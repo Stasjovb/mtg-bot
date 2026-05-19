@@ -196,20 +196,17 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``DyadrineAttackEffect`` effect kind
-    in ``_ta_dict_to_python_effect``.
+def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_FIXED_parity():
+    """Bridge arm for ``DyadrineAttackEffect`` is now wired.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py`` -- the
-      ``_ta_dict_to_python_effect`` dispatcher has no arm for
-      ``kind="dyadrine_attack_effect"``.  All unrecognised kinds fall
-      through to the terminal:
+    AAA Pin 1 -- CLOSED.  The bridge arm for
+    ``kind="dyadrine_attack_effect"`` was added to
+    ``_ta_dict_to_python_effect`` in
+    ``src/mtg_bot/parity/cross_engine.py``.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: unsupported "
-              "effect kind 'dyadrine_attack_effect' ..."
-          )
+    This test verifies the wired behavior (no ValueError raised, correct
+    class returned) and asserts the structural invariants that the pin
+    originally documented.
 
     Card context:
       Dyadrine, Synthesis Amalgam -- "Whenever you attack, you may
@@ -226,19 +223,6 @@ def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_diverg
       ``DyadrineAttackEffect()`` -- zero-field dataclass from
       ``effects/bespoke.py``.  No constructor arguments; it is a
       singleton-like effect sentinel.
-
-    Probe shape:
-      1. Assert ``DyadrineAttackEffect`` exists in ``effects.bespoke``
-         and is a dataclass with zero fields.
-      2. Assert the bridge raises ``ValueError`` for the unwired kind.
-      3. Assert the error message contains ``"dyadrine_attack_effect"``
-         and ``"unsupported effect kind"``.
-      4. Assert a wired effect kind (``"draw_cards"``) does NOT raise.
-      5. Enumerate the 1 EoE card blocked by this gap.
-
-    Closure path:
-      Add a ``kind == "dyadrine_attack_effect"`` arm that returns
-      ``DyadrineAttackEffect()``.  No dict fields to read.
 
     This pin is pure Python (no Rust extension required).
     """
@@ -260,32 +244,23 @@ def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_diverg
         "If a field was added, the bridge arm needs to read it from the dict."
     )
 
-    # 2-3. Bridge raises ValueError for the unwired effect kind.
-    unwired_eff_dict = {"kind": "dyadrine_attack_effect"}
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(unwired_eff_dict)
-
-    err_msg = str(exc_info.value)
-    assert "dyadrine_attack_effect" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'dyadrine_attack_effect' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
-    )
-    assert "unsupported effect kind" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain "
-        "'unsupported effect kind' confirming the _ta_dict_to_python_effect "
-        "dispatcher produced this error. "
-        f"Got message: {err_msg!r}"
+    # 2. Bridge NO LONGER raises ValueError -- the arm is wired.
+    wired_eff_dict = {"kind": "dyadrine_attack_effect"}
+    result = _ta_dict_to_python_effect(wired_eff_dict)
+    assert isinstance(result, DyadrineAttackEffect), (
+        "Bridge arm for 'dyadrine_attack_effect' should return a "
+        "DyadrineAttackEffect instance.  "
+        f"Got {type(result).__name__!r}."
     )
 
-    # 4. Sanity: a WIRED effect kind ("draw_cards") round-trips without error.
+    # 3. Sanity: a WIRED effect kind ("draw_cards") still round-trips.
     from mtg_bot.effects.base import Effect
-    wired_eff_dict = {"kind": "draw_cards", "count": 1}
+    wired_draw_dict = {"kind": "draw_cards", "count": 1}
     try:
-        result = _ta_dict_to_python_effect(wired_eff_dict)
-        assert isinstance(result, Effect), (
+        draw_result = _ta_dict_to_python_effect(wired_draw_dict)
+        assert isinstance(draw_result, Effect), (
             "Wired effect 'draw_cards' should produce an Effect instance; "
-            f"got {type(result).__name__}."
+            f"got {type(draw_result).__name__}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -293,18 +268,18 @@ def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_diverg
             f"raise ValueError -- got: {e}"
         ) from e
 
-    # 5. Enumerate the EoE cards blocked by this gap.
-    blocked_eoe_cards = [
+    # 4. Enumerate the EoE cards unblocked by this fix.
+    unblocked_eoe_cards = [
         "Dyadrine, Synthesis Amalgam",
         # "Whenever you attack, you may remove a +1/+1 counter from each
         # of two creatures you control. If you do, draw a card and create
         # a 2/2 colorless Robot artifact creature token."
         # Parser: DyadrineAttackEffect() via bespoke factory path.
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'dyadrine_attack_effect' bridge gap blocks 1 EoE card "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'dyadrine_attack_effect' bridge arm unblocks 1 EoE card "
         "(Dyadrine, Synthesis Amalgam). "
-        f"Enumerated list has {len(blocked_eoe_cards)} entries."
+        f"Enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
@@ -314,20 +289,17 @@ def test_cross_engine_real_eoe_dyadrine_attack_effect_bridge_gap_sentinel_diverg
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``PutPoisonCountersOnTargetPlayer``
-    effect kind in ``_ta_dict_to_python_effect``.
+def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_sentinel_FIXED_parity():
+    """Bridge arm for ``PutPoisonCountersOnTargetPlayer`` is now wired.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py`` -- the
-      ``_ta_dict_to_python_effect`` dispatcher has no arm for
-      ``kind="put_poison_counters_on_target_player"``.  All
-      unrecognised kinds fall through to the terminal:
+    AAA Pin 2 -- CLOSED.  The bridge arm for
+    ``kind="put_poison_counters_on_target_player"`` was added to
+    ``_ta_dict_to_python_effect`` in
+    ``src/mtg_bot/parity/cross_engine.py``.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: unsupported "
-              "effect kind 'put_poison_counters_on_target_player' ..."
-          )
+    This test verifies the wired behavior (no ValueError, correct class
+    and field binding) and asserts the structural invariants the pin
+    originally documented.
 
     Card context:
       Virulent Silencer -- "Whenever a nontoken artifact creature you
@@ -346,24 +318,6 @@ def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_s
       from ``effects/generic/``.
       * ``amount`` -- the number of poison counters (e.g. 2 for
         Virulent Silencer, per "gets two poison counters").
-
-    Probe shape:
-      1. Assert ``PutPoisonCountersOnTargetPlayer`` exists in
-         ``effects.generic`` and has the expected ``amount`` field.
-      2. Assert the bridge raises ``ValueError`` for the unwired kind,
-         both with and without the ``amount`` field in the dict.
-      3. Assert the error message contains
-         ``"put_poison_counters_on_target_player"`` and
-         ``"unsupported effect kind"``.
-      4. Assert a wired effect kind (``"draw_cards"``) does NOT raise.
-      5. Assert ``amount`` is a required int field (no default).
-      6. Enumerate the 1 EoE card blocked by this gap and note the
-         ``amount=2`` binding.
-
-    Closure path:
-      Add a ``kind == "put_poison_counters_on_target_player"`` arm that
-      reads ``amount: int`` from the dict and constructs
-      ``PutPoisonCountersOnTargetPlayer(amount=amount)``.
 
     This pin is pure Python (no Rust extension required).
     """
@@ -384,45 +338,37 @@ def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_s
         f"Got fields: {list(fields.keys())!r}"
     )
 
-    # 2-3. Bridge raises ValueError for the unwired effect kind.
-    #      Test with ``amount=2`` (the Virulent Silencer instantiation).
-    unwired_eff_dict = {
+    # 2. Bridge NO LONGER raises ValueError -- the arm is wired.
+    #    Test with amount=2 (the Virulent Silencer instantiation).
+    wired_eff_dict = {
         "kind": "put_poison_counters_on_target_player",
         "amount": 2,
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(unwired_eff_dict)
-
-    err_msg = str(exc_info.value)
-    assert "put_poison_counters_on_target_player" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'put_poison_counters_on_target_player'. "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_effect(wired_eff_dict)
+    assert isinstance(result, PutPoisonCountersOnTargetPlayer), (
+        "Bridge arm for 'put_poison_counters_on_target_player' should return a "
+        "PutPoisonCountersOnTargetPlayer instance.  "
+        f"Got {type(result).__name__!r}."
     )
-    assert "unsupported effect kind" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain "
-        "'unsupported effect kind' confirming the _ta_dict_to_python_effect "
-        "dispatcher produced this error. "
-        f"Got message: {err_msg!r}"
+    assert result.amount == 2, (
+        "Bridge arm should read 'amount' from dict and pass it through. "
+        f"Expected amount=2, got {result.amount!r}."
     )
 
-    # Bridge also raises when amount is omitted (kind is unrecognised first).
-    with pytest.raises(ValueError) as exc_info_no_amount:
-        _ta_dict_to_python_effect({"kind": "put_poison_counters_on_target_player"})
-    err_no_amount = str(exc_info_no_amount.value)
-    assert "put_poison_counters_on_target_player" in err_no_amount, (
-        "Bridge gap sentinel (no-amount dict): the ValueError message should "
-        "still mention 'put_poison_counters_on_target_player'. "
-        f"Got message: {err_no_amount!r}"
+    # 3. No-amount dict uses the default (amount=1).
+    result_default = _ta_dict_to_python_effect({"kind": "put_poison_counters_on_target_player"})
+    assert isinstance(result_default, PutPoisonCountersOnTargetPlayer), (
+        "No-amount dict should also produce a PutPoisonCountersOnTargetPlayer; "
+        f"got {type(result_default).__name__!r}."
     )
 
-    # 4. Sanity: a WIRED effect kind ("draw_cards") round-trips without error.
+    # 4. Sanity: a WIRED effect kind ("draw_cards") still round-trips.
     from mtg_bot.effects.base import Effect
     try:
-        result = _ta_dict_to_python_effect({"kind": "draw_cards", "count": 1})
-        assert isinstance(result, Effect), (
+        draw_result = _ta_dict_to_python_effect({"kind": "draw_cards", "count": 1})
+        assert isinstance(draw_result, Effect), (
             "Wired effect 'draw_cards' should produce an Effect instance; "
-            f"got {type(result).__name__}."
+            f"got {type(draw_result).__name__}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -430,10 +376,7 @@ def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_s
             f"raise ValueError -- got: {e}"
         ) from e
 
-    # 5. ``amount`` field is an int with a concrete numeric default.
-    #    (The class uses a sensible default of 1 rather than MISSING;
-    #    the bridge arm must still read the actual amount from the dict to
-    #    support any card-specific value, e.g. Virulent Silencer's 2.)
+    # 5. ``amount`` field default is a non-None int.
     amount_field = fields["amount"]
     assert amount_field.default is not None, (
         "PutPoisonCountersOnTargetPlayer.amount should have a non-None default. "
@@ -446,27 +389,27 @@ def test_cross_engine_real_eoe_put_poison_counters_on_target_player_bridge_gap_s
         f"value: {amount_field.default!r}"
     )
 
-    # 6. Enumerate the EoE card blocked by this gap.
-    blocked_eoe_cards = [
+    # 6. Enumerate the EoE card unblocked by this fix.
+    unblocked_eoe_cards = [
         ("Virulent Silencer", 2),
         # "Whenever a nontoken artifact creature you control deals combat
         # damage to a player, that player gets two poison counters."
         # Parser: PutPoisonCountersOnTargetPlayer(amount=2).
         # Target: the player who was dealt combat damage (trigger subject).
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'put_poison_counters_on_target_player' bridge gap blocks "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'put_poison_counters_on_target_player' bridge arm unblocks "
         "1 EoE card (Virulent Silencer). "
-        f"Enumerated list has {len(blocked_eoe_cards)} entries."
+        f"Enumerated list has {len(unblocked_eoe_cards)} entries."
     )
-    card_name, expected_amount = blocked_eoe_cards[0]
+    card_name, expected_amount = unblocked_eoe_cards[0]
     assert card_name == "Virulent Silencer", (
-        f"Expected the first blocked card to be 'Virulent Silencer'; "
+        f"Expected the first unblocked card to be 'Virulent Silencer'; "
         f"got {card_name!r}."
     )
     assert expected_amount == 2, (
-        "Virulent Silencer gives 2 poison counters; bridge arm must "
-        "construct PutPoisonCountersOnTargetPlayer(amount=2) for this card. "
+        "Virulent Silencer gives 2 poison counters; bridge arm constructs "
+        "PutPoisonCountersOnTargetPlayer(amount=2) for this card. "
         f"Got: {expected_amount!r}"
     )
 

@@ -8740,6 +8740,36 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         nested_key = "effect" if "effect" in eff_dict else "inner"
         inner_effect = _ta_dict_to_python_effect(eff_dict[nested_key])
         return ConditionalIfSourcePowerAtLeast(effect=inner_effect, threshold=threshold)
+    if kind == "dyadrine_attack_effect":
+        # **AAA Pin 1 — DyadrineAttackEffect zero-field bespoke dataclass.**
+        # Python's ``DyadrineAttackEffect()`` (``effects/bespoke.py``) is a
+        # zero-field dataclass that encodes Dyadrine, Synthesis Amalgam's
+        # attack-trigger body: "Whenever you attack, you may remove a +1/+1
+        # counter from each of two creatures you control. If you do, draw a
+        # card and create a 2/2 colorless Robot artifact creature token."
+        # All resolution logic lives in its ``resolve`` method; no sub-fields
+        # are read from the dict.
+        #
+        # EoE card unlocked: Dyadrine, Synthesis Amalgam.
+        # Dict shape: ``{"kind": "dyadrine_attack_effect"}`` (no extra fields).
+        from mtg_bot.effects.bespoke import DyadrineAttackEffect
+        return DyadrineAttackEffect()
+    if kind == "put_poison_counters_on_target_player":
+        # **AAA Pin 2 — PutPoisonCountersOnTargetPlayer effect.**
+        # Python's ``PutPoisonCountersOnTargetPlayer(amount: int)``
+        # (``effects/generic/counters.py``) gives the target player N poison
+        # counters. Subject is the player who was dealt combat damage (resolved
+        # from the trigger's subject map at fire time).
+        #
+        # EoE card unlocked: Virulent Silencer — "Whenever a nontoken artifact
+        # creature you control deals combat damage to a player, that player gets
+        # two poison counters." Parser instantiates
+        # ``PutPoisonCountersOnTargetPlayer(amount=2)``.
+        #
+        # Dict shape: ``{"kind": "put_poison_counters_on_target_player",
+        # "amount": N}``. Missing ``amount`` defaults to 1 (the class default).
+        from mtg_bot.effects.generic.counters import PutPoisonCountersOnTargetPlayer
+        return PutPoisonCountersOnTargetPlayer(amount=int(eff_dict.get("amount", 1)))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -8943,6 +8973,52 @@ def _ta_dict_to_python_state_predicate(pred_dict: dict):
     )
 
 
+def _rewrite_predicate_for_plays_land(predicate):
+    """Recursively rewrite slot=None predicates to slot="land" for the
+    ``PLAYS_LAND`` two-subject event.
+
+    ``Event.PLAYS_LAND`` carries subjects ``{"land": <land_card>,
+    "controller": <player>}``.  Python's ``_resolve_subject(subjects, None)``
+    returns ``None`` when ``len(subjects) == 2`` (LL Pin 2 multi-subject
+    hazard), so any ``IsSelf(subject=None)`` or ``Subject(slot=None, ...)``
+    would silently evaluate False rather than binding to the land card.
+
+    This function fixes slot=None to slot="land" in the predicate tree,
+    matching what the parser produces directly — ``IsSelf(subject="land")``
+    for "whenever you play a land" predicates.
+
+    Only rewrite ``IsSelf`` and ``Subject`` with ``slot=None``.  Leave
+    ``And``, ``Not``, ``Or``, ``Source``, ``Always``, ``Controlled``, and
+    other predicates unchanged.
+
+    Predicates that already carry an explicit slot pass through unmodified.
+    """
+    from mtg_bot.effects.predicates import IsSelf, And, Not, Or, Subject, Always
+
+    if isinstance(predicate, IsSelf):
+        if predicate.subject is None:
+            return IsSelf(subject="land")
+        return predicate
+    if isinstance(predicate, Subject):
+        if predicate.slot is None:
+            return Subject(slot="land", inner=predicate.inner)
+        return predicate
+    if isinstance(predicate, And):
+        return And(
+            _rewrite_predicate_for_plays_land(predicate.left),
+            _rewrite_predicate_for_plays_land(predicate.right),
+        )
+    if isinstance(predicate, Not):
+        return Not(_rewrite_predicate_for_plays_land(predicate.inner))
+    if isinstance(predicate, Or):
+        return Or(
+            _rewrite_predicate_for_plays_land(predicate.left),
+            _rewrite_predicate_for_plays_land(predicate.right),
+        )
+    # Always, Source, Controlled, StateBound, IsHost, etc. — pass through
+    return predicate
+
+
 def _rewrite_predicate_for_deals_combat_damage(predicate):
     """Recursively rewrite slot=None predicates to slot="source" for
     the ``DEALS_COMBAT_DAMAGE`` two-subject event.
@@ -9143,20 +9219,67 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # Walk, Most Valuable Slayer, Razorkin Hordecaller,
         # Ticket Booth // Tunnel of Hate.
         event = Event.YOU_ATTACK
+    elif event_str == "would_draw_cards":
+        # **UU Pin 1 — WOULD_DRAW_CARDS replacement-event bridge.**
+        # Python's ``Event.WOULD_DRAW_CARDS`` (value ``"would_draw_cards"``)
+        # fires *before* a draw resolves, allowing replacement effects to
+        # intercept and modify the draw action.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[WOULD_DRAW_CARDS]``
+        # is ``("player",)`` — the player who would draw.  Single-subject
+        # means ``Subject(slot=None, ...)`` resolves correctly on
+        # WOULD_DRAW_CARDS dispatch (unlike WOULD_CREATE_TOKEN's two-subject
+        # shape).  No predicate-slot rewrite needed alongside this arm.
+        #
+        # EoE card unblocked: Quantum Riddler — "As long as you have one or
+        # fewer cards in hand, if you would draw one or more cards, you draw
+        # that many cards plus one instead."  (The "one or fewer cards in
+        # hand" condition also needs a ``hand_size_at_most`` predicate arm —
+        # a separate closure step beyond this event wire.)
+        event = Event.WOULD_DRAW_CARDS
+    elif event_str == "plays_land":
+        # **UU Pin 3 — PLAYS_LAND event bridge.**
+        # Python's ``Event.PLAYS_LAND`` (value ``"plays_land"``) fires when
+        # a player plays a land (CR 305 play-land action from hand during
+        # the main phase).  Distinct from ``Event.ENTERS`` (Landfall), which
+        # fires when any permanent enters the battlefield via any means.
+        #
+        # **Two-subject shape.**  ``EVENT_SUBJECTS[PLAYS_LAND]`` is
+        # ``("land", "controller")`` — the land card being played and the
+        # player who plays it.  This two-subject shape triggers the LL Pin 2
+        # / OO Pin 2 multi-subject hazard: ``Subject(slot=None, ...)``
+        # resolves to ``None`` when ``len(subjects) == 2``, causing any
+        # slot=None predicate to evaluate ALWAYS FALSE.
+        #
+        # A predicate-slot companion rewrite is applied below
+        # (``_rewrite_predicate_for_plays_land``) to fix up slot=None
+        # ``IsSelf`` / ``Subject`` bindings to explicit ``"land"`` slot
+        # bindings — matching the parser's output of ``IsSelf(subject="land")``
+        # for "whenever you play a land" predicates.
+        #
+        # EoE card unblocked (prerequisite step): The Endstone — "Whenever
+        # you play a land or cast a spell, draw a card."  (The compound
+        # disjunction with IS_CAST is a separate follow-on closure item;
+        # this arm is the necessary prerequisite.)
+        event = Event.PLAYS_LAND
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
             f"{event_str!r} is not yet wired"
         )
     predicate = _ta_dict_to_python_predicate(ta_dict.get("predicate"))
-    # For two-subject events (DEALS_COMBAT_DAMAGE), apply a slot-rewrite
-    # pass to convert slot=None predicates to explicit slot="source"
-    # bindings. This avoids the LL Pin 2 multi-subject hazard where
-    # ``_resolve_subject(subjects, None)`` returns ``None`` when
-    # ``len(subjects) == 2`` (IsSelf(slot=None) would always evaluate
-    # False on DEALS_COMBAT_DAMAGE without this fix).
+    # For two-subject events, apply a slot-rewrite pass to convert slot=None
+    # predicates to explicit slot bindings. This avoids the LL Pin 2
+    # multi-subject hazard where ``_resolve_subject(subjects, None)`` returns
+    # ``None`` when ``len(subjects) == 2`` (IsSelf(slot=None) would always
+    # evaluate False on multi-subject events without this fix).
     if event == Event.DEALS_COMBAT_DAMAGE:
         predicate = _rewrite_predicate_for_deals_combat_damage(predicate)
+    if event == Event.PLAYS_LAND:
+        # PLAYS_LAND carries two subjects ("land", "controller"). Rewrite
+        # slot=None predicates to slot="land" — matching the parser's output
+        # of IsSelf(subject="land") for "whenever you play a land" triggers.
+        predicate = _rewrite_predicate_for_plays_land(predicate)
     effect = _ta_dict_to_python_effect(ta_dict["effect"])
     once_per_turn = ta_dict.get("once_per_turn", False)
     return TriggeredAbility(
