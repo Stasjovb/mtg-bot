@@ -1546,24 +1546,38 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
 def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
     parity_smoke,
 ):
-    """**CE5 closure regression pin**: at step 108 (turn 9 PRECOMBAT_MAIN
-    p0 active) the selector emits ``cast_spell`` for Grizzly Bears. With
-    the harness-side ``resolve_top_of_stack_python`` mirror in
-    :func:`step_both` (gated by ``_RUST_AUTO_RESOLVE_ACTION_KINDS``),
-    the cast step's divergence list is EMPTY: Python's stack drains
-    immediately after the StackItem is pushed, the Bears resolves to
-    the battlefield, and both engines' observable state agrees.
+    """**S7-A1 closure-flip of the original CE5 closure-pin.**
 
-    This is the post-closure counterpart of the pre-closure CE5
-    symptom-pin (deleted in this slice â€” the symptom no longer
-    surfaces). The pair-pin pattern matches the CE2/CE3/CE4 closures:
-    a post-closure regression test pins the new equilibrium.
+    Pre-S7 contract (CE5 active): at step 108 the selector emits
+    ``cast_spell`` for Grizzly Bears; ``step_both``'s implicit
+    cast-vs-resolve mirror drained Python's stack inside the same
+    call, so the per-step view showed stack=() + Bears on the
+    battlefield = byte-equal with Rust's no-stack ``cast_creature``.
 
-    Pinned fields after the closure:
+    Post-S7 contract (CE5 removed, S7-1): ``step_both`` is strict
+    single-decision — it pushes the cast item to the stack on BOTH
+    engines (Rust now uses real stack-and-priority resolution
+    post-G7 closure) and DOES NOT drain. The byte-equal observable
+    is now stack=(StackItem,) on BOTH engines AND Bears still in
+    p0's hand (cast item carries the source) AND battlefield
+    carries only the 6 lands. The drain is an explicit opt-in:
+    pass ``auto_drain_after_step=True`` to :func:`walk_both` OR
+    call :func:`step_both_drained` / :func:`drain_stack_both` at
+    the call site.
 
-      * ``battlefield`` â€” both engines have 7 objects (the cast lands
-        the Bears on Python's bf via the drained stack).
-      * ``stack`` â€” both engines have an empty stack.
+    Two parallel sub-assertions verify both contracts:
+
+      * **Pre-drain (strict step_both)**: ``walk_both`` with the
+        default ``auto_drain_after_step=False`` — the step-108
+        snapshot has stack=(spell,) and bf=6, but the per-step
+        divergences MUST STILL be empty (both engines agree the
+        spell is on the stack, both have the same bf shape).
+
+      * **Post-drain (priority-loop opt-in)**: ``walk_both`` with
+        ``auto_drain_after_step=True`` — the step-108 snapshot
+        has stack=() and bf=7 (Bears resolved), AND divergences=[]
+        (post-drain field views byte-equal). This is the explicit
+        replacement for CE5's implicit behavior.
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1571,51 +1585,80 @@ def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
         walk_both,
     )
 
-    result = walk_both(
+    # Pre-drain (strict step_both): per-step view shows the cast item
+    # ON the stack on BOTH engines + Bears still IN hand on Python (the
+    # source-of-truth single-decision snapshot). Divergences=[] because
+    # both engines push the spell to their stacks (post-G7 closure
+    # Rust uses real stack-and-priority resolution).
+    result_pre = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=109,
         decision_selector=cast_bears_selector,
     )
-    assert result.error is None
-    step_108 = result.steps[108]
-    # The cast_spell action was emitted at step 108.
-    assert step_108.action_dict["kind"] == "cast_spell"
-    # The Bears was the active player's hand card 3 (per the
-    # slightly_bigger_deckspec deck order: p0 lib =
-    # [Forest(id=0), Mountain(id=1), Forest(id=2), Bears(id=3)] â€”
-    # by turn 9 p0 has drawn all four).
-    assert step_108.action_dict["card_id"] == 3
-
-    # CE5 closure: zero divergences on the cast step.
-    assert step_108.divergences == [], (
-        f"CE5 closure regression: step 108 cast should be parity-clean, "
-        f"got {[(d.field, d.py_value, d.rust_value) for d in step_108.divergences]}"
+    assert result_pre.error is None
+    step_108_pre = result_pre.steps[108]
+    assert step_108_pre.action_dict["kind"] == "cast_spell"
+    assert step_108_pre.action_dict["card_id"] == 3
+    assert step_108_pre.divergences == [], (
+        f"S7 contract: step 108 cast should still be parity-clean "
+        f"(both engines push spell to stack); got "
+        f"{[(d.field, d.py_value, d.rust_value) for d in step_108_pre.divergences]}"
     )
+    # Post-S7: both engines have the spell on the stack + bf shows 6
+    # lands (no Bears yet — the cast didn't drain).
+    py_bf_pre = step_108_pre.py_view["battlefield"]
+    rust_bf_pre = step_108_pre.rust_view["battlefield"]
+    assert len(py_bf_pre) == 6
+    assert len(rust_bf_pre) == 6
+    assert "Grizzly Bears" not in [sig[0] for sig in py_bf_pre]
+    assert "Grizzly Bears" not in [sig[0] for sig in rust_bf_pre]
+    assert len(step_108_pre.py_view["stack"]) == 1
+    assert len(step_108_pre.rust_view["stack"]) == 1
 
-    # Both views agree on the post-cast state â€” Bears on the
-    # battlefield, stack empty.
-    py_bf = step_108.py_view["battlefield"]
-    rust_bf = step_108.rust_view["battlefield"]
-    assert len(py_bf) == 7
-    assert len(rust_bf) == 7
-    assert "Grizzly Bears" in [sig[0] for sig in py_bf]
-    assert "Grizzly Bears" in [sig[0] for sig in rust_bf]
-    assert step_108.py_view["stack"] == ()
-    assert step_108.rust_view["stack"] == ()
+    # Post-drain (priority-loop opt-in): the explicit byte-equal
+    # successor to CE5. The drain runs after step_both inside
+    # walk_both; the step-108 snapshot reflects the post-drain state.
+    result_post = walk_both(
+        slightly_bigger_deckspec(),
+        n_decisions=109,
+        decision_selector=cast_bears_selector,
+        auto_drain_after_step=True,
+    )
+    assert result_post.error is None
+    step_108_post = result_post.steps[108]
+    assert step_108_post.divergences == [], (
+        f"S7-A2: post-drain cast step must be parity-clean, got "
+        f"{[(d.field, d.py_value, d.rust_value) for d in step_108_post.divergences]}"
+    )
+    py_bf_post = step_108_post.py_view["battlefield"]
+    rust_bf_post = step_108_post.rust_view["battlefield"]
+    assert len(py_bf_post) == 7
+    assert len(rust_bf_post) == 7
+    assert "Grizzly Bears" in [sig[0] for sig in py_bf_post]
+    assert "Grizzly Bears" in [sig[0] for sig in rust_bf_post]
+    assert step_108_post.py_view["stack"] == ()
+    assert step_108_post.rust_view["stack"] == ()
 
 
 def test_cross_engine_resolve_top_of_stack_python_drains_stack(parity_smoke):
-    """**CE5 closure unit pin**: the harness primitive
-    :func:`resolve_top_of_stack_python` drains a non-empty Python
-    stack to empty, mirroring ``simulate.priority_loop``'s
-    "resolve until empty" contract (CR 117.4).
+    """**S7-A1 closure-flip of the original CE5 unit pin.**
 
-    Drives a one-decision walk to N=109 to reach the post-cast state,
-    then verifies that after :func:`step_both` returns the Python
-    stack is empty AND the cast emitted exactly one stack-pop.
+    Pre-S7 contract (CE5 active): the harness primitive
+    :func:`resolve_top_of_stack_python` was the load-bearing drainer
+    invoked from inside :func:`step_both`'s ``cast_spell`` branch.
+    The post-cast view at step 108 showed stack=() because the
+    primitive ran transparently.
 
-    Also pins the no-op behavior: calling the primitive on a state
-    with an empty stack returns 0 without raising.
+    Post-S7 contract (CE5 removed, S7-1): :func:`step_both` no longer
+    auto-drains. The primitive still drains Python's stack to empty
+    when called explicitly — either via the new
+    :func:`step_both_drained` / :func:`drain_stack_both` composers
+    or by passing ``auto_drain_after_step=True`` to :func:`walk_both`.
+
+    Pins both the explicit-call contract AND the no-op behavior on
+    an empty stack (the latter is unchanged across S7 and matches
+    ``simulate.priority_loop``'s "no pop on empty stack" branch at
+    line 269).
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1624,17 +1667,23 @@ def test_cross_engine_resolve_top_of_stack_python_drains_stack(parity_smoke):
         walk_both,
     )
 
+    # S7-A2 explicit drain: opt-in to the priority loop via the new
+    # walk_both flag. The step 108 snapshot reflects the post-drain
+    # state — Python's stack is empty, exactly as it was pre-S7 when
+    # CE5 ran transparently.
     result = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=109,
         decision_selector=cast_bears_selector,
+        auto_drain_after_step=True,
     )
     assert result.error is None
-    # The cast step left Python's stack empty (drain ran in step_both).
     assert result.steps[108].py_view["stack"] == ()
 
     # No-op contract: calling the primitive on a state with an empty
     # stack returns 0 without raising. Build a fresh state to confirm.
+    # Unchanged across S7 — mirrors `simulate.priority_loop`'s
+    # "empty-stack" branch (returns without popping).
     from mtg_bot.parity.cross_engine import build_python_state
     py_state = build_python_state(slightly_bigger_deckspec())
     assert py_state.stack == []
