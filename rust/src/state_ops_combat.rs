@@ -1330,7 +1330,7 @@ impl GameState {
             let (pass_1, pass_2_all): (Vec<PlanEntry>, Vec<PlanEntry>) =
                 plan.into_iter().partition(|e| e.pass == Pass::FirstStrike);
             // Apply pass 1.
-            self.apply_damage_pass(pass_1);
+            self.apply_damage_pass(pass_1)?;
             // Filter pass 2:
             // (a) Source must be still alive after pass 1 — a creature
             //     that took lethal damage in step 1 doesn't strike
@@ -1458,9 +1458,9 @@ impl GameState {
                     DamageTarget::Player(_) => Some(e),
                 })
                 .collect();
-            self.apply_damage_pass(pass_2);
+            self.apply_damage_pass(pass_2)?;
         } else {
-            self.apply_damage_pass(plan);
+            self.apply_damage_pass(plan)?;
         }
         Ok(())
     }
@@ -1512,7 +1512,7 @@ impl GameState {
     ///      doesn't see a stale value from a prior event (the reset
     ///      is what keeps event-N's amount from leaking into event-
     ///      N+1's resolution).
-    fn apply_damage_pass(&mut self, entries: Vec<PlanEntry>) {
+    fn apply_damage_pass(&mut self, entries: Vec<PlanEntry>) -> PyResult<()> {
         for entry in entries {
             // Read the source's keywords + controller BEFORE applying
             // mutations. Deathtouch upgrades the recipient's mark to
@@ -1558,6 +1558,38 @@ impl GameState {
                     if idx < self.players.len() {
                         self.players[idx].life -= entry.amount as i32;
                     }
+                    // Round-13: fire DEALS_DAMAGE triggers for each
+                    // (attacker, defending_player) pair where the
+                    // attacker dealt positive damage to the player.
+                    // Mirrors Python's
+                    // ``_fire_combat_damage_to_player_triggers`` call
+                    // at ``combat.py:571`` which iterates
+                    // ``sources_hit_player`` (the same (source_id,
+                    // target_player, amount) triples assembled during
+                    // the damage-apply loop). We call BEFORE the
+                    // lifelink credit (below) so the ordering matches
+                    // Python's: player life is already decremented;
+                    // the trigger pushes onto the stack; lifelink
+                    // then runs. Stack resolution happens later so
+                    // the push order is the observable parity point.
+                    //
+                    // Note: SBAs (destroy lethal-damage creatures) run
+                    // AFTER the full pass is applied, not between
+                    // entries. So the source creature is still on the
+                    // battlefield here (at most marked for death);
+                    // ``dispatch_combat_damage_to_player``'s bf guard
+                    // is a no-op in normal play. The guard exists for
+                    // the first-strike substep boundary where a source
+                    // that took lethal FS damage was NOT destroyed yet
+                    // (SBAs run after FS-pass completes, not mid-pass).
+                    if entry.amount > 0 {
+                        crate::state_ops_resolve::dispatch_combat_damage_to_player(
+                            self,
+                            entry.source_id,
+                            player_id,
+                            entry.amount as i32,
+                        )?;
+                    }
                 }
             }
 
@@ -1582,5 +1614,6 @@ impl GameState {
             // resolving_combat_damage_amount = 0` reset shape.
             self.resolving_combat_damage_amount = 0;
         }
+        Ok(())
     }
 }

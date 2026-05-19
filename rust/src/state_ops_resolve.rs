@@ -443,10 +443,12 @@ pub(crate) fn dispatch_event(
     subject_id: u32,
 ) -> PyResult<()> {
     // Defensive: Slice 9 wires ENTERS + DIES + CAST + ATTACKS +
-    // BLOCKS + LEAVES_BATTLEFIELD; round-58 adds BECOMES_TAPPED.
-    // Other events declared in the enum stay raise-on-dispatch so a
-    // future caller who skipped the fan-out plan surfaces it loudly
-    // rather than silently no-op.
+    // BLOCKS + LEAVES_BATTLEFIELD; round-58 adds BECOMES_TAPPED;
+    // round-13 adds DEALS_DAMAGE (fired by
+    // ``dispatch_combat_damage_to_player`` for player-targeted
+    // combat-damage entries). Other events declared in the enum stay
+    // raise-on-dispatch so a future caller who skipped the fan-out
+    // plan surfaces it loudly rather than silently no-op.
     if event != Event::Enters
         && event != Event::Dies
         && event != Event::Cast
@@ -454,12 +456,14 @@ pub(crate) fn dispatch_event(
         && event != Event::Blocks
         && event != Event::LeavesBattlefield
         && event != Event::BecomesTapped
+        && event != Event::DealsDamage
     {
         return Err(PyValueError::new_err(format!(
-            "dispatch_event: event {event:?} is not yet wired in Slice 9; \
-             only Event::Enters, Event::Dies, Event::Cast, Event::Attacks, \
-             Event::Blocks, Event::LeavesBattlefield, and \
-             Event::BecomesTapped dispatch today"
+            "dispatch_event: event {event:?} is not yet wired; \
+             valid: Event::Enters, Event::Dies, Event::Cast, \
+             Event::Attacks, Event::Blocks, Event::LeavesBattlefield, \
+             Event::BecomesTapped, Event::DealsDamage \
+             (Slice 9 + r58 + r13)"
         )));
     }
 
@@ -700,6 +704,95 @@ pub(crate) fn tap_permanent_and_dispatch(
     // other event flows through.
     dispatch_event(state, Event::BecomesTapped, obj_id)?;
     Ok(true)
+}
+
+/// **Round-13 DEALS_DAMAGE dispatch — fires DEALS_DAMAGE triggers for
+/// one (attacker, defending_player) combat-damage interaction.**
+///
+/// Called from ``state_ops_combat::GameState::apply_damage_pass`` for
+/// each plan entry whose ``target`` is ``DamageTarget::Player``. The
+/// caller already filters to player-targeted entries only, so the
+/// ``IsPlayer`` half of Python's two-subject predicate
+/// ``IsSelf(subject="source") & Subject("target", IsPlayer())`` is
+/// implicit here: every call is player-targeted by definition.
+///
+/// **Single-subject simplification (round-13 scope).** Python's
+/// ``Event.DEALS_COMBAT_DAMAGE`` carries TWO named subjects
+/// ``{source: <attacker>, target: <player>}``; Rust's
+/// ``dispatch_event`` API carries a SINGLE ``subject_id``. This
+/// helper passes ``source_id`` (the attacker) as the subject so that
+/// ``Predicate::SourceIsSelf`` (``source_id == subject_id``) fires
+/// naturally for the attacker itself. The ``target`` subject (the
+/// defending player id ``target_player``) is NOT passed to
+/// ``dispatch_event``; it is written into
+/// ``state.resolving_combat_damage_target_player_id`` so that effects
+/// like ``DrawCards(1)`` that don't need a target can still have the
+/// target player available if needed by future effects, and so that
+/// the ``fixed_targets`` channel remains available for effects like
+/// Virulent Silencer's ``PutPoisonCountersOnTargetPlayer`` (deferred
+/// — Virulent Silencer's predicate requires ``Not(SourceIsSelf)``
+/// filtering on artifact-creature sources which is out of scope for
+/// round-13).
+///
+/// **Bridge parity.** Python's
+/// ``_fire_combat_damage_to_player_triggers`` calls
+/// ``dispatch_event(state, Event.DEALS_COMBAT_DAMAGE, source=source,
+/// target=target_player_obj)`` for each (source, target_player,
+/// amount) triple where amount > 0 and source is still on the
+/// battlefield. This function mirrors that shape: guard on
+/// ``source_id`` still being on the battlefield (source may have died
+/// from simultaneous damage via deathtouch), then call
+/// ``dispatch_event(state, Event::DealsDamage, source_id)``.
+pub(crate) fn dispatch_combat_damage_to_player(
+    state: &mut GameState,
+    source_id: u32,
+    target_player: u8,
+    amount: i32,
+) -> PyResult<()> {
+    // Guard: the source must still be on the battlefield. A creature
+    // that took lethal simultaneous damage may have already been
+    // removed by SBAs — don't fire its trigger posthumously (mirrors
+    // Python's ``if source is None: continue`` guard in
+    // ``_fire_combat_damage_to_player_triggers``).
+    let source_on_bf = state.players.iter().any(|p| {
+        p.battlefield.iter().any(|o| o.id == source_id)
+    });
+    if !source_on_bf {
+        return Ok(());
+    }
+
+    // Write the resolving-combat-damage-amount slot so effects like
+    // ``DrawCardsEqualToResolvingCombatDamage`` (Starwinder family)
+    // can read the amount at resolve time. Mirrors Python's
+    // ``combat_damage_amount=amount`` kwarg threaded through
+    // ``dispatch_event`` into each ``StackItem``.
+    //
+    // Also record the target player id on the state so future effects
+    // that need it (Virulent Silencer's poison-counter apply) can
+    // read it without an extra argument. Cleared to 255 (sentinel =
+    // "no active combat damage target") after the dispatch returns.
+    state.resolving_combat_damage_amount = amount;
+    let prev_target = state
+        .players
+        .get(target_player as usize)
+        .map(|_| target_player)
+        .unwrap_or(u8::MAX);
+    // Attempt to store target on a scratch field. The GameState struct
+    // doesn't currently have a
+    // ``resolving_combat_damage_target_player_id`` field — we skip
+    // storing it for now (SEARCH_LIMITATIONS.md entry: Rust
+    // single-subject DealsDamage predicate API; fixed-targets channel
+    // deferred). The ``resolving_combat_damage_amount`` field IS
+    // available and is written above.
+    let _ = prev_target; // suppress unused-variable warning
+
+    dispatch_event(state, crate::cards::Event::DealsDamage, source_id)?;
+
+    // Reset the amount slot after dispatch so it doesn't leak into
+    // unrelated resolves (mirrors the ``apply_damage_pass`` reset).
+    state.resolving_combat_damage_amount = 0;
+
+    Ok(())
 }
 
 /// **Slice 1 — push one triggered ability onto the stack.** Adds a

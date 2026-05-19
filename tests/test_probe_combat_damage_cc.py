@@ -91,56 +91,18 @@ import pytest
 
 
 def test_combat_damage_trigger_lane_blocked() -> None:
-    """The Rust parse gate raises on ``"deals_damage"`` triggered abilities.
+    """Substrate now wired; see deals_combat_damage_unlock probe.
 
-    This test confirms the substrate gap documented in this module's
-    docstring: ``parse_triggered_ability`` in ``rust/src/cards.rs`` raises
-    ``PyValueError`` for any card that carries a ``"deals_damage"`` event
-    string.  This is the architectural reason zero byte-equal cross-engine
-    probes can be written for Illvoi Infiltrator, Starwinder, or Virulent
-    Silencer at this HEAD.
+    Round-13 wired the ``"deals_damage"`` event string in both the Rust
+    parse gate (``cards.rs::parse_triggered_ability``) and the dispatch
+    site (``state_ops_combat.rs::apply_damage_pass`` via
+    ``dispatch_combat_damage_to_player``).  The gap documented in this
+    module's docstring no longer exists at this HEAD.
+
+    The real cross-engine parity probe for Illvoi Infiltrator lives in
+    ``tests/test_probe_deals_combat_damage_unlock.py``.
     """
-    # We import the Rust extension to confirm it is loadable.
-    # The extension is named ``mtg_bot_engine`` (not ``mtg_engine``).
-    try:
-        import mtg_bot_engine  # noqa: F401 — presence-check only
-        rust_available = True
-    except ImportError:
-        rust_available = False
-
-    if rust_available:
-        # Attempt to register a minimal card dict with event="deals_damage".
-        # The Rust parse gate must raise.
-        import mtg_bot_engine
-
-        # ``Registry()`` takes no arguments; cards are registered
-        # individually via ``reg.register_printing(dict)``.  The ``mana_cost``
-        # field must be a dict (not a string); ``card_types`` is a list.
-        reg = mtg_bot_engine.Registry()
-        minimal_card_dict = {
-            "name": "_SentinelDealsDamage",
-            "mana_cost": {},
-            "card_types": ["Creature"],
-            "power": 1,
-            "toughness": 1,
-            "triggered_abilities": [
-                {
-                    "event": "deals_damage",
-                    "predicate": {"kind": "source_is_self"},
-                    "effect": {"kind": "draw_cards", "n": 1},
-                }
-            ],
-        }
-        with pytest.raises(ValueError) as exc_info:
-            # ``register_printing`` must raise on the unsupported event.
-            reg.register_printing(minimal_card_dict)
-
-        # The error message must reference the unsupported event.
-        err = str(exc_info.value)
-        assert "deals_damage" in err or "not yet wired" in err or "unknown" in err, (
-            f"Expected a gap error for 'deals_damage', got: {err}"
-        )
-    else:
-        # If the Rust extension is not available (e.g. the .pyd was not
-        # built in this worktree), skip gracefully rather than false-pass.
-        pytest.skip("mtg_engine Rust extension not available in this worktree")
+    pytest.skip(
+        "substrate now wired (round-13); "
+        "see test_probe_deals_combat_damage_unlock.py"
+    )
