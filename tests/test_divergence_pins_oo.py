@@ -402,76 +402,60 @@ def test_cross_engine_real_eoe_deals_combat_damage_event_bridge_FIXED_parity():
 
 
 # ---------------------------------------------------------------------------
-# Pin 3 -- you_attack event not wired in triggered-ability bridge
+# Pin 3 -- you_attack event bridge gap CLOSED (round-15 YOU_ATTACK slice)
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``you_attack`` event string in
-    ``_ta_dict_to_python_triggered_ability``.
+def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_FIXED_parity():
+    """**OO Pin 3 CLOSED (round-15 YOU_ATTACK bridge slice).**
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8838-8874`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` does not include an arm
-      for ``"you_attack"``.  All unrecognised strings fall through to the
-      final ``raise ValueError``.
+    The bridge gap for ``"you_attack"`` in
+    ``_ta_dict_to_python_triggered_ability`` is now FIXED.
 
-    Semantic note -- YOU_ATTACK vs ATTACKS:
-      ``Event.ATTACKS`` (``"attacks"``; WIRED) fires once per declared
-      attacker; subject is ``("attacker",)`` (the attacking creature, per
-      ``EVENT_SUBJECTS`` at ``effects/predicates.py:210``).  This is the
-      "whenever [creature X] attacks" trigger shape used by cards like
-      Dawnsire Sunstar Dreadnought's "Whenever a Spacecraft you control
-      attacks" clause.
+    **What was broken (pre-round-15):**
+      ``_ta_dict_to_python_triggered_ability`` raised ``ValueError:
+      event 'you_attack' is not yet wired`` for any triggered-ability
+      dict with ``"event": "you_attack"``.  8 EoE "whenever you attack"
+      cards were blocked from cross-engine probing.
 
-      ``Event.YOU_ATTACK`` (``"you_attack"``; UNWIRED) fires exactly ONCE
-      per combat when the active player declares any attackers; subject is
-      ``("player",)`` (the attacking player, per ``EVENT_SUBJECTS`` at
-      ``effects/predicates.py:224``).  This is the "whenever you attack"
-      trigger shape used by cards like Lionheart Glimmer ("Whenever you
-      attack, creatures you control gain lifelink until end of turn.").
+    **What was fixed (round-15 Rust + bridge slice):**
+      1. ``Event::YouAttack`` added to Rust ``Event`` enum (``cards.rs``).
+      2. Parse arm ``"you_attack" => Event::YouAttack`` added to
+         ``parse_triggered_ability`` (``cards.rs``).
+      3. ``Event::YouAttack`` added to the ``dispatch_event`` allow-list
+         (``state_ops_resolve.rs``).
+      4. Dispatch site added in the ``DeclareAttackers`` arm of
+         ``apply_action`` (``state_ops_actions.rs``): fires once after
+         the per-attacker loop when ``state.attackers`` grew, using
+         ``PLAYER_SUBJECT_OFFSET + active_player`` as subject_id.
+      5. Bridge arm ``elif event_str == "you_attack":
+         event = Event.YOU_ATTACK`` added to
+         ``_ta_dict_to_python_triggered_ability`` (``cross_engine.py``).
 
-      The two events model different oracle-text phrasings: per-attacker
-      (ATTACKS) vs per-combat-once (YOU_ATTACK).  Wiring ATTACKS but not
-      YOU_ATTACK means the 8 EoE "whenever you attack" cards cannot be
-      exercised via the bridge.
+    **Semantic note — YOU_ATTACK vs ATTACKS:**
+      ``Event.ATTACKS`` fires once per declared attacker; subject is
+      ``("attacker",)`` (the attacking creature). ``Event.YOU_ATTACK``
+      fires ONCE per combat; subject is ``("player",)`` (the attacking
+      player). Two distinct oracle-text phrasings.
 
-    Scale:
-      8 EoE cards carry ``you_attack`` triggered abilities.  Representative
-      cards: Dyadrine Synthesis Amalgam, Dawnsire Sunstar Dreadnought,
-      Lionheart Glimmer, Dawnstrike Vanguard, Luminary Stalker.
+    **8 EoE cards unlocked:** Dyadrine Synthesis Amalgam, Dawnsire
+    Sunstar Dreadnought, Lionheart Glimmer, Surgical Suite // Hospital
+    Room, Derelict Attic // Widow's Walk, Most Valuable Slayer,
+    Razorkin Hordecaller, Ticket Booth // Tunnel of Hate.
 
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_triggered_ability({"event": "you_attack",
-      ...})`` raises ``ValueError`` with message containing ``"you_attack"``
-      and ``"not yet wired"``.
+    **Companion probe:** ``tests/test_probe_you_attack_unlock.py`` —
+    Lionheart Glimmer pump-all-creatures-you-control-until-EOT
+    cross-engine byte-equality probe (_parity suffix).
 
-    Closure path:
-      Add ``elif event_str == "you_attack":
-          event = Event.YOU_ATTACK``
-      to the event-string elif chain.  When that arm lands, the ValueError
-      will no longer fire here, flipping this sentinel to a failure and
-      signaling the pin should be promoted to a parity probe for one of
-      the 8 EoE "whenever you attack" cards.
-
-    Probe shape:
-      1. Assert ``Event.YOU_ATTACK`` exists (Python side present) and has
-         the correct string value ``"you_attack"``.
-      2. Assert ``Event.ATTACKS`` is a distinct enum member from
-         ``Event.YOU_ATTACK`` (documenting the per-attacker vs
-         per-combat-once distinction).
-      3. Assert ``EVENT_SUBJECTS[Event.YOU_ATTACK]`` is ``("player",)``
-         (the once-per-combat subject structure).
-      4. Assert the bridge raises ``ValueError`` for ``"you_attack"``.
-      5. Assert the message mentions ``"you_attack"`` and ``"not yet wired"``.
-      6. Assert ``"attacks"`` (the wired per-attacker event) does NOT raise.
-
-    This pin is pure Python (no Rust extension required).
+    This pin is pure Python (no Rust extension required for the
+    assertion inversions, though the Rust changes must be built for
+    the full probe).
     """
     from mtg_bot.effects.predicates import Event, EVENT_SUBJECTS
+    from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_triggered_ability
 
-    # 1. The Python Event enum has YOU_ATTACK.
+    # 1. The Python Event enum has YOU_ATTACK (unchanged from gap era).
     assert hasattr(Event, "YOU_ATTACK"), (
         "Event.YOU_ATTACK should be a member of the Event enum "
         "(effects/predicates.py). If this fails the enum member was renamed "
@@ -485,15 +469,14 @@ def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_divergence_p
         f"got {Event.YOU_ATTACK.value!r}"
     )
 
-    # 2. YOU_ATTACK is distinct from ATTACKS (per-attacker vs per-combat).
+    # 2. YOU_ATTACK is distinct from ATTACKS (unchanged from gap era).
     assert Event.YOU_ATTACK is not Event.ATTACKS, (
         "Event.YOU_ATTACK must be a distinct enum member from Event.ATTACKS. "
         "ATTACKS fires once per declaring creature; YOU_ATTACK fires once "
         "per combat. Conflating them would suppress or double-fire triggers."
     )
 
-    # 3. YOU_ATTACK subject is ("player",) -- once-per-combat subject.
-    #    Compare with ATTACKS subject ("attacker",) -- per-creature subject.
+    # 3. YOU_ATTACK subject is ("player",) (unchanged from gap era).
     you_attack_subjects = EVENT_SUBJECTS.get(Event.YOU_ATTACK)
     attacks_subjects = EVENT_SUBJECTS.get(Event.ATTACKS)
     assert you_attack_subjects == ("player",), (
@@ -509,8 +492,9 @@ def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_divergence_p
         f"Got attacks_subjects={attacks_subjects!r}"
     )
 
-    # 4-5. Bridge raises ValueError for "you_attack" -- pin the gap.
-    unwired_ta_dict = {
+    # **INVERTED from the gap-era pin**: "you_attack" now translates
+    # WITHOUT raising ValueError.
+    you_attack_ta_dict = {
         "event": "you_attack",
         "predicate": {"kind": "always"},
         "effect": {
@@ -518,23 +502,25 @@ def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_divergence_p
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
+    try:
+        result = _ta_dict_to_python_triggered_ability(you_attack_ta_dict)
+    except ValueError as e:
+        raise AssertionError(
+            "OO Pin 3 regression: bridge arm for 'you_attack' is missing "
+            "-- _ta_dict_to_python_triggered_ability raised ValueError: "
+            f"{e}"
+        ) from e
 
-    err_msg = str(exc_info.value)
-    assert "you_attack" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'you_attack' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    assert isinstance(result, TriggeredAbility), (
+        "Bridge for 'you_attack' must produce a TriggeredAbility; "
+        f"got {type(result).__name__}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.YOU_ATTACK, (
+        "Bridge must translate 'you_attack' to Event.YOU_ATTACK; "
+        f"got {result.event!r}."
     )
 
-    # 6. Sanity: "attacks" (wired per-attacker event) round-trips cleanly.
+    # Sanity: "attacks" (wired per-attacker event) still round-trips cleanly.
     wired_ta_dict = {
         "event": "attacks",
         "predicate": {"kind": "always"},
@@ -544,15 +530,14 @@ def test_cross_engine_real_eoe_you_attack_event_bridge_gap_sentinel_divergence_p
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
-            "Wired event 'attacks' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+        attacks_result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+        assert isinstance(attacks_result, TriggeredAbility), (
+            "Sanity: 'attacks' must still produce a TriggeredAbility; "
+            f"got {type(attacks_result).__name__}."
         )
-        assert result.event == Event.ATTACKS, (
-            "Wired event 'attacks' should translate to Event.ATTACKS; "
-            f"got {result.event!r}."
+        assert attacks_result.event == Event.ATTACKS, (
+            "Sanity: 'attacks' must still translate to Event.ATTACKS; "
+            f"got {attacks_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(

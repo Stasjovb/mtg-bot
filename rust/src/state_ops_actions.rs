@@ -213,8 +213,51 @@ impl GameState {
                 // preserves the Python iterable's iteration order.
                 // Callers that want a canonical order sort the set
                 // before passing (the parity harness does this).
+                //
+                // **Round-15 YOU_ATTACK once-per-combat dispatch.**
+                // After all per-attacker `Event::Attacks` dispatches
+                // complete, snapshot the current attackers count and
+                // fire `Event::YouAttack` ONCE if any attacker was
+                // registered. Mirrors Python's
+                // `_fire_you_attack_triggers(state, declared)` in
+                // `combat.py` which skips the dispatch when `declared`
+                // is empty (no legal attacker was declared).
+                //
+                // Subject convention: same PLAYER_SUBJECT_OFFSET
+                // sentinel as the phase-step events — the subject is
+                // the active player (the attacker's controller).
+                // `ControlledByYou` resolves the player index from the
+                // sentinel; `Always` ignores the subject_id entirely.
+                //
+                // The snapshot is taken AFTER the loop so all
+                // per-attacker tap + Attacks triggers have already
+                // been pushed (correct stack ordering: BECOMES_TAPPED
+                // → ATTACKS per attacker, then YOU_ATTACK once for
+                // the whole combat step — matches Python's ordering
+                // in `combat.declare_attackers`).
+                let attackers_before = slf.borrow().attackers.len();
                 for attacker_id in attacker_ids {
                     slf.call_method1("declare_attacker", (attacker_id,))?;
+                }
+                // Fire YOU_ATTACK once if at least one new attacker
+                // was registered during this loop.
+                let (any_new_attacker, active_player_idx) = {
+                    let state = slf.borrow();
+                    let any = state.attackers.len() > attackers_before;
+                    (any, state.active_player)
+                };
+                if any_new_attacker {
+                    // Reuse PLAYER_SUBJECT_OFFSET sentinel (see cards.rs
+                    // doc-comment) so ControlledByYou resolves the active
+                    // player without colliding with game-object IDs.
+                    let player_subject = crate::cards::PLAYER_SUBJECT_OFFSET
+                        + active_player_idx as u32;
+                    let mut state = slf.borrow_mut();
+                    crate::state_ops_resolve::dispatch_event(
+                        &mut state,
+                        crate::cards::Event::YouAttack,
+                        player_subject,
+                    )?;
                 }
             }
             Action::DeclareBlockers { assignments } => {

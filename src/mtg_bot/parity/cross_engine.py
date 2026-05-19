@@ -9010,6 +9010,32 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # entry to ``PHASE_BEGIN_COMBAT``; mirrors Python's
         # ``run_beginning_of_combat_triggers``.
         event = Event.BEGINNING_OF_COMBAT
+    elif event_str == "you_attack":
+        # Round-15 YOU_ATTACK event bridge. Rust's ``Event::YouAttack``
+        # (string value ``"you_attack"``) ↔ Python's
+        # ``Event.YOU_ATTACK`` (same string value — no spelling skew).
+        #
+        # **Distinct from ``"attacks"``** (per-attacker; subject =
+        # ``("attacker",)``). YOU_ATTACK fires ONCE per combat when the
+        # active player declares at least one legal attacker; subject
+        # is ``("player",)`` (the attacking player). Rust dispatch site:
+        # ``DeclareAttackers`` arm in ``state_ops_actions.rs``, after
+        # all per-attacker ``Event::Attacks`` dispatches complete.
+        # Mirrors Python's ``_fire_you_attack_triggers(state, declared)``
+        # in ``combat.py`` which skips when ``declared`` is empty.
+        #
+        # **Player subject convention.** Same PLAYER_SUBJECT_OFFSET
+        # sentinel (``0x8000_0000 + active_player``) as the phase-step
+        # events. ``ControlledByYou`` resolves the player index from the
+        # sentinel; ``Always`` ignores it. No bridge-side subject
+        # rewrite needed.
+        #
+        # 8 EoE cards unlocked (OO Pin 3 closure): Dyadrine Synthesis
+        # Amalgam, Dawnsire Sunstar Dreadnought, Lionheart Glimmer,
+        # Surgical Suite // Hospital Room, Derelict Attic // Widow's
+        # Walk, Most Valuable Slayer, Razorkin Hordecaller,
+        # Ticket Booth // Tunnel of Hate.
+        event = Event.YOU_ATTACK
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
