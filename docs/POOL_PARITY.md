@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **117 (24.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 190 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **125 (26.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 182 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 117 | 24.6% |
-| Effect+bridge covered (not individually probed) | 190 | 40.0% |
+| PROBED byte-equal | 125 | 26.3% |
+| Effect+bridge covered (not individually probed) | 182 | 38.3% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -100,6 +100,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Hymn of the Faller
 - Icecave Crasher
 - Icetill Explorer
+- Impossible Inferno
 - Interceptor Mechan
 - Kav Landseeker
 - Kavaron Harrier
@@ -111,17 +112,20 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Mechanozoa
 - Melded Moxite
 - Mental Modulation
+- Midnight Mayhem
 - Mightform Harmonizer
 - Mm'menon, Uthros Exile
 - Mm'menon, the Right Hand
 - Monoist Circuit-Feeder
 - Monoist Sentry
 - Mouth of the Storm
+- Murder
 - Nanoform Sentinel
 - Nebula Dragon
 - Nova Hellkite
 - Orbital Plunge
 - Oreplate Pangolin
+- Overlord of the Boilerbilges
 - Overlord of the Floodpits
 - Overlord of the Mistmoors
 - Perigee Beckoner
@@ -143,11 +147,14 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Seedship Broodtender
 - Seedship Impact
 - Selfcraft Mechan
+- Shroudstomper
 - Sinister Cryologist
 - Space-Time Anomaly
+- Spineseeker Centipede
 - Starbreach Whale
 - Starfighter Pilot
 - Sunset Saboteur
+- Sunstar Expansionist
 - Susurian Dirgecraft
 - Susurian Voidborn
 - Tannuk, Memorial Ensign
@@ -164,6 +171,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Wedgelight Rammer
 - Weftblade Enhancer
 - Weftstalker Ardent
+- Winter's Intervention
 - Wurmwall Sweeper
 - Zealous Display
 
