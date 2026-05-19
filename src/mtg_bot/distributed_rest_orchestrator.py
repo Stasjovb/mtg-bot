@@ -654,9 +654,18 @@ def make_runs_db_progress_writer(
                 extra={
                     "n_samples": int(m.get("n_samples", 0) or 0),
                     "n_in_flight": m_inflight,
-                    # n_workers on a per-shard row = "this machine is
-                    # one worker"; sum across shards = total machines.
-                    "n_workers": 1,
+                    # n_workers on a per-shard row is what the UI's
+                    # per-machine sub-card displays — the per-machine
+                    # parallel concurrency. Hardcoding 1 was a relic
+                    # from when the aggregate-row n_workers (machine
+                    # count) was the only consumer; the per-machine UI
+                    # cell needs the per-machine pool size. Use
+                    # m_inflight as the live proxy — it equals the
+                    # pool_size while the pool is saturated (the
+                    # normal running state of a self-play / eval
+                    # stage). The aggregate row's n_workers (machine
+                    # count) is set separately above.
+                    "n_workers": max(m_inflight, 1),
                 },
             )
 
