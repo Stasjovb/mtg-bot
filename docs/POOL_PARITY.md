@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **176 (37.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 134 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **180 (37.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 130 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **165 (34.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 176 | 37.1% |
-| Effect+bridge covered (not individually probed) | 134 | 28.2% |
+| PROBED byte-equal | 180 | 37.9% |
+| Effect+bridge covered (not individually probed) | 130 | 27.4% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -70,6 +70,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Commune with Evil
 - Cryogen Relic
 - Dashing Bloodsucker
+- Dawnstrike Vanguard
 - Debris Field Crusher
 - Decode Transmissions
 - Depressurize
@@ -101,6 +102,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Focus Fire
 - Found Footage
 - Friendly Ghost
+- Frontline War-Rager
 - Full Bore
 - Galactic Wayfarer
 - Germinating Wurm
@@ -130,6 +132,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Kav Landseeker
 - Kavaron Harrier
 - Knight Luminary
+- Lionheart Glimmer
 - Live or Die
 - Lost in Space
 - Luxknight Breacher
@@ -143,6 +146,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Mightform Harmonizer
 - Mm'menon, Uthros Exile
 - Mm'menon, the Right Hand
+- Molecular Modifier
 - Monoist Circuit-Feeder
 - Monoist Sentry
 - Mouth of the Storm
