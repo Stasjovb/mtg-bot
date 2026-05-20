@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **312 / 475 EoE cards (65.7%) are byte-equal at the Effect+bridge level**; of those, **187 (39.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 125 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **312 / 475 EoE cards (65.7%) are byte-equal at the Effect+bridge level**; of those, **190 (40.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 122 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **163 (34.3%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 187 | 39.4% |
-| Effect+bridge covered (not individually probed) | 125 | 26.3% |
+| PROBED byte-equal | 190 | 40.0% |
+| Effect+bridge covered (not individually probed) | 122 | 25.7% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -40,7 +40,9 @@ Evaluated in this strict precedence (a card lands in the FIRST tier it qualifies
 
 The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absence (it sees Effect-shape riders the class-granularity coverage heuristic cannot). A `genuinely_missing` card is therefore hard-pinned to the BLOCKED tier regardless of what the class heuristic / probe name-match says — the metric never overstates parity.
 
-- **0 violations** — no `genuinely_missing` residue card was class-heuristic-counted as covered/probed. The headline does not overstate parity relative to the honest residue list.
+**WARNING: 1 `genuinely_missing` card(s) the class-granularity heuristic WOULD have counted as covered/probed.** They are pinned to BLOCKED (the worklist wins), but the heuristic's class-level blind spot for these is worth reconciling — either the worklist entry is stale (the Effect actually shipped → close it; the round-54/55 cron is the structural backstop) or the class heuristic is genuinely too coarse for that card's rider (expected — this is exactly why the per-card worklist exists):
+
+- `Sothera, the Supervoid` — residue `genuinely_missing`; class heuristic would have placed it in `probed` (class-granularity false-positive — pinned BLOCKED).
 
 _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_
 
@@ -52,8 +54,10 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - All-Fates Stalker
 - Alpharael, Dreaming Acolyte
 - Annul
+- Appendage Amalgam
 - Atmospheric Greenhouse
 - Banishing Light
+- Bashful Beastie
 - Beamsaw Prospector
 - Bear Trap
 - Bioengineered Future
@@ -109,6 +113,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Germinating Wurm
 - Get Out
 - Glacier Godmaw
+- Glassworks // Shattered Yard
 - Glimmerburst
 - Glimmerlight
 - Grasping Longneck
