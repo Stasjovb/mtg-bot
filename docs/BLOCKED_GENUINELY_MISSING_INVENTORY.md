@@ -103,6 +103,31 @@ Tractor Beam scope estimates remain unchanged (medium / large —
 they depend on Phase 2 S2 + Phase 3 residue Effects, not the Phase 2
 first deliverable's keyword admit widen).
 
+**Round-79+ update (2026-05-20): AURA ATTACH SUBSTRATE PHASE 2 S2
+EXTENSION LANDED — TRACTOR BEAM SUBSTRATE CLOSED.** The Phase-2-S2-
+extension slice shipped the substrate plumbing Tractor Beam needs:
+- New `aura_prevents_host_untap` field on CardDef + Rust
+  `CardPrinting` + bidir bridge round-trip (the new
+  `get_printing_aura_prevents_host_untap` getter).
+- Rust untap-step skip in
+  `state_ops_steps.rs::untap_all_for_player_inline` (pre-computes
+  the don't-untap host set walking both players' battlefields, then
+  skips during the active-player sweep).
+- Narrow Aura-ETB-trigger admit
+  (`_aura_triggers_are_phase2_s2_safe` +
+  `_python_ta_to_safe_dict_aura_extension`) for the
+  `Event.ENTERS + IsSelf + TapEnchantedPermanent` shape.
+
+The byte-equal round-trip + untap-step game-state probes
+(`tests/test_aura_substrate_phase_2_s2_extension.py`) pass at
+substrate level. **Tractor Beam transitions from
+BLOCKED-genuinely_missing to substrate-landed (bench admit
+honest-stopped)** — the residue worklist entry's
+`blocked_non_effect` status now reads "substrate landed; bench
+admit honest-stopped pending cross-engine cast-time
+auto-resolve seat-alignment slice". **BLOCKED-genuinely_missing
+tier shrinks from 2 → 1 — only Pain for All remains.**
+
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
 Pain for All 4,367 + Sothera 2,108). Some decks contain multiple

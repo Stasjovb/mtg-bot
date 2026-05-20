@@ -8113,6 +8113,72 @@ together.
 **Impact estimate**: **0 today** — no multi-grant Aura scenario in
 the live EoE pool. Forward-looking fix.
 
+## Aura Phase 2 S2 extension: Tractor Beam bench-loader admit honest-stopped (cross-engine cast-time seat alignment) (Aura-attachment Phase 2 S2 extension, 2026-05-20)
+
+**Where**: `src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_aura`
+(the lone-control-grant decline at the §2 teeth, just before the
+`attached_prevents_untap` decline). Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 "remaining
+honest-stops + extensions".
+
+**What the shortcut is**: the Phase-2-S2-extension slice landed the
+full substrate plumbing for the Tractor Beam shape (`is_aura` +
+`attached_grants_control` + `attached_prevents_untap` +
+`ENTERS-IsSelf-TapEnchantedPermanent` ETB): new
+`aura_prevents_host_untap` field on CardDef + Rust `CardPrinting`
++ bidir bridge round-trip via
+`get_printing_aura_prevents_host_untap`, Rust untap-step skip in
+`state_ops_steps.rs::untap_all_for_player_inline` (walks both
+players' battlefields to pre-compute the don't-untap host set, then
+skips during the active-player sweep), and the narrow
+Aura-ETB-trigger admit
+(`_aura_triggers_are_phase2_s2_safe` +
+`_python_ta_to_safe_dict_aura_extension`).
+
+**The bench-loader admit predicate stays declined for Tractor
+Beam** — the lone-control-grant decline + the
+`attached_prevents_untap` decline (one paragraph above) both keep
+Tractor Beam in the not-bridged sink. The byte-equal round-trip +
+untap-step game-state probe BOTH pass at substrate level
+(`tests/test_aura_substrate_phase_2_s2_extension.py`).
+
+**Why it's OK**: a relaxed admit during Phase-2-S2-extension surfaces
+a cross-engine production-deck shadow bake-in divergence at
+archetype 2 / seed 1 / step 874: Python casts Tractor Beam → puts
+it on the stack with a pending enchant-target decision, while Rust's
+auto-resolve fizzles with no selected target → Tractor Beam goes
+to graveyard on Rust but stays attached on Python. The cast-time
+auto-resolve seat needs Python<->Rust alignment for the
+Tractor-Beam shape under an opponent-creature host. The substrate
+landing is the closure milestone for the BLOCKED-genuinely_missing
+tier shrink (2 → 1 — only Pain for All remains); the bench-loader
+admit waits on the follow-up alignment slice.
+
+**Failure mode**: a future agent that widens the predicate to
+admit the Tractor-Beam shape WITHOUT fixing the cast-time seat
+alignment would re-trigger the production-deck shadow bake-in
+divergence at the same archetype 2 / seed 1 / step 874 boundary —
+guaranteed parity gap on any deck containing Tractor Beam.
+
+**Fix-scope estimate**: ~3-5h Rust slice — align Rust's
+`cast_aura` auto-resolve target-seat with Python's
+`_select_spell_targets` aura branch + `actions.py:1354` flow
+under the agent-not-yet-bound case (the divergence is in HOW the
+candidate seat is bound on Rust before `move_aura_post_resolve` is
+called; Python's flow places a pending decision on the stack and
+the agent-or-bench seat picks via `pool[0]`, but Rust's
+auto-resolve under no-decision-binding races to fizzle). Drop the
+two `_printing_is_bridge_simple_aura` decline arms guarding the
+Tractor-Beam shape, re-run the production-deck shadow bake-in to
+confirm closure.
+
+**Impact estimate**: +1 admit (Tractor Beam) on the bench at fix
+time. Deck-count delta is minimal (Tractor Beam appears in one
+17lands archetype — archetype 2 — and isn't a multi-copy mainstay).
+The substrate is the load-bearing closure for the
+BLOCKED-genuinely_missing tier shrink; the bench-admit delta is
+opportunistic.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

@@ -334,10 +334,13 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_2():
         else:
             declined.append((name, "declined"))
     # Phase 2 first deliverable: S1 carriers + S2 Duskmourn-shape
-    # (control-swap + lose-abilities). Tractor Beam still declined
-    # (triggered ETB + don't-untap rider). If this set changes
-    # (parser drift, future widen), update both this pin AND the
-    # deck-count expectations in the plan.
+    # (control-swap + lose-abilities). Tractor Beam stays
+    # bench-loader-declined (substrate plumbed in the Phase-2-S2-
+    # extension slice but cross-engine play parity is honest-stopped;
+    # see :func:`_printing_is_bridge_simple_aura`'s SL-documented
+    # Tractor-Beam decline). If this set changes (parser drift,
+    # future widen), update both this pin AND the deck-count
+    # expectations in the plan.
     assert sorted(admitted) == sorted([
         "Frantic Strength",
         "Shardmage's Rescue",
@@ -492,13 +495,26 @@ def test_predicate_admits_duskmourns_domination_post_phase_2_s2():
     assert _printing_is_bridge_simple_aura(dd) is True
 
 
-def test_predicate_declines_tractor_beam_pre_phase_2_s2_extension():
-    """S2 sub-shape sibling: Tractor Beam carries
-    ``attached_grants_control + attached_prevents_untap`` plus a
-    triggered ETB (TapEnchantedPermanent). The triggered_abilities
-    teeth + the attached_prevents_untap teeth keep it declined; a
-    future Phase-2-S2-extension slice (untap-step skip + trigger
-    bridge) is the unblocker."""
+def test_predicate_declines_tractor_beam_at_bench_loader_post_phase_2_s2_extension():
+    """**Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+    The Phase-2-S2-extension slice landed the full substrate for
+    Tractor Beam — ``aura_prevents_host_untap`` CardDef field +
+    Rust ``CardPrinting`` field + bridge round-trip + untap-step
+    skip in ``state_ops_steps.rs`` + the narrow
+    ``Event.ENTERS + IsSelf + TapEnchantedPermanent`` admit gate
+    helpers (``_aura_triggers_are_phase2_s2_safe`` +
+    ``_python_ta_to_safe_dict_aura_extension``). The byte-equal
+    round-trip pin + the untap-step game-state probe BOTH pass at
+    substrate level (see
+    ``tests/test_aura_substrate_phase_2_s2_extension.py``).
+
+    **Bench-loader admit is honest-stopped.** Full cross-engine
+    play parity over a production deck (the shadow bake-in) requires
+    aligning Python's cast-time enchant-target auto-resolve seat
+    with Rust's for the Tractor-Beam shape; that's a separate
+    follow-up slice. Until it lands, the bench-loader admit stays
+    declined to keep the production-deck shadow tests bit-clean.
+    SL-documented."""
     tb = _live_printing("Tractor Beam")
     assert tb.is_aura is True
     assert tb.attached_grants_control is True
@@ -668,9 +684,14 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
     # Phase 2 S2 first deliverable (round-79+, 2026-05-20): Duskmourn's
     # Domination is now ADMITTED — it carries the paired
     # control-swap + lose-abilities S2 shape the new Rust attach arm
-    # handles. Tractor Beam stays declined (triggered ETB +
-    # attached_prevents_untap rider). S3/S4 Auras stay positively
-    # declined by their respective §2 teeth.
+    # handles. Tractor Beam stays bench-loader-declined
+    # post-Phase-2-S2-extension — the substrate is plumbed end-to-end
+    # (``aura_prevents_host_untap`` + Rust untap-step skip +
+    # ``TapEnchantedPermanent`` Aura ETB bridge) but the bench
+    # admit waits on a cross-engine play-parity follow-up slice
+    # (the cast-time auto-resolve target seat needs Python<->Rust
+    # alignment under the Tractor-Beam shape). S3/S4 Auras stay
+    # positively declined by their respective §2 teeth.
     assert "Duskmourn's Domination" in admitted_auras, (
         "Phase 2 S2 expected Duskmourn's Domination to admit. "
         "Admitted set: %r" % (admitted_auras,)
@@ -680,7 +701,7 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
         "Sporogenic Infection",      # S4 triggered_abilities
         "Chorale of the Void",       # S4 triggered_abilities
         "Moonlit Meditation",        # S3 replaces_first_tokens_with_copies
-        "Tractor Beam",              # residue triggered_abilities + prevents_untap
+        "Tractor Beam",              # phase-2-s2-ext: bench admit honest-stopped pending cross-engine play parity
         "Meltstrider's Resolve",     # residue triggered_abilities
         "Pain for All",              # residue triggered_abilities
     }

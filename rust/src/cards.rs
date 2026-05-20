@@ -6655,6 +6655,22 @@ pub struct CardPrinting {
     /// S2.5 / Lignify-shape slice can light up the readers without
     /// further substrate changes. Ignored unless `is_aura == true`.
     pub aura_set_base_pt: Option<(i16, i16)>,
+    /// **Aura-attachment substrate — Phase 2 S2 extension (Tractor
+    /// Beam closure, 2026-05-20).** Layer-6-adjacent "doesn't untap
+    /// during its controller's untap step" static rider. `true` iff
+    /// this Aura's printed text contains "Enchanted permanent
+    /// doesn't untap during its controller's untap step" (Tractor
+    /// Beam, Stay Hidden Stay Silent). When `true` AND `is_aura`,
+    /// the untap-step sweep (`untap_all_for_player_inline` in
+    /// `state_ops_steps.rs`) skips any host the Aura is attached to,
+    /// so the host stays tapped through its controller's untap step
+    /// while the Aura is in play.
+    ///
+    /// `false` is the back-compat default — every pre-extension
+    /// registry dict omits the `aura_prevents_host_untap` key.
+    /// Mirrors Python's `CardPrinting.attached_prevents_untap`
+    /// (`cards/base.py:604`). Ignored unless `is_aura == true`.
+    pub aura_prevents_host_untap: bool,
     /// **Static / layered abilities substrate — Phase 1 first-deliverable
     /// (round-79, 2026-05-20).** Anthem-shape statics carried by this
     /// printing. Each `StaticAnthem` declares a layer-6 keyword grant
@@ -9660,6 +9676,20 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             }
             None => None,
         };
+    // Aura-attachment substrate — Phase 2 S2 extension (Tractor Beam
+    // closure, 2026-05-20). One new optional key:
+    // `aura_prevents_host_untap` (bool). Missing key parses to
+    // `false` per the back-compat pattern every other optional aura
+    // flag uses.
+    let aura_prevents_host_untap =
+        match dict.get_item("aura_prevents_host_untap")? {
+            Some(v) => v.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "aura_prevents_host_untap must be a bool",
+                )
+            })?,
+            None => false,
+        };
     // Static / layered abilities substrate — Phase 1 first-deliverable
     // (round-79). Parse the `static_anthems` list — each entry is a
     // dict `{"scope": str, "granted_keywords": [str, ...]}`. Missing
@@ -9849,6 +9879,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_grants_control,
         aura_grants_lose_abilities,
         aura_set_base_pt,
+        aura_prevents_host_untap,
         static_anthems,
         dynamic_pt_formula,
     })
@@ -11665,6 +11696,20 @@ impl Registry {
         id: u32,
     ) -> PyResult<Option<(i16, i16)>> {
         Ok(self.lookup(id)?.aura_set_base_pt)
+    }
+
+    /// **Aura-attachment substrate — Phase 2 S2 extension (Tractor
+    /// Beam closure, 2026-05-20).** `true` iff this Aura prevents
+    /// its host from untapping during the host's controller's untap
+    /// step. Defaults to `false` for non-Auras and for Auras without
+    /// the don't-untap rider. Consumed by the cross-engine bridge
+    /// read-back (`read_rust_printing_aura_fields`) and by the
+    /// untap-step sweep in `state_ops_steps.rs::untap_all_for_player_inline`.
+    fn get_printing_aura_prevents_host_untap(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.aura_prevents_host_untap)
     }
 
     /// **Static / layered abilities substrate — Phase 1 first-

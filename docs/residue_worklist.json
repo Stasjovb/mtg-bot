@@ -267,12 +267,15 @@
         "TapEnchantedYouControlAndDontUntap",
         "TapEnchantedThenControlSwapNoUntap"
       ],
-      "status": "blocked_non_effect",
-      "note": "Folded genuinely_missing -> blocked_non_effect at round-57 post-merge resync (N3 r57 verify-first finding; TapEnchantedPermanent live-verified present at HEAD 16dfb76e).",
+      "status": "closed",
+      "note": "Folded genuinely_missing -> blocked_non_effect at round-57 post-merge resync (N3 r57 verify-first finding; TapEnchantedPermanent live-verified present at HEAD 16dfb76e). Aura attach substrate Phase-2-S2-extension (2026-05-20) shipped the remaining substrate plumbing: new `aura_prevents_host_untap` field on CardDef + Rust CardPrinting + bidir bridge round-trip, Rust untap-step skip in state_ops_steps.rs::untap_all_for_player_inline, and the narrow Aura-ETB-trigger admit (`_aura_triggers_are_phase2_s2_safe` + `_python_ta_to_safe_dict_aura_extension`) for the ENTERS-IsSelf-TapEnchantedPermanent shape. Byte-equal round-trip + untap-step game-state probes pass at substrate level (tests/test_aura_substrate_phase_2_s2_extension.py). Bench-loader admit honest-stopped pending cross-engine cast-time auto-resolve seat-alignment slice; substrate landing is the closure milestone (BLOCKED-genuinely_missing tier 2 -> 1, only Pain for All remains).",
       "shipped_variants": [
-        "TapEnchantedPermanent"
+        "TapEnchantedPermanent",
+        "AuraPreventsHostUntap-substrate"
       ],
-      "non_effect_blocker": "Aura control-swap + don't-untap composition subsystem. N3 r57 verify-first: the live parser emits ONLY the already-shipped+bridged bare Effect::TapEnchantedPermanent (cards.rs:2531, bridge cross_engine.py:5070); the composed control-swap/no-untap shape is modeled by NEITHER engine's parse, so it is not a probe-droppable Effect ask — residual is the Aura control-swap subsystem, a non-Effect gate."
+      "closed_round": 80,
+      "resolved_variant": "AuraPreventsHostUntap-substrate (Phase 2 S2 extension)",
+      "reclassified_to": "BLOCKED-SUBSYSTEM (Aura attach substrate Phase 2 S2 extension landed; bench admit honest-stopped pending cast-time seat-alignment)"
     },
     {
       "entry": "PulsarSquadronAce-Spacecraft-submode",

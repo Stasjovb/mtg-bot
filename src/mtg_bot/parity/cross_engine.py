@@ -388,6 +388,16 @@ class CardDef:
     aura_grants_lose_abilities: bool = False
     aura_set_base_power: Optional[int] = None
     aura_set_base_toughness: Optional[int] = None
+    # Aura-attachment substrate — Phase 2 S2 extension (Tractor Beam
+    # closure, 2026-05-20). Layer-6-adjacent "doesn't untap during its
+    # controller's untap step" static rider. When ``True`` on an Aura,
+    # the host's untap-step skip applies while the Aura is attached.
+    # Mirrors Python's ``CardPrinting.attached_prevents_untap``
+    # (`cards/base.py:604`). ``False`` is the back-compat default —
+    # every pre-extension CardDef omits it and the registry-dict emitter
+    # skips it, so the Rust parser maps the absent key to ``false``.
+    # Ignored unless ``is_aura == true``.
+    aura_prevents_host_untap: bool = False
     # Static / layered abilities substrate — Phase 1 first-deliverable
     # (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``
     # §3 lever (1)). The frozen, bridge-serializable representation of
@@ -10729,6 +10739,14 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
             }
             for scope, granted_keywords in card.static_anthems
         ]
+    # Aura-attachment substrate — Phase 2 S2 extension (Tractor
+    # Beam closure, 2026-05-20). Emit ``aura_prevents_host_untap``
+    # only when set so every pre-extension CardDef registry dict is
+    # byte-identical to before this slice landed. The Rust parser
+    # maps the absent key to its zero default per the back-compat
+    # pattern every other optional field uses.
+    if card.aura_prevents_host_untap:
+        printing_dict["aura_prevents_host_untap"] = True
     return printing_dict
 
 
@@ -11244,6 +11262,11 @@ def _card_def_to_python_printing(card: "CardDef"):
             )
             else None
         ),
+        # Aura-attachment substrate — Phase 2 S2 extension (Tractor
+        # Beam closure, 2026-05-20). Threads the don't-untap rider
+        # through to the Python CardPrinting. Default ``False`` keeps
+        # every pre-extension CardDef bit-identical.
+        attached_prevents_untap=card.aura_prevents_host_untap,
         # Static / layered abilities substrate — Phase 1 first-
         # deliverable (round-79). Anthem-shape statics only — see the
         # materialization block above. Empty tuple = no anthem
@@ -11423,6 +11446,12 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         aura_set_base_power = int(sp)
         aura_set_base_toughness = int(st)
         attached_sets_base_pt = (int(sp), int(st))
+    # Aura-attachment substrate — Phase 2 S2 extension (Tractor Beam
+    # closure, 2026-05-20). Read back the don't-untap rider via the
+    # new STEP-2-style getter.
+    aura_prevents_host_untap = (
+        rust_registry.get_printing_aura_prevents_host_untap(printing_id)
+    )
     return {
         "is_aura": bool(is_aura),
         "aura_enchant_type": str(aura_enchant_type),
@@ -11442,6 +11471,11 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         "attached_grants_control": bool(aura_grants_control),
         "attached_grants_lose_all_abilities": bool(aura_grants_lose_abilities),
         "attached_sets_base_pt": attached_sets_base_pt,
+        # Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).
+        # Surfaced under both names for caller convenience — same
+        # convention as the other S2 fields above.
+        "aura_prevents_host_untap": bool(aura_prevents_host_untap),
+        "attached_prevents_untap": bool(aura_prevents_host_untap),
     }
 
 
