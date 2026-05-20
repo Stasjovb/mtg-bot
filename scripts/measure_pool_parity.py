@@ -376,6 +376,40 @@ PROBE_MODULES: tuple[Path, ...] = (
     # the same ZZZ + YYY drop-list precedent that already pins this
     # as honest-exhaustion).
     REPO_ROOT / "tests" / "test_probe_remaining_cccc.py",
+    # Probe batch DDDD (round 30 covered-but-unprobed) — fourth
+    # 4-letter probe batch (after AAAA, BBBB, CCCC).  Two cards from
+    # the covered tier upgraded to PROBED via the same parse +
+    # bridge round-trip + Python-side resolve idiom DDD slice 17 /
+    # YYY / ZZZ / AAAA / CCCC established:
+    #   * Broodguard Elite (Creature LEAVES_BATTLEFIELD + IsSelf ->
+    #     MoveSelfCountersToTargetCreatureYouControl(); FIRST
+    #     PROBE_MODULES-credited probe of the
+    #     MoveSelfCountersToTargetCreatureYouControl effect class --
+    #     the counter-relocation primitive distinct from
+    #     PutPlusOneCounterOnSelf's counter-ADD primitive; Dockworker
+    #     Drone is PROBED for its ETB leg only, the DIES sibling leg
+    #     emitting this same primitive is covered-by-construction
+    #     but unprobed prior to this batch).
+    #   * Starwinder (Creature DEALS_COMBAT_DAMAGE ->
+    #     DrawCardsEqualToResolvingCombatDamage(); FIRST
+    #     PROBE_MODULES-credited probe of the
+    #     DrawCardsEqualToResolvingCombatDamage effect class AND
+    #     FIRST DEALS_COMBAT_DAMAGE-event carrier _parity probe --
+    #     the implicit-carrier-scalar draw primitive reads
+    #     state.resolving_combat_damage_amount at resolve time
+    #     rather than carrying an explicit count field, distinct
+    #     from DrawCards(count=N); Anticausal Vestige / Dual-Sun
+    #     Technique / Haliya Guided by Light and 22 other EoE
+    #     consumers are covered-by-construction but unprobed prior
+    #     to this batch).
+    # Honest-exhaustion drops: Clammy Prowler (GrantUnblockableUEOT
+    # target-bearing rider not pinned by the bare bridge), Innocuous
+    # Rat (ManifestDread substrate -- re-confirmed honest exhaustion
+    # per CCCC), Optimistic Scavenger (Room subsystem -- re-
+    # confirmed per CCCC), Flesh Burrower / Hand That Feeds / Cult
+    # Healer (granted_keywords rider -- re-confirmed honest
+    # exhaustion per CCCC / BBBB / YYY).
+    REPO_ROOT / "tests" / "test_probe_remaining_dddd.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
