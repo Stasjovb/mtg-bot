@@ -3471,6 +3471,103 @@ pub enum Effect {
     /// fields. The bridge translates this Rust variant to
     /// `EnchantedCreatureFightsTargetEffect()` (field-free construction).
     EnchantedCreatureFightsTarget,
+    /// **20th Rust slice (XXX Pin 3 closure -- honest-stop substrate
+    /// landing) -- Lightstall Inquisitor each-opponent-exiles-card-
+    /// from-hand-with-cast-permission.** "When this creature enters,
+    /// each opponent exiles a card from their hand. They may play that
+    /// card for as long as it remains exiled, and they may spend mana
+    /// as though it were mana of any color to cast that spell. If they
+    /// cast a spell this way, they pay {1} more for it. If they play a
+    /// land this way, it enters tapped." Mirrors Python's
+    /// `EachOpponentExilesCardFromHandWithCastPermission`
+    /// (`effects/generic/discard.py:172-214`) -- the ONLY EoE card with
+    /// this shape, 4,371 17lands decks.
+    ///
+    /// **HONEST-STOP CLOSURE -- Effect variant + parse + to_pydict +
+    /// bridge + resolve arm (each-opponent-exile portion) ship here;
+    /// the persistent `cast_from_exile_with_lightstall_surcharge` flag
+    /// substrate is DEFERRED.** The Rust resolve arm moves a card from
+    /// each opponent's hand to exile byte-equal to Python's
+    /// `EachOpponentExilesCardFromHandWithCastPermission.resolve`. What
+    /// it does NOT do is stamp the per-card persistent flag on the
+    /// exiled `GameObject` (Python sets
+    /// `card.cast_from_exile_with_lightstall_surcharge = True`; Rust's
+    /// `GameObject` struct has no such field today) and the legal-
+    /// actions / cast-machinery on the Rust side therefore has no
+    /// "you may play this card from exile" surface for that exiled
+    /// card. This is the substrate gap documented in
+    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3 ("Lightstall
+    /// Inquisitor -- 4,371 decks"; large scope 6+ cycles) and is the
+    /// **largest single-card §2 substrate-shaped decline** in the
+    /// BLOCKED-genuinely_missing tier post-slice-18.
+    ///
+    /// **Why honest-stop?** The persistent permission substrate is
+    /// load-bearing across THREE Rust subsystems:
+    ///   1. New `GameObject` field
+    ///      (`cast_from_exile_with_lightstall_surcharge: bool`) +
+    ///      fingerprint serializer slot + CR 400.7 zone-change reset.
+    ///   2. Legal-actions emission (`state_ops_legal.rs`) must surface
+    ///      the exiled card as castable -- new exile-as-source code
+    ///      path and a {1} surcharge rider on the mana-cost check.
+    ///   3. Cast machinery (`state_ops_cast.rs`) must honor: cast from
+    ///      exile (the card stays in exile until the cast completes /
+    ///      moves it to the stack), +{1} mana surcharge on spells,
+    ///      tapped-entry rider on lands.
+    /// That's the multi-cycle substrate scope `BLOCKED_GENUINELY_MISSING
+    /// _INVENTORY.md` flags as "large (6+)". This slice closes the
+    /// Effect-shape gap (byte-equal up to the exile-of-the-card step);
+    /// the cast-back-from-exile permission lands in a separate slice
+    /// when (a) a second consumer surfaces or (b) the substrate cost
+    /// is paid down on its own merits.
+    ///
+    /// **Cross-engine parity boundary.** A probe that drives ETB
+    /// resolution and inspects post-resolve zones (count of cards in
+    /// each opponent's hand decreased by 1; count of cards in each
+    /// opponent's exile increased by 1; chosen-card identity is the
+    /// deterministic hand[0]-or-equivalent first-legal pick) is
+    /// byte-equal across engines today. A probe that further attempts
+    /// to cast the exiled card on the OWNER's next priority is NOT
+    /// byte-equal -- Python surfaces the cast in legal_actions; Rust
+    /// does not.
+    ///
+    /// **Resolve semantics (mirrors `EachOpponentExilesCardFromHand
+    /// WithCastPermission.resolve` step-for-step on the exile portion).**
+    /// 1. Source-controller resolution: 5-zone walk (hand / library /
+    ///    battlefield / graveyard / exile) on both players plus a stack
+    ///    scan to recover the source's `controller`. Mirrors
+    ///    `EachOpponentDiscards` (the same source-finder dispatch shape
+    ///    -- punisher / "each opponent" effects fire on whoever
+    ///    controls the source). Source not found anywhere = silent
+    ///    fizzle (lost-track-of-source tolerance).
+    /// 2. 2-player "each opponent" reduces to "the one opponent".
+    ///    `opponent_idx = (1 - controller) as usize`.
+    /// 3. If opponent's hand is empty: silent no-op (Python parity --
+    ///    `if not p.hand: continue` on Python side; mirrors
+    ///    `EachOpponentDiscards`'s empty-hand short-circuit).
+    /// 4. Pop hand[0] of the opponent (deterministic first-legal pick;
+    ///    Python's `agent.choose_discard` on the discarding opponent is
+    ///    matched in probe by an agent that returns
+    ///    `hand_ids[0]`).
+    /// 5. CR 400.7 zone-change reset on the moved object: `tapped`,
+    ///    `summoning_sick`, `damage`, `counters`, `attached_to`,
+    ///    `exiled_with_source` all cleared; `zone = ZONE_EXILE`.
+    /// 6. Push the object to the opponent's `exile` vec.
+    ///
+    /// **No event dispatch.** Unlike `EachOpponentDiscards`, this
+    /// effect does NOT dispatch `Event::DiscardsCard` -- the card is
+    /// exiled, not discarded (CR 701.8 vs CR 701.13). Python's resolve
+    /// does NOT fire `fire_opponent_discards_triggers` either
+    /// (`discard.py:172-214` has no event hook; cf. `discard.py:163`
+    /// which does, for `EachOpponentDiscards`). Honest-attribution
+    /// boundary respected.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides -- no
+    /// fields. The bridge translates this Rust variant to
+    /// `EachOpponentExilesCardFromHandWithCastPermission()` (field-
+    /// free construction). Mirrors the round-49 / slice-16
+    /// `AstelliReclaimerETBEffect` / slice-19
+    /// `EnchantedCreatureFightsTarget` unit-variant convention.
+    EachOpponentExilesCardFromHandWithCastPermission,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -7226,6 +7323,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // shape verbatim).
             Ok(Effect::EnchantedCreatureFightsTarget)
         }
+        "each_opponent_exiles_card_from_hand_lightstall" => {
+            // 20th Rust slice (XXX Pin 3 honest-stop closure) --
+            // Lightstall Inquisitor each-opponent-exiles-card-from-
+            // hand-with-cast-permission. Unit variant; no payload
+            // fields beyond `kind`. Mirrors the slice-16 / slice-19
+            // unit-variant parse arm shape verbatim. Extra dict fields
+            // silently ignored.
+            //
+            // **Persistent-permission substrate honest-stopped.** The
+            // resolve arm closes the each-opponent-exile portion
+            // byte-equal to Python; the persistent
+            // `cast_from_exile_with_lightstall_surcharge` per-object
+            // flag + cast-from-exile legality + +{1} surcharge +
+            // tapped-land-entry riders are NOT plumbed in this slice
+            // (see the Effect variant docstring for the substrate-
+            // scope breakdown and the BLOCKED_GENUINELY_MISSING
+            // _INVENTORY §3 entry for the closure-cost estimate).
+            Ok(Effect::EachOpponentExilesCardFromHandWithCastPermission)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -9989,6 +10105,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // No other keys emitted — round-trip dict-shape consistency
             // (slice-16 `astelli_reclaimer_etb_effect` precedent).
             d.set_item("kind", "enchanted_creature_fights_target")?;
+        }
+        Effect::EachOpponentExilesCardFromHandWithCastPermission => {
+            // 20th Rust slice (XXX Pin 3 honest-stop closure). Unit
+            // variant; no payload fields beyond `kind` (mirrors
+            // Python's field-free @dataclass(frozen=True) at
+            // `effects/generic/discard.py:172-214`). No other keys
+            // emitted -- round-trip dict-shape consistency (slice-16
+            // / slice-19 unit-variant precedent).
+            d.set_item("kind", "each_opponent_exiles_card_from_hand_lightstall")?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;

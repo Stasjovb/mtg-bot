@@ -8251,6 +8251,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EnchantedCreatureFightsTargetEffect,
         )
         return EnchantedCreatureFightsTargetEffect()
+    if kind == "each_opponent_exiles_card_from_hand_lightstall":
+        # 20th Rust slice (XXX Pin 3 honest-stop closure) -- Lightstall
+        # Inquisitor each-opponent-exiles-card-from-hand-with-cast-
+        # permission bridge arm. Rust's
+        # ``Effect::EachOpponentExilesCardFromHandWithCastPermission``
+        # (cards.rs unit variant added in this slice; parse + to_dict
+        # arms immediately after the slice-19
+        # ``enchanted_creature_fights_target``; resolve arm in
+        # ``state_ops_resolve.rs`` immediately after the slice-19
+        # arm) mirrors Python's
+        # ``EachOpponentExilesCardFromHandWithCastPermission``
+        # (``effects/generic/discard.py:172-214``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``EachOpponentExilesCardFromHandWithCastPermission()``
+        # reconstructs the Python @dataclass(frozen=True) (mirrors the
+        # ``astelli_reclaimer_etb_effect`` slice-16 /
+        # ``enchanted_creature_fights_target`` slice-19 unit-variant
+        # precedent).
+        #
+        # **Honest-stop status.** The Effect variant + parse +
+        # to_pydict + this bridge arm + the resolve arm (each-opponent-
+        # exile portion) ship the substrate scaffolding -- the cross-
+        # engine round-trip closes for this Effect class AND the post-
+        # resolve zone counts are byte-equal across engines (one card
+        # moves from each opponent's hand to that opponent's exile).
+        # The persistent ``cast_from_exile_with_lightstall_surcharge``
+        # per-object flag + cast-from-exile legality + +{1} mana
+        # surcharge + tapped-land-entry riders are NOT plumbed in this
+        # slice -- Rust's ``GameObject`` struct has no such field today,
+        # Rust's ``state_ops_legal.rs`` does not surface exile-as-cast-
+        # source for that flag, and Rust's ``state_ops_cast.rs`` does
+        # not honor the surcharge / tapped-entry riders. See the Rust
+        # Effect variant docstring at ``cards.rs`` for the substrate-
+        # scope breakdown and ``docs/BLOCKED_GENUINELY_MISSING
+        # _INVENTORY.md`` §3 ("Lightstall Inquisitor -- 4,371 decks";
+        # large scope 6+ cycles) for the closure-cost estimate.
+        #
+        # **Cross-engine parity boundary.** A probe that drives ETB
+        # resolution and inspects post-resolve zones (count of cards in
+        # each opponent's hand decreased by 1; count of cards in each
+        # opponent's exile increased by 1; chosen-card identity is the
+        # deterministic hand[0]-or-equivalent first-legal pick) is
+        # byte-equal across engines today. A probe that further attempts
+        # to cast the exiled card on the OWNER's next priority is NOT
+        # byte-equal -- Python surfaces the cast in legal_actions; Rust
+        # does not.
+        #
+        # **Real EoE consumer:** Lightstall Inquisitor (4,371 17lands
+        # decks) -- the ONLY EoE card with this shape. One of the 6
+        # cards on ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing
+        # list; this slice partially closes it (Effect-level +
+        # exile-portion byte-equality; persistent permission substrate
+        # honest-stopped).
+        from mtg_bot.effects.generic.discard import (
+            EachOpponentExilesCardFromHandWithCastPermission,
+        )
+        return EachOpponentExilesCardFromHandWithCastPermission()
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card
         # in each opponent's graveyard moves to that player's own
