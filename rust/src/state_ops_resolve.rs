@@ -1784,6 +1784,13 @@ fn apply_effect(
                 .map(|c| c as usize)
                 .unwrap_or(state.active_player as usize);
             state.players[controller].life += *amount;
+            // Track life-gained-this-turn for ConditionalIfYouGainedLifeAtLeast.
+            // Only positive amounts count — mirrors Python's gain_life() guard
+            // (game.py:1360: "if amount <= 0: return") which skips the
+            // `p.life_gained_this_turn += amount` increment when amount <= 0.
+            if *amount > 0 {
+                state.players[controller].life_gained_this_turn += *amount;
+            }
         }
         // Round-10: ReturnToHand. Bounce a target permanent back to
         // its current controller's hand (= owner's hand in the
@@ -12579,6 +12586,83 @@ fn apply_effect(
             // `resolve_top_of_stack`.
             state.pending_leaves_dispatches.push(leaving_obj_id);
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+        }
+        // **BBB downstream complement — 7th Rust slice (GGG Pin 2).**
+        // DefendingPlayerLosesHalfLifeRoundedUp: each opponent of the
+        // source-controller loses ceil(their_life / 2) life.  Mirrors
+        // Python's `DefendingPlayerLosesHalfLifeRoundedUp.resolve`
+        // (`effects/generic/life.py:576-588`).
+        //
+        // Controller resolution: prefer
+        // `state.current_resolve_source_controller` (set by the stack
+        // resolver around each `apply_effect` call), falling back to
+        // `state.active_player`. Same pattern as `Effect::GainLife`
+        // and `Effect::DrawCards`.
+        //
+        // Formula: `loss = (p.life + 1) / 2` — integer division of
+        // `(p.life + 1)` by 2, which is ceiling division for positive
+        // life totals and correct for zero / negative (e.g. life=0 →
+        // loss=0; life=-1 → loss=0). Matches Python's `(p.life + 1) // 2`.
+        Effect::DefendingPlayerLosesHalfLifeRoundedUp => {
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            for p in state.players.iter_mut() {
+                if p.id == controller || p.has_lost {
+                    continue;
+                }
+                let loss = (p.life + 1) / 2;
+                p.life -= loss;
+                // No Rust log field; Python-side logging is done by
+                // DefendingPlayerLosesHalfLifeRoundedUp.resolve.
+            }
+        }
+        // **BBB downstream complement — 7th Rust slice (XX Pin 1).**
+        // ConditionalIfYouGainedLifeAtLeast: check
+        // `controller.life_gained_this_turn >= threshold`; if met,
+        // apply `inner`. Mirrors Python's
+        // `ConditionalIfYouGainedLifeAtLeast.resolve`
+        // (`effects/combinators.py:985-996`).
+        //
+        // Controller resolution: prefer
+        // `state.current_resolve_source_controller` (set by the stack
+        // resolver); fall back to `state.active_player`. Same pattern
+        // as `Effect::GainLife`.
+        Effect::ConditionalIfYouGainedLifeAtLeast { threshold, inner } => {
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let gained = state.players[controller].life_gained_this_turn;
+            if gained >= *threshold {
+                apply_effect(state, inner, source_obj_id)?;
+            }
+            // else: silent no-op (mirrors Python's early return with log).
+        }
+        // **BBB downstream complement — 7th Rust slice (XX Pin 2).**
+        // ConditionalIfSourcePowerAtLeast: read `source_obj_id`'s
+        // effective power; if `>= threshold`, apply `effect`. Mirrors
+        // Python's `ConditionalIfSourcePowerAtLeast.resolve`
+        // (`effects/combinators.py:1084-1101`).
+        //
+        // Source-power read: use
+        // `predicate_subject_effective_power(state, source_obj_id)`
+        // which is already pub(crate) and handles UEOT + counter
+        // folding. `None` → source absent from battlefield → no-op
+        // (mirrors Python's `if source is None: return`). Power below
+        // threshold → silent no-op.
+        Effect::ConditionalIfSourcePowerAtLeast { threshold, effect } => {
+            match crate::state_ops_combat::predicate_subject_effective_power(
+                state,
+                source_obj_id,
+            ) {
+                Some(power) if power >= *threshold => {
+                    apply_effect(state, effect, source_obj_id)?;
+                }
+                _ => {
+                    // Source absent or power below threshold: silent no-op.
+                }
+            }
         }
     }
     Ok(())

@@ -316,6 +316,15 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     // GameState (not behind an Arc), so no CoW dance is needed.
     state.permanent_left_battlefield_this_turn = false;
     state.spell_warped_this_turn = false;
+    // Reset per-player life-gained-this-turn counters. Mirrors Python's
+    // `turn.py:1108`: `p.life_gained_this_turn = 0` in `run_cleanup_step`.
+    // Required by `Effect::ConditionalIfYouGainedLifeAtLeast` (Haliya,
+    // Guided by Light: "draw a card if you've gained 3 or more life this
+    // turn"). The cleanup step is the canonical "this turn" boundary for
+    // life tracking, same as the Void flags above.
+    for p in state.players.iter_mut() {
+        p.life_gained_this_turn = 0;
+    }
 }
 
 /// CR 106.4 — "When a phase or step ends, each player's mana pool

@@ -226,7 +226,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_rust_parse_predicate_state_bound_void_active_gap_sentinel_divergence_pin():
+def test_cross_engine_real_eoe_rust_parse_predicate_state_bound_void_active_FIXED_parity():
     """Pin the Rust-side gap in ``parse_predicate`` for the three predicate
     kinds wired by BBB's Python bridge fix but absent from the Rust parser.
 
@@ -348,80 +348,80 @@ def test_cross_engine_real_eoe_rust_parse_predicate_state_bound_void_active_gap_
         "changed and the Rust arm closure path needs updating."
     )
 
-    # 4-5. Rust raises for kind="state_bound" in a triggered_ability predicate
-    #      dict -- demonstrating the Rust gap.
+    # 4-5. GGG Pin 1 FIXED (BBB downstream complement 7th Rust slice):
+    #      Verify Rust Registry accepts state_bound + void_active +
+    #      any_player_controls_no_creatures predicate dicts via round-trip.
+    #      We register a synthetic card with a triggered_ability dict
+    #      carrying a state_bound predicate; if parse_predicate raises,
+    #      register_printing raises. Not raising == gap is closed.
     try:
-        from mtg_bot.rust_engine import parse_triggered_ability  # type: ignore[import]
-
-        ta_dict_state_bound = {
-            "event": "enters",
-            "effect": {"kind": "draw_cards", "count": 1},
-            "predicate": {
-                "kind": "state_bound",
-                "inner": {"kind": "void_active"},
-            },
-        }
-        with pytest.raises(Exception) as exc_info:
-            parse_triggered_ability(ta_dict_state_bound)
-
-        err_msg = str(exc_info.value)
-        assert "state_bound" in err_msg, (
-            "Rust parse_predicate gap sentinel: the error message should "
-            "mention 'state_bound' -- the invalid kind being dispatched.  "
-            f"Got error: {err_msg!r}.  "
-            "If 'state_bound' IS absent from the error message, Rust may "
-            "have silently accepted the dict -- which would mean the gap "
-            "is already closed; invert this pin to a FIXED-parity test."
+        import mtg_bot_engine
+        reg = mtg_bot_engine.Registry()
+        reg.register_printing({
+            "name": "GGG_Pin1_Parity_Test_VoidActive",
+            "mana_cost": {},
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [{
+                "event": "enters",
+                "effect": {"kind": "draw_cards", "count": 1},
+                "predicate": {
+                    "kind": "state_bound",
+                    "inner": {"kind": "void_active"},
+                },
+            }],
+        })
+        reg.register_printing({
+            "name": "GGG_Pin1_Parity_Test_AnyPlayerNoCreatures",
+            "mana_cost": {},
+            "card_types": ["Creature"],
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [{
+                "event": "beginning_of_end_step",
+                "effect": {"kind": "draw_cards", "count": 1},
+                "predicate": {
+                    "kind": "state_bound",
+                    "inner": {"kind": "any_player_controls_no_creatures"},
+                },
+            }],
+        })
+        # Both registered without error -- gap is closed on the Rust side.
+        assert len(reg) >= 2, (
+            "GGG Pin 1 FIXED parity: both state_bound-predicated printings "
+            "should be in the registry if parse_predicate handles them."
         )
-
     except ImportError:
-        # Rust extension not compiled in this worktree; verify the gap
-        # structurally via Python-introspectable evidence.
-        #
-        # The valid-kind list in Rust parse_predicate terminal arm (cards.rs)
-        # does NOT include state_bound, void_active, or
-        # any_player_controls_no_creatures.  The Python bridge arms ARE
-        # present (verified above in steps 1-3).  Rust extension not
-        # compiled -- gap is documented structurally.
+        # Rust extension not available -- verify structurally.
+        # The parse_predicate code now includes state_bound arm in cards.rs.
         assert hasattr(_ta_dict_to_python_state_predicate, '__call__'), (
-            'Structural gap pin: _ta_dict_to_python_state_predicate exists '
-            '(Python bridge); Rust parse_predicate lacks state_bound/'
-            'void_active/any_player_controls_no_creatures arms.'
+            'Structural parity: _ta_dict_to_python_state_predicate exists '
+            '(Python bridge); Rust parse_predicate NOW handles state_bound/'
+            'void_active/any_player_controls_no_creatures arms (BBB downstream '
+            'complement 7th Rust slice).'
         )
 
-    try:
-        from mtg_bot.rust_engine import parse_triggered_ability  # type: ignore[import]
-
-        ta_dict_always = {
-            "event": "enters",
-            "effect": {"kind": "draw_cards", "count": 1},
-            "predicate": {"kind": "always"},
-        }
-        # Should NOT raise.
-        parse_triggered_ability(ta_dict_always)
-    except ImportError:
-        pass  # Rust not compiled -- covered by structural probe above.
-
-    # 7. EoE cards blocked at the Rust layer by this gap.
-    void_family_blocked = [
-        "Voidforged Titan",       # Void -- parse_predicate can't materialise
-        "Insatiable Skittermaw",  # Void --   StateBound(VoidActive()) in the
-        "Kavaron Skywarden",      # Void --   Rust TA loader path.
+    # 7. EoE cards now unblocked at the Rust layer.
+    void_family_unblocked = [
+        "Voidforged Titan",       # Void -- StateBound(VoidActive()) now parsed
+        "Insatiable Skittermaw",  # Void
+        "Kavaron Skywarden",      # Void
         "Hylderblade",            # Void
         "Alpharael Stonechosen",  # Void
         "Roving Actuator",        # Void
     ]
-    any_player_blocked = [
+    any_player_unblocked = [
         "Sothera, the Supervoid",  # end-step gate:
                                    # StateBound(AnyPlayerControlsNoCreatures())
     ]
-    assert len(void_family_blocked) >= 5, (
-        "The Rust parse_predicate gap for state_bound+void_active blocks at "
-        f"least 5 Void-family EoE cards; enumerated {len(void_family_blocked)}."
+    assert len(void_family_unblocked) >= 5, (
+        "GGG Pin 1 FIXED: at least 5 Void-family EoE cards unblocked. "
+        f"Enumerated {len(void_family_unblocked)}."
     )
-    assert len(any_player_blocked) == 1, (
-        "The Rust parse_predicate gap for any_player_controls_no_creatures "
-        f"blocks 1 EoE card; enumerated {len(any_player_blocked)}."
+    assert len(any_player_unblocked) == 1, (
+        "GGG Pin 1 FIXED: Sothera, the Supervoid unblocked. "
+        f"Enumerated {len(any_player_unblocked)}."
     )
 
 
@@ -431,7 +431,7 @@ def test_cross_engine_real_eoe_rust_parse_predicate_state_bound_void_active_gap_
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_defending_player_loses_half_life_rounded_up_bridge_gap_sentinel_divergence_pin():
+def test_cross_engine_real_eoe_defending_player_loses_half_life_rounded_up_bridge_gap_sentinel_FIXED_parity():
     """Pin the bridge gap for the ``DefendingPlayerLosesHalfLifeRoundedUp``
     effect kind in ``_ta_dict_to_python_effect``.
 
@@ -516,23 +516,16 @@ def test_cross_engine_real_eoe_defending_player_loses_half_life_rounded_up_bridg
         "If a field was added, the bridge arm needs to read it from the dict."
     )
 
-    # 2-3. Bridge raises ValueError for the unwired effect kind.
-    unwired_eff_dict = {"kind": "defending_player_loses_half_life_rounded_up"}
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(unwired_eff_dict)
-
-    err_msg = str(exc_info.value)
-    assert "defending_player_loses_half_life_rounded_up" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'defending_player_loses_half_life_rounded_up' so the gap is "
-        "immediately identifiable.  "
-        f"Got message: {err_msg!r}"
+    # 2-3. Bridge NOW handles the wired effect kind (GGG Pin 2 FIXED).
+    wired_eff_dict = {"kind": "defending_player_loses_half_life_rounded_up"}
+    result = _ta_dict_to_python_effect(wired_eff_dict)
+    assert isinstance(result, DefendingPlayerLosesHalfLifeRoundedUp), (
+        "GGG Pin 2 FIXED: bridge should return DefendingPlayerLosesHalfLifeRoundedUp() "
+        f"for kind='defending_player_loses_half_life_rounded_up'.  Got: {type(result).__name__!r}."
     )
-    assert "unsupported effect kind" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain "
-        "'unsupported effect kind' confirming the "
-        "_ta_dict_to_python_effect dispatcher produced this error.  "
-        f"Got message: {err_msg!r}"
+    assert isinstance(result, Effect), (
+        "DefendingPlayerLosesHalfLifeRoundedUp must be an Effect subclass.  "
+        f"Got: {type(result).__name__!r}"
     )
 
     # 5. ConditionalIfVoid outer wrapper IS wired in the bridge -- the inner

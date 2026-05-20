@@ -817,6 +817,16 @@ pub struct Player {
     /// same fingerprint regardless of how many mulligans were taken
     /// to get there.
     pub mulligan_count: u32,
+    /// Per-player cumulative life gained this turn (reset to 0 at the
+    /// cleanup step, mirroring Python's `Player.life_gained_this_turn`
+    /// which is zeroed at `turn.py:1108`).  Tracks the running sum for
+    /// `Effect::ConditionalIfYouGainedLifeAtLeast` — the gate reads
+    /// this field at resolve time.  Written by the `Effect::GainLife`
+    /// resolve arm (state_ops_resolve.rs) whenever life increases.
+    /// Negative `amount` (life loss via GainLife, legal but unusual) does
+    /// NOT decrement — only positive gains count, same as Python's
+    /// `gain_life()` function which guards on `amount > 0` (game.py:1360).
+    pub life_gained_this_turn: i32,
 }
 
 /// Discriminant for the two kinds of stack items the engine
@@ -2352,6 +2362,7 @@ fn make_player(
         has_lost: false,
         attempted_draw_on_empty: false,
         mulligan_count: 0,
+        life_gained_this_turn: 0,
     }
 }
 
