@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **318 / 475 EoE cards (66.9%) are byte-equal at the Effect+bridge level**; of those, **212 (44.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 106 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **318 / 475 EoE cards (66.9%) are byte-equal at the Effect+bridge level**; of those, **214 (45.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 104 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **157 (33.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 212 | 44.6% |
-| Effect+bridge covered (not individually probed) | 106 | 22.3% |
+| PROBED byte-equal | 214 | 45.1% |
+| Effect+bridge covered (not individually probed) | 104 | 21.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 6 | 1.3% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -56,6 +56,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Alpharael, Stonechosen
 - Annul
 - Appendage Amalgam
+- Astelli Reclaimer
 - Atmospheric Greenhouse
 - Banishing Light
 - Bashful Beastie
@@ -84,6 +85,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Demonic Counsel
 - Depressurize
 - Desculpting Blast
+- Diplomatic Relations
 - Divert Disaster
 - Dockworker Drone
 - Don't Make a Sound
