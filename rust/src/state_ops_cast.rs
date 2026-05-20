@@ -1532,6 +1532,55 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
+        // **Battlefield STATE_EQ axis closure (todo `e5b7c9d8`).**
+        // Per-effect cast-time binds for the two Effect arms migrated
+        // to the `current_resolve_payload_target_id` pattern in
+        // `state_ops_resolve.rs` (Radiant Strike's destroy half +
+        // Focus Fire's damage half). The resolve arms now read the
+        // bound target id and fizzle on stale/illegal targets per CR
+        // 608.2b — so the cast-time bind MUST pick a target matching
+        // the effect's `legal_targets` filter (Python parity), not
+        // the default "first creature".
+        //
+        // Radiant Strike: spell_effect is
+        // `Sequence([DestroyTargetArtifactOrTappedCreature, GainLife(3)])`,
+        // so the head effect lives inside a Sequence. Peek through.
+        // Filter = `IsArtifact() | (IsCreature() & IsTapped())`, non-
+        // indestructible. Mirrors
+        // `state_ops_resolve.rs::Effect::DestroyTargetArtifactOrTapped
+        // Creature` + Python's `effects/generic/destroy.py:487-493`
+        // legal_targets.
+        let is_radiant_strike_destroy = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                let head = match p.effects.first() {
+                    Some(crate::cards::Effect::Sequence { effects }) => {
+                        effects.first()
+                    }
+                    other => other,
+                };
+                matches!(
+                    head,
+                    Some(crate::cards::Effect::DestroyTargetArtifactOrTappedCreature)
+                )
+            })
+            .unwrap_or(false);
+        // Focus Fire: top-level `FocusFireEffect { base }` (no
+        // Sequence wrapper). Filter = `IsCreature() & (IsAttacking()
+        // | IsBlocking())`. Mirrors
+        // `state_ops_resolve.rs::Effect::FocusFireEffect` + Python's
+        // `effects/bespoke.py:1771-1782` legal_targets.
+        let is_focus_fire = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                matches!(
+                    p.effects.first(),
+                    Some(crate::cards::Effect::FocusFireEffect { .. })
+                )
+            })
+            .unwrap_or(false);
         let (bound_target, bound_target_2): (Option<u32>, Option<u32>) =
             if is_two_slot {
                 // 2-slot: slot 0 = first caster-controlled creature,
@@ -1562,6 +1611,73 @@ impl GameState {
                     }
                 }
                 (slot0, slot1)
+            } else if is_radiant_strike_destroy {
+                // Radiant Strike's destroy half: first artifact-OR-
+                // tapped-creature on EITHER bf in
+                // `bf_iter_etb_sorted` order, non-indestructible
+                // (matches the resolve arm's filter + Python
+                // `legal_targets` filter exactly). The deterministic-
+                // first pick mirrors the
+                // `_PickFirstLegalTargetAgent` bake-in convention the
+                // Python SoT uses for `choose_target`.
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_creature = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        if !(is_artifact || (is_creature && o.tapped)) {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some(o.id)
+                    });
+                (t, None)
+            } else if is_focus_fire {
+                // Focus Fire: first attacking-or-blocking creature on
+                // EITHER bf in `bf_iter_etb_sorted` order (matches
+                // the resolve arm's filter + Python's `legal_targets`
+                // exactly). Combat predicate: id in
+                // `state.attackers` OR id is a `blocker_id` in
+                // `state.blockers`.
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        if !printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            return None;
+                        }
+                        let is_attacking =
+                            self.attackers.contains(&o.id);
+                        let is_blocking = self
+                            .blockers
+                            .iter()
+                            .any(|(_att, blk)| *blk == o.id);
+                        if is_attacking || is_blocking {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
+                    });
+                (t, None)
             } else if is_seedship_impact {
                 // Seedship Impact: first artifact-OR-enchantment on
                 // EITHER bf in `bf_iter_etb_sorted` order, non-

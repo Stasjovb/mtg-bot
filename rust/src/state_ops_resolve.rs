@@ -6180,25 +6180,110 @@ fn apply_effect(
         // full effect runs through the already-live `Effect::Sequence`
         // / `Effect::GainLife` arms. See invariant I39.
         Effect::DestroyTargetArtifactOrTappedCreature => {
-            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
-                .into_iter()
-                .find_map(|obj| {
-                    let printing = state.registry.lookup(obj.printing_id)?;
-                    let is_artifact =
-                        printing.card_types.iter().any(|t| t == "Artifact");
-                    let is_creature =
-                        printing.card_types.iter().any(|t| t == "Creature");
-                    // Typed-OR filter: artifact OR (creature AND tapped).
-                    // An untapped non-artifact creature is NOT legal
-                    // (the OR-filter teeth — pin both engines agree).
-                    if !(is_artifact || (is_creature && obj.tapped)) {
-                        return None;
-                    }
-                    if printing.keywords.iter().any(|k| k == "indestructible") {
-                        return None;
-                    }
-                    Some((obj.controller as usize, obj.id))
-                });
+            // **Battlefield STATE_EQ axis closure (todo `e5b7c9d8`).**
+            // Migrated to the `current_resolve_payload_target_id`
+            // pattern (SeedshipImpactEffect / DepressurizeEffect
+            // precedent). Pre-fix this arm self-scanned for the first
+            // Artifact-OR-tapped-Creature on either bf — diverging
+            // from Python whenever the cast-time-bound target ceased
+            // between cast and resolve (CR 608.2b — Python re-checks
+            // the ORIGINAL target id and fizzles; Rust pre-fix
+            // re-targeted the next matching permanent).
+            //
+            // Repro (arch=253 seed=2 step 1147 / `docs/BATTLEFIELD_
+            // AXIS_INVESTIGATION.md` §2): P0 attacks with Beamsaw
+            // Prospector id=0 (tapped). P1 casts Radiant Strike on
+            // Beamsaw, then Focus Fire on Beamsaw. Focus Fire
+            // resolves first (LIFO top), kills Beamsaw, dies-trigger
+            // creates Lander id=120 (Artifact). Now Radiant Strike
+            // resolves: Python re-checks bound target id=0
+            // (Beamsaw), finds it in graveyard → fizzle. Rust pre-fix
+            // scanned bf, picked Lander (first Artifact) and
+            // destroyed it. Post-fix: Rust reads
+            // `current_resolve_payload_target_id == Some(0)`, scans
+            // for id=0 on bf, finds None → fizzle. Byte-equal.
+            //
+            // **None-payload synthetic-test fallback.** The cross-
+            // engine real-EoE probe + the spell-card-bridge use
+            // `cast_spell_noncreature` which binds the target at
+            // cast time. The low-level synthetic-test `push_to_stack`
+            // API does NOT seat a target. For that path — and ONLY
+            // that path — fall back to the pre-fix deterministic-
+            // first scan: identical observable to prior behavior on
+            // every synthetic pin, no risk of re-introducing the bug
+            // because the bug requires a NON-None bound target whose
+            // target ceased to be legal. Documented in
+            // `docs/SEARCH_LIMITATIONS.md` (battlefield STATE_EQ
+            // axis closure entry).
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                let is_artifact = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact");
+                                let is_creature = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature");
+                                // Typed-OR filter re-checked at
+                                // resolve (defense-in-depth + the
+                                // CR 608.2b "still matches the
+                                // typed filter" leg).
+                                if !(is_artifact
+                                    || (is_creature && o.tapped))
+                                {
+                                    return None;
+                                }
+                                if printing
+                                    .keywords
+                                    .iter()
+                                    .any(|k| k == "indestructible")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_creature = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        if !(is_artifact || (is_creature && obj.tapped)) {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some((obj.controller as usize, obj.id))
+                    }),
+            };
             if let Some((pidx, target_id)) = target {
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
@@ -7215,38 +7300,107 @@ fn apply_effect(
                     x = x.saturating_add(1);
                 }
             }
-            // Target = first attacking-or-blocking creature in ETB-
-            // timestamp order across BOTH bfs (NOT controller-
-            // restricted — Python's filter is ANY creature). Combat
-            // predicate: id in `state.attackers` OR id is a
-            // `blocker_id` in `state.blockers`.
-            let target: Option<(usize, u32)> = {
-                let attackers = &state.attackers;
-                let blockers = &state.blockers;
-                let registry = &state.registry;
-                crate::bf_iter::bf_iter_etb_sorted(state)
-                    .into_iter()
-                    .find_map(|obj| {
-                        let printing =
-                            registry.lookup(obj.printing_id)?;
-                        if !printing
-                            .card_types
+            // **Battlefield STATE_EQ axis closure (todo `e5b7c9d8`).**
+            // Migrated to the `current_resolve_payload_target_id`
+            // pattern (SeedshipImpactEffect / DepressurizeEffect
+            // precedent). Pre-fix this arm self-scanned for the
+            // first attacking-or-blocking creature in ETB-timestamp
+            // order — diverging from Python whenever the cast-time-
+            // bound target was NOT the oldest attacker/blocker.
+            //
+            // Repro (arch=281 seed=4 step 2358 / `docs/BATTLEFIELD_
+            // AXIS_INVESTIGATION.md` §3): P0 declares 3 attackers
+            // (Knight Luminary id=10, Human Soldiers id=120 and
+            // id=121). P1 casts 2 Focus Fires each targeting id=120.
+            // Python resolves each Focus Fire against bound target
+            // id=120 (damage to Human Soldier 120, which dies). Rust
+            // pre-fix scanned for first attacking-or-blocking
+            // creature in ETB order → picked Knight id=10 (oldest
+            // attacker) twice → Knight dies, id=120 survives.
+            // Diverges from Python by which creature dies. Post-fix:
+            // Rust reads `current_resolve_payload_target_id ==
+            // Some(120)`, scans for id=120 on bf, finds it (still
+            // attacking) → deals damage to id=120. Byte-equal.
+            //
+            // **None-payload synthetic-test fallback.** Mirrors the
+            // DepressurizeEffect synthetic-fallback precedent
+            // (`:6808`). The low-level `push_to_stack` API used by
+            // synthetic tests (e.g.
+            // `test_rust_focus_fire_denominator_is_source_
+            // controllers_board`, `test_cross_engine_real_eoe_focus_
+            // fire_drives_combat_then_casts_parity`) does NOT seat a
+            // target. For that path — and ONLY that path — fall
+            // back to the pre-fix deterministic-first scan. Combat
+            // predicate (`id ∈ state.attackers ∨ id ∈ blockers`)
+            // preserved in both branches: the bound-target leg re-
+            // checks it at resolve (CR 608.2b "still matches the
+            // typed filter" leg — if a bound attacker died and got
+            // removed from `state.attackers`, the spell fizzles
+            // silently as Python does).
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
                             .iter()
-                            .any(|t| t == "Creature")
-                        {
-                            return None; // not a creature
-                        }
-                        let is_attacking =
-                            attackers.contains(&obj.id);
-                        let is_blocking = blockers
-                            .iter()
-                            .any(|(_att, blk)| *blk == obj.id);
-                        if is_attacking || is_blocking {
-                            Some((obj.controller as usize, obj.id))
-                        } else {
-                            None
-                        }
-                    })
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if !printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    return None;
+                                }
+                                let is_attacking =
+                                    state.attackers.contains(&o.id);
+                                let is_blocking = state
+                                    .blockers
+                                    .iter()
+                                    .any(|(_att, blk)| *blk == o.id);
+                                if is_attacking || is_blocking {
+                                    Some((pidx, o.id))
+                                } else {
+                                    None
+                                }
+                            })
+                    }),
+                None => {
+                    let attackers = &state.attackers;
+                    let blockers = &state.blockers;
+                    let registry = &state.registry;
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            let printing =
+                                registry.lookup(obj.printing_id)?;
+                            if !printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                return None; // not a creature
+                            }
+                            let is_attacking =
+                                attackers.contains(&obj.id);
+                            let is_blocking = blockers
+                                .iter()
+                                .any(|(_att, blk)| *blk == obj.id);
+                            if is_attacking || is_blocking {
+                                Some((obj.controller as usize, obj.id))
+                            } else {
+                                None
+                            }
+                        })
+                }
             };
             if let Some((pidx, target_id)) = target {
                 let amount_i16 = x.min(i16::MAX as i32) as i16;
