@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **311 / 475 EoE cards (65.5%) are byte-equal at the Effect+bridge level**; of those, **184 (38.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 127 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **311 / 475 EoE cards (65.5%) are byte-equal at the Effect+bridge level**; of those, **187 (39.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 124 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **164 (34.5%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 184 | 38.7% |
-| Effect+bridge covered (not individually probed) | 127 | 26.7% |
+| PROBED byte-equal | 187 | 39.4% |
+| Effect+bridge covered (not individually probed) | 124 | 26.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -83,6 +83,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Dual-Sun Adepts
 - Dubious Delicacy
 - Edge Rover
+- Elegy Acolyte
 - Embrace Oblivion
 - Emerge from the Cocoon
 - Endless Sands
@@ -174,6 +175,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Ragged Playmate
 - Ragost, Deft Gastronaut
 - Rayblade Trooper
+- Razorkin Hordecaller
 - Remnant Elemental
 - Rescue Skiff
 - Roaring Furnace // Steaming Sauna
@@ -208,6 +210,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Terramorphic Expanse
 - Thaumaton Torpedo
 - Thawbringer
+- Thrumming Hivepool
 - Tragic Trajectory
 - Trial of Agony
 - Tunnel Surveyor

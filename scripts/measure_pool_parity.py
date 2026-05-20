@@ -259,6 +259,9 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_remaining_ccc.py",
     REPO_ROOT / "tests" / "test_divergence_pins_aaa.py",
     REPO_ROOT / "tests" / "test_divergence_pins_uu.py",
+    REPO_ROOT / "tests" / "test_probe_remaining_fff.py",
+    REPO_ROOT / "tests" / "test_probe_rr_events_trio.py",
+    REPO_ROOT / "tests" / "test_divergence_pins_rr.py",
     REPO_ROOT
     / "tests"
     / "test_probe_idiom_unlocked_optional_cost_mirror.py",
