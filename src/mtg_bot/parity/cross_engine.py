@@ -8354,6 +8354,129 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EachOpponentExilesCardFromHandWithCastPermission,
         )
         return EachOpponentExilesCardFromHandWithCastPermission()
+    if kind == "each_opponent_exiles_own_creature":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Sothera, the
+        # Supervoid's DIES-trigger body: each opponent exiles a creature
+        # they control. Rust's
+        # ``Effect::EachOpponentExilesOwnCreature { link_to_source: bool }``
+        # mirrors Python's
+        # ``EachOpponentExilesOwnCreature(link_to_source: bool = False)``
+        # (``effects/generic/opponent_punishers.py:148-217``).
+        #
+        # **Single-field bridge.** ``link_to_source: bool`` round-trips
+        # as a Python ``bool``; default ``False`` matches Python's
+        # dataclass default.
+        #
+        # **Honest-stop substrate.** The persistent ``GameObject.exiled_by_
+        # source`` source-link field is deferred (large multi-cycle
+        # substrate per ``BLOCKED_GENUINELY_MISSING_INVENTORY.md`` Sothera
+        # entry); the Rust resolve arm ships the exile move portion only.
+        # See the cards.rs Effect variant docstring for the substrate-
+        # scope breakdown.
+        #
+        # **Real EoE consumer:** Sothera, the Supervoid (2,108 17lands
+        # decks) -- the ONLY EoE card with this shape.
+        from mtg_bot.effects.generic.opponent_punishers import (
+            EachOpponentExilesOwnCreature,
+        )
+        link_to_source = bool(eff_dict.get("link_to_source", False))
+        return EachOpponentExilesOwnCreature(link_to_source=link_to_source)
+    if kind == "reanimate_one_exiled_with_source_with_counters":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Sothera, the
+        # Supervoid's end-step recall body. Rust's
+        # ``Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount: i32 }``
+        # mirrors Python's
+        # ``ReanimateOneExiledWithSourceWithCounters(counter_amount: int = 0)``
+        # (``effects/generic/exile.py:1121-1216``).
+        #
+        # **Single-field bridge.** ``counter_amount: int`` round-trips
+        # as a Python int; default 0 matches Python's dataclass default.
+        #
+        # **Honest-stop substrate.** Resolve arm fizzles silently in
+        # Rust because the candidate set (cards tagged ``exiled_by_source
+        # == source.id``) is always empty -- the source-link field
+        # doesn't exist on Rust's GameObject today. Python takes the
+        # same fizzle in the no-candidates case, so cross-engine state
+        # remains byte-equal.
+        from mtg_bot.effects.generic.exile import (
+            ReanimateOneExiledWithSourceWithCounters,
+        )
+        counter_amount = int(eff_dict.get("counter_amount", 0))
+        return ReanimateOneExiledWithSourceWithCounters(
+            counter_amount=counter_amount,
+        )
+    if kind == "sacrifice_self_preserving_exile_link":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Sothera, the
+        # Supervoid's sacrifice companion to the recall. Rust's
+        # ``Effect::SacrificeSelfPreservingExileLink`` mirrors Python's
+        # ``SacrificeSelfPreservingExileLink``
+        # (``effects/generic/exile.py:1221-1273``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``SacrificeSelfPreservingExileLink()`` reconstructs the Python
+        # @dataclass(frozen=True).
+        from mtg_bot.effects.generic.exile import (
+            SacrificeSelfPreservingExileLink,
+        )
+        return SacrificeSelfPreservingExileLink()
+    if kind == "grant_triggered_ability_ueot_requiem":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Requiem
+        # Monolith's UEOT grant of a quoted dealt-damage trigger. Rust's
+        # ``Effect::GrantTriggeredAbilityUEOTRequiem`` is a unit variant
+        # (the inner ``ability`` TriggeredAbility is reconstructed here
+        # from the fixed Requiem shape).
+        #
+        # **Unit-variant Rust bridge to a fixed-shape Python
+        # GrantTriggeredAbilityUEOT.** This is the Requiem-shape grant
+        # arm. The general grant-triggered-ability registry in Rust is
+        # deferred (only the Perigee `GrantedDiesReturnTapped` marker
+        # exists today). When the registry lands, this arm will fan out
+        # to a parameterized Effect variant carrying the inner
+        # ``TriggeredAbility``.
+        #
+        # **Real EoE consumer:** Requiem Monolith (only EoE card with
+        # this shape).
+        from mtg_bot.effects.generic.grant_keywords import (
+            GrantTriggeredAbilityUEOT,
+        )
+        from mtg_bot.effects.generic.damage import (
+            DrawCardsAndLoseLifeEqualToResolvingDamage,
+        )
+        from mtg_bot.effects.base import TriggeredAbility
+        return GrantTriggeredAbilityUEOT(
+            ability=TriggeredAbility(
+                trigger="this_dealt_damage",
+                effect=DrawCardsAndLoseLifeEqualToResolvingDamage(),
+            ),
+        )
+    if kind == "may_have_source_deal_damage_to_target":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Requiem
+        # Monolith's optional 1-damage ping. Rust's
+        # ``Effect::MayHaveSourceDealDamageToTarget { amount: i32 }``
+        # mirrors Python's
+        # ``MayHaveSourceDealDamageToTarget(amount: int = 1)``
+        # (``effects/generic/damage.py:1114-1186``).
+        #
+        # **Single-field bridge.** ``amount: int`` round-trips as a
+        # Python int; default 1 matches Python's dataclass default.
+        from mtg_bot.effects.generic.damage import (
+            MayHaveSourceDealDamageToTarget,
+        )
+        amount = int(eff_dict.get("amount", 1))
+        return MayHaveSourceDealDamageToTarget(amount=amount)
+    if kind == "draw_cards_and_lose_life_equal_to_resolving_damage":
+        # 22nd Rust slice (Sothera + Requiem honest-stop) -- Requiem
+        # Monolith's granted UEOT trigger body. Rust's
+        # ``Effect::DrawCardsAndLoseLifeEqualToResolvingDamage``
+        # mirrors Python's
+        # ``DrawCardsAndLoseLifeEqualToResolvingDamage``
+        # (``effects/generic/damage.py:1072-1111``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip.
+        from mtg_bot.effects.generic.damage import (
+            DrawCardsAndLoseLifeEqualToResolvingDamage,
+        )
+        return DrawCardsAndLoseLifeEqualToResolvingDamage()
     if kind == "house_cartographer_survival":
         # 21st Rust slice (XXX Pin 1 closure) -- House Cartographer
         # reveal-until-land library walk bridge arm. Rust's

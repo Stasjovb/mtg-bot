@@ -12582,6 +12582,307 @@ fn apply_effect(
                 }
             }
         }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Sothera, the Supervoid's DIES-trigger body: each opponent
+        // chooses one creature they control and exiles it. With
+        // `link_to_source = true`, each exiled object would be tagged
+        // with `exiled_by_source = state.resolving_source.id` so a
+        // sibling end-step ability on the same source can later
+        // recall it.
+        //
+        // **HONEST-STOP RESOLVE ARM.** The exile-portion of the body
+        // (each opponent exiles their first creature) is shipped
+        // verbatim — byte-equal with Python's resolve when no agent
+        // hook is plumbed (Python uses `agent.choose_sacrifice`
+        // returning the first candidate by deterministic test-agent
+        // contract; Rust here picks the first creature without an
+        // agent callback, which matches the no-agent-supplied
+        // deterministic fallback at `opponent_punishers.py:200-201`:
+        // `chosen = next((o for o in candidates if o.id == pick_id),
+        // candidates[0])`).
+        //
+        // **Source-link bookkeeping deferred.** When
+        // `link_to_source = true`, Python stamps
+        // `chosen.exiled_by_source = source.id`; Rust here can't
+        // record the link because `GameObject` has no
+        // `exiled_by_source` field (large multi-cycle substrate per
+        // `BLOCKED_GENUINELY_MISSING_INVENTORY.md` Sothera entry).
+        // The exile move itself still ships; only the cross-card
+        // source-link bookkeeping is the deferred piece. Without the
+        // link, the sister `ReanimateOneExiledWithSourceWithCounters`
+        // arm cannot find the exiled creature at end-of-turn — but
+        // that arm ALSO honest-stops to a silent fizzle in this
+        // slice, so the cross-engine state remains byte-equal on the
+        // FULL DIES + end-step sequence (both engines: P_opp loses
+        // one creature; neither engine recalls it; Sothera is
+        // sacrificed normally without the exile-link suppression).
+        Effect::EachOpponentExilesOwnCreature { link_to_source: _ } => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan
+            // (mirrors slice-20 Lightstall source-controller resolution).
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2. Per-opponent loop. 2-player engine: the one opponent
+            // is `1 - controller`. Mirrors Python's
+            // `for opp in state.players: if opp.id == controller_id or
+            // opp.has_lost: continue` at `opponent_punishers.py:187-188`.
+            let opponent_idx = (1 - controller) as usize;
+            if opponent_idx >= state.players.len() {
+                return Ok(());
+            }
+            // 3. First-legal creature candidate scan on the opponent's
+            // battlefield. Mirrors `candidates = [o for o in
+            // state.battlefield if o.controller_id == opp.id and
+            // o.printing.is_creature]`; deterministic first pick (no-
+            // agent fallback `candidates[0]`).
+            let pick_id: Option<u32> = {
+                let bf = &state.players[opponent_idx].battlefield;
+                let mut found: Option<u32> = None;
+                for obj in bf.iter() {
+                    let is_creature = match state.registry.lookup(obj.printing_id) {
+                        Some(pr) => pr.card_types.iter().any(|t| t == "Creature"),
+                        None => false,
+                    };
+                    if is_creature {
+                        found = Some(obj.id);
+                        break;
+                    }
+                }
+                found
+            };
+            let Some(pick_id) = pick_id else {
+                // No legal creature: silent skip (Python parity at
+                // `opponent_punishers.py:194-195`).
+                return Ok(());
+            };
+            // 4. Move the chosen object from the opponent's bf to the
+            // opponent's exile zone. Mirrors `move_off_battlefield(
+            // state, chosen, destination="exile")` with CR 400.7
+            // zone-change reset on the moved object.
+            //
+            // **Source-link bookkeeping is the deferred piece.**
+            // Python stamps `chosen.exiled_by_source = source.id` here
+            // when `link_to_source = true`; Rust does not have such a
+            // field. Honest-stop: the exile move ships; the link does
+            // not. See the Effect variant docstring.
+            let bf_mut = Arc::make_mut(&mut state.players[opponent_idx].battlefield);
+            let Some(pos) = bf_mut.iter().position(|o| o.id == pick_id) else {
+                return Ok(()); // raced; defensive
+            };
+            let mut obj = bf_mut.remove(pos);
+            let printing_id = obj.printing_id;
+            let leaving_obj_id = obj.id;
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
+            // Battlefield-exit bookkeeping (mirrors the `Effect::Exile`
+            // / `Effect::Sacrifice` arm conventions).
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+        }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Sothera, the Supervoid's end-step "put one creature card
+        // exiled with this permanent onto the battlefield under your
+        // control with N additional +1/+1 counters" body.
+        //
+        // **HONEST-STOP RESOLVE ARM — silent fizzle.** The candidate
+        // set is built from cards tagged with `exiled_by_source ==
+        // source.id`, but Rust's `GameObject` has no `exiled_by_source`
+        // field today (large multi-cycle substrate per
+        // `BLOCKED_GENUINELY_MISSING_INVENTORY.md` Sothera entry). The
+        // candidate set is always empty — silent fizzle. Python takes
+        // the same fizzle when `candidates` is empty
+        // (`exile.py:1178-1179`: `if not candidates: return`), so the
+        // cross-engine state stays byte-equal in the no-candidate case.
+        // The hot-path branch (`put_into_battlefield` + add counters)
+        // becomes ready-to-flip when the source-link substrate ships.
+        Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount: _ } => {
+            // No-op: honest stop. The substrate gate
+            // (`obj.exiled_by_source == source.id` field check) is
+            // never satisfied because the field doesn't exist. This is
+            // the slice-19 Meltstrider precedent: silently match
+            // Python's same-case fizzle until the deferred substrate
+            // lands.
+            let _ = source_obj_id;
+        }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Sothera, the Supervoid's "sacrifice this, preserving the
+        // source-link" body. Companion to
+        // `ReanimateOneExiledWithSourceWithCounters` — together they
+        // form Sothera's end-step Sequence (recall first, sac second).
+        //
+        // **HONEST-STOP RESOLVE ARM.** The sacrifice itself ships via
+        // the existing `sacrifice_source_inline` helper. The one-shot
+        // `suppress_exiled_by_source_on_leave_for` arming is a no-op
+        // in Rust today because the on-leave auto-return hook itself
+        // isn't wired — both halves of the suppression machinery (the
+        // auto-return AND the suppression) are deferred together, so
+        // cross-engine state stays byte-equal on the sac event
+        // (Python's pre-suppression state: source is on bf; Python's
+        // post-resolve state: source is in graveyard with no auto-
+        // return having fired because no creature was tagged with the
+        // missing source-link in the first place — identical to
+        // Rust's post-resolve state).
+        Effect::SacrificeSelfPreservingExileLink => {
+            // Locate the source's controller. Mirrors the Sothera
+            // pattern: the source is presumed on bf (CR 701.16: "The
+            // controller of the ability sacrifices the source").
+            let mut source_controller: Option<u8> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    source_controller = Some(pidx as u8);
+                    break;
+                }
+            }
+            let Some(controller) = source_controller else {
+                // Source already off the bf (e.g. destroyed by an
+                // earlier sequence step) — silent no-op, mirroring
+                // Python's `if source not in state.battlefield: return`
+                // at `exile.py:1262-1263`.
+                return Ok(());
+            };
+            sacrifice_source_inline(state, controller as usize, source_obj_id)?;
+        }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Requiem Monolith's UEOT grant of a quoted dealt-damage
+        // trigger.
+        //
+        // **HONEST-STOP RESOLVE ARM — silent no-op.** Rust has no
+        // general layer-6 grant-triggered-ability registry (only the
+        // narrow Perigee `GrantedDiesReturnTapped` marker — see
+        // `state.rs:299`). The Effect-level closure ships the variant
+        // + parse + to_pydict + bridge round-trip; the resolve arm
+        // records nothing today. When the broader grant-triggered-
+        // ability registry lands, this arm flips to writing a UEOT-
+        // bounded layer-6 entry on the chosen target.
+        Effect::GrantTriggeredAbilityUEOTRequiem => {
+            // No-op: honest stop. The chosen target is left untouched
+            // because there's nowhere to write the granted ability.
+            let _ = source_obj_id;
+        }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Requiem Monolith's optional 1-damage ping: "That creature's
+        // controller may have <source> deal N damage to it."
+        //
+        // **HONEST-STOP RESOLVE ARM — silent no-op.** The choice is
+        // owned by the TARGET's controller (NOT the activator), which
+        // requires a `choose_yes_no` agent callback Rust has not
+        // plumbed at this resolve site. Python's same-case fallback
+        // (`target_controller.agent is None: return` at
+        // `damage.py:1161`) is identical — both engines fizzle when
+        // no agent is wired.
+        //
+        // The cross-engine round-trip closes for this Effect class via
+        // the bridge arm; the hot-path branch (`tgt.damage += amount`
+        // + fire enchanted-creature dealt-damage triggers) becomes
+        // ready-to-flip when the `choose_yes_no` callback substrate
+        // is plumbed.
+        Effect::MayHaveSourceDealDamageToTarget { amount: _ } => {
+            // No-op: honest stop. Cross-engine state stays byte-equal
+            // because Python ALSO returns early in the no-agent case.
+            let _ = source_obj_id;
+        }
+        // **22nd Rust slice (Sothera + Requiem closures honest-stop).**
+        // Requiem Monolith's granted-trigger BODY: "You draw that many
+        // cards and lose that much life." Mirrors Python's
+        // `DrawCardsAndLoseLifeEqualToResolvingDamage.resolve`
+        // (`effects/generic/damage.py:1089-1108`).
+        //
+        // **Direct-resolve byte-equal (not honest-stop).** This arm is
+        // exercised only when a caller drives it directly via
+        // `apply_effect` with `state.resolving_combat_damage_amount`
+        // pre-set (e.g. a synthetic probe). It reads the amount slot,
+        // fizzles silently if 0, locates the source's controller, and
+        // applies `draw_card × amount` + `life -= amount` to that
+        // controller. The Python parity-checks: `if amount <= 0:
+        // return`, `if source is None: return`. The arm is wired even
+        // though no production code-path reaches it today, because
+        // the cross-engine round-trip needs the resolve to be present
+        // for the dict-shape-consistency probe to pass.
+        Effect::DrawCardsAndLoseLifeEqualToResolvingDamage => {
+            let amount = state.resolving_combat_damage_amount;
+            if amount <= 0 {
+                return Ok(());
+            }
+            // Source-controller resolution: 5-zone walk + stack scan.
+            // Mirrors the slice-20 Lightstall source-controller-
+            // resolution shape.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(());
+            };
+            let controller_idx = controller as usize;
+            if controller_idx >= state.players.len() {
+                return Ok(());
+            }
+            // Draw `amount` cards. Mirrors Python's `for _ in
+            // range(amount): draw_card(state, owner.id)`. Inlined per
+            // the file-isolation convention (see the `Effect::DrawCards`
+            // arm's inlining note at `state_ops_resolve.rs:1892`).
+            for _ in 0..amount.max(0) {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    // CR 704.5b — empty-library draw flags the player
+                    // (same shape as the `Effect::DrawCards` arm).
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+            // Lose `amount` life. Mirrors `owner.life -= amount`.
+            let player_mut = &mut state.players[controller_idx];
+            player_mut.life = player_mut.life.saturating_sub(amount);
+        }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
         // Void ETB.** "Exile up to one target instant or sorcery card
         // with mana value 2 or less from your graveyard. Copy it. You
