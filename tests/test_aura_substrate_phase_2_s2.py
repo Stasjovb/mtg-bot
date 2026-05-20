@@ -22,14 +22,17 @@ flash-symmetric-drop slice.
   timestamp interleaving between a grant applied BEFORE and a
   lose-abilities effect applied AFTER is not modeled — no live admit
   set exercises it.
-* **Layer 7b — set-base-PT (plumbing only).** New
-  ``aura_set_base_power`` / ``aura_set_base_toughness`` fields +
-  ``aura_set_base_pt`` wire key + Rust storage + bidir bridge
-  round-trip. **No reader fold lit** — no admitted S2 carrier today
+* **Layer 7b — set-base-PT (plumbing only in this slice; reader
+  fold lit in Phase 2 S2.5).** New ``aura_set_base_power`` /
+  ``aura_set_base_toughness`` fields + ``aura_set_base_pt`` wire
+  key + Rust storage + bidir bridge round-trip. Phase 2 S2 (this
+  slice) did NOT wire the reader fold — no admitted S2 carrier
   uses the override; Duskmourn's Domination is control-swap +
-  lose-abilities only. A future S2.5 / Lignify-shape slice can light
-  up ``battlefield_creature_power`` / ``_toughness`` without further
-  substrate changes.
+  lose-abilities only. Phase 2 S2.5 (separately) lights up
+  ``battlefield_creature_power`` / ``_toughness`` +
+  ``collect_sba_victims`` to read the set-base; exercised via
+  synthetic registry-dict injection in
+  ``tests/test_aura_substrate_phase_2_s2_5.py``.
 
 **Cards unblocked / scaffolded.**
 

@@ -8015,54 +8015,60 @@ any card today, but is the prerequisite for admitting any S2 +
 keyword-grant interleaving Aura combination that lands in a future
 set.
 
-## Aura Phase 2 S2 layer-7b set-base-PT: reader fold honest-stopped (substrate plumbed only) (Aura-attachment Phase 2 S2, round-79+)
+## Aura Phase 2 S2.5 layer-7b set-base-PT: multi-Aura timestamp interleaving honest-stopped (reader fold lit) (Aura-attachment Phase 2 S2.5, round-79+)
 
-**Where**: `rust/src/cards.rs::CardPrinting.aura_set_base_pt`
-+ `rust/src/state_ops_combat.rs::battlefield_creature_power` /
-`battlefield_creature_toughness` (the readers don't yet consult
-the new field). Spec:
-`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2.
+**Where**: `rust/src/state_ops_combat.rs::aura_set_base_pt_on`
+(scans both bfs for the first Aura with `aura_set_base_pt`
+attached to `host_id`) — used by `battlefield_creature_power`,
+`battlefield_creature_toughness`,
+`state_ops_sba::collect_sba_victims`, and
+`state_ops_sba::is_lethal`. Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 / S2.5.
 
-**What the shortcut is**: the Phase-2-S2 slice plumbs the
-`aura_set_base_pt` (layer-7b set-base-PT) field through the entire
-substrate — CardDef → bridge → Rust storage → bidir round-trip via
-`read_rust_printing_aura_fields` / `get_printing_aura_set_base_pt`.
-But the Rust effective-P/T readers (`battlefield_creature_power` /
-`battlefield_creature_toughness`) do NOT yet consult the field for
-the layer-7b base override. A printing carrying
-`aura_set_base_pt = Some((0, 4))` (Lignify shape) would round-trip
-correctly through the registry but Rust would compute effective P/T
-from the host's PRINTED base (CR 613 layer-7b override silently
-dropped on the Rust side).
+**Status update (round-79+, S2.5, 2026-05-20).** The
+reader-fold-honest-stop documented in the Phase 2 S2 slice is now
+**closed** — the Rust effective-P/T computation (both combat and
+SBA reader sites) reads `aura_set_base_pt` and slots it between
+the UEOT base override (last-applied wins, kept above set-base by
+precedent) and the dynamic-base / printed-base fallbacks. The 12
+tests in `tests/test_aura_substrate_phase_2_s2_5.py` exercise the
+fold via synthetic registry-dict injection (Lignify isn't in the
+EoE pool, but the substrate is ready for any future set carrier).
 
-**Why it's OK**: the **loader predicate
-`_printing_is_bridge_simple_aura` declines any Aura with
-`attached_sets_base_pt is not None`** (see
-`src/mtg_bot/parity/trajectory.py`). No printing reaches the bench
-loader with the set-base-PT field populated, so the missing reader
-fold is not exercised. The field's plumbing is value-added by
-making it a one-line flip in a future S2.5 / Lignify slice: light
-up the reader, drop the predicate's `attached_sets_base_pt` decline
-teeth, ship.
+**What the shortcut is (post-S2.5)**: when multiple set-base-PT
+Auras attach to the SAME host, CR 613.3b requires the latest by
+timestamp to win. The Rust `GameObject` carries no attach
+timestamp; `aura_set_base_pt_on` returns the FIRST attached
+set-base-PT Aura it encounters in the deterministic bf walk
+(player 0 then player 1, in registration order). For a real
+multi-set-base interleave this could disagree with Python's
+last-writer-wins continuous-effects registry.
 
-**Failure mode**: a future agent that mistakenly widens the
-predicate to admit a Lignify-shape Aura WITHOUT also lighting up
-the Rust reader fold would produce a guaranteed inter-engine
-divergence (Python uses the layer-7b base; Rust uses the printed
-base). The honest-stop is gate-protected.
+**Why it's OK**: the **bench admit set today has ZERO
+set-base-PT Auras**. `trajectory.py::_printing_is_bridge_simple_
+aura` still declines `attached_sets_base_pt is not None` because
+Lignify also carries `attached_grants_subtype` (layer 4 — separate
+substrate not yet wired in Rust). No live admit set exercises the
+multi-Aura interleave. The honest-stop is gate-protected by the
+admit predicate.
 
-**Fix-scope estimate**: ~1-2h Rust slice — add a
-`aura_set_base_pt_on(state, host_id) -> Option<(i16, i16)>` helper
-mirroring `aura_pt_bonus_on`, fold it into the two effective-P/T
-readers ABOVE the additive layer-7c bonus + counter scalar (CR 613
-layer order: 7b sets the base, 7c adds on top, 7d adds counter
-delta), drop the predicate decline. A test that asserts a
-Lignify-shape Aura attached to a 4/2 creature yields effective 0/4
-(layer-7b override) closes the slice.
+**Failure mode**: a future agent that admits a Lignify-shape
+through the loader AND drives two of them onto the same host in a
+self-play game would observe a divergent set-base resolution
+between engines. The fix is to add an attach-time `timestamp:
+u64` slot on the `GameObject` (or store the set-base in a
+per-host continuous-effects registry mirroring Python's
+`_registry_set_base_pt` table) and use last-applied wins in the
+helper.
 
-**Impact estimate**: **0 today** — no live EoE carrier uses the
-field. A future set carrier (Lignify-shape Aura in a new
-expansion) would be a +1 admit gated on this slice.
+**Fix-scope estimate**: ~2-4h Rust slice — add the timestamp
+slot, write at attach time, walk in reverse-timestamp order in
+the helper. Mirrors the shape Python's continuous-effects table
+already takes.
+
+**Impact estimate**: **0 today** — gated behind the admit
+predicate. Lit once a multi-Aura-set-base interleave joins the
+live admit set.
 
 ## Aura Phase 2 S2 multi-grant control-swap: single outstanding grant assumed for revert (Aura-attachment Phase 2 S2, round-79+)
 
