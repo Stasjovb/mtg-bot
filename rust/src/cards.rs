@@ -3568,6 +3568,101 @@ pub enum Effect {
     /// `AstelliReclaimerETBEffect` / slice-19
     /// `EnchantedCreatureFightsTarget` unit-variant convention.
     EachOpponentExilesCardFromHandWithCastPermission,
+    /// **21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+    /// reveal-until-land library walk.** "Reveal cards from the top of
+    /// your library until you reveal a land card. Put that card into
+    /// your hand and the rest on the bottom of your library in a random
+    /// order." Mirrors Python's `HouseCartographerSurvivalEffect`
+    /// (`effects/bespoke.py:2667-2733`) -- the ONLY EoE card with this
+    /// shape (the 5th and final EoE Survivor-family probe carrier).
+    ///
+    /// **Unit variant on both sides.** Python's
+    /// `HouseCartographerSurvivalEffect` is a `@dataclass(frozen=True)`
+    /// with no fields; the Rust enum mirrors this. The library-walk
+    /// state (which cards have been revealed; the land-or-none sentinel)
+    /// is entirely transient -- both engines compute it fresh on every
+    /// resolve and emit no PendingDecision.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:2690-2726`).**
+    /// 1. Source-controller resolution: prefer the transient
+    ///    `current_resolve_source_controller` (set by the stack resolver
+    ///    around each apply_effect call), fall back to `active_player`.
+    ///    "Your library" = the source's controller's library
+    ///    (CR 119.5 / 608.2). Mirrors the slice-16 / slice-18 /
+    ///    slice-20 source-controller-resolution shape.
+    /// 2. Walk the controller's library from the top (index 0):
+    ///    pop the top card; if its printing's `card_types` contains
+    ///    "Land", break out with the popped card as the revealed land;
+    ///    otherwise push the popped card onto the local `revealed`
+    ///    Vec and keep walking. Empty library terminates with no
+    ///    land found (mirrors Python's `while p.library:` loop).
+    /// 3. If a land was revealed: stamp its `zone = ZONE_HAND` and
+    ///    push to the controller's `hand` (mirrors `bespoke.py:2706-
+    ///    2707`'s `land_card.zone = Zone.HAND; p.hand.append(...)`).
+    ///    Apply the CR 400.7 zone-change reset on the moved object
+    ///    (`tapped`, `summoning_sick`, `damage`, `counters`,
+    ///    `attached_to`, `exiled_with_source` all cleared) so the
+    ///    move is byte-equal with Python's library→hand transition.
+    /// 4. If no land was found: the `revealed` Vec already holds
+    ///    every popped card (every revealed non-land); no hand move.
+    /// 5. Shuffle the local `revealed` Vec using the SAME byte-equal
+    ///    RNG primitive every other in-Effect shuffle site uses
+    ///    (external `random.Random.shuffle` via
+    ///    `external_rng::next_below` when an external rng is
+    ///    installed; inline xorshift64 fallback otherwise).
+    ///    Mirrors Python's `state.rng.shuffle(revealed)` at
+    ///    `bespoke.py:2718` -- the "random order" tail of CR
+    ///    701.18a.
+    /// 6. Stamp each shuffled card's `zone = ZONE_LIBRARY` and push
+    ///    in order onto the BOTTOM of the controller's library
+    ///    (= `lib.push(card)` — Python uses `p.library.append(card)`
+    ///    where index 0 is the top, so append IS the bottom).
+    ///    Mirrors `bespoke.py:2719-2722`.
+    ///
+    /// **Why no PendingDecision.** The Python effect emits no
+    /// `choose_*` callback -- the library walk is fully deterministic
+    /// (top-to-bottom pop with a `printing.is_land` terminator), and
+    /// the random-order tail is owned by `state.rng`, not by the
+    /// controller's agent. No cross-engine choice surface to bridge.
+    ///
+    /// **Why state.rng.shuffle is the right primitive.** Python's
+    /// `state.rng.shuffle(revealed)` is `random.Random.shuffle(list)`
+    /// applied in-place; the byte-equal Rust mirror is the Fisher-
+    /// Yates loop that consumes `external_rng::next_below(rng, i+1)`
+    /// for each i in `(1..n).rev()` -- exactly what
+    /// `fisher_yates_shuffle_optional` and every other in-Effect
+    /// shuffle site (Famished Worldsire / SearchLibraryForBasicLand
+    /// Tapped / search_library_for_first_of_type_and_shuffle) does.
+    /// When NO external rng is installed, the deterministic xorshift64
+    /// fallback (seeded with a per-resolve tuple) keeps the Rust path
+    /// deterministic within a fixed-seed simulation; the Python side
+    /// in that branch uses the engine's `state.rng` (a seedable
+    /// `random.Random`), which IS deterministic too. Full byte-
+    /// equality on the random-order tail requires the EXTERNAL rng
+    /// path (the test harness installs the same `random.Random` on
+    /// both engines via `set_external_rng`); the xorshift64 fallback
+    /// is for the Rust-alone case where no external rng is plumbed.
+    ///
+    /// **Empty-library / no-non-lands corner cases.**
+    /// - Empty library at entry: silent no-op (no land, no revealed).
+    /// - Library starts with a land: revealed is empty, the land
+    ///   goes straight to hand, no shuffle needed.
+    /// - No land in the whole library: every card moves to revealed,
+    ///   the controller's library ends up empty before the shuffle
+    ///   + append; the shuffled revealed list is appended -- net
+    ///   effect: the whole library is shuffled. Mirrors Python's
+    ///   `bespoke.py:2712-2722` "found no land" branch + the
+    ///   shuffle-and-append tail (which acts as a whole-library
+    ///   shuffle when revealed == the full library).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides --
+    /// no fields. The bridge translates this Rust variant to
+    /// `HouseCartographerSurvivalEffect()` (field-free construction).
+    /// Mirrors the slice-16 `AstelliReclaimerETBEffect` / slice-19
+    /// `EnchantedCreatureFightsTarget` / slice-20
+    /// `EachOpponentExilesCardFromHandWithCastPermission` unit-
+    /// variant convention.
+    HouseCartographerSurvivalEffect,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -7342,6 +7437,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // _INVENTORY §3 entry for the closure-cost estimate).
             Ok(Effect::EachOpponentExilesCardFromHandWithCastPermission)
         }
+        "house_cartographer_survival" => {
+            // 21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+            // reveal-until-land library walk. Unit variant; no payload
+            // fields beyond `kind` (the library-walk state is transient,
+            // computed fresh on every resolve). Mirrors the slice-16 /
+            // slice-19 / slice-20 unit-variant parse arm shape verbatim.
+            // Extra dict fields silently ignored for round-trip dict-
+            // shape consistency.
+            Ok(Effect::HouseCartographerSurvivalEffect)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -10114,6 +10219,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // emitted -- round-trip dict-shape consistency (slice-16
             // / slice-19 unit-variant precedent).
             d.set_item("kind", "each_opponent_exiles_card_from_hand_lightstall")?;
+        }
+        Effect::HouseCartographerSurvivalEffect => {
+            // 21st Rust slice (XXX Pin 1 closure). Unit variant; no
+            // payload fields beyond `kind` (mirrors Python's
+            // field-free @dataclass(frozen=True) at
+            // `effects/bespoke.py:2667-2733`). No other keys emitted
+            // -- round-trip dict-shape consistency (slice-16 /
+            // slice-19 / slice-20 unit-variant precedent).
+            d.set_item("kind", "house_cartographer_survival")?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;

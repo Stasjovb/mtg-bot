@@ -12253,6 +12253,159 @@ fn apply_effect(
             // for the substrate-scope breakdown.
             Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
         }
+        // **21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+        // reveal-until-land library walk.** "Reveal cards from the top
+        // of your library until you reveal a land card. Put that card
+        // into your hand and the rest on the bottom of your library in
+        // a random order." Mirrors Python's
+        // `HouseCartographerSurvivalEffect.resolve`
+        // (`effects/bespoke.py:2690-2726`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //   1. resolve source controller (CR 119.5 / 608.2)
+        //   2. walk the controller's library from the top; collect
+        //      non-lands into `revealed` until a land is popped or
+        //      the library empties
+        //   3. if a land was popped: push it to the controller's hand
+        //      (CR 400.7 zone-change reset on the moved object)
+        //   4. shuffle `revealed` via the byte-equal external_rng path
+        //      (when a Python random.Random is installed via
+        //      `set_external_rng`) / xorshift64 fallback otherwise
+        //   5. append each shuffled card onto the BOTTOM of the
+        //      controller's library
+        //
+        // **No PendingDecision.** Both engines: deterministic library
+        // walk + state.rng-owned "random order" tail.
+        Effect::HouseCartographerSurvivalEffect => {
+            // 1. Source-controller resolution. Same shape as the
+            // slice-18 Roving Actuator / slice-20 Lightstall arms:
+            // prefer the transient current_resolve_source_controller
+            // (set by the stack resolver around each apply_effect
+            // call), fall back to active_player. "Your library" =
+            // the source's controller's library.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            // 2. Library walk: pop from the top (index 0) of the
+            // controller's library until either the library is empty
+            // OR a land is popped. The popped land becomes
+            // `land_card`; non-lands accumulate in `revealed` (which
+            // becomes the "rest" the bottom-shuffle operates on).
+            //
+            // Mirrors Python's `while p.library: top = p.library.pop(0)`
+            // loop at `bespoke.py:2699-2704`. The two-phase split
+            // (drain into local vecs first, then apply the moves to
+            // the player's zones) avoids a borrow conflict between
+            // the `state.registry.lookup` immutable borrow and the
+            // `Arc::make_mut(&mut player.library)` mutable borrow.
+            let (revealed, land_card): (Vec<GameObject>, Option<GameObject>) = {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut revealed: Vec<GameObject> = Vec::new();
+                let mut land_card: Option<GameObject> = None;
+                while !lib.is_empty() {
+                    let top = lib.remove(0);
+                    let is_land = match state.registry.lookup(top.printing_id) {
+                        Some(pr) => pr.card_types.iter().any(|t| t == "Land"),
+                        None => false,
+                    };
+                    if is_land {
+                        land_card = Some(top);
+                        break;
+                    }
+                    revealed.push(top);
+                }
+                (revealed, land_card)
+            };
+            // 3. Route the revealed land (if any) into the controller's
+            // hand. Apply the CR 400.7 zone-change reset so the moved
+            // object is byte-equal with Python's library->hand
+            // transition. Mirrors `bespoke.py:2705-2711`.
+            if let Some(mut land_card) = land_card {
+                land_card.zone = ZONE_HAND;
+                land_card.tapped = false;
+                land_card.summoning_sick = false;
+                land_card.damage = 0;
+                land_card.counters = 0;
+                land_card.attached_to = None;
+                land_card.exiled_with_source = None;
+                let player = &mut state.players[controller_idx];
+                Arc::make_mut(&mut player.hand).push(land_card);
+            }
+            // 4. Shuffle the local `revealed` Vec via the same dual-
+            // path RNG primitive every other in-Effect shuffle site
+            // uses (external `random.Random.shuffle` via
+            // `external_rng::next_below` when an external rng is
+            // installed; inline xorshift64 fallback otherwise).
+            // Mirrors `bespoke.py:2718` (`state.rng.shuffle(revealed)`).
+            //
+            // The shuffle happens BEFORE the bottom-append so the
+            // append order = the shuffled order (Python parity:
+            // `state.rng.shuffle(revealed); for card in revealed:
+            // p.library.append(card)`).
+            let mut revealed = revealed;
+            let n = revealed.len();
+            if n >= 2 {
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            revealed.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    // xorshift64 fallback: distinct seed per (turn,
+                    // ap, source, n) tuple — same control flow as
+                    // every other xorshift site in the engine
+                    // (SearchLibraryForBasicLandTapped /
+                    // FamishedWorldsireLookTopXByPowerPutLandsTapped
+                    // precedent).
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (n as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
+                    }
+                    let mut x = seed;
+                    for i in (1..n).rev() {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        revealed.swap(i, j);
+                    }
+                }
+            }
+            // 5. Append each shuffled card onto the BOTTOM of the
+            // controller's library (= `lib.push(card)` -- index 0 is
+            // the top; append IS the bottom). Stamp zone=LIBRARY on
+            // the way in (mirrors Python's `card.zone = Zone.LIBRARY;
+            // p.library.append(card)` at `bespoke.py:2719-2721`).
+            if !revealed.is_empty() {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                for mut card in revealed.into_iter() {
+                    card.zone = ZONE_LIBRARY;
+                    lib.push(card);
+                }
+            }
+        }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
         // Void ETB.** "Exile up to one target instant or sorcery card
         // with mana value 2 or less from your graveyard. Copy it. You
