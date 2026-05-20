@@ -102,6 +102,13 @@ def test_read_rust_printing_aura_fields_returns_non_aura_defaults_for_non_aura()
     )
     reg, _ = build_rust_registry(spec)
     fields = read_rust_printing_aura_fields(reg, 0)
+    # Phase 2 S2 (round-79+, 2026-05-20): the read-back dict gained
+    # six new keys (``aura_grants_control`` /
+    # ``aura_grants_lose_abilities`` / ``aura_set_base_power`` /
+    # ``aura_set_base_toughness`` + the matching
+    # ``attached_grants_*`` / ``attached_sets_base_pt`` Python-side
+    # projections). For a non-aura printing they are all
+    # False / None — bit-identical to a pre-S2 CardDef.
     assert fields == {
         "is_aura": False,
         "aura_enchant_type": "creature",
@@ -110,6 +117,13 @@ def test_read_rust_printing_aura_fields_returns_non_aura_defaults_for_non_aura()
         "aura_toughness_bonus": 0,
         "aura_granted_keywords": (),
         "equipment_bonuses": None,
+        "aura_grants_control": False,
+        "aura_grants_lose_abilities": False,
+        "aura_set_base_power": None,
+        "aura_set_base_toughness": None,
+        "attached_grants_control": False,
+        "attached_grants_lose_all_abilities": False,
+        "attached_sets_base_pt": None,
     }
 
 

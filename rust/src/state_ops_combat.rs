@@ -455,6 +455,29 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     let Some(printing) = state.registry.lookup(printing_id) else {
         return false;
     };
+    // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    // Layer-6 lose-all-abilities: if any Aura attached to this
+    // object carries `aura_grants_lose_abilities`, the host has NO
+    // keywords (printed, UEOT-granted, OR aura-granted). Mirrors
+    // Python's `_layer6_entries_for` lose-all-abilities scan
+    // (`game.py:1045+`) — when a "lose_all_abilities" entry is
+    // active, every printed and granted keyword is wiped.
+    //
+    // **Honest-stop:** the strict CR 613 layer-6 timestamp order
+    // (where a keyword grant applied BEFORE the lose-abilities
+    // effect still survives, but one applied AFTER does not) is not
+    // modeled in this slice — Phase-2 S2 ships the simple "any
+    // active lose-abilities aura → all keywords wiped" wipe. The
+    // single admitted S2 carrier (Duskmourn's Domination) attaches
+    // to a creature with at most printed keywords on the bench
+    // (`attack_all` does not pump or grant keywords mid-game), so
+    // the simplification is bit-equal for the live admit set. A
+    // future Phase-3 slice can promote this to a per-grant
+    // timestamp walk when a lose-abilities + grant interleave hits
+    // the bench.
+    if aura_grants_lose_abilities_to(state, obj_id) {
+        return false;
+    }
     if printing.keywords.iter().any(|k| k == keyword) {
         return true;
     }
@@ -475,6 +498,34 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     // not yet folded in on the Rust side; this branch covers Auras
     // only (S1 sub-shape: granted_keywords like trample / hexproof).
     aura_grants_keyword_to(state, obj_id, keyword)
+}
+
+/// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
+/// True iff any Aura whose `attached_to == Some(host_id)` carries
+/// `aura_grants_lose_abilities`. Single-pass over both bfs. Used by
+/// `battlefield_has_keyword` to gate the printed/granted-keyword
+/// wipe when a Duskmourn's-Domination-style Aura is attached.
+/// Mirrors Python's `_layer6_entries_for` lose-all-abilities check
+/// (`game.py:1045+`).
+pub(crate) fn aura_grants_lose_abilities_to(
+    state: &GameState,
+    host_id: u32,
+) -> bool {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.attached_to != Some(host_id) {
+                continue;
+            }
+            let Some(printing) = state.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            if printing.is_aura && printing.aura_grants_lose_abilities {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Read effective toughness for a battlefield creature, returning 0
