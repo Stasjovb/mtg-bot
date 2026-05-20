@@ -255,6 +255,79 @@ fn read_creature_status(state: &GameState, obj_id: u32) -> Option<(bool, bool)> 
     None
 }
 
+/// **Aura-attachment substrate — Phase 1 STEP 4 (round-78,
+/// 2026-05-20).** Sum the P/T bonuses every Aura whose
+/// `attached_to == Some(obj_id)` contributes to its host. Walks
+/// every player's battlefield once, filtering on
+/// `printing.is_aura && obj.attached_to == Some(host_id)`. Mirrors
+/// Python's `game.py:972-982` scan (the Equipment riders walk that
+/// auras also flow through via the shared `equipment_bonuses`
+/// machinery). Returns `(power_bonus, toughness_bonus)` as i32s so
+/// the caller can fold into its own clamp.
+///
+/// **Layer note.** This is CR 613.1d layer 7c (additive P/T
+/// bonuses). Counters (layer 7d) and base-PT overrides (layer 7b)
+/// live in the caller — this helper contributes only the layer-7c
+/// additive piece. Keyword grants (layer 6) live in
+/// `aura_grants_keyword_to` below.
+pub(crate) fn aura_pt_bonus_on(
+    state: &GameState,
+    host_id: u32,
+) -> (i32, i32) {
+    let mut p_sum: i32 = 0;
+    let mut t_sum: i32 = 0;
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.attached_to != Some(host_id) {
+                continue;
+            }
+            let Some(printing) = state.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            if !printing.is_aura {
+                continue;
+            }
+            p_sum += printing.aura_power_bonus as i32;
+            t_sum += printing.aura_toughness_bonus as i32;
+        }
+    }
+    (p_sum, t_sum)
+}
+
+/// **Aura-attachment substrate — Phase 1 STEP 4 (round-78,
+/// 2026-05-20).** True iff any Aura whose `attached_to ==
+/// Some(host_id)` grants the given lowercase keyword. Mirrors
+/// Python's `game.py:1120-1145` scan (the Equipment-rider keyword
+/// walk that auras flow through via `equipment_bonuses`'s
+/// granted_keywords tuple). Single-pass over both players' bfs.
+///
+/// **Layer note.** CR 613.1c layer 6 (ability-granting effects).
+pub(crate) fn aura_grants_keyword_to(
+    state: &GameState,
+    host_id: u32,
+    keyword: &str,
+) -> bool {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.attached_to != Some(host_id) {
+                continue;
+            }
+            let Some(printing) = state.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            if !printing.is_aura {
+                continue;
+            }
+            if printing.aura_granted_keywords.iter().any(|k| k == keyword) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Read effective power for a battlefield creature, returning 0 for
 /// non-creatures or unknown ids. "Effective" =
 /// `base + ueot_power_bonus + obj.counters` per CR 613 layer 7c
@@ -312,7 +385,14 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // (Python `_compute_effective_pt`, game.py:2251). Matches the
     // SBA-side `base + obj.counters + ueot_toughness_bonus()` recipe.
     let net_counters = obj.map(|o| o.counters).unwrap_or(0);
-    let effective = base + bonus + net_counters;
+    // Aura-attachment substrate STEP 4 (round-78): fold in the
+    // layer-7c P/T bonus contributed by every Aura attached to this
+    // host. Equipment riders are *not* folded in yet (the Rust side
+    // does not currently scan equipment_bonuses; the analogous
+    // Python contributor at game.py:972-982 walks both auras and
+    // equipment via the same equipment_bonuses tuple).
+    let (aura_p, _aura_t) = aura_pt_bonus_on(state, obj_id);
+    let effective = base + bonus + net_counters + aura_p;
     // Saturate into i16 to match the existing return-shape contract;
     // a 32k+ effective power is unreachable on any real card.
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
@@ -379,12 +459,22 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
         return true;
     }
     // UEOT-granted keywords (CR 613 layer 6).
-    state.players[player_idx]
+    let ueot_hit = state.players[player_idx]
         .battlefield
         .iter()
         .find(|o| o.id == obj_id)
         .map(|o| o.ueot_has_keyword(keyword))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if ueot_hit {
+        return true;
+    }
+    // Aura-attachment substrate STEP 4 (round-78): layer-6 keyword
+    // grants from any Aura attached to this object. Mirrors Python's
+    // game.py:1120-1145 scan of `equipment_bonuses`-rider keywords on
+    // attached_to-matching auras / equipment. Equipment riders are
+    // not yet folded in on the Rust side; this branch covers Auras
+    // only (S1 sub-shape: granted_keywords like trample / hexproof).
+    aura_grants_keyword_to(state, obj_id, keyword)
 }
 
 /// Read effective toughness for a battlefield creature, returning 0
@@ -433,7 +523,11 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // equally into power and toughness (Python `_compute_effective_pt`,
     // game.py:2252); matches the SBA-side recipe.
     let net_counters = obj.map(|o| o.counters).unwrap_or(0);
-    let effective = base + ueot_bonus + net_counters;
+    // Aura-attachment substrate STEP 4 (round-78): fold in the
+    // layer-7c toughness bonus contributed by every Aura attached to
+    // this host. See sibling `battlefield_creature_power` above.
+    let (_aura_p, aura_t) = aura_pt_bonus_on(state, obj_id);
+    let effective = base + ueot_bonus + net_counters + aura_t;
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 

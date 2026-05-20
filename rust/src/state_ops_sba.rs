@@ -288,8 +288,19 @@ impl GameState {
                 .ueot_base_pt_override()
                 .map(|(_, t)| t)
                 .unwrap_or(toughness as i32);
+            // Aura-attachment substrate STEP 4 (round-78): fold in
+            // the layer-7c toughness bonus from any Aura attached to
+            // this object. Same Equipment-rider/Aura
+            // equipment_bonuses scan as
+            // state_ops_combat::battlefield_creature_toughness. This
+            // is load-bearing for the SBA: a 2/1 with Frantic
+            // Strength (+2/+2) sits at effective toughness 3 and
+            // must survive 2 damage. Without this fold the SBA would
+            // wrongly destroy it.
+            let (_aura_p, aura_t) =
+                crate::state_ops_combat::aura_pt_bonus_on(self, obj.id);
             let effective_toughness =
-                base_toughness + obj.counters + obj.ueot_toughness_bonus();
+                base_toughness + obj.counters + obj.ueot_toughness_bonus() + aura_t;
             // 704.5f first per CR ordering.
             if effective_toughness <= 0 {
                 victims.push((obj.controller, obj.id));
@@ -607,8 +618,15 @@ impl GameState {
                         .ueot_base_pt_override()
                         .map(|(_, t)| t)
                         .unwrap_or(toughness as i32);
+                    // Aura-attachment substrate STEP 4 (round-78):
+                    // lockstep with collect_sba_victims above —
+                    // fold in the layer-7c aura toughness bonus.
+                    let (_aura_p, aura_t) =
+                        crate::state_ops_combat::aura_pt_bonus_on(
+                            self, obj.id,
+                        );
                     let effective_toughness =
-                        base_toughness + obj.counters + obj.ueot_toughness_bonus();
+                        base_toughness + obj.counters + obj.ueot_toughness_bonus() + aura_t;
                     return Some(obj.damage as i32 >= effective_toughness);
                 }
             }
