@@ -1552,6 +1552,22 @@ impl GameState {
                             }
                         }
                     });
+                    // Round-16 RR Pin 3: dispatch DEALT_DAMAGE for the
+                    // permanent that RECEIVED damage (receiver-side
+                    // event). Fires after the damage marker is applied.
+                    // Subject = obj_id (the creature that received damage).
+                    // Mirrors Python's ``_fire_enchanted_dealt_damage_triggers``
+                    // in ``combat.py`` which dispatches
+                    // ``Event.DEALT_DAMAGE`` for each damaged creature.
+                    // Only fire when amount > 0 (plan already filters
+                    // this, but be explicit for clarity).
+                    if amount > 0 {
+                        crate::state_ops_resolve::dispatch_event(
+                            self,
+                            crate::cards::Event::DealtDamage,
+                            obj_id,
+                        )?;
+                    }
                 }
                 DamageTarget::Player(player_id) => {
                     let idx = player_id as usize;

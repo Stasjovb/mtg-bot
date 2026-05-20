@@ -450,10 +450,14 @@ pub(crate) fn dispatch_event(
     // events (BEGINNING_OF_END_STEP, BEGINNING_OF_UPKEEP,
     // BEGINNING_OF_COMBAT) fired by ``advance_phase`` in
     // ``state_ops_steps.rs``; round-15 adds YOU_ATTACK fired by the
-    // ``DeclareAttackers`` arm in ``state_ops_actions.rs``. Other
-    // events declared in the enum stay raise-on-dispatch so a future
-    // caller who skipped the fan-out plan surfaces it loudly rather
-    // than silently no-op.
+    // ``DeclareAttackers`` arm in ``state_ops_actions.rs``; round-16
+    // (RR Pins 1+2+3) adds COUNTERS_ADDED (fired after counter
+    // placement in the AddCounters / PutPlusOneCounterOnSelf arms),
+    // IS_SACRIFICED (fired from the Sacrifice effect arm), and
+    // DEALT_DAMAGE (fired when a permanent receives combat damage).
+    // Other events declared in the enum stay raise-on-dispatch so a
+    // future caller who skipped the fan-out plan surfaces it loudly
+    // rather than silently no-op.
     if event != Event::Enters
         && event != Event::Dies
         && event != Event::Cast
@@ -466,6 +470,9 @@ pub(crate) fn dispatch_event(
         && event != Event::BeginningOfUpkeep
         && event != Event::BeginningOfCombat
         && event != Event::YouAttack
+        && event != Event::CountersAdded
+        && event != Event::IsSacrificed
+        && event != Event::DealtDamage
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired; \
@@ -473,8 +480,9 @@ pub(crate) fn dispatch_event(
              Event::Attacks, Event::Blocks, Event::LeavesBattlefield, \
              Event::BecomesTapped, Event::DealsDamage, \
              Event::BeginningOfEndStep, Event::BeginningOfUpkeep, \
-             Event::BeginningOfCombat, Event::YouAttack \
-             (Slice 9 + r58 + r13 + r14 + r15)"
+             Event::BeginningOfCombat, Event::YouAttack, \
+             Event::CountersAdded, Event::IsSacrificed, Event::DealtDamage \
+             (Slice 9 + r58 + r13 + r14 + r15 + r16-RR)"
         )));
     }
 
@@ -519,6 +527,7 @@ pub(crate) fn dispatch_event(
         if event == Event::Dies
             || event == Event::Cast
             || event == Event::LeavesBattlefield
+            || event == Event::IsSacrificed
         {
             // DIES: look up the dying object (now in graveyard).
             // CAST: look up the cast object (still in hand).
@@ -526,6 +535,11 @@ pub(crate) fn dispatch_event(
             // in graveyard / exile / hand / library depending on
             // the bf-exit primitive that fired the dispatch). The
             // four-zone walk + library covers each destination.
+            // IS_SACRIFICED: look up the sacrificed object (now in
+            // graveyard). Same extra-observer pattern as DIES —
+            // the sacrificed permanent has already left the
+            // battlefield so ``IsSelf``-shape triggers on the
+            // sacrificed object need the graveyard walk to find it.
             //
             // All three share the multi-zone walk shape. Skip if
             // not found — the dispatch caller is loud-but-safe.
@@ -2509,6 +2523,16 @@ fn apply_effect(
             // id is queued unconditionally; the is_token gate lives
             // in drain_pending_token_cease (CR 111.7 / 704.5d).
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            // Round-16 RR Pin 2: dispatch IS_SACRIFICED with the
+            // sacrificed permanent's id as subject. The object has
+            // already been moved to the graveyard, so dispatch_event
+            // uses the IS_SACRIFICED extra-observer walk (parallels
+            // DIES) to include the sacrificed object in the observer
+            // set even though it is no longer on the battlefield.
+            // Mirrors Python's ``dispatch_event(state,
+            // Event.IS_SACRIFICED, label="sacrifice",
+            // extra_observers=[obj], obj=obj)`` in ``turn.sacrifice``.
+            dispatch_event(state, crate::cards::Event::IsSacrificed, leaving_obj_id)?;
             }
         },
         // Round-15: AddCounters. Routes through round-2's signed net-
@@ -2579,6 +2603,19 @@ fn apply_effect(
                         obj.counters = obj.counters.saturating_add(delta);
                         break;
                     }
+                }
+                // Round-16 RR Pin 1: dispatch COUNTERS_ADDED after the
+                // counter mutation. Subject = the object that received
+                // the counters (target_id). Mirrors Python's
+                // ``fire_counters_added_to_your_creature_triggers`` call
+                // in ``game.add_plus_one_counters``. Only fire when delta
+                // is positive (adding counters, not removing).
+                if delta > 0 {
+                    dispatch_event(
+                        state,
+                        crate::cards::Event::CountersAdded,
+                        target_id,
+                    )?;
                 }
             }
         },
@@ -3888,6 +3925,16 @@ fn apply_effect(
                     break;
                 }
             }
+            // Round-16 RR Pin 1: dispatch COUNTERS_ADDED after the
+            // self-counter mutation. Subject = source_obj_id (the
+            // object that received counters on itself). Mirrors Python's
+            // ``fire_counters_added_to_your_creature_triggers`` call
+            // in ``game.add_plus_one_counters``.
+            dispatch_event(
+                state,
+                crate::cards::Event::CountersAdded,
+                source_obj_id,
+            )?;
         }
         // Round-27 G20 closure: Surveil. CR 701.43 — controller looks
         // at the top `count` cards of their library and may put any
@@ -8719,9 +8766,23 @@ fn apply_effect(
             // deal_damage call.
             if a_power > 0 {
                 apply_damage_marker(state, b_id, a_power);
+                // Round-16 RR Pin 3: dispatch DEALT_DAMAGE for the
+                // creature that received damage in the fight (b_id).
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DealtDamage,
+                    b_id,
+                )?;
             }
             if b_power > 0 {
                 apply_damage_marker(state, a_id, b_power);
+                // Round-16 RR Pin 3: dispatch DEALT_DAMAGE for the
+                // other fighter that received damage (a_id).
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DealtDamage,
+                    a_id,
+                )?;
             }
         }
         // Round-28 highest-frequency-class coverage. Sequence walks
