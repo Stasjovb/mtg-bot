@@ -52,7 +52,7 @@ estimate.
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium (5 cards realizable; 18 deferred behind sibling substrates) | partial (5 shipped round 60) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED |
 | warp_cost (declined cost-mechanic) | 10 | 3 | 15,436 | medium | medium (Phase 1+1.5+2 SHIPPED rounds 67-cycle-7) | Phase 1/1.5/2 SHIPPED |
-| Dynamic-P/T formula (layer 7 CDA) | 2 | 1 | 61 | medium | small-medium (1 ready, 1 multi-gated) | OPEN |
+| Dynamic-P/T formula (layer 7 CDA) | 2 | 1 | 61 | medium | small-medium (1 ready, 1 multi-gated) | PARTIAL — substrate landed round-78, ward-rider still gates live Harmonious Grovestrider |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (declared §2-decline) | DEFERRED |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; no single-gated members) | DEFERRED |
 | BECOMES_TAPPED event | 2 | 0 | 0 | contained | small (event bridge) — but 0 single-gated | DEFERRED |
@@ -137,15 +137,38 @@ ref: `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §1 sub-shapes,
 `docs/AURA_ATTACHMENT_PHASE1_DESIGN.md` for the just-landed
 Phase 1 design.
 
-### (3) Dynamic-P/T formula (layer-7 CDA) — 1 single-gated, 61 decks
+### (3) Dynamic-P/T formula (layer-7 CDA) — 1 single-gated, 61 decks — **SUBSTRATE LANDED ROUND-78**
 
 Smallest-by-decks named substrate but smallest scope. Single-gated
 member is Harmonious Grovestrider (61 decks); multi-gated Cosmogoyf
-adds CDA-with-effect-uncovered-rider. Layer-7 CDA arm is a **small
-1-2 cycle slice** per card; Rust's existing layer-7 P/T machinery
-(proven by I23 combat-counters fix `c3cd126f`) takes most of the
-weight. Low pool leverage, but a cheap closure that drains 1-2 cards
-from the tier for ~1-2 cycles of work.
+adds CDA-with-effect-uncovered-rider.
+
+**Round-78 substrate-extension landed**: `dynamic_pt_formula` (a new
+optional `Option<String>` / `Optional[str]` field) now round-trips
+through the CardDef bridge in BOTH directions; Rust's
+`state_ops_combat::dynamic_base_pt_pub` dispatches on the formula
+key string in lockstep with Python's `game._dynamic_base_pt`. The
+`harmonious_grovestrider` arm computes P = T = lands controlled by
+the formula creature's controller (CR 208.2 / layer-7b CDA) on both
+engines, byte-equal. Real-EoE probe at
+`test_parity_smoke.py::test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity`
+pins the 0-land / 3-controlled-land / +2-opponent-land cases.
+
+**Remaining gate (orthogonal substrate)**: the real EoE Harmonious
+Grovestrider printing ALSO carries Ward {2}. The
+`_printing_is_bridge_simple_creature` ward_cost gate still rejects
+it; the ward-substrate slice is a separate closure target. A
+synthetic Grovestrider CardDef without the ward rider admits
+cleanly post-round-78. The 61 decks worth of leverage will flip
+when the ward-substrate slice lands.
+
+Sibling formulas (`cosmogoyf` / `emissary_escort`) carry different
+per-formula shapes and are honest-stopped Rust-side (unknown key →
+`None`); they stay on the drop-at-filter path until per-card slices
+flip each in lockstep. Each is a ~1-2 cycle slice on the same
+substrate (extend the Rust dispatch table arm + thread the formula
+key through the bridge admit predicate); they were not part of the
+round-78 closure scope.
 
 ### (4) Non-basic land substrate — 18 cards remaining, ~16,510 decks (deferred)
 
