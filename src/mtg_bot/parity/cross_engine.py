@@ -1238,14 +1238,21 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # **Distinct from ``EnchantedCreatureFightsTargetEffect``**
         # (effects/bespoke.py:507) -- the Aura-shape sibling used by
         # Meltstrider's Resolve. That class derives the source-side
-        # fighter from the resolving Aura's ``attached_to`` field;
-        # the bridge does NOT route the Aura shape through here. The
-        # Aura-shape Rust variant + bridge arm are tracked as a
-        # deferred follow-up in
-        # ``docs/EOE_PROBE_READINESS_AUDIT.md`` -- they need the
-        # Aura-attachment ETB substrate plumbed end-to-end on Rust
-        # before the cross-engine bridge can route Meltstrider's
-        # Resolve specifically.
+        # fighter from the resolving Aura's ``attached_to`` field.
+        # As of the 19th Rust slice (honest-stop substrate landing)
+        # the bridge DOES route the Aura shape through a separate
+        # ``enchanted_creature_fights_target`` arm below (the Rust
+        # ``Effect::EnchantedCreatureFightsTarget`` unit variant); the
+        # Rust resolve arm is an honest-stop sentinel that fizzles
+        # when source.attached_to is None (which is the Rust-side
+        # reality today -- Rust does NOT set ``attached_to`` on Aura
+        # resolution; full byte-equality for Meltstrider's Resolve
+        # still requires the broader Aura attach substrate per
+        # ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` Phases 1-2).
+        # The two arms are kept distinct because the bare bilateral
+        # ``FightTargetCreatureWithTargetCreature`` is the
+        # deterministic-pick synthetic bridge target; the Aura-shape
+        # arm carries the deferred attach substrate.
         #
         # **No real-EoE consumer of the bare bilateral shape today.**
         # Rust + bridge ship synthetic-only end-to-end coverage; the
@@ -8145,6 +8152,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         )
         max_mv_raw = eff_dict.get("max_mv", 2)
         return RovingActuatorETBEffect(max_mv=int(max_mv_raw))
+    if kind == "enchanted_creature_fights_target":
+        # 19th Rust slice (honest-stop substrate landing) -- Meltstrider's
+        # Resolve Aura ETB "fight" bridge arm. Rust's
+        # ``Effect::EnchantedCreatureFightsTarget`` (cards.rs unit variant
+        # added in this slice; parse + to_dict arms immediately after
+        # the slice-18 ``roving_actuator_etb``; resolve arm in
+        # ``state_ops_resolve.rs`` immediately before the slice-18
+        # Roving Actuator arm) mirrors Python's
+        # ``EnchantedCreatureFightsTargetEffect``
+        # (``effects/bespoke.py:506-582``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``EnchantedCreatureFightsTargetEffect()`` reconstructs the
+        # Python @dataclass(frozen=True) (mirrors the
+        # ``astelli_reclaimer_etb_effect`` slice-16 / round-49
+        # ``gain_life_equal_to_your_life_total`` unit-variant precedent).
+        #
+        # **Honest-stop status.** The Effect variant + parse + to_pydict
+        # + this bridge arm ship the substrate scaffolding (so the
+        # cross-engine round-trip is closed for this Effect class). The
+        # Rust resolve arm fizzles silently when source.attached_to is
+        # None, which is byte-equal with Python's same-case fizzle
+        # (bespoke.py:546-548). The genuine full-game byte-equality
+        # for Meltstrider's Resolve still requires the broader Aura
+        # attach substrate (docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md
+        # Phases 1-2) -- Rust does NOT set `attached_to` on Aura
+        # resolution today and the production-deck loader does NOT
+        # admit Auras. This slice closes the Effect-level closure +
+        # documents the deferred substrate.
+        #
+        # **Real EoE consumer:** Meltstrider's Resolve (15,259 17lands
+        # decks) -- the ONLY EoE card with this shape, the #1
+        # marginal-value closure target in
+        # ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md``.
+        from mtg_bot.effects.bespoke import (
+            EnchantedCreatureFightsTargetEffect,
+        )
+        return EnchantedCreatureFightsTargetEffect()
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card
         # in each opponent's graveyard moves to that player's own

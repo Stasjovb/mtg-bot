@@ -3374,6 +3374,103 @@ pub enum Effect {
     /// Python dataclass. The bridge translates this Rust variant to
     /// `RovingActuatorETBEffect(max_mv=max_mv)`.
     RovingActuatorETBEffect { max_mv: u8 },
+    /// **19th Rust slice (honest-stop substrate landing) — Meltstrider's
+    /// Resolve Aura ETB "fight".** "When this Aura enters, enchanted
+    /// creature fights up to one target creature an opponent controls."
+    /// Mirrors Python's `EnchantedCreatureFightsTargetEffect`
+    /// (`effects/bespoke.py:506-582`) — the ONLY EoE card with this
+    /// shape, 15,259 17lands decks (the #1 marginal-value closure
+    /// target in `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`).
+    ///
+    /// **HONEST-STOP CLOSURE — substrate landed, full byte-equality
+    /// deferred.** The Effect variant + parse + to_pydict + bridge
+    /// arms ship here; the resolve arm fizzles silently when the
+    /// resolving Aura source has no `attached_to` (which is the
+    /// Rust-side reality TODAY — see `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`,
+    /// the verify-first re-walk that audited the entire Aura family
+    /// as the **largest §2-declined Rust multi-round substrate**:
+    /// CardDef has no `is_aura`, the loader admits no Aura, Rust's
+    /// spell resolution has no Aura attach path, and `attached_to`
+    /// is hard-reset on every Rust zone change). The Python side ALSO
+    /// fizzles in the no-`attached_to` case (`bespoke.py:546-548`:
+    /// `if aura is None or aura.attached_to is None: return`), so the
+    /// no-host branch IS byte-equal across engines. The genuine
+    /// full-game byte-equality for Meltstrider's Resolve still requires
+    /// the broader Aura attach substrate (Phases 1-2 of the substrate
+    /// plan: CardDef aura representation + Rust cast-time enchant-
+    /// target decision + Rust Aura-resolution attach + layered grants +
+    /// CR-704.5n SBA + loader admit predicate). The shipped resolve
+    /// arm is the Phase-3 stub that Phases 1-2 unblock — once Auras
+    /// actually set `attached_to` in Rust, this arm's hot-path branch
+    /// (the both-fighters-present case) becomes live and exercises
+    /// the simultaneous-damage logic already shipped.
+    ///
+    /// **Why ship the substrate now (not pure-defer).** The variant +
+    /// parse + to_pydict + bridge round-trip lets `cards.rs`'s
+    /// previously-pre-marked "deferred Aura-shape Fight follow-up"
+    /// doc-comment slot (Effect::FightTargetCreatureWithTargetCreature
+    /// at cards.rs:1713) move from "deferred follow-up" → "shipped
+    /// stub awaiting attach substrate". Future slices that land
+    /// Aura attach (the long pole — the agent-driven cast-target
+    /// decision substrate shared with Monoist / Fight-Aura per
+    /// docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md §3 phase 1) flip the
+    /// hot-path live without touching this variant — it is forward-
+    /// compatible scaffolding rather than throwaway code. This is the
+    /// CE5-style "ship the substrate + an honest-stop sentinel; document
+    /// follow-up" pattern (the campaign discipline for §2-declined
+    /// substrates that the inventory rated as "small (1-2 cycles)"
+    /// but the verify-first re-walk reveals as multi-round).
+    ///
+    /// **Unit variant on both sides.** Python's
+    /// `EnchantedCreatureFightsTargetEffect` is a `@dataclass(frozen=
+    /// True)` with no fields; the Rust enum mirrors this. Source-side
+    /// fighter is read from `state.resolving_source.attached_to` at
+    /// resolve time (the Aura's enchanted creature, NOT a player-picked
+    /// friendly creature — the Aura's `attached_to` decides). Opponent-
+    /// side fighter is the optional ("up to one") target.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:541-575`).**
+    /// 1. Locate the source object (`source_obj_id`) — scan every zone
+    ///    (Aura may still be on bf as the ETB trigger fires; mirrors
+    ///    `Fight`'s source-controller resolution).
+    /// 2. Read `source.attached_to`. If `None` (every Rust Aura today
+    ///    because Rust does not set `attached_to` on Aura resolve —
+    ///    see `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §2) → silent
+    ///    fizzle. **THIS IS THE HONEST-STOP BRANCH** until the
+    ///    attach substrate lands; Python takes the same fizzle when
+    ///    `attached_to is None` so the cross-engine state stays
+    ///    byte-equal in the no-host case.
+    /// 3. Resolve the enchanted creature on its bf by id. If not found
+    ///    (already left the bf) → silent fizzle (Python parity, mirrors
+    ///    CR 701.12c "if either fighter has left the battlefield, the
+    ///    fight fizzles").
+    /// 4. Pick the opponent-side target — FIRST creature on the
+    ///    OPPONENT's bf (deterministic first-legal scan; mirrors
+    ///    `FightTargetCreatureWithTargetCreature`'s opponent scan).
+    ///    The Aura's controller is the source's controller (CR 119.5);
+    ///    "an opponent" is `1 - controller` on the 2-player engine.
+    ///    No opponent creature → silent fizzle ("up to one" = legal
+    ///    0-pick + the effect resolves with no fight).
+    /// 5. Compute BOTH effective powers BEFORE applying any damage
+    ///    (CR 701.12 simultaneous damage event). Apply each fighter's
+    ///    power as damage to the other via `apply_damage_marker`.
+    ///    Dispatch DEALT_DAMAGE events for the receiving creatures —
+    ///    mirrors the `FightTargetCreatureWithTargetCreature` arm.
+    ///
+    /// **Source-substitution helper for Aura `attached_to`.** The new
+    /// `resolve_source_for_aura_attached` private helper at
+    /// `state_ops_resolve.rs` reads `state.resolving_source.attached_to`
+    /// when the source is an Aura; falls back to the source itself for
+    /// non-Aura sources. This is the substrate primitive that future
+    /// Aura-shape Effect arms (Pain for All's
+    /// `PainForAllETBEffect` + `PainForAllDamageEchoEffect` — listed
+    /// under `attached_to` source-substitution in the BLOCKED_GENUINELY_
+    /// MISSING_INVENTORY substrate-sharing pattern §) reuse.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `EnchantedCreatureFightsTargetEffect()` (field-free construction).
+    EnchantedCreatureFightsTarget,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -7113,6 +7210,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::RovingActuatorETBEffect { max_mv: max_mv_i as u8 })
         }
+        "enchanted_creature_fights_target" => {
+            // 19th Rust slice (honest-stop substrate landing) —
+            // Meltstrider's Resolve Aura ETB "fight". Unit variant; no
+            // payload fields beyond `kind` (the source-side fighter is
+            // the Aura's `attached_to` host, read at resolve time; the
+            // opponent-side fighter is the first-legal scan on the
+            // opponent's bf — matches `FightTargetCreatureWithTarget
+            // Creature`'s deterministic-pick convention). Extra dict
+            // fields silently ignored for round-trip dict-shape
+            // consistency (mirrors round-49 `gain_life_equal_to_your_
+            // life_total` / round-54 `famished_worldsire_look_top_x_
+            // by_power_put_lands_tapped` / slice-16
+            // `astelli_reclaimer_etb_effect` unit-variant parse arm
+            // shape verbatim).
+            Ok(Effect::EnchantedCreatureFightsTarget)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -9868,6 +9981,14 @@ pub(crate) fn effect_to_pydict<'py>(
             // back to the same variant payload.
             d.set_item("kind", "roving_actuator_etb")?;
             d.set_item("max_mv", *max_mv as i64)?;
+        }
+        Effect::EnchantedCreatureFightsTarget => {
+            // 19th Rust slice (honest-stop substrate landing). Unit
+            // variant; no payload fields beyond `kind` (mirrors Python's
+            // field-free @dataclass(frozen=True) at bespoke.py:506-507).
+            // No other keys emitted — round-trip dict-shape consistency
+            // (slice-16 `astelli_reclaimer_etb_effect` precedent).
+            d.set_item("kind", "enchanted_creature_fights_target")?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;
