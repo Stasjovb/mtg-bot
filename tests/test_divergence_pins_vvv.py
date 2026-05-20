@@ -305,71 +305,67 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_divergence_pin():
-    """Pin the Rust ``Predicate::SourceIsSelf`` player-subject gap.
+def test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_FIXED_parity():
+    """FIXED-parity (VVV Pin 1 closed 2026-05-20, 15th Rust slice).
 
     The ``Predicate::SourceIsSelf`` arm of ``Predicate::matches`` at
-    ``rust/src/cards.rs:4730`` is the bare ``source_id == subject_id``
-    identity check.  Phase-step events dispatch with
-    ``PLAYER_SUBJECT_OFFSET + active_player`` as ``subject_id``, so
-    ``SourceIsSelf`` ALWAYS evaluates False for those events.  Python's
-    ``IsSelf.matches`` at ``src/mtg_bot/effects/predicates.py:428-436``
-    carries a player-subject tautology arm (``not hasattr(obj,
-    "printing")``) that evaluates True for player subjects, so the
-    Survivor postcombat-main triggers fire on Python but never push
-    on Rust.
+    ``rust/src/cards.rs`` previously was the bare
+    ``source_id == subject_id`` identity check.  Phase-step events
+    dispatch with ``PLAYER_SUBJECT_OFFSET + active_player`` as
+    ``subject_id``, so ``SourceIsSelf`` always evaluated False for
+    those events.  Python's ``IsSelf.matches`` at
+    ``src/mtg_bot/effects/predicates.py:428-436`` carries a
+    player-subject tautology arm (``not hasattr(obj, "printing")``)
+    that evaluates True for player subjects.  The 15th Rust slice
+    mirrored the sibling ``ControlledByYou`` arm's
+    PLAYER_SUBJECT_OFFSET-recognising branch in the
+    ``Predicate::SourceIsSelf`` arm so player-subject events
+    structurally evaluate True (the dispatcher already iterates one
+    source at a time, so IsSelf is tautological for player subjects).
 
-    Probe shape:
-      1. Confirm Python's ``IsSelf.matches`` carries the player-
-         subject tautology arm (the ``not hasattr(obj, "printing")``
-         branch returning True).
-      2. Sentinel A: the Rust source's ``Predicate::SourceIsSelf``
-         arm at cards.rs is the BARE ``source_id == subject_id``
-         expression (no PLAYER_SUBJECT_OFFSET-recognising branch).
-      3. Sentinel B: the sibling ``Predicate::ControlledByYou`` arm
-         in the SAME file DOES carry a PLAYER_SUBJECT_OFFSET-
-         recognising branch (the to-be-mirrored closure target).
-      4. Confirm Python's ``Event.BEGINNING_OF_POSTCOMBAT_MAIN``
-         is the canonical enum value the dispatch lane uses.
-      5. Confirm all 5 affected EoE Survivor cards are loadable
-         from the active CardSource and carry a postcombat-main
-         triggered ability with an ``IsSelf`` clause in the
-         predicate composition.
+    FIXED-parity shape (inverted from the original divergence pin):
+      1. Python's ``IsSelf.matches`` still carries the player-subject
+         tautology arm (canonical behavior unchanged).
+      2. Sentinel A (inverted): the bare
+         ``Predicate::SourceIsSelf => source_id == subject_id,``
+         expression is NO LONGER present in cards.rs — the arm now
+         carries a PLAYER_SUBJECT_OFFSET-aware branch.
+      3. Sentinel B (preserved): the sibling
+         ``Predicate::ControlledByYou`` arm continues to carry its
+         PLAYER_SUBJECT_OFFSET-recognising branch (the mirror target).
+      4. Sentinel C (new): the ``Predicate::SourceIsSelf`` arm itself
+         contains the ``subject_id >= PLAYER_SUBJECT_OFFSET`` branch
+         and cites the VVV Pin 1 closure marker.
+      5. Confirm all 5 affected EoE Survivor cards are loadable AND
+         carry a postcombat-main triggered ability with an ``IsSelf``
+         clause in the predicate composition (unchanged).
 
-    Closure indicator: the ``Predicate::SourceIsSelf`` arm grows a
-    ``subject_id >= PLAYER_SUBJECT_OFFSET`` branch returning ``true``
-    (mirroring the ``ControlledByYou`` arm's sentinel handling).
-    Pin renames to ``..._FIXED_parity`` with the assertion inverted.
-
-    EoE card scale: 5 directly (Savior of the Small, Cautious
+    EoE card scale unblocked: 5 (Savior of the Small, Cautious
     Survivor, Defiant Survivor, House Cartographer, Shrewd
-    Storyteller); broader applicability to any future trigger using
-    ``IsSelf`` predicate on a phase-step or player-subject event.
+    Storyteller).
     """
     # 1. Python's IsSelf.matches carries the player-subject tautology arm.
     from mtg_bot.effects.predicates import IsSelf, Event
     is_self_src = inspect.getsource(IsSelf.matches)
     assert 'not hasattr(obj, "printing")' in is_self_src, (
-        "Pin invariant: Python's IsSelf.matches at src/mtg_bot/effects/"
-        "predicates.py should contain the player-subject tautology arm "
-        "'not hasattr(obj, \"printing\")' (the branch that evaluates "
-        "True on player subjects, where Players have id but no "
-        "printing).  If this assertion fails, the Python side changed "
-        "convention -- audit + update this pin.  Source:\n"
-        f"{is_self_src!r}"
+        "FIXED-parity invariant: Python's IsSelf.matches at "
+        "src/mtg_bot/effects/predicates.py should still contain the "
+        "player-subject tautology arm 'not hasattr(obj, \"printing\")' "
+        "— this is the canonical behavior Rust mirrors.  If absent, "
+        "the Python side changed convention — audit + update this "
+        f"test.  Source:\n{is_self_src!r}"
     )
     assert "return True" in is_self_src, (
-        "Pin invariant: Python's IsSelf.matches should return True "
-        "from the player-subject tautology arm (the branch above).  "
-        "If absent, the Python convention changed."
+        "FIXED-parity invariant: Python's IsSelf.matches should "
+        "return True from the player-subject tautology arm."
     )
 
     # 1a. Event.BEGINNING_OF_POSTCOMBAT_MAIN is the canonical dispatch
     #     lane enum the Survivor cards consume.
     assert hasattr(Event, "BEGINNING_OF_POSTCOMBAT_MAIN"), (
-        "Pin invariant: Event enum should expose BEGINNING_OF_POSTCOMBAT_"
-        "MAIN (the round-21 PPP Pin 3 + slice-10 closure).  If absent, "
-        "the event was renamed -- update this pin."
+        "FIXED-parity invariant: Event enum should expose "
+        "BEGINNING_OF_POSTCOMBAT_MAIN (the round-21 PPP Pin 3 + "
+        "slice-10 closure)."
     )
 
     # 2. Locate the Rust cards.rs source file.
@@ -377,61 +373,77 @@ def test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_div
     repo_root = test_file_path.parents[1]  # tests/.. = repo root
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
     assert rust_cards_path.exists(), (
-        f"Rust source file should exist at {rust_cards_path!r}.  "
-        "If the file moved, update this test's path resolution."
+        f"Rust source file should exist at {rust_cards_path!r}."
     )
     rust_src = rust_cards_path.read_text(encoding="utf-8")
 
-    # 2a. Locate the Predicate::matches function body.  The function
-    #     spans roughly cards.rs:4720-4870 (the predicate-evaluator
-    #     match block).
+    # 2a. Locate the Predicate::matches function body.
     matches_sig = "Predicate::Always => true,"
     matches_start = rust_src.find(matches_sig)
     assert matches_start >= 0, (
         f"Rust source should contain the Predicate::matches arm "
-        f"signature {matches_sig!r} (the marker line for the start "
-        "of the predicate-evaluator match block).  If the signature "
-        "moved, update this pin's path resolution."
+        f"signature {matches_sig!r}."
     )
-    # Walk forward to a generous end window: the function body fits
-    # in ~10000 chars of source.
     matches_body = rust_src[matches_start:matches_start + 20000]
 
-    # 2b. Sentinel A: the Predicate::SourceIsSelf arm IS the bare
-    #     ``source_id == subject_id`` (the bug).  Match the exact
-    #     line shape including the prefix to anchor to the right arm.
+    # 2b. Sentinel A (INVERTED): the bare
+    #     ``Predicate::SourceIsSelf => source_id == subject_id,``
+    #     line should NO LONGER appear.  The closure replaced the
+    #     bare arm with a sentinel-aware branch.
     bare_arm = "Predicate::SourceIsSelf => source_id == subject_id,"
-    assert bare_arm in matches_body, (
-        "Pin sentinel A: rust/src/cards.rs should still contain the "
-        f"bare Predicate::SourceIsSelf arm body {bare_arm!r} (the "
-        "divergence -- strict identity check with no player-subject "
-        "tautology arm).  If this assertion fails, the arm has been "
-        "restructured -- the divergence may be closed; flip to "
-        "_FIXED_parity and invert the assertion.  Match-body excerpt:"
-        f"\n{matches_body[:400]!r}..."
+    assert bare_arm not in matches_body, (
+        "FIXED-parity (inverted): rust/src/cards.rs should NO "
+        f"LONGER contain the bare arm body {bare_arm!r}.  If "
+        "present, the VVV Pin 1 closure was reverted — restore "
+        "the player-subject tautology branch."
     )
 
-    # 2c. Sentinel B: the sibling ControlledByYou arm DOES carry a
-    #     PLAYER_SUBJECT_OFFSET-recognising branch (the to-be-mirrored
-    #     closure target).
+    # 2c. Sentinel B (preserved): the sibling ControlledByYou arm
+    #     continues to carry the PLAYER_SUBJECT_OFFSET branch.
     controlled_by_you_marker = (
         "Predicate::ControlledByYou { slot: _ } => {"
     )
     assert controlled_by_you_marker in matches_body, (
-        f"Pin sentinel B: rust/src/cards.rs's Predicate::matches "
-        f"should contain the sibling ControlledByYou arm marker "
-        f"{controlled_by_you_marker!r}.  If absent, the sibling "
-        "arm was restructured -- update this pin's reference."
+        f"FIXED-parity invariant: rust/src/cards.rs's "
+        f"Predicate::matches should still contain the sibling "
+        f"ControlledByYou arm marker {controlled_by_you_marker!r} "
+        "(the mirrored closure pattern)."
     )
-    # And the same arm body references the PLAYER_SUBJECT_OFFSET
-    # sentinel (the closure pattern SourceIsSelf needs to mirror).
-    assert "if subject_id >= PLAYER_SUBJECT_OFFSET {" in matches_body, (
-        "Pin sentinel B (extended): rust/src/cards.rs's Predicate::"
-        "matches should contain at least one "
-        "'if subject_id >= PLAYER_SUBJECT_OFFSET {' sentinel-"
-        "recognising branch (in the ControlledByYou / ControlledByOpp"
-        "onent arms).  If absent, the sentinel handling moved -- "
-        "audit this pin's reference."
+
+    # 2d. Sentinel C (new — closure landing): the SourceIsSelf arm
+    #     itself now contains the PLAYER_SUBJECT_OFFSET-aware branch.
+    #     Anchor on the arm head + the sentinel comparison.
+    source_is_self_idx = matches_body.find("Predicate::SourceIsSelf =>")
+    assert source_is_self_idx >= 0, (
+        "FIXED-parity invariant: rust/src/cards.rs should still "
+        "contain a 'Predicate::SourceIsSelf =>' arm head."
+    )
+    # Walk ~800 chars from the arm head to the end of the arm body
+    # (the new arm is ~600 chars; ControlledByYou starts ~800 chars
+    # later).
+    source_is_self_arm = matches_body[
+        source_is_self_idx : source_is_self_idx + 1500
+    ]
+    assert "subject_id >= PLAYER_SUBJECT_OFFSET" in source_is_self_arm, (
+        "FIXED-parity (new closure landing): the "
+        "Predicate::SourceIsSelf arm should now contain a "
+        "'subject_id >= PLAYER_SUBJECT_OFFSET' branch mirroring "
+        "the ControlledByYou arm's sentinel handling.  If absent, "
+        "the VVV Pin 1 closure was reverted.  Arm excerpt:\n"
+        f"{source_is_self_arm[:500]!r}"
+    )
+    assert "VVV Pin 1" in source_is_self_arm, (
+        "FIXED-parity (closure citation): the "
+        "Predicate::SourceIsSelf arm should cite the VVV Pin 1 "
+        "closure marker in a code comment so future readers can "
+        "trace the change."
+    )
+    # The bare equality body is now nested inside the else branch.
+    assert "source_id == subject_id" in source_is_self_arm, (
+        "FIXED-parity invariant: the non-player-subject path of "
+        "the closed arm should still compare 'source_id == "
+        "subject_id' (the strict identity reading for permanent "
+        "subjects).  If absent, the closure semantics regressed."
     )
 
     # 3. Confirm the PLAYER_SUBJECT_OFFSET constant is declared.
@@ -894,24 +906,42 @@ def test_cross_engine_real_eoe_pain_for_all_aura_damage_echo_no_rust_variant_div
 
 
 def test_vvv_pin_inventory_complete():
-    """Sanity check: the VVV batch declares exactly 3 pin tests.
+    """Sanity check: the VVV batch declares exactly 3 pin tests (one of
+    which has since flipped to ``_FIXED_parity`` per the closure cadence).
 
-    Pin batch VVV (round 24 pin-side) targets 3 divergence pins per
-    the lane discipline; this guards against accidental deletion or
-    rename of any pin function.
+    Pin batch VVV (round 24 pin-side) originally targeted 3 divergence
+    pins.  Pin 1 (Survivor family SourceIsSelf player-subject tautology)
+    closed in the 15th Rust slice (2026-05-20) — flipped to
+    ``_FIXED_parity`` with assertions inverted per the PPP / MMM / TTT
+    closure-cadence precedent.  This sanity check guards against
+    accidental deletion or rename of any pin / FIXED-parity function in
+    the batch.
     """
     import tests.test_divergence_pins_vvv as _self_mod
     pin_fns = [
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_divergence_pin")
     ]
-    expected_pins = {
-        "test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_divergence_pin",
+    fixed_fns = [
+        name for name in dir(_self_mod)
+        if name.startswith("test_") and name.endswith("_FIXED_parity")
+    ]
+    expected_remaining_pins = {
         "test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_no_rust_variant_divergence_pin",
         "test_cross_engine_real_eoe_pain_for_all_aura_damage_echo_no_rust_variant_divergence_pin",
     }
-    assert set(pin_fns) == expected_pins, (
-        "VVV pin inventory mismatch.  Expected exactly the 3 pin tests:\n"
-        f"  {sorted(expected_pins)}\n"
+    expected_fixed = {
+        "test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_FIXED_parity",
+    }
+    assert set(pin_fns) == expected_remaining_pins, (
+        "VVV remaining-pin inventory mismatch.  Expected exactly 2 "
+        "open-divergence pins (Pin 1 closed in 15th Rust slice):\n"
+        f"  {sorted(expected_remaining_pins)}\n"
         f"Got:\n  {sorted(pin_fns)}"
+    )
+    assert set(fixed_fns) == expected_fixed, (
+        "VVV FIXED-parity inventory mismatch.  Expected exactly 1 "
+        "closed pin (Pin 1 -- Survivor SourceIsSelf tautology):\n"
+        f"  {sorted(expected_fixed)}\n"
+        f"Got:\n  {sorted(fixed_fns)}"
     )

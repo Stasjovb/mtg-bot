@@ -4727,7 +4727,30 @@ impl Predicate {
     ) -> bool {
         match self {
             Predicate::Always => true,
-            Predicate::SourceIsSelf => source_id == subject_id,
+            Predicate::SourceIsSelf => {
+                // VVV Pin 1 closure 2026-05-20 — Survivor family
+                // player-subject tautology mirroring Python's
+                // IsSelf.matches at src/mtg_bot/effects/predicates.py
+                // :428-436. Phase-step events (e.g.
+                // BEGINNING_OF_POSTCOMBAT_MAIN) dispatch with
+                // ``PLAYER_SUBJECT_OFFSET + active_player`` as the
+                // subject_id sentinel rather than a permanent's id, so
+                // the bare ``source_id == subject_id`` always
+                // evaluates False for those events. Python's
+                // ``IsSelf.matches`` handles this with the
+                // ``not hasattr(obj, "printing")`` branch (Players
+                // expose ``id`` but no ``printing``), returning True
+                // — the dispatcher already iterates one source at a
+                // time, so IsSelf is structurally tautological on
+                // player-subject events. Mirror the sibling
+                // ControlledByYou arm at cards.rs:4758-4807 which
+                // already recognises the sentinel range.
+                if subject_id >= PLAYER_SUBJECT_OFFSET {
+                    true
+                } else {
+                    source_id == subject_id
+                }
+            }
             Predicate::SourceIsCreature => {
                 source_has_card_type(state, source_id, "Creature")
             }
