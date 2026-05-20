@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **314 / 475 EoE cards (66.1%) are byte-equal at the Effect+bridge level**; of those, **190 (40.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 124 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **314 / 475 EoE cards (66.1%) are byte-equal at the Effect+bridge level**; of those, **194 (40.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 120 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **161 (33.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 190 | 40.0% |
-| Effect+bridge covered (not individually probed) | 124 | 26.1% |
+| PROBED byte-equal | 194 | 40.8% |
+| Effect+bridge covered (not individually probed) | 120 | 25.3% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -53,6 +53,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 
 - All-Fates Stalker
 - Alpharael, Dreaming Acolyte
+- Alpharael, Stonechosen
 - Annul
 - Appendage Amalgam
 - Atmospheric Greenhouse
@@ -86,6 +87,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Drix Fatemaker
 - Dual-Sun Adepts
 - Dubious Delicacy
+- Dyadrine, Synthesis Amalgam
 - Edge Rover
 - Elegy Acolyte
 - Embrace Oblivion
@@ -125,6 +127,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Honor
 - Honored Knight-Captain
 - Hullcarver
+- Hylderblade
 - Hymn of the Faller
 - Icecave Crasher
 - Icetill Explorer
@@ -228,6 +231,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Uthros Scanship
 - Valgavoth's Faithful
 - Vicious Clown
+- Virulent Silencer
 - Virus Beetle
 - Voidforged Titan
 - Vote Out
