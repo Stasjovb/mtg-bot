@@ -3893,6 +3893,126 @@ pub enum Effect {
     /// `PutPlusOneCounterOnSelf` — the resolver uses
     /// `source_obj_id` rather than a target picked at push time.
     WarpExileSelf,
+    /// **BBB downstream complement — 7th Rust slice.**
+    /// Defending player (each opponent in 2-player) loses half their
+    /// life, rounded up. Mirrors Python's
+    /// `DefendingPlayerLosesHalfLifeRoundedUp`
+    /// (`effects/generic/life.py:570`). Engine approximation: "defending
+    /// player" → "each opponent" (correct in 2-player EoE; documented
+    /// approximation per the Python class docstring). One EoE card:
+    /// Alpharael, Stonechosen — "Void — Whenever Alpharael, Stonechosen
+    /// attacks, if Void is active, defending player loses half their
+    /// life, rounded up." The Void outer shell is `ConditionalIfVoid`;
+    /// this is the inner then_effect.
+    ///
+    /// **Resolve semantics.** For each player whose id ≠
+    /// source-controller AND who has not yet lost: compute
+    /// `loss = (p.life + 1) / 2` (integer ceiling of `p.life / 2`),
+    /// subtract from `p.life`. Matches Python's
+    /// `loss = (p.life + 1) // 2` (floor division on `life + 1`).
+    DefendingPlayerLosesHalfLifeRoundedUp,
+    /// **BBB downstream complement — 7th Rust slice.**
+    /// Run `inner` only if the effect's controller gained at least
+    /// `threshold` life this turn at resolution.  Mirrors Python's
+    /// `ConditionalIfYouGainedLifeAtLeast(threshold, inner)`
+    /// (`effects/combinators.py:966`).  Reads the controller's
+    /// `Player.life_gained_this_turn` counter (now tracked in Rust
+    /// via the `GainLife` resolve arm + cleanup-step reset).
+    ///
+    /// EoE card unlocked: Haliya, Guided by Light — "At the beginning
+    /// of your end step, draw a card if you've gained 3 or more life
+    /// this turn." Parser wraps `DrawCards(1)` in this conditional.
+    ///
+    /// **Resolve semantics.** Read `controller.life_gained_this_turn`;
+    /// if `< threshold`, log and no-op. Otherwise apply `inner`.
+    ConditionalIfYouGainedLifeAtLeast {
+        threshold: i32,
+        inner: Box<Effect>,
+    },
+    /// **BBB downstream complement — 7th Rust slice.**
+    /// Run `effect` only if the triggering source's effective power is
+    /// at least `threshold` at resolution. Mirrors Python's
+    /// `ConditionalIfSourcePowerAtLeast(effect, threshold=4)`
+    /// (`effects/combinators.py:1055`). Reads
+    /// `state.resolving_source` (= the source_obj_id at apply_effect
+    /// call time — resolved via the existing `source_obj_id` parameter
+    /// to `apply_effect`). If the source is absent from the battlefield
+    /// (died before resolution) or its effective power is below
+    /// `threshold`, no-op.
+    ///
+    /// EoE cards unlocked: Syr Vondam, Sunstar Exemplar ("while its
+    /// power is 4 or greater" on a DIES trigger), Dawnstrike Vanguard,
+    /// Frontline War-Rager.  Default threshold = 4 (most EoE cards).
+    ///
+    /// **Resolve semantics.** Read effective power via
+    /// `predicate_subject_effective_power(state, source_obj_id)`.
+    /// None (source not on bf) → log + no-op (mirrors Python's
+    /// `if source is None: return`).  `power < threshold` → log + no-op.
+    /// Otherwise apply `effect`.
+    ConditionalIfSourcePowerAtLeast {
+        threshold: i32,
+        effect: Box<Effect>,
+    },
+}
+
+/// **BBB downstream complement — 7th Rust slice.**
+/// Two-tier predicate architecture mirroring Python's
+/// `StatePredicate` ABC (`effects/state_predicates.py`).  A
+/// `StatePredicate` checks a global game-state condition; it is
+/// wrapped by `Predicate::StateBound` (a `TriggerPredicate`) to
+/// enter the trigger-predicate evaluation path.
+///
+/// Wired kinds (XX Pin 3 closure):
+///   * `VoidActive` — Void is active (a nonland permanent left the
+///     battlefield OR a spell was warped this turn).  Reads
+///     `state.permanent_left_battlefield_this_turn ||
+///     state.spell_warped_this_turn`.  Viewer-independent (global flag).
+///   * `AnyPlayerControlsNoCreatures` — at least one player
+///     controls no creatures.  Scans all players' battlefields.
+///     Viewer-independent.  EoE card: Sothera, the Supervoid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StatePredicate {
+    /// Void is active: `permanent_left_battlefield_this_turn ||
+    /// spell_warped_this_turn`. Viewer-independent.
+    VoidActive,
+    /// At least one player controls no creatures (battlefield is
+    /// empty or holds only non-Creature permanents). Viewer-
+    /// independent. Sothera, the Supervoid's gate predicate.
+    AnyPlayerControlsNoCreatures,
+}
+
+impl StatePredicate {
+    /// Evaluate the state predicate.
+    ///
+    /// `_viewer_id` is the source-controller's player id passed in
+    /// from `Predicate::StateBound::matches`.  Both current wired
+    /// predicates are viewer-independent; the parameter is present
+    /// for forward-compatibility when viewer-relative predicates
+    /// (e.g. "you control more lands than an opponent") land.
+    pub(crate) fn test(
+        &self,
+        state: &crate::state::GameState,
+        _viewer_id: u8,
+    ) -> bool {
+        match self {
+            StatePredicate::VoidActive => {
+                state.permanent_left_battlefield_this_turn
+                    || state.spell_warped_this_turn
+            }
+            StatePredicate::AnyPlayerControlsNoCreatures => {
+                state.players.iter().any(|p| {
+                    !p.battlefield.iter().any(|obj| {
+                        state
+                            .registry
+                            .printings
+                            .get(obj.printing_id as usize)
+                            .map(|pr| pr.card_types.iter().any(|t| t == "Creature"))
+                            .unwrap_or(false)
+                    })
+                })
+            }
+        }
+    }
 }
 
 /// **G7 Class-C delayed-trigger port (round-78).** Single entry on
@@ -4309,6 +4429,20 @@ pub enum Predicate {
     /// AND NOT SourceIsSelf`), where Slice 4's `And`-only algebra
     /// couldn't express the disjunction.
     Or(Box<Predicate>, Box<Predicate>),
+    /// **BBB downstream complement — 7th Rust slice.**
+    /// Wraps a `StatePredicate` and binds it to the firing source's
+    /// controller.  Mirrors Python's `StateBound(inner: StatePredicate)`
+    /// (`effects/predicates.py:392-406`): evaluates
+    /// `inner.test(state, source.controller_id)` at check time.
+    ///
+    /// This is the Tier-1 TriggerPredicate entry point for the
+    /// Tier-2 `StatePredicate` sub-kinds (`VoidActive`,
+    /// `AnyPlayerControlsNoCreatures`).  The bridge translates:
+    ///   `"state_bound"` outer + `"void_active"` / `"any_player_controls_no_creatures"` inner.
+    ///
+    /// EoE cards unlocked: all Void-gated triggers (VoidActive inner)
+    /// and Sothera, the Supervoid (AnyPlayerControlsNoCreatures inner).
+    StateBound(StatePredicate),
 }
 
 impl Predicate {
@@ -4419,6 +4553,19 @@ impl Predicate {
             Predicate::Or(a, b) => {
                 a.matches(state, source_id, subject_id)
                     || b.matches(state, source_id, subject_id)
+            }
+            Predicate::StateBound(inner) => {
+                // Resolve the source-controller's player id and delegate
+                // to the inner StatePredicate's `test` method.  Mirrors
+                // Python's `StateBound.matches(state, subjects, source)`:
+                //   `return self.inner.test(state, source.controller_id)`
+                // (`effects/predicates.py:405`).
+                // Both current StatePredicate kinds (VoidActive,
+                // AnyPlayerControlsNoCreatures) are viewer-independent, so
+                // the controller id is passed for forward-compat only.
+                let viewer_id = find_object_controller(state, source_id)
+                    .unwrap_or(state.active_player);
+                inner.test(state, viewer_id)
             }
         }
     }
@@ -7217,8 +7364,87 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::Sequence { effects: children })
         }
+        // **BBB downstream complement — 7th Rust slice (GGG Pin 2).**
+        // DefendingPlayerLosesHalfLifeRoundedUp — zero-field effect.
+        // Dict shape: `{"kind": "defending_player_loses_half_life_rounded_up"}`.
+        // No required sub-fields. Extra fields silently ignored for
+        // round-trip dict-shape consistency (mirrors every unit-variant
+        // parse arm precedent — ConditionalIfVoid / WarpExileSelf etc.).
+        // Mirrors Python's `DefendingPlayerLosesHalfLifeRoundedUp()`
+        // (`effects/generic/life.py:570`).
+        "defending_player_loses_half_life_rounded_up" => {
+            Ok(Effect::DefendingPlayerLosesHalfLifeRoundedUp)
+        }
+        // **BBB downstream complement — 7th Rust slice (XX Pin 1).**
+        // ConditionalIfYouGainedLifeAtLeast — threshold (int) + inner
+        // (nested effect dict). Reads `threshold` from dict; recursively
+        // parses `inner` via `parse_effect`. Mirrors Python's
+        // `ConditionalIfYouGainedLifeAtLeast(threshold, inner)`
+        // (`effects/combinators.py:966`) and the Python bridge arm in
+        // `cross_engine.py:8694`.
+        "conditional_if_you_gained_life_at_least" => {
+            let threshold: i32 = require(dict, "threshold")?.extract().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "conditional_if_you_gained_life_at_least.threshold must be an int (got: {e})"
+                ))
+            })?;
+            let inner_any = require(dict, "inner")?;
+            let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "conditional_if_you_gained_life_at_least.inner must be a dict"
+                )
+            })?;
+            let inner = parse_effect(inner_dict)?;
+            Ok(Effect::ConditionalIfYouGainedLifeAtLeast {
+                threshold,
+                inner: Box::new(inner),
+            })
+        }
+        // **BBB downstream complement — 7th Rust slice (XX Pin 2).**
+        // ConditionalIfSourcePowerAtLeast — threshold (int, default=4)
+        // + effect (nested effect dict, accepting both "inner" and
+        // "effect" keys for forward-compat with the Python bridge's
+        // field-name skew). Mirrors Python's
+        // `ConditionalIfSourcePowerAtLeast(effect, threshold=4)`
+        // (`effects/combinators.py:1055`) and the Python bridge arm in
+        // `cross_engine.py:8716`.
+        "conditional_if_source_power_at_least" => {
+            let threshold: i32 = dict
+                .get_item("threshold")
+                .map_err(|e| PyValueError::new_err(format!("dict access error: {e}")))?
+                .map(|v| v.extract::<i32>())
+                .transpose()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "conditional_if_source_power_at_least.threshold must be an int (got: {e})"
+                    ))
+                })?
+                .unwrap_or(4);
+            // Accept both "effect" and "inner" dict keys (mirrors the
+            // Python bridge's `nested_key = "effect" if "effect" in eff_dict
+            // else "inner"` forward-compat logic).
+            let effect_any = if dict
+                .get_item("effect")
+                .map_err(|e| PyValueError::new_err(format!("dict access error: {e}")))?
+                .is_some()
+            {
+                require(dict, "effect")?
+            } else {
+                require(dict, "inner")?
+            };
+            let effect_dict = effect_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "conditional_if_source_power_at_least effect/inner must be a dict"
+                )
+            })?;
+            let effect = parse_effect(effect_dict)?;
+            Ok(Effect::ConditionalIfSourcePowerAtLeast {
+                threshold,
+                effect: Box::new(effect),
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least"
         ))),
     }
 }
@@ -8150,12 +8376,52 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
                 Box::new(parse_predicate(right_dict)?),
             ))
         }
+        // **BBB downstream complement — 7th Rust slice (GGG Pin 1).**
+        // `state_bound` wraps a `StatePredicate` sub-kind dict under
+        // the `"inner"` key.  Dict shape:
+        //   `{"kind": "state_bound", "inner": {"kind": "void_active"}}`.
+        // Mirrors Python's `StateBound(inner: StatePredicate)` bridge
+        // arm in `cross_engine.py::_ta_dict_to_python_predicate`.
+        "state_bound" => {
+            let inner_any = require(dict, "inner")?;
+            let inner_dict = inner_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "predicate.state_bound.inner must be a dict (StatePredicate shape)"
+                )
+            })?;
+            Ok(Predicate::StateBound(parse_state_predicate(inner_dict)?))
+        }
         other => Err(PyValueError::new_err(format!(
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
              subject_is_enchantment, has_power_at_most, \
-             controlled_by_you, subject_has_subtype, not, and, or"
+             controlled_by_you, subject_has_subtype, not, and, or, \
+             state_bound"
+        ))),
+    }
+}
+
+/// Parse a Tier-2 `StatePredicate` dict into a `StatePredicate` enum
+/// variant.  Called by `parse_predicate` for the `"state_bound"` arm.
+///
+/// Wired kinds (GGG Pin 1):
+///   * `"void_active"` → `StatePredicate::VoidActive`
+///   * `"any_player_controls_no_creatures"` →
+///     `StatePredicate::AnyPlayerControlsNoCreatures`
+///
+/// Mirrors Python's `_ta_dict_to_python_state_predicate` in
+/// `src/mtg_bot/parity/cross_engine.py`.
+fn parse_state_predicate(dict: &Bound<'_, PyDict>) -> PyResult<StatePredicate> {
+    let kind: String = require(dict, "kind")?.extract()?;
+    match kind.as_str() {
+        "void_active" => Ok(StatePredicate::VoidActive),
+        "any_player_controls_no_creatures" => {
+            Ok(StatePredicate::AnyPlayerControlsNoCreatures)
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown StatePredicate kind {other:?}; \
+             valid: void_active, any_player_controls_no_creatures"
         ))),
     }
 }
@@ -8978,6 +9244,23 @@ pub(crate) fn effect_to_pydict<'py>(
             // and pushed onto the stack at the start of the END step
             // by `state_ops_steps.rs::run_delayed_end_step_triggers`.
             d.set_item("kind", "warp_exile_self")?;
+        }
+        // BBB downstream complement — 7th Rust slice.
+        Effect::DefendingPlayerLosesHalfLifeRoundedUp => {
+            d.set_item("kind", "defending_player_loses_half_life_rounded_up")?;
+        }
+        Effect::ConditionalIfYouGainedLifeAtLeast { threshold, inner } => {
+            d.set_item("kind", "conditional_if_you_gained_life_at_least")?;
+            d.set_item("threshold", *threshold)?;
+            d.set_item("inner", effect_to_pydict(py, inner)?)?;
+        }
+        Effect::ConditionalIfSourcePowerAtLeast { threshold, effect } => {
+            d.set_item("kind", "conditional_if_source_power_at_least")?;
+            d.set_item("threshold", *threshold)?;
+            // Emit as "effect" key to match the Python class field name
+            // (ConditionalIfSourcePowerAtLeast.effect, not .inner).
+            // The bridge accepts both "effect" and "inner" for forward-compat.
+            d.set_item("effect", effect_to_pydict(py, effect)?)?;
         }
     }
     Ok(d)

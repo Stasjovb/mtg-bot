@@ -8770,6 +8770,27 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # "amount": N}``. Missing ``amount`` defaults to 1 (the class default).
         from mtg_bot.effects.generic.counters import PutPoisonCountersOnTargetPlayer
         return PutPoisonCountersOnTargetPlayer(amount=int(eff_dict.get("amount", 1)))
+    if kind == "defending_player_loses_half_life_rounded_up":
+        # **GGG Pin 2 — DefendingPlayerLosesHalfLifeRoundedUp zero-field effect.**
+        # Python's ``DefendingPlayerLosesHalfLifeRoundedUp()``
+        # (``effects/generic/life.py:570``) encodes "defending player
+        # loses half their life, rounded up" — simplified to "each
+        # opponent" in 2-player context (documented approximation per
+        # the class docstring).
+        #
+        # EoE card unlocked: Alpharael, Stonechosen — "Void — Whenever
+        # Alpharael, Stonechosen attacks, if Void is active, defending
+        # player loses half their life, rounded up."
+        # Parser: ``ConditionalIfVoid(then_effect=
+        # DefendingPlayerLosesHalfLifeRoundedUp())``
+        # (the ConditionalIfVoid outer wrapper is separately handled in
+        # the bridge; this arm covers the inner then_effect).
+        #
+        # Dict shape: ``{"kind": "defending_player_loses_half_life_rounded_up"}``
+        # (no extra fields — zero-field class; all resolution logic is in
+        # the resolve method).
+        from mtg_bot.effects.generic.life import DefendingPlayerLosesHalfLifeRoundedUp
+        return DefendingPlayerLosesHalfLifeRoundedUp()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

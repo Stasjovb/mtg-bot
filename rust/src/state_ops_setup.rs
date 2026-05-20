@@ -371,6 +371,7 @@ pub fn make_state(
         has_lost: false,
         attempted_draw_on_empty: false,
         mulligan_count: 0,
+        life_gained_this_turn: 0,
     };
     let p1 = Player {
         id: 1,
@@ -384,6 +385,7 @@ pub fn make_state(
         has_lost: false,
         attempted_draw_on_empty: false,
         mulligan_count: 0,
+        life_gained_this_turn: 0,
     };
 
     Ok(GameState {
