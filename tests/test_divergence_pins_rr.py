@@ -204,7 +204,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergence_pin():
+def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_FIXED_parity():
     """Pin the bridge gap for the ``counters_added`` event string in
     ``_ta_dict_to_python_triggered_ability``.
 
@@ -287,8 +287,10 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
         f"Got subjects={subjects!r}"
     )
 
-    # 3-4. Bridge raises ValueError for the unwired event -- pin the gap.
-    unwired_ta_dict = {
+    # 3-4. FIXED: Bridge now translates "counters_added" without raising.
+    #      Inversion of the original divergence-pin assertion — the elif arm
+    #      was added in the RR slice and the ValueError is no longer raised.
+    now_wired_ta_dict = {
         "event": "counters_added",
         "predicate": {"kind": "always"},
         "effect": {
@@ -296,23 +298,24 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "counters_added" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'counters_added' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    from mtg_bot.effects.base import TriggeredAbility
+    try:
+        result = _ta_dict_to_python_triggered_ability(now_wired_ta_dict)
+    except ValueError as e:
+        raise AssertionError(
+            "RR Pin 1 FIXED: 'counters_added' should now be wired in the "
+            f"bridge elif chain and must NOT raise ValueError -- got: {e}"
+        ) from e
+    assert isinstance(result, TriggeredAbility), (
+        "RR Pin 1 FIXED: 'counters_added' bridge result must be a "
+        f"TriggeredAbility; got {type(result).__name__}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.COUNTERS_ADDED, (
+        "RR Pin 1 FIXED: 'counters_added' bridge result event must be "
+        f"Event.COUNTERS_ADDED; got {result.event!r}."
     )
 
-    # 5. Sanity: a WIRED event ("dies") round-trips without error.
+    # 5. Sanity: a previously-WIRED event ("dies") still round-trips cleanly.
     wired_ta_dict = {
         "event": "dies",
         "predicate": {"kind": "always"},
@@ -322,15 +325,14 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
+        dies_result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+        assert isinstance(dies_result, TriggeredAbility), (
             "Wired event 'dies' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+            f"got {type(dies_result).__name__}."
         )
-        assert result.event == Event.DIES, (
+        assert dies_result.event == Event.DIES, (
             "Wired event 'dies' should translate to Event.DIES; "
-            f"got {result.event!r}."
+            f"got {dies_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -338,8 +340,8 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
             f"ValueError -- got: {e}"
         ) from e
 
-    # 6. Document the 2 EoE cards blocked by this gap.
-    blocked_eoe_cards = [
+    # 6. Document the 2 EoE cards now unblocked.
+    unblocked_eoe_cards = [
         "Terrasymbiosis",        # "Whenever you put one or more +1/+1 counters on
                                  #  a creature you control, you may draw that many
                                  #  cards. Do this only once each turn."
@@ -347,9 +349,9 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
                                     #  with +1/+1 counters on them deal combat damage
                                     #  to a player, draw a card."
     ]
-    assert len(blocked_eoe_cards) == 2, (
-        "The 'counters_added' event gap blocks 2 EoE cards (Terrasymbiosis, "
-        f"Haliya, Ascendant Cadet); enumerated list has {len(blocked_eoe_cards)} entries."
+    assert len(unblocked_eoe_cards) == 2, (
+        "The 'counters_added' event wire unblocks 2 EoE cards (Terrasymbiosis, "
+        f"Haliya, Ascendant Cadet); enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
@@ -358,7 +360,7 @@ def test_cross_engine_real_eoe_counters_added_event_bridge_gap_sentinel_divergen
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_divergence_pin():
+def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_FIXED_parity():
     """Pin the bridge gap for the ``is_sacrificed`` event string in
     ``_ta_dict_to_python_triggered_ability``.
 
@@ -456,8 +458,10 @@ def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_divergenc
         "conflating them would mis-fire or suppress triggers."
     )
 
-    # 4-5. Bridge raises ValueError for the unwired event -- pin the gap.
-    unwired_ta_dict = {
+    # 4-5. FIXED: Bridge now translates "is_sacrificed" without raising.
+    #      Inversion of the original divergence-pin assertion — the elif arm
+    #      was added in the RR slice and the ValueError is no longer raised.
+    now_wired_ta_dict = {
         "event": "is_sacrificed",
         "predicate": {"kind": "always"},
         "effect": {
@@ -465,23 +469,24 @@ def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_divergenc
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "is_sacrificed" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'is_sacrificed' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    from mtg_bot.effects.base import TriggeredAbility
+    try:
+        result = _ta_dict_to_python_triggered_ability(now_wired_ta_dict)
+    except ValueError as e:
+        raise AssertionError(
+            "RR Pin 2 FIXED: 'is_sacrificed' should now be wired in the "
+            f"bridge elif chain and must NOT raise ValueError -- got: {e}"
+        ) from e
+    assert isinstance(result, TriggeredAbility), (
+        "RR Pin 2 FIXED: 'is_sacrificed' bridge result must be a "
+        f"TriggeredAbility; got {type(result).__name__}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.IS_SACRIFICED, (
+        "RR Pin 2 FIXED: 'is_sacrificed' bridge result event must be "
+        f"Event.IS_SACRIFICED; got {result.event!r}."
     )
 
-    # 6. Sanity: a WIRED event ("leaves_battlefield") round-trips cleanly.
+    # 6. Sanity: a previously-WIRED event ("leaves_battlefield") still round-trips.
     wired_ta_dict = {
         "event": "leaves_battlefield",
         "predicate": {"kind": "always"},
@@ -491,15 +496,14 @@ def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_divergenc
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
+        ltb_result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+        assert isinstance(ltb_result, TriggeredAbility), (
             "Wired event 'leaves_battlefield' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+            f"got {type(ltb_result).__name__}."
         )
-        assert result.event == Event.LEAVES_BATTLEFIELD, (
+        assert ltb_result.event == Event.LEAVES_BATTLEFIELD, (
             "Wired event 'leaves_battlefield' should translate to "
-            f"Event.LEAVES_BATTLEFIELD; got {result.event!r}."
+            f"Event.LEAVES_BATTLEFIELD; got {ltb_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -514,7 +518,7 @@ def test_cross_engine_real_eoe_is_sacrificed_event_bridge_gap_sentinel_divergenc
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_dealt_damage_event_bridge_gap_sentinel_divergence_pin():
+def test_cross_engine_real_eoe_dealt_damage_event_bridge_gap_sentinel_FIXED_parity():
     """Pin the bridge gap for the ``dealt_damage`` event string in
     ``_ta_dict_to_python_triggered_ability``.
 
@@ -626,8 +630,10 @@ def test_cross_engine_real_eoe_dealt_damage_event_bridge_gap_sentinel_divergence
         f"Got deals_combat_subjects={deals_combat_subjects!r}"
     )
 
-    # 4-5. Bridge raises ValueError for "dealt_damage" -- pin the gap.
-    unwired_ta_dict = {
+    # 4-5. FIXED: Bridge now translates "dealt_damage" without raising.
+    #      Inversion of the original divergence-pin assertion — the elif arm
+    #      was added in the RR slice and the ValueError is no longer raised.
+    now_wired_ta_dict = {
         "event": "dealt_damage",
         "predicate": {"kind": "always"},
         "effect": {
@@ -635,23 +641,24 @@ def test_cross_engine_real_eoe_dealt_damage_event_bridge_gap_sentinel_divergence
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "dealt_damage" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'dealt_damage' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    from mtg_bot.effects.base import TriggeredAbility
+    try:
+        result = _ta_dict_to_python_triggered_ability(now_wired_ta_dict)
+    except ValueError as e:
+        raise AssertionError(
+            "RR Pin 3 FIXED: 'dealt_damage' should now be wired in the "
+            f"bridge elif chain and must NOT raise ValueError -- got: {e}"
+        ) from e
+    assert isinstance(result, TriggeredAbility), (
+        "RR Pin 3 FIXED: 'dealt_damage' bridge result must be a "
+        f"TriggeredAbility; got {type(result).__name__}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.DEALT_DAMAGE, (
+        "RR Pin 3 FIXED: 'dealt_damage' bridge result event must be "
+        f"Event.DEALT_DAMAGE; got {result.event!r}."
     )
 
-    # 6. Sanity: a WIRED event ("enters") round-trips without error.
+    # 6. Sanity: a previously-WIRED event ("enters") still round-trips cleanly.
     wired_ta_dict = {
         "event": "enters",
         "predicate": {"kind": "always"},
@@ -661,15 +668,14 @@ def test_cross_engine_real_eoe_dealt_damage_event_bridge_gap_sentinel_divergence
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
+        enters_result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+        assert isinstance(enters_result, TriggeredAbility), (
             "Wired event 'enters' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+            f"got {type(enters_result).__name__}."
         )
-        assert result.event == Event.ENTERS, (
+        assert enters_result.event == Event.ENTERS, (
             "Wired event 'enters' should translate to Event.ENTERS; "
-            f"got {result.event!r}."
+            f"got {enters_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(

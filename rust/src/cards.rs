@@ -4113,6 +4113,80 @@ pub enum Event {
     ///
     /// 8 EoE cards unlocked by this event (OO Pin 3 closure).
     YouAttack,
+    /// "Whenever you put one or more counters on X" — round-16 (RR Pin 1)
+    /// COUNTERS_ADDED event bridge. Single-subject shape: subject = the
+    /// permanent that received the counters (``("obj",)`` per Python's
+    /// ``EVENT_SUBJECTS``).
+    ///
+    /// **Dispatch site.** Fired from the ``Effect::AddCounters`` arm
+    /// (``state_ops_resolve.rs``) AFTER the counter delta is applied to
+    /// the target object, and from ``Effect::PutPlusOneCounterOnSelf``
+    /// AFTER the self-counter mutation — both are the canonical Rust
+    /// counter-placement chokepoints. Mirrors Python's
+    /// ``fire_counters_added_to_your_creature_triggers`` in ``turn.py``
+    /// which dispatches ``Event.COUNTERS_ADDED`` after each
+    /// ``add_plus_one_counters`` call.
+    ///
+    /// **Subject.** ``subject_id`` = the object id of the permanent that
+    /// received counters. Matches ``source_id == subject_id`` for
+    /// ``Predicate::SourceIsSelf`` ("whenever you put counters on this
+    /// creature").
+    ///
+    /// Mirrors Python's ``Event.COUNTERS_ADDED`` (string value
+    /// ``"counters_added"``, ``src/mtg_bot/effects/predicates.py``).
+    ///
+    /// EoE cards unlocked: Terrasymbiosis, Haliya Ascendant Cadet
+    /// (RR Pin 1 closure).
+    CountersAdded,
+    /// "Whenever you sacrifice X" — round-16 (RR Pin 2) IS_SACRIFICED
+    /// event bridge. Single-subject shape: subject = the permanent that
+    /// was sacrificed (``("obj",)`` per Python's ``EVENT_SUBJECTS``).
+    ///
+    /// **Distinct from ``Event::Dies``.** Every sacrifice causes a DIES
+    /// dispatch AND an IS_SACRIFICED dispatch (sacrifice is a subset of
+    /// death). IS_SACRIFICED is the sacrifice-specific event used by
+    /// "whenever you sacrifice ..." oracle text, while DIES covers all
+    /// battlefield-to-graveyard transitions. Mirrors Python's separation
+    /// of ``Event.IS_SACRIFICED`` and ``Event.DIES``.
+    ///
+    /// **Dispatch site.** Fired from the ``Effect::Sacrifice`` arm
+    /// (``state_ops_resolve.rs``) AFTER the sacrificed permanent has been
+    /// moved to the graveyard and DIES/LEAVES are queued. Subject =
+    /// ``leaving_obj_id`` (the id of the sacrificed permanent). Extra-
+    /// observer pattern mirrors DIES: the sacrificed object has already
+    /// left the battlefield so it cannot be in the bf observer set; the
+    /// dispatch call must use ``dispatch_event_with_extra`` or inline the
+    /// extra-observer inclusion for self-triggers.
+    ///
+    /// Mirrors Python's ``Event.IS_SACRIFICED`` (string value
+    /// ``"is_sacrificed"``, ``src/mtg_bot/effects/predicates.py``).
+    ///
+    /// EoE cards unlocked: Lightless Evangel, Biotech Specialist
+    /// (RR Pin 2 closure).
+    IsSacrificed,
+    /// "Whenever X is dealt damage" — round-16 (RR Pin 3) DEALT_DAMAGE
+    /// event bridge. Single-subject shape: subject = the permanent that
+    /// RECEIVED damage (``("obj",)`` per Python's ``EVENT_SUBJECTS``).
+    ///
+    /// **Distinct from ``Event::DealsDamage`` (deals_combat_damage).**
+    /// ``DealsDamage`` fires for the DEALER of combat damage; this
+    /// ``DealtDamage`` variant fires for the RECEIVER. Two events model
+    /// opposite sides of the same damage exchange.
+    ///
+    /// **Dispatch site.** Fired after damage is marked on a permanent
+    /// that is the RECEIVER (not the dealer). In the blocker-vs-attacker
+    /// combat loop (``state_ops_resolve.rs``) after each
+    /// ``apply_damage_marker`` call that marks a creature with positive
+    /// damage. Mirrors Python's ``_fire_enchanted_dealt_damage_triggers``
+    /// in ``combat.py`` which calls
+    /// ``dispatch_event(state, Event.DEALT_DAMAGE, obj=obj, …)``.
+    ///
+    /// Mirrors Python's ``Event.DEALT_DAMAGE`` (string value
+    /// ``"dealt_damage"``, ``src/mtg_bot/effects/predicates.py``).
+    ///
+    /// EoE cards unlocked: Requiem Monolith, Pain for All
+    /// (RR Pin 3 closure).
+    DealtDamage,
 }
 
 /// Sentinel offset used by phase-step dispatch to pass a **player
@@ -7812,7 +7886,9 @@ fn parse_activation_cost(
 /// `"leaves_battlefield"`; Slice 9 adds `"blocks"`; round-58 adds
 /// `"becomes_tapped"`; round-13 adds `"deals_damage"` alongside the
 /// ``dispatch_combat_damage_to_player`` dispatch site in
-/// ``state_ops_combat.rs``. No further events are stub-raised —
+/// ``state_ops_combat.rs``; round-16 (RR Pins 1+2+3) adds
+/// ``"counters_added"``, ``"is_sacrificed"``, and ``"dealt_damage"``.
+/// No further events are stub-raised —
 /// unrecognised strings fall through to the `other` error arm.
 fn parse_triggered_ability(
     dict: &Bound<'_, PyDict>,
@@ -7897,14 +7973,38 @@ fn parse_triggered_ability(
         // Mirrors Python's ``Event.YOU_ATTACK`` (value ``"you_attack"``).
         // 8 EoE cards unlocked (OO Pin 3 closure).
         "you_attack" => Event::YouAttack,
+        // Round-16 COUNTERS_ADDED event bridge (RR Pin 1): "whenever you put
+        // one or more counters on X" triggered abilities. Single-subject shape:
+        // subject = the permanent that received the counters (``("obj",)``).
+        // Mirrors Python's ``Event.COUNTERS_ADDED`` (value ``"counters_added"``).
+        // No spelling skew — string values are identical.
+        // EoE cards unlocked: Terrasymbiosis, Haliya Ascendant Cadet.
+        "counters_added" => Event::CountersAdded,
+        // Round-16 IS_SACRIFICED event bridge (RR Pin 2): "whenever you
+        // sacrifice X" triggered abilities. Single-subject shape: subject =
+        // the sacrificed permanent (``("obj",)``). Distinct from DIES (which
+        // fires for all battlefield-to-graveyard transitions, not only sacrifice).
+        // Mirrors Python's ``Event.IS_SACRIFICED`` (value ``"is_sacrificed"``).
+        // No spelling skew.
+        // EoE cards unlocked: Lightless Evangel, Biotech Specialist.
+        "is_sacrificed" => Event::IsSacrificed,
+        // Round-16 DEALT_DAMAGE event bridge (RR Pin 3): "whenever X is
+        // dealt damage" triggered abilities. Single-subject shape: subject =
+        // the permanent that RECEIVED damage (``("obj",)``). Distinct from
+        // DealsDamage / DEALS_COMBAT_DAMAGE (the DEALER side; two subjects).
+        // Mirrors Python's ``Event.DEALT_DAMAGE`` (value ``"dealt_damage"``).
+        // No spelling skew.
+        // EoE cards unlocked: Requiem Monolith, Pain for All.
+        "dealt_damage" => Event::DealtDamage,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
                  valid: enters, dies, cast, attacks, blocks, \
                  leaves_battlefield, becomes_tapped, deals_damage, \
                  beginning_of_end_step, beginning_of_upkeep, \
-                 beginning_of_combat, you_attack \
-                 (Slice 9 + r58 + r13 + r14 + r15)"
+                 beginning_of_combat, you_attack, \
+                 counters_added, is_sacrificed, dealt_damage \
+                 (Slice 9 + r58 + r13 + r14 + r15 + r16-RR)"
             )));
         }
     };

@@ -9262,6 +9262,59 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # disjunction with IS_CAST is a separate follow-on closure item;
         # this arm is the necessary prerequisite.)
         event = Event.PLAYS_LAND
+    elif event_str == "counters_added":
+        # **RR Pin 1 — COUNTERS_ADDED event bridge.**
+        # Python's ``Event.COUNTERS_ADDED`` (value ``"counters_added"``) fires
+        # when one or more counters are placed on a permanent you control.
+        # Rust's ``Event::CountersAdded`` (string value ``"counters_added"``)
+        # is the counterpart — no spelling skew.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[COUNTERS_ADDED]`` is
+        # ``("obj",)`` — the permanent that received the counters.  Single-
+        # subject means ``Subject(slot=None, ...)`` resolves correctly on
+        # COUNTERS_ADDED dispatch (unlike IS_CAST's two-subject trap).
+        # No predicate-slot rewrite is needed alongside this arm.
+        #
+        # EoE cards unblocked: Terrasymbiosis ("Whenever you put one or more
+        # +1/+1 counters on a creature you control, you may draw that many
+        # cards. Do this only once each turn.") and Haliya, Ascendant Cadet.
+        event = Event.COUNTERS_ADDED
+    elif event_str == "is_sacrificed":
+        # **RR Pin 2 — IS_SACRIFICED event bridge.**
+        # Python's ``Event.IS_SACRIFICED`` (value ``"is_sacrificed"``) fires
+        # when a permanent is sacrificed.  Rust's ``Event::IsSacrificed``
+        # (string value ``"is_sacrificed"``) is the counterpart — no spelling
+        # skew.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[IS_SACRIFICED]`` is
+        # ``("obj",)`` — the permanent that was sacrificed.  Distinct from
+        # ``Event.DIES`` (fires for any battlefield-to-graveyard transition);
+        # IS_SACRIFICED fires specifically for the sacrifice action.  No
+        # predicate-slot rewrite is needed alongside this arm.
+        #
+        # EoE cards unblocked: Lightless Evangel ("Whenever you sacrifice
+        # another creature or artifact, put a +1/+1 counter on this creature.")
+        # and Biotech Specialist ("Whenever you sacrifice an artifact, this
+        # creature deals 2 damage to target opponent.").
+        event = Event.IS_SACRIFICED
+    elif event_str == "dealt_damage":
+        # **RR Pin 3 — DEALT_DAMAGE event bridge.**
+        # Python's ``Event.DEALT_DAMAGE`` (value ``"dealt_damage"``) fires
+        # when a permanent RECEIVES damage (receiver-side perspective).
+        # Rust's ``Event::DealtDamage`` (string value ``"dealt_damage"``) is
+        # the counterpart — no spelling skew.
+        #
+        # **Distinct from DEALS_COMBAT_DAMAGE (OO Pin 2).** DEALS_COMBAT_DAMAGE
+        # fires for the DEALER of combat damage (two subjects: ``("source",
+        # "target")``); DEALT_DAMAGE fires for the RECEIVER (one subject:
+        # ``("obj",)``). Wiring one does not close the other.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[DEALT_DAMAGE]`` is
+        # ``("obj",)`` — the permanent that was dealt damage.  No predicate-
+        # slot rewrite is needed alongside this arm.
+        #
+        # EoE cards unblocked: Requiem Monolith and Pain for All.
+        event = Event.DEALT_DAMAGE
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
