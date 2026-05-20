@@ -233,15 +233,27 @@ def _rust_zone_obj_sig(d: dict) -> tuple:
     dicts with the same key set:
 
         {id, printing_id, printing_name, tapped, summoning_sick,
-         damage, counters, controller_id, zone}
+         damage, counters, attached_to, controller_id, zone,
+         cast_from_exile_with_lightstall_surcharge}
 
     The Python ``_zone_signature`` produces an 8-tuple
     ``(printing_name | None, int(tapped), int(summoning_sick), damage,
        counters, attached_to, controller_id, id)``.
 
-    Rust doesn't track ``attached_to`` yet (auras are out of scope for
-    round 22/23), so we emit ``None`` for that slot — matching the
-    ``Value::Null`` the Rust ``fingerprint()`` emits in the same position.
+    **Aura-attachment substrate Phase 1 STEP 6.** Rust now tracks
+    ``attached_to`` on every ``GameObject`` (Round-28 attach foundation
+    + Equipment AttachToTargetCreatureYouControl + STEP-4 Aura resolve
+    arm). ``object_to_pydict`` in ``state_ops_snapshot.rs`` emits the
+    Optional field as ``None`` (unattached) or the target id (attached);
+    the native ``fingerprint()`` does the same on the in-Rust hash path
+    (``state_ops_fingerprint.rs:155-158``). Read it through verbatim so
+    this helper's hash recipe stays byte-equal to the native fingerprint
+    AND to Python's ``_zone_signature`` for any bf object whose
+    ``attached_to`` is set (Equipment + Aura post-STEP-4). Pre-STEP-6
+    this slot was hardcoded ``None``, which silently produced a hash
+    divergence on any state with an attached permanent — the same
+    blindness the counters-slot bug had until the
+    ``_zone_signature`` ``counters`` fix.
     """
     return (
         d["printing_name"],
@@ -249,7 +261,7 @@ def _rust_zone_obj_sig(d: dict) -> tuple:
         int(d["summoning_sick"]),
         d["damage"],
         d["counters"],
-        None,  # attached_to — not modeled on the Rust side
+        d.get("attached_to"),
         d["controller_id"],
         d["id"],
     )
