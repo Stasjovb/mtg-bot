@@ -273,12 +273,14 @@ Pre-2026-05-20-closures: 1775/1800 (98.6%) PASS / 25 FAIL_DIVERGENCE
 across 3 distinct axes (priority_player 15, blocker LEGAL_SET_EQ 4,
 battlefield STATE_EQ 6). Post the priority+blocker closure at
 `7a127e87` + v10 regress-verify at `b5035028`: effective cumulative
-**99.73%** at scale (only the battlefield axis residuals remain);
-battlefield closure (`feature/battlefield-axis-closure`) is the
-final-axis lane currently in flight per
-[`docs/BATTLEFIELD_AXIS_INVESTIGATION.md`](BATTLEFIELD_AXIS_INVESTIGATION.md)
-(merged `d99d85f3`). The flip-candidate-commit re-run will be against
-whichever main commit follows the battlefield-axis-closure merge.
+**99.73%** at scale (only the battlefield axis residuals remained).
+**Post the battlefield closure at `5bca387a` (2026-05-20): ALL 3
+broader-sweep residual axes are CLOSED**; cumulative is projected
+**100%** at scale per the closure-bench verification (full v-sweep
+at `5bca387a` still pending for end-to-end re-measurement, currently
+running in the orchestrator shell). The flip-candidate-commit re-run
+is against `5bca387a` (or post-slice-15 HEAD if that lane lands
+first). See §8.1 for the per-axis status table.
 
 ### C5 (JUDGMENT) — Honest residue is N or accepted-with-rationale
 
@@ -519,7 +521,7 @@ Tagged HARD vs ACCEPT. **Every status re-verified against `4704ca3e`
 | B7 | The "bare add_counters" Rust gap (`Effect::AddCounters` defender-shape; I73) | **ACCEPT** (I73 closed + pinned) | CLOSED/pinned; **additionally** the I23/R74-1 combat-side counter fold is now CLOSED (`RUST_PARITY_GAPS.md:983`). No open divergence — re-verify at flip per C2. |
 | B8 | Loader-admit completeness for whole-pool full-trajectory NOT a single measured number | **was HARD-for-C3-as-% / ACCEPT-via-C4∧C6** | **DOWNGRADED — now MEASURED.** `LOADER_ADMIT_COMPLETENESS_ANALYSIS.md` (landed `85d51879`) supplied it; re-measured live here (§1.1): pool 10.95%, deck-slot 52.14%, non-land 19.74%, 0/129,996 fully admitted. C3 is now a measured *trajectory*, not a static bar. Flip honestly relies on C4∧C6; the staged-flip card-universe reduction is an explicitly accepted consequence (§7 OQ3). **No longer "unmeasurable"; it is measured and the number is honest.** |
 | B9 | Harness-idiom frontier exhausted | **ACCEPT** (PROBED is evidence-strength, NOT the flip gate) | Not a flip-blocker. PROBED 96 → 106 (`POOL_PARITY.md:19`); the cleanly-probe-constructible idiom frontier is EXHAUSTED (PHASE TRANSITION note). Evidence-strength lane only. |
-| B11 | Broader-sweep residual axes (2026-05-20): priority_player STATE_EQ + blocker LEGAL_SET_EQ + battlefield STATE_EQ surfaced by v5–v9 sweep (23/1500 cumulative across archetypes 0–299) | **HARD (3 axes; 2 CLOSED + 1 IN-FLIGHT)** | **2 OF 3 CLOSED via `7a127e87` (`feature/priority-player-blocker-closure`).** priority_player STATE_EQ (15/1500) + blocker LEGAL_SET_EQ (4/1500) shared a single root cause (Rust `state.attackers` Vec retains dead attacker ids; `rust_engine_adapter.py` `_combat_decision_maker` mis-classifies the defender as decision-maker). Closed by a ~30-LoC adapter-only fix (3 coordinated dead-attacker guards in `_combat_decision_maker` + `_refresh_combat_phase` + the blocker-emission filter) per `docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md` (merge `4b47b701`). Pure-Python `rust_engine_adapter.py` only — no `.pyd` rebuild, same shape as the cycle-37 `86411a99` reconciliation pattern. Regression-verified at v10 (`b5035028`, archetypes 300-359, 60-archetype NEW slice): **298/300 PASS, 0 priority_player, 0 blocker, only 2 battlefield STATE_EQ — closure regression-free + no new axes surfaced**. Cumulative effective scale-PASS now **99.73%** (1496/1500 across 0–299 + 298/300 on 300–359 ≈ **1794/1800**). **3rd axis closure IN FLIGHT**: battlefield STATE_EQ (6/1800 cumulative across v9 + v10 = 4+2) — root cause + closure scope documented at `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged `d99d85f3`; pin at `tests/test_divergence_pins_battlefield.py`); root cause = 2 un-migrated Rust `Effect::*` arms (`DestroyTargetArtifactOrTappedCreature` + `FocusFireEffect` in `state_ops_resolve.rs`) that use a "first legal target via battlefield scan" convention instead of the `current_resolve_payload_target_id` pattern the `SeedshipImpactEffect` arm exemplifies; lane `feature/battlefield-axis-closure` is executing the recipe (~60 LoC across two arms + Rust touch + `.pyd` rebuild). Todos: `c8d3a5f1` (priority_player) DONE, `d4f6a8c9` (blocker) DONE, `e5b7c9d8` (battlefield) IN FLIGHT. Once the battlefield closure lands the broader-sweep cumulative residual surface goes to **0/1800 at scale** — a fully clean evidence base across 7.2% of the deck pool. |
+| B11 | Broader-sweep residual axes (2026-05-20): priority_player STATE_EQ + blocker LEGAL_SET_EQ + battlefield STATE_EQ surfaced by v5–v9 sweep (23/1500 cumulative across archetypes 0–299) | **HARD (3 axes; ALL 3 CLOSED 2026-05-20)** | **ALL 3 CLOSED 2026-05-20.** Axes 1+2 closed via `7a127e87` (`feature/priority-player-blocker-closure`): priority_player STATE_EQ (15/1500) + blocker LEGAL_SET_EQ (4/1500) shared a single root cause (Rust `state.attackers` Vec retains dead attacker ids; `rust_engine_adapter.py` `_combat_decision_maker` mis-classifies the defender as decision-maker). Closed by a ~30-LoC adapter-only fix (3 coordinated dead-attacker guards in `_combat_decision_maker` + `_refresh_combat_phase` + the blocker-emission filter) per `docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md` (merge `4b47b701`). Pure-Python `rust_engine_adapter.py` only — no `.pyd` rebuild, same shape as the cycle-37 `86411a99` reconciliation pattern. Regression-verified at v10 (`b5035028`, archetypes 300-359, 60-archetype NEW slice): **298/300 PASS, 0 priority_player, 0 blocker, only 2 battlefield STATE_EQ — closure regression-free + no new axes surfaced**. Cumulative effective scale-PASS post axes-1+2: **99.73%** (1496/1500 across 0–299 + 298/300 on 300–359 ≈ **1794/1800**). **Axis 3 (battlefield STATE_EQ, 6/1800 cumulative) CLOSED via `5bca387a` (`feature/battlefield-axis-closure`, 2026-05-20)** — root cause documented at `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged `d99d85f3`), regression pin at `tests/test_divergence_pins_battlefield.py` FLIPPED to `..._is_closed_FIXED_parity`. Fix: 2 un-migrated Rust `Effect::*` arms (`DestroyTargetArtifactOrTappedCreature` + `FocusFireEffect` in `state_ops_resolve.rs`) migrated from "first legal target via battlefield scan" to the `current_resolve_payload_target_id` pattern the `SeedshipImpactEffect` arm exemplifies (~60 LoC across two arms + sister cast-time bind sites in `state_ops_cast.rs`; single `.pyd` rebuild). Closure bench verified: 15 games (arch=253/257/281 × seeds 0-4) / 0 battlefield STATE_EQ FAIL_DIVERGENCE. Todos: `c8d3a5f1` (priority_player) DONE, `d4f6a8c9` (blocker) DONE, `e5b7c9d8` (battlefield) DONE. **All 3 broader-sweep residual axes CLOSED; cumulative residual surface projected 0/1800 at scale** — a fully clean evidence base across 7.2% of the deck pool. Full v-sweep at `5bca387a` end-to-end re-measurement still pending (v12-class sweep running in orchestrator shell). |
 | B10 | C2 standing gate — no open confirmed Rust-side divergence pin | **HARD (standing)** | **GREEN at `4704ca3e`.** CFI-1 + round-74 trio + R76-1 + R76-2 ALL fixed (`8a2a8d84`-class → `c3cd126f`/`f456ec20`/`e4d4a50e`/`dea55cff`/`0627614e`, consolidated `4704ca3e`). Remaining `*_divergence_pin`s are documented KNOWN pins on loader-DECLINED cards, excluded from the headline — not open admitted-population divergences. Re-verify at flip-time (Step 0). |
 | G4 | I20 mana-empty-timing asymmetry diverges the legal CAST SET under the role-swapped (Rust-driven / Python-shadow) `rust_shadow` bake-in contract | **HARD pre-flip blocker (a flip-correctness IMPROVEMENT, not a regression)** | **CLOSED-by-lockstep (`5a0b966f`, path A).** Surfaced BY the B3-S4 bake-in exactly as designed (the C1/G1-analog for the I20 axis). Rust's `advance_phase` empties mana every phase tick (**CR 106.4 — the CR-correct model**); the Python engine DELIBERATELY holds mana until cleanup (the documented I20 *simplification*, `turn.py:1081-1083` — **Python is the known-wrong side; the flip RETIRES that simplification, so G4 is a correctness IMPROVEMENT, not a regression**). Closed by `ShadowCheckedRustAdapter._install_i20_phase_exit_mana_mirror` driving the Python shadow's per-phase-exit mana empty in lockstep with the Rust driver's CR-106.4 empty (the SAME `advance_phase_python`-step-1 semantics `cross_engine.step_both` already proves; pure Python, `rust_shadow.py` only — no Rust/`cards.rs`/`cross_engine.py`/`.pyd`; `decision_source="python"` byte-unchanged). The `_DOCUMENTED_ACCEPTED_FIELDS` mana_pool carve-out is REMOVED → STATE_EQ now asserts FULL mana-pool byte-equality (tripwire strictly STRENGTHENED; green-with-carve-out-removed IS the closure proof). **C6 fence:** unchanged — the apply-side mana gate is the hard correctness boundary and the admitted population stays C4∧C6-fenced; G4 closure makes the bake-in's shadow checker CR-correct on the mana axis, it does not widen the admitted universe. Pinned `tests/test_rust_shadow_bakein.py::test_g4_i20_cast_set_axis_is_closed_by_lockstep`. **SEPARATE unmasked follow-up (NOT G4):** the now-strengthened tripwire surfaced a distinct pre-existing Rust-driver priority-port gap — tracked + **now CLOSED** as ledger row **G5** below (the `_next_alive` alive-skip port), whose closure in turn unmasked the further distinct game-over-timing gap **G6** — also **now CLOSED** (the `_run_step_enter_sbas` SBA-cadence port; the G4→G5→G6 chain is fully convergent and closed). G4's own closure does not depend on G5/G6 and is complete without them. |
 | G5 | Rust-driver priority-port gap (`RustGameStateAdapter._reset_priority_to_active` sets priority/active to a decked-out active player vs Python's CR-aware alive-skipping `_next_alive`), surfaced by the G4-strengthened bake-in tripwire in the degenerate post-deck-out 3-card-synthetic tail (~turn 8 / step ~149) | **HARD pre-flip blocker (a flip-correctness fix, not a regression)** | **CLOSED-by-`86411a99` (path: pure-Python alive-skip port — no Rust pymethod, no `.pyd` rebuild).** Distinct, pre-existing, NOT the I20 mana axis, NOT introduced by the G4 mana mirror. Verify-first re-confirmed the brief's root cause exactly (live evidence: pre-fix STATE_EQ `priority_player` rust=1/python=0 at step 149, turn 8 DRAW — Python's `_next_alive(active_player_idx=1)` skips the decked-out active player to 0, the Rust port set raw `active_player_idx=1`). Closed by porting Python's `simulate._next_alive` byte-exactly into `RustGameStateAdapter._next_alive_idx` (uses Rust's pre-existing `losers()` `#[pymethods]` — the eager OR'd-three predicate `state_ops_winloss.rs:95` explicitly documents as the byte-equal analog of Python's eager `has_lost`), applied at `_reset_priority_to_active` AND the sibling "no-loss model" sites (the single-pass priority handoff + the `_alive_count` pass-round threshold). **Pure Python in `rust_engine_adapter.py` only** — `decision_source="python"` (the SoT) byte-unchanged, 4-file 1532 baseline UNMOVED, no Rust/`.pyd`/Cargo touch. Closure proof: the bake-in now runs divergence-CLEAN through the entire post-deck-out priority window (past the old step-~149 trip point); pin **flipped** `test_post_player_loss_priority_port_divergence_is_surfaced` → `::test_post_player_loss_priority_port_is_closed` (G4-lane closure-flip pattern); negative controls intact (STATE_EQ still fires loudly on a genuine injected divergence). Todo `3ed036fc` → DONE. **SEPARATE unmasked follow-up — ledger row G6 below, now itself CLOSED** (closing G5 honestly unmasked a distinct pre-existing game-over-detection-timing gap, exactly as G4's closure unmasked G5; G6 is now closed by the `_run_step_enter_sbas` SBA-cadence port — the G4→G5→G6 chain is fully convergent and closed, no G7 unmasked). |
@@ -706,14 +708,15 @@ serializers stay.
    3 (CE5-free re-proof) per
    [`docs/FLIP_READINESS_EVIDENCE_2026_05_19.md`](FLIP_READINESS_EVIDENCE_2026_05_19.md).
    The broader-archetype sweep (v5–v9) surfaced 3 residual axes
-   (23/1500 across archetypes 0–299); **2 of those 3 axes are now
-   CLOSED** by `feature/priority-player-blocker-closure` (`7a127e87`,
-   pure-Python adapter fix, v10 regress-verified at `b5035028`); the
-   **3rd (battlefield STATE_EQ) is in flight** on
-   `feature/battlefield-axis-closure` with root cause + closure scope
-   captured in
+   (23/1500 across archetypes 0–299); **ALL 3 axes are now CLOSED**:
+   axes 1+2 by `feature/priority-player-blocker-closure` (`7a127e87`,
+   pure-Python adapter fix, v10 regress-verified at `b5035028`); axis
+   3 (battlefield STATE_EQ) by `feature/battlefield-axis-closure`
+   (`5bca387a`, 2026-05-20) — migrating 2 un-migrated Rust Effect
+   arms to the `current_resolve_payload_target_id` pattern per
    [`docs/BATTLEFIELD_AXIS_INVESTIGATION.md`](BATTLEFIELD_AXIS_INVESTIGATION.md)
-   (merged `d99d85f3`). Owner doc for G7:
+   (merged `d99d85f3`). Cumulative residuals 23/1500 → projected
+   0/1500. Owner doc for G7:
    `docs/RUST_STACK_RESOLUTION_DESIGN.md`. The GO decision itself is
    the USER's.
 
@@ -732,20 +735,22 @@ refreshed evidence:
   (C6 hard-boundary pin) is CLOSED.** **B3 spec is LANDED and
   B3-S1..S4 are merged** (the `rust_shadow` shadow-checker bake-in
   is the pre-flip tripwire).
-- **The remaining hard critical path (post 2026-05-20 closures) is
-  the battlefield-axis closure → fresh C4 re-run + one full
-  `mtg_bot iterate` with shadow-checker active → B3-S5:**
-  1. **`feature/battlefield-axis-closure`** — currently in flight per
-     `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged `d99d85f3`).
+- **The remaining hard critical path (post 2026-05-20 all-closures)
+  is fresh C4 re-run at `5bca387a` + one full `mtg_bot iterate` with
+  shadow-checker active → B3-S5:**
+  1. ✅ **DONE — `feature/battlefield-axis-closure`** merged at
+     `5bca387a` 2026-05-20 (underlying `7db0590b` + `16c88726`).
      ~60 LoC across `Effect::DestroyTargetArtifactOrTappedCreature` +
-     `Effect::FocusFireEffect` in `rust/src/state_ops_resolve.rs`,
-     migrating them to the `SeedshipImpactEffect` target-id pattern.
-     Once landed, the broader-sweep cumulative residual surface goes
-     to **0/1800 at scale** (Path A nominally complete).
-  2. **Re-run the C4 bench on the post-battlefield-closure
-     flip-candidate commit** (Step 0 in §2). The v5_terminal scale
-     evidence (`ca569619`) already exceeds the recommended scale; a
-     fresh sweep at the actual flip commit pins no-regression.
+     `Effect::FocusFireEffect` (and sister cast-time-bind sites)
+     in `rust/src/state_ops_resolve.rs`/`state_ops_cast.rs`, migrated
+     to the `SeedshipImpactEffect` target-id pattern. Broader-sweep
+     cumulative residual surface goes to projected **0/1800 at
+     scale** (Path A COMPLETE).
+  2. **Re-run the C4 bench on `5bca387a`** (Step 0 in §2). The
+     v5_terminal scale evidence (`ca569619`) already exceeds the
+     recommended scale; a fresh v12-class sweep at `5bca387a` is
+     running in the orchestrator shell to pin no-regression across
+     ALL 3 closures end-to-end.
   3. **One full `mtg_bot iterate` with the shadow-checker active.**
      Bake-in exit criterion (§3) — production-representative volume
      completing with zero shadow-divergence. This is the only
@@ -774,24 +779,24 @@ closes. The next actions are orchestrator-sequenced Rust + bake-in
 work, **not more analysis** — this re-verification concludes here.
 
 *[2026-05-20 SUPERSEDED: see §8 below. The G7 chain S1–S7 is now
-LANDED; CE5 has been removed + dead-code-excised on main; the
-remaining hard path is the battlefield-axis closure (in flight) + a
-flip-candidate C4 re-run + one shadow-checker iterate run before
-B3-S5.]*
+LANDED; CE5 has been removed + dead-code-excised on main; ALL 3
+broader-sweep residual axes are now CLOSED (battlefield axis closed
+at `5bca387a`); the remaining hard path is a fresh C4/v-sweep at
+`5bca387a` + one shadow-checker iterate run before B3-S5.]*
 
 ---
 
 ## 8. Post-broader-sweep-closure status (2026-05-20)
 
-**Live at main `b5035028`** (`feature/broader-archetype-sweep-300-359`
-merge — the v10 post-closure regression-verify). This section
-re-states the GO calculus after the post-G7 broader-archetype sweep
+**Live at main `5bca387a`** (`feature/battlefield-axis-closure`
+merge — the 3rd of 3 residual-axis closures). This section re-states
+the GO calculus after the post-G7 broader-archetype sweep
 (`docs/BROADER_SWEEP_CONSOLIDATED_V5_V9.md`, 1500 games on archetypes
-0–299) surfaced 3 residual axes and 2 of those 3 axes were
-subsequently closed in this session. **It does NOT re-verify the
-older §0a/§1/§2/§4 status against `b5035028` end-to-end** — those
-sections re-verified accurately at `89a4f32b` and only the
-broader-sweep cluster is structurally new since.
+0–299) surfaced 3 residual axes and **ALL 3 axes were subsequently
+closed in this session**. **It does NOT re-verify the older
+§0a/§1/§2/§4 status against `5bca387a` end-to-end** — those sections
+re-verified accurately at `89a4f32b` and only the broader-sweep
+cluster is structurally new since.
 
 ### 8.1 The 3 broader-sweep axes — current state
 
@@ -799,14 +804,15 @@ broader-sweep cluster is structurally new since.
 |---|---|---:|---:|---|---|
 | 1 | `STATE_EQ::fields:priority_player` (G5-family long-tail surfaced v6–v9) | 15/1500 | **0/1500** (v10 regress-verified across NEW archetypes 300–359 too: 0/300) | **CLOSED 2026-05-20** | `7a127e87` (`feature/priority-player-blocker-closure`; underlying fix `5b8608d1`) |
 | 2 | `LEGAL_SET_EQ::fields:blocker` (NEW v8 — Rust-extra blocker) | 4/1500 | **0/1500** (same v10 0/300 regress-verify) | **CLOSED 2026-05-20** — same root cause as axis 1, closed by the same `feature/priority-player-blocker-closure` lane | `7a127e87` |
-| 3 | `STATE_EQ::fields:battlefield` (NEW v9; +2 more @ v10 = 6/1800 cumulative) | 4/1500 (v9 only) | 6/1800 cumulative (v9: 4 + v10: 2) | **IN FLIGHT — `feature/battlefield-axis-closure`** per `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged `d99d85f3`); root cause + closure scope captured + regression pin filed (`tests/test_divergence_pins_battlefield.py`) | (pending — battlefield-axis-closure lane) |
+| 3 | `STATE_EQ::fields:battlefield` (NEW v9; +2 more @ v10 = 6/1800 cumulative) | 4/1500 (v9 only) | **0/1500** (closure verified at the repro cluster: arch=253/257/281 × seeds 0-4 = 15 games / 0 FAIL_DIVERGENCE on battlefield STATE_EQ) | **CLOSED 2026-05-20** — `feature/battlefield-axis-closure` merged at `5bca387a`; migrated `Effect::DestroyTargetArtifactOrTappedCreature` + `Effect::FocusFireEffect` (and sister arms from grep audit) to the `current_resolve_payload_target_id` pattern per `docs/BATTLEFIELD_AXIS_INVESTIGATION.md`; regression pin flipped (`tests/test_divergence_pins_battlefield.py::..._is_closed_FIXED_parity`) | `5bca387a` |
 
-**Cumulative effective scale-PASS post 2026-05-20 closures =
-1794/1800 (99.67%)** — was 1775/1800 (98.6%) pre-closure;
-priority+blocker closure recovers 19/1500 + nets zero new axes per
-the v10 regress-verify. Once axis 3 (battlefield) lands the
-cumulative goes to **0/1800 FAIL_DIVERGENCE across 7.2% of the deck
-pool** — a fully clean evidence base for Path A.
+**Cumulative effective scale-PASS post 2026-05-20 closures (ALL 3
+axes) = projected 1800/1800 (100.00%)** — was 1775/1800 (98.6%)
+pre-closure; priority+blocker closure recovered 19/1500, battlefield
+closure collapses the remaining 6/1800 to 0 (verified at the repro
+bench; full v-sweep at `5bca387a` still pending for end-to-end
+re-measurement). All 3 broader-sweep residual axes are CLOSED — a
+fully clean evidence base for Path A.
 
 ### 8.2 Closure architecture — what landed
 
@@ -830,25 +836,35 @@ reconciliation pattern. Pure-Python, no `.pyd` rebuild. 19/1500
 cumulative residuals → 0 at scale (`bench_trajectory_parity.py`
 40-game cluster of v6/v7/v8/v9 repro archetypes — 0 FAIL_DIVERGENCE).
 
-**Axis 3 (battlefield STATE_EQ) — IN FLIGHT.** Root cause + recipe
-captured at `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged
-`d99d85f3`). 2 un-migrated `Effect::*` arms in
-`rust/src/state_ops_resolve.rs` use a "first legal target via
+**Axis 3 (battlefield STATE_EQ) — CLOSED 2026-05-20.** Root cause +
+recipe captured at `docs/BATTLEFIELD_AXIS_INVESTIGATION.md` (merged
+`d99d85f3`); closure landed at `5bca387a`
+(`feature/battlefield-axis-closure`, underlying commits `7db0590b` +
+`16c88726`). 2 un-migrated `Effect::*` arms in
+`rust/src/state_ops_resolve.rs` were using a "first legal target via
 battlefield scan" convention at resolve time, ignoring the
 cast-time-bound target on the resolving `StackItem`:
 `Effect::DestroyTargetArtifactOrTappedCreature` (`:6182–6285`,
 Radiant Strike's destroy half) and `Effect::FocusFireEffect`
-(`:7162–7267`, Focus Fire). The canonical migrated shape lives at
-`Effect::SeedshipImpactEffect` (`:6319–6500`) — read
+(`:7162–7267`, Focus Fire). Both were migrated to the canonical
+shape at `Effect::SeedshipImpactEffect` (`:6319–6500`) — read
 `state.current_resolve_payload_target_id`, scan only for that id,
-filter check, silent fizzle per CR 608.2b when not found. Both arms
-have identical shape; ~30 LoC per arm. The
-`feature/battlefield-axis-closure` lane is executing the recipe
-(grep audit for sister un-migrated arms first; then port both;
-single `.pyd` rebuild; flip the regression pin
-`tests/test_divergence_pins_battlefield.py`). **NOT a shared root
-cause** with axes 1+2 (those are adapter-side `state.attackers` Vec
-staleness; this is engine-side target-tracking convention).
+filter check, silent fizzle per CR 608.2b when not found.
+~30 LoC per arm; paired with cast-time bind updates in
+`rust/src/state_ops_cast.rs` (Radiant Strike + Focus Fire). Single
+`.pyd` rebuild + regression pin flipped
+(`tests/test_divergence_pins_battlefield.py::..._is_closed_FIXED_parity`,
+INVERTED assertions per the G7 token-creation-parity closure-flip
+pattern). **NOT a shared root cause** with axes 1+2 (those are
+adapter-side `state.attackers` Vec staleness; this is engine-side
+target-tracking convention). Bench verification: 15 games / 0
+battlefield STATE_EQ FAIL_DIVERGENCE on the original v9/v10 repros
+(arch=253/257/281 × seeds 0-4). Out-of-scope sister un-migrated arms
+(`DestroyTargetArtifact`, `DestroyTargetNonlandPermanent`,
+`DestroyTargetNoncreaturePermanent`, etc.) get the default
+"first creature" cast-time bind that doesn't match their resolve-time
+filters — filed as future work per the investigation doc; not part
+of the broader-sweep residuals.
 
 ### 8.3 Regression-verify (v10, `b5035028`)
 
@@ -864,17 +880,20 @@ axes surfaced.**
 
 ### 8.4 GO-ready commit identification
 
-The current GO-ready candidate is **the merge of
-`feature/battlefield-axis-closure` to main**, modulo any further
-sibling lanes (Slice 15 VVV Pin 1 — `feature/rust-slice-15-vvv-pin-1`
-— is concurrent and orthogonal). After that merge:
+The current GO-ready commit is **`5bca387a`** (the
+`feature/battlefield-axis-closure` merge — ALL 3 broader-sweep
+residual axes CLOSED), modulo Slice 15 VVV Pin 1
+(`feature/rust-slice-15-vvv-pin-1`) which is concurrent and
+orthogonal and stacks on top if it lands first. From `5bca387a`:
 
 - Re-run the C4 bench (`scripts/bench_trajectory_parity.py`) on the
   flip-candidate commit per `FLIP_READINESS_EVIDENCE_2026_05_19.md`
   §6 (recommended scale: ≥~700 games / ≥7 archetype windows / ≥5
   seed offsets). The terminal-cap v5_terminal evidence (`ca569619`,
   300 games at cap=20000) already exceeds the recommended scale; a
-  fresh sweep at the flip commit pins no-regression.
+  fresh sweep at `5bca387a` (a v12-class sweep is running in the
+  orchestrator shell against this commit) pins no-regression across
+  ALL 3 closures end-to-end.
 - Run one full `mtg_bot iterate` with the `rust_shadow` shadow-
   checker active (bake-in exit criterion per §3 — production-
   representative volume completing with zero shadow-divergence).
@@ -887,67 +906,78 @@ The Path A / Path B framing in
 [`docs/BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md)
 §6 (merged `f4314ea1`) estimated **Path A (close all 3 axes
 pre-flip) at ~4–8 cycles** vs **Path B (ship with bake-in safety
-net, defer axis closure to post-flip)**. **Path A is now near-
-complete in <1 cycle** — 2 of 3 axes closed by `7a127e87`, the 3rd
-axis closure recipe captured + lane in flight. The user's
-operational decision is effectively reduced to:
+net, defer axis closure to post-flip)**. **Path A is now COMPLETE
+in <1 cycle** — all 3 axes closed: axes 1+2 by `7a127e87`, axis 3
+by `5bca387a`. The user's operational decision is effectively
+reduced to:
 
-**Option P1 — GO immediately on the post-battlefield-closure merge.**
-Once axis 3 lands, all 3 broader-sweep residual axes are closed at
-scale; cumulative is 0/1800 FAIL_DIVERGENCE. The C4 re-run + one
+**Option P1 — GO immediately on `5bca387a`** (or post-slice-15 HEAD
+if Survivor-family closure also lands first). All 3 broader-sweep
+residual axes are CLOSED at scale; cumulative is projected 0/1800
+FAIL_DIVERGENCE (verified at the repro bench; full v-sweep at the
+post-closure tip still pending). The fresh C4/v-sweep + one
 iterate-with-shadow-checker remain as standing gates per
 `FLIP_READINESS_EVIDENCE_2026_05_19.md` §6; once both green, B3-S5
 is the single-flag atomic flip.
 
 **Option P2 — Run one additional `mtg_bot iterate` with the
-shadow-checker active before the flag flip**, even after axis 3
-lands, to surface any production-distribution-but-not-bench
-divergence the C4 sweep didn't exercise. This is per the bake-in
-exit criterion in §3 already, but called out explicitly because the
-operational cost is ~1 iterate run (hours, not days) and the upside
-is catching distribution-shift bugs the C4 archetype windows might
-miss.
+shadow-checker active before the flag flip**, to surface any
+production-distribution-but-not-bench divergence the C4 sweep
+didn't exercise. This is per the bake-in exit criterion in §3
+already, but called out explicitly because the operational cost is
+~1 iterate run (hours, not days) and the upside is catching
+distribution-shift bugs the C4 archetype windows might miss.
 
 **The two options are NOT mutually exclusive** — P2 is operational
 hygiene on top of P1. The honest read: P1+P2 is the recommended
 posture; the dashed-line trade-off ("flip now without the iterate
 run" vs "flip after one more iterate run") is a small one-iterate
 delta, not the ~4–8 cycle delta that Path A vs Path B was originally
-framing. **Path A is effectively complete; the remaining question
-is whether to run one more iterate-with-shadow-checker before
-B3-S5.**
+framing. **Path A is COMPLETE; the remaining question is whether
+to run one more iterate-with-shadow-checker before B3-S5.**
 
 ### 8.6 Honest caveats
 
-- **Battlefield closure may surface new edge cases.** The
-  investigation doc's grep audit covers the 2 named arms; if other
-  Effect arms in `state_ops_resolve.rs` share the same bf-scan
-  convention without using `current_resolve_payload_target_id`, the
-  v10 2/300 cases may need a second pass. The investigation's Phase 1
-  recipe ("grep `bf_iter_etb_sorted` audit for sister un-migrated
-  arms before flipping") is the safeguard.
-- **The cumulative 1794/1800 (99.67%) post-closure number is
+- **Battlefield closure was bounded to the 2 named arms.** The
+  closure lane executed the investigation doc's grep audit and
+  migrated `DestroyTargetArtifactOrTappedCreature` +
+  `FocusFireEffect` (plus the sister arms with matching cast-time
+  binds). Other un-migrated sister arms
+  (`DestroyTargetArtifact`, `DestroyTargetNonlandPermanent`,
+  `DestroyTargetNoncreaturePermanent`, `DestroyTargetLand`,
+  `TapTargetArtifactOrCreature`, `PutStunCounterOnTappedCreature`,
+  `TapTargetOpponentPermanentAndStunIt`, `TapAnotherTargetCreature`,
+  `UntapTargetOtherPermanent`) get the default "first creature"
+  cast-time bind that doesn't match their resolve-time filters —
+  filed as future work per the worklog; out of scope for the
+  battlefield axis closure since they don't trip the broader-sweep
+  residual bench. If a future card pool exposes them they'll need
+  both cast-time + resolve-time fixes per arm.
+- **The cumulative 1800/1800 (projected 100%) post-closure number is
   effective, not measured end-to-end.** It's the arithmetic of
-  "1796/1800 pre-battlefield-closure + axis 3 fix collapses the
-  battlefield 6 to ~0". A true measurement requires the
-  battlefield closure to land and then re-running the v5–v10 sweep
-  series at the post-closure tip. The v10 sweep (`b5035028`)
-  measured the 298/300 number directly for the NEW 300-359
-  archetypes; the older 0–299 numbers are inherited from v5–v9
-  (i.e. the priority+blocker closure was not re-run against v5–v9
-  archetypes individually — only the 40-game `bench_trajectory_
-  parity.py` repro cluster the closure lane ran).
-- **The v10 sweep was NOT against the flip-candidate commit.** It
-  was against `7a127e87` (priority+blocker closure tip), pre-
-  battlefield-closure. A fresh C4 sweep against the actual flip
-  commit is still required (Step 0 / `FLIP_READINESS_EVIDENCE_
-  2026_05_19.md` §6).
+  "1794/1800 pre-battlefield-closure + axis 3 fix collapses the
+  battlefield 6 to 0" (battlefield closure verified at the 15-game
+  repro bench / 0 FAIL_DIVERGENCE on battlefield STATE_EQ). A true
+  end-to-end measurement requires re-running the v5–v10 sweep series
+  at `5bca387a`. The v10 sweep (`b5035028`) measured the 298/300
+  number directly for the NEW 300-359 archetypes pre-battlefield-
+  closure; the older 0–299 numbers are inherited from v5–v9 (i.e.
+  the priority+blocker closure was not re-run against v5–v9
+  archetypes individually — only the 40-game
+  `bench_trajectory_parity.py` repro cluster the closure lane ran).
+  A v12-class sweep at `5bca387a` is running in the orchestrator
+  shell to close this loop end-to-end.
+- **The pending v-sweep at `5bca387a` IS the fresh C4 sweep.** It
+  serves as Step 0 (`FLIP_READINESS_EVIDENCE_2026_05_19.md` §6) for
+  Option P1 — pins no-regression across ALL 3 closures at the actual
+  flip-candidate commit. If slice 15 lands first and stacks on top,
+  a sweep at the post-slice-15 HEAD becomes the gating measurement.
 - **Slice 15 (VVV Pin 1) is concurrent.** A separate
-  `feature/rust-slice-15-vvv-pin-1` lane is in flight (5 Survivor
-  postcombat-main cards, SourceIsSelf trigger gating). It is
-  orthogonal to the 3 broader-sweep axes and to G7; its merge
-  doesn't gate the flip but its merge may co-arrive with the
-  battlefield-axis-closure merge.
+  `feature/rust-slice-15-vvv-pin-1` lane was still in flight at the
+  time of this update (5 Survivor postcombat-main cards,
+  SourceIsSelf trigger gating). It is orthogonal to the 3
+  broader-sweep axes and to G7; its merge doesn't gate the flip but
+  its merge may stack on top of `5bca387a`.
 
 ### 8.7 Cross-refs
 
@@ -962,10 +992,12 @@ B3-S5.**
   — Path A vs B framing source (now superseded by §8.5)
 - [`docs/FLIP_READINESS_EVIDENCE_2026_05_19.md`](FLIP_READINESS_EVIDENCE_2026_05_19.md)
   — overarching GO/NO-GO synthesis; §6 lists the standing gates
-- Closure commit: `7a127e87` (priority+blocker, merged 2026-05-20)
+- Closure commit (axes 1+2): `7a127e87` (priority+blocker, merged
+  2026-05-20)
 - Regression-verify commit: `b5035028` (v10 sweep, merged 2026-05-20)
-- Battlefield closure pending: `feature/battlefield-axis-closure`
-  (root cause + recipe at `d99d85f3`)
+- Closure commit (axis 3): `5bca387a` (battlefield, merged
+  2026-05-20; underlying commits `7db0590b` + `16c88726`; root cause
+  + recipe at `d99d85f3`)
 
 ---
 

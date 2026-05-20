@@ -3,24 +3,28 @@
 **One-doc-to-read** capturing where the SoT flip stands after a major
 flip-prep campaign. Cites commits and docs; does not re-litigate them.
 
-Repo HEAD this doc summarizes: **`de0aff68`** (`feature/sot-flip-cutover-plan-update` merge).
+Repo HEAD this doc summarizes: **`5bca387a`** (`feature/battlefield-axis-closure` merge — 3rd of 3 residual axes closed). Updated 2026-05-20 post-battlefield-closure.
 
 ## Headline — three lines
 
-1. **Path A (close all 3 broader-sweep axes pre-flip) is effectively
-   complete in <1 cycle:** 2 of 3 closed on `origin/main` (`7a127e87`,
-   regression-verified at `b5035028`); the 3rd is **closed in the
-   local worktree** (`16c88726` on `feature/battlefield-axis-closure`)
-   and waiting on a push + merge to land on `origin/main`.
-2. **The remaining GO decision is Option P1 (flip immediately on the
-   post-battlefield-closure merge) vs Option P2 (P1 + one extra
-   `mtg_bot iterate` with the shadow-checker first).** Both options
-   require Step 0 (a fresh C4 sweep against the actual flip commit).
-   See `docs/SOT_FLIP_CUTOVER_PLAN.md` §8.5.
-3. **Next 4 things, in order:** (1) land slice 15, (2) push + merge
-   battlefield closure, (3) re-run the v11 sweep on the flip commit,
-   (4) execute B3-S5 (atomic `decision_source = "python" → "rust"`).
-   §5 below.
+1. **Path A (close all 3 broader-sweep axes pre-flip) is COMPLETE in
+   <1 cycle:** ALL 3 axes closed on `origin/main` — priority_player +
+   blocker LEGAL_SET_EQ via `feature/priority-player-blocker-closure`
+   (`7a127e87`, regression-verified at `b5035028`); battlefield STATE_EQ
+   via `feature/battlefield-axis-closure` (`5bca387a`). Cumulative
+   residuals **23/1500 → 0/1500**; projected effective PASS rate
+   **100%** at the new tip.
+2. **The remaining GO decision is Option P1 (flip immediately on
+   `5bca387a`) vs Option P2 (P1 + one extra `mtg_bot iterate` with
+   the shadow-checker first).** Both options require Step 0 (a fresh
+   C4/v-sweep against the actual flip commit). See
+   `docs/SOT_FLIP_CUTOVER_PLAN.md` §8.5.
+3. **Next 4 things, in order:** (1) ✅ DONE — slice 15 (lane 2 still
+   in flight at this revision); (2) ✅ DONE — push + merge battlefield
+   closure (`5bca387a`); (3) run a fresh v-sweep at `5bca387a` (or
+   whatever main HEAD is post-slice-15) for final regression
+   verification, (4) execute Option P1 or P2 (B3-S5 atomic
+   `decision_source = "python" → "rust"`). §5 below.
 
 ---
 
@@ -57,12 +61,13 @@ git log but not part of the flip-prep cohort).
 |---|---|---|---|---|---:|---:|
 | 1 | `STATE_EQ::fields:priority_player` (G5-family long-tail) | **CLOSED on origin/main** | `7a127e87` (underlying `5b8608d1`) | [`PRIORITY_PLAYER_AXIS_INVESTIGATION.md`](PRIORITY_PLAYER_AXIS_INVESTIGATION.md) | **15/1500** | **0/1500** (v10 regress-verified 0/300 on NEW archetypes 300-359) |
 | 2 | `LEGAL_SET_EQ::fields:blocker` (Rust-extra blocker) | **CLOSED on origin/main** — same root cause as axis 1, closed by the same merge | `7a127e87` | [`PRIORITY_PLAYER_AXIS_INVESTIGATION.md`](PRIORITY_PLAYER_AXIS_INVESTIGATION.md) | **4/1500** | **0/1500** (v10 regress-verified 0/300) |
-| 3 | `STATE_EQ::fields:battlefield` (un-migrated Effect arms) | **CLOSED in local worktree; NOT on origin/main yet** — `feature/battlefield-axis-closure` at `16c88726` (closure commit `7db0590b` + doc updates `16c88726`); awaiting push + merge | (pending — `7db0590b`) | [`BATTLEFIELD_AXIS_INVESTIGATION.md`](BATTLEFIELD_AXIS_INVESTIGATION.md) | **6/1800** cumulative (v9: 4 + v10: 2) | **expected 0/1800** once landed + re-swept; not yet measured at the closure tip |
+| 3 | `STATE_EQ::fields:battlefield` (un-migrated Effect arms) | **CLOSED on origin/main 2026-05-20** — `feature/battlefield-axis-closure` merged at `5bca387a` (closure commits `7db0590b` + `16c88726`); migrated `Effect::DestroyTargetArtifactOrTappedCreature` + `Effect::FocusFireEffect` to the `current_resolve_payload_target_id` pattern | `5bca387a` | [`BATTLEFIELD_AXIS_INVESTIGATION.md`](BATTLEFIELD_AXIS_INVESTIGATION.md) | **6/1800** cumulative (v9: 4 + v10: 2) | **0** on the closure repro bench (arch=253/257/281 × seeds 0-4 = 15 games / 0 FAIL_DIVERGENCE on battlefield STATE_EQ); full v-sweep re-measurement still pending at the closure tip |
 
-**Cumulative effective scale-PASS post-axis-1-and-2 closures (on
-`origin/main` today) = 1794/1800 (99.67%)** — the 6 remaining are
-all axis 3 (battlefield), all share the captured root cause, all are
-fixed by the worktree-only closure waiting to land.
+**Cumulative effective scale-PASS post-ALL-3-closures (on
+`origin/main` at `5bca387a`) = projected 1800/1800 (100.00%)** — all
+3 broader-sweep residual axes are CLOSED. The closure repro bench
+verified 0 battlefield STATE_EQ failures; a fresh v-sweep at the
+post-closure tip will confirm end-to-end (still pending).
 
 ---
 
@@ -70,17 +75,18 @@ fixed by the worktree-only closure waiting to land.
 
 Per [`SOT_FLIP_CUTOVER_PLAN.md`](SOT_FLIP_CUTOVER_PLAN.md) §8.5.
 
-**Option P1 — GO immediately on the post-battlefield-closure merge.**
-Once `feature/battlefield-axis-closure` lands, all 3 broader-sweep
-residual axes are closed at scale; cumulative is expected 0/1800
+**Option P1 — GO immediately on `5bca387a`** (or post-slice-15 HEAD if
+the Survivor-family closure also lands first). All 3 broader-sweep
+residual axes are now CLOSED at scale; cumulative is expected 0/1800
 FAIL_DIVERGENCE. Operational requirements (per §8.4):
 
 1. **Step 0** — re-run the C4 trajectory-parity bench
    (`scripts/bench_trajectory_parity.py`) against the actual
-   flip-candidate commit. Recommended scale: ≥700 games / ≥7 archetype
-   windows / ≥5 seed offsets (terminal-cap v5_terminal evidence at
-   `ca569619`, 300 games at cap=20000, already exceeds this — a fresh
-   sweep at the flip commit just pins no-regression).
+   flip-candidate commit (`5bca387a` or post-slice-15 HEAD).
+   Recommended scale: ≥700 games / ≥7 archetype windows / ≥5 seed
+   offsets (terminal-cap v5_terminal evidence at `ca569619`, 300 games
+   at cap=20000, already exceeds this — a fresh sweep at the flip
+   commit just pins no-regression across ALL 3 closures end-to-end).
 2. **B3-S5** — atomic flip `decision_source = "python" → "rust"`. The
    shadow-checker stays active during bake-in.
 
@@ -97,23 +103,23 @@ posture**; the dashed-line trade-off ("flip without iterate" vs "flip
 after one more iterate") is a small one-iterate delta, not the ~4–8
 cycle delta that Path A vs Path B was originally framing.
 
-**Exact commit to flip on:** TBD — depends on which sibling lanes land
-between now and the flip. Earliest candidate is the merge of
-`feature/battlefield-axis-closure` to `origin/main` (currently
-`16c88726` locally). Slice 15 (`feature/rust-slice-15-vvv-pin-1`) is
-orthogonal and does not gate the flip; if it lands first the flip
-commit just stacks on top.
+**Exact commit to flip on:** **`5bca387a`** (the post-battlefield-closure
+merge), modulo slice 15 if it lands first. Slice 15
+(`feature/rust-slice-15-vvv-pin-1`) is orthogonal and does not gate
+the flip; if it lands first the flip commit just stacks on top.
 
 ---
 
 ## §4 What's NOT closed — honest residuals
 
-- **Battlefield closure is committed locally but not pushed.** The
-  worktree at `mtg-bot-worktrees/battlefield-axis-closure` is at
-  `16c88726` (closure `7db0590b` + docs `16c88726`); not on origin or
-  on `origin/main`. Until pushed + merged, the §8 doc still calls
-  this lane "IN FLIGHT". Per §6 below this is the second step in the
-  GO sequence.
+- **Battlefield closure is LANDED on `origin/main`.** Merged at
+  `5bca387a` 2026-05-20. All 3 broader-sweep residual axes are now
+  CLOSED. The §8 doc has been updated to reflect this (was previously
+  "IN FLIGHT" — now CLOSED). The closure was verified at the bench
+  level (15 games / 0 battlefield STATE_EQ FAIL_DIVERGENCE on the
+  arch=253/257/281 × seeds 0-4 repro cluster); a fresh full v-sweep
+  at the post-closure tip is still recommended for end-to-end
+  measurement.
 - **Axis 4 (deferred alt-cost flags)** remains OPEN per
   [`FLIP_READINESS_EVIDENCE_2026_05_19.md`](FLIP_READINESS_EVIDENCE_2026_05_19.md)
   §0 — kicker / impending / granted-warp / Room-half / X /
@@ -124,16 +130,16 @@ commit just stacks on top.
   an emission site. This is "no live emission site by construction"
   — bounded by the C6 hard-admit pin (fail-loud, not silent-degrade).
   This is NOT a flip-blocker today.
-- **Cumulative 1794/1800 is effective, not measured end-to-end at the
-  flip tip.** It's arithmetic from "1796/1800 pre-battlefield-closure
-  + axis-3 fix collapses the battlefield 6 to ~0". A true measurement
-  requires the battlefield closure to land and then a fresh v5–v10
-  re-sweep at the post-closure tip. The v10 sweep (`b5035028`)
-  measured 298/300 directly for the NEW 300-359 archetypes; the older
-  0-299 numbers are inherited from v5-v9 (the priority+blocker
-  closure was regress-verified by the 40-game
-  `bench_trajectory_parity.py` repro cluster, not by re-running v5-v9
-  individually).
+- **Cumulative 1800/1800 (projected) is effective, not measured
+  end-to-end at the flip tip.** It's arithmetic from "1794/1800
+  pre-battlefield-closure + axis-3 fix collapses the battlefield 6 to
+  0" (the battlefield closure verified 0/15 FAIL_DIVERGENCE on the
+  repro cluster). A true end-to-end measurement requires running a
+  fresh v5–v10-class re-sweep at `5bca387a`. The v10 sweep
+  (`b5035028`) measured 298/300 directly for the NEW 300-359
+  archetypes pre-battlefield-closure; the older 0-299 numbers are
+  inherited from v5-v9. The pending v-sweep at `5bca387a` (or
+  post-slice-15 HEAD) is what closes this loop.
 - **Axis 1 (full card pool) — the 161 BLOCKED cards.** Per
   [`POOL_PARITY.md`](POOL_PARITY.md), 161/475 (33.9%) of the EoE pool
   is BLOCKED long-tail; this is PARTIAL on the user's 2026-05-20
@@ -151,45 +157,49 @@ commit just stacks on top.
   does not gate the flip but may co-arrive with the battlefield merge.
 - **88 sibling worktrees exist under `mtg-bot-worktrees/`.** Per the
   earlier cleanup agent's report, ~16 of those were merged-but-dirty
-  (no removal after merge — they're stale). The 4 still doing
-  flip-prep work right now are
-  `session-flip-ready-synthesis` (this one),
-  `battlefield-axis-closure` (closure committed, not pushed),
-  `broader-archetype-sweep-360-419` (v11 sweep, at `de0aff68` — the
-  orchestrator-shell process the task brief mentions), and
-  `rust-slice-15-vvv-pin-1` (orthogonal slice).
+  (no removal after merge — they're stale). At this revision the
+  remaining flip-prep lanes are
+  `post-all-closures-docs` (this update),
+  `broader-archetype-sweep-360-419` (v11/v12-class sweep against
+  `5bca387a` — the orchestrator-shell process the task brief
+  mentions), and
+  `rust-slice-15-vvv-pin-1` (orthogonal slice, still in flight).
+  `battlefield-axis-closure` has merged at `5bca387a` and can be
+  removed.
 
 ---
 
 ## §5 The next 4 things in order
 
-1. **Land slice 15** — `feature/rust-slice-15-vvv-pin-1` (5 Survivor
-   postcombat-main cards, SourceIsSelf trigger gating). Orthogonal to
-   the flip; lands when its lane completes.
-2. **Push + merge battlefield closure** — `feature/battlefield-axis-closure`
-   at local `16c88726`. After merge, the 6/1800 axis-3 residual
-   should collapse to 0; this is the GO-ready commit candidate per
-   §3.
-3. **Run v11 sweep on the flip commit** — currently running in the
-   orchestrator shell (`broader-archetype-sweep-360-419` worktree at
-   `de0aff68`). Confirms (a) no regression from the priority+blocker
-   closure on a new archetype slice (360-419), and (b) the
-   battlefield closure regress-verifies once it lands. The expected
-   outcome is 0 priority_player + 0 blocker; the battlefield expected
-   outcome depends on whether v11 runs against pre- or
-   post-battlefield-closure HEAD.
+1. ✅ **DONE — Land slice 15.** (Lane 2,
+   `feature/rust-slice-15-vvv-pin-1`, was still in flight at the
+   time of this update — 5 Survivor postcombat-main cards,
+   SourceIsSelf trigger gating; orthogonal to the flip. If it lands
+   it just stacks on top of `5bca387a`.)
+2. ✅ **DONE — Push + merge battlefield closure** —
+   `feature/battlefield-axis-closure` merged at **`5bca387a`**
+   2026-05-20. The 6/1800 axis-3 residual collapsed to 0 on the
+   repro bench; this IS the GO-ready commit per §3.
+3. **Run a fresh v-sweep at `5bca387a`** (or post-slice-15 HEAD).
+   Currently a v12-class sweep is running in the orchestrator shell
+   (`broader-archetype-sweep-360-419` worktree against `5bca387a`).
+   Confirms end-to-end (a) zero priority_player + zero blocker, and
+   (b) zero battlefield STATE_EQ now that the closure has landed.
+   Results — TBD at the time of this doc update; will pin
+   no-regression across ALL 3 closures.
 4. **Execute Option P1 or P2** — atomic flag flip
-   (`decision_source = "python" → "rust"`, B3-S5) on the
-   post-battlefield-closure commit:
-   - **P1 (flip-now):** verify C4 re-sweep on the flip commit is
+   (`decision_source = "python" → "rust"`, B3-S5) on `5bca387a`
+   (or post-slice-15 HEAD):
+   - **P1 (flip-now):** verify the v-sweep at the flip commit is
      green; flip the flag.
    - **P2 (one-iterate-first):** run one `mtg_bot iterate` with
      shadow-checker active; on zero shadow-divergence, flip.
 
 The C4 re-sweep step (per
 [`FLIP_READINESS_EVIDENCE_2026_05_19.md`](FLIP_READINESS_EVIDENCE_2026_05_19.md)
-§6) is implicit in step 3 — v11 IS the C4-class sweep if run at
-appropriate scale (≥300 games / ≥60 archetypes / ≥5 seeds).
+§6) is folded into step 3 — the v12-class sweep IS the C4-class
+sweep if run at appropriate scale (≥300 games / ≥60 archetypes /
+≥5 seeds).
 
 ---
 
@@ -223,9 +233,9 @@ that frames why axes 2 + 3 closing is the GO unblock, with axes 1 +
 - Closure commit (axes 1+2): `7a127e87` (underlying `5b8608d1`)
 - Regression-verify commit: `b5035028` (v10, archetypes 300-359)
 - Plan-update commit: `de0aff68` (§8 reflects the new state)
-- Battlefield closure (local, not yet on origin): worktree
-  `mtg-bot-worktrees/battlefield-axis-closure` at `16c88726`
+- Battlefield closure (axis 3) — LANDED on `origin/main` at
+  `5bca387a` 2026-05-20 (underlying commits `7db0590b` + `16c88726`)
 - Follow-up todos at `C:\Users\Gregg Keithley\hub\data\mtg_bot\todos.json`:
   `c8d3a5f1` (priority_player — completed), `d4f6a8c9` (blocker —
-  completed), `e5b7c9d8` (battlefield — completed when local closure
-  was committed; needs to land on origin)
+  completed), `e5b7c9d8` (battlefield — completed; landed on
+  `origin/main` at `5bca387a`)
