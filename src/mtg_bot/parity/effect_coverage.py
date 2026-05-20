@@ -162,6 +162,19 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     "CreateTokenTapped": "CreateToken",
     "SurveilXEqualToArtifactCount": "Surveil",
     "MillTargetPlayerEqualToYourLifeTotal": "MillTargetPlayer",
+    # 19th Rust slice (honest-stop substrate landing) -- the Rust
+    # variant intentionally omits the ``Effect`` suffix to match the
+    # cards.rs deferred-slot doc-comment naming convention
+    # (``EnchantedCreatureFightsTarget`` is the slot the round-17 bare
+    # bilateral Fight doc-comment named as the Aura-shape follow-up).
+    # The Python class keeps the ``Effect`` suffix per the existing
+    # ``effects/bespoke.py:506`` ``EnchantedCreatureFightsTargetEffect``
+    # spelling. Bridge round-trip works end-to-end (verified via
+    # test_probe_yyy_downstream.py + test_divergence_pins_yyy.py); this
+    # override clears the false orphan WARNING by reflecting the real
+    # round-trip relationship rather than silencing it (same precedent
+    # as the slice-16 / round-52 family).
+    "EnchantedCreatureFightsTarget": "EnchantedCreatureFightsTargetEffect",
     # --- Round-56 N2 fold: Famished Worldsire override.
     #
     # Round-54 N2 shipped Effect::FamishedWorldsireLookTopXByPowerPut

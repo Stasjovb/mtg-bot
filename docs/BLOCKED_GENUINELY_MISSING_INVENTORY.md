@@ -1,23 +1,47 @@
 # BLOCKED-genuinely_missing inventory + closure-scope estimates
 
-Canonical focused inventory of the **6 EoE cards** currently in the
+Canonical focused inventory of the **4 EoE cards** currently in the
 `BLOCKED — genuinely_missing` tier (`docs/POOL_PARITY.md`) — the cards
 that need a brand-new Rust `Effect::` variant + parse + bridge before
 they can be byte-equal cross-engine. This is the **post-flip long-tail
 sequencing guide**: every other parity work is BLOCKED-non-effect (2
 cards), BLOCKED-subsystem-gated (149 cards, see
-`docs/SUBSYSTEM_ROADMAP.md`), or PROBED/covered (318 cards).
+`docs/SUBSYSTEM_ROADMAP.md`), or PROBED/covered (320 cards).
 
-**Snapshot HEAD:** `e2f0539d` (main, 2026-05-19 post-XXX-Pin-2-merge).
+**Snapshot HEAD:** post-slice-19-merge (2026-05-20).
 **Source of truth:** `docs/residue_worklist.json` (the residue
 worklist's per-card re-walk is the AUTHORITY on genuine Effect absence
-— round-63 N5 verify-first re-walk at `e6f95002`). The 6 cards below
+— round-63 N5 verify-first re-walk at `e6f95002`). The 4 cards below
 are the entirety of the load-bearing "how far from parity" residue.
 
-**Total deck reach of this tier:** 53,927 decks (sum of the per-card
-counts below; some decks contain multiple genuinely-missing cards, so
-this is an upper bound on the union — closing the whole tier moves
-fewer than 53,927 distinct decks but no more, see §Sequencing).
+**Slice 19 update (honest-stop substrate landing for Meltstrider's
+Resolve).** Meltstrider's Resolve's Effect-level scaffolding shipped
+(Rust `Effect::EnchantedCreatureFightsTarget` + parse + to_pydict +
+bridge + honest-stop resolve arm) — `docs/residue_worklist.json`
+flipped its status to `closed` with `reclassified_to: BLOCKED-SUBSYSTEM
+(Aura attach substrate)`. The card now sits in the
+`subsystem-gated / Effect-uncovered` tier under the
+**Aura-attachment substrate** subsystem (per
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`) rather than the
+genuinely-missing tier. **Full byte-equality for the real Meltstrider's
+Resolve card is NOT yet shipped — the broader Aura attach substrate
+remains the deferred bottleneck.** See `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`
+for the Phase 1-4 plan; the substrate is the **largest §2-declined
+Rust multi-round substrate audited so far** (5-7 Rust-agent rounds
+end-to-end). The same applies to Pain for All's scope estimate (#3
+below): the **shared Aura attach substrate has NOT yet landed**, so
+Pain for All's residual scope stays **medium** (NOT "small") — the
+substrate-sharing flip only fires once Phase 1 of the substrate plan
+ships.
+
+**Total deck reach of this tier:** 35,368 decks (sum of the per-card
+counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
+Pain for All 4,367 + Sothera 2,108). Some decks contain multiple
+genuinely-missing cards, so this is an upper bound on the union —
+closing the whole tier moves fewer than 35,368 distinct decks but
+no more, see §Sequencing. Meltstrider's Resolve's 15,259 decks are
+NOT in this tier; they're carried under the Aura subsystem in
+`docs/POOL_PARITY.md`.
 
 ---
 
@@ -26,11 +50,17 @@ fewer than 53,927 distinct decks but no more, see §Sequencing).
 | Card | bespoke.py (or generic) class | LoC | 17lands decks | Substrate ask | Scope |
 |---|---|---:|---:|---|---|
 | Command Bridge | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing + tap-a-permanent agent decision | medium (3-5) |
-| Meltstrider's Resolve | `bespoke.py::EnchantedCreatureFightsTargetEffect` | 507-582 | 15,259 | Aura `attached_to` source-substitution + bare-Fight reuse | small (1-2) |
 | Lightstall Inquisitor | `effects/generic/discard.py::EachOpponentExilesCardFromHandWithCastPermission` | 173-214 | 4,371 | persistent `cast_from_exile_with_lightstall_surcharge` flag + cost-hike legality | large (6+) |
-| Pain for All | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo | medium (3-5) |
-| Roving Actuator | `bespoke.py::RovingActuatorETBEffect` | 630-718 | 3,400 | exile-then-copy-then-cast-without-paying-cost subsystem | large (6+) |
+| Pain for All | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo (substrate-shared with Meltstrider's Resolve) | medium (3-5) |
 | Sothera, the Supervoid | `effects/generic/exile.py::ReanimateOneExiledWithSourceWithCounters` + `::SacrificeSelfPreservingExileLink` + `effects/generic/opponent_punishers.py::EachOpponentExilesOwnCreature` | 149-217 / 1122-1216 / 1221-1273 | 2,108 | `GameObject.exiled_by_source` source-link + on-leave auto-return suppression + recall-first/sac-second ordering | large (6+) |
+
+**Recently closed (now sitting in the Aura subsystem tier of
+`docs/POOL_PARITY.md`):**
+
+| Card | Closure slice | Substrate landed | Substrate deferred |
+|---|---|---|---|
+| Roving Actuator | 18th (slice 18) | `Effect::RovingActuatorETBEffect { max_mv: u8 }` + parse + resolve + bridge — Effect closed AND full game byte-equal under the short-circuit-the-stack shortcut | n/a (the short-circuit-the-stack shortcut closes the full card) |
+| Meltstrider's Resolve | 19th (slice 19, honest-stop) | `Effect::EnchantedCreatureFightsTarget` unit variant + parse + to_pydict + bridge + honest-stop resolve arm (Effect-level closure) | Aura attach substrate Phases 1-2 per `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` — `attached_to` is never set on Rust Aura resolve today; the loader admits no Aura. Full byte-equal of the real card requires this substrate. |
 
 Scope key (calibrated against this session's slices):
 
@@ -78,7 +108,12 @@ Scope key (calibrated against this session's slices):
   marginal-value closure in the tier** — common-rarity land, plays in
   ~19% of 17lands EoE decks.
 
-### 2. Meltstrider's Resolve — 15,259 decks
+### 2. Meltstrider's Resolve — 15,259 decks — HONEST-STOP CLOSURE (slice 19)
+
+**Status:** Effect-level scaffolding LANDED in slice 19; full byte-equal
+of the real card still BLOCKED on the Aura attach substrate (now sitting
+in the Aura-attachment subsystem tier of `docs/POOL_PARITY.md`, NOT
+genuinely-missing).
 
 - **Bespoke class:** `src/mtg_bot/effects/bespoke.py:507-582`
   (`EnchantedCreatureFightsTargetEffect`).
@@ -87,26 +122,49 @@ Scope key (calibrated against this session's slices):
   opponent controls"). The bare-bilateral
   `FightTargetCreatureWithTargetCreature` arm IS shipped + bridged
   (`name_in_arm_ack: fight_target_creature_with_target_creature`); the
-  Aura-shape source-substitution is the genuine ask.
-- **Effect variant needed:** `Effect::EnchantedCreatureFightsTarget`
-  (Aura-shape; source fighter = the Aura's `attached_to`, not the
-  Aura itself).
-- **Substrate dependencies:**
-  - Aura `attached_to` → `state.resolving_source` substitution at
-    resolve time. Rust already tracks Aura-attached pairs for static
-    effects; this just needs to route the "source for damage
-    computation" through `attached_to` when present.
-  - Reuses the already-shipped bare-Fight damage application
-    (`_apply_damage` path — both sides simultaneously, rule 701.12).
-- **Scope:** **small (1-2 cycles).** Single new variant; reuses bare
-  Fight resolve; the Aura `attached_to` dereference is the only new
-  substrate touch. cards.rs already names this card in a deferred
-  doc-comment ("Meltstrider's Resolve specifically as the Aura-shape
-  follow-up") — the slot is pre-marked.
-- **Per-deck leverage:** 15,259 decks × small scope = **best
-  decks-per-cycle ratio in the tier** by a wide margin (~7-15k
-  decks/cycle). Likely the #1 closure target unless Command Bridge
-  is grouped with other land-ETB work.
+  Aura-shape source-substitution was the genuine ask.
+- **Effect variant LANDED (slice 19):** `Effect::EnchantedCreatureFightsTarget`
+  (unit variant; Aura-shape; source fighter = the Aura's `attached_to`,
+  read at resolve time).
+- **Substrate landed in slice 19:**
+  - The Rust enum variant + parse + to_pydict + bridge arms ship the
+    Effect-level closure (round-trip dict-shape consistency).
+  - Resolve arm in `state_ops_resolve.rs` reads `source.attached_to`
+    and silently fizzles when None (the **honest-stop branch** — Rust
+    today does NOT set `attached_to` on Aura resolution, so this is
+    the byte-equal-with-Python branch for every Rust Aura under the
+    current substrate; Python takes the same fizzle at
+    `bespoke.py:546-548`).
+  - The full simultaneous-damage logic IS shipped behind the honest-
+    stop branch and exercised today via `state.attach(aura_id,
+    host_id)` test primitive in `test_probe_yyy_downstream.py`.
+- **Substrate STILL DEFERRED (the multi-round Aura attach plan):**
+  - `CardDef` aura representation (`is_aura`, `aura_enchant_type`,
+    `aura_yours_only`, `equipment_bonuses`, `attached_grants_*`).
+  - Rust cast-time enchant-target decision (Auras pick their host
+    at cast, CR 303.4 / 601.2c).
+  - Rust Aura-resolution attach path (today only Equipment ETB sets
+    `attached_to`).
+  - CR 704.5n SBA (bury Aura with no legal host) + host-leave bury.
+  - Bidirectional bridge arms for the aura fields.
+  - Loader admit predicate `_printing_is_bridge_simple_aura`.
+  - See `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` Phases 1-2 —
+    estimated 5-7 Rust-agent rounds end-to-end; the **largest
+    §2-declined Rust multi-round substrate** audited to date.
+- **Substrate-thinness check (slice 19 task brief):** Re-verified
+  DEEPER than the "small (1-2 cycles)" estimate that was in this
+  inventory at slice-19 start. The verify-first re-walk in
+  `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §2 confirms full Aura
+  attach is a sprawling multi-round substrate, not a one-off
+  field-dereference. Slice 19's honest-stop closure ships the
+  Effect-level scaffolding now and documents the multi-round
+  follow-up; it does NOT spiral into the broader substrate.
+- **Per-deck leverage on FULL-card closure:** 15,259 decks gated
+  behind the multi-round Aura attach substrate (NOT a near-term
+  win on top of slice 19). The Effect-level scaffolding makes the
+  hot-path branch ready-to-flip when the substrate's Phase 1
+  ships, but the *real-EoE* byte-equal game-trajectory still
+  requires the full substrate.
 
 ### 3. Lightstall Inquisitor — 4,371 decks
 
@@ -159,51 +217,39 @@ Scope key (calibrated against this session's slices):
     damage-feedback subsystem)
 - **Substrate dependencies:**
   - Same Aura `attached_to` source-substitution as Meltstrider's
-    Resolve (#2). If #2 lands first, #4 reuses the substrate.
+    Resolve (#2). Slice 19's honest-stop landing shipped the
+    *Effect-level scaffolding* for the Aura-shape Fight variant but
+    NOT the broader Aura attach substrate that ALSO blocks Pain for
+    All — `attached_to` is still never set on Rust Aura resolve, and
+    the loader still admits no Aura. The Aura attach substrate
+    (Phases 1-2 per `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`) remains
+    the deferred bottleneck for both.
   - Dealt-damage event on the enchanted creature → trigger fires on
     the Aura. Rust's `Event::DEALT_DAMAGE` exists but doesn't
     fan out to riders attached via an Aura's `attached_to`. Needs a
     new "enchanting-permanent-fires-on-enchanted-creature-event" hook.
   - `state.resolving_combat_damage_amount` ledger that survives the
     DEALT_DAMAGE event into the rider's resolve.
-- **Scope:** **medium (3-5 cycles).** No new persistent flag, but
-  needs the new Aura-event-rider plumbing. Substrate-shared with #2
-  (Aura `attached_to` source-substitution).
-- **Per-deck leverage:** 4,367 decks. Closure cost drops sharply if
-  #2 lands first (substrate-sharing).
+- **Scope:** **medium (3-5 cycles)** — UNCHANGED post-slice-19. The
+  "substrate-sharing flip from medium → small" depends on the **full
+  Aura attach substrate** landing first (not the slice-19 honest-stop
+  Effect-level scaffolding alone). Per the substrate plan that
+  substrate is 5-7 Rust-agent rounds end-to-end; Pain for All's
+  scope estimate stays medium until at least Phase 1 of that
+  substrate ships.
+- **Per-deck leverage:** 4,367 decks. Closure cost drops sharply
+  ONLY if the broader Aura attach substrate lands (NOT slice 19's
+  Effect-level scaffolding alone) — the substrate-sharing pattern
+  binds at the substrate level, not the Effect level.
 
-### 5. Roving Actuator — 3,400 decks
+### 5. Roving Actuator — 3,400 decks — CLOSED (slice 18)
 
-- **Bespoke class:** `src/mtg_bot/effects/bespoke.py:630-718`
-  (`RovingActuatorETBEffect`).
-- **Real parse:** Void-conditional ETB ("If Void, exile up to one
-  target instant or sorcery card with mana value 2 or less from your
-  graveyard. Copy it. You may cast the copy without paying its mana
-  cost.")
-- **Effect variant needed:**
-  `Effect::ExileGraveyardCastFromExile` (or
-  `VoidExileFromGYCopyAndCastForFree` per the worklist alias). The
-  Void condition itself shipped r29 as `ConditionalIfVoid` — only the
-  exile-then-cast-copy-for-free half is the genuine ask.
-- **Substrate dependencies:**
-  - Cast-copy-without-paying-cost subsystem: Rust has no "cast a
-    copy from exile, bypass mana cost, fresh targets" path today.
-    Implies: a new "free cast" cost-payment mode + a copy GameObject
-    (or a synthetic resolve of the spell_effect inline, matching the
-    Python short-circuit at `bespoke.py:683-711`).
-  - The Python implementation **short-circuits the stack** ("the copy
-    doesn't go on the stack and can't be counterspelled — acceptable
-    given the engine's lack of responses"). Rust can match this exact
-    shortcut for byte-equality without implementing a real free-cast
-    pipeline.
-- **Scope:** **large (6+ cycles)** if a real free-cast pipeline is
-  built; **medium (3-5 cycles)** if the short-circuit-the-stack
-  shortcut is matched verbatim. Lane 3
-  (`feature/rust-slice-18-roving-actuator`) is currently exploring
-  this — update scope from that lane's findings.
-- **Per-deck leverage:** 3,400 decks. If the short-circuit
-  shortcut holds, marginal-value-per-cycle is competitive with
-  Meltstrider's Resolve.
+**Status:** CLOSED in the 18th Rust slice. Effect-level + full-card
+byte-equal closure via the short-circuit-the-stack shortcut (Python
+also short-circuits per `bespoke.py:683-711`). `Effect::RovingActuator
+ETBEffect { max_mv: u8 }` variant + parse + to_pydict + resolve +
+bridge all shipped. No deferred substrate. See `docs/residue_worklist.json`
+entry `RovingActuator-cast-copy-half`.
 
 ### 6. Sothera, the Supervoid — 2,108 decks (LOWEST leverage)
 
@@ -247,33 +293,43 @@ Scope key (calibrated against this session's slices):
 
 ## Substrate-sharing patterns
 
-The 6 cards fall into 3 substrate families:
+Post-slice-18/19, the remaining 4 genuinely-missing cards fall into 3
+substrate families (Meltstrider's Resolve and Roving Actuator are now
+closed at the Effect level; Meltstrider's still requires the Aura
+attach substrate for full-game byte-equality and is tracked in the
+Aura subsystem tier of `docs/POOL_PARITY.md`):
 
-1. **Aura `attached_to` source-substitution (small/medium substrate):**
-   - Meltstrider's Resolve (#2)
-   - Pain for All (#4)
-   - Closing #2 first lets #4 reuse the substrate; combined cost ≈ #2
-     small + (#4 minus shared substrate) ≈ small + small.
+1. **Aura `attached_to` source-substitution (multi-round Rust
+   substrate, NOT shipped):**
+   - **Meltstrider's Resolve** — Effect-level scaffolding LANDED in
+     slice 19 (honest-stop); full-card byte-equal still needs the
+     Aura attach substrate (Phases 1-2). Listed under the Aura
+     subsystem tier, NOT this tier.
+   - **Pain for All (#3 below)** — still needs both the Aura attach
+     substrate AND a new Aura-fires-on-enchanted-creature-DEALT_DAMAGE
+     hook. The slice-19 Effect-level scaffolding did NOT pay down
+     this substrate; Pain for All's scope stays **medium**.
+   - The full Aura attach substrate is the **largest §2-declined Rust
+     multi-round substrate** audited so far (5-7 Rust-agent rounds —
+     see `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`). It is the shared
+     long-pole for both cards.
 
 2. **Land-ETB sacrifice-decision (medium substrate):**
-   - Command Bridge (#1) — solitary in this tier today, but the
+   - **Command Bridge (#1)** — solitary in this tier today, but the
      `untapped_permanent` decision contract it requires is reusable
      by any future "sac unless tap" land (a common shape).
 
-3. **Cast-from-exile-with-rider (large substrate):**
-   - Lightstall Inquisitor (#3) — persistent permission + cost-hike
-     + tapped-land entry; no current sibling.
-   - Roving Actuator (#5) — cast-copy-from-exile for free; partial
-     overlap (both need exile→legal-actions-surfaces-cast); diverges
-     on the cost rider direction (hike vs free).
-   - If the cast-from-exile permission-flag substrate is built once,
-     both #3 and #5 can drop their substrate share. Combined cost ≈
-     1 large + 2× (large minus shared substrate) ≈ large + medium +
-     medium.
+3. **Cast-from-exile-with-rider (large substrate, single consumer
+   post-slice-18):**
+   - **Lightstall Inquisitor (#2)** — persistent permission +
+     cost-hike + tapped-land entry. Post-slice-18 there is no
+     in-tier sibling (Roving Actuator closed via the short-circuit-
+     the-stack shortcut, NOT a real free-cast pipeline). The
+     substrate has no other consumer in the EoE pool today.
 
 4. **Exile-source-link bookkeeping (large substrate, single consumer):**
-   - Sothera, the Supervoid (#6) — solitary; substrate has no other
-     consumer in the EoE pool today. Pure overhead.
+   - **Sothera, the Supervoid (#4)** — solitary; substrate has no
+     other consumer in the EoE pool today. Pure overhead.
 
 ---
 
@@ -281,76 +337,84 @@ The 6 cards fall into 3 substrate families:
 
 Ranked by **marginal-value-per-cycle (decks ÷ scope)**:
 
-1. **Meltstrider's Resolve (#2)** — small scope + 15,259 decks +
-   pre-marked slot in cards.rs doc-comment. Single highest-leverage
-   close in the tier. Lands the Aura `attached_to`
-   source-substitution substrate.
-
-2. **Pain for All (#4)** — medium scope, but if #2 landed first the
-   Aura substrate is paid; the remaining work (Aura-fires-on-enchanted-
-   creature-DEALT_DAMAGE + damage-amount ledger) is closer to small.
-   4,367 decks. Take #2 + #4 as a tandem.
-
-3. **Command Bridge (#1)** — medium scope + 24,522 decks (highest
-   deck count in the tier). The reason it's #3 not #1 is scope: it's
-   genuinely a new agent-decision contract in Rust, not a primitive
-   addition. But the per-deck leverage is enormous, and the
+1. **Command Bridge (#1)** — medium scope + 24,522 decks (highest
+   deck count in the tier post-slice-19). Genuinely a new
+   agent-decision contract in Rust, not a primitive addition. The
    `untapped_permanent` decision substrate it lands is reusable.
+   **#1 closure target now that Meltstrider's Resolve and Roving
+   Actuator are closed.**
 
-4. **Roving Actuator (#5)** — medium-scope IF the short-circuit-the-
-   stack shortcut holds (currently being explored on Lane 3,
-   `feature/rust-slice-18-roving-actuator`). 3,400 decks. If the
-   lane's findings confirm the short-circuit, slot here; if a full
-   free-cast pipeline is required, defer to #6's bucket.
+2. **Pain for All (#3)** — medium scope, BUT closure depends on the
+   broader Aura attach substrate (NOT slice 19's Effect-level
+   scaffolding alone — the substrate-sharing flip only fires once
+   Phase 1 of the substrate plan ships). 4,367 decks. Consider
+   bundling with a future Aura attach Phase 1+ slice.
 
-5. **Lightstall Inquisitor (#3)** — large scope + 4,371 decks. The
+3. **Lightstall Inquisitor (#2)** — large scope + 4,371 decks. The
    cast-from-exile permission substrate is heavy and currently has
    only this consumer. Defer until/unless a second card needing it
-   surfaces (or it's batched with #5 if both share the new
-   cast-from-exile substrate).
+   surfaces.
 
-6. **Sothera, the Supervoid (#6)** — large scope + 2,108 decks + no
+4. **Sothera, the Supervoid (#4)** — large scope + 2,108 decks + no
    substrate reuse. **Pure tail.** Carry forward; close only when
    the rest of the tier is empty and the parity number lives or
    dies on this one card.
 
 ### Sequencing observations
 
-- **Top-3 closure (Meltstrider + Pain for All + Command Bridge)
-  ships 44,148 decks of marginal coverage** (15,259 + 4,367 + 24,522)
-  — about 82% of the tier's deck reach for the small-to-medium
-  scope work.
-- **The Aura substrate is the single highest-leverage substrate
-  decision** — landing it (via #2) immediately compounds onto #4
-  and unlocks any future Aura-rider card in the long tail.
+- **Top-2 closure (Command Bridge + Pain for All)** ships 28,889
+  decks of marginal coverage (24,522 + 4,367) — about 82% of the
+  tier's deck reach for the medium-scope work.
+- **Aura attach substrate is the binding constraint for Pain for
+  All AND for the FULL byte-equal closure of Meltstrider's Resolve**
+  (whose Effect-level scaffolding shipped in slice 19 but whose
+  full-card byte-equality still needs the substrate). Landing
+  Phase 1 unlocks both; the substrate is multi-round (5-7 Rust-
+  agent rounds end-to-end).
 - **Bottom-2 closure (Lightstall + Sothera) is 6,479 decks** for the
   most expensive work — defer indefinitely unless a substrate sibling
   appears.
-- The 6-card tier represents **1.3% of the pool by count** but their
-  closure is the load-bearing "true new-Rust-Effect ask" gap. Closing
-  the top 3 moves the headline `PROBED + covered` from 318/475
-  (66.9%) toward 321/475 (67.6%) at the Effect+bridge level (assuming
-  each closure picks up a probe).
+- The 4-card tier represents **0.8% of the pool by count**; closing
+  it shifts the headline `PROBED + covered` headline from 320/475
+  (67.4%) toward 324/475 (68.2%) at the Effect+bridge level
+  (assuming each closure picks up a probe).
 
 ---
 
 ## Caveats
 
-- **Effect+bridge ≠ full-game-trajectory parity.** Closing all 6
+- **Effect+bridge ≠ full-game-trajectory parity.** Closing all 4
   Effects does not by itself ship full-game byte-equality for these
   cards — see the headline caveat in `docs/POOL_PARITY.md`.
+  Meltstrider's Resolve is the canonical example: slice 19 shipped
+  the Effect-level scaffolding (so the worklist marks it `closed`
+  with `reclassified_to: BLOCKED-SUBSYSTEM`), but the full-card
+  byte-equality requires the broader Aura attach substrate that
+  has NOT yet shipped.
 - **Scope estimates are calibrated from this session's slices**:
-  Astelli Reclaimer (slice 16) closed in 1 cycle (small-medium), the
-  XXX Pin 2 Roving Actuator slice is in flight on Lane 3 (active
-  measurement), Lightstall's persistent-flag bucket is large-with-
-  substrate-no-other-consumer. Re-estimate after each closure.
+  Astelli Reclaimer (slice 16) closed in 1 cycle (small-medium),
+  Roving Actuator (slice 18) closed in 1 cycle via the short-
+  circuit-the-stack shortcut, Meltstrider's Resolve (slice 19)
+  shipped the Effect-level scaffolding via honest-stop with full
+  byte-equality deferred to the Aura attach substrate.
+  Lightstall's persistent-flag bucket is large-with-substrate-
+  no-other-consumer. Re-estimate after each closure.
 - **Deck counts are distinct-deck appearances in the 129,996-deck
   17lands EoE corpus.** Sum across cards double-counts decks that
-  contain multiple genuinely-missing cards (the upper bound on the
-  union is 53,927; the true union is smaller).
-- **Lane 3 may shrink #5's scope** if the short-circuit-the-stack
-  shortcut byte-equals the Python implementation. Re-rank #5 once
-  Lane 3 lands.
+  contain multiple genuinely-missing cards.
+- **The "small (1-2 cycles)" estimate for Meltstrider's Resolve in
+  the slice-19-start version of this doc was DEEPER than the
+  verify-first re-walk revealed.** The verify-first re-walk in
+  `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §2 confirmed that "Aura
+  `attached_to` source-substitution" is NOT a one-off field-deref
+  — it requires the full multi-round Aura attach substrate
+  (CardDef aura fields + cast-time enchant-target decision + Rust
+  Aura-resolution attach + layered grants + CR 704.5n SBA + loader
+  predicate). Slice 19's honest-stop discipline (ship the Effect-
+  level scaffolding, document the substrate as deferred) handled
+  this correctly; future "small scope" estimates against Aura-shape
+  effects should re-anchor to the substrate plan before lane
+  scoping.
 - **The worklist is the source of truth.** If this doc and
   `docs/residue_worklist.json` disagree on a card's status, the
   worklist wins; refresh this doc by re-running through the same
