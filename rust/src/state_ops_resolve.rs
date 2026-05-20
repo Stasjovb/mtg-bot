@@ -10455,10 +10455,14 @@ fn apply_effect(
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
         }
         // Round-28 "owner puts target artifact-or-creature on top or
-        // bottom of their library." First-slice deterministic-BOTTOM:
-        // Python prompts the owner's agent for top vs bottom; Rust
-        // has no decision callback substrate yet so we always pick
-        // bottom (= lib[0] per Rust convention; lib[len-1] is top).
+        // bottom of their library." Post-13th-slice deterministic-
+        // TOP: Python prompts the owner's agent for top vs bottom;
+        // Rust has no decision callback substrate yet so we always
+        // pick TOP (matching Python's no-agent default at
+        // `effects/generic/zone_moves.py:92-93` which sets
+        // `choice = 0` and head-inserts into the library). The
+        // post-CE3 convention is library[0] = TOP (next drawn) and
+        // library[-1] = BOTTOM.
         //
         // Target selection mirrors TapTargetArtifactOrCreature: first
         // defender (= 1 - active_player) permanent whose
@@ -10469,9 +10473,13 @@ fn apply_effect(
         // owner-vs-controller distinction; first-slice synthetic
         // states never split the two, so controller == owner).
         //
-        // CR 400.7 zone-change reset: tapped, summoning_sick (true
-        // per r28 CE1 universal default), damage, counters all reset.
-        // attached_to also reset to None on zone change.
+        // CR 400.7 zone-change reset: tapped, damage, counters,
+        // attached_to all reset. summoning_sick is PRESERVED on the
+        // bf->library transition (13th Rust slice / RRR Pin 2
+        // closure) — Python's resolve in `effects/generic/zone_moves
+        // .py` likewise never touches summoning_sick, matching the
+        // post-CE13 LTB preserve-semantics standardised by slice 12
+        // on the sibling exile arm.
         Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary => {
             let _ = source_obj_id;
             // **Controller resolution (I78 follow-up to the
@@ -10547,7 +10555,8 @@ fn apply_effect(
                 obj.controller as usize
             };
             // Remove from battlefield, reset per CR 400.7, insert at
-            // owner's lib[0] (= bottom of library).
+            // owner's lib[0] (= TOP of library; matches Python's
+            // no-agent default `choice=0` -> `library.insert(0, obj)`).
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[defender].battlefield);
             let pos = bf_mut
@@ -10557,7 +10566,16 @@ fn apply_effect(
             let mut obj = bf_mut.remove(pos);
             obj.zone = ZONE_LIBRARY;
             obj.tapped = false;
-            obj.summoning_sick = true; // r28 CE1 universal-true default
+            // RRR Pin 2 closure (13th Rust slice): the explicit
+            // unconditional summoning-sick stamp was dropped here to
+            // match Python's resolve in `effects/generic/zone_moves.py:
+            // 96-128`, which strips combat / counter state but never
+            // touches the summoning-sick field. The pre-bounce value
+            // now persists naturally through the bf->library
+            // transition, mirroring the CE13 LTB preserve-semantics
+            // that slice 12 applied to the sibling
+            // `ExileOpponentsNonlandPermanentUntilLeaves` arm. 1 EoE
+            // card aligned: Lost in Space.
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
@@ -10565,7 +10583,18 @@ fn apply_effect(
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[owner_idx].library);
-            lib_mut.push(obj); // post-CE3: bottom = tail of Vec
+            // RRR Pin 3 closure (13th Rust slice): the no-agent
+            // top-vs-bottom-of-library default now matches Python's
+            // `effects/generic/zone_moves.py:86-94` no-agent branch
+            // (`choice = 0` selects the head-insert leg). Prior code
+            // here used a tail-append (BOTTOM-default); the new
+            // head-insert below converges on Python's TOP-default.
+            // CE13's Rust-converges-on-Python precedent applies. Full
+            // agent-driven choice plumbing is a deeper modal-effect
+            // gap deferred from this slice — the no-agent default
+            // alignment is the minimal honest fix on the byte-equal
+            // axis (post-CE3: library[0] = TOP, library[-1] = BOTTOM).
+            lib_mut.insert(0, obj); // TOP of library = head of Vec
             // Round-29 Void LTB: target is Artifact OR Creature —
             // either way the helper's nonland gate filters correctly.
             mark_left_battlefield_if_nonland(state, printing_id);

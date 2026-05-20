@@ -51,8 +51,13 @@ Pin 1 — ``CounterTargetSpell`` bridge drops ``filter_types`` parameter
     Python bridge translation layer only.
 
 Pin 2 — ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
-Rust resolve arm resets ``summoning_sick = True`` on library bounce
+Rust resolve arm reset ``summoning_sick = True`` on library bounce
 (``rust/src/state_ops_resolve.rs:10158``).
+**CLOSED by 13th Rust slice** (``feature/rust-slice-13-rrr-pins-2-3``):
+the explicit ``obj.summoning_sick = true`` stamp has been dropped;
+both engines now preserve the pre-bounce value.  This Pin's test is
+renamed ``..._FIXED_parity`` with the assertion inverted (both
+engines report ``summoning_sick=False``).
 
     Rust's resolve arm for
     ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
@@ -90,9 +95,15 @@ Rust resolve arm resets ``summoning_sick = True`` on library bounce
                 (incorrectly stamped True at state_ops_resolve.rs:10158).
 
 Pin 3 — ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
-Rust resolve arm always places the card at BOTTOM of library (``push()``)
-while Python defaults to TOP (``insert(0, obj)``)
+Rust resolve arm always placed the card at BOTTOM of library
+(``push()``) while Python defaults to TOP (``insert(0, obj)``)
 (``rust/src/state_ops_resolve.rs:10166``).
+**CLOSED by 13th Rust slice** (``feature/rust-slice-13-rrr-pins-2-3``):
+Rust converged on Python — ``lib_mut.push(obj)`` was changed to
+``lib_mut.insert(0, obj)``.  Both engines' no-agent default now
+places the bounced card at the TOP of the library.  This Pin's test
+is renamed ``..._FIXED_parity`` with the assertion inverted (both
+engines report index 0).
 
     The same Rust resolve arm at state_ops_resolve.rs:10166 calls
     ``lib_mut.push(obj)``.  In the Rust library representation, the Vec's
@@ -410,11 +421,11 @@ def test_cross_engine_real_eoe_counterspell_bridge_drops_filter_types_divergence
 # ---------------------------------------------------------------------------
 
 @pytestmark_rust
-def test_cross_engine_real_eoe_vanish_from_sight_summoning_sick_reset_on_library_bounce_divergence_pin():
-    """Pin the Rust-vs-Python divergence for
+def test_cross_engine_real_eoe_vanish_from_sight_summoning_sick_reset_on_library_bounce_FIXED_parity():
+    """Assert the Rust-vs-Python parity for
     ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
-    incorrectly resetting ``summoning_sick = True`` when bouncing a creature
-    to the library.
+    preserving ``summoning_sick`` on library bounce (RRR Pin 2 closure,
+    13th Rust slice).
 
     Bug location:
       Rust: ``rust/src/state_ops_resolve.rs:10158`` —
@@ -583,22 +594,24 @@ def test_cross_engine_real_eoe_vanish_from_sight_summoning_sick_reset_on_library
         f"Got: {py_ss_in_lib}"
     )
 
-    # Rust: summoning_sick incorrectly stamped True at
-    # state_ops_resolve.rs:10158 ("r28 CE1 universal-true default").
-    assert rust_ss_in_lib is True, (
-        "Rust: OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary resolve "
-        "arm at state_ops_resolve.rs:10158 stamps summoning_sick=True on "
-        "library bounce (the CE1 universal-true default). Pinned divergent "
-        "behavior — will flip to FAIL when Rust removes/conditions the stamp "
-        "to apply only to battlefield entry, not library bounce. "
+    # Rust (post-RRR-Pin-2 closure, 13th Rust slice): summoning_sick
+    # preserved on library bounce — the explicit
+    # ``obj.summoning_sick = true`` stamp has been dropped from
+    # ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``.
+    assert rust_ss_in_lib is False, (
+        "Rust (post-13th-slice): OwnerPutsTargetArtifactOrCreatureOnTop"
+        "OrBottomOfLibrary resolve arm should preserve the pre-bounce "
+        "summoning_sick value (False) — the explicit "
+        "'obj.summoning_sick = true' stamp was dropped (RRR Pin 2 "
+        "closure). "
         f"Got: {rust_ss_in_lib}"
     )
 
-    # Cross-engine non-parity: must disagree until the Rust bug is fixed.
-    assert py_ss_in_lib != rust_ss_in_lib, (
-        "Cross-engine non-parity: Python (False) should NOT equal "
-        "Rust (True) until state_ops_resolve.rs:10158 is fixed to omit "
-        "the summoning_sick stamp on library bounce. "
+    # Cross-engine parity: both engines preserve the pre-bounce value.
+    assert py_ss_in_lib == rust_ss_in_lib == False, (
+        "Cross-engine parity: Python (False) and Rust (False) both "
+        "preserve summoning_sick on library bounce post-RRR-Pin-2 "
+        "closure. "
         f"Python={py_ss_in_lib}, Rust={rust_ss_in_lib}"
     )
 
@@ -609,12 +622,13 @@ def test_cross_engine_real_eoe_vanish_from_sight_summoning_sick_reset_on_library
 # ---------------------------------------------------------------------------
 
 @pytestmark_rust
-def test_cross_engine_real_eoe_vanish_from_sight_library_position_bottom_vs_top_divergence_pin():
-    """Pin the Rust-vs-Python divergence for
+def test_cross_engine_real_eoe_vanish_from_sight_library_position_top_default_FIXED_parity():
+    """Assert the Rust-vs-Python parity for
     ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
-    always placing the bounced card at the BOTTOM of the library via
-    ``push()`` (tail of Vec) while Python defaults to TOP via
-    ``insert(0, obj)`` when no agent is seated.
+    placing the bounced card at the TOP of the library via
+    ``insert(0, obj)`` (head of Vec) on the no-agent default path —
+    matching Python's ``library.insert(0, obj)`` (RRR Pin 3 closure,
+    13th Rust slice; Option A "Rust converges on Python").
 
     Bug location:
       Rust: ``rust/src/state_ops_resolve.rs:10166`` —
@@ -783,21 +797,22 @@ def test_cross_engine_real_eoe_vanish_from_sight_library_position_bottom_vs_top_
         f"Got index={py_victim_index}, library={py_lib_after}"
     )
 
-    # Rust: unconditional push() → tail of Vec → BOTTOM (index 1 of 2).
-    assert rust_victim_index > 0, (
-        "Rust: OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary "
-        "resolve arm at state_ops_resolve.rs:10166 calls push() (tail of "
-        "Vec = bottom of library). Victim Creature should be at index > 0 "
-        "(i.e., after the sentinel at index 0). Pinned divergent behavior "
-        "— will flip to FAIL when Rust implements the owner's top/bottom "
-        "choice and the no-decision default picks top. "
+    # Rust (post-RRR-Pin-3 closure, 13th Rust slice): no-agent default
+    # is now ``lib_mut.insert(0, obj)`` (TOP = head of Vec), matching
+    # Python's ``library.insert(0, obj)``. Victim Creature lands at
+    # index 0 above the sentinel.
+    assert rust_victim_index == 0, (
+        "Rust (post-13th-slice): OwnerPutsTargetArtifactOrCreatureOnTop"
+        "OrBottomOfLibrary resolve arm now calls 'lib_mut.insert(0, "
+        "obj)' (head of Vec = TOP of library) — RRR Pin 3 closure. "
+        "Victim Creature should be at index 0 (above the sentinel). "
         f"Got index={rust_victim_index}, library={rust_lib_names}"
     )
 
-    # Cross-engine non-parity: Python places at top, Rust places at bottom.
-    assert py_victim_index != rust_victim_index, (
-        "Cross-engine non-parity: Python victim at index 0 (top) must NOT "
-        "equal Rust victim index (bottom, > 0) until state_ops_resolve.rs"
-        ":10166 is fixed to implement the owner's top-or-bottom choice. "
+    # Cross-engine parity: Python TOP-default and Rust TOP-default
+    # agree.
+    assert py_victim_index == rust_victim_index == 0, (
+        "Cross-engine parity: Python victim at index 0 (top) must "
+        "equal Rust victim at index 0 (top) post-RRR-Pin-3 closure. "
         f"Python index={py_victim_index}, Rust index={rust_victim_index}"
     )

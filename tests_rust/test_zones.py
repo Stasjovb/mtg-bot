@@ -1185,11 +1185,13 @@ def test_resolve_create_token_copy_clone_isolation(synthetic_state):
 # of their library." 2 EoE cards. Python class lives at
 # `effects/generic/zone_moves.py:30`.
 #
-# **First-slice deterministic-bottom.** Python prompts the OWNER's
+# **Post-13th-slice deterministic-top.** Python prompts the OWNER's
 # agent for top vs bottom; Rust has no decision-callback substrate yet,
-# so we always pick bottom (= lib[0] per Rust convention). A reasonable
-# first-slice mirror because decision-callback agents typically
-# default-pick the bottom option (least disruptive).
+# so we always pick TOP (= lib[0] per the post-CE3 top=lib[0]
+# convention). Matches Python's no-agent default of
+# `library.insert(0, obj)` (zone_moves.py:92-93). Slice 13 RRR Pin 3
+# closure changed the previous BOTTOM-default to TOP for byte-equal
+# parity with Python on the no-agent path.
 #
 # **Owner-as-controller simplification.** Rust doesn't track an
 # owner-vs-controller distinction; first-slice synthetic states never
@@ -1236,12 +1238,14 @@ def test_register_owner_puts_target_aoc_top_or_bottom(engine):
     )
 
 
-def test_resolve_owner_puts_aoc_bottom_moves_defender_creature_to_lib_bottom(
+def test_resolve_owner_puts_aoc_top_moves_defender_creature_to_lib_top(
     synthetic_state,
 ):
-    """Casting puts first defender creature on bottom of OWNER's
-    library. Synthetic state's p1 bf has Forests (non-creature,
-    non-artifact) then Grizzly Bears — Bears is first eligible."""
+    """Casting puts first defender creature on TOP of OWNER's
+    library (post-13th-slice no-agent default = TOP, matching
+    Python's `library.insert(0, obj)`). Synthetic state's p1 bf has
+    Forests (non-creature, non-artifact) then Grizzly Bears — Bears
+    is first eligible."""
     snap = synthetic_state.battlefield_snapshot()
     p1_first_bear_id = next(
         d["id"] for d in snap
@@ -1258,16 +1262,18 @@ def test_resolve_owner_puts_aoc_bottom_moves_defender_creature_to_lib_bottom(
     assert synthetic_state.find_object_zone(p1_first_bear_id) == ZONE_LIBRARY
     # Owner's library grew by 1.
     assert synthetic_state.library_sizes[1] == p1_lib_before + 1
-    # Bottom of library (lib[len-1] post-CE3) is the target.
+    # TOP of library (lib[0] per post-CE3 top=lib[0] convention) is
+    # the target (post-13th-slice RRR Pin 3 closure).
     p1_lib_snap = synthetic_state.library_snapshot(1)
-    assert p1_lib_snap[-1]["id"] == p1_first_bear_id
+    assert p1_lib_snap[0]["id"] == p1_first_bear_id
 
 
-def test_resolve_owner_puts_aoc_bottom_owner_is_controller(synthetic_state):
+def test_resolve_owner_puts_aoc_top_owner_is_controller(synthetic_state):
     """The card lands in the OWNER's library — owner is the target's
     controller (Rust treats controller as owner). Inject an artifact
     on p1's bf; cast the spell from p0 — the artifact moves to p1's
-    library, NOT p0's."""
+    library, NOT p0's. Post-13th-slice: TOP-default (RRR Pin 3
+    closure)."""
     # Move existing p1 creatures out so the artifact is first eligible.
     state = synthetic_state.clone_once()
     snap = state.battlefield_snapshot()
@@ -1292,12 +1298,13 @@ def test_resolve_owner_puts_aoc_bottom_owner_is_controller(synthetic_state):
     assert state.find_object_zone(artifact_id) == ZONE_LIBRARY
     assert state.library_sizes[0] == p0_lib_before
     assert state.library_sizes[1] == p1_lib_before + 1
-    # Bottom of p1's library (post-CE3: tail).
+    # TOP of p1's library (post-13th-slice: lib[0] per post-CE3
+    # top=lib[0] convention).
     p1_lib_snap = state.library_snapshot(1)
-    assert p1_lib_snap[-1]["id"] == artifact_id
+    assert p1_lib_snap[0]["id"] == artifact_id
 
 
-def test_resolve_owner_puts_aoc_bottom_no_eligible_fizzles(synthetic_state):
+def test_resolve_owner_puts_aoc_top_no_eligible_fizzles(synthetic_state):
     """No artifacts and no creatures on defender's bf → silent fizzle.
     The source sorcery still routes to graveyard (CR 608.2m)."""
     state = synthetic_state.clone_once()
@@ -1321,7 +1328,7 @@ def test_resolve_owner_puts_aoc_bottom_no_eligible_fizzles(synthetic_state):
     assert state.find_object_zone(spell_id) == ZONE_GRAVEYARD
 
 
-def test_resolve_owner_puts_aoc_bottom_clone_isolation(synthetic_state):
+def test_resolve_owner_puts_aoc_top_clone_isolation(synthetic_state):
     """Resolving on the clone leaves the source state untouched."""
     snap = synthetic_state.battlefield_snapshot()
     p1_first_bear_id = next(
