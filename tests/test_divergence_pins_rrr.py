@@ -11,7 +11,25 @@ Containment, Seam Rip).  Pin 1's test is now
 ``..._summoning_sick_stamp_FIXED_parity`` with the sentinel
 assertion inverted (stamp absent rather than present).
 
-**Pins 2 and 3 remain OPEN** (still ``..._divergence_pin``).
+**Pins 2 AND 3 CLOSED by the 13th Rust slice** (``feature/rust-slice-
+13-rrr-pins-2-3``).  Same Rust arm
+(``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+in ``state_ops_resolve.rs``):
+
+* Pin 2 closure dropped the ``obj.summoning_sick = true`` stamp.
+  The bf->library transition now preserves the pre-bounce value,
+  matching Python's inline-resolve in ``zone_moves.py:96-128``
+  (which strips combat / counter state but never touches
+  ``summoning_sick``).
+
+* Pin 3 closure changed the no-agent default from
+  ``lib_mut.push(obj)`` (BOTTOM = tail of Vec) to
+  ``lib_mut.insert(0, obj)`` (TOP = head of Vec), matching
+  Python's ``library.insert(0, obj)`` on the ``choice=0`` default
+  branch in ``zone_moves.py:86-94``.
+
+1 EoE card unblocked: Lost in Space.  Both pin tests renamed
+``_divergence_pin`` -> ``_FIXED_parity`` with sentinels inverted.
 
 Each remaining pin test is named ``test_cross_engine_real_eoe_<slug>
 _*_divergence_pin`` and ASSERTS the CURRENT divergent behavior
@@ -552,28 +570,21 @@ def test_cross_engine_real_eoe_exile_opponents_nonland_permanent_until_leaves_su
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp_divergence_pin():
-    """Pin the Rust library-bounce ``summoning_sick = true`` stamp.
+def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp_FIXED_parity():
+    """Assert the Rust library-bounce ``summoning_sick = true`` stamp
+    has been REMOVED (RRR Pin 2 closure -- 13th Rust slice).
 
-    Sibling shape to Pin 1: same ``state_ops_resolve.rs`` substrate,
-    same CE13-missed Effect arm class.  This pin covers the bf ->
-    library bounce (Lost in Space); Pin 1 covers the bf -> exile
-    bounce (Banishing Light shape).
+    Fixed by: 13th Rust slice
+    (``feature/rust-slice-13-rrr-pins-2-3``).  The CE13 LTB
+    preserve-semantics standardised by slice 12 on the sibling exile
+    arm now extends to the bf->library bounce arm.  Slice 13 dropped
+    the explicit ``obj.summoning_sick = true`` stamp from
+    ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+    in ``rust/src/state_ops_resolve.rs`` (sibling shape to Pin 1; same
+    CE13-missed Effect arm class).
 
-    Bug location (Rust):
-      ``rust/src/state_ops_resolve.rs:10349-10360`` -- inside
-      ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``,
-      AFTER ``bf_mut.remove(pos)`` and before ``lib_mut.push(obj)``::
-
-          let mut obj = bf_mut.remove(pos);
-          obj.zone = ZONE_LIBRARY;
-          obj.tapped = false;
-          obj.summoning_sick = true; // r28 CE1 universal-true default
-          obj.damage = 0;
-          ...
-          lib_mut.push(obj);
-
-    Bug location (Python -- the correct behavior):
+    Bug location (Python -- the correct behavior the Rust arm now
+    matches):
       ``src/mtg_bot/effects/generic/zone_moves.py:96-128`` --
       ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.resolve``
       strips the permanent from the battlefield with an inline
@@ -581,19 +592,12 @@ def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp
       clearing combat state + counters but NEVER touching
       ``obj.summoning_sick``.
 
-    Probe shape:
-      1. Assert ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOf
-         Library`` exists, is a frozen dataclass, and has the
-         ``nonland_permanent`` rider (default False; Lost in Space's
-         bare shape).
-      2. Inspect ``resolve`` source to confirm it does NOT assign
-         ``summoning_sick``.
-      3. Sentinel: the Rust source contains the explicit
-         ``obj.summoning_sick = true`` line inside the library-
-         bounce arm.
-
-    Closure indicator: same as Pin 1 -- remove the explicit stamp,
-    flip the pin to ``_FIXED_parity``.
+    Closure shape (post-13th-slice):
+      1. Python Effect class structure UNCHANGED.
+      2. Python's resolve still does NOT assign ``summoning_sick``.
+      3. **Sentinel inverted:** the Rust source's library-bounce
+         arm body now does NOT contain ``obj.summoning_sick =
+         true``.  1 EoE card unblocked on this axis: Lost in Space.
     """
     from mtg_bot.effects.generic.zone_moves import (
         OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
@@ -664,18 +668,18 @@ def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp
     if next_arm_start < 0:
         next_arm_start = len(rust_src)
     arm_body = rust_src[arm_start:next_arm_start]
-    assert "obj.summoning_sick = true" in arm_body, (
-        "Pin sentinel: rust/src/state_ops_resolve.rs's "
+    assert "obj.summoning_sick = true" not in arm_body, (
+        "Post-13th-slice invariant: rust/src/state_ops_resolve.rs's "
         "Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary "
-        "arm should still contain the unconditional "
-        "'obj.summoning_sick = true' stamp (Pin 2's divergence).  "
-        "If this assertion fails, the Rust stamp has been removed -- "
-        "rename to _FIXED_parity and invert.  Body excerpt:\n"
+        "arm should NO LONGER contain the unconditional "
+        "'obj.summoning_sick = true' stamp.  If this assertion fails, "
+        "the stamp has been reintroduced -- the divergence is "
+        "REOPENED.  Body excerpt:\n"
         f"{arm_body[:500]!r}..."
     )
 
-    # 4. EoE cards affected.
-    affected_eoe_cards = [
+    # 4. EoE cards unblocked by this closure.
+    unblocked_eoe_cards = [
         "Lost in Space",
         # {3}{U} Instant.  Oracle: "Target artifact or creature's
         # owner puts it on their choice of the top or bottom of
@@ -685,10 +689,10 @@ def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp
         #         nonland_permanent=False),
         #     Surveil(1))
     ]
-    assert len(affected_eoe_cards) == 1, (
-        "The library-bounce summoning_sick-stamp divergence affects 1 "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The library-bounce summoning_sick-stamp closure unblocks 1 "
         "EoE card (Lost in Space).  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries."
+        f"Enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
@@ -699,58 +703,48 @@ def test_cross_engine_real_eoe_lost_in_space_library_bounce_summoning_sick_stamp
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_lost_in_space_library_bounce_top_vs_bottom_default_divergence_pin():
-    """Pin the no-agent default disagreement on bf->library bounce.
+def test_cross_engine_real_eoe_lost_in_space_library_bounce_top_vs_bottom_default_FIXED_parity():
+    """Assert Rust's no-agent default has converged on Python's TOP
+    default (RRR Pin 3 closure -- 13th Rust slice).
 
-    Sibling gap to Pin 2 on the SAME Rust resolve arm.  Independent
-    of Pin 2: closing the summoning_sick stamp does not align the
-    top-vs-bottom default, and vice versa.
+    Fixed by: 13th Rust slice
+    (``feature/rust-slice-13-rrr-pins-2-3``).  Rust's
+    ``lib_mut.push(obj)`` (BOTTOM = tail of Vec) at
+    ``state_ops_resolve.rs`` was changed to ``lib_mut.insert(0, obj)``
+    (TOP = head of Vec) -- Option A from the original pin's closure
+    sketch (CE13's Rust-converges-on-Python precedent).  Both
+    engines' no-agent default is now TOP, matching Python's
+    ``zone_moves.py:86-94`` no-agent path (``choice = 0`` ->
+    ``library.insert(0, obj)``).
 
-    Bug location (Python):
-      ``src/mtg_bot/effects/generic/zone_moves.py:86-94`` -- when
-      ``owner.agent is None`` (the cross-engine test condition with
-      no agent seated), ``choice`` defaults to 0; the resolve arm
-      then calls ``owner.library.insert(0, obj)`` (TOP of library).
-
-    Bug location (Rust):
-      ``rust/src/state_ops_resolve.rs:10358-10360`` -- the arm
-      unconditionally calls ``lib_mut.push(obj)`` (BOTTOM of library
-      = tail of Vec per the post-CE3 library-index convention).
-      No owner-choose-mode plumbing.
-
-    Library-index convention (post-CE3):
+    Library-index convention (post-CE3) is unchanged:
       ``library[0]`` = TOP of library (next card drawn).
       ``library[-1]`` = BOTTOM of library.
 
       Python's ``library.insert(0, obj)`` = TOP.
       Python's ``library.append(obj)`` = BOTTOM.
-      Rust's ``lib_mut.push(obj)`` = BOTTOM (tail of Vec).
-      Rust's ``lib_mut.insert(0, obj)`` = TOP (would match Python).
+      Rust's ``lib_mut.insert(0, obj)`` = TOP (post-13th-slice).
+      Rust's ``lib_mut.push(obj)`` = BOTTOM (no longer in the
+      library-bounce arm post-slice-13).
 
-    Probe shape:
-      1. Inspect Python source: confirm the no-agent branch sets
-         ``choice = 0`` and the ``choice == 0`` branch calls
-         ``library.insert(0, obj)``.
-      2. Sentinel: Rust source's library-bounce arm calls
-         ``lib_mut.push(obj)`` (not ``lib_mut.insert(0, obj)``).
-      3. Symbolic check: the strings ``"library.insert(0, obj)"``
-         and ``"lib_mut.push(obj)"`` both appear in their respective
-         sources (the source-of-truth divergence).
+    Closure shape (post-13th-slice):
+      1. Python source is UNCHANGED -- the no-agent branch still
+         sets ``choice = 0``, ``choice == 0`` still calls
+         ``library.insert(0, obj)``, ``choice == 1`` still calls
+         ``library.append(obj)``.
+      2. **Sentinel inverted:** the Rust source's library-bounce
+         arm now calls ``lib_mut.insert(0, obj)`` (TOP) instead of
+         ``lib_mut.push(obj)`` (BOTTOM).  1 EoE card unblocked on
+         this axis: Lost in Space.
 
-    Closure indicator (Option A -- the preferred CE13-precedent
-    path):
-      Rust's ``lib_mut.push(obj)`` at
-      ``state_ops_resolve.rs:10360`` changes to
-      ``lib_mut.insert(0, obj)``.  Both engines' no-agent default
-      becomes TOP.  Pin renames to ``_FIXED_parity`` and the
-      sentinel asserts ``insert(0, obj)`` appears in the Rust arm
-      instead of ``push(obj)``.
-
-      Full closure also requires the Rust arm to grow an
-      owner-side modal-choice hook so the AGENT-driven case can
-      pick bottom too -- that is a deeper plumbing gap and is
-      out of scope for this pin (the no-agent default alignment
-      is the minimal honest fix).
+    Note on owner-choice plumbing (still deferred):
+      Full closure of agent-driven top-vs-bottom modal choice
+      would require Rust to grow an owner-side choose-mode hook
+      so the agent-driven case can pick bottom too.  That deeper
+      modal-effect plumbing gap remains out of scope for this
+      slice; only the no-agent default is aligned here (the
+      minimal honest byte-equal-axis fix matching CE13's
+      precedent).
     """
     from mtg_bot.effects.generic.zone_moves import (
         OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
@@ -803,40 +797,36 @@ def test_cross_engine_real_eoe_lost_in_space_library_bounce_top_vs_bottom_defaul
         next_arm_start = len(rust_src)
     arm_body = rust_src[arm_start:next_arm_start]
 
-    # 2a. Rust arm calls lib_mut.push(obj) (the BOTTOM-default
-    #     divergence).
-    assert "lib_mut.push(obj)" in arm_body, (
-        "Pin sentinel: rust/src/state_ops_resolve.rs's library-"
-        "bounce arm should still contain 'lib_mut.push(obj)' "
-        "(Pin 3's divergence -- bottom-of-library hardcoded "
-        "default).  If this fails, the Rust convention changed -- "
-        "rename to _FIXED_parity and invert the assertion (expect "
-        "'lib_mut.insert(0, obj)' instead).  Body excerpt:\n"
-        f"{arm_body[:1200]!r}..."
+    # 2a. Post-13th-slice: Rust arm calls lib_mut.insert(0, obj)
+    #     (the TOP-default Python-aligned form).
+    assert "lib_mut.insert(0, obj)" in arm_body, (
+        "Post-13th-slice invariant: rust/src/state_ops_resolve.rs's "
+        "library-bounce arm should contain 'lib_mut.insert(0, obj)' "
+        "(TOP-default, matching Python's no-agent default).  If this "
+        "fails, the Rust convention changed -- check whether the arm "
+        "regressed to 'lib_mut.push(obj)' (BOTTOM-default).  Body "
+        f"excerpt:\n{arm_body[:1200]!r}..."
     )
-    # 2b. Rust arm does NOT call lib_mut.insert(0, obj) (the
-    #     would-be-aligned-with-Python TOP-default).  This is the
-    #     inverse of the closure indicator.
-    assert "lib_mut.insert(0, obj)" not in arm_body, (
-        "Pin sentinel inverse: the Rust arm should NOT contain "
-        "'lib_mut.insert(0, obj)' yet (that would be the closure-"
-        "indicator state -- pin should flip to _FIXED_parity).  "
-        f"Body excerpt:\n{arm_body[:1200]!r}..."
+    # 2b. Post-13th-slice: Rust arm does NOT call lib_mut.push(obj)
+    #     for the library bounce — the prior BOTTOM-default code path
+    #     has been removed.
+    assert "lib_mut.push(obj)" not in arm_body, (
+        "Post-13th-slice invariant: the Rust arm should NO LONGER "
+        "contain 'lib_mut.push(obj)' (the prior BOTTOM-default form "
+        "was replaced with 'lib_mut.insert(0, obj)' for Python-default "
+        f"alignment).  Body excerpt:\n{arm_body[:1200]!r}..."
     )
 
-    # 3. EoE cards affected.
-    affected_eoe_cards = [
+    # 3. EoE cards unblocked by this closure.
+    unblocked_eoe_cards = [
         "Lost in Space",
         # Same card as Pin 2 -- both gaps live on the same Rust resolve
         # arm.  Lost in Space's full byte-equal probe requires Pin 2
         # (summoning_sick) AND Pin 3 (top-vs-bottom default) to both
-        # close.  Closing only Pin 2 still leaves the library_pX
-        # tuple ordering divergent on every slot; closing only Pin 3
-        # still leaves slot 2 of the bounced object's tuple
-        # divergent.
+        # close, which the 13th Rust slice does together.
     ]
-    assert len(affected_eoe_cards) == 1, (
-        "The library-bounce top-vs-bottom default divergence affects 1 "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The library-bounce top-vs-bottom default closure unblocks 1 "
         "EoE card (Lost in Space).  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries."
+        f"Enumerated list has {len(unblocked_eoe_cards)} entries."
     )

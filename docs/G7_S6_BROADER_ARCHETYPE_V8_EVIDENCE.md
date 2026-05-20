@@ -1,0 +1,98 @@
+# G7 S6 — Broader archetype matrix scale-verify v8 (archetypes 180-239 at cap=20000)
+
+Fourth in the broader-archetype-sweep series. Significantly higher divergence
+rate than v6/v7 — surfaces a **NEW divergence axis** (`LEGAL_SET_EQ::fields:blocker`)
+that v5/v6/v7 did not.
+
+| Slice | Archetypes | PASS | FAIL_DIVERGENCE | Wall (min) |
+|---|---|---:|---:|---:|
+| v5_terminal | 0-59 | 300/300 (100.0%) | 0 | 26.8 |
+| v6 | 60-119 | 297/300 (99.0%) | 3 priority_player | 22.5 |
+| v7 | 120-179 | 299/300 (99.7%) | 1 priority_player | 26.2 |
+| **v8** | **180-239** | **291/300 (97.0%)** | **9** (5 priority_player + **4 blocker NEW**) | **21.8** |
+| **Combined v5-v8** | **0-239 (240/5000 = 4.8% of pool)** | **1187/1200 (98.9%)** | **13** | **97.3** |
+
+## v8 headline
+
+| Outcome | Count | % | Δ vs v7 |
+|---|---:|---:|---|
+| **PASS** | **291** | 97.0% | **−8** |
+| **FAIL_DIVERGENCE** | **9** | **3.0%** | **+8** |
+| **FAIL_TIMEOUT** | 0 | 0.0% | 0 |
+| **FAIL_EXCEPTION** | 0 | 0.0% | 0 |
+| **total games** | 300 | 100% | — |
+
+Per-archetype 5/5 PASS: **52/60** (vs v7's 59/60). Affected archetypes: 201, 220, 226 (3 fails), 228 (2), 229 (2).
+
+## The 9 v8 divergences (in step order within each archetype)
+
+### Priority_player axis (5 new — continues v6+v7 trend)
+
+| Game | Step | Direction |
+|---|---:|---|
+| arch=201 seed=3 | 1192 | rust-side-extra-priority (`(0,1)`) |
+| arch=226 seed=0 | 458 | python-side-extra-priority (`(1,0)`) |
+| arch=226 seed=4 | 1599 | rust-side-extra-priority (`(0,1)`) |
+| arch=228 seed=4 | 1830 | rust-side-extra-priority (`(0,1)`) |
+| arch=229 seed=4 | 1830 | rust-side-extra-priority (`(0,1)`) — arch=228/229 same-step+shape (near-duplicate decks) |
+
+Cumulative priority_player residuals (v6+v7+v8): **9 games / 900 = 1.0%**. Both
+directions surface. Filed under existing follow-up todo `c8d3a5f1`.
+
+### **NEW: Blocker axis (4 new — LEGAL_SET_EQ)**
+
+This is the highest-value v8 finding. Distinct from the priority_player STATE_EQ
+axis. **Rust's `legal_decisions` offers a `blocker` action that Python's
+`legal_actions` does NOT admit.** The harness 3-tuple is
+`(action_kind='blocker', attacker_id, blocker_id)`.
+
+| Game | Step | Rust-extra blocker | Active player |
+|---|---:|---|---:|
+| arch=220 seed=2 | 1152 | `('blocker', 0, 60)` | 0 |
+| arch=226 seed=2 | 498 | `('blocker', 61, 120)` | 1 |
+| arch=228 seed=0 | 976 | `('blocker', 1, 63)` | 0 |
+| arch=229 seed=0 | 976 | `('blocker', 1, 63)` | 0 — arch=228/229 same-step+blocker-tuple (near-duplicate decks) |
+
+**Same shape across all 4: Rust admits a blocker assignment Python rejects.**
+No reverse direction surfaced. This is a Rust-side-extra-blocker pattern.
+
+**Closure path hypothesis** (verify-first required): one of the block-eligibility
+predicates in `rust/src/state_ops_legal.rs` (the blocker emission site) is more
+permissive than its Python `legal_actions::generate_block_assignments` (or
+similar) counterpart. Likely candidates:
+- A keyword-grant or static-ability gate that Rust accepts as block-eligible but Python rejects (e.g. a tapped-flying-creature being offered as a blocker when it shouldn't be)
+- A creature that's been silently summoning-sick'd in one engine vs the other (cross-ref the Conductive Machete summoning_sick pin from TTT — same family substrate)
+- An attacker-side filter (e.g. menace, evasion) handled asymmetrically
+
+The arch=228/229 same-step+tuple strongly suggests a deterministic deck-shape
+trigger, not random noise.
+
+**This is the C1 family of legal-set asymmetries** — the same axis the cycle-37
+B1/C1 Slice 1/2/3 closures targeted on the CAST side. Blocker LEGAL_SET_EQ may
+need an analogous C1-Slice-N closure on the BLOCKER emission site.
+
+## What this changes for the flip-readiness picture
+
+**The GO-with-deferral recommendation in `FLIP_READINESS_EVIDENCE_2026_05_19.md`
+should be downgraded one notch:** axis 2 was "CLOSED on C4-class" and is now
+"CLOSED on C4-class; 98.9% PASS across 4.8% of deck pool with 2 distinct
+divergence axes (priority_player + blocker LEGAL_SET_EQ)." The C1-family blocker
+closure is **new flip-prep work** that didn't surface pre-v8.
+
+Honest read for the user's GO call: 
+- 98.9% across 1200 games is still a strong signal
+- Both residual axes have well-understood closure shapes (priority_player ≈ cycle-37 adapter fix pattern; blocker LEGAL_SET_EQ ≈ B1/C1 Slice analog)
+- The bake-in shadow-checker post-flip would catch both axes; the question is whether to do the closure pre-flip (cleaner evidence base) or post-flip (faster to ship)
+- **Recommended adjustment:** GO-with-deferral, with the blocker LEGAL_SET_EQ axis surfaced as the highest-priority flip-prep follow-up alongside priority_player closure
+
+## Methodology notes
+
+* Same `--driver rust_shadow` contract as v5/v6/v7
+* Bench script unchanged; pure measurement at the next 60-archetype slice
+* Wall time 21.8 min — fastest of the series (likely faster games at higher
+  archetype indices? Worth investigating if pattern persists)
+
+---
+
+*Generated by `feature/broader-archetype-sweep-180-239` off main `3b7809ed`.
+Pure measurement — zero `rust/src/` change, zero `src/` change.*
