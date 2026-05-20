@@ -372,6 +372,7 @@ pub fn make_state(
         attempted_draw_on_empty: false,
         mulligan_count: 0,
         life_gained_this_turn: 0,
+        poison_counters: 0,
     };
     let p1 = Player {
         id: 1,
@@ -386,6 +387,7 @@ pub fn make_state(
         attempted_draw_on_empty: false,
         mulligan_count: 0,
         life_gained_this_turn: 0,
+        poison_counters: 0,
     };
 
     Ok(GameState {
@@ -422,6 +424,7 @@ pub fn make_state(
         // p0-then-p1 order (see cross_engine.build_python_state).
         next_object_id: next_id,
         resolving_combat_damage_amount: 0,
+        resolving_combat_damage_target_player_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))` after

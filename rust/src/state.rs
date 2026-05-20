@@ -827,6 +827,15 @@ pub struct Player {
     /// NOT decrement — only positive gains count, same as Python's
     /// `gain_life()` function which guards on `amount > 0` (game.py:1360).
     pub life_gained_this_turn: i32,
+    /// Poison counter count (CR 704.5c).  A player with 10 or more poison
+    /// counters loses the game — enforced by `apply_sbas`.  Mirrors
+    /// Python's `Player.poison_counters` (game.py).  Written by the
+    /// `Effect::PutPoisonCountersOnTargetPlayer` resolve arm
+    /// (state_ops_resolve.rs).  Reset is NOT done at cleanup (poison
+    /// counters persist between turns per CR 704.5c).
+    ///
+    /// **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+    pub poison_counters: i32,
 }
 
 /// Discriminant for the two kinds of stack items the engine
@@ -1681,6 +1690,22 @@ pub struct GameState {
     /// post-resolve must produce the same digest regardless of the
     /// intermediate amount.
     pub resolving_combat_damage_amount: i32,
+    /// **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+    /// The player id (0 or 1) that was the TARGET of the most recently
+    /// dispatched combat-damage-to-player event.  Written by
+    /// `dispatch_combat_damage_to_player` before calling
+    /// `dispatch_event(DealsDamage, source_id)` and reset to `u8::MAX`
+    /// (sentinel "no active target") after the dispatch returns.
+    ///
+    /// Read by `Effect::PutPoisonCountersOnTargetPlayer.resolve` to find
+    /// which player receives the poison counters.  Matches Python's
+    /// convention where `_fire_combat_damage_to_player_triggers` passes
+    /// `target=target_player_obj` to `dispatch_event` and the triggered
+    /// ability's effect reads `targets[0]` at resolve time.
+    ///
+    /// Initialized to `u8::MAX` (= "no active target") at game start.
+    /// Not serialized into the fingerprint (transient resolve-time slot).
+    pub resolving_combat_damage_target_player_id: u8,
     /// **CE12 closure — sticky winner_id shadow.** Mirrors Python's
     /// `GameState.winner_id`: a write-once `Option<u8>` field set by
     /// `apply_sbas` the FIRST time the SBA pass observes "exactly one
@@ -2064,6 +2089,7 @@ impl Clone for GameState {
             // `clone()` copying `state.next_object_id` (game.py:3322).
             next_object_id: self.next_object_id,
             resolving_combat_damage_amount: self.resolving_combat_damage_amount,
+            resolving_combat_damage_target_player_id: self.resolving_combat_damage_target_player_id,
             winner_id_sticky: self.winner_id_sticky,
             rng,
             triggered_this_turn: self.triggered_this_turn.clone(),
@@ -2124,6 +2150,40 @@ impl GameState {
     #[getter]
     fn life_totals(&self) -> [i32; 2] {
         [self.players[0].life, self.players[1].life]
+    }
+
+    /// **EEE downstream complement — 8th Rust slice.**
+    /// Expose per-player poison counter counts to Python callers (tests
+    /// and the parity bridge).  Mirrors `Player.poison_counters` on the
+    /// Python side.  Returns `[p0_poison, p1_poison]`.
+    #[getter]
+    fn poison_counter_totals(&self) -> [i32; 2] {
+        [self.players[0].poison_counters, self.players[1].poison_counters]
+    }
+
+    /// **EEE downstream complement — 8th Rust slice.**
+    /// Python-exposed wrapper around `dispatch_combat_damage_to_player`
+    /// for test probes.  Mirrors the internal pub(crate) function that
+    /// is called by `apply_damage_pass` during real combat.
+    ///
+    /// Parameters:
+    ///   source_id    — the attacking/blocking creature's object id
+    ///   target_player — the player id (0 or 1) who received the damage
+    ///   amount        — the amount of damage dealt (used for
+    ///                   `resolving_combat_damage_amount` and for
+    ///                   `DrawCardsEqualToResolvingCombatDamage` effects)
+    ///
+    /// Returns `Ok(())` (dispatches the event; any stack items from
+    /// triggered abilities are pushed for later resolution).
+    fn dispatch_combat_damage_to_player(
+        &mut self,
+        source_id: u32,
+        target_player: u8,
+        amount: i32,
+    ) -> pyo3::PyResult<()> {
+        crate::state_ops_resolve::dispatch_combat_damage_to_player(
+            self, source_id, target_player, amount,
+        )
     }
 
     #[getter]
@@ -2363,6 +2423,7 @@ fn make_player(
         attempted_draw_on_empty: false,
         mulligan_count: 0,
         life_gained_this_turn: 0,
+        poison_counters: 0,
     }
 }
 
@@ -2594,6 +2655,7 @@ pub fn make_synthetic_state(
         // equivalent population via `new_object`.
         next_object_id: id_offset.saturating_mul(2),
         resolving_combat_damage_amount: 0,
+        resolving_combat_damage_target_player_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))`.
