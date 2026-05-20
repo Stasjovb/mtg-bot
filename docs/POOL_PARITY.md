@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **324 / 475 EoE cards (68.2%) are byte-equal at the Effect+bridge level**; of those, **224 (47.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 100 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **324 / 475 EoE cards (68.2%) are byte-equal at the Effect+bridge level**; of those, **226 (47.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 98 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **151 (31.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 224 | 47.2% |
-| Effect+bridge covered (not individually probed) | 100 | 21.1% |
+| PROBED byte-equal | 226 | 47.6% |
+| Effect+bridge covered (not individually probed) | 98 | 20.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 2 | 0.4% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -70,6 +70,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Blooming Stinger
 - Bombard
 - Bonders' Enclave
+- Broodguard Elite
 - Cautious Survivor
 - Cerebral Download
 - Chrome Companion
@@ -232,6 +233,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Starfield Shepherd
 - Starfighter Pilot
 - Starport Security
+- Starwinder
 - Stay Hidden, Stay Silent
 - Strip Mine
 - Sunset Saboteur
