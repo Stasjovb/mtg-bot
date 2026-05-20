@@ -376,6 +376,35 @@ PROBE_MODULES: tuple[Path, ...] = (
     # the same ZZZ + YYY drop-list precedent that already pins this
     # as honest-exhaustion).
     REPO_ROOT / "tests" / "test_probe_remaining_cccc.py",
+    # Probe batch EEEE (round 31 reclaim covered-but-unprobed) — fifth
+    # 4-letter probe batch (this slot was previously claimed by an
+    # agent that hit the API limit; that branch is gone, slot
+    # reclaimed fresh).  Two cards from the covered tier upgraded to
+    # PROBED via the same parse + bridge round-trip + Python-side
+    # resolve idiom DDD slice 17 / YYY / ZZZ / AAAA / CCCC
+    # established:
+    #   * Starwinder (Creature DEALS_COMBAT_DAMAGE ->
+    #     DrawCardsEqualToResolvingCombatDamage(); FIRST credited
+    #     probe of this bare unit-variant effect class -- the
+    #     WWW/YYY batches explicitly deferred this card citing
+    #     combat-damage harness substrate, but the bare effect+
+    #     bridge+resolve idiom unblocks it: the resolve reads
+    #     state.resolving_combat_damage_amount, which the probe
+    #     sets directly per the effect's resolve contract at
+    #     draw_mill.py:106; the harness-driven trajectory firing
+    #     is a stronger but distinct test shape that stays
+    #     deferred).
+    #   * Broodguard Elite (Creature LEAVES_BATTLEFIELD ->
+    #     MoveSelfCountersToTargetCreatureYouControl(); FIRST
+    #     LEAVES_BATTLEFIELD-event carrier of this effect class to
+    #     land a credited probe -- complements the existing
+    #     PROBED Dockworker Drone ENTERS-event carrier).
+    # Fear of Failed Tests was considered but DROPPED on verify
+    # (bit-identical effect-class shape to Starwinder; the predicate
+    # distinction is metadata and does not move the PROBED-tier
+    # classifier).  See module docstring for the full honest-
+    # exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_eeee.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
