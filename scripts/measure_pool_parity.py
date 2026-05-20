@@ -283,6 +283,10 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_remaining_sss.py",
     # Probe batch UUU (round 24 covered-but-unprobed):
     REPO_ROOT / "tests" / "test_probe_remaining_uuu.py",
+    # Probe batch WWW (round 25 covered-but-unprobed):
+    REPO_ROOT / "tests" / "test_probe_remaining_www.py",
+    # 14th Rust slice (TTT Pins 1+2 closures):
+    REPO_ROOT / "tests" / "test_probe_ttt_downstream.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
