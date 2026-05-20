@@ -285,6 +285,9 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_remaining_uuu.py",
     # Probe batch WWW (round 25 covered-but-unprobed):
     REPO_ROOT / "tests" / "test_probe_remaining_www.py",
+    # 15th Rust slice (VVV Pin 1 — Predicate::SourceIsSelf
+    # player-subject tautology arm for Survivor postcombat-main):
+    REPO_ROOT / "tests" / "test_probe_vvv_downstream.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
