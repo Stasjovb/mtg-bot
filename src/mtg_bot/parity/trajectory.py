@@ -1357,6 +1357,43 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
+# Aura-substrate Phase 2 (round-79) — extra static keywords that the
+# Aura predicate `_printing_is_bridge_simple_aura` admits ON TOP of
+# `_SAFE_KEYWORDS`. These are cast-timing / non-combat riders that the
+# CardDef bridge does **NOT** propagate from the source printing
+# through to the materialized CardDef → CardPrinting round-trip on
+# either engine — both Python's and Rust's bridge re-materialize the
+# Aura with empty `keywords`, so the rider is **symmetrically
+# dropped** on both sides. The drop is therefore bit-equal cross-
+# engine under the bench's `attack_all` coverage (which only casts at
+# sorcery speed; the cast-timing rider is never exercised by either
+# engine in a bench game). The simple-creature filter continues to
+# use the strict `_SAFE_KEYWORDS` set unchanged — these extras are
+# Aura-only because Auras are not creatures and never enter combat
+# (so a creature carrying `flash` would still need its own per-keyword
+# parity work before admission).
+#
+# **Per-keyword admit rationale (round-79):**
+#
+#   * `flash` (CR 702.8) — cast-timing rider only; instant-speed
+#     castability is documented at `parity/cross_engine.py` (the CE19
+#     Bear-Flash legal-decisions emission probe) as a known
+#     active!=priority divergence on CREATURE casts, but Auras are
+#     dropped symmetrically through the CardDef bridge (no keywords
+#     thread through), AND the bench's `attack_all` only ever casts at
+#     sorcery speed where the gate is irrelevant on both engines.
+#     Carriers: Frantic Strength + Shardmage's Rescue (S1 carriers per
+#     `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §1; both 0 EoE 17lands
+#     decks — the substrate's value is the unblock of the first live
+#     EoE Aura admit path, not the deck count). Symmetric-drop SL
+#     entry: `docs/SEARCH_LIMITATIONS.md` (the "Aura `flash` cast-
+#     timing rider" entry, sibling to the round-39 Ward / round-59
+#     shockland precedents).
+_AURA_SAFE_EXTRA_KEYWORDS: frozenset[str] = frozenset({
+    "flash",
+})
+
+
 # Phase 6 carddef-triggers slice: triggered-ability shapes that BOTH
 # engines model byte-for-byte today via the existing
 # ``cross_engine._ta_dict_to_python_predicate`` /
@@ -4264,11 +4301,26 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
 
 
 def _printing_is_bridge_simple_aura(printing) -> bool:
-    """True iff a CardPrinting is a Phase-1 bridge-supported Aura
+    """True iff a CardPrinting is a Phase-1/2 bridge-supported Aura
     (sub-shape S1 in ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §1):
     a static P/T-or-keyword Aura with no triggered/spell/activated/
     static effects, no control-swap or replacement riders, and a
     parseable cost.
+
+    **Aura-attachment substrate — Phase 2 FIRST DELIVERABLE LANDED
+    (round-79; widens the keyword admit set to include cast-timing
+    ``flash`` per the symmetric-drop precedent).** Phase 2 widens the
+    static-keyword check to admit Auras whose printing keywords are a
+    subset of ``_SAFE_KEYWORDS ∪ {flash}``. ``flash`` is a cast-timing
+    rider that the CardDef bridge symmetrically drops on BOTH engines
+    (the CardDef → CardPrinting round-trip carries no ``keywords``
+    field through the aura arm). This finally admits the **first live
+    EoE Aura** — Frantic Strength (and Shardmage's Rescue) — through
+    the loader: substrate end-to-end on a real EoE printing. See
+    `docs/SEARCH_LIMITATIONS.md` for the SL entry mirroring the
+    round-39 Ward / round-59 shockland symmetric-drop precedent. The
+    full Phase 2 (S2 control-changing per the plan §3) remains
+    deferred to a follow-up Rust slice.
 
     **Aura-attachment substrate — Phase 1 STEP 7 LANDED (round-78).**
     This is the §2 positive-allowlist predicate the plan's §3 Phase 1
@@ -4333,14 +4385,14 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         bonus deltas have no upper bound.
       * Mana cost is parseable into (generic, colored).
 
-    **Wired into the loader as of STEP 7 (round-78):** the predicate
-    is the 6th disjunct of :func:`_filter_deck_to_bridge_supported`'s
-    admit chokepoint. The live EoE pool admits 0 Auras through this
-    disjunct today — every S1 carrier (Frantic Strength / Shardmage's
-    Rescue) carries the non-``_SAFE_KEYWORDS`` ``flash`` keyword, the
-    predicate's documented decline reason — but the substrate is
-    wired through for the first non-flash S1 Aura that ships, and
-    Phase 2/3/4 will widen the admit set.
+    **Wired into the loader as of STEP 7 (round-78), widened by Phase
+    2 first deliverable (round-79):** the predicate is the 6th
+    disjunct of :func:`_filter_deck_to_bridge_supported`'s admit
+    chokepoint. **The live EoE pool now admits ≥1 Aura through this
+    disjunct** (the first live admit — round-79 widen of the keyword
+    set per the symmetric-drop precedent above). Remaining S2/S3/S4
+    Aura sub-shapes stay positively declined here; Phase 3/4 widen
+    further.
     """
     if not getattr(printing, "is_aura", False):
         return False
@@ -4385,19 +4437,46 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     if getattr(printing, "dynamic_pt_formula", None) is not None:
         return False
-    # Static keyword set on the printing itself — every Phase-1 S1
-    # carrier (Frantic Strength, Shardmage's Rescue) carries ``flash``
-    # which is OUTSIDE _SAFE_KEYWORDS. This is the §2 decline that
-    # keeps the substrate from accidentally admitting an S1 carrier
-    # this slice; the round-61 N1 scout's "0 realizable decks" finding
-    # is faithful here. When Phase 1 widens _SAFE_KEYWORDS (or a future
-    # Phase ships flash-on-static-aura), the predicate continues to
-    # decline correctly via the bonus-set check below.
-    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+    # Static keyword set on the printing itself.
+    #
+    # **Phase 2 widen (round-79; symmetric-drop precedent — round-39
+    # Ward / round-59 shockland).** The Aura-keyword surface admits
+    # _SAFE_KEYWORDS PLUS ``flash``. ``flash`` is a cast-timing rider
+    # (CR 702.8), not a per-permanent combat keyword, AND the CardDef
+    # bridge in :func:`_printing_to_card_def`'s aura arm DOES NOT
+    # propagate the source printing's ``keywords`` field through to the
+    # CardDef — both Python and Rust materialize the Aura with empty
+    # ``keywords`` from the CardDef on each engine, so the ``flash``
+    # rider is **symmetrically dropped** on BOTH bridge sides
+    # bit-equally. The instant-speed cast emit path (`flash` on a
+    # non-creature spell makes it instant-speed castable) is unexercised
+    # by `attack_all`-style bench play, which only casts at sorcery
+    # speed — exactly the same parity-safety argument as the round-59
+    # shocklands' tapped-entry / pay-life replacement (the rider is
+    # never driven by the bench strategy on EITHER engine post-bridge,
+    # so the drop is bit-equal under bench coverage).
+    #
+    # This widen finally admits the first **live EoE Aura** through the
+    # loader: Frantic Strength (0 EoE 17lands decks — the substrate's
+    # value, not deck count) + Shardmage's Rescue (0 decks; its
+    # ``aura_yours_only`` is independently bridge-correct on both
+    # engines per `actions.py:1337-1357` / `state_ops_cast.rs:2000-2055`;
+    # its conditional `entered_this_turn` hexproof grant is NOT parsed
+    # by the live parser at all — shared CR-incompleteness on the
+    # Python side, so the drop is symmetric there too). See
+    # `docs/SEARCH_LIMITATIONS.md` for the symmetric-drop SL entry.
+    if printing.keywords and not printing.keywords.issubset(
+        _SAFE_KEYWORDS | _AURA_SAFE_EXTRA_KEYWORDS
+    ):
         return False
     # Granted-keyword check on equipment_bonuses (the +P/+T/keywords
     # rider). The bonus tuple is (power_bonus, toughness_bonus,
     # granted_keywords); granted_keywords must all be in _SAFE_KEYWORDS.
+    # (Granted keywords flow through the CardDef bridge per
+    # ``aura_granted_keywords`` and are applied to the host by Rust's
+    # layer-6 grant — those MUST stay in _SAFE_KEYWORDS so both engines
+    # round-trip the grant identically; only the static cast-timing
+    # ``flash`` is dropped symmetrically per the comment above.)
     if printing.equipment_bonuses is not None:
         _, _, granted_kws = printing.equipment_bonuses
         if granted_kws and not granted_kws.issubset(_SAFE_KEYWORDS):
