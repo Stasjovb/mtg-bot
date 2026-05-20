@@ -129,19 +129,49 @@ const PHASE_MAX: u8 = PHASE_CLEANUP;
 ///     rule (CR 502.1).
 /// Mirrors Python's `src/mtg_bot/turn.py:88-96`.
 ///
+/// **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+/// Hosts attached by an Aura whose printing carries
+/// `aura_prevents_host_untap = true` (Tractor Beam, Stay Hidden
+/// Stay Silent) STAY TAPPED through the active player's untap step.
+/// We pre-compute the set of host ids that any such Aura is
+/// attached to (scanning ANY battlefield — the Aura's controller
+/// may differ from the host's, and host transfer is the whole
+/// point of Tractor Beam's control-grant rider). Mirrors Python's
+/// `src/mtg_bot/turn.py:78-86` pre-compute + skip.
+///
 /// **CoW short-circuit.** The make_mut now fires when ANY object
 /// either is tapped or carries a stun counter — pre-r30 baselines
 /// (no stun counters anywhere on the bf) keep the same warm path.
 fn untap_all_for_player_inline(state: &mut GameState, player_id: u8) {
+    // Pre-compute the set of host ids whose untap is prevented by an
+    // attached `aura_prevents_host_untap` Aura. Walks BOTH players'
+    // battlefields — the Aura may be controlled by anyone (Tractor
+    // Beam's control grant flips the host's controller to the Aura's
+    // controller, but the Aura object itself stays where it ETB'd).
+    // Mirrors Python's `turn.py:82-86` set-comprehension.
+    let no_untap_ids: std::collections::HashSet<u32> = state
+        .players
+        .iter()
+        .flat_map(|p| p.battlefield.iter())
+        .filter_map(|aura| {
+            let host_id = aura.attached_to?;
+            let printing = state.registry.lookup(aura.printing_id)?;
+            if printing.aura_prevents_host_untap {
+                Some(host_id)
+            } else {
+                None
+            }
+        })
+        .collect();
     let player = match state.players.iter_mut().find(|p| p.id == player_id) {
         Some(p) => p,
         None => return,
     };
-    if player
-        .battlefield
-        .iter()
-        .all(|o| !o.tapped && o.stun_counters == 0)
-    {
+    if player.battlefield.iter().all(|o| {
+        !o.tapped
+            && o.stun_counters == 0
+            && !no_untap_ids.contains(&o.id)
+    }) {
         return;
     }
     let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
@@ -149,6 +179,13 @@ fn untap_all_for_player_inline(state: &mut GameState, player_id: u8) {
         if obj.stun_counters > 0 {
             // CR 701.20: doesn't untap; instead remove a stun counter.
             obj.stun_counters -= 1;
+            continue;
+        }
+        if no_untap_ids.contains(&obj.id) {
+            // Phase 2 S2 extension: Tractor Beam / Stay Hidden Stay
+            // Silent shape — host stays tapped while the don't-untap
+            // Aura is attached. Mirrors Python's
+            // `turn.py:97-102` continue branch.
             continue;
         }
         obj.tapped = false;
