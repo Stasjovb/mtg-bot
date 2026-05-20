@@ -8312,40 +8312,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``enchanted_creature_fights_target`` slice-19 unit-variant
         # precedent).
         #
-        # **Honest-stop status.** The Effect variant + parse +
-        # to_pydict + this bridge arm + the resolve arm (each-opponent-
-        # exile portion) ship the substrate scaffolding -- the cross-
-        # engine round-trip closes for this Effect class AND the post-
-        # resolve zone counts are byte-equal across engines (one card
-        # moves from each opponent's hand to that opponent's exile).
-        # The persistent ``cast_from_exile_with_lightstall_surcharge``
-        # per-object flag + cast-from-exile legality + +{1} mana
-        # surcharge + tapped-land-entry riders are NOT plumbed in this
-        # slice -- Rust's ``GameObject`` struct has no such field today,
-        # Rust's ``state_ops_legal.rs`` does not surface exile-as-cast-
-        # source for that flag, and Rust's ``state_ops_cast.rs`` does
-        # not honor the surcharge / tapped-entry riders. See the Rust
-        # Effect variant docstring at ``cards.rs`` for the substrate-
-        # scope breakdown and ``docs/BLOCKED_GENUINELY_MISSING
-        # _INVENTORY.md`` §3 ("Lightstall Inquisitor -- 4,371 decks";
-        # large scope 6+ cycles) for the closure-cost estimate.
+        # **Closure status (cast-from-exile-substrate slice).** Slice
+        # 20 shipped the Effect variant + parse + to_pydict + this
+        # bridge arm + the resolve arm (each-opponent-exile portion);
+        # this follow-up slice (cast-from-exile-with-cost-hike
+        # substrate) closes the persistent permission gap end-to-end:
+        # GameObject carries the ``cast_from_exile_with_lightstall_
+        # surcharge`` field (``rust/src/state.rs``), the legal emitter
+        # surfaces exile-as-cast-source for it
+        # (``rust/src/state_ops_legal.rs``), the cast pay path applies
+        # the +{1} generic surcharge (``rust/src/state_ops_cast.rs::
+        # cast_creature`` / ``cast_spell_noncreature``), and the
+        # tapped-land-entry rider stamps ``tapped = true`` on the
+        # entering land regardless of the printing's static
+        # ``enters_tapped`` (``rust/src/state_ops_cast.rs::play_land``
+        # exile branch). The flag is cleared at cast/play time
+        # (Python parity, ``actions.py:1083`` and ``actions.py:1505``).
+        # ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §3 closure
+        # status flips from "PARTIAL CLOSED" to "FULL CLOSED" with
+        # this slice.
         #
-        # **Cross-engine parity boundary.** A probe that drives ETB
+        # **Cross-engine parity contract.** A probe that drives ETB
         # resolution and inspects post-resolve zones (count of cards in
         # each opponent's hand decreased by 1; count of cards in each
         # opponent's exile increased by 1; chosen-card identity is the
         # deterministic hand[0]-or-equivalent first-legal pick) is
-        # byte-equal across engines today. A probe that further attempts
-        # to cast the exiled card on the OWNER's next priority is NOT
-        # byte-equal -- Python surfaces the cast in legal_actions; Rust
-        # does not.
+        # byte-equal across engines. A probe that further attempts to
+        # cast the exiled card on the OWNER's next priority NOW also
+        # round-trips: both engines surface the cast at sorcery timing,
+        # apply the +{1} surcharge, and (for lands) stamp tapped-entry.
         #
         # **Real EoE consumer:** Lightstall Inquisitor (4,371 17lands
         # decks) -- the ONLY EoE card with this shape. One of the 6
         # cards on ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing
-        # list; this slice partially closes it (Effect-level +
-        # exile-portion byte-equality; persistent permission substrate
-        # honest-stopped).
+        # list; this slice + the persistent-permission substrate
+        # close it fully (the loader's
+        # ``_printing_is_bridge_simple_*`` guardrails decide separately
+        # whether Lightstall flips to bridge-admitted; the substrate
+        # is no longer the blocker).
         from mtg_bot.effects.generic.discard import (
             EachOpponentExilesCardFromHandWithCastPermission,
         )

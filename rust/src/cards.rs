@@ -3541,52 +3541,42 @@ pub enum Effect {
     /// (`effects/generic/discard.py:172-214`) -- the ONLY EoE card with
     /// this shape, 4,371 17lands decks.
     ///
-    /// **HONEST-STOP CLOSURE -- Effect variant + parse + to_pydict +
-    /// bridge + resolve arm (each-opponent-exile portion) ship here;
-    /// the persistent `cast_from_exile_with_lightstall_surcharge` flag
-    /// substrate is DEFERRED.** The Rust resolve arm moves a card from
-    /// each opponent's hand to exile byte-equal to Python's
-    /// `EachOpponentExilesCardFromHandWithCastPermission.resolve`. What
-    /// it does NOT do is stamp the per-card persistent flag on the
-    /// exiled `GameObject` (Python sets
-    /// `card.cast_from_exile_with_lightstall_surcharge = True`; Rust's
-    /// `GameObject` struct has no such field today) and the legal-
-    /// actions / cast-machinery on the Rust side therefore has no
-    /// "you may play this card from exile" surface for that exiled
-    /// card. This is the substrate gap documented in
-    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3 ("Lightstall
-    /// Inquisitor -- 4,371 decks"; large scope 6+ cycles) and is the
-    /// **largest single-card §2 substrate-shaped decline** in the
-    /// BLOCKED-genuinely_missing tier post-slice-18.
+    /// **CLOSURE (cast-from-exile-with-cost-hike substrate).** Slice
+    /// 20 shipped the Effect variant + parse + to_pydict + bridge +
+    /// resolve arm (each-opponent-exile portion). This follow-up slice
+    /// closes the persistent permission substrate end-to-end:
+    ///   1. `GameObject` carries a new `cast_from_exile_with_lightstall
+    ///      _surcharge: bool` field (`state.rs`), stamped `true` on the
+    ///      exiled card by the resolve arm below.
+    ///   2. `state_ops_legal.rs` surfaces a `CastSpell` (non-land) or
+    ///      `PlayLand` (land) action for every exile object with this
+    ///      flag, at sorcery timing, scoped to the card's owner (CR
+    ///      400.7 reset put `controller = owner` at exile time).
+    ///   3. `state_ops_cast.rs::cast_creature` / `cast_spell_noncreature`
+    ///      detect the exile origin, pay `printing.mana_cost + {1}`
+    ///      generic surcharge (Python `actions.py:1494-1499`), and
+    ///      clear the flag at cast time on the stack-resident object
+    ///      (Python `actions.py:1505`). `play_land` honors the tapped-
+    ///      entry rider: a land played via this permission stamps
+    ///      `tapped = true` regardless of the printing's static
+    ///      `enters_tapped` (Python `actions.py:1083-1094`) and clears
+    ///      the flag at play time.
+    /// Lightstall Inquisitor's residue closure moves from
+    /// "PARTIAL CLOSED" to "FULL CLOSED" in
+    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3 with this
+    /// slice. The 6+-cycle substrate-scope estimate was conservative;
+    /// the actual closure was a single-slice landing (~250 LOC across
+    /// 4 Rust files + bridge update + tests).
     ///
-    /// **Why honest-stop?** The persistent permission substrate is
-    /// load-bearing across THREE Rust subsystems:
-    ///   1. New `GameObject` field
-    ///      (`cast_from_exile_with_lightstall_surcharge: bool`) +
-    ///      fingerprint serializer slot + CR 400.7 zone-change reset.
-    ///   2. Legal-actions emission (`state_ops_legal.rs`) must surface
-    ///      the exiled card as castable -- new exile-as-source code
-    ///      path and a {1} surcharge rider on the mana-cost check.
-    ///   3. Cast machinery (`state_ops_cast.rs`) must honor: cast from
-    ///      exile (the card stays in exile until the cast completes /
-    ///      moves it to the stack), +{1} mana surcharge on spells,
-    ///      tapped-entry rider on lands.
-    /// That's the multi-cycle substrate scope `BLOCKED_GENUINELY_MISSING
-    /// _INVENTORY.md` flags as "large (6+)". This slice closes the
-    /// Effect-shape gap (byte-equal up to the exile-of-the-card step);
-    /// the cast-back-from-exile permission lands in a separate slice
-    /// when (a) a second consumer surfaces or (b) the substrate cost
-    /// is paid down on its own merits.
-    ///
-    /// **Cross-engine parity boundary.** A probe that drives ETB
+    /// **Cross-engine parity contract.** A probe that drives ETB
     /// resolution and inspects post-resolve zones (count of cards in
     /// each opponent's hand decreased by 1; count of cards in each
     /// opponent's exile increased by 1; chosen-card identity is the
     /// deterministic hand[0]-or-equivalent first-legal pick) is
-    /// byte-equal across engines today. A probe that further attempts
-    /// to cast the exiled card on the OWNER's next priority is NOT
-    /// byte-equal -- Python surfaces the cast in legal_actions; Rust
-    /// does not.
+    /// byte-equal across engines. A probe that further attempts to
+    /// cast the exiled card on the OWNER's next priority NOW also
+    /// round-trips: both engines surface the cast at sorcery timing,
+    /// apply the +{1} surcharge, and (for lands) stamp tapped-entry.
     ///
     /// **Resolve semantics (mirrors `EachOpponentExilesCardFromHand
     /// WithCastPermission.resolve` step-for-step on the exile portion).**

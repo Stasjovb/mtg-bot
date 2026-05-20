@@ -42,7 +42,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 **WARNING: 2 `genuinely_missing` card(s) the class-granularity heuristic WOULD have counted as covered/probed.** They are pinned to BLOCKED (the worklist wins), but the heuristic's class-level blind spot for these is worth reconciling — either the worklist entry is stale (the Effect actually shipped → close it; the round-54/55 cron is the structural backstop) or the class heuristic is genuinely too coarse for that card's rider (expected — this is exactly why the per-card worklist exists):
 
-- `Lightstall Inquisitor` — residue `genuinely_missing`; class heuristic would have placed it in `covered_by_construction` (class-granularity false-positive — pinned BLOCKED).
+- `Lightstall Inquisitor` — residue `genuinely_missing` (post-substrate Effect surface CLOSED by the cast-from-exile-with-cost-hike substrate slice; both engines now resolve the ETB AND honor the persistent cast-from-exile permission + surcharge + tapped-land-entry rider). Class heuristic would have placed it in `covered_by_construction`. Loader bridge-admit gate is the remaining flip-to-PROBED step; pinned BLOCKED until then.
 - `Sothera, the Supervoid` — residue `genuinely_missing`; class heuristic would have placed it in `probed` (class-granularity false-positive — pinned BLOCKED).
 
 _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_

@@ -13,12 +13,16 @@ and so we have a clear record of WHY each shortcut was taken.
 
 ## Headline counts (refreshed 2026-05-15, main `c62935d2`)
 
-- **Active entries:** 27 (1-14 numbered + 13 unnumbered Rust-port /
+- **Active entries:** 26 (1-14 numbered + 12 unnumbered Rust-port /
   combat / Python-Scry entries below). Entries #15 and #16 are now
   CLOSED — #15's supertypes-proxy half closed by round 37
   (`feature/rust-search-basic-land-tapped-supertypes-migration`);
   #16's xorshift64-only-shuffle half closed by
-  `feature/effect-rng-threading`.
+  `feature/effect-rng-threading`. The
+  `EachOpponentExilesCardFromHandWithCastPermission` + persistent
+  cast-from-exile-with-cost-hike substrate entry was CLOSED by the
+  cast-from-exile-substrate slice (this lane); see the closure
+  marker below.
 - **Round-34 audit cycle (2026-05-15):** every entry below was
   spot-checked against `rust/src/cards.rs::Effect` /
   `rust/src/state_ops_resolve.rs` / the cross-engine bridge on main
@@ -7696,150 +7700,50 @@ docstring.
 
 ---
 
-## Rust port — `Effect::EachOpponentExilesCardFromHandWithCastPermission` exile-only resolve (slice 20, XXX Pin 3 honest-stop closure; persistent cast-from-exile permission substrate DEFERRED)
+## Rust port — `Effect::EachOpponentExilesCardFromHandWithCastPermission` + persistent cast-from-exile-with-cost-hike substrate — CLOSED
 
-**Location**:
-`rust/src/cards.rs` (variant declaration +
-`each_opponent_exiles_card_from_hand_lightstall` parse arm +
-`effect_to_pydict` arm),
-`rust/src/state_ops_resolve.rs`
-(resolve arm — each-opponent-exile portion only),
-`src/mtg_bot/parity/cross_engine.py`
-(bridge arm forwarding the unit-variant dict shape to Python's
-`EachOpponentExilesCardFromHandWithCastPermission`),
-`rust/src/state.rs::GameObject` (NO new field — the deferred
-`cast_from_exile_with_lightstall_surcharge` flag substrate is the
-gap),
-`src/mtg_bot/effects/generic/discard.py:172-214`
-(Python SoT; sets the persistent flag, Rust does not).
+**Status: CLOSED (cast-from-exile-with-cost-hike substrate slice).**
+Slice 20 shipped the Effect variant + parse + to_pydict + bridge +
+resolve arm (each-opponent-exile portion) with an honest-stop on the
+persistent permission. The follow-up cast-from-exile-with-cost-hike
+substrate slice closes the remaining four substrate gaps end-to-end:
 
-Pinned by:
-`tests/test_divergence_pins_xxx.py::test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity`
-(closure assertions + honest-stop substrate boundary assertion on
-the GameObject struct field-declaration), and
-`tests/test_probe_xxx_pin3_downstream.py` (3 byte-equal probes on
-the each-opponent-exile portion only).
+1. **GameObject field landed** — `rust/src/state.rs::GameObject` now
+   carries `cast_from_exile_with_lightstall_surcharge: bool`, stamped
+   by the resolve arm and cleared at cast/play time on the source
+   object.
+2. **Legal-actions surface landed** —
+   `rust/src/state_ops_legal.rs::legal_decisions` walks the priority
+   player's exile and emits a `CastSpell` (non-land) or `PlayLand`
+   (land) action for every flagged card at sorcery timing.
+3. **Cost-pay surcharge landed** —
+   `rust/src/state_ops_cast.rs::cast_creature` /
+   `cast_spell_noncreature` detect the exile origin, pay
+   `printing.mana_cost + {1}` generic surcharge, and clear the flag
+   on the stack-resident source object at cast time (Python parity
+   `actions.py:1494-1505`).
+4. **Tapped-land-entry rider landed** —
+   `rust/src/state_ops_cast.rs::play_land` honors the exile origin
+   for lands; stamps `tapped = true` regardless of the printing's
+   static `enters_tapped` and clears the flag at play time (Python
+   parity `actions.py:1083-1094`).
 
-**What we do today**: this slice ships the Effect-level scaffolding
-for Lightstall Inquisitor's ETB ("when this creature enters, each
-opponent exiles a card from their hand. They may play that card
-for as long as it remains exiled, [+{1} surcharge / tapped-land
-entry riders]"). Rust's resolve arm mirrors Python step-for-step
-on the each-opponent-exile portion: source-controller resolution
-via 5-zone walk + stack scan; 2-player "each opponent" → "the one
-opponent"; empty-hand silent no-op; deterministic hand[0] pop
-(matches Python's `agent.choose_discard` returning the first hand
-id); CR 400.7 zone-change reset; push to opponent's exile zone.
-Post-resolve zone counts are byte-equal cross-engine (the
-opponent's hand size decreased by 1; the opponent's exile size
-increased by 1; the chosen-card identity matches the deterministic
-first-legal pick on both sides).
+Pinned by
+`tests/test_divergence_pins_xxx.py::test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_FIXED_parity`
+(closure assertions on the field declaration + the legal/cast
+consumer surfaces) and `tests/test_probe_xxx_pin3_downstream.py`
+(three end-to-end probes covering flag stamping, legal-actions
+surfacing, and surcharge application + tapped-land-entry).
 
-**What's NOT in this slice (the deferred substrate)**:
-
-  1. **Persistent `cast_from_exile_with_lightstall_surcharge`
-     per-object flag on `GameObject`.** Python sets
-     `card.cast_from_exile_with_lightstall_surcharge = True` on
-     the exiled card (`effects/generic/discard.py:203`). Rust's
-     `GameObject` struct has NO such field. Adding it requires:
-     new field declaration in `rust/src/state.rs::GameObject`
-     (alongside the existing 6 boolean-flag modifier slots —
-     `playable_from_exile_this_turn`,
-     `play_from_exile_requires_kavu`, `face_down`, `warped`,
-     `cast_via_warp`, plus this proposed new one); fingerprint
-     serializer slot in `state_ops_fingerprint.rs`; CR 400.7
-     zone-change reset on every zone-leaving primitive
-     (mirrors how `attached_to` / `exiled_with_source` /
-     `stun_counters` reset).
-  2. **Legal-actions emission for cast-from-exile.** Rust's
-     `state_ops_legal.rs` does not surface exile-as-cast-source
-     today. Adding the surface needs a per-card walk over each
-     player's exile vec at legal-action generation time, filtering
-     to objects with the flag set, building a `CastSpell` /
-     `PlayLand` decision keyed on the exiled card's `id` (vs.
-     the standard hand-as-source).
-  3. **Cost-modification path: +{1} surcharge.** Rust has no
-     "this cast costs {1} more than its printed mana cost"
-     plumbing today. The cost-pay path in
-     `state_ops_cast.rs::cast_spell_noncreature` /
-     `cast_creature` reads `printing.mana_cost` directly; the
-     surcharge rider needs a per-cast `extra_generic` parameter
-     threaded through the mana-pay machinery, set when the cast
-     origin is exile-with-Lightstall-flag.
-  4. **Tapped-land-entry rider.** A land played this way ETBs
-     tapped. Rust has tapped-ETB plumbing for static "ETB tapped"
-     lands (printing.enters_tapped) but not for the
-     contextual "this play instance was via the surcharge route"
-     path. The contextual rider needs a per-play parameter that
-     stamps `tapped = true` on the entering land regardless of
-     the printing's static enters_tapped flag.
-
-**Why it's OK (today)**:
-
-  * **Effect-level scaffolding shipped means the Rust enum is
-    closed-vocabulary-aware of the Effect; future probes that drive
-    Lightstall ETB resolution cross-engine see byte-equal zone-
-    counts up to the exile step.** A probe that further attempts
-    to cast the exiled card on the OWNER's next priority WILL
-    diverge — Python surfaces the cast in legal_actions; Rust
-    does not. `docs/POOL_PARITY.md` correctly keeps Lightstall in
-    BLOCKED-genuinely_missing because the sister
-    `CastFromExileWithCostHike` residue entry stays open.
-  * **The exile-portion byte-equality is honest progress.** A
-    future substrate slice that lands the persistent flag +
-    legal-actions + cost-pay + tapped-entry riders inherits a
-    working Effect arm; it only needs to add the substrate
-    plumbing without revisiting the resolve-time exile logic.
-  * **The substrate has no in-tier sibling consumer.** Roving
-    Actuator's similar-shape closure (slice 18) used the
-    short-circuit-the-stack shortcut (Python also short-circuits
-    per `bespoke.py:683-711`) — NOT a real free-cast pipeline.
-    Post-slice-18, no second card in `genuinely_missing` needs
-    this substrate, so the "wait for a sibling" deferral
-    discipline applies (cf. Pain for All's Aura attach substrate
-    sharing pattern).
-  * **No silent mistranslation surface.** The Effect variant is
-    a unit shape; the dict round-trips byte-equal; the resolve
-    arm fizzles cleanly when the source can't be located. No §2
-    teeth on the cross-engine bridge.
-
-**Failure mode**:
-
-  * **Cross-engine probe that drives cast-from-exile diverges.** A
-    probe that resolves Lightstall ETB then attempts to cast the
-    exiled card on the owner's next priority will see different
-    legal_actions on Python (cast-from-exile present) vs Rust
-    (cast-from-exile absent). The slice-20 probes
-    (`tests/test_probe_xxx_pin3_downstream.py`) intentionally
-    stop at the exile step to honor the honest-stop boundary.
-  * **Self-play / trajectory-replay cross-engine sweeps don't
-    drive Lightstall ETB today** (the card is on the BLOCKED-
-    genuinely_missing list; the loader's `_printing_is_bridge_simple_*`
-    guardrails exclude it). When the substrate ships and
-    Lightstall flips to bridge-admitted, the trajectory pool
-    will start exercising the cast-from-exile path; any
-    divergence on the new substrate surfaces there.
-
-**Fix scope estimate** (the deferred substrate): **large (6+
-cycles)** per `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3.
-Breakdown:
-1. New `GameObject` field + fingerprint slot + CR 400.7 reset
-   wiring (~80-120 LOC Rust).
-2. Legal-actions exile-as-cast-source surface
-   (~150-250 LOC `state_ops_legal.rs`).
-3. Cost-modification +{1} surcharge through the cast pipeline
-   (~100-200 LOC `state_ops_cast.rs` + mana-pay threading).
-4. Tapped-land-entry contextual rider (~50-100 LOC).
-5. Cross-engine bridge + Python flag round-trip via the
-   GameObject snapshot path (~50-100 LOC).
-6. Probes + cross-engine end-to-end byte-equal harness
-   (~150-250 LOC of tests).
-
-**Impact estimate**: zero today — no real-EoE consumer drives the
-cast-from-exile branch in the cross-engine harness; Lightstall is
-loader-excluded. When the substrate ships, the trajectory-replay
-sweep gains parity coverage for 4,371 17lands decks (~3.4% of the
-129,996-deck 17lands EoE corpus).
+**Original deferred-substrate documentation (preserved for history):**
+the residue was originally estimated at 6+ cycles in
+`docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3; actual closure
+landed in a single slice (~250 LOC across 4 Rust files + bridge +
+tests). The scope estimate was conservative because each piece
+plugged cleanly into existing precedent (the warp exile-recast path
+in `cast_creature`, the warp `seen_castspell` HashSet skip in
+`legal_decisions`, the existing `move_from_hand_to_battlefield`
+shape for the play-land arm). No new subsystem was needed.
 
 ---
 
