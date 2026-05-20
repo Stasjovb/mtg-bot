@@ -443,13 +443,17 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # Slice-20 fold: Command Bridge genuinely_missing -> closed
     # (Effect::SacrificeSelfUnlessTapPermanent + PendingDecision::
     # TapPermanentChoice cost-decision substrate + bridge shipped).
-    # `missing` is now 3 distinct genuine new-Rust-Effect asks
+    # Slice-22 fold: Sothera, the Supervoid genuinely_missing -> closed
+    # (Effect::SotheraDIESCreaturesEachOpponentControlsBattleLoseLife
+    # + Effect::SotheraBeginningOfEndStepIfSurvivedCreaturesLoseLife
+    # composite shipped + bridge + Sothera DIES probe at
+    # ``tests/test_probe_sothera_requiem_downstream.py``).
+    # `missing` is now 2 distinct genuine new-Rust-Effect asks
     # (Lightstall Inquisitor appears twice in the worklist; the set
     # dedupes it).
     assert missing == {
         "Lightstall Inquisitor",
         "Pain for All",
-        "Sothera, the Supervoid",
     }
     assert non_effect == {
         "Dauntless Scrapbot",
