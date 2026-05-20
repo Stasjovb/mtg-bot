@@ -137,6 +137,7 @@ impl GameState {
                 // Inquisitor residue closure): deck-loaded library
                 // cards never start with the Lightstall flag.
                 cast_from_exile_with_lightstall_surcharge: false,
+                controller_baseline: None,
             });
             next_id += 1;
         }

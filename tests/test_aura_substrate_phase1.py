@@ -313,19 +313,15 @@ def test_predicate_declines_non_aura():
     assert _printing_is_bridge_simple_aura(forest) is False
 
 
-def test_predicate_declines_every_live_eoe_aura_today():
-    """**§2 verify-first**: at HEAD, every Aura in the live parser pool
-    is positively declined by the predicate. This pins the round-61 N1
-    scout's finding (``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §1)
-    that the Phase-1 first-deliverable slice admits ZERO real Auras —
-    Phase-1 S1 (Frantic Strength, Shardmage's Rescue) carry ``flash``
-    which is outside :data:`_SAFE_KEYWORDS`; S2/S3/S4 are positively
-    declined by the rider checks.
-
-    When a Phase widens the admit set, this test's NAMED-decline list
-    flips — drop the cards that now admit from the assert below and
-    add per-card admit pins. This is the same verify-first discipline
-    the warp / spell guardrails use."""
+def test_predicate_admits_live_eoe_s1_auras_post_phase_2():
+    """**Phase 2 first deliverable (round-79).** Phase 2 widened the
+    keyword admit set to include cast-timing ``flash`` (per the
+    symmetric-drop precedent — see SL entry). The two S1 carriers per
+    `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §1 (Frantic Strength,
+    Shardmage's Rescue) now admit; every S2/S3/S4 carrier stays
+    positively declined by the §2 rider teeth. This pin captures the
+    exact admit set so a future Phase widen has to update it
+    explicitly (verify-first discipline)."""
     from mtg_bot.cards.source import get_active_source
     pool = get_active_source().get_printings()
     declined: list[tuple[str, str]] = []
@@ -337,15 +333,24 @@ def test_predicate_declines_every_live_eoe_aura_today():
             admitted.append(name)
         else:
             declined.append((name, "declined"))
-    assert admitted == [], (
-        f"Phase-1 first-deliverable admits NO live Aura. Newly-admitted "
-        f"set: {admitted!r}. If this is intentional (a later Phase-1 step "
-        f"widened the predicate's admit shape), update this pin to assert "
-        f"the new expected admit list explicitly."
+    # Phase 2 first deliverable: S1 carriers + S2 Duskmourn-shape
+    # (control-swap + lose-abilities). Tractor Beam still declined
+    # (triggered ETB + don't-untap rider). If this set changes
+    # (parser drift, future widen), update both this pin AND the
+    # deck-count expectations in the plan.
+    assert sorted(admitted) == sorted([
+        "Frantic Strength",
+        "Shardmage's Rescue",
+        "Duskmourn's Domination",
+    ]), (
+        f"Phase 2 first deliverable + S2 expected three carriers to "
+        f"admit; got {sorted(admitted)!r}. If this is intentional (a "
+        f"later Phase widen of the predicate's admit shape), update "
+        f"this pin to assert the new expected admit list explicitly."
     )
     # Sanity: the parser pool has at least the 14 Auras the scout
-    # documented; if it grew, we just want >= the round-61 count.
-    assert len(declined) >= 14
+    # documented (round-61 N1 + round-63 N4 drift extensions).
+    assert (len(declined) + len(admitted)) >= 14
 
 
 def test_predicate_admits_synthetic_phase1_s1_aura():
@@ -402,13 +407,19 @@ def test_predicate_declines_unsafe_granted_keyword():
     assert _printing_is_bridge_simple_aura(pr) is False
 
 
-def test_predicate_declines_static_unsafe_keyword():
-    """The printing's static-keyword check (mirroring the simple-
-    creature guardrail) declines an Aura whose own ``keywords``
-    frozenset contains a non-safe entry."""
+def test_predicate_admits_static_flash_keyword_phase_2():
+    """**Phase 2 first deliverable (round-79) widen.** The static
+    keyword check now admits ``flash`` (in addition to
+    :data:`_SAFE_KEYWORDS`). The CardDef bridge does NOT propagate the
+    source printing's ``keywords`` through to the materialized
+    CardDef → CardPrinting round-trip on either engine — both Python
+    and Rust materialize the Aura with empty keywords, so the
+    ``flash`` rider is symmetrically dropped on BOTH bridge sides
+    bit-equally (round-39 Ward / round-59 shockland symmetric-drop
+    precedent). See `docs/SEARCH_LIMITATIONS.md` for the SL entry."""
     from mtg_bot.cards.base import CardPrinting, ManaCost
     pr = CardPrinting(
-        name="Synthetic Static-Unsafe Aura",
+        name="Synthetic Static-Flash Aura",
         mana_cost_str="",
         mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
         type_line="Enchantment - Aura",
@@ -419,6 +430,36 @@ def test_predicate_declines_static_unsafe_keyword():
         toughness=None,
         produces=frozenset(),
         keywords=frozenset({"flash"}),
+        aura_enchant_type="creature",
+        equipment_bonuses=(1, 1, frozenset()),
+    )
+    assert _printing_is_bridge_simple_aura(pr) is True
+
+
+def test_predicate_declines_truly_unsafe_static_keyword():
+    """The printing's static-keyword check still declines an Aura
+    whose ``keywords`` frozenset contains a keyword that is neither in
+    :data:`_SAFE_KEYWORDS` nor in the Aura-specific
+    :data:`_AURA_SAFE_EXTRA_KEYWORDS` (which only contains ``flash``
+    today). Pins the §2 teeth on a synthetic carrier so the widen does
+    NOT regress the rejection of truly unbridged keyword shapes (e.g.
+    hexproof, ward, protection — none of these would round-trip
+    symmetrically through the CardDef bridge)."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    pr = CardPrinting(
+        name="Synthetic Static-Hexproof Aura",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Enchantment - Aura",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Aura",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        # "hexproof" is not in _SAFE_KEYWORDS and not in
+        # _AURA_SAFE_EXTRA_KEYWORDS — must still decline.
+        keywords=frozenset({"hexproof"}),
         aura_enchant_type="creature",
         equipment_bonuses=(1, 1, frozenset()),
     )
@@ -434,14 +475,35 @@ def test_predicate_declines_aura_with_triggered_ability():
     assert _printing_is_bridge_simple_aura(sheltered) is False
 
 
-def test_predicate_declines_aura_with_control_swap():
-    """S2 sub-shape: an Aura that grants control (Duskmourn's
-    Domination, Tractor Beam) is positively declined — Phase 2 of the
-    plan."""
+def test_predicate_admits_duskmourns_domination_post_phase_2_s2():
+    """S2 sub-shape, Phase 2 S2 first deliverable (round-79+,
+    2026-05-20): Duskmourn's Domination
+    (``attached_grants_control + attached_grants_lose_all_abilities +
+    equipment_bonuses=(-3,0,...)``) is now ADMITTED through the
+    loader. The Rust attach arm flips the host's controller (layer 2)
+    and `battlefield_has_keyword` wipes the host's keyword set
+    (layer 6 honest-stop) while the Aura is attached. Tractor Beam
+    (also S2-shape) stays declined separately on its triggered ETB +
+    `attached_prevents_untap` rider."""
     dd = _live_printing("Duskmourn's Domination")
     assert dd.is_aura is True
     assert dd.attached_grants_control is True
-    assert _printing_is_bridge_simple_aura(dd) is False
+    assert dd.attached_grants_lose_all_abilities is True
+    assert _printing_is_bridge_simple_aura(dd) is True
+
+
+def test_predicate_declines_tractor_beam_pre_phase_2_s2_extension():
+    """S2 sub-shape sibling: Tractor Beam carries
+    ``attached_grants_control + attached_prevents_untap`` plus a
+    triggered ETB (TapEnchantedPermanent). The triggered_abilities
+    teeth + the attached_prevents_untap teeth keep it declined; a
+    future Phase-2-S2-extension slice (untap-step skip + trigger
+    bridge) is the unblocker."""
+    tb = _live_printing("Tractor Beam")
+    assert tb.is_aura is True
+    assert tb.attached_grants_control is True
+    assert tb.attached_prevents_untap is True
+    assert _printing_is_bridge_simple_aura(tb) is False
 
 
 def test_predicate_declines_aura_with_replacement():
@@ -516,47 +578,116 @@ def test_loader_admits_aura_simple_shape():
     assert cd.aura_granted_keywords == ("trample",)
 
 
-def test_loader_still_declines_live_eoe_aura_carriers():
-    """Live-EoE coverage pin: every shipping S1 carrier in the EoE
-    pool (Frantic Strength + Shardmage's Rescue) carries the
-    non-``_SAFE_KEYWORDS`` ``flash`` keyword, and the predicate's §2
-    teeth correctly decline it. STEP 7's OR-in did NOT widen the live
-    admit set — the substrate is wired but no real Aura passes today.
-
-    The plan's §1 documents this: the value of Phase 1 is the
-    substrate, not the deck count. Phase 2 widens the admit set."""
+def test_loader_admits_frantic_strength_phase_2_first_deliverable():
+    """**Phase 2 first deliverable (round-79).** The keyword admit set
+    now allows ``flash`` symmetrically (per the round-39 Ward /
+    round-59 shockland precedent — the CardDef bridge does NOT
+    propagate the source printing's ``flash`` keyword through to the
+    materialized round-trip on either engine, so the rider is
+    dropped bit-equal on BOTH sides). Frantic Strength is the first
+    **live EoE Aura** to admit through the loader: it's the cleanest
+    S1 carrier (`equipment_bonuses=(+2,+2,{trample})`, no
+    `aura_yours_only`, no rider beyond `flash`). The deck-count
+    payoff is 0 (Frantic Strength has 0 EoE 17lands decks per the
+    plan §1 scout); the substrate's value is the **first live admit**
+    of the substrate Phases 1+2 wire through end-to-end."""
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
     deck = ["Forest", "Forest", "Frantic Strength", "Forest"]
     not_bridged_sink: list[str] = []
-    filtered, _ = _filter_deck_to_bridge_supported(
+    filtered, card_defs = _filter_deck_to_bridge_supported(
         deck,
         printings,
         not_bridged_sink=not_bridged_sink,
     )
-    assert "Frantic Strength" not in filtered
-    assert "Frantic Strength" in not_bridged_sink
+    assert "Frantic Strength" in filtered
+    assert "Frantic Strength" not in not_bridged_sink
+    # The CardDef materializes the Aura's parsed shape:
+    aura_cd = [cd for cd in card_defs if cd.name == "Frantic Strength"]
+    assert len(aura_cd) == 1
+    cd = aura_cd[0]
+    assert cd.is_aura is True
+    assert cd.aura_enchant_type == "creature"
+    assert cd.aura_yours_only is False
+    assert cd.aura_power_bonus == 2
+    assert cd.aura_toughness_bonus == 2
+    assert cd.aura_granted_keywords == ("trample",)
 
 
-def test_loader_admits_zero_live_eoe_auras_pre_phase_2():
-    """Sweep the live EoE pool: no real Aura passes the OR'd-in
-    predicate this slice (every S1 carrier carries the ``flash``
-    decline reason; every S2/S3/S4 Aura is positively declined by
-    the §2 rider checks). Locks the Phase-1 STEP-7 admit-delta at
-    exactly ZERO new live cards — the bench corpus is bit-identical
-    to pre-OR-in for the EoE pool. The first non-flash S1 Aura that
-    ships will flow through without any further wire-up."""
+def test_loader_admits_shardmages_rescue_phase_2_first_deliverable():
+    """Shardmage's Rescue is the second S1 carrier — also admits in
+    Phase 2 first deliverable. Carries ``flash`` (now symmetrically
+    dropped) + ``aura_yours_only=True`` (independently bridge-correct
+    on both engines per `actions.py:1337-1357` /
+    `state_ops_cast.rs:2000-2055`'s yours_only filter); its
+    conditional ``entered_this_turn``-gated hexproof grant is **not
+    parsed** by the live parser at all (shared CR-incompleteness on
+    BOTH bridge sides — symmetric)."""
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
-    admitted_auras = [
+    deck = ["Forest", "Forest", "Shardmage's Rescue", "Forest"]
+    not_bridged_sink: list[str] = []
+    filtered, card_defs = _filter_deck_to_bridge_supported(
+        deck,
+        printings,
+        not_bridged_sink=not_bridged_sink,
+    )
+    assert "Shardmage's Rescue" in filtered
+    assert "Shardmage's Rescue" not in not_bridged_sink
+    aura_cd = [cd for cd in card_defs if cd.name == "Shardmage's Rescue"]
+    assert len(aura_cd) == 1
+    cd = aura_cd[0]
+    assert cd.is_aura is True
+    assert cd.aura_enchant_type == "creature"
+    assert cd.aura_yours_only is True
+    assert cd.aura_power_bonus == 1
+    assert cd.aura_toughness_bonus == 1
+    assert cd.aura_granted_keywords == ()
+
+
+def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
+    """Sweep the live EoE pool: the Phase 2 first deliverable widens
+    the admit set so at least one real EoE Aura now passes the
+    predicate. Every S2/S3/S4 Aura stays positively declined by the
+    §2 rider checks (control-swap, replacement, triggered abilities).
+
+    Positive pin: at least Frantic Strength must admit. Negative pin:
+    no S2/S3/S4 Aura leaks through (they each fail a separate §2
+    teeth check — the substrate stays honest)."""
+    from mtg_bot.cards.source import get_active_source
+    printings = get_active_source().get_printings()
+    admitted_auras = sorted(
         name for name, pr in printings.items()
         if getattr(pr, "is_aura", False)
         and _printing_is_bridge_simple_aura(pr)
-    ]
-    assert admitted_auras == [], (
-        "Live-EoE Aura admit-delta from STEP 7 must be zero this "
-        "slice — Phase 2 widens the admit set. Surprise admit: %r"
-        % (admitted_auras,)
+    )
+    assert "Frantic Strength" in admitted_auras, (
+        "Phase 2 first deliverable MUST admit Frantic Strength as "
+        "the first live EoE Aura. Admitted set: %r" % (admitted_auras,)
+    )
+    # Phase 2 S2 first deliverable (round-79+, 2026-05-20): Duskmourn's
+    # Domination is now ADMITTED — it carries the paired
+    # control-swap + lose-abilities S2 shape the new Rust attach arm
+    # handles. Tractor Beam stays declined (triggered ETB +
+    # attached_prevents_untap rider). S3/S4 Auras stay positively
+    # declined by their respective §2 teeth.
+    assert "Duskmourn's Domination" in admitted_auras, (
+        "Phase 2 S2 expected Duskmourn's Domination to admit. "
+        "Admitted set: %r" % (admitted_auras,)
+    )
+    must_decline = {
+        "Cracked Skull",             # S4 triggered_abilities
+        "Sporogenic Infection",      # S4 triggered_abilities
+        "Chorale of the Void",       # S4 triggered_abilities
+        "Moonlit Meditation",        # S3 replaces_first_tokens_with_copies
+        "Tractor Beam",              # residue triggered_abilities + prevents_untap
+        "Meltstrider's Resolve",     # residue triggered_abilities
+        "Pain for All",              # residue triggered_abilities
+    }
+    leaked = must_decline & set(admitted_auras)
+    assert leaked == set(), (
+        "S3/S4/residue Auras must stay positively declined by §2 "
+        "teeth — surprise admit: %r" % (sorted(leaked),)
     )
 
 

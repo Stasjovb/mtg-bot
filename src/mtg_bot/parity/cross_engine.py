@@ -345,6 +345,19 @@ class CardDef:
     aura_power_bonus: int = 0
     aura_toughness_bonus: int = 0
     aura_granted_keywords: tuple[str, ...] = ()
+    # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    # Control-changing + lose-abilities + set-base-PT static grants
+    # applied to the attached host on attach. Defaults are all
+    # back-compat — every pre-S2 CardDef omits these fields and the
+    # registry-dict emitter skips them, so the Rust parser maps every
+    # absent key to its zero default. Mirror Python's
+    # ``CardPrinting.attached_grants_control`` /
+    # ``attached_grants_lose_all_abilities`` /
+    # ``attached_sets_base_pt`` fields (`cards/base.py:604-635`).
+    aura_grants_control: bool = False
+    aura_grants_lose_abilities: bool = False
+    aura_set_base_power: Optional[int] = None
+    aura_set_base_toughness: Optional[int] = None
     # Static / layered abilities substrate — Phase 1 first-deliverable
     # (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``
     # §3 lever (1)). The frozen, bridge-serializable representation of
@@ -362,15 +375,6 @@ class CardDef:
     # ``trajectory._SAFE_KEYWORDS`` (e.g. ``"haste"``, ``"flying"``).
     # Empty tuple = no anthem statics — the back-compat default for
     # every pre-substrate CardDef.
-    #
-    # **First-deliverable scope (round-79 — this slice).** Phase 1
-    # covers ONLY the anthem keyword-grant sub-shape (Tannuk Steadfast
-    # Second is the canonical EoE carrier — "Other creatures you
-    # control have haste."). Self-scope conditional statics (Brightspear
-    # Zealot, Cloudsculpt Technician, Gravblade Heavy — the SELF +
-    # condition + layer-7 P/T shape) and P/T anthems are honest-stopped
-    # to a later slice (each needs its own condition-grammar /
-    # P/T-fold reader work).
     static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
@@ -10574,6 +10578,24 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
                     for kw in card.aura_granted_keywords
                 ],
             }
+        # Aura-attachment substrate — Phase 2 S2 (round-79+,
+        # 2026-05-20). Emit the S2 static-grant flags only when set
+        # so every pre-S2 CardDef registry dict is byte-identical to
+        # before this slice landed. The Rust parser maps every absent
+        # key to its zero default per the back-compat pattern every
+        # other optional field uses.
+        if card.aura_grants_control:
+            printing_dict["aura_grants_control"] = True
+        if card.aura_grants_lose_abilities:
+            printing_dict["aura_grants_lose_abilities"] = True
+        if (
+            card.aura_set_base_power is not None
+            and card.aura_set_base_toughness is not None
+        ):
+            printing_dict["aura_set_base_pt"] = {
+                "power": int(card.aura_set_base_power),
+                "toughness": int(card.aura_set_base_toughness),
+            }
     # Static / layered abilities substrate — Phase 1 first-deliverable
     # (round-79). Emit the anthem-keyword sub-shape as a list of dicts
     # ``[{"scope": str, "granted_keywords": [str, ...]}, ...]``. The key
@@ -11082,6 +11104,23 @@ def _card_def_to_python_printing(card: "CardDef"):
         aura_enchant_type=card.aura_enchant_type,
         aura_yours_only=card.aura_yours_only,
         equipment_bonuses=aura_equipment_bonuses,
+        # Aura-attachment substrate — Phase 2 S2 (round-79+,
+        # 2026-05-20). S2 static-grant fields. Defaults are
+        # back-compat (every pre-S2 CardDef has these = False / None);
+        # the materialized CardPrinting is bit-identical to
+        # pre-substrate for non-S2 Auras. The Python side reads these
+        # in ``apply_aura_static_grants_on_attach`` (`actions.py:2799`)
+        # to write the matching continuous-effect entries on attach.
+        attached_grants_control=card.aura_grants_control,
+        attached_grants_lose_all_abilities=card.aura_grants_lose_abilities,
+        attached_sets_base_pt=(
+            (card.aura_set_base_power, card.aura_set_base_toughness)
+            if (
+                card.aura_set_base_power is not None
+                and card.aura_set_base_toughness is not None
+            )
+            else None
+        ),
         # Static / layered abilities substrate — Phase 1 first-
         # deliverable (round-79). Anthem-shape statics only — see the
         # materialization block above. Empty tuple = no anthem
@@ -11241,6 +11280,26 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         )
     else:
         equipment_bonuses = None
+    # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    # Read back the S2 static-grant flags via the new STEP-2-style
+    # getters so round-trip pins can verify the Rust parse arm
+    # carried them through.
+    aura_grants_control = rust_registry.get_printing_aura_grants_control(
+        printing_id
+    )
+    aura_grants_lose_abilities = (
+        rust_registry.get_printing_aura_grants_lose_abilities(printing_id)
+    )
+    set_base_pt = rust_registry.get_printing_aura_set_base_pt(printing_id)
+    if set_base_pt is None:
+        aura_set_base_power: Optional[int] = None
+        aura_set_base_toughness: Optional[int] = None
+        attached_sets_base_pt: Optional[tuple[int, int]] = None
+    else:
+        sp, st = set_base_pt
+        aura_set_base_power = int(sp)
+        aura_set_base_toughness = int(st)
+        attached_sets_base_pt = (int(sp), int(st))
     return {
         "is_aura": bool(is_aura),
         "aura_enchant_type": str(aura_enchant_type),
@@ -11249,6 +11308,17 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         "aura_toughness_bonus": int(t_bonus),
         "aura_granted_keywords": aura_granted_keywords,
         "equipment_bonuses": equipment_bonuses,
+        # Phase 2 S2 fields. Surfaced both as the bridge-wire names
+        # (``aura_grants_*``) AND the matching Python ``CardPrinting``
+        # field names (``attached_grants_*`` / ``attached_sets_base_pt``)
+        # so callers can assert against either projection.
+        "aura_grants_control": bool(aura_grants_control),
+        "aura_grants_lose_abilities": bool(aura_grants_lose_abilities),
+        "aura_set_base_power": aura_set_base_power,
+        "aura_set_base_toughness": aura_set_base_toughness,
+        "attached_grants_control": bool(aura_grants_control),
+        "attached_grants_lose_all_abilities": bool(aura_grants_lose_abilities),
+        "attached_sets_base_pt": attached_sets_base_pt,
     }
 
 

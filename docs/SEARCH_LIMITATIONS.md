@@ -7836,6 +7836,261 @@ the static-abilities subsystem row. Per-card 17lands deck count for
 Tannuk specifically requires a re-attribution scout run; the row
 totals 34,526 single-gate decks for all 8 cards.
 
+## Aura `flash` cast-timing rider dropped symmetrically (Aura-attachment Phase 2 first deliverable, round-79)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_aura`
+(the new `_AURA_SAFE_EXTRA_KEYWORDS = frozenset({"flash"})` constant
++ the relaxed static-keyword check in the predicate body). Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 +
+`docs/AURA_ATTACHMENT_PHASE1_DESIGN.md` §3.7 / §3.8 (the symmetric-
+drop ``flash`` admit rationale).
+
+**What the shortcut is**: the production-deck trajectory-parity
+loader now admits the two live EoE S1 Auras — **Frantic Strength**
+and **Shardmage's Rescue** — through the new
+`_printing_is_bridge_simple_aura` predicate (Phase-1 STEP-7 wire-up)
+even though both carry the `flash` cast-timing keyword (CR 702.8) on
+the source printing. `flash` is NOT in `_SAFE_KEYWORDS` (the
+creature-keyword admit set) and is documented as a known cross-
+engine divergence on creature CastSpell emission at instant-speed
+windows (see `parity/cross_engine.py` CE19 Bear-Flash probe —
+Python's `legal.py:217-301` emits CastSpell for `is_instant or
+"flash" in keywords`; Rust's `state_ops_legal.rs:759-764` short-
+circuits CastSpell on `active_player == player_id && phase in MAIN
+&& stack.is_empty()` and never reads the flash keyword). For Auras
+specifically, the divergence is **bridged away** by the CardDef
+bridge's aura arm in `_printing_to_card_def` — the source's
+`keywords` field is NOT propagated through to the CardDef, so both
+Python's `_card_def_to_python_printing` and Rust's parse arm
+materialize the Aura with empty `keywords`. The `flash` rider is
+**symmetrically dropped** on BOTH bridge sides bit-equally before
+either engine sees the Aura.
+
+**Why it's OK**: the drop is **symmetric** — the CardDef bridge
+flattens the Aura's `keywords` to the empty frozenset identically on
+both engines, so Python and Rust each materialize the SAME
+``keywords=frozenset()`` printing and round-trip byte-equal on every
+aura field that DOES round-trip (`is_aura`, `aura_enchant_type`,
+`aura_yours_only`, `equipment_bonuses`). Pinned at three levels:
+(1) static — Phase 2 first-deliverable tests
+(`tests/test_aura_substrate_phase_2.py`,
+`test_carddef_bridge_drops_flash_symmetrically_for_*`) assert the
+post-bridge `keywords == frozenset()` on both engines for each S1
+carrier; (2) loader — `test_loader_admits_real_eoe_frantic_strength_deck`
+drives a mixed Forest + bridge-simple-creature + Frantic Strength
+deck through `_filter_deck_to_bridge_supported` divergence-free;
+(3) cross-engine — `test_phase_2_aura_decks_pec_round_trips_python_rust`
+builds the SAME DeckSpec on both engines and asserts the aura
+fields read back identically from Rust's registry via
+`read_rust_printing_aura_fields`. The bench's `attack_all`
+strategy only ever casts at sorcery speed where the `flash`-gate
+fork is irrelevant on BOTH engines (Rust's sorcery-timing
+predicate covers every non-instant spell; Python's instant-speed
+block is gated on `is_instant or "flash"` and runs at sorcery
+windows anyway via the falling-through sorcery emit). This is the
+**round-39 Ward / round-59 shockland precedent** exactly: a rider
+the bridge drops symmetrically, bit-equal under the bench play
+strategy, shipped blocked-at-fidelity rather than as a latent
+inter-engine divergence.
+
+**Failure mode**: a future probe (or a smarter bench strategy) that
+DRIVES a flash-Aura cast at *instant* speed at a priority window
+where `active_player != priority_player` would observe Python and
+Rust **agree with each other** post-CardDef-bridge (both treat the
+Aura as having no `flash` keyword, so neither emits CastSpell at
+the instant-speed window) but **disagree with the Comprehensive
+Rules** (the real Frantic Strength / Shardmage's Rescue can be cast
+at instant speed in response to e.g. an attack declaration). It is
+a shared CR-incompleteness, NOT a cross-engine divergence — the
+bench cannot surface it because neither engine models flash on the
+admitted Aura post-bridge, and `attack_all` never reaches an
+instant-speed cast window for an Aura anyway. The honest risk is
+that this masks the *absence* of Rust's instant-speed Aura CastSpell
+emit, not that it produces a wrong cross-engine comparison.
+
+**Fix-scope estimate**: a Rust slice that (a) propagates `flash`
+through the Aura's CardDef bridge (new field
+`CardDef.aura_static_keywords` or similar), (b) honors the rider on
+Rust's instant-speed CastSpell pass for Aura spells (mirror of the
+`state_ops_legal.rs::is_instant`-gate to also accept `is_aura &&
+aura_static_keywords contains "flash"`), (c) wires Python's
+`_card_def_to_python_printing` to set `keywords=frozenset({"flash"})`
+when `card.aura_static_keywords` carries it. Estimate: ~2-3h
+Rust slice + bridge + new probe asserting both engines emit
+CastSpell at an Aura-flash priority window. The CR-fidelity gap
+(flash being a real CR 702.8 keyword the engines model on creatures
+but symmetrically drop on Auras) becomes a real divergence the
+moment any cross-engine surface drives an instant-speed window —
+no such surface exists in the bench today.
+
+**Impact estimate**: **+2 cards / +0 cumulative 17lands decks**
+(Frantic Strength 0 + Shardmage's Rescue 0 — both 0 EoE decks per
+the round-61 N1 scout) unblocked into the production-deck bench,
+**0 strength cost** (no engine behavior changes; this is a bench-
+coverage admit that wires the Phase-1 attach substrate through to
+its first live EoE consumer). The value is the **first live EoE
+Aura admit** through the loader — Phase 1's substrate (STEPs 1-7
+landed round-77/78) becomes exercised end-to-end on real EoE
+printings rather than synthetic CardDef-only fixtures. The deck
+count is intentionally 0 (per the plan §1 verify-first finding —
+S1 carriers have 0 17lands deck presence regardless of admit
+gate); Phase 2's full S2 control-changing slice (Duskmourn's
+Domination) + Phase 3 (residue Aura-shape Effects: Meltstrider's
+Resolve, Pain for All, Tractor Beam) + Phase 4 (S3/S4 — Moonlit
+Meditation, Chorale of the Void) carry the real-bench-signal payoff
+of the broader substrate, and each is its own follow-up Rust slice.
+
+## Aura Phase 2 S2 layer-6 lose-abilities: no strict CR 613 timestamp interleaving with earlier-applied grants (Aura-attachment Phase 2 S2, round-79+)
+
+**Where**: `rust/src/state_ops_combat.rs::battlefield_has_keyword`
+(the layer-6 lose-abilities short-circuit added in the Phase-2-S2
+slice). Spec: `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2.
+
+**What the shortcut is**: when ANY Aura attached to a host carries
+`aura_grants_lose_abilities` (Duskmourn's Domination's printed
+"loses all abilities" clause), Rust's `battlefield_has_keyword`
+returns `false` for EVERY keyword — printed, UEOT-granted, AND
+aura-granted from other attached auras. The strict CR 613 layer-6
+**timestamp interleaving** (where a keyword grant applied BEFORE
+the lose-abilities effect survives, but one applied AFTER does not)
+is NOT modeled. Python's `_layer6_entries_for` walks the
+continuous-effects registry in timestamp order; Rust's pre-S2 reader
+has no per-grant timestamp table for keyword-granting Auras, so the
+short-circuit treats lose-abilities as a hard wipe.
+
+**Why it's OK**: the live admit set today is exactly **one** S2
+carrier — Duskmourn's Domination — and the bench's `attack_all`
+strategy does not grant keywords mid-game on the targeted host
+(no pump spells, no Aura that grants keywords pre-Duskmourn attach,
+no UEOT-grant Effects targeting a host that Duskmourn is then cast
+on). The simplification is **bit-equal under bench coverage** on
+both engines: Python's timestamp-walk and Rust's hard-wipe both
+produce a host with no keywords post-attach, because there was no
+pre-attach grant to interleave with.
+
+**Failure mode**: a probe (or a smarter bench strategy) that drives
+a keyword-granting Aura ATTACH FIRST onto a host, then later drives
+a lose-abilities Aura ATTACH onto the same host, would diverge on
+the layer-6 surviving-grant question. Python's layer-6 walk has the
+earlier grant out-timestamp the later lose-abilities entry (the
+earlier-applied grant survives); Rust's hard-wipe wipes
+everything. **There is no such probe today; the bench cannot
+construct one (the only ways to grant keywords mid-game involve
+Effects + carriers that haven't landed yet).**
+
+**Fix-scope estimate**: a Rust continuous-effect registry for
+layer-6 entries (mirror Python's `state.continuous_effects` table)
+that records each grant + lose-abilities entry with a timestamp,
+then walks the table in CR-613-correct order. Estimate: ~4-6h
+Rust slice + bridge — Phase 3+ territory, sequenced alongside the
+multi-grant layer-2 control-swap timestamp walk (same registry
+shape applies to both layers).
+
+**Impact estimate**: **0 strength cost / 0 admit delta today** — the
+simplification is bench-bit-equal under the current admit set. The
+fix-scope estimate above is **forward-looking**: it doesn't unblock
+any card today, but is the prerequisite for admitting any S2 +
+keyword-grant interleaving Aura combination that lands in a future
+set.
+
+## Aura Phase 2 S2 layer-7b set-base-PT: reader fold honest-stopped (substrate plumbed only) (Aura-attachment Phase 2 S2, round-79+)
+
+**Where**: `rust/src/cards.rs::CardPrinting.aura_set_base_pt`
++ `rust/src/state_ops_combat.rs::battlefield_creature_power` /
+`battlefield_creature_toughness` (the readers don't yet consult
+the new field). Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2.
+
+**What the shortcut is**: the Phase-2-S2 slice plumbs the
+`aura_set_base_pt` (layer-7b set-base-PT) field through the entire
+substrate — CardDef → bridge → Rust storage → bidir round-trip via
+`read_rust_printing_aura_fields` / `get_printing_aura_set_base_pt`.
+But the Rust effective-P/T readers (`battlefield_creature_power` /
+`battlefield_creature_toughness`) do NOT yet consult the field for
+the layer-7b base override. A printing carrying
+`aura_set_base_pt = Some((0, 4))` (Lignify shape) would round-trip
+correctly through the registry but Rust would compute effective P/T
+from the host's PRINTED base (CR 613 layer-7b override silently
+dropped on the Rust side).
+
+**Why it's OK**: the **loader predicate
+`_printing_is_bridge_simple_aura` declines any Aura with
+`attached_sets_base_pt is not None`** (see
+`src/mtg_bot/parity/trajectory.py`). No printing reaches the bench
+loader with the set-base-PT field populated, so the missing reader
+fold is not exercised. The field's plumbing is value-added by
+making it a one-line flip in a future S2.5 / Lignify slice: light
+up the reader, drop the predicate's `attached_sets_base_pt` decline
+teeth, ship.
+
+**Failure mode**: a future agent that mistakenly widens the
+predicate to admit a Lignify-shape Aura WITHOUT also lighting up
+the Rust reader fold would produce a guaranteed inter-engine
+divergence (Python uses the layer-7b base; Rust uses the printed
+base). The honest-stop is gate-protected.
+
+**Fix-scope estimate**: ~1-2h Rust slice — add a
+`aura_set_base_pt_on(state, host_id) -> Option<(i16, i16)>` helper
+mirroring `aura_pt_bonus_on`, fold it into the two effective-P/T
+readers ABOVE the additive layer-7c bonus + counter scalar (CR 613
+layer order: 7b sets the base, 7c adds on top, 7d adds counter
+delta), drop the predicate decline. A test that asserts a
+Lignify-shape Aura attached to a 4/2 creature yields effective 0/4
+(layer-7b override) closes the slice.
+
+**Impact estimate**: **0 today** — no live EoE carrier uses the
+field. A future set carrier (Lignify-shape Aura in a new
+expansion) would be a +1 admit gated on this slice.
+
+## Aura Phase 2 S2 multi-grant control-swap: single outstanding grant assumed for revert (Aura-attachment Phase 2 S2, round-79+)
+
+**Where**: `rust/src/state_ops_resolve.rs::move_aura_post_resolve`
+(the layer-2 control-swap on attach captures
+`controller_baseline` once + flips controller) +
+`rust/src/state_ops_sba.rs::move_aura_to_owners_graveyard` (the
+revert-on-bury path checks for OTHER attached control-grants but
+assumes a single outstanding grant chain). Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2.
+
+**What the shortcut is**: when a control-granting Aura attaches,
+the host's prior controller is stashed in
+`GameObject.controller_baseline` ONLY on the first grant; subsequent
+control-granting Auras don't update the baseline. On bury, the
+revert path checks for any OTHER attached control-granting Aura and
+defers the revert if one is found — but if multiple grants chain
+(Aura A by P0, then Aura B by P1, then A leaves), the bury path
+finds B still grants and keeps controller at the LATEST flip
+(P1), not the timestamp-correct CR 613 layer-2 walk (which would
+re-elect the latest by timestamp, which IS P1 in this case — so
+the simplification happens to be correct for the LIFO case but
+would diverge for a more complex timestamp interleave with
+post-attach Aura churn).
+
+**Why it's OK**: the **live admit set today is exactly one S2
+carrier** — Duskmourn's Domination. Two simultaneous control-
+granting Auras on the same host requires either two Duskmourns
+or a future S2 sibling card that doesn't exist yet. The
+single-outstanding-grant simplification is bench-bit-equal under
+the current admit set on both engines.
+
+**Failure mode**: a probe (or a future Aura that grants control
+without lose-abilities, or two Duskmourns on the same host across
+two turns with Aura B attaching before Aura A leaves) would
+exercise the multi-grant timestamp walk. Python's
+`effective_controller` walks `state.continuous_effects` in
+timestamp order with latest-wins; Rust's revert-on-bury walks the
+bf for ANY remaining grant and stops at the first found — which
+happens to be the latest-attached due to ETB-order bf-iteration in
+practice, but is NOT a strict timestamp guarantee.
+
+**Fix-scope estimate**: same continuous-effect registry as the
+layer-6 lose-abilities timestamp walk fix-scope above. The two
+slices share the registry shape, so they're naturally sequenced
+together.
+
+**Impact estimate**: **0 today** — no multi-grant Aura scenario in
+the live EoE pool. Forward-looking fix.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

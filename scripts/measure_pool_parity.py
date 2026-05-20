@@ -477,6 +477,40 @@ PROBE_MODULES: tuple[Path, ...] = (
     # subsystem / bridge-arm blockers (see module docstring for the
     # full honest-exhaustion drop list).
     REPO_ROOT / "tests" / "test_probe_remaining_ffff.py",
+    # Probe batch GGGG (round 33 covered-but-unprobed) — seventh
+    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE, FFFF).
+    # ONE card from the covered tier upgraded to PROBED via the same
+    # parse + bridge round-trip + Python-side resolve idiom DDD slice
+    # 17 / YYY / ZZZ / AAAA / CCCC / DDDD / EEEE / FFFF established:
+    #   * Roving Actuator (Artifact Creature ENTERS ->
+    #     RovingActuatorETBEffect(max_mv=2); FIRST credited _parity
+    #     probe of this dedicated bespoke effect class on the REAL
+    #     parsed Roving Actuator EoE printing.  The
+    #     test_probe_xxx_downstream.py test_xxx_probe_roving_actuator
+    #     _* function family exercises the bridge round-trip + cross-
+    #     engine resolve trajectory on a SYNTHETIC carrier (built
+    #     via register_and_inject_object) but is NOT credited
+    #     because the function names predate the _parity convention;
+    #     GGGG binds the REAL parsed printing via
+    #     get_printings().get("Roving Actuator") and asserts the
+    #     empty-target short-circuit at bespoke.py:667-668).
+    # Honest-exhaustion drops include Illvoi Operative (ALREADY
+    # PROBED via FFFF round 32 relaunch, main HEAD 25c0d410 -- the
+    # original GGGG draft included Illvoi Operative as a second
+    # probe but it was dropped on origin/main merge since FFFF
+    # landed first and credited it), Optimistic Scavenger (Drix
+    # Fatemaker already PROBED on same effect+event combo), Unwanted
+    # Remake / Come Back Wrong (Murder already PROBED bare),
+    # Weapons Manufacturing / Station Monitor (token-registration
+    # substrate), Clammy Prowler / Dawnsire (no bridge arm), Hand
+    # That Feeds (granted_keywords rider dropped by bridge), Room
+    # cards (Rooms subsystem), ManifestDread carriers (picker
+    # substrate deferred), Sequence / Modal wrappers (no container-
+    # level bridge), Pain for All / Tractor Beam (Aura phase 2 in
+    # flight), vanilla / lands / activated-ability cards (separate
+    # probe surface).  See module docstring for the full honest-
+    # exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_gggg.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
