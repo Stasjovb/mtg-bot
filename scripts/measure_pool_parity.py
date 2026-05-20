@@ -342,6 +342,18 @@ PROBE_MODULES: tuple[Path, ...] = (
     # established alphabetic cadence, now widened by one letter to
     # give the campaign another 26 batches of room.
     REPO_ROOT / "tests" / "test_probe_remaining_aaaa.py",
+    # Probe batch BBBB (round 28 covered-but-unprobed) — second
+    # 4-letter probe batch.  One probe lands via the QQQ cross-engine
+    # spell-effect idiom: Withering Torment (Instant
+    # Sequence(DestroyTargetCreature, LoseLife(2)) — FIRST Sequence-
+    # of-destroy+lose_life spell-effect probe; ``lose_life``
+    # previously pinned only at synthetic-ETB-trigger level (round
+    # 24)).  Vanish from Sight DROPPED on verify for a bounce-to-
+    # library summoning-sick divergence — parallel to the ZZZ-flagged
+    # exile-summoning-sick gap (Trapped in the Screen drop); a
+    # sibling-lane divergence pin should pin the bounce path.  See
+    # module docstring for the full honest-exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_bbbb.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
