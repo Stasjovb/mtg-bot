@@ -8,6 +8,10 @@ commits, files, and measurements rather than re-litigating any of them.
 Master cross-refs: [`SOT_FLIP_CUTOVER_PLAN.md`](SOT_FLIP_CUTOVER_PLAN.md),
 [`POOL_PARITY.md`](POOL_PARITY.md),
 [`G7_S6_TERMINAL_SCALE_EVIDENCE.md`](G7_S6_TERMINAL_SCALE_EVIDENCE.md),
+[`BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md)
+(v5–v9 cross-slice synthesis; 1477/1500 PASS across 6% of deck pool;
+3 residual axes; supersedes the §2 axis-2 single-residual footnote
+below),
 [`RUST_STACK_RESOLUTION_DESIGN.md`](RUST_STACK_RESOLUTION_DESIGN.md),
 [`SEARCH_LIMITATIONS.md`](SEARCH_LIMITATIONS.md),
 the user's 2026-05-20 bar at
@@ -27,10 +31,16 @@ Of the user's 4 enumerated flip-gate axes:
   slowly via probe/Rust-slice cadence. Loader-admitted denominator is
   ~20% deck-weighted non-land — the actual flip surface is much smaller
   than the whole-pool denominator suggests.
-- **Axis 2 (real-game-trajectory):** **CLOSED.** 300/300 PASS at
-  cap=20000 to natural terminal (`ca569619`, merged `ddc0bf6e`); zero
-  divergence; the v4 109/300 cap-bound timeouts all converted to clean
-  PASS between 4001–5215 actions.
+- **Axis 2 (real-game-trajectory):** **CLOSED on C4-class (0–59);
+  98.5% PASS across broader v5–v9 sweep (1477/1500 games, 6.0% of
+  deck pool) with 3 distinct residual axes** —
+  [`BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md).
+  C4-class 300/300 PASS at cap=20000 stays clean (`ca569619`, merged
+  `ddc0bf6e`); the broader 0–299 archetype range surfaces **15
+  priority_player + 4 blocker LEGAL_SET_EQ + 4 battlefield STATE_EQ**
+  residuals across 3 follow-up todos (`c8d3a5f1`, `d4f6a8c9`,
+  `e5b7c9d8`). All 3 axes are small-count, well-characterized, and
+  post-flip-tripwire-able via the bake-in shadow-checker.
 - **Axis 3 (full test surface CE5-free re-proof):** **EFFECTIVELY
   CLOSED.** CE5 mirror was emptied at `68c247e1` (S7-1), then dead-code
   excised at `b58be4a0` (merged `369d0d10`); S7-3 scale-verify v5
@@ -151,12 +161,28 @@ post-flip via incremental Rust-slice merges.
 
 ## §2 Axis 2 — real-game-trajectory parity
 
-**Status: CLOSED on C4-class (archetypes 0-59); 99.0% PASS on broader
-60-119 slice with 3 priority_player residuals (G5-family long-tail) —
-see [`G7_S6_BROADER_ARCHETYPE_EVIDENCE.md`](G7_S6_BROADER_ARCHETYPE_EVIDENCE.md).
-The original "CLOSED" claim holds on the C4-class set; the broader
-sweep refines the residual shape and is filed as follow-up for the
-divergence-pin cadence.**
+**Status: CLOSED on C4-class (archetypes 0-59); 98.5% PASS across
+broader v5–v9 sweep (archetypes 0–299, 1500 games, 6.0% of deck pool)
+with 23 residuals split across 3 distinct divergence axes —
+see [`BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md)
+for the consolidated cross-slice synthesis (replaces the prior v6-only
+footnote that this section originally carried).**
+
+**Residual axes (cumulative v5–v9):**
+
+| Axis | Count | % of 1500 | Direction | Follow-up todo |
+|---|---:|---:|---|---|
+| `STATE_EQ::fields:priority_player` (G5-family long-tail) | 15 | 1.00% | bidirectional (8 py-extra, 7 rust-extra) | `c8d3a5f1` |
+| `LEGAL_SET_EQ::fields:blocker` (NEW v8) | 4 | 0.27% | one-sided (Rust-extra) | `d4f6a8c9` |
+| `STATE_EQ::fields:battlefield` (NEW v9) | 4 | 0.27% | mixed (verify-first required) | `e5b7c9d8` |
+| **total** | **23** | **1.53%** | | 3 todos |
+
+Each new 60-archetype slice has surfaced a previously-unseen axis —
+the residual surface is **broader** than the post-cycle-37 closure
+picture would have predicted (single G5-family long-tail). The
+"CLOSED on C4-class" claim still holds on archetypes 0–59 (300/300
+PASS); the broader sweep refines the picture and is filed as 3
+follow-up axes for the divergence-pin cadence.
 
 ### What landed
 
@@ -468,6 +494,17 @@ backed by the C6 hard-admit boundary:
    the admit fraction via incremental Rust-slice merges; each newly
    admitted card type's first cross-engine play is the shadow-checker's
    tripwire window.
+
+1a. **Three known open broader-sweep residual axes** — 23/1500 games
+   across priority_player (15), blocker LEGAL_SET_EQ (4), battlefield
+   STATE_EQ (4). The bake-in shadow-checker will trip on these
+   per-game during the first real iterate, so ops-side filtering of
+   "expected residual" vs "new regression" is non-trivial. The 3
+   todos (`c8d3a5f1`, `d4f6a8c9`, `e5b7c9d8`) characterize the expected
+   shapes for tripwire categorization. See
+   [`BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md)
+   §6 for the Path A (close axes pre-flip, ~4–8 cycles) vs Path B
+   (flip now, axes become post-flip closure work) trade-off framing.
 2. **A future alt-cost emission site lands without C1 predicates
    composed.** Mitigation: the C1 Slice-1/2/3 design explicitly
    reserves the extension points; any alt-cost emit-site lane must
@@ -482,17 +519,27 @@ backed by the C6 hard-admit boundary:
 
 ## §7 Recommendation
 
-**GO with axis 4 deferred (Option B).**
+**GO with axis 4 deferred (Option B), with the 3 broader-sweep
+residual axes accepted as post-flip closure work.** See
+[`BROADER_SWEEP_CONSOLIDATED_V5_V9.md`](BROADER_SWEEP_CONSOLIDATED_V5_V9.md)
+§6 for the Path A (close pre-flip, ~4–8 cycles) vs Path B (flip
+now) trade-off; this section's recommendation aligns with Path B.
 
 Honest synthesis:
 
 1. **The user's 2026-05-20 bar specifically said the narrow CE5-free
    C4 was "necessary but not sufficient" and enumerated 4 axes.**
-   Since that bar was set, axis 2 has been independently closed by
-   the terminal-cap sweep (`ca569619`/`ddc0bf6e`) and axis 3 has been
-   effectively closed by the S7 dead-code excision (`b58be4a0` /
-   `369d0d10`) + the 49-test closure-flip set. Two of the four axes
-   are now strict-upgrades over the narrower proof the bar rejected.
+   Since that bar was set, axis 2 has been independently closed at
+   the C4-class scale (`ca569619`/`ddc0bf6e`) — 300/300 PASS on
+   archetypes 0–59 — and **further broadened to 98.5% PASS across
+   archetypes 0–299 (1500 games, 6.0% of deck pool)** via the v5–v9
+   broader-archetype sweep. Axis 3 has been effectively closed by the
+   S7 dead-code excision (`b58be4a0` / `369d0d10`) + the 49-test
+   closure-flip set. Two of the four axes are now strict-upgrades over
+   the narrower proof the bar rejected, with the axis-2 broader-sweep
+   surfacing **3 distinct residual axes** (priority_player×15, blocker
+   LEGAL_SET_EQ×4, battlefield STATE_EQ×4) that are well-characterized,
+   small-count, and tripwire-able via the bake-in shadow-checker.
 
 2. **Axis 1 is not blockable on a flip-time basis.** The BLOCKED long
    tail is multi-round subsystem work that continues post-flip; the
@@ -560,9 +607,19 @@ GO call.
 
 ## Appendix — citations index
 
-- **Axis 2 closure:** `docs/G7_S6_TERMINAL_SCALE_EVIDENCE.md`, commit
-  `ca569619`, merged at `ddc0bf6e`; raw JSON
+- **Axis 2 closure (C4-class):** `docs/G7_S6_TERMINAL_SCALE_EVIDENCE.md`,
+  commit `ca569619`, merged at `ddc0bf6e`; raw JSON
   `s6_scale_verify_v5_terminal.json`.
+- **Axis 2 broader sweep (v5–v9, archetypes 0–299, 6% of deck pool):**
+  `docs/BROADER_SWEEP_CONSOLIDATED_V5_V9.md` (cross-slice synthesis);
+  per-slice docs `docs/G7_S6_BROADER_ARCHETYPE_EVIDENCE.md` (v6),
+  `docs/G7_S6_BROADER_ARCHETYPE_V7_EVIDENCE.md`,
+  `docs/G7_S6_BROADER_ARCHETYPE_V8_EVIDENCE.md`,
+  `docs/G7_S6_BROADER_ARCHETYPE_V9_EVIDENCE.md`; raw JSON
+  `s6_scale_verify_v6_broader_60_119.json` through
+  `s6_scale_verify_v9_broader_240_299.json`. Residual follow-up todos:
+  `c8d3a5f1` (priority_player), `d4f6a8c9` (blocker LEGAL_SET_EQ),
+  `e5b7c9d8` (battlefield STATE_EQ).
 - **Axis 3 closure:** commits `68c247e1` (S7-1), `37f3ab3a` (S7-3),
   `c8f041fb` / `a65b0127` / `7b0bb963` (S7-A1/A2), `b58be4a0` (S7-2
   dead-code excision), merged at `369d0d10`.
