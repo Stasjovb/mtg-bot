@@ -123,11 +123,14 @@
       "claimed_missing_effect": "ReturnPermanentCardWithMVXorLessFromGY",
       "aliases": [
         "ReturnPermanentCardWithMVXorLessFromGY",
-        "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"
+        "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent",
+        "AstelliReclaimerETBEffect",
+        "astelli_reclaimer_etb_effect"
       ],
-      "status": "genuinely_missing",
+      "status": "closed",
+      "closed_at_slice": "16th Rust slice (TTT Pin 3 closure)",
       "verified_absent_at_commit": "e17802c9",
-      "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → the bespoke composite AstelliReclaimerETBEffect (Python class, NOT in the live 112-variant Rust enum); no alias resolves to a live Rust variant; printed name 'Astelli Reclaimer' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
+      "note": "CLOSED in slice 16 (TTT Pin 3 closure). Effect::AstelliReclaimerETBEffect unit variant + parse arm + resolve arm in Rust + bridge arm in cross_engine.py; sister-variant precedent of Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped (round 54). The resolve arm reads X from the source's printing's mana_cost/warp_cost gated on the warp_exile_pending flag stamped at cast time (no new cast-cost-paid ledger subsystem needed — the existing warp_exile_pending Phase-1 flag served as Rust's cast_via_warp signal). First-legal graveyard scan filtered to is_permanent && !is_creature && !is_land && mana_cost.total <= X mirrors Python's bespoke AstelliReclaimerETBEffect step-for-step. 4,565 17lands decks — the LARGEST single-card BLOCKED-genuinely_missing closure to date. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
     },
     {
       "entry": "PumpAndGrantDiesReturnTrigger",
