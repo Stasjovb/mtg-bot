@@ -27,8 +27,21 @@ riders are HONEST-STOPPED (substrate is large 6+ cycles --
 ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §3). Cross-engine
 byte-equality holds up to the exile-of-the-card step; any probe
 that further attempts to cast the exiled card on the owner's next
-priority is NOT byte-equal. Pin 1 (House Cartographer) remains
-OPEN ``_divergence_pin``.
+priority is NOT byte-equal.
+
+**Slice 21 closure status:** Pin 1 (House Cartographer no Rust
+Effect variant) is CLOSED -- new
+``Effect::HouseCartographerSurvivalEffect`` unit variant + parse arm
++ resolve arm in Rust + bridge arm in ``cross_engine.py``; renamed
+to ``..._FIXED_parity`` with the sentinel inverted. The resolve arm
+mirrors Python's reveal-until-land library walk step-for-step:
+deterministic top-of-library pop with a ``card_types`` land-
+terminator, hand transition for the revealed land with CR 400.7
+zone-change reset, and a byte-equal external-rng Fisher-Yates
+shuffle (xorshift64 fallback when no external rng is installed)
+for the random-order bottom-append tail. House Cartographer brings
+the EoE Survivor-family probe coverage to 5/5 (after slice 15 +
+the Survivor downstream honest-exhaustion drop at ``1ad5b073``).
 
 Each open pin test is named ``test_..._divergence_pin`` and
 ASSERTS the CURRENT divergent behavior rather than parity.  The
@@ -333,45 +346,57 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_divergence_pin():
-    """Pin House Cartographer's Survival ETB effect lacking a Rust counterpart.
+def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_FIXED_parity():
+    """**21st Rust slice (XXX Pin 1 closure)** -- House Cartographer's
+    Survival postcombat-main effect now has a matching Rust
+    ``Effect::HouseCartographerSurvivalEffect`` unit variant + parse
+    arm + resolve arm + bridge arm.
 
-    House Cartographer's ``BEGINNING_OF_POSTCOMBAT_MAIN`` triggered
-    ability resolves to ``HouseCartographerSurvivalEffect`` on the
-    Python side (``src/mtg_bot/effects/bespoke.py:2667-2733``).  The
-    effect's ``resolve`` implements a reveal-until-land library walk:
-    pop cards from the top of the controller's library, accumulate
-    non-lands, break on the first land, put the land into the
-    controller's hand, then ``state.rng``-shuffle the non-lands and
-    append them to the bottom of the library.  Rust's ``Effect`` enum
-    has NO matching variant -- the printing's postcombat-main trigger
-    body cannot round-trip through the bridge.
+    Pre-closure (the divergence XXX Pin 1 locked in): Python's bespoke
+    ``HouseCartographerSurvivalEffect``
+    (``src/mtg_bot/effects/bespoke.py:2667-2733``) implemented a
+    reveal-until-land library walk: pop cards from the top of the
+    controller's library, accumulate non-lands, break on the first
+    land, put the land into the controller's hand, then
+    ``state.rng``-shuffle the non-lands and append them to the bottom
+    of the library. Rust's ``Effect`` enum had no matching variant --
+    the printing's ``BEGINNING_OF_POSTCOMBAT_MAIN`` triggered ability
+    body could not round-trip through the bridge. Surfaced by the
+    Survivor downstream probe agent during honest-exhaustion drop
+    (commit ``1ad5b073``); the 5th and final EoE Survivor-family
+    probe carrier.
 
-    Probe shape:
-      1. Confirm Python's ``HouseCartographerSurvivalEffect`` class
-         exists with the expected interface (``resolve`` method
-         present; mutates the controller's library).
-      2. Sentinel: the Rust crate's source files contain NO reference
-         to ``HouseCartographerSurvivalEffect`` /
-         ``house_cartographer_survival`` / ``HouseCartographer`` /
-         ``house_cartographer`` / ``reveal_until_land`` -- the Rust
-         side is silent on this effect today.
-      3. Confirm House Cartographer is loadable + carries the
-         postcombat-main triggered ability on the Python side, with
-         the bespoke effect attached.
+    Post-closure (asserted here): a new
+    ``Effect::HouseCartographerSurvivalEffect`` unit variant lands in
+    ``rust/src/cards.rs`` with parse arm, to_pydict arm, resolve arm
+    in ``rust/src/state_ops_resolve.rs``, and bridge arm in
+    ``src/mtg_bot/parity/cross_engine.py``. The resolve arm mirrors
+    Python step-for-step: source-controller resolution; library walk
+    popping from the top with a ``card_types contains "Land"``
+    terminator; revealed land goes to the controller's hand with the
+    standard CR 400.7 zone-change reset; non-land "rest" is shuffled
+    via the byte-equal ``external_rng::next_below`` Fisher-Yates path
+    (when an external ``random.Random`` is installed) / xorshift64
+    fallback; shuffled cards are appended onto the BOTTOM of the
+    controller's library with ``zone = ZONE_LIBRARY``.
 
-    Closure indicator:
-    ``Effect::HouseCartographerSurvivalEffect`` (or a more general
-    ``RevealUntilLandLibraryWalk`` shape) lands in
-    ``rust/src/cards.rs``, with a parse arm + resolve arm in
-    ``state_ops_resolve.rs`` + bridge arm in ``cross_engine.py``.
-    Pin renames to ``..._FIXED_parity`` asserting the variant +
-    parse arm + resolve arm are present.
+    Closure shape:
+      1. Python's bespoke ``HouseCartographerSurvivalEffect`` class is
+         unchanged (the SoT side; the closure was Rust-side).
+      2. Sentinel inverted: the Rust crate's source files NOW contain
+         ``HouseCartographerSurvivalEffect`` /
+         ``house_cartographer_survival`` (the new variant + parse arm +
+         resolve arm).
+      3. The bridge arm round-trips Rust's
+         ``{"kind": "house_cartographer_survival"}`` to Python's
+         ``HouseCartographerSurvivalEffect()``.
 
-    EoE card scale: 1 directly (House Cartographer).
+    EoE card scale: 1 directly (House Cartographer; the 5th and final
+    EoE Survivor-family probe carrier, completing the 5/5 Survivor
+    downstream probe coverage set).
     """
-    # 1. Python's HouseCartographerSurvivalEffect class exists with
-    #    the expected interface.
+    # 1. Python's HouseCartographerSurvivalEffect class is unchanged
+    #    (the SoT side; the closure was Rust-side).
     from mtg_bot.effects.bespoke import HouseCartographerSurvivalEffect
     from mtg_bot.effects.base import Effect as _EffectBase
 
@@ -415,17 +440,16 @@ def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_vari
         "changed."
     )
 
-    # 2. Rust crate: NO reference to HouseCartographerSurvivalEffect /
-    #    HouseCartographer / house_cartographer / reveal_until_land in
-    #    cards.rs or state_ops_resolve.rs.
+    # 2. Rust crate: sentinels INVERTED -- the Rust source files now
+    #    contain Effect::HouseCartographerSurvivalEffect + the parse-arm
+    #    kind string + the resolve arm.
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
 
     assert rust_cards_path.exists(), (
-        f"Rust source file should exist at {rust_cards_path!r}.  "
-        "If the file moved, update this test's path resolution."
+        f"Rust source file should exist at {rust_cards_path!r}."
     )
     assert rust_resolve_path.exists(), (
         f"Rust source file should exist at {rust_resolve_path!r}."
@@ -434,28 +458,23 @@ def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_vari
     cards_src = rust_cards_path.read_text(encoding="utf-8")
     resolve_src_rs = rust_resolve_path.read_text(encoding="utf-8")
 
-    forbidden_substrings = [
-        "HouseCartographer",
-        "house_cartographer",
-        "HouseCartographerSurvival",
-        "house_cartographer_survival",
-        "reveal_until_land",
-        "RevealUntilLand",
-    ]
-    for needle in forbidden_substrings:
-        assert needle not in cards_src, (
-            f"Pin sentinel: rust/src/cards.rs should NOT yet contain "
-            f"{needle!r} (no House Cartographer Effect variant exists).  "
-            "If this assertion fails, the closure may have landed -- "
-            "audit the Rust enum + parse arm + resolve arm and flip "
-            "this pin to _FIXED_parity."
-        )
-        assert needle not in resolve_src_rs, (
-            f"Pin sentinel: rust/src/state_ops_resolve.rs should NOT "
-            f"yet contain {needle!r} (no House Cartographer resolve "
-            "arm exists).  If this assertion fails, the resolve arm "
-            "has landed -- flip to _FIXED_parity."
-        )
+    # Closure assertions: the Effect variant + parse-arm kind string
+    # land in cards.rs, the resolve arm lands in state_ops_resolve.rs.
+    assert "HouseCartographerSurvivalEffect" in cards_src, (
+        "Closure assertion: rust/src/cards.rs SHOULD contain "
+        "'HouseCartographerSurvivalEffect' -- the new Effect variant "
+        "added by the 21st Rust slice."
+    )
+    assert "house_cartographer_survival" in cards_src, (
+        "Closure assertion: rust/src/cards.rs SHOULD contain "
+        "'house_cartographer_survival' -- the parse-arm kind string "
+        "the bridge produces."
+    )
+    assert "HouseCartographerSurvivalEffect" in resolve_src_rs, (
+        "Closure assertion: rust/src/state_ops_resolve.rs SHOULD "
+        "contain 'HouseCartographerSurvivalEffect' -- the new resolve "
+        "arm added by the 21st Rust slice."
+    )
 
     # 3. House Cartographer is loadable + carries the expected
     #    postcombat-main trigger with the bespoke effect.
@@ -493,7 +512,27 @@ def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_vari
         f"{type(pcm_ta.effect).__name__}."
     )
 
-    # 4. EoE cards affected.
+    # 4. Bridge round-trip: parse_effect({"kind":
+    #    "house_cartographer_survival"}) → Rust variant → bridged →
+    #    Python HouseCartographerSurvivalEffect().
+    try:
+        import mtg_bot_engine  # noqa: F401
+    except ImportError:
+        # Rust extension not built; skip the round-trip assertion
+        # (it's covered by the dedicated downstream probe file).
+        pass
+    else:
+        from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+        dict_payload = {"kind": "house_cartographer_survival"}
+        bridged = _ta_dict_to_python_effect(dict_payload)
+        assert isinstance(bridged, HouseCartographerSurvivalEffect), (
+            f"Closure assertion: bridge should round-trip "
+            f"{{'kind': 'house_cartographer_survival'}} to "
+            f"HouseCartographerSurvivalEffect.  Got: "
+            f"{type(bridged).__name__}."
+        )
+
+    # 5. EoE cards affected.
     affected_eoe_cards = [
         "House Cartographer",
         # Survivor creature with "When this becomes tapped during your
@@ -985,8 +1024,8 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
 
 def test_xxx_pin_inventory_complete():
     """Sanity check: the XXX batch declares exactly 3 pin tests
-    (1 OPEN _divergence_pin + 1 CLOSED _FIXED_parity + 1 PARTIAL
-    _partial_FIXED_parity after the 18th + 20th Rust slices).
+    (0 OPEN _divergence_pin + 2 CLOSED _FIXED_parity + 1 PARTIAL
+    _partial_FIXED_parity after the 18th + 20th + 21st Rust slices).
 
     Pin batch XXX (round 25 pin-side) targets 3 divergence pins per
     the lane discipline.  Pin 2 (Roving Actuator) was closed by the
@@ -995,9 +1034,9 @@ def test_xxx_pin_inventory_complete():
     slice (Effect-level + each-opponent-exile portion byte-equal;
     persistent cast-from-exile permission substrate honest-stopped)
     and renamed ``..._partial_FIXED_parity``; Pin 1 (House
-    Cartographer) remains OPEN ``..._divergence_pin``.  This guards
-    against accidental deletion or rename of any pin function (open
-    / closed / partial).
+    Cartographer) was closed by the 21st Rust slice and renamed
+    ``..._FIXED_parity``.  This guards against accidental deletion or
+    rename of any pin function (open / closed / partial).
     """
     import tests.test_divergence_pins_xxx as _self_mod
     open_pin_fns = [
@@ -1013,24 +1052,24 @@ def test_xxx_pin_inventory_complete():
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_partial_FIXED_parity")
     ]
-    expected_open_pins = {
-        "test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_divergence_pin",
-    }
+    expected_open_pins: set[str] = set()
     expected_closed_pins = {
         "test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_parity",
+        "test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_FIXED_parity",
     }
     expected_partial_pins = {
         "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity",
     }
     assert set(open_pin_fns) == expected_open_pins, (
-        "XXX open-pin inventory mismatch.  Expected exactly the 1 "
-        "open pin test (Pin 1 still open):\n"
+        "XXX open-pin inventory mismatch.  Expected zero open pin "
+        "tests (all 3 Pins closed or partial-closed):\n"
         f"  {sorted(expected_open_pins)}\n"
         f"Got:\n  {sorted(open_pin_fns)}"
     )
     assert set(closed_pin_fns) == expected_closed_pins, (
-        "XXX closed-pin inventory mismatch.  Expected exactly the 1 "
-        "closed pin test (Pin 2 closed by 18th Rust slice):\n"
+        "XXX closed-pin inventory mismatch.  Expected exactly the 2 "
+        "closed pin tests (Pin 2 closed by 18th Rust slice; Pin 1 "
+        "closed by 21st Rust slice):\n"
         f"  {sorted(expected_closed_pins)}\n"
         f"Got:\n  {sorted(closed_pin_fns)}"
     )
