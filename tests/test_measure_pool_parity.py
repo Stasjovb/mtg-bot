@@ -432,21 +432,18 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # genuinely_missing -> closed (Effect-half shipped
     # `PumpTargetCreatureUntilEotGrantDiesReturnTapped` + genuine
     # probe; full card stays nested-trigger-grant/warp_cost gated).
-    # CYCLE-10 fold (re-anchored here — the orchestrator's cycle-10
-    # consolidated resync `005192f5` added **Sothera, the Supervoid**
-    # to `genuinely_missing` via the residue re-walk it had been flagged
-    # for, re-stamping all 8 entries to `fa3d17b4`; this snapshot lagged
-    # the live worklist — re-anchored to the live source of truth per
-    # the "new-code-is-right" parity discipline). `missing` is now 7
-    # distinct genuine new-Rust-Effect asks (Lightstall Inquisitor
-    # appears twice in the worklist; the set dedupes it).
+    # Slice-16 fold: Astelli Reclaimer genuinely_missing -> closed
+    # (Effect::AstelliReclaimerETBEffect shipped + bridge).
+    # Slice-18 fold: Roving Actuator genuinely_missing -> closed
+    # (Effect::RovingActuatorETBEffect { max_mv: u8 } shipped + bridge).
+    # `missing` is now 5 distinct genuine new-Rust-Effect asks
+    # (Lightstall Inquisitor appears twice in the worklist; the set
+    # dedupes it).
     assert missing == {
-        "Astelli Reclaimer",
         "Command Bridge",
         "Lightstall Inquisitor",
         "Meltstrider's Resolve",
         "Pain for All",
-        "Roving Actuator",
         "Sothera, the Supervoid",
     }
     assert non_effect == {
