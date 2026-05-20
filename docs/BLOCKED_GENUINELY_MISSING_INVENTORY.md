@@ -34,6 +34,19 @@ Pain for All's residual scope stays **medium** (NOT "small") — the
 substrate-sharing flip only fires once Phase 1 of the substrate plan
 ships.
 
+**Round-77 update (2026-05-20): Phase 1 first-deliverable LANDED
+(PARTIAL).** Steps 1+2 partial (CardDef aura fields + bridge
+emission/materialization) and step 7 partial (the loader admit
+predicate `_printing_is_bridge_simple_aura` — defined + tested + NOT
+yet OR'd into the 5-disjunct) shipped on the `feature/aura-substrate-
+phase-1` slice. Steps 3-6 (Rust `parse_printing` aura-key parse +
+cast-time enchant-target decision + Rust aura-resolution arm +
+CR-704.5n SBA + bidirectional bridge arms) are honest-stopped. **Pain
+for All's scope estimate is UNCHANGED** — the substrate-sharing
+medium→small flip still requires the Rust Phase-1 steps to land
+(Pain for All sits at Phase 3 of the substrate plan, ≥2 rounds out
+even after Phase 1 closes).
+
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
 Pain for All 4,367 + Sothera 2,108). Some decks contain multiple
