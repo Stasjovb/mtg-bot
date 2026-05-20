@@ -365,6 +365,143 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
     Some(dest_zone)
 }
 
+/// **Aura-attachment substrate — Phase 1 STEP 4 (round-78,
+/// 2026-05-20).** Post-resolve mover for Aura spells. Mirrors
+/// Python's Aura resolve path at `actions.py:2720-2758`:
+///
+/// 1. Read the cast-time bound target via `target_id_opt` (the
+///    caller passes `top.target_obj_id` — STEP 3 binds this on
+///    `submit_enchant_target_decision`). NB: we do *not* read
+///    `state.current_resolve_payload_target_id` here — the resolver
+///    restores that swap BEFORE this mover runs (the `saved_target`
+///    bracket completes before `move_*_post_resolve` is called).
+///    The target slot is threaded explicitly via the function arg.
+/// 2. Validate at resolve time per CR 608.2b:
+///    - Target must be on a battlefield.
+///    - Target's card_types must match the printing's
+///      `aura_enchant_type` (`"artifact"` → Artifact; default
+///      `"creature"` → Creature).
+///    - If `aura_yours_only=true`, target's controller must equal
+///      the Aura's controller (the resolving spell's controller).
+/// 3. **Illegal target → fizzle (CR 608.2b).** Route the Aura to its
+///    owner's graveyard with `attached_to = None`. Returns
+///    `Some(ZONE_GRAVEYARD)` so the caller skips the ETB dispatch
+///    (the Aura never entered the battlefield).
+/// 4. **Legal target → attach.** Route to controller's battlefield,
+///    stamp `obj.attached_to = Some(host_id)`, reserve fresh ETB
+///    timestamp. Returns `Some(ZONE_BATTLEFIELD)` so the caller
+///    fires ETB triggers (none today for the S1 P/T/keyword shape,
+///    but the substrate is now in place for STEP-5+ triggered-on-
+///    attach auras).
+///
+/// **Layer-7 P/T + layer-6 keyword grants** are NOT applied here —
+/// they are *continuous* effects sourced by the bf-resident Aura and
+/// keyed on `attached_to`. The dynamic reader analogue in
+/// `state_ops_combat.rs::battlefield_creature_power` /
+/// `_toughness` / `_has_keyword` scans the bf for any Aura whose
+/// `attached_to` matches the queried object and folds the bonuses in
+/// at read time. The Python source-of-truth scan is in
+/// `game.py:969-996` (P/T) and `game.py:1120-1145` (keywords).
+///
+/// `controller_id` is the resolving spell's controller (read from
+/// the StackItem). The fizzle path needs it to route the Aura to the
+/// *owner's* graveyard — Python's `_send_to_graveyard_or_library`
+/// walks owner not controller, and the Aura's stack-source
+/// `controller` field is the caster (the owner of a hand-cast
+/// spell). For cast-from-exile (STEP-6 territory) this would
+/// diverge, but Phase 1's only cast origin is hand → the resolving
+/// controller IS the owner.
+fn move_aura_post_resolve(
+    state: &mut GameState,
+    source_obj_id: u32,
+    controller_id: u8,
+    target_id_opt: Option<u32>,
+) -> Option<u8> {
+    // Look up printing fields we need (aura_enchant_type, yours_only).
+    let printing_id = find_source_printing_id(state, source_obj_id)?;
+    let (enchant_type, yours_only) = match state.registry.lookup(printing_id) {
+        Some(p) => {
+            if !p.is_aura {
+                // Defensive: caller should only route Aura spells
+                // here. Fall through to the regular mover by returning
+                // None — the caller treats that as "no aura semantics
+                // apply" and re-routes through move_source_post_resolve.
+                return None;
+            }
+            (p.aura_enchant_type.clone(), p.aura_yours_only)
+        }
+        None => return None,
+    };
+    // Resolve-time target legality: target must (a) exist on a bf,
+    // (b) match the enchant type, (c) satisfy yours_only.
+    let legal_target_id: Option<u32> = match target_id_opt {
+        Some(tid) => {
+            let mut matched: Option<u32> = None;
+            'outer: for player in state.players.iter() {
+                for obj in player.battlefield.iter() {
+                    if obj.id != tid {
+                        continue;
+                    }
+                    // Found candidate; check type + yours_only.
+                    let Some(p) = state.registry.lookup(obj.printing_id) else {
+                        break 'outer;
+                    };
+                    let type_ok = if enchant_type == "artifact" {
+                        p.card_types.iter().any(|t| t == "Artifact")
+                    } else {
+                        // Default "creature" — matches the cast-time
+                        // filter in cast_aura.
+                        p.card_types.iter().any(|t| t == "Creature")
+                    };
+                    if !type_ok {
+                        break 'outer;
+                    }
+                    if yours_only && obj.controller != controller_id {
+                        break 'outer;
+                    }
+                    matched = Some(obj.id);
+                    break 'outer;
+                }
+            }
+            matched
+        }
+        None => None,
+    };
+
+    // Take the spell-source object out of the stack store.
+    let (mut obj, owner, _src_zone) = take_source(state, source_obj_id)?;
+
+    if let Some(host_id) = legal_target_id {
+        // Legal target → battlefield with attached_to stamped.
+        // CR 303.4: an Aura entering the battlefield must be attached
+        // to its enchant target.
+        obj.zone = ZONE_BATTLEFIELD;
+        obj.attached_to = Some(host_id);
+        obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
+        // Sticky-controller convention: the Aura's controller is the
+        // resolving spell's controller (the caster). Already set by
+        // cast_aura's rehome path, but assert it via the owner walk
+        // for the fizzle-vs-attach symmetry below.
+        let _ = owner;
+        let bf =
+            &mut state.players[controller_id as usize].battlefield;
+        Arc::make_mut(bf).push(obj);
+        Some(ZONE_BATTLEFIELD)
+    } else {
+        // No legal target → fizzle (CR 608.2b). Aura goes to owner's
+        // graveyard. Phase 1 cast origin is hand only, so owner ==
+        // controller; the comment above explains why we route via
+        // controller_id for parity with Python's
+        // `_send_to_graveyard_or_library`.
+        obj.zone = ZONE_GRAVEYARD;
+        obj.attached_to = None;
+        let gy =
+            &mut state.players[controller_id as usize].graveyard;
+        Arc::make_mut(gy).push(obj);
+        Some(ZONE_GRAVEYARD)
+    }
+}
+
 /// Apply a single Effect to `state`. Closed-enum match: adding a
 /// new variant in the bridge will turn this into a build-time
 /// error (exhaustiveness) until handled here — the desired "fail
@@ -14439,7 +14576,30 @@ impl GameState {
         // hatch — leave source in place. Done BEFORE the stack pop
         // so a panic in movement doesn't leave the stack drained
         // with no movement applied (transactional shape).
-        let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
+        //
+        // **Aura-attachment substrate STEP 4 (round-78).** If the
+        // resolving spell is an Aura, route to `move_aura_post_resolve`
+        // first: it consults the cast-time bound target (already
+        // swapped into `current_resolve_payload_target_id` above),
+        // performs the resolve-time legality check per CR 608.2b,
+        // fizzles to graveyard if illegal, OR attaches + lands on bf
+        // if legal. Mirrors Python's branch at `actions.py:2720-2758`.
+        // Non-Aura permanents / instants / sorceries continue through
+        // the regular `move_source_post_resolve`.
+        let is_aura_source = find_source_printing_id(self, top.source_obj_id)
+            .and_then(|pid| self.registry.lookup(pid))
+            .map(|p| p.is_aura)
+            .unwrap_or(false);
+        let post_resolve_zone = if is_aura_source {
+            move_aura_post_resolve(
+                self,
+                top.source_obj_id,
+                top.controller,
+                top.target_obj_id,
+            )
+        } else {
+            move_source_post_resolve(self, top.source_obj_id)
+        };
 
         // ETB-trigger Slice 3: legacy `etb_effects` inline loop
         // retired. The parse-time bridge in `cards.rs::parse_printing`
