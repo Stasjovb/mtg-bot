@@ -15303,10 +15303,13 @@ def test_owner_puts_target_aoc_routes_to_source_controllers_opponent(engine):
     # P0's library grew by 1; p1's library unchanged.
     assert state.library_sizes[0] == p0_lib_before + 1
     assert state.library_sizes[1] == p1_lib_before
-    # The Bears is at the BOTTOM of p0's library (= tail of Vec
-    # per the post-CE3 bottom-is-tail convention).
+    # The Bears is at the TOP of p0's library (= head of Vec per
+    # the post-CE3 lib[0]=TOP convention). Post-13th-slice the
+    # no-agent default is `lib_mut.insert(0, obj)` (RRR Pin 3
+    # closure, matching Python's no-agent default of
+    # `library.insert(0, obj)`).
     p0_lib_snap = state.library_snapshot(0)
-    assert p0_lib_snap[-1]["id"] == p0_first_aoc_id
+    assert p0_lib_snap[0]["id"] == p0_first_aoc_id
 
 
 def test_owner_puts_target_aoc_active_player_controlled_still_works(engine):
@@ -15335,8 +15338,12 @@ def test_owner_puts_target_aoc_active_player_controlled_still_works(engine):
     assert state.find_object_zone(p0_first_aoc_id) == ZONE_BATTLEFIELD
     assert state.library_sizes[1] == p1_lib_before + 1
     assert state.library_sizes[0] == p0_lib_before
+    # The Bears is at the TOP of p1's library (= head of Vec per
+    # the post-CE3 lib[0]=TOP convention). Post-13th-slice the
+    # no-agent default is `lib_mut.insert(0, obj)` (RRR Pin 3
+    # closure).
     p1_lib_snap = state.library_snapshot(1)
-    assert p1_lib_snap[-1]["id"] == p1_first_aoc_id
+    assert p1_lib_snap[0]["id"] == p1_first_aoc_id
 
 
 def test_owner_puts_target_aoc_pause_variant_threads_controller(engine):

@@ -7630,6 +7630,72 @@ byte-equal, just role-swapped). Cross-ref: `docs/C4_RESWEEP_
 EVIDENCE.md` (the full C4 evidence + the `c4_resweep.json` artifact);
 `SOT_FLIP_CUTOVER_PLAN.md` §4 ledger row **G7 (OPEN)**.
 
+## Rust port — `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` modal-choice plumbing deferred (no agent-driven top-vs-bottom on Rust)
+
+**Location**:
+`rust/src/state_ops_resolve.rs` —
+`Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+resolve arm (~:10475).
+
+**What the shortcut is.**
+The bf->library bounce arm hardcodes the no-agent TOP default
+(`lib_mut.insert(0, obj)` — RRR Pin 3 closure landed by the 13th
+Rust slice, `feature/rust-slice-13-rrr-pins-2-3`).  There is no
+owner-side `pending_decision` for the top-vs-bottom modal choice;
+Rust does not ask the agent to pick top or bottom.  Python's
+`OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.resolve`
+(`effects/generic/zone_moves.py:86-128`) DOES call
+`owner.agent.choose_mode(...)` when an agent is seated and can
+land the bounced object at either end.  The no-agent default
+path (which is the cross-engine probe condition) byte-equals
+between the two engines post-slice-13; the agent-driven paths
+diverge whenever the agent picks BOTTOM.
+
+**Why it's OK today.**
+
+* The PIMC search has no seated owner-side agent in the
+  determinization branches the modal-choice arm fires on (the
+  determinizer treats the modal pick as a max-over-options
+  evaluation, not a per-rollout agent call).  Cross-engine probes
+  in the PROBED tier seat no agent on P1 by construction, so the
+  no-agent default is the active path.
+* Single EoE consumer (Lost in Space).  Worst-case strategic
+  cost: the agent never gets to pick BOTTOM as a self-deck
+  manipulation defensive option.  In practice Lost in Space's
+  caster targets an opponent's permanent, so the choice belongs
+  to the opponent's agent — and the opponent's optimal pick on a
+  defensive bounce is usually TOP (to redraw immediately) which
+  is what the no-agent default lands on.
+
+**Failure mode.**
+A future scenario where the deck contains card-draw-on-self
+acceleration that wants the bounced opponent permanent at the
+BOTTOM (forcing the opponent to draw past it) is not
+representable.  No EoE printing exhibits this synergy today.
+
+**Fix scope estimate.**
+Medium.  Requires growing the Rust side a `pending_decision`
+variant for the top-vs-bottom modal choice (~50-80 LoC), a new
+agent-callback hook into the resolve arm, and bridge-side
+plumbing so the cross-engine harness can seat a matching mode
+picker on both sides.  Mirrors the existing `pending_decisions`
+substrate but for an effect that resolves OWNER-side (not
+controller-side).
+
+**Impact estimate.**
+Zero strength cost today (no current EoE consumer exhibits the
+synergy).  Re-evaluate when a future set (Duskmourn's Vanish
+from Sight already shares the arm with the `nonland_permanent`
+rider; future "may put on bottom" cards) creates a binding
+optimization edge.  Cross-ref:
+`tests/test_divergence_pins_rrr.py::test_cross_engine_real_eoe_
+lost_in_space_library_bounce_top_vs_bottom_default_FIXED_parity`
+(asserts the closed-no-agent-default invariant), the 13th Rust
+slice commit, and the closure-path Option A note in that test's
+docstring.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

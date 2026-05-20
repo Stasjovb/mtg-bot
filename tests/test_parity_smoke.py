@@ -30660,20 +30660,26 @@ def test_cross_engine_synthetic_etb_owner_puts_target_artifact_or_creature_on_to
     graveyard for the siblings) and adds an OWNER-side top-vs-
     bottom choice via the agent's ``choose_mode`` hook.
 
-    **First-slice deterministic-bottom convention.** Per the Rust
-    Effect variant docstring (cards.rs:1151-1158), Rust has no
-    decision-callback substrate yet for the owner-side top-vs-
-    bottom choice and deterministically picks BOTTOM (a reasonable
-    first-slice mirror because decision-callback agents typically
-    default-pick the bottom option when offered top/bottom -- least
-    disruptive). Python's resolve calls
-    ``owner.agent.choose_mode(state, owner_id, ["top of library",
-    "bottom of library"])`` (effects/generic/zone_moves.py:87-93)
-    with the no-agent fallback at line 92-93 picking TOP. To
-    cross-engine match Rust's deterministic bottom pick, this probe
-    seats ``_PickBottomLibraryAgent`` on P0 (the OWNER of the
-    bait), which returns 1 from ``choose_mode``. The two engines
-    then agree on bottom-of-library destination.
+    **Post-13th-slice no-agent default convention.** Per RRR Pin 3
+    closure (13th Rust slice), Rust's library-bounce arm now
+    deterministically picks TOP (``lib_mut.insert(0, obj)``,
+    matching Python's no-agent default at zone_moves.py:92-93,
+    ``choice = 0`` -> ``library.insert(0, obj)``). Rust still has
+    no decision-callback substrate for the owner-side top-vs-
+    bottom choice; the post-slice-13 hardcoded TOP matches
+    Python's no-agent default exactly. This probe seats
+    ``_PickBottomLibraryAgent`` on P0 (the OWNER of the bait) for
+    historical reasons -- before slice 13, Rust's hardcoded BOTTOM
+    needed Python to ALSO pick bottom to byte-equal; post-slice-13,
+    Rust's hardcoded TOP would no longer agree with Python's
+    bottom pick. However, since this synthetic probe leaves the
+    library at exactly 1 element (the bait), ``library[0] ==
+    library[-1]`` and the assertion shape below passes regardless
+    of which end the bait lands at -- the probe's load-bearing
+    axis is the CROSS-CONTROLLER controller-of-effect routing
+    (I78), not the top-vs-bottom byte-equality (covered by the
+    real-EoE Lost in Space probe in
+    tests/test_probe_rrr_downstream.py).
 
     Python's
     ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.resolve(
@@ -30748,12 +30754,16 @@ def test_cross_engine_synthetic_etb_owner_puts_target_artifact_or_creature_on_to
          creature scan.
 
       5. **Seat ``_PickBottomLibraryAgent`` on P0** (the OWNER of
-         the bait), so Python's ``choose_mode`` hook routes the
-         bait to the BOTTOM of P0's library, matching Rust's
-         deterministic bottom pick (cards.rs:1151-1158 +
-         state_ops_resolve.rs:5266 ``lib_mut.push(obj)``). The
-         no-agent default would pick TOP (zone_moves.py:92-93),
-         observably divergent from Rust.
+         the bait). Originally this matched Rust's pre-slice-13
+         hardcoded ``lib_mut.push(obj)`` (BOTTOM); post-slice-13
+         Rust hardcodes TOP via ``lib_mut.insert(0, obj)`` to
+         match Python's NO-AGENT default. With the single-element
+         post-bounce library here, both lib[0] and lib[-1] equal
+         the bait, so the assertion shape below remains correct
+         regardless of which end the bait lands at -- the I78
+         load-bearing axis is the cross-controller routing, not
+         the top-vs-bottom byte-equal axis (covered separately by
+         the real-EoE Lost in Space probe).
 
       6. **Drain both stacks.** The trigger resolves: Rust's
          post-I78 arm reads

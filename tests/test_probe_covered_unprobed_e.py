@@ -341,26 +341,19 @@ def test_cross_engine_real_eoe_lost_in_space_owner_puts_then_surveil_parity(
         f"rust={rs_p0_gy} py={py_p0_gy}"
     )
 
-    # Documented synthetic-state zone-change artifact (the established
-    # Icecave-Crasher / Mechan-Navigator precedent): the bounced 2/2
-    # had ``summoning_sick=False`` on the bf; Rust resets it to True on
-    # the bf→library zone change (CR 400.7 fresh-object reset) while
-    # Python preserves the stale bf flag into the library. Summoning
-    # sickness is gameplay-IRRELEVANT in the library (it only matters
-    # for a creature on the battlefield) — a representation artifact on
-    # a library card, NOT an owner-puts engine divergence. Normalise it
-    # symmetric before the WHOLE-view compare so byte-equality
-    # genuinely measures the owner-puts-to-bottom effect under test.
-    for o in py.players[1].library:
-        if o.printing.name == "LiS Victim":
-            o.summoning_sick = True
+    # NOTE: the prior summoning_sick normalisation block (pre-13th-
+    # slice) is no longer needed.  RRR Pin 2 closure dropped the
+    # explicit ``obj.summoning_sick = true`` stamp from the Rust
+    # library-bounce arm; both engines now preserve the pre-bounce
+    # value natively, so the field is already byte-equal under the
+    # whole-view compare below.  Removed 2026-05-19 (13th Rust slice).
 
     diffs = compare_fields(
         build_python_field_view(py),
         ce_parity_smoke()._build_field_view(rs),
     )
     assert diffs == [], (
-        f"Lost in Space owner-puts-bottom + surveil-keep-all must be "
+        f"Lost in Space owner-puts-top + surveil-keep-all must be "
         f"byte-equal across the WHOLE field view on BOTH; diffs={diffs}"
     )
 
