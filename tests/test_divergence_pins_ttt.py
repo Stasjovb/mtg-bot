@@ -5,15 +5,23 @@ candidates the SSS probe agent dropped during honest exhaustion
 (see worklog entry ``2026-05-19-probe-batch-sss`` on main @
 ``b581b731``), plus one fresh BLOCKED-list candidate.
 
-Each pin test is named ``test_..._divergence_pin`` and ASSERTS the
-CURRENT divergent behavior rather than parity.  The PROBED-tier
+**Slice 14 closure status:** Pin 1 (Lightless Evangel IS_SACRIFICED
+ordering) + Pin 2 (Atomic Microsizer non-creature ETB summoning_sick)
+are CLOSED -- renamed to ``*_FIXED_parity`` with the sentinels
+inverted.  Pin 3 (Astelli Reclaimer no Rust Effect variant) remains
+OPEN as the sole remaining divergence pin in this batch.
+
+Each pin test originally named ``test_..._divergence_pin`` ASSERTS
+the CURRENT divergent behavior rather than parity.  The PROBED-tier
 detector excludes ``*_divergence_pin`` functions, so these tests
-grow the test surface without touching the PROBED metric.
+grow the test surface without touching the PROBED metric.  Closed
+pins renamed to ``*_FIXED_parity`` are regular parity tests and
+DO count in the PROBED metric.
 
 Pin closure cadence: when a sibling Rust slice closes the
 underlying gap, the relevant assertion fires and the pin is
 renamed ``*_FIXED_parity`` with the sentinel inverted (PPP / MMM /
-JJJ / RRR Pin 1 precedent).
+JJJ / RRR Pin 1 / TTT Pin 1 + 2 precedent).
 
 Pinned bugs
 -----------
@@ -298,41 +306,33 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergence_pin():
-    """Pin the IS_SACRIFICED direct-dispatch-during-spell-resolve bug.
+def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_FIXED_parity():
+    """Verify Slice 14 (TTT Pin 1) IS_SACRIFICED defer-after-pop closure.
 
     The ``Effect::Sacrifice`` arm at
-    ``rust/src/state_ops_resolve.rs`` (line ~2602) dispatches
+    ``rust/src/state_ops_resolve.rs`` previously dispatched
     IS_SACRIFICED DURING the resolving sacrifice spell's apply path,
-    while the spell is still on top of the stack.  The
-    LEAVES_BATTLEFIELD sibling a few lines above (~:2588) uses
-    ``state.pending_leaves_dispatches.push(...)`` to defer dispatch
-    until AFTER the spell's epilogue ``stack.pop()``.  The
-    IS_SACRIFICED arm needs the same defer-after-pop discipline --
-    without it, the spell's epilogue stack.pop() consumes the
-    trigger that the dispatcher pushed above the still-present
-    resolving spell.
+    while the spell was still on top of the stack.  Slice 14 closed
+    this by mirroring the LEAVES_BATTLEFIELD defer-after-pop pattern:
+    add ``pending_is_sacrificed_dispatches`` field on ``GameState``,
+    add ``drain_pending_is_sacrificed_dispatches`` mirror, wire the
+    drain into ``resolve_top_of_stack`` (both trigger + spell branches
+    of ``resolve_top_of_stack`` AND ``resolve_top_of_stack_pause``),
+    and replace the direct ``dispatch_event`` call with a push.
 
-    Probe shape:
-      1. Confirm Python's ``Event.IS_SACRIFICED`` is the canonical
-         enum value the bridge arm wires for Lightless Evangel.
-      2. Sentinel A: the Rust source's ``Effect::Sacrifice`` arm
-         CONTAINS a direct ``dispatch_event(..., Event::IsSacrificed,
-         ...)`` call (the bug).
-      3. Sentinel B: the Rust source does NOT define
-         ``pending_is_sacrificed_dispatches`` (no defer queue
-         exists yet).
-      4. Sentinel C: the sibling ``pending_leaves_dispatches.push``
-         pattern DOES appear in the same arm body (the
-         to-be-mirrored closure target).
-
-    Closure indicator: the direct ``dispatch_event(...
-    IsSacrificed ...)`` line in the ``Effect::Sacrifice`` arm body
-    has been REPLACED with
-    ``state.pending_is_sacrificed_dispatches.push(leaving_obj_id);``,
-    and a ``drain_pending_is_sacrificed_dispatches`` mirror function
-    has been added.  Once the closure lands, this pin renames to
-    ``..._FIXED_parity`` with the sentinels inverted.
+    Assertions verify the closure invariants:
+      1. Python's ``Event.IS_SACRIFICED`` is still the canonical enum
+         value the bridge arm wires for Lightless Evangel.
+      2. The Rust source's ``Effect::Sacrifice`` arm contains a
+         ``pending_is_sacrificed_dispatches.push(leaving_obj_id)``
+         call (the closure).
+      3. The Rust source's ``Effect::Sacrifice`` arm does NOT contain
+         a direct ``dispatch_event(..., Event::IsSacrificed, ...)``
+         call (the pre-closure divergence is gone).
+      4. ``pending_is_sacrificed_dispatches`` is declared on
+         ``GameState`` in ``state.rs``.
+      5. ``drain_pending_is_sacrificed_dispatches`` is defined in
+         ``state_ops_resolve.rs``.
 
     EoE card scale: 1 directly (Lightless Evangel); broader
     applicability across any IS_SACRIFICED-triggered ability fired
@@ -342,13 +342,10 @@ def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergen
     from mtg_bot.effects.predicates import Event
     assert hasattr(Event, "IS_SACRIFICED"), (
         "Python's Event enum should expose IS_SACRIFICED (the round-16 "
-        "RR Pin 2 closure).  If this fails, the event name was renamed -- "
-        "update this pin's Rust-side enum reference (Event::IsSacrificed) "
-        "to match."
+        "RR Pin 2 closure)."
     )
     assert Event.IS_SACRIFICED.value == "is_sacrificed", (
-        "Pin invariant: Event.IS_SACRIFICED's string value should be "
-        "'is_sacrificed' (the dispatch_event string identifier).  "
+        "Event.IS_SACRIFICED's string value should be 'is_sacrificed'.  "
         f"Got: {Event.IS_SACRIFICED.value!r}."
     )
 
@@ -357,75 +354,68 @@ def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergen
     repo_root = test_file_path.parents[1]  # tests/.. = repo root
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
     assert rust_resolve_path.exists(), (
-        f"Rust source file should exist at {rust_resolve_path!r}.  "
-        "If the file moved, update this test's path resolution."
+        f"Rust source file should exist at {rust_resolve_path!r}."
     )
     rust_src = rust_resolve_path.read_text(encoding="utf-8")
 
-    # Locate the Effect::Sacrifice arm body.  The arm spans roughly
-    # 130 lines (2498 -> ~2604); the next arm sentinel
-    # "\n        Effect::" finds the AddCounters arm a few lines past.
+    # Locate the Effect::Sacrifice arm body.
     arm_sig = "Effect::Sacrifice { target } => match target {"
     arm_start = rust_src.find(arm_sig)
     assert arm_start >= 0, (
         f"Rust source should contain the Effect::Sacrifice arm signature "
-        f"{arm_sig!r}.  If the variant was restructured (e.g. target field "
-        "renamed), update this pin."
+        f"{arm_sig!r}."
     )
     next_arm_start = rust_src.find("\n        Effect::", arm_start + 1)
     if next_arm_start < 0:
         next_arm_start = len(rust_src)
     arm_body = rust_src[arm_start:next_arm_start]
 
-    # 2a. Sentinel A: the direct dispatch_event call IS in the arm
-    #     body (the bug).
-    assert "dispatch_event(state, crate::cards::Event::IsSacrificed" in arm_body, (
-        "Pin sentinel A: rust/src/state_ops_resolve.rs's "
-        "Effect::Sacrifice arm should still contain a direct "
+    # 2a. Closure: the deferred push IS in the arm body.
+    assert "pending_is_sacrificed_dispatches" in arm_body, (
+        "Slice 14 closure: rust/src/state_ops_resolve.rs's "
+        "Effect::Sacrifice arm should contain a push to "
+        "'state.pending_is_sacrificed_dispatches' (the defer-after-pop "
+        "discipline mirroring the LEAVES sibling).  Arm body excerpt:"
+        f"\n{arm_body[:800]!r}..."
+    )
+
+    # 2b. Closure: the pre-closure direct dispatch is GONE.
+    assert (
+        "dispatch_event(state, crate::cards::Event::IsSacrificed"
+        not in arm_body
+    ), (
+        "Slice 14 closure invariant: rust/src/state_ops_resolve.rs's "
+        "Effect::Sacrifice arm should NO LONGER contain a direct "
         "'dispatch_event(state, crate::cards::Event::IsSacrificed, ...)' "
-        "call inside the resolve body (the divergence -- IS_SACRIFICED is "
-        "dispatched DURING the sacrifice spell's resolve, before the "
-        "spell's epilogue stack.pop()).  If this assertion fails, the "
-        "direct dispatch has been removed -- the divergence may be "
-        "closed; flip to _FIXED_parity and invert the assertion.  Arm "
-        f"body excerpt:\n{arm_body[:600]!r}..."
+        "call (the pre-closure bug).  If this fails, the closure was "
+        "partially reverted -- audit the arm body.  Arm body excerpt:"
+        f"\n{arm_body[:800]!r}..."
     )
 
-    # 2b. Sentinel C (sibling LEAVES defer pattern present in same arm):
-    #     pending_leaves_dispatches.push appears in the same arm body.
+    # 2c. The LEAVES sibling push is still present in the same arm.
     assert "pending_leaves_dispatches.push(leaving_obj_id)" in arm_body, (
-        "Pin sentinel C: rust/src/state_ops_resolve.rs's "
-        "Effect::Sacrifice arm should contain the sibling "
-        "'state.pending_leaves_dispatches.push(leaving_obj_id);' line "
-        "(the LEAVES defer-after-pop discipline that IS_SACRIFICED "
-        "needs to mirror).  If this is gone, the sibling closure "
-        "pattern moved -- update this pin's reference."
+        "rust/src/state_ops_resolve.rs's Effect::Sacrifice arm should "
+        "still contain the sibling 'state.pending_leaves_dispatches."
+        "push(leaving_obj_id);' line."
     )
 
-    # 3. Sentinel B: no pending_is_sacrificed_dispatches defer queue
-    #    exists anywhere in the Rust crate yet (the to-be-added
-    #    substrate).
+    # 3. Closure: pending_is_sacrificed_dispatches IS declared on
+    #    GameState in state.rs.
     rust_state_path = repo_root / "rust" / "src" / "state.rs"
     rust_state_src = rust_state_path.read_text(encoding="utf-8")
-    assert "pending_is_sacrificed_dispatches" not in rust_state_src, (
-        "Pin sentinel B: rust/src/state.rs should NOT yet declare a "
-        "'pending_is_sacrificed_dispatches' field on GameState.  If "
-        "this assertion fails, the defer-queue substrate has landed -- "
-        "the closure may be ready; flip to _FIXED_parity."
+    assert (
+        "pub pending_is_sacrificed_dispatches: Vec<u32>" in rust_state_src
+    ), (
+        "Slice 14 closure: rust/src/state.rs should declare "
+        "'pub pending_is_sacrificed_dispatches: Vec<u32>' on GameState."
     )
-    assert "pending_is_sacrificed_dispatches" not in rust_src, (
-        "Pin sentinel B (extended): rust/src/state_ops_resolve.rs "
-        "should NOT yet reference 'pending_is_sacrificed_dispatches' "
-        "(no push site, no drain function).  If this assertion fails, "
-        "the closure may be partway landed -- audit + flip."
-    )
-    assert "drain_pending_is_sacrificed_dispatches" not in rust_src, (
-        "Pin sentinel B (drain function): rust/src/state_ops_resolve.rs "
-        "should NOT yet contain a 'drain_pending_is_sacrificed_"
-        "dispatches' function (mirror of "
-        "drain_pending_leaves_dispatches).  If this fails, the drain "
-        "mirror has been added -- closure landed; flip to "
-        "_FIXED_parity."
+
+    # 4. Closure: drain_pending_is_sacrificed_dispatches function
+    #    exists in state_ops_resolve.rs.
+    assert "fn drain_pending_is_sacrificed_dispatches(" in rust_src, (
+        "Slice 14 closure: rust/src/state_ops_resolve.rs should define "
+        "a 'drain_pending_is_sacrificed_dispatches' function (mirror of "
+        "drain_pending_leaves_dispatches)."
     )
 
     # 4. EoE cards affected.
@@ -439,10 +429,10 @@ def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergen
         # src/mtg_bot/parity/cross_engine.py:9469-9485.
     ]
     assert len(affected_eoe_cards) == 1, (
-        "The IS_SACRIFICED ordering pin affects 1+ EoE card directly "
-        "(Lightless Evangel); broader applicability across any "
-        "IS_SACRIFICED-triggered ability fired via Effect::Sacrifice.  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries."
+        "The IS_SACRIFICED ordering closure affects 1+ EoE card "
+        "directly (Lightless Evangel); broader applicability across "
+        "any IS_SACRIFICED-triggered ability fired via "
+        f"Effect::Sacrifice.  List has {len(affected_eoe_cards)} entries."
     )
 
 
@@ -457,105 +447,96 @@ def test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergen
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick_divergence_pin():
-    """Pin Python's universal-true summoning_sick stamp on non-creature
-    ETBs.
+def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick_FIXED_parity():
+    """Verify Slice 14 (TTT Pin 2) non-creature ETB summoning_sick
+    closure.
 
     Python's ``put_into_battlefield(state, obj, controller_id)`` at
-    ``src/mtg_bot/actions.py:2993`` unconditionally assigns
-    ``obj.summoning_sick = True`` for every entering permanent
-    (creature OR non-creature).  Rust's analogous codepath at
-    ``rust/src/state_ops_resolve.rs:335`` gates the stamp on
-    ``is_creature(card_types)``, leaving non-creature permanents
-    at the default ``false``.  CR 302.1 + 612.6 says sickness is a
-    creature-only property -- the CR-canonical fix is to align
-    Python (gate the assignment on ``obj.printing.is_creature``).
+    ``src/mtg_bot/actions.py:2993`` previously assigned
+    ``obj.summoning_sick = True`` unconditionally for every entering
+    permanent (creature OR non-creature).  Rust's analogous codepath
+    at ``rust/src/state_ops_resolve.rs:335`` correctly gates the
+    stamp on ``is_creature(card_types)``.  CR 302.1 + 612.6: sickness
+    is a creature-only property -- non-creature permanents do not
+    have summoning sickness.  Slice 14 aligns Python with the
+    CR-canonical (and Rust-correct) behavior by adding an explicit
+    creature-only stamp.
 
-    Probe shape:
-      1. Inspect Python's ``put_into_battlefield`` source: assert
-         the unconditional ``obj.summoning_sick = True`` line is
-         present without a guarding ``if obj.printing.is_creature``
-         conditional immediately above it.
-      2. Sentinel: the Rust source's ``move_source_post_resolve``
-         function gates the stamp on ``&& creature``.
-      3. Identify the EoE Equipment / Artifact illustrative card
-         that exercises the divergence (Atomic Microsizer -- the
-         simplest vanilla non-creature ETB shape with no ETB
-         triggers, isolating the field-value drift cleanly).
-
-    Closure indicator: ``actions.py``'s ``put_into_battlefield``
-    grows an ``if obj.printing.is_creature:`` guard around the
-    ``obj.summoning_sick = True`` line; non-creature ETBs leave
-    the field at its default ``False``.  Pin renames to
-    ``..._FIXED_parity`` with the assertion inverted.
+    Assertions verify the closure invariants:
+      1. Python's ``put_into_battlefield`` contains an
+         ``if obj.printing.is_creature:`` branch that stamps
+         ``obj.summoning_sick = True`` only for creatures.
+      2. Python's ``put_into_battlefield`` contains an explicit
+         ``else`` branch that stamps ``obj.summoning_sick = False``
+         for non-creatures (necessary because the ``GameObject``
+         dataclass default is ``summoning_sick: bool = True``;
+         relying on the default would preserve the divergence).
+      3. Rust's ``move_source_post_resolve`` still gates the stamp
+         on ``&& creature`` (the CR-canonical reference behavior).
 
     EoE card scale: broad (every non-creature ETB across Equipment,
     Aura, Enchantment, Artifact).  Atomic Microsizer is the
     cleanest probe candidate.
     """
-    # 1. Python's put_into_battlefield source: the unconditional
-    #    summoning_sick = True assignment is present.
+    # 1. Python's put_into_battlefield source: the conditional
+    #    assignment IS present.
     from mtg_bot import actions as _actions_mod
     pib_src = inspect.getsource(_actions_mod.put_into_battlefield)
+    assert "if obj.printing.is_creature:" in pib_src, (
+        "Slice 14 closure: src/mtg_bot/actions.py::put_into_battlefield "
+        "should contain an 'if obj.printing.is_creature:' guard "
+        "around the summoning_sick stamp (per CR 302.1 + 612.6)."
+    )
     assert "obj.summoning_sick = True" in pib_src, (
-        "Pin invariant: src/mtg_bot/actions.py::put_into_battlefield "
-        "should contain the line 'obj.summoning_sick = True' (the "
-        "universal-true stamp the divergence pins).  If this line is "
-        "absent the convention changed -- update this pin to reflect "
-        "the new shape."
+        "src/mtg_bot/actions.py::put_into_battlefield should still "
+        "stamp 'obj.summoning_sick = True' for the creature branch."
+    )
+    assert "obj.summoning_sick = False" in pib_src, (
+        "Slice 14 closure: src/mtg_bot/actions.py::put_into_battlefield "
+        "should explicitly stamp 'obj.summoning_sick = False' for "
+        "non-creatures (the GameObject dataclass default is True, so "
+        "relying on the default would preserve the divergence)."
     )
 
-    # 1a. The assignment is NOT preceded by a creature-only guard.
-    #     Look for the pattern ``if obj.printing.is_creature:`` in the
-    #     5 lines preceding the assignment.
+    # 1a. The True-stamp line lies inside the is_creature branch:
+    #     look at the lines preceding it and confirm an
+    #     ``if obj.printing.is_creature`` appears nearby.
     lines = pib_src.splitlines()
-    summoning_sick_line_idx = None
+    true_stamp_idx = None
     for i, line in enumerate(lines):
         if "obj.summoning_sick = True" in line:
-            summoning_sick_line_idx = i
+            true_stamp_idx = i
             break
-    assert summoning_sick_line_idx is not None
+    assert true_stamp_idx is not None
     preceding_window = "\n".join(
-        lines[max(0, summoning_sick_line_idx - 5):summoning_sick_line_idx]
+        lines[max(0, true_stamp_idx - 5):true_stamp_idx]
     )
-    # The CR-canonical closure indicator is an ``if obj.printing.
-    # is_creature:`` guard.  Until that lands, the preceding window
-    # contains no such guard.
-    assert "if obj.printing.is_creature" not in preceding_window, (
-        "Pin sentinel: src/mtg_bot/actions.py::put_into_battlefield "
-        "should NOT yet have an 'if obj.printing.is_creature:' guard "
-        "around the 'obj.summoning_sick = True' assignment.  If this "
-        "assertion fails, the closure may have landed -- flip to "
-        "_FIXED_parity (inverted: the guard IS present).  Preceding "
-        f"window:\n{preceding_window!r}"
+    assert "if obj.printing.is_creature" in preceding_window, (
+        "Slice 14 closure: 'obj.summoning_sick = True' should be "
+        "gated by an 'if obj.printing.is_creature:' guard above it.  "
+        f"Preceding window:\n{preceding_window!r}"
     )
 
-    # 2. Rust source: move_source_post_resolve gates the stamp on
-    #    ``&& creature`` (the CR-canonical behavior Python should
-    #    converge on).
+    # 2. Rust source: move_source_post_resolve still gates the stamp
+    #    on ``&& creature`` (the CR-canonical reference behavior).
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
     rust_src = rust_resolve_path.read_text(encoding="utf-8")
-    # Find the move_source_post_resolve function body.
     fn_sig = "fn move_source_post_resolve("
     fn_start = rust_src.find(fn_sig)
     assert fn_start >= 0, (
-        f"Rust source should contain the function signature {fn_sig!r}.  "
-        "If the function was renamed, update this pin."
+        f"Rust source should contain the function signature {fn_sig!r}."
     )
-    # Walk forward to the next top-level function start (rough sentinel).
-    # The function is short (~30 lines), so a 2000-char window is safe.
     fn_body = rust_src[fn_start:fn_start + 2000]
     assert "if dest_zone == ZONE_BATTLEFIELD && creature {" in fn_body, (
-        "Pin invariant: Rust's move_source_post_resolve should gate the "
-        "summoning_sick=true stamp on '&& creature' (the CR-canonical "
-        "creature-only discipline).  If this assertion fails, the Rust "
-        "side changed convention -- audit + update this pin.  Function "
-        f"body excerpt:\n{fn_body[:800]!r}..."
+        "Rust's move_source_post_resolve should still gate the "
+        "summoning_sick=true stamp on '&& creature' (CR-canonical "
+        "creature-only discipline -- the reference behavior Python "
+        f"converged on).  Function body excerpt:\n{fn_body[:800]!r}..."
     )
 
-    # 3. EoE cards affected (illustrative; the divergence applies to
+    # 3. EoE cards affected (illustrative; the closure applies to
     #    every non-creature ETB).
     affected_eoe_cards_illustrative = [
         "Atomic Microsizer",
@@ -575,7 +556,7 @@ def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick
         # Equipment with Flash + ETB attach + hexproof.
     ]
     assert len(affected_eoe_cards_illustrative) == 6, (
-        "The non-creature ETB summoning_sick divergence has broad "
+        "The non-creature ETB summoning_sick closure has broad "
         "applicability; the illustrative list captures 6 EoE Equipment "
         "concrete examples.  "
         f"Enumerated list has {len(affected_eoe_cards_illustrative)} "
@@ -748,24 +729,38 @@ def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_dive
 
 
 def test_ttt_pin_inventory_complete():
-    """Sanity check: the TTT batch declares exactly 3 pin tests.
+    """Sanity check: the TTT batch has 1 remaining divergence pin +
+    2 FIXED parity sentinels.
 
-    Pin batch TTT (round 23 pin-side) targets 3 divergence pins per
-    the lane discipline; this guards against accidental deletion or
-    rename of any pin function.
+    Pin batch TTT (round 23 pin-side) originally targeted 3 divergence
+    pins.  Slice 14 closed Pins 1 + 2 (renamed to ``_FIXED_parity``
+    with sentinels inverted); Pin 3 (Astelli Reclaimer) remains open.
+    This inventory check guards against accidental deletion or rename
+    of any of the 3 functions.
     """
     import tests.test_divergence_pins_ttt as _self_mod
     pin_fns = [
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_divergence_pin")
     ]
+    fixed_fns = [
+        name for name in dir(_self_mod)
+        if name.startswith("test_") and name.endswith("_FIXED_parity")
+    ]
     expected_pins = {
-        "test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_divergence_pin",
-        "test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick_divergence_pin",
         "test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_divergence_pin",
     }
+    expected_fixed = {
+        "test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_FIXED_parity",
+        "test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick_FIXED_parity",
+    }
     assert set(pin_fns) == expected_pins, (
-        "TTT pin inventory mismatch.  Expected exactly the 3 pin tests:\n"
+        "TTT pin inventory mismatch.  Expected exactly 1 open pin:\n"
         f"  {sorted(expected_pins)}\n"
         f"Got:\n  {sorted(pin_fns)}"
+    )
+    assert set(fixed_fns) == expected_fixed, (
+        "TTT FIXED-parity inventory mismatch.  Expected exactly 2 "
+        f"FIXED-parity sentinels:\n  {sorted(expected_fixed)}\n"
+        f"Got:\n  {sorted(fixed_fns)}"
     )
