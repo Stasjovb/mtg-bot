@@ -607,6 +607,25 @@ impl GameState {
                 PLAYER_SUBJECT_OFFSET + self.active_player as u32;
             dispatch_event(self, Event::BeginningOfCombat, player_subject)?;
         }
+        if self.phase == PHASE_MAIN2 {
+            // **PPP Pin 3 (10th Rust slice) BEGINNING_OF_POSTCOMBAT_MAIN
+            // dispatch.** Mirror of Python's
+            // `run_beginning_of_postcombat_main_triggers` (turn.py:865)
+            // which calls ``dispatch_event(state,
+            // Event.BEGINNING_OF_POSTCOMBAT_MAIN,
+            // player=state.active_player())``. Same PLAYER_SUBJECT_OFFSET
+            // sentinel convention as BEGINNING_OF_UPKEEP /
+            // BEGINNING_OF_COMBAT / BEGINNING_OF_END_STEP.
+            //
+            // 5 EoE cards unlocked: Savior of the Small, Cautious
+            // Survivor, Defiant Survivor, House Cartographer, Shrewd
+            // Storyteller. The "survivor" predicate
+            // `Source(IsTapped)` is already wired (round-21 RR
+            // closure); this dispatch closes the event-layer gap.
+            let player_subject =
+                PLAYER_SUBJECT_OFFSET + self.active_player as u32;
+            dispatch_event(self, Event::BeginningOfPostcombatMain, player_subject)?;
+        }
         if self.phase == PHASE_END_STEP {
             // **Round-14 BEGINNING_OF_END_STEP dispatch.** Mirror of
             // Python's `run_beginning_of_end_step_triggers` which calls

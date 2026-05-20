@@ -8791,6 +8791,98 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # the resolve method).
         from mtg_bot.effects.generic.life import DefendingPlayerLosesHalfLifeRoundedUp
         return DefendingPlayerLosesHalfLifeRoundedUp()
+    if kind == "target_player_loses_life":
+        # **PPP Pin 1 — TargetPlayerLosesLife effect bridge arm
+        # (10th Rust slice).** Python's ``TargetPlayerLosesLife(amount:
+        # int = 1)`` (``effects/generic/life.py:80``) is a frozen
+        # dataclass that makes the PRE-FIXED target player lose
+        # ``amount`` life (distinct from ``TargetOpponentLosesLife``,
+        # which auto-picks the defending opponent at resolve time —
+        # see the ``"target_opponent_loses_life"`` arm above for the
+        # auto-pick semantics).
+        #
+        # **Pre-fixed target convention.** The target player is wired
+        # in at dispatch time via ``fixed_targets`` rather than chosen
+        # by the agent. The canonical consumer is Entropic
+        # Battlecruiser's 1+ tier trigger "whenever an opponent
+        # discards a card, they lose 3 life" — the discarding player
+        # is the pre-fixed target.
+        #
+        # **Field shape (default-handling).** Same shape as
+        # ``target_opponent_loses_life``: ``amount`` is OPTIONAL,
+        # default 1. Negative ``amount`` raises (mirrors the Rust
+        # parse_effect contract for the sibling variant).
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card (Entropic
+        # Battlecruiser 1+ tier). Also blocked by the ``discards_card``
+        # event gap (MMM Pin 2) and the ``controlled_by_opponent``
+        # predicate gap (MMM Pin 3); this arm closes the effect-layer
+        # bridge specifically. End-to-end cross-engine resolution
+        # depends on the DISCARDS_CARD ``fixed_targets`` plumbing
+        # surfacing in a follow-on slice.
+        from mtg_bot.effects.generic.life import TargetPlayerLosesLife
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 1
+        if amount < 0:
+            raise ValueError(
+                "target_player_loses_life bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract — symmetric with "
+                "target_opponent_loses_life)"
+            )
+        return TargetPlayerLosesLife(amount=amount)
+    if kind == "put_plus_one_counter_on_target_creature":
+        # **PPP Pin 2 — PutPlusOneCounterOnTargetCreature effect
+        # bridge arm (10th Rust slice).** Python's
+        # ``PutPlusOneCounterOnTargetCreature(amount: int = 1,
+        # attacking_only: bool = False)`` (counters.py:637) is the
+        # bare "target creature" (no controller restriction) form,
+        # distinct from the sibling ``put_plus_one_counter_on_creature_
+        # you_control`` arm (which restricts targets to the source-
+        # controller's own creatures via the ``ControlledByYou``
+        # filter).
+        #
+        # **Target shape.** ``__post_init__`` wires ``targets`` to a
+        # single ``TargetSpec(IsCreature())`` slot, OR
+        # ``TargetSpec(IsCreature() & IsAttacking())`` when
+        # ``attacking_only=True`` (the Hospital Room half of Surgical
+        # Suite // Hospital Room).
+        #
+        # **Field shape (default-handling).** Same shape as
+        # ``put_plus_one_counter_on_creature_you_control``: ``amount``
+        # is OPTIONAL, default 1. Negative ``amount`` raises.
+        # ``attacking_only`` is OPTIONAL, default False.
+        #
+        # **Real EoE consumers** unblocked: 6 EoE cards — Drix
+        # Fatemaker ("When this creature enters, put a +1/+1 counter
+        # on target creature."), Mm'menon Uthros Exile ("Whenever
+        # another artifact you control enters, put a +1/+1 counter on
+        # target creature."), Optimistic Scavenger (enchantment ETB
+        # trigger AND ROOM_FULLY_UNLOCKED trigger), Surgical Suite //
+        # Hospital Room (``attacking_only=True``), Shrewd Storyteller
+        # (also gated on the ``beginning_of_postcombat_main`` event
+        # arm — Pin 3 below).
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnTargetCreature,
+        )
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 1
+        if amount < 0:
+            raise ValueError(
+                "put_plus_one_counter_on_target_creature bridge arm: "
+                f"amount must be non-negative, got {amount} (mirrors "
+                "Rust parse_effect contract — symmetric with "
+                "put_plus_one_counter_on_creature_you_control)"
+            )
+        attacking_only = bool(eff_dict.get("attacking_only", False))
+        return PutPlusOneCounterOnTargetCreature(
+            amount=amount,
+            attacking_only=attacking_only,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -8862,6 +8954,16 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     if kind == "source_is_creature":
         # Python's "the source is a creature" reads via Source(IsCreature()).
         return Source(inner=IsCreature())
+    if kind == "source_is_tapped":
+        # **PPP slice — Source(IsTapped()) predicate.** Mirrors Python's
+        # `Source(inner=IsTapped())` (the "if this creature is tapped"
+        # idiom; ``effects/object_predicates.py:253``). Pins the
+        # tapped-state check to the source permanent rather than the
+        # (player) event subject. Used by all 5 "survivor" cards
+        # blocked by PPP Pin 3 (Savior of the Small, Cautious Survivor,
+        # Defiant Survivor, House Cartographer, Shrewd Storyteller).
+        from mtg_bot.effects.object_predicates import IsTapped
+        return Source(inner=IsTapped())
     if kind == "subject_is_land":
         # Python's ``Subject(None, IsLand())`` — the default-subject
         # path uses the event's only declared slot (``"obj"`` for
@@ -9368,6 +9470,45 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # Bloodsucker, Erratic Apparition, Gremlin Tamer, Infernal Phantom,
         # Scrabbling Skullcrab, Skullsnap Nuisance.
         event = Event.ROOM_FULLY_UNLOCKED
+    elif event_str == "beginning_of_postcombat_main":
+        # **PPP Pin 3 — BEGINNING_OF_POSTCOMBAT_MAIN event bridge
+        # (10th Rust slice).** Python's
+        # ``Event.BEGINNING_OF_POSTCOMBAT_MAIN`` (value
+        # ``"beginning_of_postcombat_main"`` —
+        # ``effects/predicates.py:135``) fires at the entry to the
+        # POSTCOMBAT MAIN step on every turn. Mirrors Python's
+        # ``run_beginning_of_postcombat_main_triggers`` (``turn.py:865``)
+        # dispatch site.
+        #
+        # **No spelling skew.** Python's string value matches the Rust
+        # ``Event::BeginningOfPostcombatMain`` string — no
+        # ``deals_damage``/``deals_combat_damage`` style translation
+        # needed.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[BEGINNING_OF_
+        # POSTCOMBAT_MAIN]`` is ``("player",)`` — the active player
+        # whose postcombat main step is beginning. Same
+        # ``PLAYER_SUBJECT_OFFSET`` sentinel convention as the other
+        # phase-step events (BEGINNING_OF_END_STEP, BEGINNING_OF_UPKEEP,
+        # BEGINNING_OF_COMBAT). No predicate-slot rewrite needed.
+        #
+        # **The "survivor" predicate pattern.** All 5 blocked EoE
+        # cards share the predicate composition ``And(And(Controlled
+        # (YOU), IsSelf), Source(IsTapped))`` — "at the beginning of
+        # your postcombat main phase, if this creature is tapped".
+        # The ``Source(IsTapped)`` predicate is wired (round-21 RR
+        # closure precedent); ``Controlled(YOU)`` resolves via the
+        # PLAYER_SUBJECT_OFFSET sentinel; ``IsSelf`` matches
+        # source==subject. None of these need new bridge surface
+        # beyond the event arm.
+        #
+        # **5 EoE cards unblocked**: Savior of the Small (return
+        # creature from gy), Cautious Survivor (gain 2 life), Defiant
+        # Survivor (manifest dread twice), House Cartographer (bespoke
+        # survival effect), Shrewd Storyteller (put +1/+1 counter on
+        # target creature — also gated on Pin 2's
+        # ``put_plus_one_counter_on_target_creature`` arm).
+        event = Event.BEGINNING_OF_POSTCOMBAT_MAIN
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
