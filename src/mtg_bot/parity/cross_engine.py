@@ -8932,6 +8932,110 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             amount=amount,
             attacking_only=attacking_only,
         )
+    if kind == "survey_mechan_activation_effect":
+        # **17th Rust slice -- DDD Pin 1 closure.** Pure-Python bridge
+        # arm for ``SurveyMechanActivationEffect`` (bespoke zero-field
+        # dataclass at ``effects/bespoke.py:3173``). Survey Mechan's
+        # activated ability body: "{2}{U}{R}: It deals 3 damage to any
+        # target. Target player draws three cards and gains 3 life."
+        #
+        # **Field shape.** Zero fields -- all resolution state is read
+        # from the resolving game state at resolve time. Bridge passes
+        # nothing through; any extra dict fields are silently ignored
+        # (unit-variant convention, mirrors AAA Pin 1 DyadrineAttackEffect
+        # bridge arm).
+        #
+        # **Targeting.** Two REQUIRED slots enforced by the activation
+        # machinery (slot 0: any_damage_target, slot 1: player); the
+        # Effect class itself does not declare them. Cross-engine probes
+        # exercise the bridge round-trip + the Python-side resolve;
+        # Rust-side substrate is out of scope for this slice (no Rust
+        # Effect variant exists for the bespoke shape -- this is a
+        # bridge-arm-only closure consistent with the round-23
+        # BLOCKED-bespoke-no-Rust-substrate precedent).
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card -- Survey Mechan.
+        from mtg_bot.effects.bespoke import SurveyMechanActivationEffect
+        return SurveyMechanActivationEffect()
+    if kind == "search_library_for_equipment_to_battlefield":
+        # **17th Rust slice -- DDD Pin 3 closure.** Pure-Python bridge
+        # arm for ``SearchLibraryForEquipmentToBattlefield`` (zero-field
+        # frozen dataclass at ``effects/generic/search.py:226``). Honored
+        # Knight-Captain's activated tutor body: "{4}{W}{W}, Sacrifice
+        # Honored Knight-Captain: Search your library for an Equipment
+        # card, put it onto the battlefield, then shuffle."
+        #
+        # **Field shape.** Zero fields -- the "Equipment" filter and
+        # untapped ETB semantics are encoded in the resolve method
+        # (NOT constructor arguments). Bridge passes nothing through;
+        # any extra dict fields are silently ignored (unit-variant
+        # convention, mirrors AAA Pin 1 DyadrineAttackEffect bridge arm).
+        #
+        # **Distinct sibling arms.** Adjacent ``SearchLibraryForCard``
+        # (filter_name + max_mv + may_fail; line 3739) and
+        # ``SearchLibraryForBasicLandTapped`` (count; line 3668) are
+        # INDEPENDENT arms with different resolve semantics. The
+        # Equipment tutor's untapped ETB + no-may-fail-asymmetric-agent
+        # path is materially different from the generic
+        # ``SearchLibraryForCard(filter_name="Equipment")`` shape --
+        # closing those arms did NOT close this gap.
+        #
+        # **Rust-side substrate.** Bridge-arm-only closure; no Rust
+        # ``Effect::SearchLibraryForEquipmentToBattlefield`` variant
+        # exists today (consistent with the DDD Pin 1 bespoke arm above
+        # and the round-23 BLOCKED-bespoke-no-Rust-substrate precedent).
+        # Cross-engine probes drive the Python-side resolve only.
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card -- Honored
+        # Knight-Captain.
+        from mtg_bot.effects.generic.search import (
+            SearchLibraryForEquipmentToBattlefield,
+        )
+        return SearchLibraryForEquipmentToBattlefield()
+    if kind == "exile_top_x_of_library_may_play_this_turn":
+        # **17th Rust slice -- DDD Pin 2 closure.** Pure-Python bridge
+        # arm for ``ExileTopXOfLibraryMayPlayThisTurn`` (frozen dataclass
+        # at ``effects/generic/exile.py:415``). Memorial Vault's
+        # activation body: "{2}, {T}, Sacrifice another artifact: Exile
+        # the top X cards of your library, where X is one plus the mana
+        # value of the sacrificed artifact. You may play those cards
+        # this turn."
+        #
+        # **Field shape.** ``amount: Formula | None = None``. The
+        # ``amount`` field is a structured ``Formula`` object (NOT a
+        # primitive int -- the singular ``ExileTopOfLibraryMayPlayThisTurn``
+        # sibling at line 3469 uses ``amount: int = 1``). The bridge
+        # delegates to ``_ta_dict_to_python_formula`` (defined below)
+        # for the Formula sub-dict; defaults to ``None`` when absent
+        # (the no-op / zero-card sentinel that ``resolve`` early-returns
+        # against).
+        #
+        # **Formula dispatcher.** This arm is the first consumer of
+        # ``_ta_dict_to_python_formula``; the helper currently dispatches
+        # ``mv_of_cost_paid_object_plus`` (Memorial Vault's
+        # ``MVOfCostPaidObjectPlus(constant=N)`` binding) and ``constant``
+        # (the static fallback the dataclass-default for tests). Adding
+        # a new card whose ``amount`` formula needs a new dispatch
+        # extends the helper in lockstep, not this arm.
+        #
+        # **Rust-side substrate.** Bridge-arm-only closure; no Rust
+        # ``Effect::ExileTopXOfLibraryMayPlayThisTurn`` variant exists
+        # today (the Formula algebra has no Rust serialization protocol
+        # yet -- introducing one is a substrate-scope decision separate
+        # from this slice). Cross-engine probes drive the Python-side
+        # resolve only.
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card -- Memorial Vault.
+        from mtg_bot.effects.generic.exile import (
+            ExileTopXOfLibraryMayPlayThisTurn,
+        )
+        amount_dict = eff_dict.get("amount")
+        amount = (
+            _ta_dict_to_python_formula(amount_dict)
+            if amount_dict is not None
+            else None
+        )
+        return ExileTopXOfLibraryMayPlayThisTurn(amount=amount)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -8940,6 +9044,54 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
         f"in src/mtg_bot/parity/cross_engine.py when adding a new "
         f"CE19-shape probe)"
+    )
+
+
+def _ta_dict_to_python_formula(formula_dict: dict):
+    """Translate one formula-dict into a Python ``Formula`` instance.
+
+    **17th Rust slice -- DDD Pin 2 closure substrate.** First Formula
+    dispatcher in ``cross_engine.py``; introduced for Memorial Vault's
+    ``ExileTopXOfLibraryMayPlayThisTurn(amount=MVOfCostPaidObjectPlus
+    (constant=1))`` binding.
+
+    Dict shape: ``{"kind": "<formula_kind>", <kind-specific fields>}``.
+    Mirrors the effect-dispatch shape ``_ta_dict_to_python_effect``
+    consumes; the kind discriminator is a snake_case string matching
+    each Formula subclass's canonical kind.
+
+    Currently dispatched:
+      * ``mv_of_cost_paid_object_plus`` -- ``MVOfCostPaidObjectPlus``
+        (reads ``state.resolving_cost_paid_objects[0]`` at resolve time
+        and adds ``constant``). The Memorial Vault binding uses
+        ``constant=1``.
+      * ``constant`` -- ``Constant(amount)``. Static fallback for tests
+        / future cards whose ``amount`` is a parse-time integer wrapped
+        in a Formula slot.
+
+    Adding a new Formula subclass (``CountControlledMatching`` etc.)
+    extends this helper in lockstep with the consumer arm that needs
+    it -- one new arm per new dispatch, no implicit fallthrough.
+    Mirrors the append-only ``_ta_dict_to_python_effect`` discipline.
+
+    Raises ``ValueError`` on an unrecognised kind so consumer arms get
+    a clear surfaced error (matching the parent dispatcher's terminal
+    arm shape).
+    """
+    kind = formula_dict["kind"]
+    if kind == "mv_of_cost_paid_object_plus":
+        from mtg_bot.effects.formulas import MVOfCostPaidObjectPlus
+        return MVOfCostPaidObjectPlus(
+            constant=int(formula_dict.get("constant", 0)),
+        )
+    if kind == "constant":
+        from mtg_bot.effects.formulas import Constant
+        return Constant(amount=int(formula_dict.get("amount", 0)))
+    raise ValueError(
+        f"cross_engine triggered_abilities bridge: unsupported "
+        f"formula kind {kind!r} (extend `_ta_dict_to_python_formula` "
+        f"in src/mtg_bot/parity/cross_engine.py when adding a new "
+        f"Formula-driven Effect arm)"
     )
 
 

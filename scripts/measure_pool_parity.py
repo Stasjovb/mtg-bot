@@ -290,6 +290,11 @@ PROBE_MODULES: tuple[Path, ...] = (
     # 15th Rust slice (VVV Pin 1 — Predicate::SourceIsSelf
     # player-subject tautology arm for Survivor postcombat-main):
     REPO_ROOT / "tests" / "test_probe_vvv_downstream.py",
+    # 17th Rust slice (DDD Pins 1+2+3 — pure-Python bridge arms for
+    # SurveyMechanActivationEffect + ExileTopXOfLibraryMayPlayThisTurn
+    # + SearchLibraryForEquipmentToBattlefield; first Formula
+    # dispatcher _ta_dict_to_python_formula in cross_engine.py):
+    REPO_ROOT / "tests" / "test_probe_ddd_downstream.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
