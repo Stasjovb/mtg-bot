@@ -4417,11 +4417,45 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     if printing.cost_reductions or printing.external_cost_reductions:
         return False
-    # S2 control-changing / S3 replacement riders — Phase 2/4 of the
-    # plan; positively declined here.
-    if printing.attached_grants_control:
+    # S2 control-changing — Phase 2 S2 (round-79+, 2026-05-20) — now
+    # admitted for the Duskmourn's Domination shape:
+    # ``attached_grants_control AND attached_grants_lose_all_abilities``
+    # (paired — both flags or neither — the live S2 carrier in EoE
+    # is Duskmourn's Domination, and the only other live S2 sibling,
+    # Tractor Beam, ALSO carries `attached_prevents_untap` plus a
+    # triggered ETB and is independently declined below). The Rust
+    # attach arm flips the host's controller (layer 2) and the
+    # `battlefield_has_keyword` reader wipes the host's keyword set
+    # while the lose-abilities aura is attached (layer 6 honest-stop
+    # — see the SL entry).
+    #
+    # ``attached_sets_base_pt`` (Lignify-shape layer 7b override) and
+    # ``attached_grants_subtype`` (Lignify-shape layer 4 add_subtype)
+    # stay positively declined — no S2 carrier in the live EoE pool
+    # uses them, and the Rust reader fold for set-base-PT is NOT
+    # wired in this slice (honest-stop per the plan §3 Phase 2).
+    #
+    # ``attached_prevents_untap`` (Tractor Beam's don't-untap clause)
+    # also stays declined — no Rust untap-step skip for the attached
+    # host is wired yet (also a future Phase-2-S2-extension slice).
+    #
+    # S3 replacement riders — Phase 4; positively declined here.
+    if printing.attached_grants_control and (
+        not printing.attached_grants_lose_all_abilities
+    ):
+        # Lone control-grant without the lose-abilities wipe (no live
+        # EoE carrier matches this shape today, but stay defensive —
+        # admitting a control-only Aura would silently mistranslate
+        # against a host that still has functional abilities the
+        # bench may rely on).
         return False
-    if printing.attached_grants_lose_all_abilities:
+    if printing.attached_grants_lose_all_abilities and (
+        not printing.attached_grants_control
+    ):
+        # Lone lose-abilities without control-swap is the Lignify
+        # shape (also carries set-base-PT + subtype add). No live EoE
+        # carrier matches this AND has its other riders unset; stay
+        # declined.
         return False
     if printing.attached_sets_base_pt is not None:
         return False
@@ -4719,6 +4753,26 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_power_bonus = 0
             aura_toughness_bonus = 0
             aura_granted_keywords = ()
+        # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+        # Thread the S2 static-grant fields from the parsed printing
+        # through to the CardDef. The §2 predicate above gates on the
+        # paired-shape (``attached_grants_control +
+        # attached_grants_lose_all_abilities``) and rejects
+        # ``attached_sets_base_pt`` / ``attached_grants_subtype`` /
+        # ``attached_prevents_untap``; so for the live admit set
+        # (Duskmourn's Domination) the values flowing through here
+        # are control=True / lose_abilities=True / set_base_pt=None.
+        # The Phase-1-S1 carriers (Frantic Strength, Shardmage's
+        # Rescue) have all three at the back-compat defaults, so
+        # they materialize bit-identical to before this slice.
+        attached_sets_base_pt = printing.attached_sets_base_pt
+        if attached_sets_base_pt is not None:
+            sp, st = attached_sets_base_pt
+            aura_set_base_power: int | None = int(sp)
+            aura_set_base_toughness: int | None = int(st)
+        else:
+            aura_set_base_power = None
+            aura_set_base_toughness = None
         return CardDef(
             name=printing.name,
             card_type="Enchantment",
@@ -4730,6 +4784,12 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_power_bonus=aura_power_bonus,
             aura_toughness_bonus=aura_toughness_bonus,
             aura_granted_keywords=aura_granted_keywords,
+            aura_grants_control=printing.attached_grants_control,
+            aura_grants_lose_abilities=(
+                printing.attached_grants_lose_all_abilities
+            ),
+            aura_set_base_power=aura_set_base_power,
+            aura_set_base_toughness=aura_set_base_toughness,
         )
     if _printing_is_bridge_simple_spell(printing):
         # Spell-card-bridge lever, Phase 1 (round-70): a pure

@@ -483,6 +483,55 @@ fn move_aura_post_resolve(
         // cast_aura's rehome path, but assert it via the owner walk
         // for the fizzle-vs-attach symmetry below.
         let _ = owner;
+        // Aura-attachment substrate — Phase 2 S2 (round-79+,
+        // 2026-05-20). Layer-2 control-change static grant: if the
+        // Aura's printing carries `aura_grants_control`, flip the
+        // host's `controller` to the Aura's controller. Stash the
+        // host's prior controller in `controller_baseline` on FIRST
+        // grant (the captured-baseline so subsequent grants revert
+        // through the original owner). Mirrors Python's
+        // `apply_aura_static_grants_on_attach` control-change branch
+        // (`actions.py:2828-2854`).
+        //
+        // **Honest-stop:** timestamp-based LIFO ordering of multiple
+        // control-changing Auras on the same host is not modeled in
+        // this slice — Phase-2 S2 carriers (Duskmourn's Domination)
+        // are single-host single-grant in the live EoE pool. A
+        // second Aura would observe the first's host swap and grant
+        // its OWN controller (correctly by latest-wins); only the
+        // revert-via-baseline assumes one outstanding grant. Phase 3+
+        // can add a continuous-effect registry for the multi-grant
+        // CR 613 layer-2 timestamp walk.
+        let grants_control = state
+            .registry
+            .lookup(printing_id)
+            .map(|p| p.aura_grants_control)
+            .unwrap_or(false);
+        if grants_control {
+            // Find the host in whatever bf it currently lives on,
+            // capture-baseline (only if no baseline yet), then flip
+            // the host's controller to the resolving spell's
+            // controller. We do this BEFORE pushing the Aura so the
+            // host walk doesn't find the freshly-pushed Aura. Walk
+            // both players' bfs.
+            for player_idx in 0..state.players.len() {
+                let pos = state.players[player_idx]
+                    .battlefield
+                    .iter()
+                    .position(|o| o.id == host_id);
+                if let Some(idx) = pos {
+                    let bf = Arc::make_mut(
+                        &mut state.players[player_idx].battlefield,
+                    );
+                    let h = &mut bf[idx];
+                    if h.controller_baseline.is_none() {
+                        h.controller_baseline = Some(h.controller);
+                    }
+                    h.controller = controller_id;
+                    break;
+                }
+            }
+        }
         let bf =
             &mut state.players[controller_id as usize].battlefield;
         Arc::make_mut(bf).push(obj);
@@ -3587,6 +3636,7 @@ fn apply_effect(
                     warp_exile_pending: false,
                     warped: false,
                     cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -3746,6 +3796,7 @@ fn apply_effect(
                         warp_exile_pending: false,
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
+                        controller_baseline: None,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -3877,6 +3928,7 @@ fn apply_effect(
                     warp_exile_pending: false,
                     warped: false,
                     cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -6844,6 +6896,7 @@ fn apply_effect(
                         warp_exile_pending: false,
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
+                        controller_baseline: None,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -7008,6 +7061,7 @@ fn apply_effect(
                         warp_exile_pending: false,
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
+                        controller_baseline: None,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -10807,6 +10861,7 @@ fn apply_effect(
                 warp_exile_pending: false,
                 warped: false,
                 cast_from_exile_with_lightstall_surcharge: false,
+                controller_baseline: None,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -15227,6 +15282,7 @@ impl GameState {
             warp_exile_pending: false,
             warped: false,
             cast_from_exile_with_lightstall_surcharge: false,
+            controller_baseline: None,
         };
 
         // R76-1: advance the monotonic id counter past this injected

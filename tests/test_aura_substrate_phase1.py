@@ -333,14 +333,17 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_2():
             admitted.append(name)
         else:
             declined.append((name, "declined"))
-    # Phase 2 first deliverable: exactly the two S1 carriers admit.
-    # If this set changes (parser drift, future widen), update both
-    # this pin AND the deck-count expectations in the plan.
+    # Phase 2 first deliverable: S1 carriers + S2 Duskmourn-shape
+    # (control-swap + lose-abilities). Tractor Beam still declined
+    # (triggered ETB + don't-untap rider). If this set changes
+    # (parser drift, future widen), update both this pin AND the
+    # deck-count expectations in the plan.
     assert sorted(admitted) == sorted([
         "Frantic Strength",
         "Shardmage's Rescue",
+        "Duskmourn's Domination",
     ]), (
-        f"Phase 2 first deliverable expected the two S1 carriers to "
+        f"Phase 2 first deliverable + S2 expected three carriers to "
         f"admit; got {sorted(admitted)!r}. If this is intentional (a "
         f"later Phase widen of the predicate's admit shape), update "
         f"this pin to assert the new expected admit list explicitly."
@@ -472,14 +475,35 @@ def test_predicate_declines_aura_with_triggered_ability():
     assert _printing_is_bridge_simple_aura(sheltered) is False
 
 
-def test_predicate_declines_aura_with_control_swap():
-    """S2 sub-shape: an Aura that grants control (Duskmourn's
-    Domination, Tractor Beam) is positively declined — Phase 2 of the
-    plan."""
+def test_predicate_admits_duskmourns_domination_post_phase_2_s2():
+    """S2 sub-shape, Phase 2 S2 first deliverable (round-79+,
+    2026-05-20): Duskmourn's Domination
+    (``attached_grants_control + attached_grants_lose_all_abilities +
+    equipment_bonuses=(-3,0,...)``) is now ADMITTED through the
+    loader. The Rust attach arm flips the host's controller (layer 2)
+    and `battlefield_has_keyword` wipes the host's keyword set
+    (layer 6 honest-stop) while the Aura is attached. Tractor Beam
+    (also S2-shape) stays declined separately on its triggered ETB +
+    `attached_prevents_untap` rider."""
     dd = _live_printing("Duskmourn's Domination")
     assert dd.is_aura is True
     assert dd.attached_grants_control is True
-    assert _printing_is_bridge_simple_aura(dd) is False
+    assert dd.attached_grants_lose_all_abilities is True
+    assert _printing_is_bridge_simple_aura(dd) is True
+
+
+def test_predicate_declines_tractor_beam_pre_phase_2_s2_extension():
+    """S2 sub-shape sibling: Tractor Beam carries
+    ``attached_grants_control + attached_prevents_untap`` plus a
+    triggered ETB (TapEnchantedPermanent). The triggered_abilities
+    teeth + the attached_prevents_untap teeth keep it declined; a
+    future Phase-2-S2-extension slice (untap-step skip + trigger
+    bridge) is the unblocker."""
+    tb = _live_printing("Tractor Beam")
+    assert tb.is_aura is True
+    assert tb.attached_grants_control is True
+    assert tb.attached_prevents_untap is True
+    assert _printing_is_bridge_simple_aura(tb) is False
 
 
 def test_predicate_declines_aura_with_replacement():
@@ -641,21 +665,28 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
         "Phase 2 first deliverable MUST admit Frantic Strength as "
         "the first live EoE Aura. Admitted set: %r" % (admitted_auras,)
     )
-    # S2/S3/S4 Auras stay positively declined by the §2 teeth — none
-    # of these should leak through.
+    # Phase 2 S2 first deliverable (round-79+, 2026-05-20): Duskmourn's
+    # Domination is now ADMITTED — it carries the paired
+    # control-swap + lose-abilities S2 shape the new Rust attach arm
+    # handles. Tractor Beam stays declined (triggered ETB +
+    # attached_prevents_untap rider). S3/S4 Auras stay positively
+    # declined by their respective §2 teeth.
+    assert "Duskmourn's Domination" in admitted_auras, (
+        "Phase 2 S2 expected Duskmourn's Domination to admit. "
+        "Admitted set: %r" % (admitted_auras,)
+    )
     must_decline = {
-        "Duskmourn's Domination",   # S2 attached_grants_control
         "Cracked Skull",             # S4 triggered_abilities
         "Sporogenic Infection",      # S4 triggered_abilities
         "Chorale of the Void",       # S4 triggered_abilities
         "Moonlit Meditation",        # S3 replaces_first_tokens_with_copies
-        "Tractor Beam",              # residue attached_grants_control + prevents_untap
+        "Tractor Beam",              # residue triggered_abilities + prevents_untap
         "Meltstrider's Resolve",     # residue triggered_abilities
         "Pain for All",              # residue triggered_abilities
     }
     leaked = must_decline & set(admitted_auras)
     assert leaked == set(), (
-        "S2/S3/S4/residue Auras must stay positively declined by §2 "
+        "S3/S4/residue Auras must stay positively declined by §2 "
         "teeth — surprise admit: %r" % (sorted(leaked),)
     )
 
