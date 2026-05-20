@@ -3240,6 +3240,73 @@ pub enum Effect {
     ///    `SearchLibraryForBasicLandTapped` uses. Mirrors Python's
     ///    `shuffle_library(state, controller_id)`.
     FamishedWorldsireLookTopXByPowerPutLandsTapped,
+    /// **16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer ETB.**
+    /// "When this creature enters, return target noncreature, nonland
+    /// permanent card with mana value X or less from your graveyard
+    /// to the battlefield, where X is the amount of mana spent to
+    /// cast this creature." Mirrors Python's
+    /// `AstelliReclaimerETBEffect` (`effects/bespoke.py:25-89`) — the
+    /// ONLY EoE card with this shape, 4,565 17lands decks (the largest
+    /// single-card closure in the BLOCKED-genuinely_missing tier).
+    ///
+    /// **Unit variant; no payload.** X is dynamic (read from the
+    /// source's printing's `mana_cost.total()` for a normal cast or
+    /// `warp_cost.total()` for a warp cast — the `cast_via_warp` flag
+    /// rides on the entered permanent's `warp_exile_pending`, set by
+    /// `state_ops_cast.rs::cast_creature_warp` and surviving the
+    /// move-to-battlefield post-resolve). The target selection is a
+    /// DETERMINISTIC first-legal scan over the controller's graveyard
+    /// (sorted by graveyard insertion order; ties — none expected —
+    /// would break by `id`). Both engines mirror the
+    /// first-legal-deterministic pick (Python's `legal_targets`
+    /// returns the graveyard scan in insertion order, and the resolve
+    /// pops the first via the requires_target target binding).
+    ///
+    /// **Resolve semantics (mirrors `AstelliReclaimerETBEffect`).**
+    /// 1. Source-controller resolution via the transient
+    ///    `current_resolve_source_controller` (fallback
+    ///    `active_player`) — CR 119.5 / 608.2; "your graveyard" is
+    ///    the source's controller's graveyard.
+    /// 2. Locate the source's entered-battlefield object by
+    ///    `source_obj_id` on the controller's battlefield. If absent
+    ///    (the source has already left bf — e.g. counterspelled
+    ///    pre-resolve), silent no-op.
+    /// 3. Read `cast_via_warp = obj.warp_exile_pending`. Look up the
+    ///    source's printing by `obj.printing_id`. If `cast_via_warp`
+    ///    AND the printing's `warp_cost` is `Some(cost)`, set
+    ///    `x = cost_total(cost)`. Otherwise set
+    ///    `x = cost_total(&printing.mana_cost)`.
+    /// 4. Walk the controller's graveyard in insertion order. Pick
+    ///    the FIRST card whose printing satisfies
+    ///    `is_permanent && !is_creature && !is_land && mana_cost.total() <= x`
+    ///    (`is_permanent` =
+    ///    `card_types intersects {Creature, Artifact, Land,
+    ///    Enchantment, Planeswalker}`; the filter rejects Creature
+    ///    and Land so the survivors are
+    ///    `{Artifact, Enchantment, Planeswalker}` permanent cards).
+    ///    If no card matches, silent no-op (Python parity).
+    /// 5. Remove the picked card from the graveyard. Stamp the
+    ///    standard battlefield-entry fields (
+    ///    `zone = ZONE_BATTLEFIELD`, `tapped = false`,
+    ///    `summoning_sick = false` per CR 302.1 + 612.6 — the picked
+    ///    card is NOT a creature; `controller = controller_u8`,
+    ///    `damage = 0`, `counters = 0`, `attached_to = None`,
+    ///    `exiled_with_source = None`, fresh
+    ///    `etb_timestamp`). Push to controller's battlefield.
+    /// 6. Queue `Event::Enters` for the entered card via
+    ///    `pending_etb_dispatches.push(entered_id)` so the trigger
+    ///    fires AFTER the resolving Astelli Reclaimer ETB trigger
+    ///    frame pops (mirrors `SearchLibraryForBasicLandTapped` /
+    ///    `FamishedWorldsireLookTopXByPowerPutLandsTapped`).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// the target is computed at resolve time from the deterministic
+    /// graveyard scan, not stored on the variant. Python's
+    /// `AstelliReclaimerETBEffect` is a `@dataclass(frozen=True)`
+    /// with no fields. The bridge translates this Rust unit variant
+    /// to `AstelliReclaimerETBEffect()`. Mirrors the round-49 /
+    /// round-54 unit-variant convention.
+    AstelliReclaimerETBEffect,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -6941,6 +7008,21 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // arm shape verbatim, swapping the literal).
             Ok(Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped)
         }
+        "astelli_reclaimer_etb_effect" => {
+            // 16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer
+            // ETB. Unit variant; no payload fields beyond `kind` (X is
+            // dynamic — read from the source's printing's
+            // `mana_cost`/`warp_cost` at resolve based on the
+            // `warp_exile_pending` flag the entered permanent carries;
+            // target selection is a deterministic first-legal
+            // graveyard scan mirroring Python's
+            // `AstelliReclaimerETBEffect`). Extra dict fields silently
+            // ignored for round-trip dict-shape consistency (mirrors
+            // the round-49 `gain_life_equal_to_your_life_total` /
+            // round-54 `famished_worldsire_look_top_x_by_power_put_
+            // lands_tapped` unit-variant parse arm shape verbatim).
+            Ok(Effect::AstelliReclaimerETBEffect)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -9675,6 +9757,18 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "famished_worldsire_look_top_x_by_power_put_lands_tapped",
             )?;
+        }
+        Effect::AstelliReclaimerETBEffect => {
+            // 16th Rust slice (TTT Pin 3 closure). Unit variant; no
+            // payload fields beyond `kind` (X dynamic — source
+            // printing's mana_cost/warp_cost at resolve; deterministic
+            // first-legal graveyard target selection). Mirrors
+            // Python's `AstelliReclaimerETBEffect` dict shape (no
+            // static fields on the @dataclass). No other keys emitted
+            // (round-trip dict-shape consistency convention —
+            // round-54 `famished_worldsire_look_top_x_by_power_put_
+            // lands_tapped` precedent).
+            d.set_item("kind", "astelli_reclaimer_etb_effect")?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;

@@ -1,5 +1,31 @@
 """Genuine cross-engine probes -- batch TTT downstream unlock (14th
-Rust slice; closes TTT Pins 1+2).
++ 16th Rust slices; closes TTT Pins 1+2+3).
+
+**Slice 16 additions (TTT Pin 3 closure -- Astelli Reclaimer ETB):**
+
+Slice 16 added ``Effect::AstelliReclaimerETBEffect`` (unit variant)
+to the Rust enum + parse + resolve arms, plus the
+``astelli_reclaimer_etb_effect`` bridge arm in ``cross_engine.py``.
+The resolve arm mirrors Python's ``AstelliReclaimerETBEffect``
+step-for-step: source-controller resolution; X from the source's
+``mana_cost``/``warp_cost`` (gated on the ``warp_exile_pending``
+flag stamped at warp-cast time); first-legal deterministic gy scan
+for a noncreature, nonland permanent with ``mana_cost.total <= X``;
+move to bf with ``summoning_sick=False`` (per slice 14 TTT Pin 2
+CR 302.1 + 612.6 closure); ``Event::Enters`` queued via
+``pending_etb_dispatches``.
+
+Probes added in slice 16:
+  * ``test_ttt_probe_astelli_reclaimer_etb_returns_gy_noncreature_permanent_real_eoe``
+    -- Astelli-Reclaimer-shape creature ETB returns a noncreature gy
+    permanent to bf, with the !is_creature filter dropping a sibling
+    creature card.
+  * ``test_ttt_probe_astelli_reclaimer_empty_filter_no_op`` -- empty-
+    filter no-op invariant (no legal gy target → silent no-op).
+
+1 EoE card directly parity-aligned by slice 16: Astelli Reclaimer
+(4,565 17lands decks; LARGEST single-card BLOCKED-genuinely_missing
+closure to date).
 
 **14th Rust slice (TTT Pin 1 closure):**
 
@@ -414,4 +440,290 @@ def test_ttt_probe_python_creature_etb_still_summoning_sick():
         f"Python regression guard: creature ETB should stamp "
         f"summoning_sick=True (post-Slice-14 the creature-side "
         f"branch is preserved); got summoning_sick={py_creature_ss!r}"
+    )
+
+
+def test_ttt_probe_astelli_reclaimer_etb_returns_gy_noncreature_permanent_real_eoe():
+    """**16th Rust slice TTT Pin 3 closure -- Astelli Reclaimer ETB
+    end-to-end byte-equal probe.**
+
+    Drives the Rust engine's new
+    ``Effect::AstelliReclaimerETBEffect`` arm end-to-end with an
+    Astelli-Reclaimer-shape creature ETBing on the controller's bf
+    while a noncreature, nonland permanent with MV <= X sits in the
+    controller's graveyard.  Post-resolve invariant: the gy permanent
+    returns to the bf, fires its own Enters trigger fan-out (queued
+    via ``pending_etb_dispatches`` post-pop), and the gy is emptied.
+
+    Astelli Reclaimer (EoE, 4,565 17lands decks): ``{3}{W}{W}``
+    Creature Angel Warrior with Flying + Warp {2}{W}.  Oracle: "When
+    this creature enters, return target noncreature, nonland
+    permanent card with mana value X or less from your graveyard to
+    the battlefield, where X is the amount of mana spent to cast
+    this creature."  Bespoke ``AstelliReclaimerETBEffect`` on Python
+    (``effects/bespoke.py:25-89``); new
+    ``Effect::AstelliReclaimerETBEffect`` on Rust (this slice).
+
+    Pre-closure (the divergence TTT Pin 3 locked in): the printing's
+    ETB body could not round-trip through the bridge -- Rust's
+    Effect enum had no matching variant, so any Astelli Reclaimer
+    deck registered through the bridge would either fail to parse
+    or silently drop the ETB.  Post-closure: the Rust resolve arm
+    mirrors Python step-for-step; the gy permanent returns to bf
+    on both engines under the same first-legal-graveyard-scan target
+    convention.
+
+    Probe shape (Rust-side end-to-end + cross-engine bridge):
+      1. Bridge round-trip:
+         ``{"kind": "astelli_reclaimer_etb_effect"}`` translates to
+         ``AstelliReclaimerETBEffect()`` on Python.
+      2. Rust-side full ETB cycle: inject an Astelli-Reclaimer-shape
+         creature on P0's bf with the new
+         ``astelli_reclaimer_etb_effect`` ETB trigger; pre-seed P0's
+         graveyard with a noncreature artifact card whose
+         ``mana_cost.total <= mana_cost(Reclaimer).total``.
+         Resolve the stack to completion.
+      3. Post-resolve invariants on Rust:
+            * The gy permanent is gone from P0's graveyard.
+            * The gy permanent is now on P0's battlefield, with
+              ``summoning_sick=False`` (per slice 14 TTT Pin 2 CR
+              302.1 + 612.6 closure: non-creature ETB).
+            * The Reclaimer source is still on P0's bf (ETB does not
+              relocate itself).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state, _ta_dict_to_python_effect,
+    )
+    from mtg_bot.effects.bespoke import AstelliReclaimerETBEffect
+
+    # ---- Bridge arm round-trip: Rust dict -> Python class. ---------
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "astelli_reclaimer_etb_effect"}
+    )
+    assert isinstance(bridged, AstelliReclaimerETBEffect), (
+        "TTT Pin 3 closure (slice 16): the cross_engine bridge arm "
+        "should round-trip the Rust kind 'astelli_reclaimer_etb_effect' "
+        f"to a Python AstelliReclaimerETBEffect instance; got {bridged!r}"
+    )
+    # Equality under frozen dataclass shape (zero-arg constructor).
+    assert bridged == AstelliReclaimerETBEffect(), (
+        "TTT Pin 3 closure: bridged effect should equal a default-"
+        "constructed AstelliReclaimerETBEffect (frozen-dataclass "
+        "equality contract)."
+    )
+
+    # ---- Rust-side end-to-end: inject Reclaimer + gy artifact. -----
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+
+    # Pre-seed P0's graveyard with a noncreature, nonland permanent
+    # card (a vanilla {1} Artifact) whose mana_cost.total = 1 <= X.
+    # Reclaimer's mana_cost.total = 3+1+1 = 5, so any
+    # mana_cost.total <= 5 noncreature, nonland permanent in gy is
+    # legal target.
+    rust_gy_artifact_id = rust_state.register_and_inject_object(
+        {
+            "name": "TTT Probe Vanilla Artifact (MV1)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_GRAVEYARD,
+    )
+    # Also seed a creature card in gy (to confirm it's filtered
+    # out by the !is_creature gate).  The Reclaimer's resolve arm
+    # walks graveyard in insertion order; pick is the FIRST card
+    # matching the filter -- so the creature is skipped and the
+    # artifact (inserted FIRST above) is the chosen target.
+    rust_gy_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "TTT Probe GY Creature (filtered out)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "power": 1, "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_GRAVEYARD,
+    )
+
+    # ---- Inject Astelli-Reclaimer-shape creature on P0's bf,
+    # firing its ETB trigger via the standard inject path.
+    rust_reclaimer_id = rust_state.register_and_inject_object(
+        {
+            "name": "TTT Astelli Reclaimer (probe)",
+            "card_types": ["Creature"],
+            "subtypes": ["Angel", "Warrior"],
+            "mana_cost": {"generic": 3, "W": 2},
+            "power": 3, "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "astelli_reclaimer_etb_effect",
+                },
+            }],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+
+    # The ETB trigger should land on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust TTT Pin 3 closure: Astelli Reclaimer's arrival on P0's "
+        "bf should fire its ENTERS trigger; got stack_size="
+        f"{rust_state.stack_size()}"
+    )
+
+    # Drain the stack to completion.  The ETB trigger frame resolves
+    # the AstelliReclaimerETBEffect arm: source = the Reclaimer (on
+    # bf); X = mana_cost.total = 5; first-legal gy scan picks the
+    # artifact (the creature is filtered out by !is_creature); the
+    # artifact moves to bf with summoning_sick=False; an Enters
+    # event is queued via pending_etb_dispatches and drained after
+    # the trigger frame pops.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    # ---- Post-resolve invariants. ----------------------------------
+    rust_bf_all = rust_state.battlefield_snapshot()
+    rust_p0_bf = [
+        e for e in rust_bf_all if e.get("controller_id") == 0
+    ]
+    rust_p0_bf_names = {e["printing_name"] for e in rust_p0_bf}
+
+    # 1. The artifact returned to bf.
+    assert "TTT Probe Vanilla Artifact (MV1)" in rust_p0_bf_names, (
+        "Rust TTT Pin 3 closure: the gy artifact (MV1) should have "
+        "been returned to P0's bf by Astelli Reclaimer's ETB; got "
+        f"bf_p0={sorted(rust_p0_bf_names)!r}"
+    )
+    # 2. The Reclaimer source is still on bf (ETB doesn't move self).
+    assert "TTT Astelli Reclaimer (probe)" in rust_p0_bf_names, (
+        "Rust TTT Pin 3 closure: the Reclaimer source should remain "
+        "on P0's bf post-ETB; got "
+        f"bf_p0={sorted(rust_p0_bf_names)!r}"
+    )
+    # 3. The artifact's summoning_sick is False (non-creature ETB,
+    #    slice 14 TTT Pin 2 CR 302.1 + 612.6 closure).
+    artifact_entry = next(
+        (e for e in rust_p0_bf
+         if e["printing_name"] == "TTT Probe Vanilla Artifact (MV1)"),
+        None,
+    )
+    assert artifact_entry is not None
+    artifact_ss = artifact_entry.get("summoning_sick")
+    assert artifact_ss == 0 or artifact_ss is False, (
+        "Rust TTT Pin 3 closure: the returned artifact should have "
+        "summoning_sick=False (non-creature ETB per slice 14); got "
+        f"summoning_sick={artifact_ss!r}"
+    )
+
+    # 4. The gy creature should still be there (filtered out by the
+    #    !is_creature gate; it's not a legal target).
+    rust_p0_gy = rust_state.graveyard_snapshot(0)
+    rust_p0_gy_names = {e["printing_name"] for e in rust_p0_gy}
+    assert (
+        "TTT Probe GY Creature (filtered out)" in rust_p0_gy_names
+    ), (
+        "Rust TTT Pin 3 closure: the gy creature should remain in "
+        "P0's graveyard (filtered out by the !is_creature target "
+        f"gate); got gy_p0={sorted(rust_p0_gy_names)!r}"
+    )
+    # 5. The artifact should NO LONGER be in the graveyard (it
+    #    moved to bf).
+    assert (
+        "TTT Probe Vanilla Artifact (MV1)" not in rust_p0_gy_names
+    ), (
+        "Rust TTT Pin 3 closure: the gy artifact should be GONE "
+        "from P0's graveyard (returned to bf); got "
+        f"gy_p0={sorted(rust_p0_gy_names)!r}"
+    )
+
+
+def test_ttt_probe_astelli_reclaimer_empty_filter_no_op():
+    """**16th Rust slice TTT Pin 3 closure -- empty-filter no-op
+    invariant.**
+
+    The Python SoT (``AstelliReclaimerETBEffect.resolve``) silently
+    no-ops when ``not targets`` (no legal gy target).  Rust's arm
+    mirrors this: if the first-legal scan returns ``None``, the
+    arm returns ``Ok(())`` without mutating any zone.
+
+    Probe shape: inject Astelli Reclaimer on a bf with EMPTY gy
+    (or only filtered-out cards), resolve, assert nothing moved.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+
+    # Only a creature in gy (filtered out -- no legal target).
+    rust_state.register_and_inject_object(
+        {
+            "name": "TTT Empty-Filter GY Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "power": 1, "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_GRAVEYARD,
+    )
+
+    # Inject Reclaimer; fires ETB.
+    rust_state.register_and_inject_object(
+        {
+            "name": "TTT Astelli Reclaimer (empty-filter probe)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 3, "W": 2},
+            "power": 3, "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "astelli_reclaimer_etb_effect",
+                },
+            }],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+
+    # Drain stack -- the ETB trigger resolves but the filter scan
+    # finds no legal target, so it silently no-ops.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    # Post-resolve: the gy creature should still be there (no zone
+    # transitions happened on the no-op path).
+    rust_p0_gy = rust_state.graveyard_snapshot(0)
+    rust_p0_gy_names = {e["printing_name"] for e in rust_p0_gy}
+    assert (
+        "TTT Empty-Filter GY Creature" in rust_p0_gy_names
+    ), (
+        "Rust TTT Pin 3 closure: the empty-filter no-op invariant "
+        "requires the gy creature to remain in P0's graveyard (no "
+        f"zone transitions on no-op); got gy_p0={sorted(rust_p0_gy_names)!r}"
+    )
+    # Bf has only the Reclaimer (no gy permanent returned -- filter empty).
+    rust_bf_all = rust_state.battlefield_snapshot()
+    rust_p0_bf = [
+        e for e in rust_bf_all if e.get("controller_id") == 0
+    ]
+    rust_p0_bf_names = {e["printing_name"] for e in rust_p0_bf}
+    assert (
+        "TTT Astelli Reclaimer (empty-filter probe)" in rust_p0_bf_names
+    )
+    assert "TTT Empty-Filter GY Creature" not in rust_p0_bf_names, (
+        "Rust TTT Pin 3 closure: empty-filter no-op should NOT "
+        "have moved the gy creature to bf (it's filtered out); got "
+        f"bf_p0={sorted(rust_p0_bf_names)!r}"
     )

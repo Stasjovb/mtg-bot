@@ -8069,6 +8069,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             FamishedWorldsireETBEffect,
         )
         return FamishedWorldsireETBEffect()
+    if kind == "astelli_reclaimer_etb_effect":
+        # 16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer ETB
+        # bridge arm. Rust's ``Effect::AstelliReclaimerETBEffect``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-54
+        # ``famished_worldsire_look_top_x_by_power_put_lands_tapped``
+        # arm, to_dict immediately after the round-54
+        # ``FamishedWorldsireLookTopXByPowerPutLandsTapped`` arm,
+        # resolve in ``state_ops_resolve.rs`` immediately after that
+        # arm) mirrors Python's ``AstelliReclaimerETBEffect``
+        # (``effects/bespoke.py:25-89``).
+        #
+        # **Unit variant — no fields.** X is dynamic (the source's
+        # printing's ``mana_cost.total`` for a normal cast or
+        # ``warp_cost.total`` for a warp cast — Rust reads the
+        # ``warp_exile_pending`` flag stamped on the entered
+        # permanent by ``state_ops_cast.rs::cast_creature_warp``,
+        # Python reads ``source.cast_via_warp``; both flags are set
+        # at warp-cast time and ride the source object through the
+        # ETB resolve). The target is a deterministic first-legal
+        # graveyard scan on both engines (Python's
+        # ``legal_targets`` returns the graveyard in insertion order;
+        # the resolve binds the first via the requires_target
+        # target-selection convention). No PendingDecision is
+        # plumbed on either side, so there is no §2
+        # silent-mistranslation surface from the choice. The bridge
+        # passes through verbatim; extra dict keys ignored (mirrors
+        # the round-54 ``famished_worldsire_look_top_x_by_power_put_
+        # lands_tapped`` unit-variant arm shape).
+        #
+        # **Resolve semantics (cross-engine).** Both engines:
+        # resolve under the SOURCE's controller (CR 119.5 / 608.2);
+        # X = mana spent (warp_cost if cast_via_warp else
+        # mana_cost); pick the first noncreature, nonland permanent
+        # card with ``mana_cost.total <= X`` from the controller's
+        # graveyard; remove from graveyard; put onto battlefield
+        # with the standard non-creature ETB stamp
+        # (``summoning_sick=False`` per CR 302.1 + 612.6 — the slice
+        # 14 TTT Pin 2 closure); fire ``Event::Enters`` for the
+        # entered card. Empty filter result → silent no-op.
+        #
+        # **Real EoE consumer:** Astelli Reclaimer (4,565 17lands
+        # decks) — the ONLY EoE card with this shape, the LARGEST
+        # single-card closure in the BLOCKED-genuinely_missing tier
+        # (the 7-card tier per ``docs/POOL_PARITY.md``).
+        from mtg_bot.effects.bespoke import (
+            AstelliReclaimerETBEffect,
+        )
+        return AstelliReclaimerETBEffect()
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card
         # in each opponent's graveyard moves to that player's own
