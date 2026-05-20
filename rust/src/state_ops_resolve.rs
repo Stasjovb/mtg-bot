@@ -474,6 +474,7 @@ pub(crate) fn dispatch_event(
         && event != Event::IsSacrificed
         && event != Event::DealtDamage
         && event != Event::BeginningOfPostcombatMain
+        && event != Event::DiscardsCard
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired; \
@@ -483,8 +484,8 @@ pub(crate) fn dispatch_event(
              Event::BeginningOfEndStep, Event::BeginningOfUpkeep, \
              Event::BeginningOfCombat, Event::YouAttack, \
              Event::CountersAdded, Event::IsSacrificed, Event::DealtDamage, \
-             Event::BeginningOfPostcombatMain \
-             (Slice 9 + r58 + r13 + r14 + r15 + r16-RR + PPP)"
+             Event::BeginningOfPostcombatMain, Event::DiscardsCard \
+             (Slice 9 + r58 + r13 + r14 + r15 + r16-RR + PPP + MMM)"
         )));
     }
 
@@ -2767,6 +2768,22 @@ fn apply_effect(
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
+                // **MMM Pin 2 (11th Rust slice).** Dispatch
+                // `Event::DiscardsCard` for the discarding player AFTER
+                // the card has been moved to graveyard. Mirrors
+                // Python's IS_DISCARD dispatch shape: subject is the
+                // discarding player (`PLAYER_SUBJECT_OFFSET +
+                // defender` sentinel — same convention as
+                // YOU_ATTACK / BEGINNING_OF_END_STEP). Entropic
+                // Battlecruiser's "Whenever an opponent discards a
+                // card, they lose 3 life" trigger fires here.
+                let discarding_player_subject =
+                    crate::cards::PLAYER_SUBJECT_OFFSET + defender as u32;
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DiscardsCard,
+                    discarding_player_subject,
+                )?;
             }
         },
         // Round-16: ScryN. CR 701.18 — controller looks at the top
@@ -4412,6 +4429,20 @@ fn apply_effect(
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
+                // **MMM Pin 2 (11th Rust slice).** Dispatch
+                // `Event::DiscardsCard` ONCE PER DISCARDED CARD on
+                // the controlling player (the discarding player for
+                // DiscardSelf). Per-card firing matches CR 701.8a
+                // semantics ("each card discarded") and mirrors
+                // Python's IS_DISCARD dispatch shape. Subject =
+                // PLAYER_SUBJECT_OFFSET + controller.
+                let discarding_player_subject =
+                    crate::cards::PLAYER_SUBJECT_OFFSET + controller as u32;
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DiscardsCard,
+                    discarding_player_subject,
+                )?;
             }
         }
         // Round-28 coverage. Mirror of
@@ -5729,6 +5760,18 @@ fn apply_effect(
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
+                // **MMM Pin 2 (11th Rust slice).** Dispatch
+                // `Event::DiscardsCard` ONCE PER DISCARDED CARD on
+                // the discarding opponent. Same per-card firing
+                // convention as `Effect::DiscardSelf`. Subject =
+                // PLAYER_SUBJECT_OFFSET + opponent_idx.
+                let discarding_player_subject =
+                    crate::cards::PLAYER_SUBJECT_OFFSET + opponent_idx as u32;
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DiscardsCard,
+                    discarding_player_subject,
+                )?;
             }
         }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath

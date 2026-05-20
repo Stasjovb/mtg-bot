@@ -836,6 +836,30 @@ pub struct Player {
     ///
     /// **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
     pub poison_counters: i32,
+    /// **MMM Pin 1 (11th Rust slice) — spells_cast_this_turn.**
+    /// Per-player cumulative count of spells cast this turn. Reset
+    /// to 0 at the cleanup step (mirroring Python's
+    /// `Player.spells_cast_this_turn` zeroed in `turn.py:1105`).
+    /// Tracks the running total for
+    /// `StatePredicate::SpellsCastThisTurn { n }` — the gate latches
+    /// when the counter flips to exactly `n` post-increment.
+    ///
+    /// **Increment site.** Bumped by `+1` in every Rust `cast_*`
+    /// primitive that fires `Event::Cast`, IMMEDIATELY BEFORE the
+    /// `dispatch_event(Event::Cast, ...)` call. The pre-dispatch
+    /// position mirrors Python's `actions._cast_spell` which
+    /// increments `p.spells_cast_this_turn` then dispatches IS_CAST
+    /// (`actions.py:1777`/`:1795`), so the StateBound predicate
+    /// observes the post-increment value when the trigger fires
+    /// ("your second spell" latches the moment the count reaches 2).
+    ///
+    /// **Scope.** Counts ALL spells cast, regardless of card type
+    /// (creature, instant, sorcery, etc.) — same as Python.
+    /// Noncreature-spell tracking is a separate counter (Python's
+    /// `noncreature_spells_cast_this_turn`); Rust does NOT mirror
+    /// that yet (no EoE card uses the noncreature variant in the
+    /// triggered-ability path).
+    pub spells_cast_this_turn: i32,
 }
 
 /// Discriminant for the two kinds of stack items the engine
@@ -2424,6 +2448,7 @@ fn make_player(
         mulligan_count: 0,
         life_gained_this_turn: 0,
         poison_counters: 0,
+        spells_cast_this_turn: 0,
     }
 }
 

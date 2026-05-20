@@ -325,6 +325,18 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     for p in state.players.iter_mut() {
         p.life_gained_this_turn = 0;
     }
+    // **MMM Pin 1 (11th Rust slice).** Reset per-player
+    // spells-cast-this-turn counters. Mirrors Python's
+    // `turn.py:1105`: `p.spells_cast_this_turn = 0` in
+    // `run_cleanup_step`. Required by
+    // `StatePredicate::SpellsCastThisTurn` (Cosmogrand Zenith /
+    // Sunstar Lightsmith / Illvoi Operative / Station Monitor "your
+    // second spell each turn" gates). The cleanup step is the
+    // canonical "this turn" boundary for cast tracking, same as the
+    // Void flags and life-gained counter above.
+    for p in state.players.iter_mut() {
+        p.spells_cast_this_turn = 0;
+    }
 }
 
 /// CR 106.4 — "When a phase or step ends, each player's mana pool
