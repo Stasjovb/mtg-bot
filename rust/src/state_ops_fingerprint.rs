@@ -560,6 +560,26 @@ impl GameState {
                                 .collect(),
                         ),
                     ]),
+                    // 20th Rust slice (VVV Pin 2 closure) — Command
+                    // Bridge cost-decision fingerprint. The candidate
+                    // ids fully determine the pending-state shape:
+                    // re-resolving the decision with a different
+                    // candidate set would expose a different choice
+                    // surface, so the candidates must participate in
+                    // the fingerprint. Flat list of u32 ids (mirrors
+                    // the dict surface shape).
+                    PendingDecision::TapPermanentChoice {
+                        source_obj_id,
+                        controller,
+                        candidates,
+                    } => Value::Array(vec![
+                        Value::String("TapPermanentChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            candidates.iter().map(|id| json!(*id)).collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

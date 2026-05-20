@@ -1465,6 +1465,48 @@ pub enum PendingDecision {
         controller: u8,
         cards: Vec<GameObject>,
     },
+    /// **20th Rust slice (VVV Pin 2 closure) — Command Bridge cost-
+    /// decision substrate.** "Sacrifice this unless you tap an
+    /// untapped permanent you control" — controller chooses ONE
+    /// permanent from the pre-built candidate set to tap (and the
+    /// source survives) OR declines (and the source is sacrificed).
+    /// Pushed by `Effect::SacrificeSelfUnlessTapPermanent` (Command
+    /// Bridge ETB, 24,522 17lands decks — the highest deck-count
+    /// card in the BLOCKED-genuinely_missing tier).
+    ///
+    /// **Payload.** Carries the source id (so the dispatcher can
+    /// locate the source to sacrifice if the controller declines)
+    /// and the candidate ids (untapped permanents controlled by the
+    /// source's controller, source excluded — built at push time by
+    /// the resolve arm). Mirrors `SurveilChoice`'s flat `Vec<u32>`
+    /// idiom for the choice set rather than the heavier
+    /// `Vec<GameObject>` used by `PickCardFromExaminedChoice` —
+    /// candidates already live on the battlefield, so re-locating
+    /// them by id at submit time is the same pattern as
+    /// `submit_pick_card_decision`'s id-based dispatch.
+    ///
+    /// **Submit.** `submit_tap_permanent_decision(Some(chosen_id))`
+    /// taps the chosen permanent (the source stays); `None` declines
+    /// → sacrifice the source. `chosen_id` MUST be one of the
+    /// candidate ids; an unknown id raises `ValueError`
+    /// transactionally (no mutation on failure).
+    ///
+    /// **Auto-resolve default.** `"default"` declines (matches
+    /// Python's no-agent-seated fallback at `combinators.py:139-141`
+    /// — `chosen = None` when `p.agent is None`, leading to sacrifice
+    /// via the `_sacrifice(state, source)` decline branch at
+    /// `combinators.py:147`). Other strategies fall through to the
+    /// same decline-default for robustness.
+    ///
+    /// **Empty candidate set is impossible.** The resolve arm only
+    /// pushes this decision when candidates is non-empty (the
+    /// empty-set case sacrifices the source directly without ever
+    /// queuing a decision — Python parity, `combinators.py:130-136`).
+    TapPermanentChoice {
+        source_obj_id: u32,
+        controller: u8,
+        candidates: Vec<u32>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
