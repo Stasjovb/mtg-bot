@@ -2594,6 +2594,16 @@ pub fn make_synthetic_state(
         additional_cost_sacrifice_creature_or_artifact: false,
         additional_cost_sacrifice_creature_or_enchantment: false,
         additional_cost_choose_your_creature: false,
+        // Aura-attachment substrate — Phase 1 STEP 2 (round-78):
+        // synthetic-state printings are not Auras. Back-compat
+        // defaults (every pre-substrate registry dict omits these
+        // keys, parser maps to the same defaults).
+        is_aura: false,
+        aura_enchant_type: "creature".to_string(),
+        aura_yours_only: false,
+        aura_power_bonus: 0,
+        aura_toughness_bonus: 0,
+        aura_granted_keywords: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2635,6 +2645,16 @@ pub fn make_synthetic_state(
         additional_cost_sacrifice_creature_or_artifact: false,
         additional_cost_sacrifice_creature_or_enchantment: false,
         additional_cost_choose_your_creature: false,
+        // Aura-attachment substrate — Phase 1 STEP 2 (round-78):
+        // synthetic-state printings are not Auras. Back-compat
+        // defaults (every pre-substrate registry dict omits these
+        // keys, parser maps to the same defaults).
+        is_aura: false,
+        aura_enchant_type: "creature".to_string(),
+        aura_yours_only: false,
+        aura_power_bonus: 0,
+        aura_toughness_bonus: 0,
+        aura_granted_keywords: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2689,6 +2709,16 @@ pub fn make_synthetic_state(
         additional_cost_sacrifice_creature_or_artifact: false,
         additional_cost_sacrifice_creature_or_enchantment: false,
         additional_cost_choose_your_creature: false,
+        // Aura-attachment substrate — Phase 1 STEP 2 (round-78):
+        // synthetic-state printings are not Auras. Back-compat
+        // defaults (every pre-substrate registry dict omits these
+        // keys, parser maps to the same defaults).
+        is_aura: false,
+        aura_enchant_type: "creature".to_string(),
+        aura_yours_only: false,
+        aura_power_bonus: 0,
+        aura_toughness_bonus: 0,
+        aura_granted_keywords: Vec::new(),
     });
     let registry = builder.snapshot();
 
