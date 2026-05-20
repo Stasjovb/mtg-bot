@@ -1752,4 +1752,182 @@ impl GameState {
         self.consecutive_passes = 0;
         Ok(true)
     }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 3 (round-78,
+    /// 2026-05-20).** Cast an Aura spell from `player_id`'s hand.
+    /// Mirrors `cast_spell_noncreature`'s S5a shape (mana payment +
+    /// rehome to stack store + IS_CAST + StackItem push + priority
+    /// reset) WITH the cast-time enchant-target decision pushed onto
+    /// the pending-decisions queue (CR 303.4 / 601.2c — Auras pick
+    /// their enchant target at cast time). Mirrors Python's Aura
+    /// branch in `_select_spell_targets` at `actions.py:1337-1357`.
+    ///
+    /// Returns `true` on success (cost paid, spell on stack, decision
+    /// queued or skipped per the empty-candidate branch), `false` on
+    /// any precondition failure (object not in hand, no such
+    /// printing, not an Aura, insufficient mana) with NO mutation
+    /// (transactional shape — the same `Ok(false)` semantics
+    /// `cast_creature` / `cast_spell_noncreature` use to let the
+    /// caller's dispatch fall through to the next primitive).
+    ///
+    /// **STEP-3 scope.** Stops at "decision queued + target chosen +
+    /// bound onto StackItem." The resolution arm (STEP 4 — stamping
+    /// `aura.attached_to = Some(host_id)` + applying the layer-7 P/T
+    /// + keyword grant) is honest-stopped per the plan; today the
+    /// resolved Aura goes to bf as a host-less floating enchantment
+    /// (the pre-STEP-3 Rust behavior — `Aura.attached_to = None`
+    /// because no zone-change resets it to anything else). When STEP
+    /// 4 lands it will read `current_resolve_payload_target_id` (the
+    /// resolve-time swap of `StackItem.target_obj_id`) and do the
+    /// attach. Fizzle-on-no-legal-target (Python parity at
+    /// `actions.py:2740-2745` — Aura with `target_obj is None` goes
+    /// to graveyard without entering bf) is also STEP 4's concern.
+    ///
+    /// **No-legal-target cast is ALLOWED at cast time** (Python
+    /// parity: `actions.py:1354 if legal:` short-circuits the agent
+    /// pick when zero candidates exist, but the cast itself still
+    /// completes — fizzle happens at resolve). The empty-candidate
+    /// branch skips the decision-push entirely (no choice to make);
+    /// the StackItem rides with `target_obj_id = None` and STEP 4
+    /// will fizzle on resolve. This matches the Python cast pump's
+    /// behavior — there is no cast-time gate that says "an Aura with
+    /// zero legal hosts cannot be cast at all."
+    fn cast_aura(&mut self, obj_id: u32, player_id: u8) -> PyResult<bool> {
+        let idx = check_player_id(player_id)?;
+        // Phase 1: hand lookup. Bail before any mutation if absent.
+        let printing_id = match self.players[idx]
+            .hand
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.printing_id)
+        {
+            Some(pid) => pid,
+            None => return Ok(false),
+        };
+        // Phase 2: aura-shape gate. The printing MUST be an Aura
+        // (`is_aura=True` set by STEP 2's parse arm reading the
+        // bridge's `is_aura` registry-dict key). Non-Aura -> bail
+        // (`Ok(false)` no-mutation) so the dispatcher falls through
+        // to `cast_spell_noncreature` / `cast_creature`.
+        let (cost, enchant_type, yours_only) = match self.registry.lookup(printing_id) {
+            Some(p) => {
+                if !p.is_aura {
+                    return Ok(false);
+                }
+                (
+                    p.mana_cost.clone(),
+                    p.aura_enchant_type.clone(),
+                    p.aura_yours_only,
+                )
+            }
+            None => return Ok(false),
+        };
+        // Phase 3: build the candidate set BEFORE paying cost so we
+        // can push the decision with a stable id list. Pre-pay scan
+        // is read-only — no state mutation until phase 4 commits the
+        // cost. Mirrors Python `_select_spell_targets`'s aura branch
+        // at `actions.py:1337-1357`:
+        //   - `enchant_type == "artifact"` -> legal hosts are
+        //     `o.printing.is_artifact` permanents (both bfs).
+        //   - else ("creature" — the Phase-1 dominant case) -> legal
+        //     hosts are `o.printing.is_creature` permanents.
+        //   - `yours_only` further restricts to `o.controller_id ==
+        //     player_id` (the printed "Enchant <type> you control"
+        //     wording, Shardmage's Rescue).
+        // Order: `bf_iter_etb_sorted` (cross-engine-proven equivalent
+        // of Python's `state.battlefield` walk — same ordering every
+        // other cast-time target picker uses). `candidates[0]` is
+        // the deterministic-first legal host (the auto-resolve
+        // default).
+        let candidates: Vec<u32> = crate::bf_iter::bf_iter_etb_sorted(self)
+            .into_iter()
+            .filter_map(|o| {
+                let p = self.registry.lookup(o.printing_id)?;
+                let type_ok = if enchant_type == "artifact" {
+                    p.card_types.iter().any(|t| t == "Artifact")
+                } else {
+                    // Default "creature" enchant-type. Mirrors
+                    // Python's branch at actions.py:1347 (the `else`
+                    // arm — any aura_enchant_type that isn't
+                    // explicitly "artifact" reads as "creature").
+                    p.card_types.iter().any(|t| t == "Creature")
+                };
+                if !type_ok {
+                    return None;
+                }
+                if yours_only && o.controller != player_id {
+                    return None;
+                }
+                Some(o.id)
+            })
+            .collect();
+        // Phase 4: pay the mana cost. Floating pool first, then
+        // auto-tap lands — byte-mirrors `cast_creature` /
+        // `cast_spell_noncreature`. `false` on failure (no mutation).
+        if !auto_tap_pay_for_cost(self, idx, &cost)? {
+            return Ok(false);
+        }
+        // Phase 5: rehome the spell hand -> stack store (Option β
+        // mirror of Python's `p.hand.remove(card)` + `card.zone =
+        // Zone.STACK`). Same primitive `cast_spell_noncreature` uses.
+        if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
+            // Defensive: hand-lookup succeeded in phase 1 but the
+            // rehome failed — should not happen because phase 1
+            // confirmed presence. Returning `false` preserves the
+            // transactional contract.
+            return Ok(false);
+        }
+        // Phase 6: bump spells-cast counter (MMM Pin 1 — Python parity
+        // at `actions.py:1777`, BEFORE IS_CAST dispatch).
+        self.players[player_id as usize].spells_cast_this_turn += 1;
+        // Phase 7: dispatch Event::Cast — spell is stack-resident,
+        // before the StackItem push. Same ordering as
+        // `cast_creature` / `cast_spell_noncreature`.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Cast,
+            obj_id,
+        )?;
+        // Phase 8: push the StackItem. Target is initially `None`;
+        // the controller binds it via `submit_enchant_target_decision`
+        // (or the auto-resolve default picks `candidates[0]`). When
+        // STEP 4 lands, the resolve arm reads the bound target via
+        // `current_resolve_payload_target_id` (the standard
+        // resolve-time swap of `StackItem.target_obj_id`). Use the
+        // `new_spell_with_targets` constructor with both slots
+        // `None` for back-compat with the existing Spell-shape
+        // resolve path; `submit_enchant_target_decision` mutates the
+        // StackItem's `target_obj_id` in place.
+        self.stack.push(crate::state::StackItem::new_spell_with_targets(
+            obj_id,
+            player_id,
+            None,
+            None,
+        ));
+        // Phase 9: queue the enchant-target decision IFF there's a
+        // non-empty candidate set. Python parity: `actions.py:1354
+        // if legal:` short-circuits the agent pick when zero
+        // candidates exist (the cast still completes, no decision is
+        // ever made; the Aura fizzles on resolve at
+        // `actions.py:2740-2745`). An empty candidate set MUST NOT
+        // push the decision — otherwise the caster faces an
+        // unanswerable choice (no legal id to submit). The empty-set
+        // StackItem rides with `target_obj_id = None`; STEP 4's
+        // resolve arm will fizzle it to graveyard.
+        if !candidates.is_empty() {
+            self.pending_decisions.push(
+                crate::state::PendingDecision::EnchantTargetChoice {
+                    source_obj_id: obj_id,
+                    controller: player_id,
+                    candidates,
+                },
+            );
+        }
+        // Phase 10: priority + passes reset (CR 117.1c — active
+        // player gets priority after a spell is cast). Verbatim from
+        // `cast_creature` / `cast_spell_noncreature`.
+        self.priority_player = self.active_player;
+        self.consecutive_passes = 0;
+        Ok(true)
+    }
 }

@@ -364,7 +364,7 @@ test_trajectory_parity.py + test_trajectory.py`).
 
 ### Phase 1 (Rust + bridge + loader) — the attach substrate core: static P/T-or-keyword Aura
 
-**Status (round-78, 2026-05-20): PARTIAL — STEPs 1+2 + step-7 partial LANDED.**
+**Status (round-78, 2026-05-20): PARTIAL — STEPs 1+2+3 + step-7 partial LANDED.**
 Steps 1+2 (CardDef aura representation + the bridge-side
 `printing_dict` emission + the Python-side `_card_def_to_python_printing`
 materialization + the **Rust `parse_printing` aura-key parse arm**) and
@@ -376,16 +376,27 @@ on main. STEP 2 (Rust parse arm) closed the round-77 honest-stop:
 `aura_yours_only` / `aura_power_bonus` / `aura_toughness_bonus` /
 `aura_granted_keywords`, populated from the registry dict the Python
 bridge has been emitting since round-77 — see commit
-`feature/aura-substrate-step-2`. Steps 3-6 (cast-time enchant-target
-decision + Rust aura-resolution arm + CR-704.5n SBA + bidirectional
-bridge arms) remain honest-stopped; the predicate is callable +
-pinned against every live EoE Aura but NO Aura reaches the bench yet
-(the pin `tests/test_aura_substrate_phase1.py::
+`feature/aura-substrate-step-2`. **STEP 3 (cast-time enchant-target
+decision — the long pole) is LANDED** — see commit
+`feature/aura-substrate-step-3`: new `PendingDecision::EnchantTargetChoice`
+variant, `cast_aura` primitive (gates on `is_aura`; builds candidate
+list per `aura_enchant_type` + `aura_yours_only`; pushes decision iff
+candidates non-empty), `submit_enchant_target_decision(chosen_id)`
+dispatcher (binds chosen host onto the matching spell StackItem's
+`target_obj_id`), auto-resolve arm with `"enchant_target_first"` /
+`"default"` strategies, `stack_top_target_id()` read-only getter,
+`Action::CastSpell` dispatcher tries `cast_aura` first then falls
+through to `cast_spell_noncreature` / `cast_creature`. Steps 4-6
+(Rust aura-resolution arm + CR-704.5n SBA + bidirectional bridge
+arms) remain honest-stopped; the predicate is callable + pinned
+against every live EoE Aura but NO Aura reaches the bench yet (the
+pin `tests/test_aura_substrate_phase1.py::
 test_loader_does_not_yet_admit_any_aura` is the honest-stop
-sentinel). Once steps 3-6 land, a one-line wire-up flip at
+sentinel). Once steps 4-6 land, a one-line wire-up flip at
 `src/mtg_bot/parity/trajectory.py:_filter_deck_to_bridge_supported`
-closes Phase 1 for sub-shape S1. **STEP 3 (cast-time enchant-target
-decision — the long pole) is next.**
+closes Phase 1 for sub-shape S1. **STEP 4 (Aura-resolution attach
+arm — stamp `aura.attached_to = Some(host_id)` + apply the
+layer-7 P/T + keyword grant) is next.**
 
 **Scope:** sub-shape S1 only (Frantic Strength, Shardmage's Rescue) —
 the smallest self-contained Aura: a continuous P/T/keyword grant, no

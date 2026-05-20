@@ -407,17 +407,39 @@ impl GameState {
                         (card_id, player_id),
                     )?;
                 } else {
-                    let cast_spell_ok: bool = slf
+                    // **Aura-attachment substrate — Phase 1 STEP 3
+                    // (round-78).** Try `cast_aura` first: the
+                    // primitive type-gates inside on the printing's
+                    // `is_aura` flag and returns `Ok(false)` for a
+                    // non-Aura (NO mutation — exactly the
+                    // `cast_spell_noncreature` / `cast_creature`
+                    // dispatch pattern). On `false` we fall through
+                    // to `cast_spell_noncreature` (Instant/Sorcery
+                    // path), then `cast_creature` (the round-4
+                    // creature path + warp exile-recast). Order is
+                    // load-bearing — Auras are noncreature
+                    // Enchantments, so `cast_spell_noncreature` would
+                    // reject them as "not Instant/Sorcery" and the
+                    // cast would silently no-op without the aura arm.
+                    let cast_aura_ok: bool = slf
                         .call_method1(
-                            "cast_spell_noncreature",
+                            "cast_aura",
                             (card_id, player_id),
                         )?
                         .extract()?;
-                    if !cast_spell_ok {
-                        slf.call_method1(
-                            "cast_creature",
-                            (card_id, player_id),
-                        )?;
+                    if !cast_aura_ok {
+                        let cast_spell_ok: bool = slf
+                            .call_method1(
+                                "cast_spell_noncreature",
+                                (card_id, player_id),
+                            )?
+                            .extract()?;
+                        if !cast_spell_ok {
+                            slf.call_method1(
+                                "cast_creature",
+                                (card_id, player_id),
+                            )?;
+                        }
                     }
                 }
             }

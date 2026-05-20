@@ -62,6 +62,29 @@ impl GameState {
         self.stack.push(StackItem::new_spell(source_obj_id, controller));
     }
 
+    /// **Aura-attachment substrate — Phase 1 STEP 3 (round-78,
+    /// 2026-05-20).** Read the `target_obj_id` slot of the top
+    /// stack item. Returns `Some(id)` if the top item carries a
+    /// bound target (the Aura's chosen enchant target after
+    /// `submit_enchant_target_decision(Some(id))`, OR the cast-time
+    /// bound target for a single-target spell like Lightning Bolt),
+    /// `None` if the top item has no bound target OR the stack is
+    /// empty.
+    ///
+    /// **Why a dedicated getter instead of extending
+    /// `stack_snapshot()` / `peek_top_of_stack()`.** Those dict
+    /// surfaces are pinned by the existing `tests_rust/test_stack.py`
+    /// suite (exact `{"source_obj_id", "controller"}` dict shape) —
+    /// adding a key would breaking-change every pin. A dedicated
+    /// getter is additive (no existing test reads it; new STEP-3
+    /// tests opt in by calling it). Same pattern the
+    /// `pending_decisions()` dict / `submit_*_decision` substrate
+    /// uses: separate read-only and submit surfaces from the
+    /// existing snapshot surfaces.
+    fn stack_top_target_id(&self) -> Option<u32> {
+        self.stack.last().and_then(|item| item.target_obj_id)
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the
