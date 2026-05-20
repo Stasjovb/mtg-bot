@@ -422,6 +422,68 @@ pub(crate) fn static_anthem_grants_keyword_to(
 /// `life_pX` divergence — Python dealt counter-adjusted power, Rust
 /// dealt base power. New code is right (written against the Python
 /// SoT); Python untouched.
+/// Compute the layer-7b dynamic base P/T for a creature whose
+/// printing carries a `dynamic_pt_formula` key. Returns `None`
+/// when the printing has no formula (the printed base wins) or
+/// when the obj cannot be located.
+///
+/// **Round-78 dynamic-P/T-formula substrate.** Dispatches on the
+/// formula key string in lockstep with Python's
+/// `game._dynamic_base_pt` (`src/mtg_bot/game.py:1318-1355`).
+/// Per the "new code is right" SoT-flip discipline, every formula
+/// key added on the Python side must land here too; an unknown
+/// key returns `None` (defensive — the bridge admit predicate
+/// guarantees only recognized keys reach this arm).
+///
+/// Recognized keys (in lockstep with Python):
+///   * `"harmonious_grovestrider"` — base P = T = number of lands
+///     controlled by the obj's controller. CR 208.2 / layer 7b
+///     CDA. Harmonious Grovestrider is the only EoE printing
+///     this lane covers today; sibling cards (Cosmogoyf, Emissary
+///     Escort) carry different per-formula shapes and are
+///     honest-stopped on the Rust side (they remain admit-filtered
+///     on the bridge until a per-card slice lands).
+pub(crate) fn dynamic_base_pt_pub(
+    state: &GameState,
+    obj_id: u32,
+) -> Option<(i32, i32)> {
+    let (player_idx, printing_id) =
+        locate_battlefield_obj(state, obj_id)?;
+    let printing = state.registry.lookup(printing_id)?;
+    let formula = printing.dynamic_pt_formula.as_deref()?;
+    let controller = state.players[player_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == obj_id)
+        .map(|o| o.controller)?;
+    match formula {
+        "harmonious_grovestrider" => {
+            // P = T = lands controlled by the obj's controller.
+            // Mirrors Python's `game._dynamic_base_pt` arm:
+            // `sum(1 for o in state.battlefield if
+            //  o.controller_id == obj.controller_id and
+            //  o.printing.is_land)`.
+            let mut n: i32 = 0;
+            for player in state.players.iter() {
+                for bf_obj in player.battlefield.iter() {
+                    if bf_obj.controller != controller {
+                        continue;
+                    }
+                    if let Some(p) =
+                        state.registry.lookup(bf_obj.printing_id)
+                    {
+                        if p.card_types.iter().any(|t| t == "Land") {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            Some((n, n))
+        }
+        _ => None,
+    }
+}
+
 fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
@@ -447,10 +509,19 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // SetBasePT cast on an already-animated land); this mirrors the
     // intuition that an explicit "has base P/T N/N" override is more
     // specific than the manland's intrinsic creature-half P/T.
+    //
+    // Round-78 dynamic-P/T-formula substrate: if a UEOT override
+    // is NOT present, fall through to the dynamic-base computation
+    // (CR 613 layer 7b CDA). The dynamic base supersedes the
+    // printed base but defers to UEOT/manland overrides (last
+    // applied wins; the Python arm has the same shape — see
+    // `_compute_effective_pt`'s 7b branch: registry SetBasePT, then
+    // dynamic, then printed).
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(p, _)| p)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(p, _)| p))
+        .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(p, _)| p))
         .unwrap_or(printed_base);
     let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
     // CR 613 layer 7d: the signed net +1/+1 / -1/-1 counter scalar
@@ -648,10 +719,15 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // top. Round-28 manland animation also overrides the printed
     // base; SetBasePT takes precedence when both are present (same
     // semantics as battlefield_creature_power above).
+    // Round-78 dynamic-P/T-formula substrate: defer to the dynamic
+    // base after UEOT overrides, before printed base. Mirrors the
+    // `battlefield_creature_power` shape; see that function's comment
+    // for the layer-7b CDA semantics.
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(_, t)| t)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(_, t)| t))
+        .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(_, t)| t))
         .unwrap_or(printed_base);
     let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);
     // CR 613 layer 7d: signed net +1/+1 / -1/-1 counter scalar folds

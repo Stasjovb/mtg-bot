@@ -584,9 +584,24 @@ impl GameState {
             // Round-28: a `UeotModifier::SetBasePT` (CR 613.4
             // layer 7b) overrides the printed base entirely;
             // counters + layer-7c bonuses still stack on top.
+            // Round-78 dynamic-P/T-formula substrate: a layer-7b
+            // CDA-driven creature (Harmonious Grovestrider — base
+            // P=T=lands-controlled) supersedes the printed-0
+            // placeholder. The SoT-flip honors the dynamic base
+            // before the printed base, defers to UEOT overrides
+            // (last-applied wins), and stacks counters / UEOT
+            // bonuses / aura on top — same layering as
+            // `battlefield_creature_toughness` in state_ops_combat.
+            // Load-bearing for SBA: without this branch a
+            // Grovestrider with ≥1 land would be destroyed by the
+            // 704.5f zero-toughness rule (printed base is 0).
             let base_toughness = obj
                 .ueot_base_pt_override()
                 .map(|(_, t)| t)
+                .or_else(|| {
+                    crate::state_ops_combat::dynamic_base_pt_pub(self, obj.id)
+                        .map(|(_, t)| t)
+                })
                 .unwrap_or(toughness as i32);
             // Aura-attachment substrate STEP 4 (round-78): fold in
             // the layer-7c toughness bonus from any Aura attached to
@@ -948,9 +963,19 @@ impl GameState {
                     // surfaces the right is_lethal answer at the
                     // mid-turn parity boundary. Round-28: SetBasePT
                     // overrides the printed base (last-applied wins).
+                    // Round-78 dynamic-P/T-formula substrate:
+                    // lockstep with collect_sba_victims above — defer
+                    // to the dynamic base after UEOT overrides,
+                    // before the printed base.
                     let base_toughness = obj
                         .ueot_base_pt_override()
                         .map(|(_, t)| t)
+                        .or_else(|| {
+                            crate::state_ops_combat::dynamic_base_pt_pub(
+                                self, obj.id,
+                            )
+                            .map(|(_, t)| t)
+                        })
                         .unwrap_or(toughness as i32);
                     // Aura-attachment substrate STEP 4 (round-78):
                     // lockstep with collect_sba_victims above —

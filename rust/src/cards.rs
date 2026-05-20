@@ -6377,6 +6377,33 @@ pub struct CardPrinting {
     /// (which stores space-separated lowercase) must underscore-map
     /// before comparison.
     pub aura_granted_keywords: Vec<String>,
+    /// Dynamic-P/T formula key (CR 613 layer 7b CDA — Characteristic
+    /// Defining Ability). When `Some(key)`, this creature's base
+    /// power and toughness are NOT read from `printing.power` /
+    /// `printing.toughness` — instead the layer-7 reader computes
+    /// the base from the formula keyed by `key` at query time.
+    ///
+    /// Mirrors Python's `CardPrinting.dynamic_pt_formula: str | None`
+    /// at `src/mtg_bot/cards/base.py:837`. Python's
+    /// `game._dynamic_base_pt` dispatches on the same key strings
+    /// (`"harmonious_grovestrider"`, `"cosmogoyf"`, `"emissary_escort"`).
+    /// Rust's `battlefield_creature_power` /
+    /// `battlefield_creature_toughness` dispatch on this field
+    /// during the layer-7b base-P/T resolution; the dispatch table
+    /// must stay in lockstep with Python's `_dynamic_base_pt` per
+    /// the "new code is right" SoT-flip discipline.
+    ///
+    /// **Round-78 dynamic-P/T-formula substrate.** Added to unblock
+    /// Harmonious Grovestrider (subsystem inventory #3; 61 17lands
+    /// decks). The substrate-extension closes the CardDef-bridge gap
+    /// that the round-39 fix (`9c0d440f`) papered over by dropping
+    /// dynamic-P/T creatures at the filter. Pre-substrate the field
+    /// didn't exist; the registry-dict parser maps the absence of
+    /// the `dynamic_pt_formula` key to `None` (the
+    /// Option/serde-default pattern every back-compat-added field
+    /// uses). When the key is present, the value must be a string
+    /// matching one of Python's dispatch keys.
+    pub dynamic_pt_formula: Option<String>,
     /// **Aura-attachment substrate — Phase 2 S2 (round-79+,
     /// 2026-05-20).** Layer-2 control-change static grant. `true`
     /// iff this Aura's printed text is "You control enchanted
@@ -9536,6 +9563,32 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             }
             None => (0i16, 0i16, Vec::new()),
         };
+    // Dynamic-P/T formula substrate (round-78). Optional string key
+    // mirroring Python's `CardPrinting.dynamic_pt_formula`. Missing key
+    // -> `None` (the Option/serde-default pattern every back-compat-
+    // added field uses); a non-string value or a value that's neither
+    // a string nor `None` is rejected to surface a registry-dict typo
+    // immediately. The recognized keys live in Python's
+    // `game._dynamic_base_pt`; this parser does NOT validate the key
+    // string here (a future cross-engine probe lane would catch any
+    // typo via a parity-divergence rather than at parse time).
+    let dynamic_pt_formula = match dict.get_item("dynamic_pt_formula")? {
+        Some(v) => {
+            if v.is_none() {
+                None
+            } else {
+                Some(v.extract::<String>().map_err(|_| {
+                    PyValueError::new_err(
+                        "dynamic_pt_formula must be a string \
+                         (the formula key Python's `_dynamic_base_pt` \
+                         dispatches on — `harmonious_grovestrider`, \
+                         `cosmogoyf`, or `emissary_escort` today)",
+                    )
+                })?)
+            }
+        }
+        None => None,
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -9567,6 +9620,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_grants_lose_abilities,
         aura_set_base_pt,
         static_anthems,
+        dynamic_pt_formula,
     })
 }
 
@@ -11278,6 +11332,18 @@ impl Registry {
     /// type this Aura enchants (`"creature"` | `"artifact"`). Defaults
     /// to `"creature"` for non-Aura printings — gate on `is_aura`
     /// before reading.
+    /// Read the dynamic-P/T formula key for a printing, or `None`.
+    /// Mirrors Python's ``CardPrinting.dynamic_pt_formula``. Used by
+    /// cross-engine probes to inspect the bridge-round-tripped value
+    /// and by the dynamic-P/T-formula substrate test surface to pin
+    /// the registry shape across builds.
+    fn get_printing_dynamic_pt_formula(
+        &self,
+        id: u32,
+    ) -> PyResult<Option<String>> {
+        Ok(self.lookup(id)?.dynamic_pt_formula.clone())
+    }
+
     fn get_printing_aura_enchant_type(&self, id: u32) -> PyResult<String> {
         Ok(self.lookup(id)?.aura_enchant_type.clone())
     }

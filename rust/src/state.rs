@@ -2710,6 +2710,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.
@@ -2772,6 +2777,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.
@@ -2847,6 +2857,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.

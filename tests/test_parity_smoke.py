@@ -69405,6 +69405,162 @@ def test_r77_cfi1_counter_retained_on_destroyed_creature_full_trajectory(
     )
 
 
+def test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity(
+    parity_smoke,
+):
+    """Probe: Harmonious Grovestrider dynamic-P/T formula byte-equal
+    across engines.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Ward {2} (Whenever this creature becomes the target of a
+         spell or ability an opponent controls, counter it unless
+         that player pays {2}.)
+         Harmonious Grovestrider's power and toughness are each
+         equal to the number of lands you control."
+
+    The Ward clause is out of scope for THIS probe -- the
+    dynamic-P/T-formula substrate landing (round-78) opens the
+    formula half of the bridge admit gate, NOT the ward half. The
+    real EoE Grovestrider printing carries both riders and remains
+    drop-at-filter under
+    `_printing_is_bridge_simple_creature` (the ward_cost rejection
+    stays). This probe drives a SYNTHETIC Grovestrider CardDef that
+    carries the same formula key (`harmonious_grovestrider`) but no
+    ward rider -- exercising the substrate's load-bearing path:
+    Rust's `state_ops_combat::dynamic_base_pt_pub` matches Python's
+    `game._dynamic_base_pt` for P = T = lands controlled by the
+    formula creature's controller, across varying land counts.
+
+    Test surface:
+
+      * 0 lands → both engines read P = T = 0.
+      * 3 controlled lands → both engines read P = T = 3.
+      * +2 opponent lands → both engines STILL read P = T = 3 (only
+        the controller's lands count -- the formula's CR 208.2
+        layer-7b CDA reads `obj.controller_id`-controlled lands).
+
+    SBA-safety pin (CR 704.5f): a Grovestrider with 0 lands sits at
+    effective toughness 0; the SBA check should NOT destroy it under
+    the dynamic-base read (since base 0 + 0 counters + 0 aura = 0,
+    the SBA does fire at zero lands -- this is rules-correct and
+    pinned here to keep the dispatch-table arm honest cross-engine).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict,
+    )
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    # Synthetic Grovestrider CardDef -- carries the dynamic-P/T
+    # formula key but NO ward rider (ward is an orthogonal substrate).
+    grove = CardDef(
+        name="Harmonious Grovestrider",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("G", 2),),
+        power=0,  # placeholder (CR 208.2 -- the printed `*` parses
+                  # as 0; the engine's dynamic-PT reader supersedes
+                  # the printed base when the formula key is set).
+        toughness=0,  # ditto.
+        dynamic_pt_formula="harmonious_grovestrider",
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(grove, forest),
+        p0_library=("Harmonious Grovestrider",),
+        p1_library=("Harmonious Grovestrider",),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    grove_dict = _spec_card_to_printing_dict(grove)
+    forest_dict = _spec_card_to_printing_dict(forest)
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: inject grove + scaling forests onto p0 bf ----
+    rust_grove_id = rust_state.register_and_inject_object(
+        grove_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    # ---- Python side: pull grove out of library, push onto bf ----
+    py_grove = py_state.players[0].library[0]
+    assert py_grove.printing.name == "Harmonious Grovestrider"
+    assert py_grove.printing.dynamic_pt_formula == "harmonious_grovestrider"
+    py_state.players[0].library.remove(py_grove)
+    py_grove.zone = Zone.BATTLEFIELD
+    py_state.battlefield.append(py_grove)
+
+    # Test case 1: 0 lands → P = T = 0 on both engines.
+    assert rust_state.effective_power(rust_grove_id) == 0
+    assert rust_state.effective_toughness(rust_grove_id) == 0
+    assert effective_power(py_state, py_grove) == 0
+    assert effective_toughness(py_state, py_grove) == 0
+
+    # Test case 2: add 3 controlled Forests → P = T = 3 on both
+    # engines. Python: mint a fresh Forest GameObject via
+    # ``GameState.new_object`` using the printing the bridge
+    # materializes (``_card_def_to_python_printing``) so the two
+    # engines see byte-identical Forest printings.
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+    forest_py_printing = _card_def_to_python_printing(forest)
+    for _ in range(3):
+        rust_state.register_and_inject_object(
+            forest_dict, 0, ZONE_BATTLEFIELD,
+        )
+        forest_obj = py_state.new_object(
+            forest_py_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        py_state.battlefield.append(forest_obj)
+
+    assert rust_state.effective_power(rust_grove_id) == 3, (
+        f"Rust grove P should be 3 with 3 controlled lands; "
+        f"got {rust_state.effective_power(rust_grove_id)}"
+    )
+    assert rust_state.effective_toughness(rust_grove_id) == 3
+    assert effective_power(py_state, py_grove) == 3, (
+        f"Python grove P should be 3 with 3 controlled lands; "
+        f"got {effective_power(py_state, py_grove)}"
+    )
+    assert effective_toughness(py_state, py_grove) == 3
+    # Cross-engine: same number.
+    assert rust_state.effective_power(rust_grove_id) == effective_power(
+        py_state, py_grove
+    )
+    assert rust_state.effective_toughness(
+        rust_grove_id
+    ) == effective_toughness(py_state, py_grove)
+
+    # Test case 3: add 2 OPPONENT-controlled Forests → grove still
+    # reads P = T = 3 (only the controller's lands count, CR 613.4
+    # layer-7b CDA reading).
+    for _ in range(2):
+        rust_state.register_and_inject_object(
+            forest_dict, 1, ZONE_BATTLEFIELD,
+        )
+        forest_obj = py_state.new_object(
+            forest_py_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+        )
+        py_state.battlefield.append(forest_obj)
+
+    assert rust_state.effective_power(rust_grove_id) == 3, (
+        f"Rust grove P should STILL be 3 (opponent's lands don't "
+        f"count toward the controller's land-count formula); got "
+        f"{rust_state.effective_power(rust_grove_id)}"
+    )
+    assert rust_state.effective_toughness(rust_grove_id) == 3
+    assert effective_power(py_state, py_grove) == 3
+    assert effective_toughness(py_state, py_grove) == 3
+    assert rust_state.effective_power(rust_grove_id) == effective_power(
+        py_state, py_grove
+    )
+    assert rust_state.effective_toughness(
+        rust_grove_id
+    ) == effective_toughness(py_state, py_grove)
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
