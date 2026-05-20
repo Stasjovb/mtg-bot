@@ -276,6 +276,10 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_remaining_ooo.py",
     REPO_ROOT / "tests" / "test_probe_remaining_qqq.py",
     REPO_ROOT / "tests" / "test_divergence_pins_oo.py",
+    # 12th Rust slice (slot-aware Controlled bridge form + RRR Pin 1):
+    REPO_ROOT / "tests" / "test_probe_mmm_downstream.py",
+    REPO_ROOT / "tests" / "test_probe_rrr_downstream.py",
+    # Probe batch SSS (round 23 covered-but-unprobed):
     REPO_ROOT / "tests" / "test_probe_remaining_sss.py",
 )
 

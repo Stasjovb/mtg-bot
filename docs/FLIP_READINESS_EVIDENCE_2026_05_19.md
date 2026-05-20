@@ -151,7 +151,12 @@ post-flip via incremental Rust-slice merges.
 
 ## §2 Axis 2 — real-game-trajectory parity
 
-**Status: CLOSED.**
+**Status: CLOSED on C4-class (archetypes 0-59); 99.0% PASS on broader
+60-119 slice with 3 priority_player residuals (G5-family long-tail) —
+see [`G7_S6_BROADER_ARCHETYPE_EVIDENCE.md`](G7_S6_BROADER_ARCHETYPE_EVIDENCE.md).
+The original "CLOSED" claim holds on the C4-class set; the broader
+sweep refines the residual shape and is filed as follow-up for the
+divergence-pin cadence.**
 
 ### What landed
 
