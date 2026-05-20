@@ -8354,6 +8354,37 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EachOpponentExilesCardFromHandWithCastPermission,
         )
         return EachOpponentExilesCardFromHandWithCastPermission()
+    if kind == "house_cartographer_survival":
+        # 21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+        # reveal-until-land library walk bridge arm. Rust's
+        # ``Effect::HouseCartographerSurvivalEffect`` (cards.rs unit
+        # variant added in this slice; parse + to_pydict arms immediately
+        # after the slice-20
+        # ``each_opponent_exiles_card_from_hand_lightstall``; resolve
+        # arm in ``state_ops_resolve.rs`` immediately after the slice-20
+        # arm) mirrors Python's ``HouseCartographerSurvivalEffect``
+        # (``effects/bespoke.py:2667-2733``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``HouseCartographerSurvivalEffect()`` reconstructs the Python
+        # @dataclass(frozen=True) (mirrors the slice-16
+        # ``astelli_reclaimer_etb_effect`` / slice-19
+        # ``enchanted_creature_fights_target`` / slice-20
+        # ``each_opponent_exiles_card_from_hand_lightstall`` unit-
+        # variant precedent).
+        #
+        # **Real EoE consumer:** House Cartographer (the ONLY EoE card
+        # with this shape — the 5th and final EoE Survivor-family
+        # probe carrier, completing the 5/5 Survivor downstream probe
+        # coverage set after slice 15 + the Survivor downstream
+        # honest-exhaustion drop at commit 1ad5b073). Trigger event is
+        # ``BEGINNING_OF_POSTCOMBAT_MAIN``; the effect itself is the
+        # bespoke library-walk that puts a land into hand + bottoms the
+        # rest in random order.
+        from mtg_bot.effects.bespoke import (
+            HouseCartographerSurvivalEffect,
+        )
+        return HouseCartographerSurvivalEffect()
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card
         # in each opponent's graveyard moves to that player's own

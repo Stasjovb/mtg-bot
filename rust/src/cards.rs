@@ -3616,6 +3616,101 @@ pub enum Effect {
     /// `AstelliReclaimerETBEffect` / slice-19
     /// `EnchantedCreatureFightsTarget` unit-variant convention.
     EachOpponentExilesCardFromHandWithCastPermission,
+    /// **21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+    /// reveal-until-land library walk.** "Reveal cards from the top of
+    /// your library until you reveal a land card. Put that card into
+    /// your hand and the rest on the bottom of your library in a random
+    /// order." Mirrors Python's `HouseCartographerSurvivalEffect`
+    /// (`effects/bespoke.py:2667-2733`) -- the ONLY EoE card with this
+    /// shape (the 5th and final EoE Survivor-family probe carrier).
+    ///
+    /// **Unit variant on both sides.** Python's
+    /// `HouseCartographerSurvivalEffect` is a `@dataclass(frozen=True)`
+    /// with no fields; the Rust enum mirrors this. The library-walk
+    /// state (which cards have been revealed; the land-or-none sentinel)
+    /// is entirely transient -- both engines compute it fresh on every
+    /// resolve and emit no PendingDecision.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:2690-2726`).**
+    /// 1. Source-controller resolution: prefer the transient
+    ///    `current_resolve_source_controller` (set by the stack resolver
+    ///    around each apply_effect call), fall back to `active_player`.
+    ///    "Your library" = the source's controller's library
+    ///    (CR 119.5 / 608.2). Mirrors the slice-16 / slice-18 /
+    ///    slice-20 source-controller-resolution shape.
+    /// 2. Walk the controller's library from the top (index 0):
+    ///    pop the top card; if its printing's `card_types` contains
+    ///    "Land", break out with the popped card as the revealed land;
+    ///    otherwise push the popped card onto the local `revealed`
+    ///    Vec and keep walking. Empty library terminates with no
+    ///    land found (mirrors Python's `while p.library:` loop).
+    /// 3. If a land was revealed: stamp its `zone = ZONE_HAND` and
+    ///    push to the controller's `hand` (mirrors `bespoke.py:2706-
+    ///    2707`'s `land_card.zone = Zone.HAND; p.hand.append(...)`).
+    ///    Apply the CR 400.7 zone-change reset on the moved object
+    ///    (`tapped`, `summoning_sick`, `damage`, `counters`,
+    ///    `attached_to`, `exiled_with_source` all cleared) so the
+    ///    move is byte-equal with Python's library→hand transition.
+    /// 4. If no land was found: the `revealed` Vec already holds
+    ///    every popped card (every revealed non-land); no hand move.
+    /// 5. Shuffle the local `revealed` Vec using the SAME byte-equal
+    ///    RNG primitive every other in-Effect shuffle site uses
+    ///    (external `random.Random.shuffle` via
+    ///    `external_rng::next_below` when an external rng is
+    ///    installed; inline xorshift64 fallback otherwise).
+    ///    Mirrors Python's `state.rng.shuffle(revealed)` at
+    ///    `bespoke.py:2718` -- the "random order" tail of CR
+    ///    701.18a.
+    /// 6. Stamp each shuffled card's `zone = ZONE_LIBRARY` and push
+    ///    in order onto the BOTTOM of the controller's library
+    ///    (= `lib.push(card)` — Python uses `p.library.append(card)`
+    ///    where index 0 is the top, so append IS the bottom).
+    ///    Mirrors `bespoke.py:2719-2722`.
+    ///
+    /// **Why no PendingDecision.** The Python effect emits no
+    /// `choose_*` callback -- the library walk is fully deterministic
+    /// (top-to-bottom pop with a `printing.is_land` terminator), and
+    /// the random-order tail is owned by `state.rng`, not by the
+    /// controller's agent. No cross-engine choice surface to bridge.
+    ///
+    /// **Why state.rng.shuffle is the right primitive.** Python's
+    /// `state.rng.shuffle(revealed)` is `random.Random.shuffle(list)`
+    /// applied in-place; the byte-equal Rust mirror is the Fisher-
+    /// Yates loop that consumes `external_rng::next_below(rng, i+1)`
+    /// for each i in `(1..n).rev()` -- exactly what
+    /// `fisher_yates_shuffle_optional` and every other in-Effect
+    /// shuffle site (Famished Worldsire / SearchLibraryForBasicLand
+    /// Tapped / search_library_for_first_of_type_and_shuffle) does.
+    /// When NO external rng is installed, the deterministic xorshift64
+    /// fallback (seeded with a per-resolve tuple) keeps the Rust path
+    /// deterministic within a fixed-seed simulation; the Python side
+    /// in that branch uses the engine's `state.rng` (a seedable
+    /// `random.Random`), which IS deterministic too. Full byte-
+    /// equality on the random-order tail requires the EXTERNAL rng
+    /// path (the test harness installs the same `random.Random` on
+    /// both engines via `set_external_rng`); the xorshift64 fallback
+    /// is for the Rust-alone case where no external rng is plumbed.
+    ///
+    /// **Empty-library / no-non-lands corner cases.**
+    /// - Empty library at entry: silent no-op (no land, no revealed).
+    /// - Library starts with a land: revealed is empty, the land
+    ///   goes straight to hand, no shuffle needed.
+    /// - No land in the whole library: every card moves to revealed,
+    ///   the controller's library ends up empty before the shuffle
+    ///   + append; the shuffled revealed list is appended -- net
+    ///   effect: the whole library is shuffled. Mirrors Python's
+    ///   `bespoke.py:2712-2722` "found no land" branch + the
+    ///   shuffle-and-append tail (which acts as a whole-library
+    ///   shuffle when revealed == the full library).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides --
+    /// no fields. The bridge translates this Rust variant to
+    /// `HouseCartographerSurvivalEffect()` (field-free construction).
+    /// Mirrors the slice-16 `AstelliReclaimerETBEffect` / slice-19
+    /// `EnchantedCreatureFightsTarget` / slice-20
+    /// `EachOpponentExilesCardFromHandWithCastPermission` unit-
+    /// variant convention.
+    HouseCartographerSurvivalEffect,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -6051,6 +6146,99 @@ pub struct CardPrinting {
     /// satisfies the cost). See
     /// `additional_cost_sacrifice_creature_or_artifact`.
     pub additional_cost_choose_your_creature: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2 (round-78,
+    /// 2026-05-20).** `true` iff this printing is an Aura per
+    /// `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 1 sub-shape S1
+    /// (static P/T-or-keyword Aura, no triggers, no control swap, no
+    /// replacement). `false` (the back-compat default — every
+    /// pre-Phase-1 registry dict omits the `is_aura` key, which the
+    /// parser maps to `false`) for every non-Aura printing AND for
+    /// every Aura that the §2 loader predicate
+    /// `_printing_is_bridge_simple_aura` declines (so the field is
+    /// load-bearing only when paired with a bridge-admitted Aura,
+    /// which is currently NONE — STEP 7 wire-up + a later phase's
+    /// real-Aura admit is required before any Aura reaches the
+    /// registry as `is_aura=true`).
+    ///
+    /// Mirrors Python's `CardPrinting.is_aura` derivation (`card_types
+    /// contains "Enchantment" AND subtypes contains "Aura"` per
+    /// `cards/base.py:1060`) — except on the Rust side the value comes
+    /// straight from the explicit `is_aura` key the Python bridge
+    /// emits (`build_rust_state` at `cross_engine.py:10339`), NOT
+    /// derived from subtypes. The bridge ensures the boolean matches
+    /// the Python derivation; downstream Rust consumers gate on this
+    /// field rather than re-running the derivation.
+    ///
+    /// **Inert until STEPs 3-6 land.** This slice extends the parser
+    /// to STORE the value — no downstream Rust consumer reads it yet
+    /// (cast-time enchant-target decision, resolution attach arm,
+    /// CR-704.5n SBA, bidir bridge are all later Phase-1 steps —
+    /// honest-stopped per the plan). The field round-trips through
+    /// the bridge faithfully so STEPs 3-6 can read it without further
+    /// substrate changes.
+    pub is_aura: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Which permanent
+    /// type this Aura enchants: `"creature"` (Frantic Strength,
+    /// Shardmage's Rescue — Phase 1 carriers) or `"artifact"`
+    /// (Hardlight Containment, admitted later). Defaults to
+    /// `"creature"` (mirrors Python's `CardPrinting.aura_enchant_type`
+    /// default at `cards/base.py:507`) when the registry dict omits
+    /// the `aura_enchant_type` key OR when the printing is not an
+    /// Aura — the field is ignored unless `is_aura` is `true`. Phase 1
+    /// restricts to single-type Auras (modal "artifact or creature"
+    /// shapes are declined at the loader predicate per the plan §2).
+    pub aura_enchant_type: String,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff the
+    /// printed text is "Enchant <type> YOU CONTROL" (Shardmage's
+    /// Rescue). `false` is the default (back-compat — every pre-STEP-2
+    /// registry dict omits the key) and the printed shape for Frantic
+    /// Strength / Hardlight Containment / etc. The cast-time
+    /// enchant-target picker (Phase 1 STEP 3, not in this slice) will
+    /// filter legal hosts on this; STEP 2 carries the field through the
+    /// bridge ONLY.
+    pub aura_yours_only: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** The layer-7
+    /// power bonus the attached host receives while this Aura is in
+    /// play. `0` (back-compat default — every pre-STEP-2 registry
+    /// dict omits the key) for keyword-only Auras and for every
+    /// non-Aura. Phase 1 admits ONLY static, layered grants; dynamic
+    /// or counter-based bonuses are out of scope. Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[0]` (the same `(power, tough,
+    /// keywords)` tuple shape Equipment uses — the Python parser
+    /// reuses `equipment_bonuses` for Auras and Equipment).
+    ///
+    /// **Wire shape.** The bridge emits a single dict
+    /// `aura_equipment_bonuses = {"power_bonus": int, "toughness_bonus":
+    /// int, "granted_keywords": [str, ...]}` (NOT three separate keys
+    /// — see `build_rust_state` at `cross_engine.py:10384`). The parse
+    /// arm reads the three sub-keys out of that dict.
+    pub aura_power_bonus: i16,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-7
+    /// toughness bonus; same parse + default + wire-shape semantics as
+    /// `aura_power_bonus`. Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[1]`.
+    pub aura_toughness_bonus: i16,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-6
+    /// keyword grants the attached host receives while this Aura is in
+    /// play (`["trample", "flying", ...]`). Empty Vec (back-compat
+    /// default — every pre-STEP-2 registry dict omits the key) for
+    /// P/T-only Auras and for every non-Aura.
+    ///
+    /// **Storage shape.** Lowercase keyword names with spaces
+    /// converted to underscores ("first_strike", "double_strike") —
+    /// matches the Python bridge's emission at
+    /// `cross_engine.py:10387` (`kw.replace(" ", "_")`). The keyword
+    /// vocabulary is restricted to `_SAFE_KEYWORDS` at the loader
+    /// (`trajectory.py:_SAFE_KEYWORDS`) so the underscore-form is
+    /// closed: "first_strike", "double_strike", "flying", "vigilance",
+    /// "lifelink", "trample", "haste", "deathtouch", "menace",
+    /// "defender", "indestructible", "reach". Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[2]` (a frozenset on the Python
+    /// side; ordered Vec here for round-trip stability). Future Rust
+    /// consumers that compare against the existing `keywords` field
+    /// (which stores space-separated lowercase) must underscore-map
+    /// before comparison.
+    pub aura_granted_keywords: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -7403,6 +7591,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // scope breakdown and the BLOCKED_GENUINELY_MISSING
             // _INVENTORY §3 entry for the closure-cost estimate).
             Ok(Effect::EachOpponentExilesCardFromHandWithCastPermission)
+        }
+        "house_cartographer_survival" => {
+            // 21st Rust slice (XXX Pin 1 closure) -- House Cartographer
+            // reveal-until-land library walk. Unit variant; no payload
+            // fields beyond `kind` (the library-walk state is transient,
+            // computed fresh on every resolve). Mirrors the slice-16 /
+            // slice-19 / slice-20 unit-variant parse arm shape verbatim.
+            // Extra dict fields silently ignored for round-trip dict-
+            // shape consistency.
+            Ok(Effect::HouseCartographerSurvivalEffect)
         }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
@@ -8800,6 +8998,111 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         })?,
         None => 0,
     };
+    // Aura-attachment substrate — Phase 1 STEP 2 (round-78,
+    // 2026-05-20). Read the aura keys the Python bridge emits at
+    // `cross_engine.py:10339-10391` (`is_aura` + `aura_enchant_type`
+    // + `aura_yours_only` + `aura_equipment_bonuses` sub-dict). Every
+    // key uses the same back-compat
+    // `match get_item { Some => extract, None => default }` shape as
+    // every other optional field above — missing key => pre-substrate
+    // default, so every pre-Phase-1 registry dict parses bit-identical
+    // to before this slice landed.
+    //
+    // **Inert until STEPs 3-6 land.** STEP 2 stores the values in
+    // `CardPrinting` — no Rust consumer reads them yet. The Phase-1
+    // remaining steps (cast-time enchant-target decision, resolution
+    // attach arm, CR-704.5n SBA, bidir bridge) will read these fields
+    // off the printing rather than re-parsing the registry dict.
+    let is_aura = match dict.get_item("is_aura")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("is_aura must be a bool")
+        })?,
+        None => false,
+    };
+    // `aura_enchant_type` mirrors Python's default at
+    // `cards/base.py:507` ("creature"). The field is ignored unless
+    // `is_aura=true`, but we still default it consistently so a
+    // direct-construction path (state.rs synthetic printings) doesn't
+    // accidentally diverge from the parse-path default.
+    let aura_enchant_type = match dict.get_item("aura_enchant_type")? {
+        Some(v) => v.extract::<String>().map_err(|_| {
+            PyValueError::new_err(
+                "aura_enchant_type must be a string \
+                 (\"creature\" | \"artifact\")",
+            )
+        })?,
+        None => "creature".to_string(),
+    };
+    let aura_yours_only = match dict.get_item("aura_yours_only")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("aura_yours_only must be a bool")
+        })?,
+        None => false,
+    };
+    // `aura_equipment_bonuses` is a single nested dict
+    // `{"power_bonus": int, "toughness_bonus": int, "granted_keywords":
+    // [str, ...]}` (NOT three top-level keys — see
+    // `cross_engine.py:10384`). Missing top-level key OR a present-but-
+    // None inner key parses to the zero/empty default; an absent
+    // top-level key on a non-Aura registers as P/T-or-keyword-less.
+    // The bridge omits the top-level key when no bonus is meaningful
+    // (the Python `if card.aura_power_bonus or ... or
+    // card.aura_granted_keywords:` gate at `cross_engine.py:10374`).
+    let (aura_power_bonus, aura_toughness_bonus, aura_granted_keywords) =
+        match dict.get_item("aura_equipment_bonuses")? {
+            Some(bonuses_any) => {
+                let bonuses_dict = bonuses_any
+                    .downcast::<PyDict>()
+                    .map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses must be a dict",
+                        )
+                    })?;
+                let pwr = match bonuses_dict.get_item("power_bonus")? {
+                    Some(v) => v.extract::<i16>().map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses.power_bonus must \
+                             be an integer",
+                        )
+                    })?,
+                    None => 0,
+                };
+                let tgh = match bonuses_dict.get_item("toughness_bonus")? {
+                    Some(v) => v.extract::<i16>().map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses.toughness_bonus \
+                             must be an integer",
+                        )
+                    })?,
+                    None => 0,
+                };
+                let kws = match bonuses_dict.get_item("granted_keywords")? {
+                    Some(kw_any) => {
+                        let iter = kw_any.try_iter().map_err(|_| {
+                            PyValueError::new_err(
+                                "aura_equipment_bonuses.granted_keywords \
+                                 must be an iterable of keyword strings",
+                            )
+                        })?;
+                        let mut out = Vec::new();
+                        for item in iter {
+                            let s: String = item?.extract().map_err(|_| {
+                                PyValueError::new_err(
+                                    "aura_equipment_bonuses.\
+                                     granted_keywords entries must be \
+                                     strings",
+                                )
+                            })?;
+                            out.push(s);
+                        }
+                        out
+                    }
+                    None => Vec::new(),
+                };
+                (pwr, tgh, kws)
+            }
+            None => (0i16, 0i16, Vec::new()),
+        };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -8821,6 +9124,12 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         additional_cost_sacrifice_creature_or_artifact,
         additional_cost_sacrifice_creature_or_enchantment,
         additional_cost_choose_your_creature,
+        is_aura,
+        aura_enchant_type,
+        aura_yours_only,
+        aura_power_bonus,
+        aura_toughness_bonus,
+        aura_granted_keywords,
     })
 }
 
@@ -10186,6 +10495,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // / slice-19 unit-variant precedent).
             d.set_item("kind", "each_opponent_exiles_card_from_hand_lightstall")?;
         }
+        Effect::HouseCartographerSurvivalEffect => {
+            // 21st Rust slice (XXX Pin 1 closure). Unit variant; no
+            // payload fields beyond `kind` (mirrors Python's
+            // field-free @dataclass(frozen=True) at
+            // `effects/bespoke.py:2667-2733`). No other keys emitted
+            // -- round-trip dict-shape consistency (slice-16 /
+            // slice-19 / slice-20 unit-variant precedent).
+            d.set_item("kind", "house_cartographer_survival")?;
+        }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;
             let mode_dicts: Vec<Bound<'_, PyDict>> = modes
@@ -10468,6 +10786,47 @@ impl Registry {
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let p = self.lookup(id)?;
         p.etb_effects.iter().map(|e| effect_to_pydict(py, e)).collect()
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff this
+    /// printing parsed as an Aura (the registry-dict carried
+    /// `is_aura=True`). Mirrors Python's `CardPrinting.is_aura`
+    /// derivation. Used by the test surface to confirm the STEP-2
+    /// parse arm landed.
+    fn get_printing_is_aura(&self, id: u32) -> PyResult<bool> {
+        Ok(self.lookup(id)?.is_aura)
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Which permanent
+    /// type this Aura enchants (`"creature"` | `"artifact"`). Defaults
+    /// to `"creature"` for non-Aura printings — gate on `is_aura`
+    /// before reading.
+    fn get_printing_aura_enchant_type(&self, id: u32) -> PyResult<String> {
+        Ok(self.lookup(id)?.aura_enchant_type.clone())
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff this
+    /// Aura's printed text is "Enchant <type> YOU CONTROL" (Shardmage's
+    /// Rescue). `false` for non-Auras and for non-yours-only Auras.
+    fn get_printing_aura_yours_only(&self, id: u32) -> PyResult<bool> {
+        Ok(self.lookup(id)?.aura_yours_only)
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-7 bonus
+    /// triple `(power_bonus, toughness_bonus, granted_keywords)`.
+    /// pyo3 auto-converts the Rust tuple to a Python tuple. `(0, 0,
+    /// [])` for non-Auras and for Auras whose bridge omitted the
+    /// `aura_equipment_bonuses` sub-dict.
+    fn get_printing_aura_grant(
+        &self,
+        id: u32,
+    ) -> PyResult<(i16, i16, Vec<String>)> {
+        let p = self.lookup(id)?;
+        Ok((
+            p.aura_power_bonus,
+            p.aura_toughness_bonus,
+            p.aura_granted_keywords.clone(),
+        ))
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

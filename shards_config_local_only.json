@@ -1,0 +1,8 @@
+{
+  "shards": [
+    {
+      "host": "local",
+      "n_workers": 8
+    }
+  ]
+}

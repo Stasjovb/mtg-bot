@@ -73,21 +73,24 @@ auto-picks the first Creature-typed graveyard card -- see
 observable: p0 graveyard size: 1 -> 0; p0 hand size: 0 -> 1 on
 both engines.
 
-Honest-exhaustion drop -- House Cartographer.  The 5th Survivor card
-(House Cartographer's "Reveal cards from the top of your library
-until you reveal a land card. ...") resolves to a bespoke Python-
-only effect class ``HouseCartographerSurvivalEffect`` at
-``src/mtg_bot/effects/bespoke.py:2667-2727``.  The Rust engine has
-NO matching ``Effect`` variant and NO ``"house_cartographer_survival"``
-parse_effect arm (verified 2026-05-20: ``parse_effect`` enumerates
-the valid kinds and rejects unknown ones with PyValueError).  Adding
-the Rust resolver is a separate slice -- a real reveal-until-land
-walk with random-order placement on library bottom is a non-trivial
-effect lane.  Closing the family today would require either a Rust
-slice (out of scope per the lane's "no Rust touch" discipline) or a
-parse-acceptance-only probe (declined: parity probes assert byte-
-equal RESOLVE, not parse).  Dropped with this docstring note in
-favor of shipping the two clean probes above.
+Probe 5 -- House Cartographer (BEGINNING_OF_POSTCOMBAT_MAIN +
+HouseCartographerSurvivalEffect) -- 21st Rust slice (XXX Pin 1
+closure).  The 5th and FINAL EoE Survivor-family card; previously
+the Survivor downstream probe agent's honest-exhaustion drop
+(commit ``1ad5b073``) because no Rust resolver existed for the
+bespoke ``HouseCartographerSurvivalEffect``.  Slice 21 lands
+``Effect::HouseCartographerSurvivalEffect`` unit variant + parse
+arm + resolve arm + bridge arm, mirroring Python's reveal-until-
+land library walk step-for-step.  The byte-equal probe drives the
+real parsed House Cartographer printing on the Python side and a
+bridged synthetic carrier on the Rust side through the
+BEGINNING_OF_POSTCOMBAT_MAIN dispatch with a single-card library
+that's a Land (the "land is at the top" case -- the simplest
+deterministic byte-equal corner where the random-order tail is
+empty so the shuffle path is exercised but trivially byte-equal).
+After firing the trigger and resolving the stack, both engines:
+library: 1 (Land) -> 0; hand: 0 -> 1 (the Land).  Brings the
+Survivor family probe coverage to 5/5.
 """
 
 from __future__ import annotations
@@ -1148,4 +1151,286 @@ def test_cross_engine_real_eoe_savior_of_the_small_postcombat_main_return_creatu
         f"Python={len(py.battlefield)} (must be byte-equal at 1 -- "
         "Savior of the Small only; Emissary Escort returned to hand "
         "not bf)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Probe 5 -- House Cartographer: BEGINNING_OF_POSTCOMBAT_MAIN +
+# HouseCartographerSurvivalEffect (reveal-until-land library walk)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_real_eoe_house_cartographer_postcombat_main_reveal_until_land_parity():
+    """**GENUINE real-EoE cross-engine probe -- House Cartographer
+    (21st Rust slice; XXX Pin 1 byte-equal verification).**
+
+    The 5th and FINAL EoE Survivor-family card; brings the Survivor
+    downstream probe coverage to 5/5.
+
+    Same Survival predicate composition as Cautious / Defiant / Shrewd
+    / Savior:
+    ``And(And(Controlled(YOU), IsSelf()), Source(IsTapped()))``.
+    Different effect lane:
+    ``HouseCartographerSurvivalEffect()`` -- reveal cards from the
+    top of the controller's library until you reveal a land card;
+    put that land into your hand; put the rest on the bottom of your
+    library in a random order.
+
+    Setup chooses the **"land at the top"** variant: a single Plains
+    seeded in p0's library.  This is the deterministic byte-equal
+    corner where the random-order tail is empty (no non-lands
+    accumulate), so the shuffle path is exercised trivially -- both
+    engines pop the Plains, push it to p0's hand, and append nothing
+    to the bottom.  Avoids the random-order substrate's external-rng
+    plumbing burden while still exercising the full Effect arm
+    (library walk + land terminator + hand transition).
+
+    Pre-21st-slice behavior (the XXX Pin 1 divergence):
+      * Python: trigger pushes at PHASE_MAIN2 entry; resolve walks
+        the library, finds Plains, moves it library -> hand.
+      * Rust: parse_effect rejects ``"house_cartographer_survival"``
+        with PyValueError (no Effect variant existed; no parse arm
+        existed).  The bridged carrier could not be built.
+
+    Post-21st-slice byte-equal observable:
+      * Both engines: stack pushes exactly 1 trigger at MAIN2 entry.
+      * Both engines: after drain, p0 library: 1 -> 0; p0 hand:
+        0 -> 1.
+      * Both engines: bf unchanged (1 = House Cartographer only).
+      * Both engines: life unchanged (20/20).
+
+    Setup:
+      * p0 library: [Plains] (1 card -- the Land terminator).
+      * p1 library: empty.
+      * p0 has House Cartographer on bf, tapped, summoning_sick=
+        False.
+      * Active player = p0; start at PHASE_MAIN2 on both engines.
+
+    Why Plains:
+      * Pure basic Land (no special abilities, no mana ability
+        triggers, no zone-change baggage).
+      * Single-card library means the random-order tail is empty
+        (revealed is []), so the shuffle is a no-op and any
+        external-rng plumbing isn't load-bearing for this probe.
+        The full multi-card "land at the bottom" variant exercises
+        the shuffle path and is left for a deeper integration probe
+        (the external-rng substrate exists but the cross-engine
+        randomness install is its own coordination).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.bespoke import HouseCartographerSurvivalEffect
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.turn import (
+        Step,
+        run_beginning_of_postcombat_main_triggers,
+    )
+    from mtg_bot.search.tactical import DefaultTacticalAgent
+
+    # ------------------------------------------------------------------
+    # 1. Verify the real parsed House Cartographer + Plains printings.
+    # ------------------------------------------------------------------
+    src = get_active_source()
+    real = src.get_printings().get("House Cartographer")
+    if real is None:
+        pytest.skip("House Cartographer absent from active CardSource")
+    plains = src.get_printings().get("Plains")
+    if plains is None:
+        pytest.skip("Plains absent from active CardSource")
+    assert "Creature" in real.card_types
+    assert "Land" in plains.card_types
+    pcm_ta = next(
+        (
+            ta for ta in real.triggered_abilities
+            if ta.event == Event.BEGINNING_OF_POSTCOMBAT_MAIN
+        ),
+        None,
+    )
+    assert pcm_ta is not None
+    assert isinstance(pcm_ta.effect, HouseCartographerSurvivalEffect)
+
+    # ------------------------------------------------------------------
+    # 2. Shared triggered-ability dict (Rust carrier).
+    # ------------------------------------------------------------------
+    hc_ta_dict = {
+        "event": "beginning_of_postcombat_main",
+        "predicate": {
+            "kind": "and",
+            "left": {
+                "kind": "and",
+                "left": {"kind": "controlled_by_you"},
+                "right": {"kind": "source_is_self"},
+            },
+            "right": {"kind": "source_is_tapped"},
+        },
+        "effect": {
+            "kind": "house_cartographer_survival",
+        },
+    }
+
+    # ------------------------------------------------------------------
+    # 3. Build cross-engine states with EMPTY libraries (we'll inject
+    #    the Plains into p0's library directly so the carrier's id +
+    #    zone are controlled).
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    py = build_python_state(spec)
+    ZB = 2  # ZONE_BATTLEFIELD
+    ZL = 1  # ZONE_LIBRARY
+
+    # ------------------------------------------------------------------
+    # 4. Rust: register Plains in p0 library FIRST (so it has the
+    #    smallest id), then House Cartographer on bf; tap; advance to
+    #    MAIN2.
+    # ------------------------------------------------------------------
+    rs_plains_id = rs.register_and_inject_object(
+        {
+            "name": "Plains",
+            "card_types": ["Land"],
+            "subtypes": ["Plains"],
+            "power": 0,
+            "toughness": 0,
+            "keywords": [],
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,  # owner_id = p0
+        ZL,
+    )
+    rs_hc_id = rs.register_and_inject_object(
+        {
+            "name": "House Cartographer",
+            "card_types": ["Creature"],
+            "subtypes": ["Human", "Scout", "Survivor"],
+            "power": int(real.power),
+            "toughness": int(real.toughness),
+            "keywords": [],
+            "effects": [],
+            "triggered_abilities": [hc_ta_dict],
+        },
+        0,
+        ZB,
+    )
+    rs.clear_summoning_sick_for_player(0)
+    rs.tap_object(rs_hc_id)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+
+    assert rs.library_sizes[0] == 1
+    assert rs.hand_sizes[0] == 0
+    assert rs.battlefield_sizes[0] == 1
+
+    # Advance phases until reaching PHASE_MAIN2.
+    PHASE_MAIN2 = 9
+    for _ in range(30):
+        rs.advance_phase()
+        if rs.current_phase() == PHASE_MAIN2:
+            break
+    assert rs.current_phase() == PHASE_MAIN2, (
+        f"Rust: must reach PHASE_MAIN2; got {rs.current_phase()}"
+    )
+
+    # Post-closure: trigger pushes.
+    assert rs.stack_size() == 1, (
+        f"Rust: exactly 1 trigger (House Cartographer Survival) "
+        f"must be on the stack after MAIN2 entry post-XXX-Pin-1 "
+        f"closure; got {rs.stack_size()}.  If 0, the closure was "
+        "reverted -- audit the Effect variant + parse arm + bridge "
+        "in cards.rs / cross_engine.py."
+    )
+
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+
+    rs_lib_after = rs.library_sizes[0]
+    rs_hand_after = rs.hand_sizes[0]
+    assert rs_lib_after == 0 and rs_hand_after == 1, (
+        f"Rust: Plains must move library -> hand; got "
+        f"lib={rs_lib_after}, hand={rs_hand_after}.  If lib=1 "
+        "hand=0, the resolve arm fizzled -- audit "
+        "Effect::HouseCartographerSurvivalEffect in "
+        "state_ops_resolve.rs."
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Python: seed Plains in p0's library FIRST (id allocation order
+    #    matches Rust), then House Cartographer on bf; tap; fire
+    #    postcombat-main triggers.
+    # ------------------------------------------------------------------
+    py_plains = py.new_object(plains, owner_id=0, zone=Zone.LIBRARY)
+    py.players[0].library.append(py_plains)
+
+    py_hc = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_hc.summoning_sick = False
+    py_hc.tapped = True
+    py_hc.damage = 0
+    py_hc.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_hc)
+
+    py.players[0].agent = DefaultTacticalAgent()
+    py.players[1].agent = DefaultTacticalAgent()
+
+    while py.stack:
+        from mtg_bot.actions import resolve_top_of_stack
+        resolve_top_of_stack(py)
+
+    assert len(py.players[0].library) == 1
+    assert len(py.players[0].hand) == 0
+
+    py.step = Step.POSTCOMBAT_MAIN
+    py.active_player_idx = 0
+    py.priority_player_idx = 0
+
+    run_beginning_of_postcombat_main_triggers(py)
+    assert len(py.stack) == 1, (
+        f"Python: exactly 1 trigger (House Cartographer Survival) "
+        f"must be on the stack; got {len(py.stack)}"
+    )
+    drain_stack(py)
+
+    py_lib_after = len(py.players[0].library)
+    py_hand_after = len(py.players[0].hand)
+    assert py_lib_after == 0 and py_hand_after == 1, (
+        f"Python: Plains must move library -> hand; got "
+        f"lib={py_lib_after}, hand={py_hand_after}"
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Cross-engine byte-equality on targeted observables.
+    # ------------------------------------------------------------------
+    assert rs_lib_after == py_lib_after == 0, (
+        f"p0 library: Rust={rs_lib_after}, Python={py_lib_after} "
+        "(must be byte-equal at 0 -- Plains moved library -> hand "
+        "identically on both engines post-XXX-Pin-1 closure)"
+    )
+    assert rs_hand_after == py_hand_after == 1, (
+        f"p0 hand: Rust={rs_hand_after}, Python={py_hand_after} "
+        "(must be byte-equal at 1 -- Plains lands in p0's hand on "
+        "both engines)"
+    )
+    assert rs.get_life(0) == py.players[0].life == 20, (
+        f"p0 life: Rust={rs.get_life(0)}, Python={py.players[0].life} "
+        f"(must be byte-equal at 20 -- reveal-until-land doesn't touch "
+        "life)"
+    )
+    assert rs.get_life(1) == py.players[1].life == 20, (
+        f"p1 life: Rust={rs.get_life(1)}, Python={py.players[1].life} "
+        f"(must be byte-equal at 20 -- untouched)"
+    )
+    # Bf size: House Cartographer remains; Plains never reached bf
+    # (library -> hand, not library -> bf).
+    assert rs.battlefield_sizes[0] == len(py.battlefield) == 1, (
+        f"p0 battlefield: Rust={rs.battlefield_sizes[0]}, "
+        f"Python={len(py.battlefield)} (must be byte-equal at 1 -- "
+        "House Cartographer only; Plains returned to hand not bf)"
     )
