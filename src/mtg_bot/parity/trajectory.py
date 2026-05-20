@@ -3725,24 +3725,30 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         loyalty
       * Mana cost is parseable into (generic, colored) — no hybrid /
         phyrexian / X / snow.
-      * No ``dynamic_pt_formula`` (round-39 fix — Harmonious
-        Grovestrider, Cosmogoyf, Emissary Escort). The CardDef bridge
-        carries only the printing's PRINTED ``power`` / ``toughness``
-        fields; the parser encodes ``*``-based P/T as ``0`` placeholders
-        (see ``parser/printing_keywords.py:478-480``) and the engine
-        computes the actual P/T at query time via
-        ``game._dynamic_base_pt(formula)``. Without the formula on the
-        bridged printing, Python materializes the creature as a literal
-        0/0 (or 0/1 for Cosmogoyf, 0/4 for Emissary Escort) and CR
-        704.5f sends it straight to graveyard the moment SBAs check —
-        but Rust's bridged printing has the same 0/0 / 0/1 / 0/4 placeholder
-        and (per the smoke surfaced by round-38 E1) keeps Grovestrider on
-        the battlefield. The honest fix is to drop these creatures at
-        the filter instead of silently mistranslating them — adding the
-        full layer-7 CDA substrate to CardDef is a separate, larger
-        slice. (Two-engines-disagree-on-0/0-SBA is its own cross-engine
-        gap, but it doesn't affect any real card today because no real
-        CR-correct printing is actually 0/0 at ETB.)
+      * Only the ``"harmonious_grovestrider"`` ``dynamic_pt_formula``
+        is admitted as of round-78 (the dynamic-P/T-formula substrate
+        landing). The CardDef bridge now carries
+        ``dynamic_pt_formula`` (a new optional string field;
+        round-trips through ``_spec_card_to_printing_dict`` →
+        Rust's ``parse_printing`` and back through
+        ``_card_def_to_python_printing``); Rust's
+        ``battlefield_creature_power`` /
+        ``battlefield_creature_toughness`` /
+        ``collect_sba_victims`` honor the
+        ``"harmonious_grovestrider"`` arm via
+        ``state_ops_combat::dynamic_base_pt_pub`` in lockstep with
+        Python's ``game._dynamic_base_pt``. Sibling formulas
+        (``"cosmogoyf"`` / ``"emissary_escort"``) carry different
+        per-formula shapes and are honest-stopped Rust-side (the
+        dispatch table's ``_`` arm returns ``None`` for any
+        unrecognized key); they stay on the drop-at-filter path
+        until a per-card slice flips each one in lockstep across
+        both engines. The pre-round-78 rejection (which dropped
+        EVERY ``dynamic_pt_formula`` carrier) was the round-39
+        honest-stop precursor to this substrate; ``9c0d440f`` /
+        ``9e71b63b`` did the drop, ``9c0d440f``'s SEARCH_LIMITATIONS
+        entry tracked the deferred substrate, and this slice
+        delivers the substrate.
       * No ``ward_cost`` (round-39 fix — Harmonious Grovestrider,
         Mouth of the Storm, Famished Worldsire, Lionheart Glimmer).
         The CardDef bridge doesn't carry ``ward_cost``; the bridged
@@ -3790,13 +3796,34 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    # Round-39 dynamic-P/T-formula fix (Harmonious Grovestrider, Cosmogoyf,
-    # Emissary Escort): see docstring above for the cross-engine
-    # mistranslation this prevents.
-    if getattr(printing, "dynamic_pt_formula", None) is not None:
+    # Round-78 dynamic-P/T-formula substrate landing: the CardDef
+    # bridge now CARRIES ``dynamic_pt_formula`` (the substrate
+    # extension this round), and Rust's ``battlefield_creature_power``
+    # / ``battlefield_creature_toughness`` honor the
+    # ``"harmonious_grovestrider"`` arm in lockstep with Python's
+    # ``game._dynamic_base_pt``. Admit only the
+    # ``"harmonious_grovestrider"`` formula key today; sibling
+    # formulas (``"cosmogoyf"`` / ``"emissary_escort"``) carry
+    # different per-formula shapes and are honest-stopped Rust-side
+    # (the dispatch table's ``_`` arm returns ``None`` for any
+    # unrecognized key, so admitting them would produce a 0/0
+    # creature on Rust — the very mistranslation the round-39 fix
+    # was guarding against). Future per-card slices flip the
+    # remaining keys in lockstep across both engines; until then
+    # they stay on the same drop-at-filter path.
+    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     # Round-39 ward-cost fix (Harmonious Grovestrider et al.): see
-    # docstring above for the substrate-honesty rationale.
+    # docstring above for the substrate-honesty rationale. This
+    # rejection STAYS — the real EoE Harmonious Grovestrider printing
+    # carries both ``dynamic_pt_formula`` AND ``ward_cost``; the
+    # dynamic-P/T substrate landing in round-78 opens the formula
+    # half of the gate, but the ward half remains an orthogonal
+    # substrate (separate closure target). A synthetic Grovestrider
+    # CardDef without the ward rider admits cleanly; the live EoE
+    # printing remains drop-at-filter until the ward substrate
+    # lands.
     if getattr(printing, "ward_cost", None) is not None:
         return False
     try:
@@ -3950,7 +3977,18 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    if getattr(printing, "dynamic_pt_formula", None) is not None:
+    # Round-78 dynamic-P/T-formula substrate: same admit rule as
+    # ``_printing_is_bridge_simple_creature`` — only the
+    # ``"harmonious_grovestrider"`` formula key is honored by Rust's
+    # dispatch table today. No EoE warp creature carries a
+    # ``dynamic_pt_formula`` (verified: the §1 warp pool is Red Tiger
+    # Mechan, Bygone Colossus, Germinating Wurm, Knight Luminary,
+    # Starbreach Whale, Timeline Culler — none are ``*``-based P/T),
+    # so this branch is dead today; keeping the explicit gate
+    # preserves the §2 substrate-honesty guarantee if a future warp
+    # printing happens to be a layer-7 CDA carrier.
+    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     if getattr(printing, "ward_cost", None) is not None:
         return False
@@ -5066,6 +5104,11 @@ def _printing_to_card_def(printing) -> CardDef:
             _python_ta_to_safe_dict(ta)
             for ta in printing.triggered_abilities
         )
+        # Round-78 dynamic-P/T-formula substrate: thread the formula
+        # key through to the CardDef. The filter above gates on the
+        # admit set (today: only ``"harmonious_grovestrider"`` is
+        # honored); ``None`` for every non-CDA creature, bit-
+        # identical to pre-substrate.
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -5075,6 +5118,9 @@ def _printing_to_card_def(printing) -> CardDef:
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
             triggered_abilities=triggered_abilities,
+            dynamic_pt_formula=getattr(
+                printing, "dynamic_pt_formula", None
+            ),
         )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "

@@ -3885,25 +3885,43 @@ Production self-play does not run both engines simultaneously.
 
 ---
 
-## CardDef bridge filter drops creatures with `dynamic_pt_formula` / `ward_cost`
+## CardDef bridge filter drops creatures with `dynamic_pt_formula` (PARTIAL CLOSURE round-78) / `ward_cost`
+
+**Status**: dynamic-P/T formula half **PARTIALLY CLOSED round-78**
+(Harmonious Grovestrider's `harmonious_grovestrider` formula key
+landed; Cosmogoyf / Emissary Escort still drop-at-filter).
+`ward_cost` half remains an orthogonal substrate (not closed).
 
 **Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_creature`
-(the two `if getattr(printing, ...) is not None: return False` lines
-guarding `dynamic_pt_formula` and `ward_cost`).
+— the dynamic-P/T gate now ADMITS the `harmonious_grovestrider` key
+(round-78 substrate landing); the `ward_cost` gate STAYS (the
+ward-substrate slice is a separate closure target).
 
 **What the shortcut is**: the trajectory-parity loader filters out
-every EoE creature that carries a `dynamic_pt_formula`
-(`*`-based P/T cards: Harmonious Grovestrider, Cosmogoyf, Emissary
-Escort) or a `ward_cost` (Harmonious Grovestrider, Mouth of the
-Storm, Famished Worldsire, Lionheart Glimmer). These creatures do
-NOT round-trip through the CardDef bridge today — the bridge's
-`CardDef` shape carries the printing's raw `power` / `toughness`
-ints (which the parser encodes as 0-placeholders for `*` cards —
-see `cards/parser/printing_keywords.py:478-480`) and has no field
-for either `dynamic_pt_formula` or `ward_cost`. Loading them
-across the bridge silently produces a 0/0 (or 0/1, 0/4) vanilla
-no-ward creature, which then disagrees cross-engine the moment
-SBAs check or a Ward trigger would have fired.
+every EoE creature that carries a `dynamic_pt_formula` whose key is
+NOT yet implemented in Rust's `state_ops_combat::dynamic_base_pt_pub`
+dispatch table, OR a `ward_cost`. Pre-round-78 every dynamic-P/T
+carrier was dropped; round-78 opened the formula half for Harmonious
+Grovestrider only. The bridge's `CardDef` now CARRIES
+`dynamic_pt_formula` (a new optional string field — round-trips
+through `_spec_card_to_printing_dict` → Rust's `parse_printing` and
+back through `_card_def_to_python_printing`); Rust's
+`battlefield_creature_power` / `battlefield_creature_toughness` /
+`collect_sba_victims` / `is_lethal` honor the
+`harmonious_grovestrider` arm via `dynamic_base_pt_pub` in lockstep
+with Python's `game._dynamic_base_pt`. Sibling formulas
+(`cosmogoyf` / `emissary_escort`) carry different per-formula shapes
+and are honest-stopped Rust-side (the dispatch table's `_` arm
+returns `None` for any unrecognized key); they stay on the
+drop-at-filter path until per-card slices flip each in lockstep.
+
+The `ward_cost` rejection is separate: the bridge has no `ward_cost`
+field and no Rust-side Ward replacement / counter-on-target
+machinery, so a real EoE Harmonious Grovestrider printing — which
+carries BOTH `dynamic_pt_formula` AND `ward_cost` — still drops at
+the ward gate. A synthetic Grovestrider CardDef without the ward
+rider admits cleanly (this is the round-78 probe at
+`test_parity_smoke.py::test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity`).
 
 **Why it's OK**: each card has a real engine-side implementation
 (Python's `game._dynamic_base_pt(formula)` + Python's full Ward
@@ -3911,30 +3929,34 @@ substrate; Rust's matching shapes for the keyword side) — they
 play correctly in production. The only context where the
 mistranslation surfaced is the production-deck trajectory-parity
 bench, where both engines are driven off the same CardDef
-registry. Dropping these cards at filter time keeps the bench
-honest. Extending CardDef to carry `dynamic_pt_formula` and
-`ward_cost` is the proper fix; it's a CardDef-schema slice on its
-own (Rust's `parse_printing` would need matching arms, plus the
-layer-7 CDA computation on both sides has to read the formula at
-P/T-query time).
+registry. Round-78 closed the dynamic-P/T half for the highest-
+deck-count single-gated member (Harmonious Grovestrider — 61
+17lands decks per the subsystem inventory). The remaining
+dynamic-P/T cards (Cosmogoyf / Emissary Escort) plus all
+`ward_cost` carriers still drop at filter time pending their
+own slices.
 
 **Failure mode (pre-fix)**: round-38 bench surfaced
 `cast_spell::graveyard_p0,battlefield` for Harmonious
 Grovestrider (2/5 of 18-game smoke failures). Python's SBA sent
 the 0/0 creature to graveyard on resolve; Rust kept it on the
-battlefield. The 0/0-SBA cross-engine asymmetry is its own
-latent bridge gap but doesn't affect any real CR-correct
-printing — no real card resolves as a literal 0/0 at ETB.
+battlefield. Round-78 fixed THIS specific failure on the
+Grovestrider side; the ward-rider still gates the LIVE printing,
+so the bench-trajectory effect is "synthetic Grovestrider-shape
+creatures now admit cleanly; live Grovestrider still drops at
+the ward gate".
 
-**Fix-scope estimate**: ~4 hours for the proper fix (CardDef
-schema extension + Rust parser arm + bridge translators on
-both sides) + ~1 hour parity test for Grovestrider/Cosmogoyf/
-Emissary Escort actually playing cross-engine.
+**Fix-scope estimate**: dynamic-P/T half — **DONE round-78** (~1
+cycle as estimated by the subsystem inventory). Remaining:
+~1 cycle each for Cosmogoyf + Emissary Escort (extend the Rust
+dispatch table arm + thread `_DYNAMIC_PT_FORMULA_LINES` admit
+keys through the bridge admit predicate); ~2-4 hours for the
+ward-substrate slice.
 
-**Impact estimate**: 3 EoE creatures + 4 EoE Ward-bearers
-unfilterable from the trajectory-parity coverage today. Reduces
-divergence noise from the bench (cast_spell::graveyard_p0,
-battlefield divergence count drops to 0 — verified round-39).
+**Impact estimate**: round-78 partial closure unblocks 61
+17lands decks (Harmonious Grovestrider single-gated member) for
+the dynamic-P/T half once the ward-substrate slice lands. Cosmogoyf
++ Emissary Escort each remain blocked on per-formula closure.
 
 ---
 
