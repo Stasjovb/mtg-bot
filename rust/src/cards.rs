@@ -3471,6 +3471,64 @@ pub enum Effect {
     /// fields. The bridge translates this Rust variant to
     /// `EnchantedCreatureFightsTargetEffect()` (field-free construction).
     EnchantedCreatureFightsTarget,
+    /// **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
+    /// "sacrifice this unless you tap an untapped permanent you
+    /// control".** Mirrors Python's `SacrificeSelfUnlessTapPermanent`
+    /// (`effects/combinators.py:96-168`) — the canonical example of the
+    /// "land-ETB-trigger path + tap-a-permanent cost decision" subsystem
+    /// gap. One direct EoE consumer: **Command Bridge** (24,522 17lands
+    /// decks — the highest deck count in the BLOCKED-genuinely_missing
+    /// tier per `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`).
+    ///
+    /// **Substrate already in place.** Two pieces of substrate the
+    /// closure planning called out as load-bearing checks: land ETB
+    /// trigger dispatch and the cost-decision pump.
+    ///   1. **Land ETB dispatch — ALREADY WIRED.** `play_land` → the
+    ///      shared `move_from_hand_to_battlefield`
+    ///      (`rust/src/state_ops_cast.rs:618-681`) which pushes
+    ///      `pending_etb_dispatches.push(entered_id)` and drains
+    ///      `drain_pending_etb_dispatches`. A land entering the
+    ///      battlefield fires ENTERS the same way a creature does, so
+    ///      Command Bridge's ETB trigger reaches the dispatcher. No
+    ///      additional wiring needed here for the lands lane.
+    ///   2. **Cost-decision pump — sibling-shape precedent.** The new
+    ///      `PendingDecision::TapPermanentChoice` mirrors `MayDoChoice`'s
+    ///      Box<Effect>-on-decline / inner-effect-on-yes shape but with
+    ///      "the cost is a tap action, NOT mana" as the gate. On yes
+    ///      (controller chose an untapped permanent), tap the chosen
+    ///      permanent and DROP the sac. On no (decline / no legal
+    ///      candidates), sacrifice the source. Pre-resolve filter
+    ///      already excludes the source itself from the candidate set.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `SacrificeSelfUnlessTapPermanent()` (field-free construction).
+    /// The source-and-controller are read from `state.resolving_source`
+    /// at resolve time, mirroring the Python convention
+    /// (`combinators.py:121` `source = state.resolving_source`).
+    ///
+    /// **Resolve semantics (mirrors `combinators.py:115-163`).**
+    /// 1. Locate the source object (`source_obj_id`) on its controller's
+    ///    battlefield. If missing, silent no-op (Python parity:
+    ///    `if source is None: return`).
+    /// 2. Build the candidate set: untapped permanents controlled by
+    ///    the source's controller, EXCLUDING the source itself. The
+    ///    source might be a land that entered tapped, but the source-
+    ///    exclusion check is structural, not state-dependent (Python
+    ///    `o.id != source.id` at `combinators.py:128`).
+    /// 3. **Empty candidate set →** sacrifice the source directly (the
+    ///    no-choice path; Python `if not candidates: _sacrifice(state,
+    ///    source); return` at `combinators.py:130-136`).
+    /// 4. **Non-empty candidate set →** push
+    ///    `PendingDecision::TapPermanentChoice` onto the queue carrying
+    ///    the source id, controller, and the candidate ids. The
+    ///    controller drains via `submit_tap_permanent_decision(Some(id))`
+    ///    (tap that permanent, keep source) or
+    ///    `submit_tap_permanent_decision(None)` (decline → sacrifice).
+    ///    Auto-resolve strategy `"default"` declines (mirrors Python's
+    ///    no-agent-seated fallback at `combinators.py:139-141`:
+    ///    `chosen = None` when `p.agent is None`).
+    SacrificeSelfUnlessTapPermanent,
     /// **20th Rust slice (XXX Pin 3 closure -- honest-stop substrate
     /// landing) -- Lightstall Inquisitor each-opponent-exiles-card-
     /// from-hand-with-cast-permission.** "When this creature enters,
@@ -7323,6 +7381,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // shape verbatim).
             Ok(Effect::EnchantedCreatureFightsTarget)
         }
+        "sacrifice_self_unless_tap_permanent" => {
+            // 20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
+            // "sacrifice this unless you tap an untapped permanent you
+            // control". Unit variant; no payload fields beyond `kind`
+            // (the source-and-controller are read from
+            // `state.resolving_source` at resolve time, mirroring the
+            // Python convention at `combinators.py:121`). Extra dict
+            // fields silently ignored for round-trip dict-shape
+            // consistency (mirrors slice-19 `enchanted_creature_fights_
+            // target` / slice-16 `astelli_reclaimer_etb_effect` /
+            // round-49 `gain_life_equal_to_your_life_total` unit-variant
+            // parse arm shape verbatim).
+            Ok(Effect::SacrificeSelfUnlessTapPermanent)
+        }
         "each_opponent_exiles_card_from_hand_lightstall" => {
             // 20th Rust slice (XXX Pin 3 honest-stop closure) --
             // Lightstall Inquisitor each-opponent-exiles-card-from-
@@ -10105,6 +10177,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // No other keys emitted — round-trip dict-shape consistency
             // (slice-16 `astelli_reclaimer_etb_effect` precedent).
             d.set_item("kind", "enchanted_creature_fights_target")?;
+        }
+        Effect::SacrificeSelfUnlessTapPermanent => {
+            // 20th Rust slice (VVV Pin 2 closure). Unit variant; no
+            // payload fields beyond `kind` (mirrors Python's field-free
+            // class at combinators.py:96-168 — no @dataclass decorator,
+            // no fields). No other keys emitted — round-trip dict-shape
+            // consistency (slice-19 `enchanted_creature_fights_target`
+            // precedent).
+            d.set_item("kind", "sacrifice_self_unless_tap_permanent")?;
         }
         Effect::EachOpponentExilesCardFromHandWithCastPermission => {
             // 20th Rust slice (XXX Pin 3 honest-stop closure). Unit

@@ -522,136 +522,156 @@ def test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_FIX
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_no_rust_variant_divergence_pin():
-    """Pin Command Bridge's ETB effect lacking a Rust counterpart.
+def test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_FIXED_parity():
+    """FIXED-parity (VVV Pin 2 closed 2026-05-20, 20th Rust slice).
 
-    Command Bridge ETBs with "sacrifice this unless you tap an untapped
-    permanent you control" -- Python parses this to the
-    ``SacrificeSelfUnlessTapPermanent`` Effect class at
-    ``src/mtg_bot/effects/combinators.py:96-168``.  Rust's ``Effect``
-    enum at ``rust/src/cards.rs`` has no matching variant -- the
-    printing's ETB body cannot round-trip through the bridge.  One of
-    7 cards on the ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing
-    list; 24522 17lands decks per ``docs/RESIDUE_CARD_PLANS.md`` -- the
-    second-highest-decked card on the residue worklist.
+    Command Bridge's ETB "sacrifice this unless you tap an untapped
+    permanent you control" -- previously absent on the Rust side --
+    now has a complete Rust counterpart:
+      * ``Effect::SacrificeSelfUnlessTapPermanent`` (cards.rs unit
+        variant; field-free, mirrors Python's class shape at
+        ``effects/combinators.py:96-168``).
+      * Parse arm ``"sacrifice_self_unless_tap_permanent"`` in
+        ``parse_effect`` + matching ``effect_to_pydict`` arm.
+      * Resolve arm in ``state_ops_resolve.rs`` reads source on its
+        controller's bf, builds candidate set (untapped permanents
+        controlled by source's controller, source-excluded), pushes
+        ``PendingDecision::TapPermanentChoice`` or sacrifices the
+        source directly when the candidate set is empty.
+      * New ``PendingDecision::TapPermanentChoice`` cost-decision
+        substrate in ``state.rs`` with submit dispatcher
+        (``submit_tap_permanent_decision``) and two auto-resolve
+        strategies (``tap_permanent_decline`` default-decline +
+        ``tap_permanent_first`` for deterministic test fixtures).
+      * Bridge arm in ``cross_engine.py::_ta_dict_to_python_effect``
+        round-trips the kind back to ``SacrificeSelfUnlessTapPermanent()``.
 
-    Probe shape:
-      1. Confirm Python's ``SacrificeSelfUnlessTapPermanent`` class
-         exists with the expected interface (``resolve`` method
-         present; reads ``state.resolving_source``).
-      2. Sentinel: the Rust crate's source files contain NO reference
-         to ``SacrificeSelfUnlessTapPermanent`` / ``sacrifice_self_
-         unless_tap_permanent`` / ``CommandBridge`` /
-         ``command_bridge`` -- the Rust side is silent on this effect
-         today.
-      3. Confirm Command Bridge is loadable + carries the expected
-         ETB-trigger shape on the Python side.
-      4. Confirm ``docs/POOL_PARITY.md``'s
-         BLOCKED-genuinely_missing list contains Command Bridge
-         (the documented worklist entry for this gap).
+    **Substrate landed in slice 20:**
+      1. New ``PendingDecision::TapPermanentChoice`` variant (the
+         cost-decision pump for "tap a permanent as alternative to
+         sacrifice").  Mirrors the ``SurveilChoice`` flat-id-Vec
+         shape; the candidate set is built at push time by the
+         resolve arm (source already excluded).
+      2. Land-ETB-dispatch was ALREADY wired -- no new substrate
+         here.  ``play_land`` -> ``move_from_hand_to_battlefield``
+         pushes ``pending_etb_dispatches`` and drains, so the ETB
+         trigger reaches the resolver the same way creature ETBs do.
+      3. Public sacrifice helper ``sacrifice_source_for_tap_decline``
+         on ``state_ops_resolve.rs`` (the LTB / IS_SACRIFICED /
+         token-cease triple-push, shared between the empty-candidate
+         fast path and the decline-via-submit path).
 
-    Closure indicator: ``Effect::SacrificeSelfUnlessTapPermanent`` (or
-    similar) lands in ``rust/src/cards.rs``, with a parse arm + resolve
-    arm in ``state_ops_resolve.rs`` + bridge arm in ``cross_engine.py``.
-    Pin renames to ``..._FIXED_parity`` asserting the variant + parse
-    arm + resolve arm are present.
+    FIXED-parity shape (inverted from the original divergence pin):
+      1. Python's ``SacrificeSelfUnlessTapPermanent`` class still
+         carries the canonical resolve behavior (unchanged).
+      2. Sentinel A (inverted): the Rust crate NOW contains a
+         ``SacrificeSelfUnlessTapPermanent`` Effect variant +
+         ``sacrifice_self_unless_tap_permanent`` parse arm +
+         resolve arm in ``state_ops_resolve.rs``.
+      3. Sentinel B (new): the Rust ``PendingDecision`` enum NOW
+         contains the ``TapPermanentChoice`` cost-decision variant
+         + ``submit_tap_permanent_decision`` dispatcher.
+      4. Sentinel C (new): the bridge arm
+         (``cross_engine.py::_ta_dict_to_python_effect``) recognizes
+         the ``"sacrifice_self_unless_tap_permanent"`` kind and
+         reconstructs ``SacrificeSelfUnlessTapPermanent()``.
 
-    EoE card scale: 1 directly (Command Bridge; 24522 17lands decks).
+    Real-EoE byte-equal probe (sentinel D) exercises the round-trip
+    + the empty-candidate-set sacrifice path against a live
+    GameState; the bridge round-trips Command Bridge's ETB through
+    Rust + back to Python without losing the Effect class.
+
+    EoE card scale: 1 directly (Command Bridge; 24522 17lands decks
+    -- the highest deck count in the BLOCKED-genuinely_missing
+    tier).
     """
-    # 1. Python's SacrificeSelfUnlessTapPermanent class exists with the
-    #    expected interface.
+    # 1. Python's SacrificeSelfUnlessTapPermanent class still exists
+    #    (canonical behavior preserved).
     from mtg_bot.effects.combinators import SacrificeSelfUnlessTapPermanent
     from mtg_bot.effects.base import Effect as _EffectBase
 
     assert issubclass(SacrificeSelfUnlessTapPermanent, _EffectBase), (
-        "SacrificeSelfUnlessTapPermanent should be an Effect subclass "
-        "(effects/combinators.py:96-168).  If this fails, the class "
-        "was restructured -- update this pin."
+        "Python invariant: SacrificeSelfUnlessTapPermanent should still "
+        "be an Effect subclass (effects/combinators.py:96-168)."
     )
 
     inst = SacrificeSelfUnlessTapPermanent()
     assert hasattr(inst, "resolve"), (
-        "SacrificeSelfUnlessTapPermanent should have a 'resolve' method "
-        "(reads state.resolving_source; builds candidate set; dispatches "
-        "choose_target with kind='untapped_permanent'; sacrifices the "
-        "source on decline).  If absent, the convention changed."
+        "Python invariant: SacrificeSelfUnlessTapPermanent should still "
+        "have a 'resolve' method."
     )
 
-    # 1a. The resolve method reads state.resolving_source (the canonical
-    #     "current resolving permanent" pointer the bespoke-effect family
-    #     uses) and routes through turn.sacrifice + turn.tap_permanent.
     resolve_src = inspect.getsource(SacrificeSelfUnlessTapPermanent.resolve)
     assert "state.resolving_source" in resolve_src, (
-        "SacrificeSelfUnlessTapPermanent.resolve should read "
-        "state.resolving_source to find the source permanent.  If "
-        "absent, the Python convention changed -- update this pin."
-    )
-    assert "_sacrifice" in resolve_src or "sacrifice" in resolve_src, (
-        "SacrificeSelfUnlessTapPermanent.resolve should route the decline "
-        "branch through turn.sacrifice.  If absent, the Python "
-        "convention changed."
+        "Python invariant: resolve still reads state.resolving_source."
     )
     assert "tap_permanent" in resolve_src, (
-        "SacrificeSelfUnlessTapPermanent.resolve should route the keep "
-        "branch through turn.tap_permanent.  If absent, the Python "
-        "convention changed."
+        "Python invariant: resolve still routes the keep branch through "
+        "turn.tap_permanent."
     )
 
-    # 2. Rust crate: NO reference to SacrificeSelfUnlessTapPermanent /
-    #    sacrifice_self_unless_tap / CommandBridge / command_bridge in
-    #    cards.rs or state_ops_resolve.rs.
+    # 2. Sentinel A (inverted): the Rust crate NOW contains the
+    #    closure-indicator strings.
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
-
-    assert rust_cards_path.exists(), (
-        f"Rust source file should exist at {rust_cards_path!r}.  "
-        "If the file moved, update this test's path resolution."
-    )
-    assert rust_resolve_path.exists(), (
-        f"Rust source file should exist at {rust_resolve_path!r}."
-    )
+    rust_state_path = repo_root / "rust" / "src" / "state.rs"
+    rust_decisions_path = repo_root / "rust" / "src" / "state_ops_decisions.rs"
 
     cards_src = rust_cards_path.read_text(encoding="utf-8")
     resolve_src_rs = rust_resolve_path.read_text(encoding="utf-8")
+    state_src = rust_state_path.read_text(encoding="utf-8")
+    decisions_src = rust_decisions_path.read_text(encoding="utf-8")
 
-    forbidden_substrings = [
-        "SacrificeSelfUnlessTapPermanent",
-        "sacrifice_self_unless_tap_permanent",
-        "sacrifice_self_unless_tap",
-        "CommandBridge",
-        "command_bridge",
-    ]
-    for needle in forbidden_substrings:
-        assert needle not in cards_src, (
-            f"Pin sentinel: rust/src/cards.rs should NOT yet contain "
-            f"{needle!r} (no Command Bridge Effect variant exists).  "
-            "If this assertion fails, the closure may have landed -- "
-            "audit the Rust enum + parse arm + resolve arm and flip "
-            "this pin to _FIXED_parity."
-        )
-        assert needle not in resolve_src_rs, (
-            f"Pin sentinel: rust/src/state_ops_resolve.rs should NOT "
-            f"yet contain {needle!r} (no Command Bridge resolve arm "
-            "exists).  If this assertion fails, the resolve arm has "
-            "landed -- flip to _FIXED_parity."
-        )
+    # Effect variant + parse + to_pydict arm in cards.rs.
+    assert "SacrificeSelfUnlessTapPermanent" in cards_src, (
+        "FIXED-parity sentinel A: cards.rs should contain the "
+        "Effect::SacrificeSelfUnlessTapPermanent variant."
+    )
+    assert "sacrifice_self_unless_tap_permanent" in cards_src, (
+        "FIXED-parity sentinel A: cards.rs should contain the parse "
+        "arm kind string 'sacrifice_self_unless_tap_permanent'."
+    )
 
-    # 3. Command Bridge is loadable + carries the expected ETB trigger.
+    # Resolve arm in state_ops_resolve.rs.
+    assert "Effect::SacrificeSelfUnlessTapPermanent" in resolve_src_rs, (
+        "FIXED-parity sentinel A: state_ops_resolve.rs should contain "
+        "the resolve arm for Effect::SacrificeSelfUnlessTapPermanent."
+    )
+
+    # 3. Sentinel B (new): PendingDecision::TapPermanentChoice
+    #    substrate in state.rs + submit dispatcher in state_ops_decisions.rs.
+    assert "TapPermanentChoice" in state_src, (
+        "FIXED-parity sentinel B: state.rs should contain the "
+        "PendingDecision::TapPermanentChoice variant."
+    )
+    assert "submit_tap_permanent_decision" in decisions_src, (
+        "FIXED-parity sentinel B: state_ops_decisions.rs should "
+        "contain the submit_tap_permanent_decision dispatcher."
+    )
+
+    # 4. Sentinel C (new): the bridge arm recognizes the kind string.
+    bridge_path = (
+        repo_root / "src" / "mtg_bot" / "parity" / "cross_engine.py"
+    )
+    bridge_src = bridge_path.read_text(encoding="utf-8")
+    assert "sacrifice_self_unless_tap_permanent" in bridge_src, (
+        "FIXED-parity sentinel C: cross_engine.py should contain the "
+        "bridge arm kind 'sacrifice_self_unless_tap_permanent'."
+    )
+
+    # 5. Command Bridge is loadable + carries the expected ETB trigger
+    #    (Python parser invariant unchanged).
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.predicates import Event
     src = get_active_source()
     pr = src.get_printings().get("Command Bridge")
     assert pr is not None, (
-        "Pin invariant: 'Command Bridge' should be present in the "
-        "active CardSource (per docs/POOL_PARITY.md BLOCKED-genuinely"
-        "_missing list).  If missing, the EoE data file was regenerated "
-        "-- update this pin."
+        "Pin invariant: 'Command Bridge' should be present."
     )
     assert "Land" in pr.card_types, (
-        f"Pin invariant: Command Bridge should be a Land card type "
-        f"(per the docs/RESIDUE_CARD_PLANS.md classification).  Got: "
+        f"Pin invariant: Command Bridge should be a Land. Got: "
         f"{pr.card_types}."
     )
     enters_ta = next(
@@ -659,40 +679,26 @@ def test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_no_rust_varia
         None,
     )
     assert enters_ta is not None, (
-        "Pin invariant: Command Bridge should carry an ENTERS "
-        "triggered ability (the sac-unless-tap rider).  If absent, the "
-        "parser convention changed -- update this pin."
+        "Pin invariant: Command Bridge should carry an ENTERS trigger."
     )
     assert isinstance(enters_ta.effect, SacrificeSelfUnlessTapPermanent), (
         f"Pin invariant: Command Bridge's ENTERS effect should be "
-        f"SacrificeSelfUnlessTapPermanent.  Got: "
+        f"SacrificeSelfUnlessTapPermanent. Got: "
         f"{type(enters_ta.effect).__name__}."
     )
 
-    # 4. POOL_PARITY's BLOCKED-genuinely_missing list contains Command
-    #    Bridge (the documented worklist entry for this gap).
-    pool_parity_path = repo_root / "docs" / "POOL_PARITY.md"
-    assert pool_parity_path.exists(), (
-        f"docs/POOL_PARITY.md should exist at {pool_parity_path!r}.  "
-        "If the doc moved, update this pin's reference."
-    )
-    pool_parity_src = pool_parity_path.read_text(encoding="utf-8")
-    assert "Command Bridge" in pool_parity_src, (
-        "Pin invariant: docs/POOL_PARITY.md should list 'Command "
-        "Bridge' (the BLOCKED-genuinely_missing entry).  If absent, "
-        "the worklist was updated -- audit this pin's BLOCKED status."
-    )
+    # 6. Real-EoE byte-equal probe (sentinel D): round-trip Command
+    #    Bridge's ETB Effect through the bridge.  The closure landed
+    #    the unit-variant parse + to_pydict + bridge arms; verify the
+    #    Effect class round-trips both directions without loss.
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
-    # 5. EoE cards affected.
-    affected_eoe_cards = [
-        "Command Bridge",
-        # Land with "When this enters, sacrifice this unless you tap an
-        # untapped permanent you control." 24522 17lands decks per
-        # docs/RESIDUE_CARD_PLANS.md:82 (#2 decked residue card).
-    ]
-    assert len(affected_eoe_cards) == 1, (
-        "The Command Bridge ETB-rider gap affects 1 EoE card directly.  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries."
+    eff_dict = {"kind": "sacrifice_self_unless_tap_permanent"}
+    rehydrated = _ta_dict_to_python_effect(eff_dict)
+    assert isinstance(rehydrated, SacrificeSelfUnlessTapPermanent), (
+        "FIXED-parity sentinel D: the bridge round-trips "
+        "{'kind': 'sacrifice_self_unless_tap_permanent'} back to "
+        f"SacrificeSelfUnlessTapPermanent. Got: {type(rehydrated).__name__}."
     )
 
 
@@ -906,16 +912,17 @@ def test_cross_engine_real_eoe_pain_for_all_aura_damage_echo_no_rust_variant_div
 
 
 def test_vvv_pin_inventory_complete():
-    """Sanity check: the VVV batch declares exactly 3 pin tests (one of
-    which has since flipped to ``_FIXED_parity`` per the closure cadence).
+    """Sanity check: the VVV batch declares exactly 3 pin tests (two of
+    which have since flipped to ``_FIXED_parity`` per the closure cadence).
 
     Pin batch VVV (round 24 pin-side) originally targeted 3 divergence
     pins.  Pin 1 (Survivor family SourceIsSelf player-subject tautology)
-    closed in the 15th Rust slice (2026-05-20) — flipped to
-    ``_FIXED_parity`` with assertions inverted per the PPP / MMM / TTT
-    closure-cadence precedent.  This sanity check guards against
-    accidental deletion or rename of any pin / FIXED-parity function in
-    the batch.
+    closed in the 15th Rust slice (2026-05-20).  Pin 2 (Command Bridge
+    SacrificeSelfUnlessTapPermanent) closed in the 20th Rust slice
+    (2026-05-20) -- flipped to ``_FIXED_parity`` with assertions
+    inverted per the PPP / MMM / TTT closure-cadence precedent.  This
+    sanity check guards against accidental deletion or rename of any
+    pin / FIXED-parity function in the batch.
     """
     import tests.test_divergence_pins_vvv as _self_mod
     pin_fns = [
@@ -927,21 +934,21 @@ def test_vvv_pin_inventory_complete():
         if name.startswith("test_") and name.endswith("_FIXED_parity")
     ]
     expected_remaining_pins = {
-        "test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_no_rust_variant_divergence_pin",
         "test_cross_engine_real_eoe_pain_for_all_aura_damage_echo_no_rust_variant_divergence_pin",
     }
     expected_fixed = {
         "test_cross_engine_real_eoe_survivor_family_source_is_self_player_subject_FIXED_parity",
+        "test_cross_engine_real_eoe_command_bridge_sacrifice_unless_tap_FIXED_parity",
     }
     assert set(pin_fns) == expected_remaining_pins, (
-        "VVV remaining-pin inventory mismatch.  Expected exactly 2 "
-        "open-divergence pins (Pin 1 closed in 15th Rust slice):\n"
+        "VVV remaining-pin inventory mismatch.  Expected exactly 1 "
+        "open-divergence pin (Pins 1 + 2 closed):\n"
         f"  {sorted(expected_remaining_pins)}\n"
         f"Got:\n  {sorted(pin_fns)}"
     )
     assert set(fixed_fns) == expected_fixed, (
-        "VVV FIXED-parity inventory mismatch.  Expected exactly 1 "
-        "closed pin (Pin 1 -- Survivor SourceIsSelf tautology):\n"
+        "VVV FIXED-parity inventory mismatch.  Expected exactly 2 "
+        "closed pins (Pin 1 + Pin 2):\n"
         f"  {sorted(expected_fixed)}\n"
         f"Got:\n  {sorted(fixed_fns)}"
     )

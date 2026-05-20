@@ -436,13 +436,18 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # (Effect::AstelliReclaimerETBEffect shipped + bridge).
     # Slice-18 fold: Roving Actuator genuinely_missing -> closed
     # (Effect::RovingActuatorETBEffect { max_mv: u8 } shipped + bridge).
-    # `missing` is now 5 distinct genuine new-Rust-Effect asks
+    # Slice-19 fold: Meltstrider's Resolve genuinely_missing -> closed
+    # (Effect::EnchantedCreatureFightsTarget shipped + bridge; honest-stop
+    # closure — full-card byte-equality stays gated on the Aura attach
+    # substrate, but the Effect-level closure flips the residue tier).
+    # Slice-20 fold: Command Bridge genuinely_missing -> closed
+    # (Effect::SacrificeSelfUnlessTapPermanent + PendingDecision::
+    # TapPermanentChoice cost-decision substrate + bridge shipped).
+    # `missing` is now 3 distinct genuine new-Rust-Effect asks
     # (Lightstall Inquisitor appears twice in the worklist; the set
     # dedupes it).
     assert missing == {
-        "Command Bridge",
         "Lightstall Inquisitor",
-        "Meltstrider's Resolve",
         "Pain for All",
         "Sothera, the Supervoid",
     }

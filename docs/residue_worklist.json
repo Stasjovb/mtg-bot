@@ -115,12 +115,14 @@
       "claimed_missing_effect": "SacUnlessYouTap",
       "aliases": [
         "SacUnlessYouTap",
-        "SacrificeSelfUnlessYouTapAPermanent"
+        "SacrificeSelfUnlessYouTapAPermanent",
+        "SacrificeSelfUnlessTapPermanent",
+        "sacrifice_self_unless_tap_permanent"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "e17802c9",
-      "name_in_arm_ack": "add_mana_to_pool",
-      "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → SacrificeSelfUnlessTapPermanent (bespoke Python class, NOT in the live 112-variant Rust enum, NOT bridged) PLUS a separate activated AddManaToPool ability. No alias resolves to a live Rust variant. The printed name 'Command Bridge' appears in the wired `add_mana_to_pool` arm, but that arm wires the card's MANA ABILITY ({T}: Add {color}, round-27 mana-ability primitive consumer list) — a DIFFERENT ability than the claimed land-ETB `SacUnlessYouTap` trigger (round-63 re-confirmed via the real parse: SacrificeSelfUnlessTapPermanent is genuinely unshipped). Per-arm ack records that audited re-walk; the round-55 structural cron suppresses exactly this arm and no other. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
+      "status": "closed",
+      "closed_at_slice": "20th Rust slice (VVV Pin 2 closure)",
+      "resolved_variant": "SacrificeSelfUnlessTapPermanent",
+      "note": "CLOSED in slice 20 (VVV Pin 2 closure). Effect::SacrificeSelfUnlessTapPermanent unit variant + parse arm + resolve arm in Rust + bridge arm in cross_engine.py. The cost-decision pump landed as PendingDecision::TapPermanentChoice (new variant in state.rs) with submit_tap_permanent_decision(Option<u32>) dispatcher — Some(id) taps the chosen untapped permanent and keeps the source; None declines and sacrifices the source via the shared sacrifice_source_for_tap_decline helper. Auto-resolve strategies tap_permanent_decline (default-decline, matches Python's no-agent fallback at combinators.py:139-141) + tap_permanent_first (deterministic first-candidate tap for test fixtures). Land-ETB-dispatch wiring was ALREADY in place (move_from_hand_to_battlefield queues pending_etb_dispatches + drains — same path creature ETBs take); no new ETB-trigger plumbing needed. 24,522 17lands decks unblocked — the HIGHEST deck count in the BLOCKED-genuinely_missing tier. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
     },
     {
       "entry": "ReturnPermanentCardWithMVXorLessFromGY",
