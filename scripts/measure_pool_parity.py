@@ -281,6 +281,8 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_rrr_downstream.py",
     # Probe batch SSS (round 23 covered-but-unprobed):
     REPO_ROOT / "tests" / "test_probe_remaining_sss.py",
+    # Probe batch UUU (round 24 covered-but-unprobed):
+    REPO_ROOT / "tests" / "test_probe_remaining_uuu.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
