@@ -1005,6 +1005,14 @@ impl GameState {
                 obj.warp_exile_pending = false;
             }
         }
+        // **MMM Pin 1 (11th Rust slice).** Bump the casting player's
+        // `spells_cast_this_turn` counter BEFORE the IS_CAST
+        // dispatch. Mirrors Python's `actions._cast_spell` which
+        // increments `p.spells_cast_this_turn += 1` at
+        // `actions.py:1777` (pre-dispatch). The post-increment value
+        // is read by `StatePredicate::SpellsCastThisTurn` ("your
+        // second spell each turn" latches when the count reaches 2).
+        self.players[player_id as usize].spells_cast_this_turn += 1;
         // Dispatch Event::Cast NOW — after the spell is stack-
         // resident (S5a) but before the StackItem push. CR 601.2 — a
         // spell is "cast" the moment its cost is paid. The subject is
@@ -1279,6 +1287,12 @@ impl GameState {
             source_id: obj_id,
             effect: crate::cards::Effect::WarpExileSelf,
         });
+        // **MMM Pin 1 (11th Rust slice).** Bump
+        // `spells_cast_this_turn` before the IS_CAST dispatch.
+        // Same pre-dispatch position as `cast_creature` /
+        // `cast_spell_noncreature` — mirrors Python's
+        // `actions._cast_spell` increment at `actions.py:1777`.
+        self.players[player_id as usize].spells_cast_this_turn += 1;
         // Dispatch Event::Cast NOW — after the spell is stack-
         // resident (S5a) + the cast-time riders commit, before the
         // StackItem push. The subject is in `stack_objects`; the
@@ -1425,6 +1439,12 @@ impl GameState {
         if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
             return Ok(false);
         }
+        // **MMM Pin 1 (11th Rust slice).** Bump
+        // `spells_cast_this_turn` before the IS_CAST dispatch.
+        // Same pre-dispatch position as `cast_creature` /
+        // `cast_creature_warp` — mirrors Python's
+        // `actions._cast_spell` increment at `actions.py:1777`.
+        self.players[player_id as usize].spells_cast_this_turn += 1;
         // Delta 6: CAST event after the spell is stack-resident (S5a)
         // and before the stack push, same ordering as `cast_creature`
         // / `cast_creature_warp`. The subject is in `stack_objects`;

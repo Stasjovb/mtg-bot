@@ -4021,6 +4021,29 @@ pub enum StatePredicate {
     /// empty or holds only non-Creature permanents). Viewer-
     /// independent. Sothera, the Supervoid's gate predicate.
     AnyPlayerControlsNoCreatures,
+    /// **MMM Pin 1 (11th Rust slice) — SpellsCastThisTurn(n).**
+    /// The viewer has cast EXACTLY ``n`` spells this turn (counted
+    /// via the per-player `Player.spells_cast_this_turn` counter).
+    /// Mirrors Python's `SpellsCastThisTurn(n: int)` from
+    /// `effects/state_predicates.py:184` — reads
+    /// `player.spells_cast_this_turn == n` post-increment of the
+    /// cast site (the dispatcher fires AFTER the counter has been
+    /// bumped, so the "second spell" trigger latches when the count
+    /// flips to exactly 2).
+    ///
+    /// **VIEWER-RELATIVE.** Reads the source's controller player
+    /// id (passed by `Predicate::StateBound::matches` as
+    /// `viewer_id`) and indexes into `state.players[viewer_id]`.
+    /// This is the first StatePredicate variant that actually
+    /// USES the viewer_id parameter — VoidActive and
+    /// AnyPlayerControlsNoCreatures both ignore it (global flag
+    /// or all-players scan).
+    ///
+    /// **EoE cards.** Cosmogrand Zenith, Sunstar Lightsmith,
+    /// Illvoi Operative, Station Monitor — all carry
+    /// `StateBound(SpellsCastThisTurn(n=2))` as the second-spell
+    /// gate on an IS_CAST trigger.
+    SpellsCastThisTurn { n: i32 },
 }
 
 impl StatePredicate {
@@ -4034,7 +4057,7 @@ impl StatePredicate {
     pub(crate) fn test(
         &self,
         state: &crate::state::GameState,
-        _viewer_id: u8,
+        viewer_id: u8,
     ) -> bool {
         match self {
             StatePredicate::VoidActive => {
@@ -4052,6 +4075,23 @@ impl StatePredicate {
                             .unwrap_or(false)
                     })
                 })
+            }
+            StatePredicate::SpellsCastThisTurn { n } => {
+                // **MMM Pin 1 — SpellsCastThisTurn.** Read
+                // `player.spells_cast_this_turn == n` for the
+                // source's controller (viewer_id resolved by
+                // `Predicate::StateBound::matches`). Mirrors
+                // Python's `SpellsCastThisTurn.test`:
+                //     return player.spells_cast_this_turn == self.n
+                // Out-of-range viewer_id (defensive guard for the
+                // sentinel path) falls back to `false` — matches
+                // Python's `state.player_by_id(viewer_id)` raising
+                // KeyError caught by the outer try/except → False.
+                let idx = viewer_id as usize;
+                if idx >= state.players.len() {
+                    return false;
+                }
+                state.players[idx].spells_cast_this_turn == *n
             }
         }
     }
@@ -4349,6 +4389,45 @@ pub enum Event {
     /// EoE cards unlocked: Requiem Monolith, Pain for All
     /// (RR Pin 3 closure).
     DealtDamage,
+    /// **MMM Pin 2 (11th Rust slice) — DiscardsCard.**
+    /// "Whenever <player> discards a card" — fired by every primitive
+    /// that moves a card from a player's hand to the graveyard via
+    /// "discard" semantics (CR 701.8). Distinct from destroy / exile
+    /// / sacrifice: only "discard" actions emit this event.
+    ///
+    /// **Single-subject shape (player subject).** `subject_id =
+    /// PLAYER_SUBJECT_OFFSET + discarding_player_id`. Mirrors Python's
+    /// `Event.DISCARDS_CARD` whose `EVENT_SUBJECTS` entry is
+    /// `("player",)` — the discarding player, not the discarded card.
+    /// `Predicate::ControlledByOpponent` ("an opponent discards")
+    /// resolves the sentinel directly; `Predicate::Always` ignores it.
+    ///
+    /// **Dispatch sites (Rust).**
+    ///   * `Effect::DiscardCard` AnyPlayer branch (Mind Rot — target
+    ///     opponent discards): dispatch on `defender` (the discarding
+    ///     player) AFTER the card is moved to graveyard.
+    ///   * `Effect::DiscardSelf` (Irreverent Gremlin — source's
+    ///     controller discards): dispatch on `controller` after EACH
+    ///     card moves to graveyard within the loop (one event per
+    ///     discarded card, matching CR 701.8a "the player discards
+    ///     each card" semantics).
+    ///   * `Effect::EachOpponentDiscards` (Let's Play a Game — each
+    ///     opponent discards): dispatch on `opponent_idx` after EACH
+    ///     card moves to graveyard.
+    /// Cleanup-step over-hand-limit discard and ward-discard riders
+    /// are NOT yet wired (no EoE card in the pool exercises them
+    /// through `DISCARDS_CARD`; they land in a future slice when a
+    /// concrete need surfaces).
+    ///
+    /// Mirrors Python's `Event.DISCARDS_CARD` (string value
+    /// `"discards_card"`, `src/mtg_bot/effects/predicates.py`).
+    ///
+    /// **EoE cards unblocked.** Entropic Battlecruiser 1+ tier
+    /// ("Whenever an opponent discards a card, they lose 3 life").
+    /// Full end-to-end firing also requires the `discards_card`
+    /// bridge arm (closed here) and the `controlled_by_opponent`
+    /// predicate (MMM Pin 3, also closed here).
+    DiscardsCard,
 }
 
 /// Sentinel offset used by phase-step dispatch to pass a **player
@@ -4426,6 +4505,33 @@ pub enum Predicate {
     /// like "whenever a creature enters under your control" and
     /// "whenever a land enters under your control".
     ControlledByYou,
+    /// **MMM Pin 3 (11th Rust slice) — ControlledByOpponent.** Matches
+    /// when the **subject** is controlled by an OPPONENT of the
+    /// source's controller. Dual of `ControlledByYou`. Mirrors
+    /// Python's `Controlled(by=OPPONENT, subject=None)` — the
+    /// canonical "an opponent discards" / "an opponent's creature
+    /// dies" qualifier for observer-opponent triggers.
+    ///
+    /// **Semantics.** Same lookup shape as `ControlledByYou` (resolve
+    /// subject's controller, resolve source's controller, compare),
+    /// but compares for INEQUALITY rather than equality. Handles the
+    /// `PLAYER_SUBJECT_OFFSET` sentinel range identically — phase-step
+    /// and DISCARDS_CARD subjects whose `subject_id` encodes a player
+    /// index (rather than a game object) resolve directly to the
+    /// player index without a zone walk.
+    ///
+    /// **Missing-id failure mode.** Either id missing → returns
+    /// `false` (loud-but-safe; matches `ControlledByYou`'s shape).
+    /// Mid-dispatch source eviction or a subject that has already
+    /// left the battlefield can both produce missing ids; treating
+    /// them as "no match" mirrors Python's
+    /// `_resolve_controller_pair` returning `None` on either side.
+    ///
+    /// **EoE cards unblocked.** Entropic Battlecruiser 1+ tier
+    /// (DISCARDS_CARD + ControlledByOpponent + TargetPlayerLosesLife).
+    /// Broader "observer-opponent" trigger shapes — opponent-side
+    /// DIES / ETBS / ATTACKS — all share this predicate variant.
+    ControlledByOpponent,
     /// Matches when the **subject's** printing carries the given
     /// subtype string. Mirrors Python's `Subject(None, HasSubtype(s))`
     /// — the canonical Kavu/Sliver/Equipment-enters predicate from
@@ -4565,6 +4671,44 @@ impl Predicate {
                         // Either id missing — never match (e.g. the
                         // subject has already left the battlefield, or
                         // the source was evicted mid-dispatch).
+                        _ => false,
+                    }
+                }
+            }
+            Predicate::ControlledByOpponent => {
+                // **MMM Pin 3 — ControlledByOpponent.** Inverse of
+                // ControlledByYou. Subject's controller != source's
+                // controller. Same PLAYER_SUBJECT_OFFSET sentinel
+                // handling as the sibling arm — phase-step /
+                // DISCARDS_CARD player subjects resolve their player
+                // index directly from the sentinel range. Missing
+                // either id → `false` (loud-but-safe, mirrors
+                // ControlledByYou's behavior).
+                let source_controller =
+                    find_object_controller(state, source_id);
+                let subject_player_index: Option<u8> =
+                    if subject_id >= PLAYER_SUBJECT_OFFSET {
+                        let idx = subject_id - PLAYER_SUBJECT_OFFSET;
+                        if (idx as usize) < state.players.len() {
+                            Some(idx as u8)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some(player_idx) = subject_player_index {
+                    // Player-subject path: source.controller != player_idx.
+                    match source_controller {
+                        Some(sc) => sc != player_idx,
+                        None => false,
+                    }
+                } else {
+                    // Game-object subject path (normal case).
+                    let subject_controller =
+                        find_object_controller(state, subject_id);
+                    match (source_controller, subject_controller) {
+                        (Some(sc), Some(jc)) => sc != jc,
                         _ => false,
                     }
                 }
@@ -8300,6 +8444,16 @@ fn parse_triggered_ability(
         // No spelling skew.
         // EoE cards unlocked: Requiem Monolith, Pain for All.
         "dealt_damage" => Event::DealtDamage,
+        // **MMM Pin 2 (11th Rust slice) — DISCARDS_CARD event.**
+        // "Whenever <player> discards a card" — Entropic
+        // Battlecruiser's 1+ tier "Whenever an opponent discards a
+        // card, they lose 3 life" is the canonical consumer. Single-
+        // subject shape: subject = PLAYER_SUBJECT_OFFSET +
+        // discarding_player_id. Mirrors Python's
+        // `Event.DISCARDS_CARD` (value `"discards_card"`); no
+        // spelling skew. Dispatched from the three "discard"
+        // primitives (DiscardCard / DiscardSelf / EachOpponentDiscards).
+        "discards_card" => Event::DiscardsCard,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
@@ -8307,8 +8461,9 @@ fn parse_triggered_ability(
                  leaves_battlefield, becomes_tapped, deals_damage, \
                  beginning_of_end_step, beginning_of_upkeep, \
                  beginning_of_combat, you_attack, \
-                 counters_added, is_sacrificed, dealt_damage \
-                 (Slice 9 + r58 + r13 + r14 + r15 + r16-RR)"
+                 counters_added, is_sacrificed, dealt_damage, \
+                 discards_card \
+                 (Slice 9 + r58 + r13 + r14 + r15 + r16-RR + MMM)"
             )));
         }
     };
@@ -8385,6 +8540,11 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         // `src/mtg_bot/effects/object_predicates.py:142`.
         "subject_is_enchantment" => Ok(Predicate::SubjectIsEnchantment),
         "controlled_by_you" => Ok(Predicate::ControlledByYou),
+        // **MMM Pin 3 (11th Rust slice) — controlled_by_opponent.**
+        // Dual of `controlled_by_you`. Mirrors Python's
+        // `Controlled(by=OPPONENT, subject=None)` — Entropic
+        // Battlecruiser's "an opponent discards" trigger gate.
+        "controlled_by_opponent" => Ok(Predicate::ControlledByOpponent),
         // HasPowerAtMost substrate slice — "with power N or less"
         // qualifier for Vicious Clown / Irreverent Gremlin ETB triggers
         // (EoE batch K/N). Dict shape: `{"kind": "has_power_at_most",
@@ -8474,7 +8634,8 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
              subject_is_enchantment, has_power_at_most, \
-             controlled_by_you, subject_has_subtype, not, and, or, \
+             controlled_by_you, controlled_by_opponent, \
+             subject_has_subtype, not, and, or, \
              state_bound"
         ))),
     }
@@ -8497,9 +8658,33 @@ fn parse_state_predicate(dict: &Bound<'_, PyDict>) -> PyResult<StatePredicate> {
         "any_player_controls_no_creatures" => {
             Ok(StatePredicate::AnyPlayerControlsNoCreatures)
         }
+        // **MMM Pin 1 (11th Rust slice).** Python's
+        // `SpellsCastThisTurn(n: int)` from
+        // `effects/state_predicates.py`. Dict shape:
+        //   `{"kind": "spells_cast_this_turn", "n": 2}`.
+        // `n` is required (no default — symmetric with the dataclass
+        // having no field default).
+        "spells_cast_this_turn" => {
+            let n: i32 = require(dict, "n")?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "state_predicate.spells_cast_this_turn.n must \
+                         be an int (got: {e})"
+                    ))
+                })?;
+            if n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "state_predicate.spells_cast_this_turn.n must be \
+                     non-negative, got {n}"
+                )));
+            }
+            Ok(StatePredicate::SpellsCastThisTurn { n })
+        }
         other => Err(PyValueError::new_err(format!(
             "unknown StatePredicate kind {other:?}; \
-             valid: void_active, any_player_controls_no_creatures"
+             valid: void_active, any_player_controls_no_creatures, \
+             spells_cast_this_turn"
         ))),
     }
 }

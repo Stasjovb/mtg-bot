@@ -8889,6 +8889,20 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         # observable semantics on single-subject events (ENTERS /
         # DIES / ATTACKS).
         return Controlled(by=YOU, subject=None)
+    if kind == "controlled_by_opponent":
+        # **MMM Pin 3 (11th Rust slice) — controlled_by_opponent.**
+        # Python's ``Controlled(by=OPPONENT, subject=None)`` — the
+        # dual of ``controlled_by_you``. Used by "observer-opponent"
+        # triggers where the event subject must be controlled by an
+        # opponent of the source's controller (e.g. Entropic
+        # Battlecruiser: "Whenever an opponent discards a card …").
+        # Rust's ``ControlledByOpponent`` checks
+        # ``subject_controller != source_controller`` on the event
+        # subject. Same observable semantics on single-subject
+        # events whose subject carries a controller (DISCARDS_CARD,
+        # IS_CAST, etc.).
+        from mtg_bot.effects.predicates import OPPONENT
+        return Controlled(by=OPPONENT, subject=None)
     if kind == "subject_has_subtype":
         # Subtypes substrate Slice 2 — Python's
         # ``Subject(None, HasSubtype("Kavu"))`` from
@@ -8962,13 +8976,15 @@ def _ta_dict_to_python_state_predicate(pred_dict: dict):
     ``test(state, viewer_id)`` rather than ``matches(state, subjects,
     source)`` (the ``TriggerPredicate`` tier).
 
-    Wired StatePredicate kinds (XX Pin 3):
+    Wired StatePredicate kinds (XX Pin 3 + MMM Pin 1):
       * ``void_active`` → ``VoidActive()``
       * ``any_player_controls_no_creatures`` → ``AnyPlayerControlsNoCreatures()``
+      * ``spells_cast_this_turn`` → ``SpellsCastThisTurn(n=…)`` (MMM
+        Pin 1; the "your Nth spell each turn" gate).
 
-    Future StatePredicate kinds (Delirium, SpellsCastThisTurn,
-    LoneAttackerForYou, OpponentControlsMoreLandsThanYou, etc.) land
-    here in lockstep with the bridge extension that needs them.
+    Future StatePredicate kinds (Delirium, LoneAttackerForYou,
+    OpponentControlsMoreLandsThanYou, etc.) land here in lockstep
+    with the bridge extension that needs them.
     """
     from mtg_bot.effects.state_predicates import VoidActive, AnyPlayerControlsNoCreatures
 
@@ -8986,6 +9002,30 @@ def _ta_dict_to_python_state_predicate(pred_dict: dict):
         # EoE card: Sothera, the Supervoid — "At the beginning of your
         # end step, if a player controls no creatures, draw a card."
         return AnyPlayerControlsNoCreatures()
+    if kind == "spells_cast_this_turn":
+        # **MMM Pin 1 (11th Rust slice) — SpellsCastThisTurn(n).**
+        # Python's ``SpellsCastThisTurn(n: int)`` from
+        # ``cards/parser/triggers.py`` /
+        # ``effects/state_predicates.py:184-206`` is the "your Nth
+        # spell each turn" gate.  Reads
+        # ``player.spells_cast_this_turn == n`` post-increment (the
+        # dispatcher fires AFTER ``actions._cast_spell`` has bumped
+        # the counter; same convention is mirrored in Rust — the
+        # increment site sits BEFORE the IS_CAST dispatch).
+        #
+        # Note: Python checks equality (`== n`), NOT `>= n`.  The
+        # trigger latches the moment the counter flips to exactly
+        # `n`, mirroring CR 603.6c "triggered the moment the
+        # condition becomes true" semantics for "your second / third
+        # / Nth" spell triggers.
+        #
+        # EoE cards: Cosmogrand Zenith, Sunstar Lightsmith, Illvoi
+        # Operative, Station Monitor (all carry
+        # ``StateBound(SpellsCastThisTurn(n=2))`` as their
+        # second-spell gate).
+        from mtg_bot.cards.parser.triggers import SpellsCastThisTurn
+        n_val = pred_dict["n"]
+        return SpellsCastThisTurn(n=n_val)
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"StatePredicate kind {kind!r} (extend "
@@ -9336,6 +9376,42 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         #
         # EoE cards unblocked: Requiem Monolith and Pain for All.
         event = Event.DEALT_DAMAGE
+    elif event_str == "discards_card":
+        # **MMM Pin 2 (11th Rust slice) — DISCARDS_CARD event bridge.**
+        # Python's ``Event.DISCARDS_CARD`` (value ``"discards_card"``)
+        # fires when a player discards a card (CR 701.8).  Rust's
+        # ``Event::DiscardsCard`` (string value ``"discards_card"``) is
+        # the counterpart — no spelling skew.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[DISCARDS_CARD]``
+        # is ``("player",)`` — the discarding player (not the card
+        # discarded).  Same PLAYER_SUBJECT_OFFSET sentinel convention
+        # as BEGINNING_OF_END_STEP / YOU_ATTACK / IS_SACRIFICED —
+        # the discarding player is passed as
+        # ``PLAYER_SUBJECT_OFFSET + player_id``.
+        # ``Controlled(by=OPPONENT)`` / ``Controlled(by=YOU)`` and
+        # ``Always`` work directly against the player subject
+        # (``Predicate::ControlledByOpponent`` / ``ControlledByYou``
+        # in Rust recognise the sentinel range and resolve the player
+        # index directly).
+        #
+        # **Dispatch sites (Rust).** Every primitive in Rust that
+        # removes a card from a player's hand via "discard" semantics
+        # (NOT destroy / exile / sacrifice — those are different
+        # events) emits ``Event::DiscardsCard``:
+        #   * ``Effect::DiscardCard`` (Mind Rot — target opponent discards)
+        #   * ``Effect::DiscardSelf`` (Irreverent Gremlin — source's
+        #     controller discards)
+        #   * ``Effect::EachOpponentDiscards`` (Let's Play a Game)
+        # Other discard paths (cleanup-step over-hand-limit discard,
+        # ward-discard rider, etc.) land in future slices alongside
+        # their respective Rust dispatch shapes.
+        #
+        # EoE card unblocked: Entropic Battlecruiser 1+ tier ("Whenever
+        # an opponent discards a card, they lose 3 life") — companion
+        # to the ``controlled_by_opponent`` predicate gap (Pin 3) and
+        # the ``target_player_loses_life`` effect closure (PPP Pin 1).
+        event = Event.DISCARDS_CARD
     elif event_str == "room_fully_unlocked":
         # **OO Pin 1 — ROOM_FULLY_UNLOCKED event bridge.**
         # Python's ``Event.ROOM_FULLY_UNLOCKED`` (value

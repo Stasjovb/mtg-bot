@@ -373,6 +373,7 @@ pub fn make_state(
         mulligan_count: 0,
         life_gained_this_turn: 0,
         poison_counters: 0,
+        spells_cast_this_turn: 0,
     };
     let p1 = Player {
         id: 1,
@@ -388,6 +389,7 @@ pub fn make_state(
         mulligan_count: 0,
         life_gained_this_turn: 0,
         poison_counters: 0,
+        spells_cast_this_turn: 0,
     };
 
     Ok(GameState {
