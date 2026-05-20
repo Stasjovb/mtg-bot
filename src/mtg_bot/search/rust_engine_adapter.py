@@ -846,6 +846,42 @@ class RustGameStateAdapter:
         )
         if self._finalized_combat_window == cur_window:
             return None
+        # **priority_player + blocker LEGAL_SET_EQ closure (2026-05-19,
+        # per docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md).** Mirror
+        # Python's ``_enter_declare_blockers`` live-battlefield check
+        # (``engine_adapter.py:1322-1329``: ``attackers = [o for o in
+        # battlefield if o.attacking]``). When an attacker declared at
+        # DECLARE_ATTACKERS dies on the stack (combat removal resolved
+        # during the same step's pass-round), the Rust engine's
+        # ``state.attackers`` Vec retains the dead attacker's id, but
+        # the battlefield no longer contains that id. ``legal_decisions
+        # (defender)`` then emits a phantom ``blocker_decision``
+        # referencing the dead id. Treating this as a real factored-
+        # blocker window gates off the ``_reset_priority_to_active()``
+        # call in ``_run_priority_action`` and leaves Rust's
+        # ``priority_player`` carried at the previous holder, while
+        # Python's adapter (keyed on the LIVE battlefield) short-
+        # circuits to the priority reset. ``battlefield_snapshot()``
+        # dicts do NOT carry the ``attacking`` field, so we instead
+        # detect dead attackers as ``state.attackers`` ids that are
+        # not in the current set of battlefield ids — Python's invariant
+        # that an attacking obj is by definition on the battlefield is
+        # exactly the cross-check that surfaces the inconsistency. If
+        # every id in ``get_attackers()`` is GONE from the battlefield,
+        # there is no real factored-blocker window — return None so
+        # the priority reset fires. Same pattern as cycle-37
+        # ``86411a99`` adapter-only reconciliation. Pure Python (no
+        # ``.pyd`` rebuild).
+        if ph == _PHASE_DECLARE_BLOCKERS:
+            bf_ids = {
+                int(dict(obj).get("id", -1))
+                for obj in self._rust.battlefield_snapshot()
+            }
+            attacker_ids = [int(a) for a in self._rust.get_attackers()]
+            if attacker_ids and not any(
+                aid in bf_ids for aid in attacker_ids
+            ):
+                return None
         act = int(self._rust.active_player_idx)
         if ph == _PHASE_DECLARE_ATTACKERS:
             dm = act
@@ -1002,7 +1038,29 @@ class RustGameStateAdapter:
                 # per attacking id in ``state.attackers`` membership
                 # (i.e. ``state.battlefield`` where ``o.attacking`` is
                 # True), plus the None option.
-                attacking_ids = sorted(int(a) for a in self._rust.get_attackers())
+                #
+                # **priority_player + blocker LEGAL_SET_EQ closure
+                # (2026-05-19, per
+                # docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md).** Filter
+                # ``state.attackers`` Vec ids by current battlefield
+                # presence — Python's
+                # ``MtgGameStateAdapter._combat_phase == _COMBAT_BLOCKERS``
+                # branch emits one BlockerDecision per LIVE attacker
+                # (``[o for o in state.battlefield if o.attacking]``,
+                # not per id in ``state.attackers``). Rust's
+                # ``state.attackers`` Vec retains dead attacker ids
+                # after the creature dies on the stack mid-DA, so a
+                # naive walk emits phantom ``('blocker', X, dead_id)``
+                # entries (the v8 blocker LEGAL_SET_EQ shape). Mirror
+                # Python's live-only filter here.
+                bf_ids = {
+                    int(dict(obj).get("id", -1))
+                    for obj in self._rust.battlefield_snapshot()
+                }
+                attacking_ids = sorted(
+                    int(a) for a in self._rust.get_attackers()
+                    if int(a) in bf_ids
+                )
                 dicts = [
                     {"kind": "blocker_decision",
                      "blocker_id": head, "attacker_id": atk}
@@ -1101,7 +1159,31 @@ class RustGameStateAdapter:
         elif atk_heads:
             phase_axis = _COMBAT_ATTACKERS
         elif blk_heads:
-            phase_axis = _COMBAT_BLOCKERS
+            # **priority_player + blocker LEGAL_SET_EQ closure
+            # (2026-05-19, per docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md).**
+            # Mirror Python's ``_enter_declare_blockers`` live-battlefield
+            # check (``engine_adapter.py:1322-1329``: ``attackers = [o
+            # for o in battlefield if o.attacking]``). Rust's
+            # ``state.attackers`` Vec retains a dead attacker's id after
+            # the attacker dies on the stack mid-DECLARE_ATTACKERS,
+            # while the battlefield no longer contains that id. If
+            # every id in ``get_attackers()`` is GONE from the
+            # battlefield, this is NOT a real factored-blocker window;
+            # treat as ``_COMBAT_NONE`` so the priority-window set is
+            # returned, mirroring Python's short-circuit. Pure-adapter
+            # reconciliation (no ``.pyd`` rebuild); same pattern as
+            # the ``_combat_decision_maker`` guard above.
+            bf_ids = {
+                int(dict(obj).get("id", -1))
+                for obj in self._rust.battlefield_snapshot()
+            }
+            attacker_ids = [int(a) for a in self._rust.get_attackers()]
+            if attacker_ids and not any(
+                aid in bf_ids for aid in attacker_ids
+            ):
+                phase_axis = _COMBAT_NONE
+            else:
+                phase_axis = _COMBAT_BLOCKERS
         else:
             phase_axis = _COMBAT_NONE
 
