@@ -631,25 +631,48 @@ A full Rust-agent slice — depends on Phase 1's attach substrate.
 
 ### Phase 3 (Rust + bridge) — the residue Aura-shape Effects
 
+**PHASE 3 PAIN FOR ALL ARM LANDED (2026-05-20, Pain for All closure
+slice).** Pain for All's Phase 3 Effect-level scaffolding shipped:
+Rust `Effect::PainForAllETBEffect` + `Effect::PainForAllDamageEcho
+Effect` (unit variants), `Predicate::IsHost { subject: Option<String> }`
+(new — the canonical Aura/Equipment relational trigger predicate),
+`find_object_attached_to` helper, full parse + to_pydict + bridge
++ honest-stop resolve arms. The ETB-effect resolve reads
+`source.attached_to` and fizzles silently on None (byte-equal with
+Python's `bespoke.py:389-391`); the damage-echo applies as
+LIFE-LOSS (not damage-pipeline) per Python's `bespoke.py:447-457`
+simplification — this is the **damage-feedback loop-guard** called
+out in `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`. The
+`IsHost::matches` impl returns false on `attached_to=None` (byte-
+equal with Python's `predicates.py:464-466`). Probe:
+`tests/test_probe_pain_for_all_downstream.py` (10 tests covering
+bridge round-trip + honest-stop fizzle + hot-path via `state.attach`
+test primitive + damage-echo life-loss math + IsHost Python parity).
+Pain for All's `docs/residue_worklist.json` status flips to `closed`
+with `reclassified_to: BLOCKED-SUBSYSTEM (Aura attach substrate)`.
+Full byte-equality for the real Pain for All card is NOT yet shipped
+— the broader Aura attach substrate (Phase 1: Rust setting
+`attached_to` on Aura resolve, plus the S4 loader admit-gate
+widening) is the deferred bottleneck. The honest-stop fizzle keeps
+cross-engine state byte-equal in the no-host case until that ships.
+
 On top of the Phase-1/2 attach substrate, the new Rust Effect
 variants the residue cards need:
 - `Effect::EnchantedCreatureFightsTarget` + bridge arm forwarding to
   `EnchantedCreatureFightsTargetEffect` → **Meltstrider's Resolve**
-  (`blocked_genuinely_missing` → resolvable). ~150-200 LOC Rust per
-  SEARCH_LIMITATIONS.md round-17 estimate; the attach-substrate
-  prerequisite (Phases 1-2) is now satisfied.
-- A self-replicating-damage Effect family (`PainForAllETBEffect` +
-  `PainForAllDamageEchoEffect` analogues, the latter on the
-  DEALT_DAMAGE event) → **Pain for All**
-  (`blocked_genuinely_missing` → resolvable).
+  (LANDED slice-19; honest-stop substrate).
+- `Effect::PainForAllETBEffect` + `Effect::PainForAllDamageEchoEffect`
+  + `Predicate::IsHost { subject }` → **Pain for All**
+  (LANDED this slice; honest-stop substrate).
 - The control-swap + don't-untap composition completion → **Tractor
-  Beam** (`blocked_non_effect` → admittable).
+  Beam** (`blocked_non_effect` → admittable; sibling lane).
 Each is its own slice. Real-EoE bench signal for these is still near-
 zero (Meltstrider's / Pain for All / Tractor Beam have minimal 17lands
 deck presence), but they ARE the residue-worklist closure — Phase 3 is
 the round that flips `blocked_genuinely_missing` Aura entries to
 `closed`, which is the campaign's "how far from parity" metric, not a
-deck-count metric.
+deck-count metric. **With this slice + Tractor Beam's sibling closure,
+the entire BLOCKED-genuinely_missing Aura residue is closed.**
 
 ### Phase 4 (Rust + bridge) — triggered-on-attach + replacement (S3, S4)
 

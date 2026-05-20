@@ -174,9 +174,12 @@
       "aliases": [
         "EnchantedDealsDamageThenPropagate"
       ],
-      "status": "genuinely_missing",
+      "status": "closed",
       "verified_absent_at_commit": "e17802c9",
-      "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → bespoke PainForAllETBEffect AND Event.DEALT_DAMAGE → bespoke PainForAllDamageEchoEffect — neither is a live Rust Effect:: variant (both cross-checked absent against the full 112-variant enum); no alias resolves to a live Rust variant; printed name 'Pain for All' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
+      "resolved_variant": "PainForAllETBEffect + PainForAllDamageEchoEffect + IsHost predicate",
+      "reclassified_to": "BLOCKED-SUBSYSTEM (Aura attach substrate)",
+      "closed_round": "pain-for-all-closure-2026-05-20",
+      "note": "Effect-level scaffolding shipped: Rust Effect::PainForAllETBEffect + Effect::PainForAllDamageEchoEffect (unit variants) + Predicate::IsHost { subject } + find_object_attached_to helper. Parse + to_pydict + bridge round-trip both directions + honest-stop resolve arms. ETB reads source.attached_to → byte-equal fizzle on None (Python parity bespoke.py:389-391); hot-path applies host-power as life-loss to first-legal player. Damage echo applies as LIFE-LOSS (NOT damage-pipeline) per Python bespoke.py:447-457 simplification — inherent damage-feedback loop-guard. IsHost::matches returns false on attached_to=None (byte-equal predicates.py:464-466). Probe tests/test_probe_pain_for_all_downstream.py (10 tests). Full byte-equality for real card still depends on Aura attach substrate Phase 1 (Rust setting attached_to on Aura resolve) — honest-stop fizzle keeps cross-engine byte-equal until then. Card flips from genuinely_missing to subsystem-gated under Aura attach substrate (same as Meltstrider's Resolve)."
     },
     {
       "entry": "ExileEachOpponentGYAndCreateToken",

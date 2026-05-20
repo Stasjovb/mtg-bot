@@ -448,12 +448,16 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # + Effect::SotheraBeginningOfEndStepIfSurvivedCreaturesLoseLife
     # composite shipped + bridge + Sothera DIES probe at
     # ``tests/test_probe_sothera_requiem_downstream.py``).
-    # `missing` is now 2 distinct genuine new-Rust-Effect asks
-    # (Lightstall Inquisitor appears twice in the worklist; the set
-    # dedupes it).
+    # Pain for All closure fold (2026-05-20): Pain for All
+    # genuinely_missing -> closed (Effect::PainForAllETBEffect +
+    # Effect::PainForAllDamageEchoEffect + Predicate::IsHost shipped
+    # + bridge + honest-stop resolve arms; full-card byte-equality
+    # stays gated on the Aura attach substrate's Phase 1, but the
+    # Effect-level closure flips the residue tier).
+    # `missing` is now 1 distinct genuine new-Rust-Effect ask
+    # (Lightstall Inquisitor).
     assert missing == {
         "Lightstall Inquisitor",
-        "Pain for All",
     }
     assert non_effect == {
         "Dauntless Scrapbot",

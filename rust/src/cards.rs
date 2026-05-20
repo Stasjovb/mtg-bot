@@ -3471,6 +3471,105 @@ pub enum Effect {
     /// fields. The bridge translates this Rust variant to
     /// `EnchantedCreatureFightsTargetEffect()` (field-free construction).
     EnchantedCreatureFightsTarget,
+    /// **Pain for All closure (Aura Phase 3 / S4 triggered shape) —
+    /// PainForAllETBEffect.** "When this Aura enters, enchanted
+    /// creature deals damage equal to its power to any other target."
+    /// Mirrors Python's `PainForAllETBEffect`
+    /// (`effects/bespoke.py:352-428`) — the ONLY EoE card with this
+    /// shape (Pain for All; 4,367 17lands decks, the
+    /// `blocked_genuinely_missing` residue Aura per
+    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §4 and
+    /// `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §1.5 residue list).
+    ///
+    /// **HONEST-STOP CLOSURE — substrate landed, full byte-equality
+    /// deferred symmetrically with slice-19's
+    /// `EnchantedCreatureFightsTarget`.** The Effect variant + parse
+    /// + to_pydict + bridge arms ship; the resolve arm fizzles
+    /// silently when the resolving Aura source has no `attached_to`,
+    /// which IS the Rust-side reality today (no Aura-on-resolve
+    /// attach path; `attached_to` hard-reset on every Rust zone-change
+    /// path — see `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §2). Python
+    /// takes the same `if aura is None or aura.attached_to is None:
+    /// return` fizzle (`bespoke.py:389-391`), so the no-host branch
+    /// is byte-equal across engines.
+    ///
+    /// **Unit variant on both sides.** Python's `PainForAllETBEffect`
+    /// is a `@dataclass(frozen=True)` with no fields. The Rust enum
+    /// mirrors that. Damage source is the Aura's enchanted creature
+    /// (read from `state.resolving_source.attached_to`); damage
+    /// amount is that creature's effective power; the controller picks
+    /// "any other target" (creature or player, excluding the
+    /// enchanted creature) at resolve time. With Rust's deterministic
+    /// first-legal target pick + no attached_to → silent fizzle =
+    /// byte-equal.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:383-422`).**
+    /// 1. Locate the source object (`source_obj_id`) — scan every zone.
+    ///    Source untrackable → silent no-op.
+    /// 2. Read `source.attached_to`. If `None` → silent fizzle
+    ///    (HONEST-STOP branch; byte-equal with Python).
+    /// 3. Resolve the enchanted creature on its controller's bf. Not
+    ///    found → silent no-op.
+    /// 4. Compute `effective_power(enchanted)`. If ≤ 0 → silent no-op
+    ///    (Python parity: `if amount <= 0: return`).
+    /// 5. Pick the deterministic first-legal target — FIRST creature
+    ///    on the OPPONENT's bf, OR the opponent player when no
+    ///    opposing creature exists. Mirror's slice-19's first-legal
+    ///    convention.
+    /// 6. Apply the damage:
+    ///    - player target → subtract `amount` from `victim.life`
+    ///      (Python parity: `victim.life -= amount`).
+    ///    - creature target → `apply_damage_marker(target, amount)`
+    ///      + `damaged_this_turn = true` + dispatch DEALT_DAMAGE.
+    ///
+    /// **Damage-feedback loop-guard.** The companion echo effect
+    /// (`PainForAllDamageEchoEffect`, below) applies its echo damage
+    /// as LIFE LOSS (not via `apply_damage_marker`), so DEALT_DAMAGE
+    /// is NOT re-dispatched. This mirrors Python's simplification
+    /// (`bespoke.py:447-457` — `p.life -= amount`, not the damage
+    /// pipeline) and inherently breaks the potential trigger loop
+    /// (the echo's life loss does not cause "is dealt damage" to fire
+    /// again).
+    PainForAllETBEffect,
+    /// **Pain for All closure (Aura Phase 3 / S4 triggered shape) —
+    /// PainForAllDamageEchoEffect.** "Whenever enchanted creature is
+    /// dealt damage, it deals that much damage to each opponent."
+    /// Mirrors Python's `PainForAllDamageEchoEffect`
+    /// (`effects/bespoke.py:432-463`).
+    ///
+    /// **Unit variant on both sides.** No fields. Reads
+    /// `state.resolving_combat_damage_amount` (already plumbed
+    /// engine-wide — every receiver-side damage event writes it,
+    /// `state_ops_combat.rs::apply_damage_pass`) and the resolving
+    /// effect's controller. For each non-controller, non-lost player,
+    /// subtract `amount` from `life` (life-loss, NOT damage pipeline
+    /// — this is the loop-guard described above and Python's
+    /// `bespoke.py:447-457` shape verbatim).
+    ///
+    /// **Trigger predicate.** The Python parser wires the trigger as
+    /// `Event.DEALT_DAMAGE + IsHost(subject=None)` — the Aura's
+    /// trigger fires when the **enchanted creature** (the Aura's
+    /// `attached_to` host) receives damage. The matching Rust
+    /// `Predicate::IsHost` variant added in this slice carries the
+    /// same semantics: matches iff `source.attached_to == subject_id`.
+    /// With Rust's current no-`attached_to` reality the predicate
+    /// returns false on every dispatch — byte-equal honest-stop with
+    /// Python's same-case `IsHost.matches` returning false when
+    /// `source.attached_to is None`.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:443-457`).**
+    /// 1. Read `state.resolving_combat_damage_amount`. If ≤ 0 →
+    ///    silent no-op.
+    /// 2. For each player p where `p.id != controller and !has_lost`:
+    ///    `p.life -= amount` (life-loss, not damage). Mirrors Python
+    ///    `bespoke.py:450-457`.
+    ///
+    /// **Why life-loss not damage-pipeline.** Python's simplification
+    /// is explicitly called out at `bespoke.py:438-441`: "modeling
+    /// 'deals damage' as life loss for simplicity in the non-creature-
+    /// target case." Both engines take the same shortcut for byte-
+    /// equality + the inherent loop-guard.
+    PainForAllDamageEchoEffect,
     /// **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
     /// "sacrifice this unless you tap an untapped permanent you
     /// control".** Mirrors Python's `SacrificeSelfUnlessTapPermanent`
@@ -5279,6 +5378,43 @@ pub enum Predicate {
     /// subtype-granting effects today, so the direct read is
     /// observably equivalent.
     SubjectHasSubtype(String),
+    /// **Pain for All closure (Aura Phase 3 / S4 triggered shape) —
+    /// IsHost.** Matches when the subject IS the permanent the source
+    /// is attached to (i.e. `source.attached_to == subject_id`).
+    /// Mirrors Python's `IsHost(subject: str | None = None)`
+    /// (`src/mtg_bot/effects/predicates.py:439-467`).
+    ///
+    /// **Use case.** The canonical Aura/Equipment relational trigger
+    /// predicate: "Whenever enchanted creature is dealt damage",
+    /// "Whenever equipped creature attacks", etc. The *source* is the
+    /// Aura/Equipment; the firing *subject* is its host (the
+    /// enchanted/equipped permanent).
+    ///
+    /// **Match semantics (mirrors Python's `IsHost.matches`).**
+    /// Walks zones for `source_id`, reads `attached_to`. If
+    /// `attached_to` is `None` (source has lost its host or never
+    /// attached) → returns `false` (Python parity:
+    /// `if host_id is None: return False`). Otherwise returns
+    /// `attached_to == subject_id`.
+    ///
+    /// **Honest-stop today.** With Rust's no-`attached_to` Aura
+    /// resolution reality (see `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`
+    /// §2), every Aura source has `attached_to = None` at predicate
+    /// time and this returns false on every DEALT_DAMAGE dispatch.
+    /// Python's same-case `IsHost.matches` likewise returns false
+    /// when `source.attached_to is None` — byte-equal honest-stop.
+    /// Once the broader attach substrate lands, the predicate flips
+    /// live without further changes.
+    ///
+    /// **Optional `subject` slot.** Mirrors Python's
+    /// `IsHost(subject: str | None)` for multi-subject events where
+    /// the subject must be selected by name (Equipment's
+    /// `IsHost(subject="attacker")` for the equipped-creature-attacks
+    /// surface). For DEALT_DAMAGE (Pain for All) it's `None` and Rust
+    /// reads the dispatched `subject_id` directly. The slot is stored
+    /// for round-trip fidelity; the Rust dispatcher passes a single
+    /// `subject_id` to `matches` regardless of slot today.
+    IsHost { subject: Option<String> },
     /// Matches when the **subject's** effective power is ≤ ``n``.
     /// Mirrors Python's ``HasPowerAtMost(n)`` from
     /// ``src/mtg_bot/effects/object_predicates.py:427``.
@@ -5478,6 +5614,38 @@ impl Predicate {
             }
             Predicate::SubjectHasSubtype(subtype) => {
                 subject_has_subtype(state, subject_id, subtype)
+            }
+            Predicate::IsHost { subject: _ } => {
+                // **Pain for All closure (Aura Phase 3 / S4 triggered
+                // shape) — IsHost match.** Walk zones for the source
+                // permanent; read `attached_to`. Mirrors Python's
+                // `IsHost.matches` (`predicates.py:460-467`):
+                //   host_id = getattr(source, "attached_to", None)
+                //   if host_id is None: return False
+                //   return getattr(obj, "id", None) == host_id
+                //
+                // Subject-slot rationale: Python carries an optional
+                // `subject` name for multi-subject events (Equipment's
+                // `IsHost(subject="attacker")` for attacks triggers).
+                // The dispatcher passes a single `subject_id` to the
+                // match function — for DEALT_DAMAGE (Pain for All's
+                // damage-echo trigger), it IS the host candidate
+                // directly, so the slot is informational only here.
+                //
+                // **Honest-stop today.** With Rust's no-`attached_to`
+                // Aura resolve reality (every Aura source has
+                // `attached_to = None` at predicate-check time —
+                // docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md §2),
+                // `find_object_attached_to` returns `None` and this
+                // returns `false` for every Aura on every dispatch.
+                // Python's `IsHost.matches` takes the same false path
+                // when `attached_to is None` (`predicates.py:464-466`)
+                // — byte-equal honest-stop until the attach substrate
+                // lands.
+                match find_object_attached_to(state, source_id) {
+                    Some(host_id) => host_id == subject_id,
+                    None => false,
+                }
             }
             Predicate::HasPowerAtMost { n } => {
                 // Mirrors Python's HasPowerAtMost.test: read effective
@@ -5710,6 +5878,43 @@ fn find_object_controller(
     for obj in state.stack_objects.iter() {
         if obj.id == obj_id {
             return Some(obj.controller);
+        }
+    }
+    None
+}
+
+/// **Pain for All closure — `find_object_attached_to` helper.**
+/// Walk every tracked zone for ``obj_id`` and return its
+/// ``attached_to`` value (the id of the permanent it's attached
+/// to as an Aura / Equipment, or ``None`` if unattached / missing).
+/// Mirrors the per-player-zone walk shape of
+/// :fn:`find_object_controller`, including the G7-S5a
+/// `stack_objects` fallthrough so a stack-resident spell whose
+/// ETB trigger fires (the Aura cast → ETB dispatch case) can still
+/// be located. Used by ``Predicate::IsHost`` to read the source's
+/// attach pointer at predicate-check time.
+fn find_object_attached_to(
+    state: &crate::state::GameState,
+    obj_id: u32,
+) -> Option<u32> {
+    for player in &state.players {
+        for zone in [
+            &player.hand,
+            &player.library,
+            &player.battlefield,
+            &player.graveyard,
+            &player.exile,
+        ] {
+            for obj in zone.iter() {
+                if obj.id == obj_id {
+                    return obj.attached_to;
+                }
+            }
+        }
+    }
+    for obj in state.stack_objects.iter() {
+        if obj.id == obj_id {
+            return obj.attached_to;
         }
     }
     None
@@ -7821,6 +8026,31 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // `astelli_reclaimer_etb_effect` unit-variant parse arm
             // shape verbatim).
             Ok(Effect::EnchantedCreatureFightsTarget)
+        }
+        "pain_for_all_etb" => {
+            // **Pain for All closure (Aura Phase 3 / S4 triggered
+            // shape) — PainForAllETBEffect parse arm.** Unit variant;
+            // no payload fields beyond `kind` (the damage source is
+            // the Aura's `attached_to` host, read at resolve time;
+            // the damage amount is that host's effective power; the
+            // target is deterministic first-legal at resolve time).
+            // Extra dict fields silently ignored for round-trip dict-
+            // shape consistency (mirrors slice-19
+            // `enchanted_creature_fights_target` unit-variant parse
+            // arm shape verbatim).
+            Ok(Effect::PainForAllETBEffect)
+        }
+        "pain_for_all_damage_echo" => {
+            // **Pain for All closure (Aura Phase 3 / S4 triggered
+            // shape) — PainForAllDamageEchoEffect parse arm.** Unit
+            // variant; no payload fields beyond `kind` (the damage
+            // amount is read from `state.resolving_combat_damage_amount`
+            // — already plumbed engine-wide; the recipients are each
+            // opponent of the resolving controller). Extra dict fields
+            // silently ignored. Damage-feedback loop-guard: applies as
+            // life-loss not damage-pipeline, so no DEALT_DAMAGE re-fire
+            // (Python parity).
+            Ok(Effect::PainForAllDamageEchoEffect)
         }
         "sacrifice_self_unless_tap_permanent" => {
             // 20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
@@ -10112,6 +10342,28 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
                 })?;
             Ok(Predicate::HasPowerAtMost { n })
         }
+        // **Pain for All closure (Aura Phase 3 / S4 triggered shape).**
+        // `is_host` — mirrors Python's `IsHost(subject: str | None)`
+        // predicate (`effects/predicates.py:439-467`). Optional
+        // `"subject"` field threads through to the slot payload.
+        // Used by Pain for All's DEALT_DAMAGE damage-echo trigger
+        // (`predicate=IsHost(subject=None)`) and (future) Equipment
+        // `IsHost(subject="attacker")` shapes. Same back-compat
+        // omission pattern as `controlled_by_you`'s slot:
+        // absent → `None` (Pain for All's default); present →
+        // explicit slot.
+        "is_host" => {
+            let subject: Option<String> = match dict.get_item("subject")? {
+                Some(v) => Some(v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "predicate.is_host.subject must be a \
+                         string (got: {e})"
+                    ))
+                })?),
+                None => None,
+            };
+            Ok(Predicate::IsHost { subject })
+        }
         // Subtypes substrate Slice 2 — subject-anchored HasSubtype.
         // Dict shape: `{"kind": "subject_has_subtype", "subtype": "Kavu"}`.
         // The `subtype` payload is the canonical Title Case string
@@ -10188,7 +10440,7 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
              subject_is_land, subject_is_artifact, subject_is_creature, \
              subject_is_enchantment, has_power_at_most, \
              controlled_by_you, controlled_by_opponent, \
-             subject_has_subtype, not, and, or, \
+             subject_has_subtype, is_host, not, and, or, \
              state_bound"
         ))),
     }
@@ -10967,6 +11219,22 @@ pub(crate) fn effect_to_pydict<'py>(
             // No other keys emitted — round-trip dict-shape consistency
             // (slice-16 `astelli_reclaimer_etb_effect` precedent).
             d.set_item("kind", "enchanted_creature_fights_target")?;
+        }
+        Effect::PainForAllETBEffect => {
+            // **Pain for All closure (Aura Phase 3 / S4) — to_pydict.**
+            // Unit variant; mirrors Python's field-free @dataclass
+            // (frozen=True) at bespoke.py:352-428. Round-trip
+            // consistency (slice-19 `enchanted_creature_fights_target`
+            // precedent).
+            d.set_item("kind", "pain_for_all_etb")?;
+        }
+        Effect::PainForAllDamageEchoEffect => {
+            // **Pain for All closure (Aura Phase 3 / S4) — to_pydict.**
+            // Unit variant; mirrors Python's field-free @dataclass
+            // (frozen=True) at bespoke.py:432-463. Round-trip
+            // consistency (slice-19 `enchanted_creature_fights_target`
+            // precedent).
+            d.set_item("kind", "pain_for_all_damage_echo")?;
         }
         Effect::SacrificeSelfUnlessTapPermanent => {
             // 20th Rust slice (VVV Pin 2 closure). Unit variant; no
