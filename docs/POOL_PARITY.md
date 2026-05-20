@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **320 / 475 EoE cards (67.4%) are byte-equal at the Effect+bridge level**; of those, **216 (45.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 104 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **321 / 475 EoE cards (67.6%) are byte-equal at the Effect+bridge level**; of those, **216 (45.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 105 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **155 (32.6%)** are BLOCKED, broken out below.
+- **154 (32.4%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -17,9 +17,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | Tier | Count | % of pool |
 |---|---:|---:|
 | PROBED byte-equal | 216 | 45.5% |
-| Effect+bridge covered (not individually probed) | 104 | 21.9% |
+| Effect+bridge covered (not individually probed) | 105 | 22.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 4 | 0.8% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 3 | 0.6% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
 | BLOCKED — subsystem-gated / Effect-uncovered | 149 | 31.4% |
 | **Pool total** | **475** | **100.0%** |
@@ -268,9 +268,8 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Zealous Display
 - Zookeeper Mechan
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (4)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (3)
 
-- Command Bridge
 - Lightstall Inquisitor
 - Pain for All
 - Sothera, the Supervoid
@@ -370,5 +369,4 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Green Sun's Zenith
 - Grove of the Burnwillows
 - … and 89 more
-
 

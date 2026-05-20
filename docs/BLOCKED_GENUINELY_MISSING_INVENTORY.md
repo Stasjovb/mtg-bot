@@ -49,7 +49,7 @@ NOT in this tier; they're carried under the Aura subsystem in
 
 | Card | bespoke.py (or generic) class | LoC | 17lands decks | Substrate ask | Scope |
 |---|---|---:|---:|---|---|
-| Command Bridge | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing + tap-a-permanent agent decision | medium (3-5) |
+| Command Bridge — CLOSED (slice 20) | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing (already wired) + tap-a-permanent agent decision (PendingDecision::TapPermanentChoice landed) | n/a (CLOSED) |
 | Lightstall Inquisitor | `effects/generic/discard.py::EachOpponentExilesCardFromHandWithCastPermission` | 173-214 | 4,371 | persistent `cast_from_exile_with_lightstall_surcharge` flag + cost-hike legality | large (6+) |
 | Pain for All | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo (substrate-shared with Meltstrider's Resolve) | medium (3-5) |
 | Sothera, the Supervoid | `effects/generic/exile.py::ReanimateOneExiledWithSourceWithCounters` + `::SacrificeSelfPreservingExileLink` + `effects/generic/opponent_punishers.py::EachOpponentExilesOwnCreature` | 149-217 / 1122-1216 / 1221-1273 | 2,108 | `GameObject.exiled_by_source` source-link + on-leave auto-return suppression + recall-first/sac-second ordering | large (6+) |
@@ -81,32 +81,52 @@ Scope key (calibrated against this session's slices):
 
 ## Per-card detail
 
-### 1. Command Bridge — 24,522 decks (HIGHEST leverage)
+### 1. Command Bridge — 24,522 decks — CLOSED (slice 20)
+
+**Status:** CLOSED in the 20th Rust slice (2026-05-20). Full Effect-
+level + cost-decision-pump closure shipped. `Effect::SacrificeSelf
+UnlessTapPermanent` variant + parse + to_pydict + resolve + bridge all
+shipped. New `PendingDecision::TapPermanentChoice` cost-decision
+substrate landed (the "tap a permanent as alternative to sacrifice"
+pump — re-usable by any future "sac unless tap X" shape). Land-ETB-
+dispatch wiring was already in place (`move_from_hand_to_battlefield`
+queues `pending_etb_dispatches` + drains, same path creature ETBs
+take). No deferred substrate.
 
 - **Bespoke class:** `src/mtg_bot/effects/combinators.py:95-168`
   (`SacrificeSelfUnlessTapPermanent`).
 - **Real parse:** Land. `Event.ENTERS → SacrificeSelfUnlessTapPermanent`
-  (the new ask) PLUS a separate `{T}: Add {color}` activated mana
-  ability (already shipped through the `add_mana_to_pool` arm —
-  `name_in_arm_ack` records the ack so the cron does not false-flag).
-- **Effect variant needed:** `Effect::SacrificeSelfUnlessTapPermanent`
-  (or sibling-named).
-- **Substrate dependencies:**
-  - Land-ETB-trigger plumbing through the Rust resolver — the existing
-    Rust `Event::ENTERS` path is wired for creatures + a small fixed
-    set of land-ETB shapes, but the "sacrifice this unless …" decision
-    arm needs the engine's `untapped_permanent` choice contract added
-    to the Rust decision menu (Python uses `choose_target` with kind
-    `"untapped_permanent"`).
-  - The agent-choice round-trip (no untapped permanent → forced sac;
-    declined → sac; chosen → tap it) needs a Rust decision point that
-    the Python side already drives.
-- **Scope:** **medium (3-5 cycles).** No new persistent flag, but a
-  new agent-decision contract surface in Rust. Sibling slot to the
-  `add_mana_to_pool` arm pattern.
-- **Per-deck leverage:** 24,522 decks × medium scope ≈ **the highest
-  marginal-value closure in the tier** — common-rarity land, plays in
-  ~19% of 17lands EoE decks.
+  PLUS a separate `{T}: Add {color}` activated mana ability (already
+  shipped through the `add_mana_to_pool` arm).
+- **Effect variant LANDED (slice 20):**
+  `Effect::SacrificeSelfUnlessTapPermanent` (unit variant; source +
+  controller read from `state.resolving_source` at resolve time,
+  mirroring the Python convention).
+- **Substrate landed in slice 20:**
+  - The Rust enum variant + parse + to_pydict + bridge arms ship the
+    Effect-level closure.
+  - Resolve arm in `state_ops_resolve.rs` locates the source on its
+    controller's bf, builds the untapped-permanent candidate set
+    (source excluded), short-circuits to sacrifice when empty, or
+    pushes `PendingDecision::TapPermanentChoice` when non-empty.
+  - New `PendingDecision::TapPermanentChoice` variant in `state.rs`
+    + `submit_tap_permanent_decision(Option<u32>)` dispatcher in
+    `state_ops_decisions.rs` (Some(id) -> tap that permanent, keep
+    source; None -> decline, sacrifice source).
+  - Auto-resolve strategies `"tap_permanent_decline"` (default-
+    decline; matches Python's no-agent fallback) and
+    `"tap_permanent_first"` (deterministic first-candidate tap for
+    test fixtures).
+  - Shared `sacrifice_source_for_tap_decline` helper on
+    `state_ops_resolve.rs` (LTB / IS_SACRIFICED / token-cease
+    triple-push reused across the empty-candidate fast path and
+    the decline-via-submit path).
+- **Per-deck leverage on FULL-card closure:** 24,522 decks
+  unblocked at the Effect-and-cost-decision level. Land-ETB
+  dispatch was already wired (`move_from_hand_to_battlefield`),
+  so the full ETB resolves end-to-end without any deferred
+  substrate. See `docs/residue_worklist.json` entry
+  `CommandBridge-sacrifice-unless-tap`.
 
 ### 2. Meltstrider's Resolve — 15,259 decks — HONEST-STOP CLOSURE (slice 19)
 
