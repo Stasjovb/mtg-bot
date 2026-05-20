@@ -354,6 +354,28 @@ PROBE_MODULES: tuple[Path, ...] = (
     # sibling-lane divergence pin should pin the bounce path.  See
     # module docstring for the full honest-exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_bbbb.py",
+    # Probe batch CCCC (round 29 covered-but-unprobed) — third
+    # 4-letter probe batch (after AAAA and BBBB).  Two cards from
+    # the covered tier upgraded to PROBED via the same parse +
+    # bridge round-trip + Python-side resolve idiom DDD slice 17 /
+    # YYY / ZZZ / AAAA established:
+    #   * Lightless Evangel (Creature IS_SACRIFICED ->
+    #     PutPlusOneCounterOnSelf(amount=1); FIRST IS_SACRIFICED-
+    #     event carrier of the effect class to land a credited
+    #     probe -- complements the existing ENTERS / IS_CAST event
+    #     consumers covered by construction).
+    #   * Skystinger (Creature BLOCKS -> PumpSelfUntilEOT(
+    #     power_bonus=5, toughness_bonus=0, granted_keywords=
+    #     frozenset()); FIRST BLOCKS-event carrier of the BARE-shape
+    #     variant -- the empty granted_keywords is what makes the
+    #     bare bridge byte-equal, distinguishing it from the
+    #     covered-but-not-probed Hand That Feeds / Cult Healer
+    #     rider-bearing variants).
+    # Trapped in the Screen was considered but DROPPED on verify
+    # (bit-identical shape to the already-PROBED Banishing Light;
+    # the same ZZZ + YYY drop-list precedent that already pins this
+    # as honest-exhaustion).
+    REPO_ROOT / "tests" / "test_probe_remaining_cccc.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
