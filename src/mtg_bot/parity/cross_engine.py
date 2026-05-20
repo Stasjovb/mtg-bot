@@ -8152,6 +8152,47 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         )
         max_mv_raw = eff_dict.get("max_mv", 2)
         return RovingActuatorETBEffect(max_mv=int(max_mv_raw))
+    if kind == "sacrifice_self_unless_tap_permanent":
+        # 20th Rust slice (VVV Pin 2 closure) -- Command Bridge ETB
+        # bridge arm. Rust's
+        # ``Effect::SacrificeSelfUnlessTapPermanent`` (cards.rs unit
+        # variant added in this slice; parse arm immediately after the
+        # slice-19 ``enchanted_creature_fights_target`` arm; to_pydict
+        # immediately after the same; resolve arm in
+        # ``state_ops_resolve.rs`` immediately after the slice-19
+        # ``EnchantedCreatureFightsTarget`` arm) mirrors Python's
+        # ``SacrificeSelfUnlessTapPermanent``
+        # (``effects/combinators.py:96-168``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``SacrificeSelfUnlessTapPermanent()`` reconstructs the Python
+        # class (no @dataclass decorator, no fields). Mirrors the
+        # slice-19 ``enchanted_creature_fights_target`` /
+        # slice-16 ``astelli_reclaimer_etb_effect`` unit-variant
+        # precedent verbatim.
+        #
+        # **Full closure (NOT honest-stop).** Unlike the slice-19
+        # Aura-shape Fight which fizzles in Rust because Aura
+        # ``attached_to`` isn't set, the Command Bridge ETB is a
+        # LAND-shape ETB -- the source-on-bf precondition is satisfied
+        # the moment ``move_from_hand_to_battlefield`` queues the
+        # ETB-trigger dispatch (rust/src/state_ops_cast.rs:670). The
+        # land-ETB-dispatch wiring is ALREADY shipped; the new
+        # ``PendingDecision::TapPermanentChoice`` substrate carries
+        # the cost-decision pump end-to-end (push at resolve / submit
+        # via ``submit_tap_permanent_decision`` / auto-resolve via
+        # ``tap_permanent_decline`` (default-sac) or
+        # ``tap_permanent_first`` (deterministic first-candidate
+        # tap)). Empty-candidate-set short-circuits to sacrifice
+        # without queuing a decision, matching Python parity.
+        #
+        # **Real EoE consumer:** Command Bridge (24,522 17lands decks
+        # -- the HIGHEST deck count in the BLOCKED-genuinely_missing
+        # tier per ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md``).
+        from mtg_bot.effects.combinators import (
+            SacrificeSelfUnlessTapPermanent,
+        )
+        return SacrificeSelfUnlessTapPermanent()
     if kind == "enchanted_creature_fights_target":
         # 19th Rust slice (honest-stop substrate landing) -- Meltstrider's
         # Resolve Aura ETB "fight" bridge arm. Rust's
