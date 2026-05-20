@@ -12003,6 +12003,173 @@ fn apply_effect(
             // priority cycle).
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
+        // Void ETB.** "Exile up to one target instant or sorcery card
+        // with mana value 2 or less from your graveyard. Copy it. You
+        // may cast the copy without paying its mana cost." Mirrors
+        // Python's `RovingActuatorETBEffect.resolve`
+        // (`effects/bespoke.py:661-711`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //   1. resolve source controller (CR 119.5 / 608.2)
+        //   2. first-legal gy scan: instant/sorcery && MV <= max_mv
+        //   3. if no card matches: silent no-op ("up to one")
+        //   4. remove from gy; stamp zone=EXILE; push to controller's exile
+        //   5. apply the exiled card's spell_effect (printing.effects[0])
+        //      recursively via apply_effect with the exiled card's id
+        //      as the new source — the copy resolves on the engine
+        //      directly without going through the stack (intentional
+        //      first-slice simplification; the copy CAN'T be countered).
+        //
+        // **No PendingDecision.** Python's `requires_target()` is True,
+        // but the target binding is a `legal_targets`-driven first-
+        // legal pick at resolve time on both sides (mirrors the slice
+        // 16 Astelli Reclaimer / round-54 Famished Worldsire pattern).
+        // The COPY's own targets (e.g. Plasma Bolt → 2 damage to a
+        // target) bind via the recursive `apply_effect` arm's standard
+        // first-legal picker. The source-controller transient stays
+        // pinned through the recursive call so any source-controller-
+        // aware arm (DealDamage / DrawCards / GainLife) reads the
+        // Roving Actuator's controller as the casting source for the
+        // copy.
+        Effect::RovingActuatorETBEffect { max_mv } => {
+            // 1. Source-controller resolution. Mirrors the Astelli
+            // Reclaimer (slice 16) shape: prefer the transient
+            // current_resolve_source_controller (set by the stack
+            // resolver around each apply_effect call), fall back to
+            // active_player.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            let max_mv_u32 = *max_mv as u32;
+            // 2. First-legal graveyard scan. Walk in insertion order;
+            // pick the FIRST card whose printing satisfies
+            // (is_instant || is_sorcery) && mana_cost.total() <= max_mv.
+            // The instant/sorcery filter rejects creatures / lands /
+            // permanents (Python's `legal_targets` builds a
+            // `graveyard_spell` tuple-kind only for those two
+            // card_types, see `bespoke.py:650-659`).
+            let pick_idx: Option<usize> = {
+                let gy = &state.players[controller_idx].graveyard;
+                let mut found: Option<usize> = None;
+                for (i, obj) in gy.iter().enumerate() {
+                    let pr = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let is_instant =
+                        pr.card_types.iter().any(|t| t == "Instant");
+                    let is_sorcery =
+                        pr.card_types.iter().any(|t| t == "Sorcery");
+                    if !is_instant && !is_sorcery {
+                        continue;
+                    }
+                    let mc = &pr.mana_cost;
+                    let mv: u32 = mc.generic as u32
+                        + mc.white as u32
+                        + mc.blue as u32
+                        + mc.black as u32
+                        + mc.red as u32
+                        + mc.green as u32;
+                    if mv <= max_mv_u32 {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            // 3. If no card matches: silent no-op (Python parity —
+            // "up to one" is fine with 0 picks).
+            let pick_idx = match pick_idx {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            // 4. Remove the picked card from the graveyard; stamp
+            // zone=EXILE; reset transient state; push to controller's
+            // exile. Mirrors Python's `bespoke.py:677-679`
+            // (`p.graveyard.remove(card); card.zone = Zone.EXILE;
+            // p.exile.append(card)`). Clone printing_id + obj id
+            // BEFORE the move so the recursive apply_effect call below
+            // can look the exiled card up on the exile by id.
+            let exiled_id: u32 = {
+                let player = &mut state.players[controller_idx];
+                let gy = Arc::make_mut(&mut player.graveyard);
+                let mut obj = gy.remove(pick_idx);
+                obj.zone = ZONE_EXILE;
+                // Clear per-zone transient fields (mirrors the
+                // gravetomb-to-exile Effect::Counterspell-shape arm
+                // at state_ops_resolve.rs:2319-2331). The copy's
+                // resolution reads only printing_id, so most of these
+                // are belt-and-suspenders, but we mirror the
+                // convention exactly to avoid byte-equal drift on
+                // future probes.
+                obj.tapped = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let id = obj.id;
+                Arc::make_mut(&mut player.exile).push(obj);
+                id
+            };
+            // 5. Apply the exiled card's spell_effect. Python:
+            // `spell_effect.resolve(state, controller_id, copy_targets)`.
+            // Rust: the printing's `effects: Vec<Effect>` is the
+            // single-element list the bridge builds from
+            // `card.spell_effect` (`cross_engine.py:10207-10208`).
+            // Iterate and call apply_effect recursively with the
+            // EXILED card's id as the new source — that id lives on
+            // exile (we just pushed it) so source-controller-aware
+            // arms find it via the standard zone-scan + correctly
+            // attribute the copy's effect to the Roving Actuator's
+            // controller.
+            //
+            // **Empty effects = silent no-op.** If the exiled card has
+            // no spell_effect (e.g. a creature card — but the
+            // instant/sorcery filter above rejects those; this is a
+            // belt-and-suspenders guard for synthetic test cards that
+            // tag a printing as Instant without giving it a
+            // spell_effect, which the Python code path also handles
+            // via `if spell_effect is None: return`).
+            //
+            // Clone the effects Vec into a local before the recursive
+            // call so we drop the borrow on state.registry across the
+            // recursive mutation. The clone is cheap (a handful of
+            // Effect enum copies, typically one) and mirrors the
+            // Sequence arm's per-iteration `effects` consumption.
+            let effects_to_apply: Vec<Effect> = match state
+                .registry
+                .lookup(
+                    state.players[controller_idx]
+                        .exile
+                        .iter()
+                        .find(|o| o.id == exiled_id)
+                        .map(|o| o.printing_id)
+                        .unwrap_or(0),
+                ) {
+                Some(pr) => pr.effects.clone(),
+                None => Vec::new(),
+            };
+            // Pin the source-controller for the duration of the
+            // copy's apply_effect calls so any source-controller-
+            // aware arm (DealDamage / DrawCards / GainLife) reads
+            // the Roving Actuator's controller as the casting source.
+            // Mirrors `apply_effect_pub_with_controller`'s
+            // save-swap-restore pattern; inline here because we're
+            // already inside `apply_effect` (which is `fn`-private
+            // and can't recurse through the `pub_with_controller`
+            // helper without an extra hop).
+            let saved_controller = state.current_resolve_source_controller;
+            state.current_resolve_source_controller = Some(controller);
+            let result: PyResult<()> = (|| {
+                for child in &effects_to_apply {
+                    apply_effect(state, child, exiled_id)?;
+                }
+                Ok(())
+            })();
+            state.current_resolve_source_controller = saved_controller;
+            result?;
+        }
         // Round-28 ModalChooseOne first-slice. Pushes a
         // ChooseModeChoice carrying every mode's Effect on the heap
         // and short-circuits. Controller drains via
