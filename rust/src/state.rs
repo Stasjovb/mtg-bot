@@ -216,6 +216,36 @@ pub struct GameObject {
     /// Defaults to `false`; not in the per-object fingerprint tuple
     /// (same back-compat rationale as `warp_exile_pending`).
     pub warped: bool,
+    /// **Cast-from-exile-with-cost-hike substrate (Lightstall
+    /// Inquisitor residue closure).** Set `true` on a card moved to
+    /// exile by `Effect::EachOpponentExilesCardFromHandWithCastPermission`
+    /// (Lightstall Inquisitor's ETB). The legal emitter
+    /// (`state_ops_legal.rs`) surfaces a `CastSpell` action on every
+    /// exile object with this flag where the controller is the
+    /// CARD'S OWNER (the player who controls the exile zone the card
+    /// lives in -- per CR 400.7, `card.controller` was reset to the
+    /// owner when the card moved to exile), at sorcery timing, with
+    /// a `+{1}` generic surcharge applied to the printed mana cost.
+    /// The cast-pay path in `state_ops_cast.rs`
+    /// (`cast_creature` / `cast_spell_noncreature`) honors the
+    /// surcharge when this flag is set and clears it on a successful
+    /// cast. For lands (the contract: any future card admitting a
+    /// non-creature exile pick), `play_land` in
+    /// `state_ops_cast.rs` honors the flag by stamping `tapped =
+    /// true` on the entering land regardless of the printing's
+    /// static `enters_tapped` flag and clears the flag.
+    ///
+    /// Mirrors Python's
+    /// `GameObject.cast_from_exile_with_lightstall_surcharge`
+    /// (`src/mtg_bot/game.py:487`). Persists until the card leaves
+    /// exile (NOT cleared at cleanup -- the permission survives
+    /// across turns); cleared at cast/play time. Defaults to
+    /// `false` for every freshly-allocated GameObject. NOT in the
+    /// per-object fingerprint tuple (back-compat: pre-substrate
+    /// pinned baselines stay byte-equal; only the cast-from-exile
+    /// surface, which had no Rust path pre-substrate, becomes
+    /// observable).
+    pub cast_from_exile_with_lightstall_surcharge: bool,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -2465,6 +2495,11 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // default; not in the per-object fingerprint tuple.
         warp_exile_pending: false,
         warped: false,
+        // Cast-from-exile-with-cost-hike substrate (Lightstall
+        // Inquisitor residue closure): no freshly-allocated object
+        // carries the Lightstall flag; stamped only at Effect-
+        // resolution time on the exiled card.
+        cast_from_exile_with_lightstall_surcharge: false,
     }
 }
 

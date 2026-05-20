@@ -92,6 +92,18 @@ fn object_to_pydict<'py>(
         Some(id) => d.set_item("attached_to", id)?,
         None => d.set_item("attached_to", py.None())?,
     }
+    // **Cast-from-exile-with-cost-hike substrate (Lightstall
+    // Inquisitor residue closure).** Surface the persistent
+    // permission flag so cross-engine harnesses can see the Rust
+    // side stamp it. Pre-substrate snapshot pinned baselines
+    // observe `false` on every object (back-compat default --
+    // unchanged from the pre-substrate dict), so the new key is
+    // additive but the value is invariant on snapshots that don't
+    // exercise the Lightstall ETB.
+    d.set_item(
+        "cast_from_exile_with_lightstall_surcharge",
+        obj.cast_from_exile_with_lightstall_surcharge,
+    )?;
     Ok(d)
 }
 

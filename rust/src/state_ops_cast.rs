@@ -843,15 +843,46 @@ impl GameState {
     fn play_land(&mut self, obj_id: u32, player_id: u8) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
         // Locate + read the printing immutably to decide the call's
-        // outcome before any Arc::make_mut clone fires.
-        let printing_id = match self.players[idx]
+        // outcome before any Arc::make_mut clone fires. Hand is the
+        // common path; exile is the Lightstall-permission fallback
+        // (cast-from-exile-with-cost-hike substrate).
+        let in_hand = self.players[idx]
             .hand
             .iter()
-            .find(|o| o.id == obj_id)
-            .map(|o| o.printing_id)
-        {
-            Some(pid) => pid,
-            None => return Ok(false),
+            .any(|o| o.id == obj_id);
+        let from_exile_lightstall = !in_hand
+            && self.players[idx]
+                .exile
+                .iter()
+                .any(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                });
+        let printing_id = if in_hand {
+            match self.players[idx]
+                .hand
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else if from_exile_lightstall {
+            match self.players[idx]
+                .exile
+                .iter()
+                .find(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                })
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else {
+            return Ok(false);
         };
         let printing = match self.registry.lookup(printing_id) {
             Some(p) => p,
@@ -859,6 +890,47 @@ impl GameState {
         };
         if !printing.card_types.iter().any(|t| t == "Land") {
             return Ok(false);
+        }
+        if from_exile_lightstall {
+            // **Cast-from-exile-with-cost-hike substrate -- the
+            // tapped-land-entry rider.** A land played via the
+            // Lightstall permission ETBs tapped regardless of the
+            // printing's static `enters_tapped` flag. Mirrors Python
+            // `actions.py:1080-1094` (`lightstall_land =
+            // card.cast_from_exile_with_lightstall_surcharge;
+            // card.cast_from_exile_with_lightstall_surcharge = False;
+            // ... card.tapped = bool(card.printing.enters_tapped);
+            // if lightstall_land: card.tapped = True`). The flag is
+            // cleared at play time on the exile-resident object
+            // (before the move) so the moved object lands on bf
+            // with the flag already False (Python parity --
+            // actions.py:1083 clears BEFORE the
+            // `card.zone = BATTLEFIELD` assignment).
+            let exile = Arc::make_mut(&mut self.players[idx].exile);
+            let Some(pos) = exile.iter().position(|o| o.id == obj_id)
+            else {
+                return Ok(false);
+            };
+            let mut obj = exile.remove(pos);
+            obj.cast_from_exile_with_lightstall_surcharge = false;
+            obj.zone = ZONE_BATTLEFIELD;
+            obj.controller = player_id;
+            obj.tapped = true;
+            // CE4: reserve and stamp a fresh ETB timestamp (mirrors
+            // `move_from_hand_to_battlefield`).
+            let etb_ts = self.next_etb_timestamp;
+            self.next_etb_timestamp =
+                self.next_etb_timestamp.saturating_add(1);
+            obj.etb_timestamp = etb_ts;
+            let entered_id = obj.id;
+            let bf = Arc::make_mut(&mut self.players[idx].battlefield);
+            bf.push(obj);
+            // ETB-trigger Slice 2 (RS11): queue + drain ENTERS for
+            // the freshly-arrived permanent. Mirrors
+            // `move_from_hand_to_battlefield`'s drain.
+            self.pending_etb_dispatches.push(entered_id);
+            crate::state_ops_resolve::drain_pending_etb_dispatches(self)?;
+            return Ok(true);
         }
         // Commit the move. The hand search re-runs inside
         // `move_from_hand_to_battlefield`; that's fine — the cost is
@@ -932,6 +1004,23 @@ impl GameState {
                 .exile
                 .iter()
                 .any(|o| o.id == obj_id && o.warped);
+        // **Cast-from-exile-with-cost-hike substrate (Lightstall
+        // Inquisitor residue closure).** If the object is in this
+        // player's exile with `cast_from_exile_with_lightstall_
+        // surcharge = true` (and is not the warp-recast case
+        // already), this is a Lightstall-permission cast -- pay
+        // `printing.mana_cost + {1}` generic surcharge and clear
+        // the flag at cast time. Mirrors Python
+        // `actions.py:1467-1510`.
+        let from_exile_lightstall = !in_hand
+            && !from_exile_warped
+            && self.players[idx]
+                .exile
+                .iter()
+                .any(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                });
         let printing_id = if in_hand {
             match self.players[idx]
                 .hand
@@ -952,6 +1041,19 @@ impl GameState {
                 Some(pid) => pid,
                 None => return Ok(false),
             }
+        } else if from_exile_lightstall {
+            match self.players[idx]
+                .exile
+                .iter()
+                .find(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                })
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
         } else {
             return Ok(false);
         };
@@ -960,7 +1062,20 @@ impl GameState {
                 if !p.card_types.iter().any(|t| t == "Creature") {
                     return Ok(false);
                 }
-                p.mana_cost.clone()
+                if from_exile_lightstall {
+                    // Apply +{1} generic surcharge. Mirrors Python
+                    // `actions.py:1494-1499`. Colored pips unchanged.
+                    crate::cards::ManaCost {
+                        generic: p.mana_cost.generic.saturating_add(1),
+                        white: p.mana_cost.white,
+                        blue: p.mana_cost.blue,
+                        black: p.mana_cost.black,
+                        red: p.mana_cost.red,
+                        green: p.mana_cost.green,
+                    }
+                } else {
+                    p.mana_cost.clone()
+                }
             }
             None => return Ok(false),
         };
@@ -1003,6 +1118,21 @@ impl GameState {
             {
                 obj.warped = false;
                 obj.warp_exile_pending = false;
+            }
+        }
+        if from_exile_lightstall {
+            // **Cast-from-exile-with-cost-hike substrate.** Clear the
+            // Lightstall flag on the stack-resident source object.
+            // Mirrors Python `actions.py:1505` --
+            // `card.cast_from_exile_with_lightstall_surcharge =
+            // False` at cast time. The card is a fresh object on
+            // resolution (CR 400.7) so the flag must not survive.
+            if let Some(obj) = self
+                .stack_objects
+                .iter_mut()
+                .find(|o| o.id == obj_id)
+            {
+                obj.cast_from_exile_with_lightstall_surcharge = false;
             }
         }
         // **MMM Pin 1 (11th Rust slice).** Bump the casting player's
@@ -1388,15 +1518,50 @@ impl GameState {
         player_id: u8,
     ) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
-        // Delta 1: hand lookup only.
-        let printing_id = match self.players[idx]
+        // Delta 1: hand lookup, with a fallback to the Lightstall
+        // exile zone for noncreature spells cast via the
+        // cast-from-exile-with-cost-hike substrate (Lightstall
+        // Inquisitor residue closure). Mirrors `cast_creature`'s
+        // hand-or-exile cascade; the warp exile-recast path is
+        // creature-only on the live surface so it does NOT
+        // duplicate here.
+        let in_hand = self.players[idx]
             .hand
             .iter()
-            .find(|o| o.id == obj_id)
-            .map(|o| o.printing_id)
-        {
-            Some(pid) => pid,
-            None => return Ok(false),
+            .any(|o| o.id == obj_id);
+        let from_exile_lightstall = !in_hand
+            && self.players[idx]
+                .exile
+                .iter()
+                .any(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                });
+        let printing_id = if in_hand {
+            match self.players[idx]
+                .hand
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else if from_exile_lightstall {
+            match self.players[idx]
+                .exile
+                .iter()
+                .find(|o| {
+                    o.id == obj_id
+                        && o.cast_from_exile_with_lightstall_surcharge
+                })
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else {
+            return Ok(false);
         };
         // Delta 2: inverted type gate — Instant/Sorcery AND NOT
         // Creature. Bail (no mutation) on anything else so the
@@ -1414,7 +1579,20 @@ impl GameState {
                 if !is_spell || is_creature {
                     return Ok(false);
                 }
-                p.mana_cost.clone()
+                if from_exile_lightstall {
+                    // Apply +{1} generic surcharge (Lightstall path).
+                    // Mirrors Python `actions.py:1494-1499`.
+                    crate::cards::ManaCost {
+                        generic: p.mana_cost.generic.saturating_add(1),
+                        white: p.mana_cost.white,
+                        blue: p.mana_cost.blue,
+                        black: p.mana_cost.black,
+                        red: p.mana_cost.red,
+                        green: p.mana_cost.green,
+                    }
+                } else {
+                    p.mana_cost.clone()
+                }
             }
             None => return Ok(false),
         };
@@ -1438,6 +1616,20 @@ impl GameState {
         // byte-equal to Python's resolve cleanup.
         if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
             return Ok(false);
+        }
+        if from_exile_lightstall {
+            // **Cast-from-exile-with-cost-hike substrate.** Clear the
+            // Lightstall flag on the stack-resident source object.
+            // Mirrors Python `actions.py:1505`. CR 400.7 -- the card
+            // is a fresh object on resolution; the flag must not
+            // survive.
+            if let Some(obj) = self
+                .stack_objects
+                .iter_mut()
+                .find(|o| o.id == obj_id)
+            {
+                obj.cast_from_exile_with_lightstall_surcharge = false;
+            }
         }
         // **MMM Pin 1 (11th Rust slice).** Bump
         // `spells_cast_this_turn` before the IS_CAST dispatch.

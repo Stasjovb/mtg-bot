@@ -729,12 +729,13 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_pa
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity():
-    """**20th Rust slice (XXX Pin 3 honest-stop closure)** -- Lightstall
-    Inquisitor's ETB now has a matching Rust
-    ``Effect::EachOpponentExilesCardFromHandWithCastPermission`` unit
-    variant + parse arm + resolve arm (each-opponent-exile portion)
-    + bridge arm.
+def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_FIXED_parity():
+    """**Lightstall Inquisitor full closure (cast-from-exile-with-cost-
+    hike substrate landing).** Slice 20 shipped the Effect variant +
+    parse arm + resolve arm (each-opponent-exile portion) + bridge arm;
+    this follow-up slice closes the persistent permission substrate
+    end-to-end (GameObject field + legal-actions surface + cost-pay
+    with +{1} surcharge + tapped-land-entry rider).
 
     Pre-closure (the divergence XXX Pin 3 locked in): Python's
     ``EachOpponentExilesCardFromHandWithCastPermission``
@@ -759,16 +760,17 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
     reduces to "the one opponent"; empty hand = silent no-op; pop
     hand[0]; CR 400.7 zone-change reset; push to opponent's exile.
 
-    **HONEST-STOP boundary.** The persistent
-    ``cast_from_exile_with_lightstall_surcharge`` per-object flag
-    + cast-from-exile legality + +{1} surcharge + tapped-land-
-    entry riders are NOT plumbed in this slice. Rust's
-    ``GameObject`` struct has no such field today;
-    ``state_ops_legal.rs`` does not surface exile-as-cast-source
-    for that flag; ``state_ops_cast.rs`` does not honor the
-    surcharge / tapped-entry riders. Cross-engine byte-equality
-    holds up to the exile step. Substrate scope: 6+ cycles
-    (``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §3).
+    **CLOSURE: persistent permission substrate landed end-to-end.**
+    Rust's ``GameObject`` now carries the
+    ``cast_from_exile_with_lightstall_surcharge: bool`` field
+    (``state.rs``); ``state_ops_legal.rs`` surfaces exile-as-cast-
+    source for cards flagged with it (sorcery timing, +{1} surcharge
+    on the mana-cost gate); ``state_ops_cast.rs::cast_creature`` /
+    ``cast_spell_noncreature`` honor the surcharge and clear the flag
+    on the stack-resident source object at cast time;
+    ``state_ops_cast.rs::play_land`` honors the tapped-entry rider
+    for lands played via the permission. Cross-engine byte-equality
+    holds through cast and resolution.
 
     Closure shape:
       1. Python's ``EachOpponentExilesCardFromHandWithCastPermission``
@@ -886,32 +888,42 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
             "fails, the resolve arm was reverted -- audit the slice."
         )
 
-    # **HONEST-STOP boundary marker.** The persistent
-    # cast_from_exile_with_lightstall_surcharge flag substrate is NOT
-    # in Rust yet -- documenting the boundary here so a future
-    # substrate slice landing can find the assertion to invert.
-    # Sentinel: the Rust GameObject struct (state.rs) carries NO
-    # 'cast_from_exile_with_lightstall_surcharge' field. The variant
-    # docstring references the field-name string, but the actual
-    # Rust-side struct field does not exist. Checking for the field-
-    # declaration line ('cast_from_exile_with_lightstall_surcharge:')
-    # rather than the bare name (which appears in the docstring as
-    # the substrate-scope identifier) keeps the sentinel honest.
+    # **CLOSURE boundary marker INVERTED.** The persistent
+    # cast_from_exile_with_lightstall_surcharge flag substrate is NOW
+    # in Rust -- the GameObject struct (state.rs) carries the field
+    # declaration. Sentinel asserts the closure landed; if a future
+    # slice removes the field this trips and the closure is reverted.
     rust_state_path = repo_root / "rust" / "src" / "state.rs"
     assert rust_state_path.exists(), (
         f"Rust source file should exist at {rust_state_path!r}."
     )
     state_src_rs = rust_state_path.read_text(encoding="utf-8")
-    assert "cast_from_exile_with_lightstall_surcharge:" not in state_src_rs, (
-        "Honest-stop boundary: rust/src/state.rs's GameObject struct "
-        "should NOT yet carry a 'cast_from_exile_with_lightstall_"
-        "surcharge:' field declaration (the persistent permission "
-        "substrate is honest-stopped in the 20th Rust slice; see "
-        "docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md §3 for substrate "
-        "scope).  If this assertion fails, the persistent permission "
-        "substrate landed in a follow-up slice -- flip this pin to "
-        "..._FIXED_parity (drop the _partial_) and remove this "
-        "honest-stop assertion."
+    assert "cast_from_exile_with_lightstall_surcharge:" in state_src_rs, (
+        "Closure assertion: rust/src/state.rs's GameObject struct "
+        "MUST carry a 'cast_from_exile_with_lightstall_surcharge:' "
+        "field declaration (persistent-permission substrate, "
+        "cast-from-exile-with-cost-hike slice). If this assertion "
+        "fails, the persistent permission substrate was reverted -- "
+        "audit the slice."
+    )
+    # Closure assertions for the consumer surfaces.
+    rust_legal_path = repo_root / "rust" / "src" / "state_ops_legal.rs"
+    assert "cast_from_exile_with_lightstall_surcharge" in (
+        rust_legal_path.read_text(encoding="utf-8")
+    ), (
+        "Closure assertion: rust/src/state_ops_legal.rs MUST honor "
+        "the Lightstall flag at legal-actions emission (the exile-"
+        "as-cast-source surface). If absent, the cast-from-exile-"
+        "with-cost-hike substrate was reverted."
+    )
+    rust_cast_path = repo_root / "rust" / "src" / "state_ops_cast.rs"
+    assert "cast_from_exile_with_lightstall_surcharge" in (
+        rust_cast_path.read_text(encoding="utf-8")
+    ), (
+        "Closure assertion: rust/src/state_ops_cast.rs MUST honor "
+        "the Lightstall flag at cast-pay / play-land time (the +{1} "
+        "surcharge and tapped-land-entry rider). If absent, the cast-"
+        "from-exile-with-cost-hike substrate was reverted."
     )
 
     # 2a. The bridge arm round-trips the Rust dict to a Python
@@ -985,19 +997,21 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
 
 def test_xxx_pin_inventory_complete():
     """Sanity check: the XXX batch declares exactly 3 pin tests
-    (1 OPEN _divergence_pin + 1 CLOSED _FIXED_parity + 1 PARTIAL
-    _partial_FIXED_parity after the 18th + 20th Rust slices).
+    (1 OPEN _divergence_pin + 2 CLOSED _FIXED_parity after the 18th +
+    20th Rust slices + the cast-from-exile-with-cost-hike substrate
+    follow-up).
 
     Pin batch XXX (round 25 pin-side) targets 3 divergence pins per
     the lane discipline.  Pin 2 (Roving Actuator) was closed by the
     18th Rust slice and renamed ``..._FIXED_parity``; Pin 3
     (Lightstall Inquisitor) was partially closed by the 20th Rust
-    slice (Effect-level + each-opponent-exile portion byte-equal;
-    persistent cast-from-exile permission substrate honest-stopped)
-    and renamed ``..._partial_FIXED_parity``; Pin 1 (House
-    Cartographer) remains OPEN ``..._divergence_pin``.  This guards
-    against accidental deletion or rename of any pin function (open
-    / closed / partial).
+    slice (Effect-level + each-opponent-exile portion byte-equal)
+    and FULLY closed by the cast-from-exile-with-cost-hike substrate
+    follow-up (persistent permission + cost surcharge + tapped-land-
+    entry rider landed end-to-end); renamed
+    ``..._FIXED_parity``. Pin 1 (House Cartographer) remains OPEN
+    ``..._divergence_pin``. This guards against accidental deletion
+    or rename of any pin function.
     """
     import tests.test_divergence_pins_xxx as _self_mod
     open_pin_fns = [
@@ -1018,10 +1032,9 @@ def test_xxx_pin_inventory_complete():
     }
     expected_closed_pins = {
         "test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_parity",
+        "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_FIXED_parity",
     }
-    expected_partial_pins = {
-        "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity",
-    }
+    expected_partial_pins: set[str] = set()
     assert set(open_pin_fns) == expected_open_pins, (
         "XXX open-pin inventory mismatch.  Expected exactly the 1 "
         "open pin test (Pin 1 still open):\n"
@@ -1029,15 +1042,16 @@ def test_xxx_pin_inventory_complete():
         f"Got:\n  {sorted(open_pin_fns)}"
     )
     assert set(closed_pin_fns) == expected_closed_pins, (
-        "XXX closed-pin inventory mismatch.  Expected exactly the 1 "
-        "closed pin test (Pin 2 closed by 18th Rust slice):\n"
+        "XXX closed-pin inventory mismatch.  Expected exactly the 2 "
+        "closed pin tests (Pin 2 closed by 18th Rust slice; Pin 3 "
+        "fully closed by the cast-from-exile-with-cost-hike substrate "
+        "follow-up to the 20th Rust slice):\n"
         f"  {sorted(expected_closed_pins)}\n"
         f"Got:\n  {sorted(closed_pin_fns)}"
     )
     assert set(partial_pin_fns) == expected_partial_pins, (
-        "XXX partial-pin inventory mismatch.  Expected exactly the 1 "
-        "partial pin test (Pin 3 partial-closed by 20th Rust slice; "
-        "persistent permission substrate honest-stopped):\n"
+        "XXX partial-pin inventory mismatch. With Pin 3 fully closed "
+        "the partial set is empty:\n"
         f"  {sorted(expected_partial_pins)}\n"
         f"Got:\n  {sorted(partial_pin_fns)}"
     )

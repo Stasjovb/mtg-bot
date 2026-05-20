@@ -3449,6 +3449,7 @@ fn apply_effect(
                     // printing). Back-compat default.
                     warp_exile_pending: false,
                     warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -3607,6 +3608,7 @@ fn apply_effect(
                         // default.
                         warp_exile_pending: false,
                         warped: false,
+                        cast_from_exile_with_lightstall_surcharge: false,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -3737,6 +3739,7 @@ fn apply_effect(
                     // default.
                     warp_exile_pending: false,
                     warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -6703,6 +6706,7 @@ fn apply_effect(
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
                         warped: false,
+                        cast_from_exile_with_lightstall_surcharge: false,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -6866,6 +6870,7 @@ fn apply_effect(
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
                         warped: false,
+                        cast_from_exile_with_lightstall_surcharge: false,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -10664,6 +10669,7 @@ fn apply_effect(
                 // tokens are never warp-cast. Back-compat default.
                 warp_exile_pending: false,
                 warped: false,
+                cast_from_exile_with_lightstall_surcharge: false,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -12406,17 +12412,21 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
+            // **Cast-from-exile-with-cost-hike substrate (Lightstall
+            // Inquisitor residue closure).** Stamp the persistent
+            // permission flag on the exiled card. Mirrors Python's
+            // `effects/generic/discard.py:203` --
+            // `card.cast_from_exile_with_lightstall_surcharge =
+            // True`. The flag is honored by the legal emitter
+            // (`state_ops_legal.rs::legal_decisions` exile-cast
+            // surface) and the cast pay path
+            // (`state_ops_cast.rs::cast_creature` /
+            // `cast_spell_noncreature` / `play_land` for the land
+            // contract); the cast pay path clears the flag on
+            // successful cast/play. Persists until the card leaves
+            // exile (not cleared at cleanup).
+            obj.cast_from_exile_with_lightstall_surcharge = true;
             // 6. Push to opponent's exile.
-            //
-            // **HONEST-STOP MARKER.** Python ALSO stamps
-            // `card.cast_from_exile_with_lightstall_surcharge = True`
-            // on the exiled card here (`discard.py:203`). Rust does
-            // NOT, because GameObject has no such field today. This
-            // is the cross-engine divergence point for any probe that
-            // attempts to cast the exiled card on the owner's next
-            // priority — Python's legal-actions surface emits the
-            // cast; Rust's does not. See the Effect variant docstring
-            // for the substrate-scope breakdown.
             Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
         }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
@@ -14602,6 +14612,7 @@ impl GameState {
             // injected objects default to not-warp. Back-compat.
             warp_exile_pending: false,
             warped: false,
+            cast_from_exile_with_lightstall_surcharge: false,
         };
 
         // R76-1: advance the monotonic id counter past this injected
