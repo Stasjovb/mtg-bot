@@ -47,7 +47,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_
 
 - `Dauntless Scrapbot` — Effects probed at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
-- `Tractor Beam` — Effects covered at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
+- `Tractor Beam` — Effects covered at the Effect+bridge level; substrate landed (`aura_prevents_host_untap` + untap-step skip + Aura-ETB-trigger admit) via Aura attach Phase-2-S2-extension (2026-05-20). CARD residue worklist status `closed`; bench admit honest-stopped pending cast-time seat-alignment (SEARCH_LIMITATIONS.md).
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
 
@@ -287,10 +287,18 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Lightstall Inquisitor
 - Pain for All
 
-## BLOCKED — blocked_non_effect (non-Effect gate) (2)
+## BLOCKED — blocked_non_effect (non-Effect gate) (1)
 
 - Dauntless Scrapbot
-- Tractor Beam
+
+**Note (2026-05-20):** Tractor Beam transitioned from
+`blocked_non_effect` to `closed` in the residue worklist via the
+Aura attach substrate Phase-2-S2-extension slice — the
+``aura_prevents_host_untap`` substrate + Rust untap-step skip +
+Aura-ETB-trigger admit landed end-to-end (byte-equal round-trip +
+untap-step probe pass at substrate level). The bench-loader admit
+is honest-stopped pending a cross-engine cast-time auto-resolve
+seat-alignment slice — see SEARCH_LIMITATIONS.md for the entry.
 
 ## BLOCKED — subsystem-gated / Effect-uncovered (147)
 

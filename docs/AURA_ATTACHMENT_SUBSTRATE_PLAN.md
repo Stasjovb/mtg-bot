@@ -613,11 +613,31 @@ Implementation summary (round-79+, branch
 
 **Phase 2 S2 remaining honest-stops + extensions:**
 
-- **Tractor Beam.** `attached_prevents_untap` Rust untap-step skip
-  + `TapEnchantedPermanent` ETB bridge (the shipped Effect reads
-  `source.attached_to` which Phase 1 sets; the trigger event
-  routing on the bridge needs a follow-up arm). A Phase-2-S2-
-  extension slice unblocks it.
+- **Tractor Beam — substrate LANDED (2026-05-20), bench-loader
+  admit honest-stopped.** The Phase-2-S2-extension slice shipped
+  the full substrate plumbing:
+  - New `aura_prevents_host_untap` field on CardDef + Rust
+    `CardPrinting` + bidir bridge round-trip via the new
+    `get_printing_aura_prevents_host_untap` getter.
+  - Rust untap-step skip in
+    `state_ops_steps.rs::untap_all_for_player_inline` (walks both
+    players' battlefields to pre-compute the set of host ids whose
+    attached Aura carries the don't-untap rider, then skips them
+    during the per-player sweep).
+  - Narrow Aura-ETB-trigger admit
+    (`_aura_triggers_are_phase2_s2_safe` +
+    `_python_ta_to_safe_dict_aura_extension`) for the
+    `Event.ENTERS + IsSelf + TapEnchantedPermanent` shape.
+  The byte-equal round-trip + untap-step game-state probe both
+  pass at substrate level (`tests/test_aura_substrate_phase_2_s2_extension.py`).
+  **The bench-loader admit predicate stays DECLINED** for the
+  Tractor-Beam shape (paired control + prevents_untap) — the
+  cross-engine production-deck shadow bake-in surfaced a
+  cast-time auto-resolve seat-alignment divergence (Python casts
+  Tractor Beam → put on the stack with a pending enchant-target
+  decision; Rust's auto-resolve fizzles with no selected target).
+  A separate follow-up slice closes that gap and flips the
+  bench-loader admit.
 - **Lignify-shape Auras.** Layer-7b set-base-PT reader fold (host's
   effective power / toughness override) — not in EoE pool today; a
   future S2.5 slice can light it up.
