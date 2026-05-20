@@ -447,49 +447,69 @@ PROBE_MODULES: tuple[Path, ...] = (
     # classifier).  See module docstring for the full honest-
     # exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_eeee.py",
-    # Probe batch GGGG (round 33 covered-but-unprobed) — seventh
-    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE; and
-    # sibling to in-flight FFFF round 32 relaunch which drafts the
-    # already-DDDD-credited Meltstrider Eulogist).  Two cards from
-    # the covered tier upgraded to PROBED via the same parse + bridge
-    # round-trip + Python-side resolve idiom DDD slice 17 / YYY / ZZZ
-    # / AAAA / CCCC / DDDD / EEEE / FFFF established:
+    # Probe batch FFFF (round 32 relaunch covered-but-unprobed) — sixth
+    # 4-letter probe batch (this slot was previously claimed by an
+    # agent that timed out at worktree creation; that branch is gone,
+    # slot reclaimed fresh).  ONE card from the covered tier upgraded
+    # to PROBED via the same parse + bridge round-trip + Python-side
+    # resolve idiom DDD slice 17 / YYY / ZZZ / AAAA / CCCC / EEEE /
+    # DDDD established:
     #   * Illvoi Operative (Creature IS_CAST ->
     #     PutPlusOneCounterOnSelf(amount=1); FIRST IS_CAST-event
-    #     carrier of the bare effect class to land a credited probe.
-    #     Every other trigger event (ENTERS, BEGINNING_OF_END_STEP,
-    #     IS_SACRIFICED) already has a PROBED pin; GGGG closes the
-    #     IS_CAST corner.  The StateBound(SpellsCastThisTurn(n=2))
-    #     "second spell each turn" predicate is metadata at the
-    #     Effect+bridge+resolve level the PROBED tier credits, the
-    #     same predicate-is-metadata precedent FFFF used for
-    #     Meltstrider Eulogist's HasCounter predicate.  The non-
-    #     credited test_probe_mmm_downstream.py
-    #     test_mmm_probe_illvoi_operative_* function predates the
-    #     _parity naming convention and uses a cross-engine stack-
-    #     resolution trajectory; GGGG lands the credited _parity
-    #     variant under the EEEE-idiom).
+    #     carrier of the PutPlusOneCounterOnSelf effect class to land
+    #     a credited probe -- the only EoE consumer of this
+    #     (event, effect-class) tuple.  Earlier YYY / SSS / UUU drops
+    #     deferred this card on cross-engine compare_fields grounds
+    #     (slice-12 IS_CAST stack-resolution-order divergence), but
+    #     the EEEE-idiom (parse + bridge round-trip + Python-side
+    #     resolve, NO cross-engine compare_fields) sidesteps that
+    #     gap entirely -- same drop-recovery precedent DDDD used for
+    #     Meltstrider Eulogist (HasCounter predicate gap) and EEEE
+    #     used for Starwinder (combat-damage harness gap).
+    # Honest-exhaustion is the dominant signal for the remainder of
+    # the covered_by_construction tier -- the magecraft-family
+    # siblings Cosmogrand Zenith / Station Monitor / Sunstar
+    # Lightsmith are blocked by their EFFECT-class wrappers (modal /
+    # token-registration / Sequence), not the IS_CAST event itself;
+    # the long tail of activated-ability cards, Equipment / Aura /
+    # Room subsystem cards, pump-rider cards, vanilla creatures,
+    # ManifestDread substrate, and non-basic lands carry their own
+    # subsystem / bridge-arm blockers (see module docstring for the
+    # full honest-exhaustion drop list).
+    REPO_ROOT / "tests" / "test_probe_remaining_ffff.py",
+    # Probe batch GGGG (round 33 covered-but-unprobed) — seventh
+    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE, FFFF).
+    # ONE card from the covered tier upgraded to PROBED via the same
+    # parse + bridge round-trip + Python-side resolve idiom DDD slice
+    # 17 / YYY / ZZZ / AAAA / CCCC / DDDD / EEEE / FFFF established:
     #   * Roving Actuator (Artifact Creature ENTERS ->
     #     RovingActuatorETBEffect(max_mv=2); FIRST credited _parity
-    #     probe of this dedicated bespoke effect class.  The
+    #     probe of this dedicated bespoke effect class on the REAL
+    #     parsed Roving Actuator EoE printing.  The
     #     test_probe_xxx_downstream.py test_xxx_probe_roving_actuator
     #     _* function family exercises the bridge round-trip + cross-
     #     engine resolve trajectory on a SYNTHETIC carrier (built
     #     via register_and_inject_object) but is NOT credited
     #     because the function names predate the _parity convention;
-    #     GGGG binds the REAL parsed Roving Actuator printing).
-    # Honest-exhaustion drops: Optimistic Scavenger (Drix Fatemaker
-    # already PROBED on same effect+event combo), Unwanted Remake /
-    # Come Back Wrong (Murder already PROBED on bare DestroyTarget
-    # Creature), Weapons Manufacturing / Station Monitor (token-
-    # registration substrate), Clammy Prowler / Dawnsire (no bridge
-    # arm), Hand That Feeds (granted_keywords rider dropped by
-    # bridge), Room cards (Rooms subsystem), ManifestDread carriers
-    # (picker substrate deferred), Sequence / Modal wrappers (no
-    # container-level bridge), Pain for All / Tractor Beam (Aura
-    # phase 2 in flight), vanilla / lands / activated-ability cards
-    # (separate probe surface).  See module docstring for the full
-    # honest-exhaustion drop list.
+    #     GGGG binds the REAL parsed printing via
+    #     get_printings().get("Roving Actuator") and asserts the
+    #     empty-target short-circuit at bespoke.py:667-668).
+    # Honest-exhaustion drops include Illvoi Operative (ALREADY
+    # PROBED via FFFF round 32 relaunch, main HEAD 25c0d410 -- the
+    # original GGGG draft included Illvoi Operative as a second
+    # probe but it was dropped on origin/main merge since FFFF
+    # landed first and credited it), Optimistic Scavenger (Drix
+    # Fatemaker already PROBED on same effect+event combo), Unwanted
+    # Remake / Come Back Wrong (Murder already PROBED bare),
+    # Weapons Manufacturing / Station Monitor (token-registration
+    # substrate), Clammy Prowler / Dawnsire (no bridge arm), Hand
+    # That Feeds (granted_keywords rider dropped by bridge), Room
+    # cards (Rooms subsystem), ManifestDread carriers (picker
+    # substrate deferred), Sequence / Modal wrappers (no container-
+    # level bridge), Pain for All / Tractor Beam (Aura phase 2 in
+    # flight), vanilla / lands / activated-ability cards (separate
+    # probe surface).  See module docstring for the full honest-
+    # exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_gggg.py",
 )
 

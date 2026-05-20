@@ -5,8 +5,10 @@ Canonical focused inventory of the **4 EoE cards** currently in the
 that need a brand-new Rust `Effect::` variant + parse + bridge before
 they can be byte-equal cross-engine. This is the **post-flip long-tail
 sequencing guide**: every other parity work is BLOCKED-non-effect (2
-cards), BLOCKED-subsystem-gated (149 cards, see
-`docs/SUBSYSTEM_ROADMAP.md`), or PROBED/covered (320 cards).
+cards), BLOCKED-subsystem-gated (147 cards, see
+`docs/SUBSYSTEM_ROADMAP.md` for the full living roadmap and
+`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` for a short
+top-5-next-levers snapshot), or PROBED/covered (320 cards).
 
 **Snapshot HEAD:** post-slice-20-merge (2026-05-20).
 **Source of truth:** `docs/residue_worklist.json` (the residue

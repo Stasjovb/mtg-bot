@@ -6,11 +6,11 @@ The AAAA batch (``tests/test_probe_remaining_aaaa.py``) opened the
 the seventh 4-letter batch (round 33); prior 4-letter batches are
 AAAA (round 27), BBBB (round 28), CCCC (round 29), DDDD (round 30
 reclaim, main HEAD ``8aeb70b4``), EEEE (round 31 reclaim, main HEAD
-``04c1f16e``), and FFFF (round 32 relaunch, in-flight sibling).
+``04c1f16e``), and FFFF (round 32 relaunch, main HEAD ``25c0d410``).
 Subsequent batches follow ``HHHH`` / ``IIII`` / ... per the
 established 4-letter alphabetic cadence.
 
-Two cards from the ``covered_by_construction`` tier are upgraded to
+ONE card from the ``covered_by_construction`` tier is upgraded to
 the ``PROBED`` tier by this module via the same parse + bridge round-
 trip + Python-side resolve idiom DDD slice 17's Honored Knight-Captain
 probe (``tests/test_probe_ddd_downstream.py``:408), the YYY batch's
@@ -19,60 +19,23 @@ batch's two probes (``tests/test_probe_remaining_zzz.py``:173 / 413),
 the AAAA batch's two probes (``tests/test_probe_remaining_aaaa.py``:231
 / 511), the CCCC batch's two probes
 (``tests/test_probe_remaining_cccc.py``:223 / 430), the DDDD batch's
-two probes (``tests/test_probe_remaining_dddd.py``:289 / 526), and
-the EEEE batch's two probes (``tests/test_probe_remaining_eeee.py``:
-245 / 501) established as a PROBE_MODULES-credited shape.
+two probes (``tests/test_probe_remaining_dddd.py``:289 / 526), the
+EEEE batch's two probes (``tests/test_probe_remaining_eeee.py``:245
+/ 501), and the FFFF batch's single Illvoi Operative probe
+(``tests/test_probe_remaining_ffff.py``) established as a
+PROBE_MODULES-credited shape.
 
-  * **Illvoi Operative** -- Creature with an IS_CAST triggered ability
-    emitting ``PutPlusOneCounterOnSelf(amount=1)``.  Bridge arm at
-    ``cross_engine.py``: ``put_plus_one_counter_on_self`` (matching
-    Rust's ``Effect::PutPlusOneCounterOnSelf { amount }``).  **NEW
-    shape coverage:** the FIRST IS_CAST-event carrier of the
-    ``PutPlusOneCounterOnSelf(amount=1)`` effect to land a
-    PROBE_MODULES-credited ``_parity`` probe.  Complements:
-      * Dockworker Drone (PROBED, ENTERS-event carrier of the same
-        effect class -- ``test_parity_smoke.py``).
-      * Seedship Agrarian (PROBED, ENTERS-event carrier;
-        ``test_parity_smoke.py``).
-      * Insatiable Skittermaw / Interceptor Mechan / Kavaron Skywarden
-        (PROBED, BEGINNING_OF_END_STEP-event carriers;
-        ``test_parity_smoke.py``).
-      * Lightless Evangel (PROBED, IS_SACRIFICED-event carrier
-        landed by CCCC; ``test_probe_remaining_cccc.py``).
-    Every other trigger event for the bare
-    ``PutPlusOneCounterOnSelf(amount=1)`` effect class has a PROBED
-    pin; THIS probe closes the IS_CAST-event corner.  The bridge arm
-    + the Python-side resolve are the same as the existing
-    ENTERS / BEGINNING_OF_END_STEP / IS_SACRIFICED carriers; what's
-    NEW is the trigger **event** (IS_CAST, a cast-into-the-stack
-    event distinct from every prior PROBED carrier's event) AND the
-    carrier substrate (a Creature with a ``StateBound(SpellsCast
-    ThisTurn(n=2))`` "second spell each turn" predicate the existing
-    PROBED carriers do not exhibit).  The mmm_downstream test at
-    ``tests/test_probe_mmm_downstream.py``:459
-    (``test_mmm_probe_illvoi_operative_second_spell_self_counter_real_eoe``)
-    exercises Illvoi Operative on a cross-engine stack-resolution
-    trajectory; it is NOT credited by the PROBED-tier classifier
-    because its function name does not end ``_parity`` -- it
-    predates the ``_parity`` naming convention.  GGGG lands the
-    credited ``_parity`` variant under the EEEE-idiom (parse +
-    bridge round-trip + Python-side resolve, NO cross-engine
-    compare_fields), which sidesteps the ``StateBound`` predicate's
-    Rust mirror status -- the predicate is metadata; the
-    Effect+bridge+resolve byte-equality the PROBED tier credits is
-    independent of which predicate fires.
-
-    Prior batch-A / cast_spell-aa drop notes deferred this card on
-    ``StateBound`` predicate grounds (the predicate's Rust mirror
-    cannot be asserted via the old compare_fields idiom).  The EEEE-
-    idiom (parse + bridge round-trip + Python-side resolve) sidesteps
-    that gap entirely: the probe verifies the Effect+bridge byte-
-    equality and the Python-side resolve mutation, both of which are
-    independent of the predicate's Rust mirror status.  This is
-    exactly the same gap-bypass FFFF used for Meltstrider Eulogist
-    (YYY / batch-A deferred its HasCounter predicate, but the EEEE-
-    idiom unblocked it by ignoring the predicate at the
-    Effect+bridge+resolve level).
+The originally-drafted GGGG batch carried TWO probes -- Illvoi
+Operative (Creature IS_CAST -> PutPlusOneCounterOnSelf(amount=1))
+and Roving Actuator (Artifact Creature ENTERS ->
+RovingActuatorETBEffect(max_mv=2)).  The FFFF lane landed first
+(main HEAD ``25c0d410``) and shipped Illvoi Operative under the same
+EEEE-idiom (predicate-is-metadata gap-bypass).  The GGGG reclaim
+drops the Illvoi Operative probe to avoid duplicate credit (the
+PROBED-credit predicate is name+_parity function match; re-probing
+Illvoi Operative would not move the classifier needle), keeping only
+the Roving Actuator probe which FFFF did not claim.  Net delta:
++1 probe (Roving Actuator).
 
   * **Roving Actuator** -- Creature with an ENTERS triggered ability
     emitting ``RovingActuatorETBEffect(max_mv=2)`` (the dedicated
@@ -272,17 +235,15 @@ DROPPED ON VERIFY (honest discipline)
 
 COVERED-BY-CONSTRUCTION -> PROBED (this module)
 -----------------------------------------------
-Two cards move from ``covered_by_construction`` to the ``PROBED``
+ONE card moves from ``covered_by_construction`` to the ``PROBED``
 tier upon merge.  Prior PROBED count (with AAAA + BBBB + CCCC + DDDD
-+ EEEE wired in via PROBE_MODULES, post-DDDD reclaim merge -- main
-HEAD ``751f0204``): 228.  Net delta from this module: +2 (PROBED),
--2 (covered).  The FFFF lane (round 32 relaunch, in-flight as
-``feature/probe-batch-ffff``) is a sibling that may land first; the
-merge instructions pull origin/main before pushing to absorb any
-FFFF-driven PROBE_MODULES + POOL_PARITY.md conflict, resolved by
-keeping both modules / both card-name list entries (FFFF's
-Meltstrider Eulogist probe will be a no-op post-DDDD merge since
-DDDD already credits that card).
++ EEEE + FFFF wired in via PROBE_MODULES, post-FFFF merge -- main
+HEAD ``25c0d410``): 229.  Net delta from this module: +1 (PROBED),
+-1 (covered).  The originally-drafted GGGG carried two probes; the
+FFFF lane (round 32 relaunch) landed first on main and credited
+Illvoi Operative, so the GGGG reclaim drops the Illvoi Operative
+probe (honest-exhaustion: duplicate credit would not move the
+classifier needle) and keeps only the Roving Actuator probe.
 """
 
 from __future__ import annotations
@@ -313,252 +274,7 @@ def parity_smoke():
 
 
 # ---------------------------------------------------------------------------
-# Probe 1 -- Illvoi Operative: Creature IS_CAST triggered ->
-#   PutPlusOneCounterOnSelf(amount=1).
-#
-# Verifies the closure chain end-to-end on the genuine parsed printing:
-#   1. ``get_active_source().get_printings().get("Illvoi Operative")``
-#      returns the parsed CardPrinting (Creature, Jellyfish Rogue).
-#   2. The IS_CAST triggered ability's effect is a
-#      ``PutPlusOneCounterOnSelf(amount=1)`` instance.
-#   3. The bridge round-trips the canonical dict shape to a fresh
-#      ``PutPlusOneCounterOnSelf(amount=1)`` instance.
-#   4. Distinctness from sibling Effect classes is preserved
-#      (regression guard against unit-variant collapse).
-#   5. Python's ``resolve`` path drives the
-#      ``state.resolving_source.plus_one_counters`` += amount pipeline:
-#      with the source on the battlefield and resolving_source pinned,
-#      the source gains amount counters post-resolve.
-# ---------------------------------------------------------------------------
-
-
-def test_cross_engine_real_eoe_illvoi_operative_parity():
-    """**GENUINE real-EoE cross-engine probe -- Illvoi Operative
-    (round 33 GGGG, Creature IS_CAST ->
-    PutPlusOneCounterOnSelf(amount=1)).**
-
-    Drives the **real parsed Illvoi Operative printing** through the
-    Python-side ``PutPlusOneCounterOnSelf`` resolve path, validating
-    the ``state.resolving_source`` -> ``add_plus_one_counters`` +1
-    pipeline on a controlled state (the source gains 1 +1/+1 counter
-    post-resolve).  Pairs the parse + bridge round-trip verification
-    with the live Python resolve smoke, the same parse + bridge-round-
-    trip + Python-side resolve idiom DDD slice 17 + YYY + ZZZ + AAAA
-    + CCCC + DDDD + EEEE + FFFF established.
-
-    **NEW shape coverage:** the FIRST IS_CAST-event carrier of the
-    bare ``PutPlusOneCounterOnSelf(amount=1)`` effect to land a
-    PROBE_MODULES-credited ``_parity`` probe.  Complements:
-      * Dockworker Drone (PROBED, ENTERS-event carrier;
-        ``test_parity_smoke.py``).
-      * Seedship Agrarian (PROBED, ENTERS-event;
-        ``test_parity_smoke.py``).
-      * Insatiable Skittermaw / Interceptor Mechan / Kavaron
-        Skywarden (PROBED, BEGINNING_OF_END_STEP-event;
-        ``test_parity_smoke.py``).
-      * Lightless Evangel (PROBED, IS_SACRIFICED-event;
-        ``test_probe_remaining_cccc.py``).
-    Every other trigger event for the bare
-    ``PutPlusOneCounterOnSelf(amount=1)`` effect has a PROBED pin;
-    THIS probe closes the IS_CAST-event corner -- the predicate
-    ``And(Controlled(YOU), StateBound(SpellsCastThisTurn(n=2)))``
-    "your second spell each turn" is metadata at the Effect+bridge+
-    resolve level the PROBED tier credits.
-
-    **Bridge arm exercised:**
-    ``put_plus_one_counter_on_self`` (matching Rust's
-    ``Effect::PutPlusOneCounterOnSelf { amount }``; bridge dispatch
-    at ``cross_engine.py`` in the ``_ta_dict_to_python_effect``
-    arm-key section).
-
-    **Setup (Python-side):**
-      * p0 has Illvoi Operative on the battlefield (the Creature
-        serving as ``resolving_source``).
-      * ``plus_one_counters=0`` pre-resolve.
-
-    **Observables asserted:**
-      * Bridge round-trip:
-        ``{"kind": "put_plus_one_counter_on_self", "amount": 1}``
-        translates to a ``PutPlusOneCounterOnSelf(amount=1)``
-        instance.
-      * The Creature's IS_CAST triggered ability emits the same.
-      * Effect-level byte-equality between the parsed real-EoE
-        emission and the bridged Effect.
-      * Post-resolve: source's plus_one_counters incremented to 1;
-        the state log carries the "gets a +1/+1 counter" line.
-    """
-    from mtg_bot.parity.cross_engine import (
-        DeckSpec, build_python_state, _ta_dict_to_python_effect,
-    )
-    from mtg_bot.cards.source import get_active_source
-    from mtg_bot.effects.generic.counters import (
-        PutPlusOneCounterOnSelf,
-    )
-    from mtg_bot.effects.generic.draw_mill import DrawCards
-    from mtg_bot.effects.predicates import Event
-    from mtg_bot.game import Zone
-
-    # ------------------------------------------------------------------
-    # 1. Verify the genuine parsed Illvoi Operative printing.
-    # ------------------------------------------------------------------
-    real = (
-        get_active_source().get_printings().get("Illvoi Operative")
-    )
-    if real is None:
-        pytest.skip("Illvoi Operative absent from active CardSource")
-    assert "Creature" in real.card_types, (
-        "Illvoi Operative must be a Creature"
-    )
-    is_cast_ta = next(
-        (
-            ta for ta in real.triggered_abilities
-            if ta.event == Event.IS_CAST
-        ),
-        None,
-    )
-    assert is_cast_ta is not None, (
-        "Illvoi Operative must have an IS_CAST triggered ability "
-        "(the trigger event distinguishing this probe from the "
-        "ENTERS / BEGINNING_OF_END_STEP / IS_SACRIFICED carriers "
-        "that already pin the bare PutPlusOneCounterOnSelf effect "
-        "class on every other event)"
-    )
-    assert isinstance(
-        is_cast_ta.effect, PutPlusOneCounterOnSelf,
-    ), (
-        f"Illvoi Operative IS_CAST effect must be "
-        f"PutPlusOneCounterOnSelf; got "
-        f"{type(is_cast_ta.effect).__name__}"
-    )
-    assert is_cast_ta.effect.amount == 1, (
-        f"Illvoi Operative IS_CAST effect must have amount=1 "
-        f"(the bare unit-amount variant the PROBED siblings already "
-        f"pin on other events); got amount={is_cast_ta.effect.amount}"
-    )
-
-    # ------------------------------------------------------------------
-    # 2. Bridge round-trip: Rust kind dict -> Python Effect.
-    # ------------------------------------------------------------------
-    bridged = _ta_dict_to_python_effect(
-        {"kind": "put_plus_one_counter_on_self", "amount": 1}
-    )
-    assert isinstance(bridged, PutPlusOneCounterOnSelf), (
-        f"Bridge arm 'put_plus_one_counter_on_self' must round-trip "
-        f"to PutPlusOneCounterOnSelf; got {type(bridged).__name__}"
-    )
-    assert bridged.amount == 1, (
-        f"Bridge round-trip must preserve amount=1; got "
-        f"amount={bridged.amount}"
-    )
-    # Effect-level byte-equality between the parsed real-EoE printing's
-    # emitted Effect and the bridged Effect.
-    assert is_cast_ta.effect == bridged, (
-        f"Illvoi Operative IS_CAST effect must be byte-equal to the "
-        f"bridged Effect; got parsed={is_cast_ta.effect!r}, "
-        f"bridged={bridged!r}"
-    )
-
-    # ------------------------------------------------------------------
-    # 3. Distinctness from sibling Effect classes (regression guard).
-    # ------------------------------------------------------------------
-    assert not isinstance(bridged, DrawCards), (
-        "PutPlusOneCounterOnSelf must NOT collapse to DrawCards "
-        "(a sibling generic effect with a different mutation "
-        "shape; counter-on-self writes to source.plus_one_counters, "
-        "draw writes to hand)."
-    )
-    # PutPlusOneCounterOnSelf has no target -- it reads
-    # state.resolving_source.
-    assert bridged.requires_target() is False, (
-        "PutPlusOneCounterOnSelf must NOT require a target (it reads "
-        "state.resolving_source, not a targets[] dereference)"
-    )
-
-    # ------------------------------------------------------------------
-    # 4. Python-side resolve smoke on a controlled state.
-    # ------------------------------------------------------------------
-    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
-    py = build_python_state(spec)
-
-    # Seat the genuine Illvoi Operative Creature on p0's battlefield.
-    source = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
-    source.summoning_sick = False
-    source.tapped = False
-    source.damage = 0
-    source.plus_one_counters = 0
-    source.etb_timestamp = py.next_timestamp
-    py.next_timestamp += 1
-    py.battlefield.append(source)
-    assert source.plus_one_counters == 0, (
-        f"Pre-resolve sanity: source.plus_one_counters must start at "
-        f"0; got {source.plus_one_counters}"
-    )
-
-    # ------------------------------------------------------------------
-    # 5. Set resolving_source = the Illvoi Operative source object
-    #    (per the PutPlusOneCounterOnSelf.resolve contract --
-    #    counters.py:798 reads state.resolving_source for the source
-    #    of the +1/+1 mutation).
-    # ------------------------------------------------------------------
-    py.resolving_source = source
-    pre_log_len = len(py.log)
-
-    # ------------------------------------------------------------------
-    # 6. resolve: put a +1/+1 counter on source.
-    # ------------------------------------------------------------------
-    bridged.resolve(py, controller_id=0, targets=())
-
-    # Source: plus_one_counters incremented from 0 to 1.
-    assert source.plus_one_counters == 1, (
-        f"Illvoi Operative: source.plus_one_counters must equal 1 "
-        f"post-resolve (PutPlusOneCounterOnSelf with amount=1 calls "
-        f"add_plus_one_counters(state, source, 1)); got "
-        f"source.plus_one_counters={source.plus_one_counters}"
-    )
-    # State log records the counter addition.
-    new_log = "\n".join(py.log[pre_log_len:])
-    assert "+1/+1 counter" in new_log, (
-        f"State log must record the +1/+1 counter addition; got "
-        f"new log:\n{new_log}"
-    )
-    assert "Illvoi Operative" in new_log, (
-        f"State log must name the source (Illvoi Operative); got "
-        f"new log:\n{new_log}"
-    )
-
-    # ------------------------------------------------------------------
-    # 7. resolving_source=None short-circuit: resolve with no source
-    #    leaves the world unchanged (the resolve's early-return at
-    #    counters.py:799-800).
-    # ------------------------------------------------------------------
-    py.resolving_source = None
-    counters_before_none = source.plus_one_counters
-    log_before_none = len(py.log)
-    bridged.resolve(py, controller_id=0, targets=())
-    assert source.plus_one_counters == counters_before_none, (
-        f"Illvoi Operative: resolving_source=None must be a no-op; "
-        f"source.plus_one_counters must be unchanged at "
-        f"{counters_before_none}; got "
-        f"source.plus_one_counters={source.plus_one_counters}"
-    )
-    assert len(py.log) == log_before_none, (
-        f"Illvoi Operative: resolving_source=None no-op must NOT "
-        f"append a log line (the resolve's early-return short-"
-        f"circuit at counters.py:799-800); got log_len={len(py.log)} "
-        f"(expected {log_before_none})"
-    )
-
-    # Source remains on the battlefield (the resolve mutates the
-    # counter field; it does NOT move zones).
-    assert source in py.battlefield, (
-        "Illvoi Operative: source must remain on the battlefield "
-        "post-resolve (PutPlusOneCounterOnSelf is a counter-mutation, "
-        "not a zone change)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Probe 2 -- Roving Actuator: Creature ENTERS triggered ->
+# Probe 1 -- Roving Actuator: Creature ENTERS triggered ->
 #   RovingActuatorETBEffect(max_mv=2).
 #
 # Verifies the closure chain end-to-end on the genuine parsed printing:
@@ -709,10 +425,10 @@ def test_cross_engine_real_eoe_roving_actuator_parity():
     # ------------------------------------------------------------------
     assert not isinstance(bridged, PutPlusOneCounterOnSelf), (
         "RovingActuatorETBEffect must NOT collapse to "
-        "PutPlusOneCounterOnSelf (Probe 1's effect class; "
-        "RovingActuator's resolve exiles + copies + casts an "
-        "instant/sorcery from gy, PutPlusOneCounterOnSelf writes "
-        "to source.plus_one_counters)."
+        "PutPlusOneCounterOnSelf (a sibling bare counter-mutation "
+        "effect class; RovingActuator's resolve exiles + copies + "
+        "casts an instant/sorcery from gy, PutPlusOneCounterOnSelf "
+        "writes to source.plus_one_counters)."
     )
     # RovingActuatorETBEffect requires a target.
     assert bridged.requires_target() is True, (
