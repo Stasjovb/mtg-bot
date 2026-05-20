@@ -191,4 +191,6 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 139 | `Effect::ConditionalIfSourcePowerAtLeast` | `ConditionalIfSourcePowerAtLeast` | 1 |
 | 140 | `Effect::DyadrineAttackEffect` | `DyadrineAttackEffect` | 1 |
 | 141 | `Effect::PutPoisonCountersOnTargetPlayer` | `PutPoisonCountersOnTargetPlayer` | 1 |
+| 142 | `Effect::PainForAllETBEffect` | `PainForAllETBEffect` | 1 |
+| 143 | `Effect::PainForAllDamageEchoEffect` | `PainForAllDamageEchoEffect` | 1 |
 

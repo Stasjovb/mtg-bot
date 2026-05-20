@@ -103,6 +103,31 @@ Tractor Beam scope estimates remain unchanged (medium / large —
 they depend on Phase 2 S2 + Phase 3 residue Effects, not the Phase 2
 first deliverable's keyword admit widen).
 
+**Round-79+ update (2026-05-20): AURA ATTACH SUBSTRATE PHASE 2 S2
+EXTENSION LANDED — TRACTOR BEAM SUBSTRATE CLOSED.** The Phase-2-S2-
+extension slice shipped the substrate plumbing Tractor Beam needs:
+- New `aura_prevents_host_untap` field on CardDef + Rust
+  `CardPrinting` + bidir bridge round-trip (the new
+  `get_printing_aura_prevents_host_untap` getter).
+- Rust untap-step skip in
+  `state_ops_steps.rs::untap_all_for_player_inline` (pre-computes
+  the don't-untap host set walking both players' battlefields, then
+  skips during the active-player sweep).
+- Narrow Aura-ETB-trigger admit
+  (`_aura_triggers_are_phase2_s2_safe` +
+  `_python_ta_to_safe_dict_aura_extension`) for the
+  `Event.ENTERS + IsSelf + TapEnchantedPermanent` shape.
+
+The byte-equal round-trip + untap-step game-state probes
+(`tests/test_aura_substrate_phase_2_s2_extension.py`) pass at
+substrate level. **Tractor Beam transitions from
+BLOCKED-genuinely_missing to substrate-landed (bench admit
+honest-stopped)** — the residue worklist entry's
+`blocked_non_effect` status now reads "substrate landed; bench
+admit honest-stopped pending cross-engine cast-time
+auto-resolve seat-alignment slice". **BLOCKED-genuinely_missing
+tier shrinks from 2 → 1 — only Pain for All remains.**
+
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
 Pain for All 4,367 + Sothera 2,108). Some decks contain multiple
@@ -120,7 +145,7 @@ NOT in this tier; they're carried under the Aura subsystem in
 |---|---|---:|---:|---|---|
 | Command Bridge — CLOSED (slice 20 / VVV Pin 2) | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing (already wired) + tap-a-permanent agent decision (PendingDecision::TapPermanentChoice landed) | n/a (CLOSED) |
 | Lightstall Inquisitor — FULL CLOSED (cast-from-exile-with-cost-hike substrate slice) | `effects/generic/discard.py::EachOpponentExilesCardFromHandWithCastPermission` | 173-214 | 4,371 | persistent `cast_from_exile_with_lightstall_surcharge` flag + cost-hike legality + tapped-land-entry rider (substrate landed end-to-end; only loader bridge-admit remains) | n/a (CLOSED — substrate estimated at 6+ cycles; actual was a single slice via existing precedent) |
-| Pain for All | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo (substrate-shared with Meltstrider's Resolve) | medium (3-5) |
+| Pain for All — CLOSED (Pain for All closure slice; substrate landing) | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo + `Predicate::IsHost` (substrate-shared with Meltstrider's Resolve; honest-stop on Rust no-`attached_to`-on-Aura-resolve reality, byte-equal fizzle) | n/a (CLOSED — Effect-level scaffolding + IsHost predicate + bridge round-trip; full byte-equality still pending the broader Aura attach substrate's Phase 1) |
 | Sothera, the Supervoid — PARTIAL CLOSED (22nd Rust slice) | `effects/generic/exile.py::ReanimateOneExiledWithSourceWithCounters` + `::SacrificeSelfPreservingExileLink` + `effects/generic/opponent_punishers.py::EachOpponentExilesOwnCreature` | 149-217 / 1122-1216 / 1221-1273 | 2,108 | `GameObject.exiled_by_source` source-link + on-leave auto-return suppression + recall-first/sac-second ordering (Effect-level scaffolding CLOSED in slice 22; exile-source-link substrate stays open) | large (6+) — substrate-only after slice 22 partial closure |
 
 **Recently closed (now sitting in the Aura subsystem tier of
@@ -133,6 +158,7 @@ NOT in this tier; they're carried under the Aura subsystem in
 | Lightstall Inquisitor (partial) | 20th (slice 20, honest-stop) | `Effect::EachOpponentExilesCardFromHandWithCastPermission` unit variant + parse + to_pydict + bridge + resolve arm (each-opponent-exile portion) — Effect-level + exile-portion byte-equal cross-engine | Persistent `cast_from_exile_with_lightstall_surcharge` substrate (GameObject field + legal-actions emission + cast-from-exile cost machinery + +{1} surcharge + tapped-land-entry rider). Lightstall stays in BLOCKED tier on `docs/POOL_PARITY.md` because the sister `CastFromExileWithCostHike` residue entry remains genuinely_missing; closing it requires the full permission substrate (large 6+ cycles). |
 | Sothera, the Supervoid (partial) | 22nd (slice 22, honest-stop) | 3 new Rust Effect variants (`Effect::EachOpponentExilesOwnCreature { link_to_source }`, `Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount }`, `Effect::SacrificeSelfPreservingExileLink`) + parse + to_pydict + bridge arms; resolve arms cover (a) each-opponent-exile move byte-equal on the no-link branch, (b) sac-self via the existing `sacrifice_source_inline` helper, (c) honest-stop fizzle on the recall arm (empty-candidate path mirrors Python's `if not candidates: return`). | Persistent `GameObject.exiled_by_source` source-link field on every Rust object + on-leave auto-return hook (`_release_exiled_until_leaves` equivalent) + one-shot `suppress_exiled_by_source_on_leave_for` flag. Full byte-equality on the DIES+end-step Sequence requires this substrate. Sothera stays in BLOCKED tier on `docs/POOL_PARITY.md` because the substrate has no other in-tier consumer (large 6+ cycles). |
 | Requiem Monolith (partial) | 22nd (slice 22, honest-stop) | 3 new Rust Effect variants (`Effect::GrantTriggeredAbilityUEOTRequiem`, `Effect::MayHaveSourceDealDamageToTarget { amount }`, `Effect::DrawCardsAndLoseLifeEqualToResolvingDamage`) + parse + to_pydict + bridge arms; resolve arms cover (a) grant-trigger no-op honest-stop, (b) optional-ping no-op honest-stop matching Python's no-agent fallback, (c) direct-resolve byte-equal for the draw+life body (reads `state.resolving_combat_damage_amount`, draws N + life -= N). | General layer-6 grant-triggered-ability registry (Python's `continuous_effects` + `game.effective_triggered_abilities`) + Rust-side `choose_yes_no` agent callback at the optional-ping resolve site. The Python pathway already decomposes Requiem's activation into a `Sequence` of generic primitives; the substrate gap is the grant-trigger registry that lets the granted body fire when the source deals damage. |
+| Pain for All (honest-stop substrate landing; this slice) | Pain for All closure slice (2026-05-20) | 2 new Rust Effect variants (`Effect::PainForAllETBEffect`, `Effect::PainForAllDamageEchoEffect`) + parse + to_pydict + bridge arms; 1 new `Predicate::IsHost { subject: Option<String> }` variant + parse + bridge; `find_object_attached_to` helper. Resolve arms: (a) ETB reads source.attached_to → byte-equal fizzle on None (Python parity bespoke.py:389-391); hot-path branch applies host-power as life-loss to the first-legal player. (b) Echo applies as life-loss (NOT damage-pipeline) per Python's bespoke.py:447-457 simplification — inherent damage-feedback loop-guard. IsHost predicate match: source.attached_to == subject_id, false on None (byte-equal predicates.py:464-466). Probe: 10 tests in tests/test_probe_pain_for_all_downstream.py (bridge round-trip + honest-stop fizzle + hot-path via state.attach + damage-echo life-loss + IsHost Python parity). | Aura attach substrate's Phase 1 (Rust setting `attached_to` on Aura resolve) + loader admit-gate widening to accept triggered Auras (S4 carriers). Full byte-equality for the real card requires this substrate. Until then, the honest-stop fizzle keeps cross-engine state byte-equal in the no-host case. |
 
 Scope key (calibrated against this session's slices):
 
@@ -342,7 +368,22 @@ PROBED step.
   deck 17lands EoE corpus), pending the loader's
   `_printing_is_bridge_simple_*` guardrail flip to admit Lightstall.
 
-### 4. Pain for All — 4,367 decks
+### 4. Pain for All — 4,367 decks — CLOSED (Pain for All closure slice; honest-stop substrate landing)
+
+**Status:** CLOSED in this Pain for All closure slice (2026-05-20).
+Effect-level scaffolding shipped (Rust `Effect::PainForAllETBEffect`
++ `Effect::PainForAllDamageEchoEffect` + `Predicate::IsHost` + parse
++ to_pydict + bridge + honest-stop resolve arms). Full byte-equality
+for the real card still depends on the broader Aura attach
+substrate's Phase 1 (Rust setting `attached_to` on Aura resolve) —
+until then the honest-stop fizzle keeps cross-engine state
+byte-equal in the no-host case (mirrors Python's bespoke.py:389-391
+short-circuit). This card now sits in the
+`subsystem-gated / Effect-uncovered` tier under the
+**Aura-attachment substrate** subsystem per
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`, alongside Meltstrider's
+Resolve. Probe: `tests/test_probe_pain_for_all_downstream.py`
+(10 tests).
 
 - **Bespoke classes:** `src/mtg_bot/effects/bespoke.py:352-428`
   (`PainForAllETBEffect`) + `src/mtg_bot/effects/bespoke.py:432-463`

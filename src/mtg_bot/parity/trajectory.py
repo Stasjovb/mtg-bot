@@ -4338,6 +4338,95 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     return True
 
 
+def _python_ta_to_safe_dict_aura_extension(ta) -> dict:
+    """**Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+    Convert a Phase-2-S2-admitted Aura ETB ``TriggeredAbility``
+    into its Rust-shape round-trip dict.
+
+    Pre-condition: ``ta`` has been validated by
+    :func:`_aura_triggers_are_phase2_s2_safe` — i.e. it is the
+    ``Event.ENTERS + IsSelf + TapEnchantedPermanent`` shape. The
+    dict this returns matches the canonical Rust trigger shape
+    (``{"event": "enters", "predicate": {"kind": "is_self"},
+    "effect": {"kind": "tap_enchanted_permanent"}, "once_per_turn":
+    False}``) — the same per-key spellings the existing
+    :func:`_python_ta_to_safe_dict` recognizer family emits for
+    sibling unit-variant effects.
+
+    Lives separate from :func:`_python_ta_to_safe_dict` because the
+    safe-trigger family is gated on creature ETB triggers (DrawCards
+    / GainLife / Scry / ...), while this gate covers the strictly-
+    Aura-specific ``TapEnchantedPermanent`` family. Sharing the
+    safe-trigger registry would require widening that family's
+    effect-kind allowlist for an effect that only makes sense on an
+    Aura source — keep the surface narrow per the "no fallback
+    hybrid" discipline.
+    """
+    return {
+        "event": "enters",
+        # Rust's predicate kind for ``IsSelf`` is ``"source_is_self"``
+        # (see ``cards.rs::parse_predicate`` and the bridge in
+        # ``cross_engine.py:9597``). Don't confuse with ``"is_self"``
+        # which is not a registered predicate kind.
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "tap_enchanted_permanent"},
+        "once_per_turn": False,
+    }
+
+
+def _aura_triggers_are_phase2_s2_safe(triggered_abilities) -> bool:
+    """**Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+    True iff every ``TriggeredAbility`` in ``triggered_abilities``
+    matches the narrow Tractor-Beam-shape allowlist:
+
+      * ``event`` is :data:`Event.ENTERS`
+      * ``predicate`` is :class:`IsSelf` with no subject scope
+      * ``effect`` is :class:`TapEnchantedPermanent`
+      * ``once_per_turn`` is ``False`` (ETB triggers are once-per-ETB
+        by construction, not once-per-turn).
+
+    The ``TapEnchantedPermanent`` effect is a bridge-supported unit
+    variant — Python side at ``effects/generic/tap.py:497``, Rust
+    side at ``state_ops_resolve.rs::TapEnchantedPermanent``,
+    cross-engine bridge at ``cross_engine.py:5317`` for the
+    dict-to-Python arm. The trigger dict round-trip uses the
+    ``_python_ta_to_safe_dict`` siblings (the Rust side parses an
+    Aura-ETB triggered ability dict via the standard
+    ``parse_triggered_ability`` arm; the effect dict the bridge
+    emits for ``TapEnchantedPermanent`` is the canonical unit-variant
+    ``{"kind": "tap_enchanted_permanent"}`` shape).
+
+    Returns ``False`` for an empty tuple — callers should gate on
+    ``if printing.triggered_abilities:`` first; this helper is only
+    relevant when there IS at least one trigger to validate.
+
+    Returns ``False`` on the first non-matching trigger so any future
+    Aura with a different ETB body keeps the gate honest (the safe-
+    trigger predicate's all-or-nothing convention).
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+
+    if not triggered_abilities:
+        return False
+    for ta in triggered_abilities:
+        if not isinstance(ta, TriggeredAbility):
+            return False
+        if ta.once_per_turn:
+            return False
+        if ta.event is not Event.ENTERS:
+            return False
+        pred = ta.predicate
+        if not isinstance(pred, IsSelf):
+            return False
+        if pred.subject is not None:
+            return False
+        if not isinstance(ta.effect, TapEnchantedPermanent):
+            return False
+    return True
+
+
 def _printing_is_bridge_simple_aura(printing) -> bool:
     """True iff a CardPrinting is a Phase-1/2 bridge-supported Aura
     (sub-shape S1 in ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §1):
@@ -4486,6 +4575,19 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         # admitting a control-only Aura would silently mistranslate
         # against a host that still has functional abilities the
         # bench may rely on).
+        #
+        # **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+        # The bench-loader admit for Tractor Beam (control-grant +
+        # prevents-untap + ETB-tap-self) is honest-stopped pending a
+        # cross-engine play-parity follow-up — the substrate IS
+        # plumbed through (``aura_prevents_host_untap`` field +
+        # Rust untap-step skip + ``TapEnchantedPermanent`` Aura ETB
+        # bridge), and the byte-equal round-trip + untap-step probe
+        # pass at substrate level. Full cross-engine play parity
+        # (the production-deck shadow bake-in) requires aligning
+        # Python's cast-time auto-resolve-target seat with Rust's
+        # for the Tractor-Beam shape under an opponent-creature host
+        # — a separate slice. SL-documented.
         return False
     if printing.attached_grants_lose_all_abilities and (
         not printing.attached_grants_control
@@ -4992,6 +5094,21 @@ def _printing_to_card_def(printing) -> CardDef:
         else:
             aura_set_base_power = None
             aura_set_base_toughness = None
+        # Aura-attachment substrate — Phase 2 S2 extension (Tractor
+        # Beam closure, 2026-05-20). Thread the don't-untap rider AND
+        # the bridge-safe Aura ETB triggers (Tractor Beam's
+        # ``TapEnchantedPermanent`` ETB) through to the CardDef. The
+        # predicate's §2 teeth gate every trigger through
+        # :func:`_aura_triggers_are_phase2_s2_safe` so an admitted
+        # printing's triggers are guaranteed to round-trip via
+        # :func:`_python_ta_to_safe_dict_aura_extension`. Empty tuple
+        # is the back-compat baseline — every pre-extension S1/S2
+        # carrier (Frantic Strength, Duskmourn's Domination) carries
+        # no triggers and threads None through unchanged.
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict_aura_extension(ta)
+            for ta in printing.triggered_abilities
+        )
         return CardDef(
             name=printing.name,
             card_type="Enchantment",
@@ -5009,6 +5126,8 @@ def _printing_to_card_def(printing) -> CardDef:
             ),
             aura_set_base_power=aura_set_base_power,
             aura_set_base_toughness=aura_set_base_toughness,
+            aura_prevents_host_untap=printing.attached_prevents_untap,
+            triggered_abilities=triggered_abilities,
         )
     if _printing_is_bridge_simple_spell(printing):
         # Spell-card-bridge lever, Phase 1 (round-70): a pure

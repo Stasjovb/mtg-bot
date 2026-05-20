@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **325 / 475 EoE cards (68.4%) are byte-equal at the Effect+bridge level**; of those, **231 (48.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 94 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **327 / 475 EoE cards (68.8%) are byte-equal at the Effect+bridge level**; of those, **231 (48.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 96 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **150 (31.6%)** are BLOCKED, broken out below.
+- **148 (31.2%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -17,10 +17,10 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | Tier | Count | % of pool |
 |---|---:|---:|
 | PROBED byte-equal | 231 | 48.6% |
-| Effect+bridge covered (not individually probed) | 94 | 19.8% |
+| Effect+bridge covered (not individually probed) | 96 | 20.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 2 | 0.4% |
-| BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 1 | 0.2% |
+| BLOCKED — blocked_non_effect (non-Effect gate) | 1 | 0.2% |
 | BLOCKED — subsystem-gated / Effect-uncovered | 146 | 30.7% |
 | **Pool total** | **475** | **100.0%** |
 
@@ -44,10 +44,9 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - `Lightstall Inquisitor` — residue `genuinely_missing`; class heuristic would have placed it in `covered_by_construction` (class-granularity false-positive — pinned BLOCKED).
 
-_Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_
+_Context (NOT drift): 1 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_
 
 - `Dauntless Scrapbot` — Effects probed at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
-- `Tractor Beam` — Effects covered at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
 
@@ -283,15 +282,13 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Zealous Display
 - Zookeeper Mechan
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (2)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (1)
 
 - Lightstall Inquisitor
-- Pain for All
 
-## BLOCKED — blocked_non_effect (non-Effect gate) (2)
+## BLOCKED — blocked_non_effect (non-Effect gate) (1)
 
 - Dauntless Scrapbot
-- Tractor Beam
 
 ## BLOCKED — subsystem-gated / Effect-uncovered (146)
 

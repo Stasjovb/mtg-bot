@@ -2721,6 +2721,9 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
+        // printings are not don't-untap Auras.
+        aura_prevents_host_untap: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
@@ -2788,6 +2791,9 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
+        // printings are not don't-untap Auras.
+        aura_prevents_host_untap: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
@@ -2868,6 +2874,9 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
+        // printings are not don't-untap Auras.
+        aura_prevents_host_untap: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
