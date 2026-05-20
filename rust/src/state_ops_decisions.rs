@@ -163,6 +163,7 @@ pub(crate) fn auto_resolve_pending(
         | "scry_send_bottom"
         | "tap_permanent_decline"
         | "tap_permanent_first"
+        | "enchant_target_first"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -172,7 +173,7 @@ pub(crate) fn auto_resolve_pending(
                  if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
                  reveal_no, optional_pay_yes, optional_pay_no, \
                  scry_keep_top, scry_send_bottom, tap_permanent_decline, \
-                 tap_permanent_first, default"
+                 tap_permanent_first, enchant_target_first, default"
             )))
         }
     }
@@ -514,9 +515,86 @@ pub(crate) fn auto_resolve_pending(
                     )?;
                 }
             }
+            PendingDecision::EnchantTargetChoice {
+                source_obj_id,
+                controller: _,
+                candidates,
+            } => {
+                // **Aura-attachment substrate — Phase 1 STEP 3
+                // (round-78, 2026-05-20) — auto-resolve.**
+                //
+                // "default" / "enchant_target_first" / unrelated
+                //   -> bind candidates[0] onto the matching StackItem's
+                //   `target_obj_id`. The cast arm only pushes this
+                //   decision when the candidate set is non-empty, so
+                //   `candidates[0]` is always a valid id. Mirrors the
+                //   `_PickFirstLegalTargetAgent` bench/probe convention
+                //   every other cast-time target picker uses (Radiant
+                //   Strike, Focus Fire, Seedship Impact — see
+                //   `state_ops_cast.rs:1614-1714`).
+                //
+                // **Locating the StackItem.** Walk the stack from the
+                // top (LIFO) to find the spell StackItem whose
+                // `source_obj_id` matches the decision's source. The
+                // decision was pushed by `cast_aura` AFTER the
+                // StackItem push, so the StackItem MUST exist on the
+                // stack at this point (no zone-change can have
+                // happened — the stack stays put during the
+                // priority round).
+                if !candidates.is_empty() {
+                    bind_enchant_target_to_stack_item(
+                        state,
+                        source_obj_id,
+                        candidates[0],
+                    );
+                }
+                // Empty-candidates case is structurally impossible (cast
+                // arm skips the push), but defensively a no-op leaves
+                // target_obj_id=None so STEP 4 fizzles on resolve —
+                // matches the "no legal target chosen" semantics.
+            }
         }
     }
     Ok(())
+}
+
+/// **Aura-attachment substrate — Phase 1 STEP 3 (round-78).** Locate
+/// the spell StackItem whose `source_obj_id` matches `aura_source_id`
+/// and stamp `target_obj_id = Some(host_id)`. Used by
+/// `submit_enchant_target_decision` (manual submit path) and the
+/// auto-resolve arm (deterministic-first default).
+///
+/// **Walks the stack top-down (LIFO).** The decision was queued by
+/// `cast_aura` AFTER pushing the StackItem, so the StackItem is at
+/// or near the top — the loop is bounded by the stack depth, in
+/// practice tiny. If multiple Aura StackItems happened to share a
+/// source_obj_id (cannot happen — `obj_id` is unique per
+/// `GameObject`), the topmost match wins.
+///
+/// **Silent partial on missing StackItem.** If no StackItem matches
+/// (the spell already resolved between cast and submit — e.g. an
+/// instant-speed effect drained the stack? — defensive, should not
+/// happen given the push-then-decision ordering), this is a silent
+/// no-op. The Aura on bf rides with `attached_to = None` and STEP
+/// 4's resolve arm fizzles per CR 608.2b illegal-target shape. Same
+/// defensive contract `apply_tap_permanent_keep_source` uses for the
+/// LTB-during-decision-window edge case.
+fn bind_enchant_target_to_stack_item(
+    state: &mut crate::state::GameState,
+    aura_source_id: u32,
+    host_id: u32,
+) {
+    for item in state.stack.iter_mut().rev() {
+        if item.source_obj_id == aura_source_id
+            && matches!(item.kind, crate::state::StackItemKind::Spell)
+        {
+            item.target_obj_id = Some(host_id);
+            return;
+        }
+    }
+    // No matching StackItem — silent no-op (defensive; the
+    // cast-push-then-decision-push ordering should keep the
+    // StackItem reachable until the decision is resolved).
 }
 
 /// **20th Rust slice (VVV Pin 2 closure) — tap-keep-source helper.**
@@ -1187,6 +1265,28 @@ impl GameState {
                     // on the battlefield, so re-locating by id at
                     // submit time is the natural pattern).
                     d.set_item("kind", "TapPermanentChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("candidates", candidates.clone())?;
+                }
+                PendingDecision::EnchantTargetChoice {
+                    source_obj_id,
+                    controller,
+                    candidates,
+                } => {
+                    // **Aura-attachment substrate — Phase 1 STEP 3
+                    // (round-78).** Cast-time enchant-target choice
+                    // surface dict. `candidates` is the flat list of
+                    // legal enchant targets per the printing's
+                    // `aura_enchant_type` + `aura_yours_only` filter
+                    // (computed at `cast_aura` push time, ordered by
+                    // `bf_iter_etb_sorted`). Same id-based idiom as
+                    // `TapPermanentChoice`. The controller drains via
+                    // `submit_enchant_target_decision(Some(id))` —
+                    // the id binds onto the matching spell
+                    // StackItem's `target_obj_id` so STEP 4 can read
+                    // it at resolve time.
+                    d.set_item("kind", "EnchantTargetChoice")?;
                     d.set_item("source_obj_id", *source_obj_id)?;
                     d.set_item("controller", *controller)?;
                     d.set_item("candidates", candidates.clone())?;
@@ -1970,6 +2070,87 @@ impl GameState {
                 source_obj_id,
             ),
         }
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 3 (round-78,
+    /// 2026-05-20).** Consume the head `EnchantTargetChoice` on the
+    /// pending-decisions queue: bind `chosen_id` (Some -> the legal
+    /// host the caster picked; None -> no target chosen, the Aura
+    /// fizzles on resolve per CR 608.2b / Python parity at
+    /// `actions.py:2740-2745`) onto the matching spell StackItem's
+    /// `target_obj_id` so STEP 4's resolve arm can read it.
+    ///
+    /// Mirrors Python's cast-time agent pick at
+    /// `actions.py:1337-1357`: the caster's `agent.choose_target`
+    /// either returns one of the legal `(kind, id)` tuples (Some) or
+    /// `None` (chose no target — the cast still completes but
+    /// resolves to nothing).
+    ///
+    /// **Submit contract.** `chosen_id` MUST be one of the candidate
+    /// ids in the head's `candidates` Vec OR `None`. An unknown id
+    /// raises `ValueError` transactionally — no mutation on failure,
+    /// the decision stays at the head of the queue.
+    ///
+    /// **StackItem mutation.** On `Some(id)`, the matching StackItem
+    /// (located by `source_obj_id`) has its `target_obj_id` set to
+    /// `Some(id)`. On `None`, the StackItem's `target_obj_id` stays
+    /// `None` (the cast already pushed with `None` defaults). Either
+    /// way the decision is consumed from the queue.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not an `EnchantTargetChoice`
+    /// - `chosen_id = Some(id)` and `id` is not in the candidate set
+    #[pyo3(signature = (chosen_id=None))]
+    fn submit_enchant_target_decision(
+        &mut self,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_enchant_target_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        match &self.pending_decisions[0] {
+            PendingDecision::EnchantTargetChoice { candidates, .. } => {
+                if let Some(id) = chosen_id {
+                    if !candidates.contains(&id) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_enchant_target_decision: chosen_id \
+                             {id} is not one of the candidate \
+                             enchant-target ids {:?}",
+                            candidates
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_enchant_target_decision: head of pending-\
+                     decisions queue is not an EnchantTargetChoice (got \
+                     {:?}); call the variant-specific submit_* \
+                     dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let source_obj_id = match decision {
+            PendingDecision::EnchantTargetChoice { source_obj_id, .. } => {
+                source_obj_id
+            }
+            _ => unreachable!("validated above"),
+        };
+        if let Some(id) = chosen_id {
+            bind_enchant_target_to_stack_item(self, source_obj_id, id);
+        }
+        // `None` -> no-op on the StackItem: target_obj_id stays None
+        // (the cast pushed with None defaults). STEP 4 will fizzle on
+        // resolve per Python parity.
+        Ok(())
     }
 
     /// Drain the pending-decisions queue using a deterministic
