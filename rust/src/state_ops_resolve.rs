@@ -1732,6 +1732,84 @@ fn perigee_pick_another_own_creature(
     Some((cidx, target_id))
 }
 
+/// 20th Rust slice (VVV Pin 2 closure) — public re-export of the
+/// inline sacrifice helper for the `state_ops_decisions` module's
+/// auto-resolve decline branch. The decline path needs the same
+/// "sacrifice source" routine the `Effect::SacrificeSelfUnlessTap
+/// Permanent` arm uses for its empty-candidates fast path; exposing
+/// the helper here avoids duplicating the LTB / IS_SACRIFICED /
+/// token-cease triple-push across modules.
+pub(crate) fn sacrifice_source_for_tap_decline(
+    state: &mut GameState,
+    controller_idx: usize,
+    source_obj_id: u32,
+) -> PyResult<()> {
+    sacrifice_source_inline(state, controller_idx, source_obj_id)
+}
+
+/// 20th Rust slice (VVV Pin 2 closure) — shared sacrifice helper for
+/// the `SacrificeSelfUnlessTapPermanent` Effect arm and the
+/// `submit_tap_permanent_decision` decline branch.
+///
+/// Sacrifice the source permanent at `source_obj_id` on
+/// `controller_idx`'s battlefield. Mirrors the inline sacrifice shape
+/// of `Effect::Sacrifice { TargetFilter::AnyCreature }` at
+/// `state_ops_resolve.rs:2532` — the same `Arc::make_mut` pop + GY
+/// push + LTB / IS_SACRIFICED / token-cease queuing pattern, but for
+/// a SPECIFIC source id rather than the first-bf-creature pick. The
+/// `Effect::Sacrifice` arm uses `bf[0]` as the target; this helper
+/// finds the source by id (the Aura-ETB-shape "sac this" target
+/// binding, not the "sac a creature" arm).
+///
+/// **Caller contract.** The caller MUST have already verified the
+/// source is on `state.players[controller_idx].battlefield` (the
+/// `Effect::SacrificeSelfUnlessTapPermanent` arm's
+/// `source_on_bf` precondition check); this helper unconditionally
+/// drops the source via `Arc::make_mut` + `bf.remove(pos)`. If the
+/// source is somehow missing at remove time (race with another
+/// Effect arm), the helper falls through silently — defensive.
+fn sacrifice_source_inline(
+    state: &mut GameState,
+    controller_idx: usize,
+    source_obj_id: u32,
+) -> PyResult<()> {
+    let bf_mut: &mut Vec<GameObject> =
+        Arc::make_mut(&mut state.players[controller_idx].battlefield);
+    let Some(pos) = bf_mut.iter().position(|o| o.id == source_obj_id) else {
+        // Defensive — caller's precondition would catch this, but a
+        // missed precondition shouldn't panic. Silent partial: drop
+        // the sacrifice request and continue (mirrors the "source LTB
+        // during decision window" fallback shape in
+        // `PendingDecision::ManifestDreadChoice`'s submit dispatcher).
+        return Ok(());
+    };
+    let mut obj = bf_mut.remove(pos);
+    // Stamp graveyard zone + reset per-object state. Mirrors the
+    // `Effect::Sacrifice { AnyCreature }` arm's zone-stamp shape
+    // verbatim (state_ops_resolve.rs:2585-2606).
+    obj.zone = ZONE_GRAVEYARD;
+    obj.tapped = false;
+    // summoning_sick: NOT reset (CR 302.1 — bf-only state; see I35).
+    obj.damage = 0;
+    // counters: NOT cleared (R77-CFI1 byte-equal contract; see the
+    // Effect::Sacrifice arm's note).
+    obj.attached_to = None;
+    obj.exiled_with_source = None;
+    let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+    Arc::make_mut(&mut state.players[controller_idx].graveyard).push(obj);
+    // Round-29 Void LTB tracking: sacrifice is a battlefield-exit.
+    mark_left_battlefield_if_nonland(state, printing_id);
+    // Slice 10 LTB fan-out + Round-55 token-cease + Slice 14
+    // IS_SACRIFICED dispatch — same triple-push as the sibling
+    // `Effect::Sacrifice` arm at state_ops_resolve.rs:2622-2642.
+    state.pending_leaves_dispatches.push(leaving_obj_id);
+    crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+    state
+        .pending_is_sacrificed_dispatches
+        .push(leaving_obj_id);
+    Ok(())
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -12146,6 +12224,94 @@ fn apply_effect(
                     enchanted_id,
                 )?;
             }
+        }
+        // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
+        // "sacrifice this unless you tap an untapped permanent you
+        // control".** Mirrors Python's
+        // `SacrificeSelfUnlessTapPermanent.resolve`
+        // (`effects/combinators.py:115-163`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //
+        //   source = state.resolving_source  (Rust: source_obj_id on bf)
+        //   if source is None: return        (off-bf -> silent no-op)
+        //   candidates = [o for o in state.battlefield
+        //                 if o.controller_id == controller
+        //                 and not o.tapped
+        //                 and o.id != source.id]
+        //   if not candidates:               (no choice -> sac source)
+        //       _sacrifice(state, source); return
+        //   --- here Python dispatches choose_target(kind=
+        //       "untapped_permanent") and either taps or sacs ---
+        //
+        // **Cost-decision pump.** When the candidate set is non-empty,
+        // we push a `PendingDecision::TapPermanentChoice` on the queue
+        // (mirroring the `SurveilChoice` / `MayDoChoice` push-and-
+        // short-circuit pattern). The controller drains via
+        // `submit_tap_permanent_decision(Some(id))` (tap that
+        // permanent, keep source) or
+        // `submit_tap_permanent_decision(None)` (decline -> sacrifice
+        // source). Auto-resolve `"default"` declines (matches Python's
+        // no-agent fallback at `combinators.py:139-141`).
+        //
+        // **Source-on-bf scan.** Command Bridge typically enters
+        // tapped before this ETB resolves (the land's own
+        // enters-tapped status is set by `move_from_hand_to_battlefield`
+        // before the ETB drain), so the candidate filter EXCLUDES
+        // the source itself by id regardless of its tapped state
+        // (Python: `o.id != source.id` at combinators.py:128).
+        Effect::SacrificeSelfUnlessTapPermanent => {
+            // 1. Locate the source on its controller's bf. Mirrors the
+            //    `Effect::Sacrifice` controller-resolution shape (CR
+            //    119.5 / 608.2 — effect resolves under the source's
+            //    controller). The source-controller transient (set by
+            //    the resolver around each apply_effect call) takes
+            //    precedence over active_player.
+            //
+            //    The source MUST be on its controller's bf for this ETB
+            //    to fire at all (an ENTERS-triggered ability fires from
+            //    bf), so we scan only that one bf rather than every
+            //    zone — mirrors the controller-pinned shape of the
+            //    other Sacrifice / Tap / etc. arms above.
+            let controller_u8 = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller_u8 as usize;
+            let source_on_bf = state.players[controller_idx]
+                .battlefield
+                .iter()
+                .any(|o| o.id == source_obj_id);
+            if !source_on_bf {
+                // Off-bf -> silent no-op (Python parity:
+                // `if source is None: return` at combinators.py:122-123).
+                // Defensive — the ETB trigger resolve path should keep
+                // the source findable on bf at this point.
+                return Ok(());
+            }
+            // 2. Build candidate set: untapped permanents controlled by
+            //    the source's controller, EXCLUDING the source itself.
+            //    Mirrors `combinators.py:124-129` exactly.
+            let candidates: Vec<u32> = state.players[controller_idx]
+                .battlefield
+                .iter()
+                .filter(|o| !o.tapped && o.id != source_obj_id)
+                .map(|o| o.id)
+                .collect();
+            // 3. Empty candidate set -> sacrifice source directly (no
+            //    decision needed). Mirrors `combinators.py:130-136`:
+            //    `if not candidates: _sacrifice(state, source); return`.
+            if candidates.is_empty() {
+                sacrifice_source_inline(state, controller_idx, source_obj_id)?;
+                return Ok(());
+            }
+            // 4. Non-empty -> push the cost-decision. The submit
+            //    dispatcher routes Some(id)->tap, None->sacrifice.
+            state.pending_decisions.push(
+                crate::state::PendingDecision::TapPermanentChoice {
+                    source_obj_id,
+                    controller: controller_u8,
+                    candidates,
+                },
+            );
         }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
         // Void ETB.** "Exile up to one target instant or sorcery card
