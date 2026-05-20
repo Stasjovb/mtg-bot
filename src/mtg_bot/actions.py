@@ -2990,7 +2990,20 @@ def put_into_battlefield(
     # ``False`` for every existing creature/spell that hasn't opted
     # in, so the change is a no-op for the pre-existing pool.
     obj.tapped = bool(obj.printing.enters_tapped)
-    obj.summoning_sick = True
+    # Slice 14 (TTT Pin 2): summoning sickness is a creature-only
+    # property per CR 302.1 + 612.6 — non-creature permanents
+    # (Equipment, Aura, Enchantment, Artifact, planeswalker) do not
+    # have summoning sickness. The pre-Slice-14 unconditional stamp
+    # diverged from Rust's `move_source_post_resolve` (state_ops_
+    # resolve.rs:335), which correctly gates the stamp on `&&
+    # creature`. Aligning Python to the CR-canonical behavior.
+    # Both branches are explicit because the GameObject dataclass
+    # default is `summoning_sick: bool = True` — relying on that
+    # default for non-creatures would preserve the divergence.
+    if obj.printing.is_creature:
+        obj.summoning_sick = True
+    else:
+        obj.summoning_sick = False
     # Impending: a spell cast for its impending cost enters with N
     # time counters and is suppressed-as-non-creature until the
     # last counter is removed. The cast site set
