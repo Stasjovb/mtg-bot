@@ -376,6 +376,48 @@ PROBE_MODULES: tuple[Path, ...] = (
     # the same ZZZ + YYY drop-list precedent that already pins this
     # as honest-exhaustion).
     REPO_ROOT / "tests" / "test_probe_remaining_cccc.py",
+    # Probe batch DDDD (round 30 reclaim covered-but-unprobed) —
+    # fourth 4-letter probe batch (after AAAA, BBBB, CCCC; sibling
+    # to EEEE which merged first and shipped DDDD's originally-
+    # drafted cards Starwinder + Broodguard Elite).  This reclaim
+    # re-picks two DIFFERENT covered-but-unprobed cards to avoid
+    # duplicate credit (the PROBED-credit predicate is name+_parity
+    # function match; re-probing the EEEE cards would not move the
+    # classifier needle).  Two cards from the covered tier upgraded
+    # to PROBED via the same parse + bridge round-trip + Python-side
+    # resolve idiom DDD slice 17 / YYY / ZZZ / AAAA / CCCC / EEEE
+    # established:
+    #   * Meltstrider Eulogist (Creature DIES -> DrawCards(amount=1);
+    #     FIRST PROBE_MODULES-credited probe of the DIES + bare
+    #     DrawCards event + effect-class combination -- the only EoE
+    #     consumer of this combination, with the HasCounter
+    #     predicate drop-recovered under the YYY-idiom per the
+    #     CCCC Lightless Evangel predicate-is-metadata precedent;
+    #     the i-batch's prior drop used the full-compare_fields
+    #     idiom requiring Rust-bridge predicate parity, which the
+    #     YYY-idiom does not).
+    #   * Balemurk Leech (Creature ENTERS ->
+    #     EachOpponentLosesLife(amount=1); FIRST PROBE_MODULES-
+    #     credited probe of the EachOpponentLosesLife effect class
+    #     -- the only EoE consumer of this effect class per the
+    #     bridge-arm docstring at cross_engine.py:4872-4874; the CR
+    #     118.4 direct life loss primitive distinct from sibling
+    #     TargetOpponentLosesLife and DamageEachOpponent; the
+    #     non-credited test_probe_subject_is_enchantment_unlock.py
+    #     function predates the _parity naming convention and uses
+    #     full compare_fields requiring the Rust-bridge subject_is_
+    #     enchantment arm, while DDDD lands the credited _parity
+    #     variant under the YYY-idiom).
+    # Honest-exhaustion drops: Sami, Ship's Engineer (Conditional
+    # OnTappedCreatures wrapper substrate), Meltstrider's Resolve
+    # (Aura subsystem -- in flight on feature/aura-substrate-step-7),
+    # Dawnsire (no bare DealDamageToTargetCreature bridge arm; only
+    # the rider-bearing variant ships), Fear of Failed Tests (bit-
+    # identical to EEEE Starwinder), Cackling Slasher / Daggermaw /
+    # vanilla creatures (no Effects to probe), activated-ability
+    # cards (subsystem-gated, separate probe surface).  See module
+    # docstring for the full honest-exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_dddd.py",
     # Probe batch EEEE (round 31 reclaim covered-but-unprobed) — fifth
     # 4-letter probe batch (this slot was previously claimed by an
     # agent that hit the API limit; that branch is gone, slot
