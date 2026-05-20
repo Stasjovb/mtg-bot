@@ -288,3 +288,596 @@ def test_mmm_probe_controlled_by_opponent_bridge_returns_opponent_controller():
     assert isinstance(you, Controlled)
     assert you.by == YOU
     assert you.subject is None
+
+
+# ---------------------------------------------------------------------------
+# Probe 4 -- Slot-aware Controlled bridge form (12th Rust slice Closure A)
+#            Bridge arm now honors `subject` field on the predicate dict.
+# ---------------------------------------------------------------------------
+
+
+def test_mmm_probe_controlled_by_you_bridge_honors_subject_slot():
+    """**12th Rust slice Closure A — slot-aware bridge form.**
+
+    The 11th Rust slice deferred real-EoE byte-equal probes for the 4
+    Pin-1 cards (Cosmogrand Zenith, Sunstar Lightsmith, Illvoi
+    Operative, Station Monitor) because the bridge arm's
+    ``controlled_by_you`` translated to ``Controlled(by=YOU,
+    subject=None)`` regardless of the dict's ``subject`` field. The
+    multi-subject IS_CAST event (``EVENT_SUBJECTS=("spell",
+    "controller")``) makes Python's ``_resolve_subject(subjects,
+    None)`` return ``None`` (len(subjects) == 2), so a slot=None
+    ``Controlled(YOU)`` silently evaluates False — the trigger never
+    fires.
+
+    The 12th slice extended the bridge: ``subject`` is now read off
+    the dict and threaded through. Default (absent) → ``None`` for
+    back-compat. Present (typically ``"controller"``) → preserved.
+    """
+    from mtg_bot.effects.predicates import Controlled, OPPONENT, YOU
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+
+    # 1. Default — no subject field — slot is None (back-compat).
+    default_you = _ta_dict_to_python_predicate(
+        {"kind": "controlled_by_you"}
+    )
+    assert isinstance(default_you, Controlled)
+    assert default_you.by == YOU
+    assert default_you.subject is None
+
+    # 2. Slot-aware — subject="controller" — slot is preserved.
+    slot_you = _ta_dict_to_python_predicate(
+        {"kind": "controlled_by_you", "subject": "controller"}
+    )
+    assert isinstance(slot_you, Controlled)
+    assert slot_you.by == YOU
+    assert slot_you.subject == "controller", (
+        "12th slice Closure A: bridge must honor explicit subject "
+        f"slot; got subject={slot_you.subject!r}"
+    )
+
+    # 3. Symmetric: controlled_by_opponent also honors slot.
+    slot_opp = _ta_dict_to_python_predicate(
+        {"kind": "controlled_by_opponent", "subject": "controller"}
+    )
+    assert isinstance(slot_opp, Controlled)
+    assert slot_opp.by == OPPONENT
+    assert slot_opp.subject == "controller"
+
+    # 4. Default for opponent — no subject field — slot is None.
+    default_opp = _ta_dict_to_python_predicate(
+        {"kind": "controlled_by_opponent"}
+    )
+    assert isinstance(default_opp, Controlled)
+    assert default_opp.by == OPPONENT
+    assert default_opp.subject is None
+
+    # 5. Other slot values pass through (PLAYS_LAND uses
+    #    subject="land"/"controller"; the bridge is slot-opaque).
+    arbitrary = _ta_dict_to_python_predicate(
+        {"kind": "controlled_by_you", "subject": "land"}
+    )
+    assert arbitrary.subject == "land"
+
+
+def test_mmm_probe_rust_controlled_by_you_slot_accepts_dict_field():
+    """**12th Rust slice Closure A — Rust parse_predicate accepts
+    optional subject field on controlled_by_you / controlled_by_opponent.**
+
+    The Rust ``Predicate::ControlledByYou`` and
+    ``Predicate::ControlledByOpponent`` enum variants grew an optional
+    ``slot: Option<String>`` field. ``parse_predicate`` reads the
+    optional ``"subject"`` dict key and threads it through. The
+    ``matches`` arm is invariant to slot value for currently-
+    dispatched events (subject_id resolves through
+    ``find_object_controller`` to the same controller either way), so
+    the slot is stored for round-trip fidelity but doesn't change the
+    boolean.
+
+    This probe verifies the Rust parser accepts the slot-aware shape
+    end-to-end via ``register_printing``.
+    """
+    import mtg_bot_engine
+    r = mtg_bot_engine.Registry()
+    # Cosmogrand Zenith / Sunstar Lightsmith / Illvoi Operative /
+    # Station Monitor shape: IS_CAST trigger with slot-aware
+    # Controlled(YOU, subject="controller").
+    pid = r.register_printing({
+        "name": "TestSlotAwareControlledByYou",
+        "card_types": ["Creature"],
+        "subtypes": [],
+        "supertypes": [],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 4,
+        "effects": [],
+        "spell_effect": None,
+        "triggered_abilities": [{
+            "event": "cast",
+            "predicate": {
+                "kind": "and",
+                "left": {
+                    "kind": "controlled_by_you",
+                    "subject": "controller",
+                },
+                "right": {
+                    "kind": "state_bound",
+                    "inner": {"kind": "spells_cast_this_turn", "n": 2},
+                },
+            },
+            "effect": {"kind": "put_plus_one_counter_on_self"},
+        }],
+        "keywords": [],
+    })
+    assert pid >= 0
+
+    # Symmetric: opponent slot-aware also accepts. The slot string
+    # is opaque to Rust's matches() arm — any string parses cleanly.
+    pid2 = r.register_printing({
+        "name": "TestSlotAwareControlledByOpponent",
+        "card_types": ["Creature"],
+        "subtypes": [],
+        "supertypes": [],
+        "mana_cost": {"generic": 3},
+        "power": 1,
+        "toughness": 1,
+        "effects": [],
+        "spell_effect": None,
+        "triggered_abilities": [{
+            "event": "discards_card",
+            "predicate": {
+                "kind": "controlled_by_opponent",
+                "subject": "player",
+            },
+            "effect": {"kind": "draw_cards", "count": 1},
+        }],
+        "keywords": [],
+    })
+    assert pid2 >= 0
+
+
+# ---------------------------------------------------------------------------
+# Probe 5 -- Illvoi Operative real-EoE byte-equal probe
+#            (12th Rust slice Closure A; spells_cast_this_turn end-to-end).
+#
+# Oracle: "{1}{U} Creature — Human Spy 2/1
+#   Whenever you cast your second spell each turn, put a +1/+1 counter
+#   on this creature."
+#
+# Parsed trigger:
+#   event = IS_CAST
+#   predicate = And(Controlled(YOU, subject="controller"),
+#                   StateBound(SpellsCastThisTurn(n=2)))
+#   effect = PutPlusOneCounterOnSelf(amount=1)
+#
+# The probe casts TWO zero-mana spells to drive spells_cast_this_turn
+# from 0 -> 1 -> 2; the SECOND cast latches the trigger. After both
+# stacks fully drain, Illvoi Operative carries a single +1/+1 counter.
+# ---------------------------------------------------------------------------
+
+
+def test_mmm_probe_illvoi_operative_second_spell_self_counter_real_eoe():
+    """**12th Rust slice Closure A — Illvoi Operative real-EoE
+    byte-equal probe.** End-to-end verification of the slot-aware
+    Controlled bridge form + the MMM Pin 1 ``spells_cast_this_turn``
+    substrate landed by the 11th slice.
+
+    Drives the SLOT-AWARE bridge end-to-end:
+      * Python side: the dict-bridge translates the slot-aware
+        ``Controlled(YOU, subject="controller")`` predicate into a
+        working Python ``TriggeredAbility`` (slice 12 closure).
+      * Rust side: ``parse_predicate`` accepts the optional ``subject``
+        field; ``matches`` evaluates correctly on the spell subject_id.
+
+    Sequence:
+      1. Inject Illvoi Operative onto p0's bf on both engines.
+      2. Inject 2 zero-mana vanilla Creatures into p0's hand on both.
+      3. Cast spell 1: spells_cast_this_turn 0 -> 1. SpellsCastThisTurn(2)
+         doesn't latch.
+      4. Cast spell 2: spells_cast_this_turn 1 -> 2. Trigger LATCHES;
+         a counter pushes onto the stack.
+      5. Drain stacks on both engines.
+      6. Verify Illvoi Operative has exactly 1 +1/+1 counter (real
+         observable: power becomes 3, toughness becomes 2 — both
+         engines).
+
+    Assertion strength: targeted-observable idiom (same as the
+    Pinnacle Emissary cast-spell probes in test_probe_cast_spell_aa.py).
+    The targeted observables are byte-equal cross-engine; full
+    compare_fields is structurally unsound due to the documented
+    IS_CAST stack-resolution-order divergence.
+    """
+    import mtg_bot_engine
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.game import Zone
+
+    # The slot-aware Illvoi Operative dict (full bridge-translatable
+    # shape — both engines consume this).
+    illvoi_trigger = {
+        "event": "cast",
+        "predicate": {
+            "kind": "and",
+            "left": {
+                "kind": "controlled_by_you",
+                "subject": "controller",
+            },
+            "right": {
+                "kind": "state_bound",
+                "inner": {"kind": "spells_cast_this_turn", "n": 2},
+            },
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self"},
+    }
+
+    # Empty DeckSpec — manual injection for exact zone control.
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2  # ZONE_BATTLEFIELD
+    ZH = 0  # ZONE_HAND
+
+    # --- Rust: inject Illvoi Operative onto p0's bf. ----------------
+    rs_illvoi_id = rs.register_and_inject_object(
+        {
+            "name": "Illvoi Operative",
+            "card_types": ["Creature"],
+            "subtypes": ["Human", "Spy"],
+            "supertypes": [],
+            "mana_cost": {"generic": 1, "U": 1},
+            "power": 2,
+            "toughness": 1,
+            "keywords": [],
+            "effects": [],
+            "triggered_abilities": [illvoi_trigger],
+        },
+        0, ZB,
+    )
+    rs.clear_summoning_sick_for_player(0)
+
+    # --- Rust: inject 2 zero-mana vanilla Creatures into p0's hand. -
+    rs_filler_a = rs.register_and_inject_object(
+        {
+            "name": "Filler Creature A",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 0},
+            "power": 1,
+            "toughness": 1,
+            "keywords": [],
+        },
+        0, ZH,
+    )
+    rs_filler_b = rs.register_and_inject_object(
+        {
+            "name": "Filler Creature B",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 0},
+            "power": 1,
+            "toughness": 1,
+            "keywords": [],
+        },
+        0, ZH,
+    )
+    # Cast spell 1 — counter goes 0 -> 1; trigger predicate fails
+    # (SpellsCastThisTurn(2) wants exactly 2).
+    assert rs.cast_creature(rs_filler_a, 0) is True
+    # Drain stack 1 (spell only — no Illvoi trigger).
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # Cast spell 2 — counter goes 1 -> 2; trigger LATCHES.
+    assert rs.cast_creature(rs_filler_b, 0) is True
+    # Now stack carries [Illvoi_trigger, Filler_B_spell]. Drain.
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+
+    # Read counters on Illvoi Operative.
+    rs_illvoi_counters = None
+    for entry in rs.battlefield_snapshot():
+        if entry["printing_name"] == "Illvoi Operative":
+            rs_illvoi_counters = entry.get("counters")
+            break
+    assert rs_illvoi_counters is not None, (
+        "Rust: Illvoi Operative should still be on p0's bf after both casts"
+    )
+    assert rs_illvoi_counters == 1, (
+        "Rust: Illvoi Operative should carry exactly 1 +1/+1 counter "
+        f"after the second cast; got counters={rs_illvoi_counters!r}"
+    )
+
+    # --- Python: inject Illvoi Operative onto p0's bf. --------------
+    illvoi_ta = _ta_dict_to_python_triggered_ability(illvoi_trigger)
+    illvoi_printing = CardPrinting(
+        name="Illvoi Operative",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature — Human Spy",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Human", "Spy"),
+        power=2,
+        toughness=1,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(illvoi_ta,),
+    )
+    py_illvoi = py.new_object(illvoi_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_illvoi.summoning_sick = False
+    py_illvoi.tapped = False
+    py_illvoi.damage = 0
+    py_illvoi.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_illvoi)
+
+    # --- Python: inject 2 zero-mana vanilla Creatures. --------------
+    def _mk_filler(name):
+        return CardPrinting(
+            name=name,
+            mana_cost_str="",
+            mana_cost=ManaCost(generic=0, colored=()),
+            type_line="Creature",
+            supertypes=(),
+            card_types=("Creature",),
+            subtypes=(),
+            power=1,
+            toughness=1,
+            produces=frozenset(),
+            keywords=frozenset(),
+            triggered_abilities=(),
+        )
+
+    py_filler_a = py.new_object(
+        _mk_filler("Filler Creature A"), owner_id=0, zone=Zone.HAND
+    )
+    py.players[0].hand.append(py_filler_a)
+    py_filler_b = py.new_object(
+        _mk_filler("Filler Creature B"), owner_id=0, zone=Zone.HAND
+    )
+    py.players[0].hand.append(py_filler_b)
+
+    # Cast spell 1 — drain.
+    _cast_spell(py, player_id=0, card_id=py_filler_a.id, cast_for_free=True)
+    while py.stack:
+        resolve_top_of_stack(py)
+    # Cast spell 2 — drain. Trigger LATCHES on the 2nd cast.
+    _cast_spell(py, player_id=0, card_id=py_filler_b.id, cast_for_free=True)
+    while py.stack:
+        resolve_top_of_stack(py)
+
+    # Python Illvoi Operative counter count.
+    assert py_illvoi.plus_one_counters == 1, (
+        "Python: Illvoi Operative should carry exactly 1 +1/+1 counter "
+        f"after the second cast; got plus_one_counters="
+        f"{py_illvoi.plus_one_counters!r}"
+    )
+
+    # Cross-engine: byte-equal counter count.
+    assert rs_illvoi_counters == py_illvoi.plus_one_counters == 1, (
+        "Both engines must agree on Illvoi Operative's counter count "
+        f"(rust={rs_illvoi_counters}, py={py_illvoi.plus_one_counters})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Probe 6 -- Sunstar Lightsmith real-EoE byte-equal probe
+#
+# Oracle: "{3}{W} Creature — Human Soldier 3/3
+#   Whenever you cast your second spell each turn, put a +1/+1 counter
+#   on this creature and draw a card."
+#
+# Same shape as Illvoi Operative but the effect is a Sequence:
+#   PutPlusOneCounterOnSelf(1) + DrawCards(1).
+# ---------------------------------------------------------------------------
+
+
+def test_mmm_probe_sunstar_lightsmith_second_spell_counter_and_draw_real_eoe():
+    """**12th Rust slice Closure A — Sunstar Lightsmith real-EoE
+    byte-equal probe.** Sibling of Illvoi Operative; the effect is a
+    Sequence(counter + draw) rather than a bare counter. Verifies the
+    slot-aware bridge composes correctly with the Sequence effect arm.
+    """
+    import mtg_bot_engine
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
+    from mtg_bot.game import Zone
+
+    sunstar_trigger = {
+        "event": "cast",
+        "predicate": {
+            "kind": "and",
+            "left": {
+                "kind": "controlled_by_you",
+                "subject": "controller",
+            },
+            "right": {
+                "kind": "state_bound",
+                "inner": {"kind": "spells_cast_this_turn", "n": 2},
+            },
+        },
+        "effect": {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "put_plus_one_counter_on_self"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        },
+    }
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+    ZH = 0
+    ZL = 1  # ZONE_LIBRARY
+
+    # Seed a "draw-target" card on p0's library on BOTH engines so the
+    # DrawCards(1) effect has something to pull. The Python side's
+    # build_python_state starts with empty libraries; Rust likewise.
+    rs_seed_id = rs.register_and_inject_object(
+        {
+            "name": "Library Seed",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 0},
+            "power": 1,
+            "toughness": 1,
+            "keywords": [],
+        },
+        0, ZL,
+    )
+    seed_printing = CardPrinting(
+        name="Library Seed",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1, toughness=1,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(),
+    )
+    py_seed = py.new_object(seed_printing, owner_id=0, zone=Zone.LIBRARY)
+    py.players[0].library.append(py_seed)
+
+    # --- Rust: inject Sunstar Lightsmith onto p0's bf. --------------
+    rs_sunstar_id = rs.register_and_inject_object(
+        {
+            "name": "Sunstar Lightsmith",
+            "card_types": ["Creature"],
+            "subtypes": ["Human", "Soldier"],
+            "supertypes": [],
+            "mana_cost": {"generic": 3, "W": 1},
+            "power": 3,
+            "toughness": 3,
+            "keywords": [],
+            "effects": [],
+            "triggered_abilities": [sunstar_trigger],
+        },
+        0, ZB,
+    )
+    rs.clear_summoning_sick_for_player(0)
+
+    # --- Rust: inject 2 zero-mana creatures into p0's hand. ---------
+    rs_filler_a = rs.register_and_inject_object(
+        {
+            "name": "Filler Creature A",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 0},
+            "power": 1, "toughness": 1, "keywords": [],
+        },
+        0, ZH,
+    )
+    rs_filler_b = rs.register_and_inject_object(
+        {
+            "name": "Filler Creature B",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 0},
+            "power": 1, "toughness": 1, "keywords": [],
+        },
+        0, ZH,
+    )
+    rs_hand_size_before = rs.hand_sizes[0]
+    assert rs_hand_size_before == 2  # the 2 fillers
+    assert rs.cast_creature(rs_filler_a, 0) is True
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # After cast 1: hand_size = 1 (just filler_b). No trigger fired.
+    assert rs.cast_creature(rs_filler_b, 0) is True
+    # Trigger now on stack (Sequence: counter + draw). Drain.
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+
+    rs_sunstar_counters = None
+    for entry in rs.battlefield_snapshot():
+        if entry["printing_name"] == "Sunstar Lightsmith":
+            rs_sunstar_counters = entry.get("counters")
+            break
+    assert rs_sunstar_counters == 1, (
+        f"Rust: Sunstar should have 1 counter; got {rs_sunstar_counters!r}"
+    )
+    # Rust drew from library — hand_size = 1 (the draw from the seed).
+    assert rs.hand_sizes[0] == 1, (
+        f"Rust: hand should have 1 card (the drawn Library Seed) "
+        f"after both casts + trigger drain; got {rs.hand_sizes[0]}"
+    )
+
+    # --- Python: inject Sunstar Lightsmith onto p0's bf. ------------
+    sunstar_ta = _ta_dict_to_python_triggered_ability(sunstar_trigger)
+    sunstar_printing = CardPrinting(
+        name="Sunstar Lightsmith",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("W", 1),)),
+        type_line="Creature — Human Soldier",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Human", "Soldier"),
+        power=3, toughness=3,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(sunstar_ta,),
+    )
+    py_sunstar = py.new_object(
+        sunstar_printing, owner_id=0, zone=Zone.BATTLEFIELD
+    )
+    py_sunstar.summoning_sick = False
+    py_sunstar.tapped = False
+    py_sunstar.damage = 0
+    py_sunstar.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_sunstar)
+
+    def _mk_filler(name):
+        return CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=0, colored=()),
+            type_line="Creature",
+            supertypes=(), card_types=("Creature",),
+            subtypes=(),
+            power=1, toughness=1,
+            produces=frozenset(), keywords=frozenset(),
+            triggered_abilities=(),
+        )
+
+    py_filler_a = py.new_object(
+        _mk_filler("Filler Creature A"), owner_id=0, zone=Zone.HAND
+    )
+    py.players[0].hand.append(py_filler_a)
+    py_filler_b = py.new_object(
+        _mk_filler("Filler Creature B"), owner_id=0, zone=Zone.HAND
+    )
+    py.players[0].hand.append(py_filler_b)
+
+    _cast_spell(py, player_id=0, card_id=py_filler_a.id, cast_for_free=True)
+    while py.stack:
+        resolve_top_of_stack(py)
+    _cast_spell(py, player_id=0, card_id=py_filler_b.id, cast_for_free=True)
+    while py.stack:
+        resolve_top_of_stack(py)
+
+    assert py_sunstar.plus_one_counters == 1, (
+        f"Python: Sunstar should have 1 counter; got "
+        f"{py_sunstar.plus_one_counters!r}"
+    )
+    # Python should have drawn the Library Seed.
+    py_hand_names = [obj.printing.name for obj in py.players[0].hand]
+    assert "Library Seed" in py_hand_names, (
+        f"Python: hand should contain the drawn Library Seed; "
+        f"got {py_hand_names!r}"
+    )
+
+    # Cross-engine byte-equality on the gameplay observables.
+    assert rs_sunstar_counters == py_sunstar.plus_one_counters == 1
+    assert rs.hand_sizes[0] == len(py.players[0].hand) == 1, (
+        f"hand sizes must match (rust={rs.hand_sizes[0]}, "
+        f"py={len(py.players[0].hand)})"
+    )
