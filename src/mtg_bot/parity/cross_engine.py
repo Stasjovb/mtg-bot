@@ -284,6 +284,67 @@ class CardDef:
     # dataclass hash contract intact: no current consumer hashes a
     # CardDef carrying a spell_effect).
     spell_effect: Optional[dict] = None
+    # Aura-attachment substrate — Phase 1 first-deliverable (round-77;
+    # spec at ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §3 Phase 1).
+    # The frozen, bridge-serializable representation of a Phase-1 Aura
+    # (sub-shape S1 in the plan: static P/T-or-keyword Aura, no triggers,
+    # no control swap, no replacement). Mirrors the Python
+    # ``CardPrinting`` aura fields (``is_aura`` / ``aura_enchant_type`` /
+    # ``aura_yours_only`` / ``equipment_bonuses``) in a shape that
+    # round-trips Python<->Rust through ``build_rust_state`` /
+    # ``_card_def_to_python_printing``.
+    #
+    # ``is_aura=False`` = not an Aura (back-compat default; every
+    # pre-substrate CardDef omits it, the registry-dict builder then
+    # omits the ``is_aura`` key and the Rust parser maps that absence to
+    # ``false`` — the same Option/serde-default pattern every
+    # back-compat-added field uses). The remaining aura fields are only
+    # meaningful when ``is_aura=True``.
+    #
+    # ``aura_enchant_type``: which permanent type the Aura enchants.
+    # "creature" (Frantic Strength, Shardmage's Rescue — Phase 1
+    # carriers) or "artifact" (Hardlight Containment — admitted later).
+    # The §2 teeth restrict Phase 1 to single-type Auras; modal
+    # ("artifact or creature") shapes (Moonlit Meditation S3) are
+    # declined at the loader predicate.
+    #
+    # ``aura_yours_only``: True iff the printed text is "Enchant <type>
+    # YOU CONTROL" (Shardmage's Rescue). The cast-time enchant-target
+    # picker (Phase 1 step 3, not in THIS first-deliverable slice) will
+    # filter legal hosts on this; Phase 1 first-deliverable carries the
+    # field through the bridge ONLY.
+    #
+    # ``aura_power_bonus`` / ``aura_toughness_bonus`` /
+    # ``aura_granted_keywords``: the layer-7 / layer-6 continuous grant
+    # the attached host receives while the Aura is in play (the same
+    # ``equipment_bonuses`` tuple Equipment uses — Python's
+    # ``CardPrinting.equipment_bonuses`` is reused for both Equipment
+    # and Aura; the parser stores the Aura's static-P/T-or-keyword
+    # grant there). Phase 1 admits ONLY keywords from
+    # :data:`trajectory._SAFE_KEYWORDS` (the same parity-correct subset
+    # the simple-creature arm uses); arbitrary keyword strings DO pass
+    # through the bridge but with no guarantee of byte-equal behavior
+    # — the loader predicate is the §2 gate.
+    #
+    # **First-deliverable scope (round-77 — this slice):** carries the
+    # CardDef shape + bridge plumbing + a stub
+    # ``_printing_is_bridge_simple_aura`` predicate (NOT OR'd into the
+    # loader's 5-disjunct admit chokepoint —
+    # ``_filter_deck_to_bridge_supported``). Zero Aura reaches the bench
+    # this slice; the field is round-trippable but inert by design.
+    # The Rust parse arm / cast-time enchant-target decision / aura-
+    # resolution arm / CR-704.5n SBA / loader admit wire-up are the
+    # remaining Phase-1 steps and are honest-stopped here (Phase 1's
+    # long pole — agent-driven cast-target decision — is comparable to
+    # or larger than the warp_cost slice per the plan §3). See
+    # ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §3 Phase 1 for the
+    # remaining items.
+    is_aura: bool = False
+    aura_enchant_type: str = "creature"
+    aura_yours_only: bool = False
+    aura_power_bonus: int = 0
+    aura_toughness_bonus: int = 0
+    aura_granted_keywords: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -10278,6 +10339,56 @@ def build_rust_state(spec: DeckSpec):
         # (back-compat).
         if card.spell_effect is not None:
             printing_dict["effects"] = [card.spell_effect]
+        # Aura-attachment substrate — Phase 1 first-deliverable
+        # (round-77; spec at
+        # ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §3 Phase 1). Emit
+        # the aura keys when the CardDef carries the Phase-1 static
+        # P/T-or-keyword shape. ``is_aura=False`` (every pre-substrate
+        # CardDef) omits the keys; Rust's ``parse_printing`` maps the
+        # absence to false / default — the same back-compat
+        # ``match get_item { Some => extract, None => default }`` shape
+        # every optional field uses (verified at
+        # ``rust/src/cards.rs:8341`` — ``parse_printing`` silently
+        # ignores any unknown key, so this slice does NOT require a
+        # Rust change. The Rust parse arm + cast-time enchant-target
+        # decision + aura-resolution arm + CR-704.5n SBA are the
+        # remaining Phase-1 steps — honest-stopped this slice. The
+        # field IS round-trippable: this slice's tests pin that a
+        # CardDef carrying an aura representation registers without
+        # raising, and that Python materializes the matching
+        # ``CardPrinting.is_aura`` + ``equipment_bonuses`` tuple on the
+        # other side. The Rust state's CardPrinting carries no aura
+        # field today — it stays effectless, exactly as it does for
+        # every Aura that reaches the registry. The §2 teeth — the
+        # loader's ``_filter_deck_to_bridge_supported`` 5-disjunct —
+        # is NOT widened in this slice (no Aura reaches the bench;
+        # this slice is substrate-only).
+        if card.is_aura:
+            printing_dict["is_aura"] = True
+            printing_dict["aura_enchant_type"] = card.aura_enchant_type
+            if card.aura_yours_only:
+                printing_dict["aura_yours_only"] = True
+            if (
+                card.aura_power_bonus
+                or card.aura_toughness_bonus
+                or card.aura_granted_keywords
+            ):
+                # The aura's continuous grant rides on Python's
+                # ``equipment_bonuses`` ``(power_bonus, toughness_bonus,
+                # granted_keywords)`` tuple (the parser reuses the
+                # Equipment bonus machinery for Auras; see
+                # ``cards/base.py:1496-1545``). The Rust registry-dict
+                # key matches the field name for clarity; Rust's
+                # parser will be extended to read it in the Phase-1
+                # Rust step (this slice ships the emission only).
+                printing_dict["aura_equipment_bonuses"] = {
+                    "power_bonus": card.aura_power_bonus,
+                    "toughness_bonus": card.aura_toughness_bonus,
+                    "granted_keywords": [
+                        kw.replace(" ", "_")
+                        for kw in card.aura_granted_keywords
+                    ],
+                }
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -10624,6 +10735,46 @@ def _card_def_to_python_printing(card: "CardDef"):
     spell_effect = None
     if card.spell_effect is not None:
         spell_effect = _ta_dict_to_python_effect(card.spell_effect)
+    # Aura-attachment substrate — Phase 1 first-deliverable
+    # (round-77). Materialize the Python ``CardPrinting`` aura fields
+    # from the CardDef so the Python side of the bridge produces an
+    # Aura printing IDENTICALLY to what the live parser yields. For
+    # every non-aura CardDef (``is_aura=False`` — the back-compat
+    # default), these are the dataclass defaults (False / "creature" /
+    # None equipment_bonuses), so the materialized printing is
+    # bit-identical to pre-substrate. The Aura `is_aura` predicate on
+    # Python's CardPrinting derives from
+    # ``card_types contains "Enchantment" AND subtypes contains
+    # "Aura"`` per ``cards/base.py:1060`` — we set those on the
+    # CardPrinting itself so the predicate fires correctly. Phase 1's
+    # carriers (Frantic Strength, Shardmage's Rescue) are
+    # Enchantment - Aura by type, with no Creature card_type. The
+    # type_line / card_types / subtypes synthesis below honors that.
+    aura_equipment_bonuses = None
+    if card.is_aura and (
+        card.aura_power_bonus
+        or card.aura_toughness_bonus
+        or card.aura_granted_keywords
+    ):
+        aura_equipment_bonuses = (
+            card.aura_power_bonus,
+            card.aura_toughness_bonus,
+            frozenset(card.aura_granted_keywords),
+        )
+    if card.is_aura:
+        # An Aura printing is an Enchantment with the "Aura" subtype
+        # (CR 205.3h). Override the heuristic type_line + supertypes +
+        # subtypes set above so Python's ``is_aura`` derivation
+        # (card_types contains "Enchantment" AND subtypes contains
+        # "Aura") fires correctly on the materialized printing.
+        # ``card_type`` on the CardDef is "Enchantment" for an Aura
+        # CardDef; extra_card_types is empty (Phase-1 Auras are pure
+        # enchantments — no creature/artifact overlap). The aura
+        # subtype is added unconditionally; any explicit
+        # CardDef.subtypes are preserved alongside it.
+        if "Aura" not in subtypes:
+            subtypes = ("Aura", *subtypes)
+        type_line = "Enchantment - Aura"
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -10665,6 +10816,20 @@ def _card_def_to_python_printing(card: "CardDef"):
         # rejects modal/X/warp/unseatable-token-pid so only a
         # covered+bridged single-target effect reaches here).
         spell_effect=spell_effect,
+        # Aura-attachment substrate — Phase 1 first-deliverable
+        # (round-77). For non-aura CardDefs (``is_aura=False``) the
+        # ``aura_enchant_type`` field defaults to "creature" on Python's
+        # CardPrinting — bit-identical to pre-substrate (and ignored by
+        # any consumer that gates on ``is_aura`` first per
+        # ``cards/base.py:1060``). ``aura_yours_only`` defaults to
+        # False. ``equipment_bonuses`` is reused by the parser for both
+        # Equipment and Aura static grants — None for non-aura /
+        # bonus-less; the Phase-1 static-PT-or-keyword Auras populate
+        # it. Empty/zero bonus and no keywords -> None (consistent
+        # with the parser's "no equipment_bonuses" shape).
+        aura_enchant_type=card.aura_enchant_type,
+        aura_yours_only=card.aura_yours_only,
+        equipment_bonuses=aura_equipment_bonuses,
     )
 
 
