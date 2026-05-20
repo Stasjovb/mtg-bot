@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **325 / 475 EoE cards (68.4%) are byte-equal at the Effect+bridge level**; of those, **231 (48.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 94 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **326 / 475 EoE cards (68.6%) are byte-equal at the Effect+bridge level**; of those, **231 (48.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 95 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **150 (31.6%)** are BLOCKED, broken out below.
+- **149 (31.4%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -17,9 +17,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | Tier | Count | % of pool |
 |---|---:|---:|
 | PROBED byte-equal | 231 | 48.6% |
-| Effect+bridge covered (not individually probed) | 94 | 19.8% |
+| Effect+bridge covered (not individually probed) | 95 | 20.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 2 | 0.4% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 1 | 0.2% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
 | BLOCKED — subsystem-gated / Effect-uncovered | 146 | 30.7% |
 | **Pool total** | **475** | **100.0%** |
@@ -286,17 +286,6 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 ## BLOCKED — genuinely_missing (new-Rust-Effect ask) (1)
 
 - Lightstall Inquisitor
-
-Pain for All is no longer in this tier: the Effect-level scaffolding
-(`Effect::PainForAllETBEffect` + `Effect::PainForAllDamageEchoEffect`
-+ `Predicate::IsHost`) + bridge + honest-stop resolve arms shipped
-in the Pain for All closure slice (2026-05-20). The card now sits
-in the `subsystem-gated / Effect-uncovered` tier under
-**Aura-attachment substrate** (same place as Meltstrider's Resolve);
-full byte-equality awaits Phase 1 of the Aura attach substrate plan
-(Rust setting `attached_to` on Aura resolve). See
-`docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §4 and
-`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` Phase 3.
 
 ## BLOCKED — blocked_non_effect (non-Effect gate) (2)
 
