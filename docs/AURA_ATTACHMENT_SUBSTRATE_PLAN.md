@@ -364,14 +364,11 @@ test_trajectory_parity.py + test_trajectory.py`).
 
 ### Phase 1 (Rust + bridge + loader) — the attach substrate core: static P/T-or-keyword Aura
 
-**Status (round-78, 2026-05-20): PARTIAL — STEPs 1+2+3+4+5 + step-7 partial LANDED.**
+**Status (round-78, 2026-05-20): PHASE 1 COMPLETE — STEPs 1+2+3+4+5+6+7 ALL LANDED.**
 Steps 1+2 (CardDef aura representation + the bridge-side
 `printing_dict` emission + the Python-side `_card_def_to_python_printing`
-materialization + the **Rust `parse_printing` aura-key parse arm**) and
-step 7 partial (the loader admit predicate
-`_printing_is_bridge_simple_aura` is defined + tested but NOT yet
-OR'd into `_filter_deck_to_bridge_supported`'s 5-disjunct) are LANDED
-on main. STEP 2 (Rust parse arm) closed the round-77 honest-stop:
+materialization + the **Rust `parse_printing` aura-key parse arm**) are
+LANDED on main. STEP 2 (Rust parse arm) closed the round-77 honest-stop:
 `CardPrinting` now carries `is_aura` / `aura_enchant_type` /
 `aura_yours_only` / `aura_power_bonus` / `aura_toughness_bonus` /
 `aura_granted_keywords`, populated from the registry dict the Python
@@ -434,16 +431,28 @@ the host's PRINTED card_types only — UEOT add_type "creature" /
 lose-all-types animations have no Rust analogue yet
 (`is_creature_now` at `game.py:831` is Python-only), benign for
 Phase-1 S1 because Frantic Strength + Shardmage's Rescue target
-creature-typed printings exclusively. STEP 6 (bidirectional bridge
-arms for `attached_to` + the `aura_*` printing fields) remains
-the only Phase-1 honest-stop; the loader predicate
-`_printing_is_bridge_simple_aura` is callable + pinned against
-every live EoE Aura but NO Aura reaches the bench yet (the pin
-`tests/test_aura_substrate_phase1.py::
-test_loader_does_not_yet_admit_any_aura` is the honest-stop
-sentinel). Once STEP 6 lands and STEP 7's one-line wire-up flip at
+creature-typed printings exclusively. **STEP 6 (bidirectional
+bridge arms for `attached_to` + the `aura_*` printing fields) is
+LANDED** — see commit `feature/aura-substrate-step-6`:
+`read_rust_printing_aura_fields(printing_id) -> dict`,
+`bf_object_attached_to(obj_id) -> Optional[int]`, and
+`parity_smoke._rust_zone_obj_sig` now emits the real `attached_to`
+field, so a Python ↔ Rust hash recipe round-trip matches for an
+attached-Aura state. **STEP 7 (the loader OR-in) is LANDED** — see
+commit `feature/aura-substrate-step-7`: a single
+`or _printing_is_bridge_simple_aura(printing)` added to
 `src/mtg_bot/parity/trajectory.py:_filter_deck_to_bridge_supported`
-fires, Phase 1 for sub-shape S1 closes.
+as the 6th disjunct, plus the round-77 honest-stop sentinel
+(`test_loader_does_not_yet_admit_any_aura`) replaced with
+`test_loader_admits_aura_simple_shape` (positive STEP-7 wire-up
+pin) + `test_loader_still_declines_live_eoe_aura_carriers` +
+`test_loader_admits_zero_live_eoe_auras_pre_phase_2`. **Phase 1 for
+sub-shape S1 is closed.** Live-EoE admit delta is ZERO this slice
+(every live S1 carrier carries the non-`_SAFE_KEYWORDS` `flash`
+keyword — the §2 documented decline reason); the substrate is
+wired through for the first non-flash S1 Aura that ships, and
+Phase 2 widens the admit set (S2 control-changing, S3 replacement,
+S4 triggered).
 
 **Scope:** sub-shape S1 only (Frantic Strength, Shardmage's Rescue) —
 the smallest self-contained Aura: a continuous P/T/keyword grant, no
