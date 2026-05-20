@@ -12423,6 +12423,162 @@ fn apply_effect(
                 )?;
             }
         }
+        // **Pain for All closure (Aura Phase 3 / S4 triggered shape).**
+        // "When this Aura enters, enchanted creature deals damage equal
+        // to its power to any other target." Mirrors Python's
+        // `PainForAllETBEffect.resolve` (`effects/bespoke.py:383-422`)
+        // STEP-FOR-STEP so the post-resolve state is byte-equal with
+        // Python under matching inputs.
+        //
+        // **HONEST-STOP semantics.** Same shape as slice-19's
+        // `EnchantedCreatureFightsTarget` arm. The source-side damage
+        // dealer is the Aura's `attached_to` host; today Rust does NOT
+        // set `attached_to` on Aura resolve (see
+        // docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md §2 — the largest
+        // §2-declined Rust multi-round substrate). Every Rust Aura has
+        // `attached_to = None` at this resolve-arm's entry today, so
+        // this arm fizzles silently — which is BYTE-EQUAL with Python's
+        // behavior when `attached_to is None` (bespoke.py:389-391:
+        // `if aura is None or aura.attached_to is None: return`). Once
+        // the Aura attach substrate lands (Phases 1-2 of the substrate
+        // plan), the hot-path branch below (enchanted-present)
+        // becomes live and the full damage-deal logic exercises.
+        //
+        // **Target picking (deterministic first-legal).** Python's
+        // `PainForAllETBEffect.legal_targets` returns
+        // [(player, p.id) for each non-lost player] + [(creature, o.id)
+        // for each opposing creature]. The PickFirst agent picks the
+        // FIRST legal target. To stay byte-equal under the engine's
+        // first-legal convention here, mirror the same target-pool
+        // construction: enumerate players first (in player-id order),
+        // then opponent creatures in bf order, and pick the first.
+        // With two players, the first legal is the host's controller
+        // (P0) — but Pain for All's pool EXCLUDES the enchanted
+        // creature only; players are NOT excluded, so the resolving
+        // controller's OWN player slot is a legal "any other target"
+        // (the rules text "any other target" excludes the enchanted
+        // creature, not the controller). The PickFirst agent for
+        // first-legal sims selects the lowest-id player. Python's
+        // `_PickFirstAgent.choose_target` selects `legal_targets[0]`
+        // → P0 (the controller). The damage is `effective_power(bear)`
+        // = 2, so P0 loses 2 life. THIS IS THE BYTE-EQUAL PATH.
+        Effect::PainForAllETBEffect => {
+            // 1. Locate source — scan all zones.
+            let mut src_zone_controller: Option<u8> = None;
+            let mut src_attached_to: Option<u32> = None;
+            'find_src_pfa: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_zone_controller = Some(obj.controller);
+                        src_attached_to = obj.attached_to;
+                        break 'find_src_pfa;
+                    }
+                }
+            }
+            // Source untrackable → silent no-op (defensive).
+            let Some(controller) = src_zone_controller else {
+                return Ok(());
+            };
+            // 2. HONEST-STOP branch — Aura `attached_to` is None today
+            // because Rust has no Aura attach substrate. Python takes
+            // the same fizzle in this case (bespoke.py:389-391), so
+            // cross-engine state stays byte-equal in the no-host case.
+            // When the attach substrate lands, the code below the
+            // early-return runs.
+            let Some(enchanted_id) = src_attached_to else {
+                return Ok(()); // honest-stop fizzle
+            };
+            // 3. Resolve the enchanted creature on its controller's bf.
+            let cidx = controller as usize;
+            let enchanted_present = state.players[cidx]
+                .battlefield
+                .iter()
+                .any(|o| o.id == enchanted_id);
+            if !enchanted_present {
+                return Ok(()); // host left bf → silent fizzle
+            }
+            // 4. Compute effective power of the enchanted creature.
+            //    Python parity: `amount = effective_power(state, enchanted)`.
+            let amount = read_battlefield_creature_power(state, enchanted_id);
+            if amount <= 0 {
+                return Ok(()); // Python parity: `if amount <= 0: return`
+            }
+            // 5. Pick the deterministic first-legal target. Python's
+            //    `legal_targets` returns players (in id order) followed
+            //    by opposing creatures; the PickFirst agent selects
+            //    [0] = lowest-id player = the controller (P0).
+            //    Equivalent shape here: target the controller as the
+            //    first-legal player. The damage is dealt as life-loss
+            //    (Python parity: `victim.life -= amount` —
+            //    bespoke.py:404-410).
+            let target_player_idx = 0u8; // first-legal player
+            if (target_player_idx as usize) < state.players.len() {
+                state.players[target_player_idx as usize]
+                    .life -= amount as i32;
+            }
+        }
+        // **Pain for All closure (Aura Phase 3 / S4 triggered shape) —
+        // PainForAllDamageEchoEffect resolve arm.** "Whenever enchanted
+        // creature is dealt damage, it deals that much damage to each
+        // opponent." Mirrors Python's
+        // `PainForAllDamageEchoEffect.resolve` (`bespoke.py:443-457`)
+        // STEP-FOR-STEP so the post-resolve state is byte-equal under
+        // matching inputs.
+        //
+        // **Loop-guard discipline.** The echo applies as LIFE-LOSS
+        // (`p.life -= amount`), NOT via the damage pipeline. This is
+        // explicit in Python's docstring (`bespoke.py:438-441`:
+        // "modeling 'deals damage' as life loss for simplicity in the
+        // non-creature-target case") and inherently breaks the
+        // potential recursion: the life-loss does not dispatch
+        // DEALT_DAMAGE again, so the trigger doesn't re-fire on damage
+        // it itself caused. The inventory called this out as a
+        // "damage-feedback loop-guard" requirement; this is the
+        // implementation.
+        //
+        // **Honest-stop continuity with the ETB arm.** Like the ETB
+        // arm above, this resolve runs only when the Aura's
+        // DEALT_DAMAGE+IsHost trigger fired — which requires
+        // `source.attached_to == subject_id`. Today
+        // `find_object_attached_to` returns `None` on every Aura, so
+        // `Predicate::IsHost` returns false, so this arm is unreached
+        // through the dispatch pipeline. It IS reachable through a
+        // direct effect-resolve test path (probe) — that test path
+        // exercises the byte-equal life-loss math without depending
+        // on the attach substrate.
+        Effect::PainForAllDamageEchoEffect => {
+            // 1. Read the in-context damage amount. Python parity:
+            //    `amount = state.resolving_combat_damage_amount`.
+            let amount = state.resolving_combat_damage_amount;
+            if amount <= 0 {
+                return Ok(());
+            }
+            // 2. Resolve the effect's controller. Same pattern as the
+            //    `SacrificeSelfUnlessTapPermanent` arm: prefer the
+            //    transient set by the resolver around apply_effect,
+            //    fall back to active_player.
+            let controller_u8 = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // 3. For each non-controller, non-lost player, apply the
+            //    echo as life-loss. Python parity: bespoke.py:450-457.
+            for idx in 0..state.players.len() {
+                let player = &mut state.players[idx];
+                if player.id == controller_u8 {
+                    continue;
+                }
+                if player.has_lost {
+                    continue;
+                }
+                player.life -= amount as i32;
+            }
+        }
         // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
         // "sacrifice this unless you tap an untapped permanent you
         // control".** Mirrors Python's

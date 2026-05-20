@@ -8285,6 +8285,63 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             SacrificeSelfUnlessTapPermanent,
         )
         return SacrificeSelfUnlessTapPermanent()
+    if kind == "pain_for_all_etb":
+        # **Pain for All closure (Aura Phase 3 / S4 triggered shape) —
+        # PainForAllETBEffect bridge arm.** Rust's
+        # ``Effect::PainForAllETBEffect`` (cards.rs unit variant added
+        # in this slice; parse + to_pydict arms immediately after the
+        # slice-19 ``enchanted_creature_fights_target``; resolve arm
+        # in ``state_ops_resolve.rs`` immediately after the slice-19
+        # arm) mirrors Python's ``PainForAllETBEffect``
+        # (``effects/bespoke.py:352-428``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``PainForAllETBEffect()`` reconstructs the Python @dataclass
+        # (frozen=True) (mirrors the slice-19
+        # ``enchanted_creature_fights_target`` unit-variant precedent).
+        #
+        # **Honest-stop status (substrate landing).** The Effect
+        # variant + parse + to_pydict + this bridge arm ship the
+        # substrate scaffolding (so the cross-engine round-trip is
+        # closed for this Effect class). The Rust resolve arm fizzles
+        # silently when ``source.attached_to`` is None, which is
+        # byte-equal with Python's same-case fizzle (bespoke.py:389-
+        # 391). The genuine full-game byte-equality for Pain for All
+        # still requires the broader Aura attach substrate
+        # (docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md Phases 1-2) -- Rust
+        # does NOT set `attached_to` on Aura resolution today and the
+        # production-deck loader does NOT admit Auras with triggered
+        # abilities (S4 loader gate). This slice closes the Effect-
+        # level closure + documents the deferred substrate.
+        #
+        # **Real EoE consumer:** Pain for All (4,367 17lands decks) --
+        # the ONLY EoE card with this shape, the `blocked_genuinely_
+        # missing` residue Aura per
+        # ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §4.
+        from mtg_bot.effects.bespoke import (
+            PainForAllETBEffect,
+        )
+        return PainForAllETBEffect()
+    if kind == "pain_for_all_damage_echo":
+        # **Pain for All closure (Aura Phase 3 / S4 triggered shape) --
+        # PainForAllDamageEchoEffect bridge arm.** Rust's
+        # ``Effect::PainForAllDamageEchoEffect`` (cards.rs unit variant)
+        # mirrors Python's ``PainForAllDamageEchoEffect``
+        # (``effects/bespoke.py:432-463``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``PainForAllDamageEchoEffect()`` reconstructs the Python
+        # @dataclass(frozen=True). Reads
+        # ``state.resolving_combat_damage_amount`` (already plumbed
+        # engine-wide) at resolve time and applies the echo as
+        # LIFE-LOSS to each opponent of the resolving controller
+        # (NOT via the damage pipeline -- this is the damage-feedback
+        # loop-guard inherent to Python's simplification; see
+        # bespoke.py:438-441 + 447-457).
+        from mtg_bot.effects.bespoke import (
+            PainForAllDamageEchoEffect,
+        )
+        return PainForAllDamageEchoEffect()
     if kind == "enchanted_creature_fights_target":
         # 19th Rust slice (honest-stop substrate landing) -- Meltstrider's
         # Resolve Aura ETB "fight" bridge arm. Rust's
@@ -9662,6 +9719,29 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         return Subject(
             slot=None, inner=HasSubtype(name=pred_dict["subtype"])
         )
+    if kind == "is_host":
+        # **Pain for All closure (Aura Phase 3 / S4 triggered shape).**
+        # Mirrors Python's ``IsHost(subject: str | None = None)``
+        # (``effects/predicates.py:439-467``) — the canonical
+        # Aura/Equipment relational trigger predicate ("Whenever
+        # enchanted creature is dealt damage", "Whenever equipped
+        # creature attacks", etc.). Rust's ``Predicate::IsHost {
+        # subject }`` carries the same optional ``subject`` slot for
+        # multi-subject events (Equipment's
+        # ``IsHost(subject="attacker")``); the default (None) is the
+        # Pain for All DEALT_DAMAGE shape.
+        #
+        # **Honest-stop today.** With Rust's no-``attached_to`` Aura
+        # resolve reality (every Aura source has ``attached_to = None``
+        # at predicate-check time -- see
+        # ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §2), Rust's
+        # ``IsHost::matches`` returns false for every Aura on every
+        # dispatch. Python's ``IsHost.matches`` takes the same false
+        # path when ``source.attached_to is None`` (predicates.py:
+        # 464-466) -- byte-equal honest-stop.
+        from mtg_bot.effects.predicates import IsHost
+        slot = pred_dict.get("subject")
+        return IsHost(subject=slot)
     if kind == "has_power_at_most":
         # HasPowerAtMost substrate — Slice 6: "with power N or less"
         # qualifier from Vicious Clown / Irreverent Gremlin (EoE batch
