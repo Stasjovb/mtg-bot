@@ -345,6 +345,36 @@ class CardDef:
     aura_power_bonus: int = 0
     aura_toughness_bonus: int = 0
     aura_granted_keywords: tuple[str, ...] = ()
+    # Dynamic-P/T formula substrate (round-78). The formula key
+    # (``"harmonious_grovestrider"``, ``"cosmogoyf"``, ``"emissary_escort"``)
+    # for a creature whose base power/toughness is a CR 613 layer 7b
+    # CDA — Characteristic Defining Ability — rather than a static
+    # printed value. ``None`` is the back-compat default; every
+    # pre-substrate CardDef omits it, the registry-dict builder then
+    # omits the ``dynamic_pt_formula`` key and the Rust parser maps
+    # that absence to ``None`` (the same Option/serde-default pattern
+    # every back-compat-added field uses).
+    #
+    # Mirrors Python's ``CardPrinting.dynamic_pt_formula: str | None``
+    # at ``src/mtg_bot/cards/base.py:837``. Both engines dispatch on
+    # the formula key string at P/T read time (Python's
+    # ``game._dynamic_base_pt``; Rust's
+    # ``state_ops_combat::dynamic_base_pt_pub``); the dispatch tables
+    # MUST stay in lockstep per the "new code is right" SoT-flip
+    # discipline.
+    #
+    # **Substrate-extension scope (round-78 — this slice):**
+    # Harmonious Grovestrider's ``"harmonious_grovestrider"`` formula
+    # is implemented on the Rust side; sibling formulas
+    # (``"cosmogoyf"`` / ``"emissary_escort"``) are honest-stopped
+    # Rust-side and remain admit-filtered through
+    # ``_printing_is_bridge_simple_creature``. The actual EoE
+    # Harmonious Grovestrider printing ALSO carries Ward {2}, which
+    # is a separate orthogonal substrate (still filtered); this
+    # substrate-extension lands the dynamic-P/T machinery so the
+    # ward-rider close (or a synthetic-ward-free probe of the
+    # Grovestrider formula) can flip the production-deck admit.
+    dynamic_pt_formula: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -10547,6 +10577,12 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
                     for kw in card.aura_granted_keywords
                 ],
             }
+    # Dynamic-P/T formula substrate (round-78). Emit the formula
+    # key when set; ``None`` (the back-compat default) is omitted so
+    # the Rust parser maps the absence to ``None`` (the
+    # Option/serde-default pattern).
+    if card.dynamic_pt_formula is not None:
+        printing_dict["dynamic_pt_formula"] = card.dynamic_pt_formula
     return printing_dict
 
 
@@ -11008,6 +11044,13 @@ def _card_def_to_python_printing(card: "CardDef"):
         aura_enchant_type=card.aura_enchant_type,
         aura_yours_only=card.aura_yours_only,
         equipment_bonuses=aura_equipment_bonuses,
+        # Dynamic-P/T formula substrate (round-78). Forwards the
+        # CardDef formula key to Python's ``CardPrinting``; ``None``
+        # for every non-dynamic-P/T CardDef (the back-compat default,
+        # bit-identical to pre-substrate). Python's
+        # ``game._dynamic_base_pt`` dispatches on this field at
+        # P/T-read time.
+        dynamic_pt_formula=card.dynamic_pt_formula,
     )
 
 
