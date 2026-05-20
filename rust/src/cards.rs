@@ -6423,6 +6423,58 @@ pub struct CardPrinting {
     /// S2.5 / Lignify-shape slice can light up the readers without
     /// further substrate changes. Ignored unless `is_aura == true`.
     pub aura_set_base_pt: Option<(i16, i16)>,
+    /// **Static / layered abilities substrate — Phase 1 first-deliverable
+    /// (round-79, 2026-05-20).** Anthem-shape statics carried by this
+    /// printing. Each `StaticAnthem` declares a layer-6 keyword grant
+    /// the source contributes to every battlefield creature matching the
+    /// anthem's `scope` (under the source's controller). `Vec::new()`
+    /// (the back-compat default — every pre-substrate registry dict
+    /// omits the `static_anthems` key) for every non-anthem printing.
+    ///
+    /// Mirrors Python's `CardPrinting.static_abilities` tuple filtered
+    /// to the anthem keyword-grant sub-shape (per
+    /// `parser/statics.py:_parse_anthem_static_line` — one
+    /// `StaticAbility` per granted keyword, each with a layer-6
+    /// `ContinuousModifier(GrantKeyword(...))`).
+    ///
+    /// **Reader site.** `battlefield_has_keyword` walks both players'
+    /// battlefields once per call: any source whose printing's
+    /// `static_anthems` matches the target's controller AND scope
+    /// contributes the granted keywords to the target's effective
+    /// keyword set. The layer-6 fold is consistent with the existing
+    /// `aura_grants_keyword_to` precedent (Aura Phase 1 STEP 4), the
+    /// difference being the source is the static-bearer itself rather
+    /// than an attached Aura.
+    ///
+    /// **Phase 1 scope teeth.** Only the unconditional anthem keyword-
+    /// grant shape (Tannuk Steadfast Second's "Other creatures you
+    /// control have haste."). Self-scope statics, conditional statics
+    /// (Brightspear / Cloudsculpt / Gravblade), and P/T anthems are
+    /// honest-stopped to later slices.
+    pub static_anthems: Vec<StaticAnthem>,
+}
+
+/// **Static / layered abilities substrate — Phase 1 first-deliverable
+/// (round-79).** One unconditional anthem-shape static ability: a
+/// layer-6 keyword grant whose subject is `scope` (under the source's
+/// controller). Mirrors Python's `StaticAbility(scope=...,
+/// continuous_effect=ContinuousModifier(layer=6, payload=GrantKeyword(
+/// kw)))` shape collapsed to the simpler anthem-keyword tuple — the
+/// Rust side groups all keywords for one scope into one struct, the
+/// reader site fans out at fold time.
+#[derive(Clone, Debug)]
+pub struct StaticAnthem {
+    /// One of `"creatures_you_control"` /
+    /// `"other_creatures_you_control"`. Other Python `StaticScope`
+    /// values (`"self"`, `"slivers_you_control"`, etc.) are out of
+    /// scope for this slice — the bridge predicate
+    /// `_printing_is_bridge_simple_static_anthem` positively rejects
+    /// them so they never reach the registry.
+    pub scope: String,
+    /// Lowercase underscore-form keyword names (e.g. `"haste"`,
+    /// `"first_strike"`). Vocabulary restricted to
+    /// `trajectory._SAFE_KEYWORDS` by the loader predicate.
+    pub granted_keywords: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -9351,6 +9403,84 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             }
             None => None,
         };
+    // Static / layered abilities substrate — Phase 1 first-deliverable
+    // (round-79). Parse the `static_anthems` list — each entry is a
+    // dict `{"scope": str, "granted_keywords": [str, ...]}`. Missing
+    // top-level key parses to an empty Vec (back-compat default — every
+    // pre-substrate registry dict omits the key, mirroring the
+    // `aura_equipment_bonuses` Option-parse shape).
+    let static_anthems: Vec<StaticAnthem> = match dict.get_item("static_anthems")? {
+        Some(anthems_any) => {
+            let iter = anthems_any.try_iter().map_err(|_| {
+                PyValueError::new_err(
+                    "static_anthems must be an iterable of \
+                     {scope, granted_keywords} dicts",
+                )
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let item = item?;
+                let anthem_dict = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err(
+                        "static_anthems entries must be dicts \
+                         {scope: str, granted_keywords: [str, ...]}",
+                    )
+                })?;
+                let scope = match anthem_dict.get_item("scope")? {
+                    Some(v) => v.extract::<String>().map_err(|_| {
+                        PyValueError::new_err(
+                            "static_anthems[].scope must be a string",
+                        )
+                    })?,
+                    None => return Err(PyValueError::new_err(
+                        "static_anthems[] is missing required key 'scope'",
+                    )),
+                };
+                // Whitelist the scope to the two anthem shapes Phase 1
+                // wires. A scope we don't recognize is a bridge-vs-Rust
+                // disagreement — fail loudly so a future scope extension
+                // can't silently mis-translate.
+                if scope != "creatures_you_control"
+                    && scope != "other_creatures_you_control"
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "static_anthems[].scope must be \
+                         'creatures_you_control' or \
+                         'other_creatures_you_control' (got: {})",
+                        scope
+                    )));
+                }
+                let kws = match anthem_dict.get_item("granted_keywords")? {
+                    Some(kw_any) => {
+                        let kw_iter = kw_any.try_iter().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_anthems[].granted_keywords must \
+                                 be an iterable of keyword strings",
+                            )
+                        })?;
+                        let mut kws = Vec::new();
+                        for k in kw_iter {
+                            let s: String = k?.extract().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_anthems[].granted_keywords \
+                                     entries must be strings",
+                                )
+                            })?;
+                            kws.push(s);
+                        }
+                        kws
+                    }
+                    None => Vec::new(),
+                };
+                out.push(StaticAnthem {
+                    scope,
+                    granted_keywords: kws,
+                });
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     let (aura_power_bonus, aura_toughness_bonus, aura_granted_keywords) =
         match dict.get_item("aura_equipment_bonuses")? {
             Some(bonuses_any) => {
@@ -9436,6 +9566,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_grants_control,
         aura_grants_lose_abilities,
         aura_set_base_pt,
+        static_anthems,
     })
 }
 
@@ -11200,6 +11331,23 @@ impl Registry {
         id: u32,
     ) -> PyResult<Option<(i16, i16)>> {
         Ok(self.lookup(id)?.aura_set_base_pt)
+    }
+
+    /// **Static / layered abilities substrate — Phase 1 first-
+    /// deliverable (round-79).** Surface the printing's
+    /// `static_anthems` as a Python-friendly
+    /// `list[tuple[str, list[str]]]` shape for round-trip pin tests.
+    /// Each element is `(scope, granted_keywords)`. Empty list for
+    /// every non-anthem printing (back-compat default).
+    fn get_printing_static_anthems(
+        &self,
+        id: u32,
+    ) -> PyResult<Vec<(String, Vec<String>)>> {
+        let p = self.lookup(id)?;
+        Ok(p.static_anthems
+            .iter()
+            .map(|a| (a.scope.clone(), a.granted_keywords.clone()))
+            .collect())
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

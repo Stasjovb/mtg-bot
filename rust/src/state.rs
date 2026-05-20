@@ -2716,6 +2716,11 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2773,6 +2778,11 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2843,6 +2853,11 @@ pub fn make_synthetic_state(
         aura_grants_control: false,
         aura_grants_lose_abilities: false,
         aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     let registry = builder.snapshot();
 

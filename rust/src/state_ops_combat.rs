@@ -328,6 +328,79 @@ pub(crate) fn aura_grants_keyword_to(
     false
 }
 
+/// **Static / layered abilities substrate — Phase 1 first-deliverable
+/// (round-79).** True iff any battlefield permanent's
+/// `static_anthems` grants the given lowercase underscore-form
+/// keyword to the target identified by `(target_controller_idx,
+/// target_id)`.
+///
+/// Mirrors Python's `_static_bonuses` / `effective_keywords` walk at
+/// `game.py:913-996` filtered to the anthem keyword-grant sub-shape:
+/// for each source on either player's battlefield, for each
+/// `StaticAnthem` on the source's printing, the grant applies iff:
+///   * The source is on the SAME controller as the target (the source
+///     `player_idx` walking the per-controller battlefield is the
+///     ground truth here; CR 613 layer-2 control-change retrofits
+///     aren't modeled this slice — back-compat with the Aura-substrate
+///     reader-site shape).
+///   * The anthem's `scope` admits the target (the `creatures_you_
+///     control` shape admits every target including the source itself;
+///     `other_creatures_you_control` excludes the source).
+///   * The target's `target_controller_idx == source_controller_idx`
+///     (the per-controller battlefield walk above ensures this; see
+///     the explicit comment below).
+///
+/// **Layer note.** CR 613.1c layer 6 (ability-granting effects). The
+/// fold is consistent with `aura_grants_keyword_to`'s precedent — the
+/// reader-side semantics are identical, the difference is the SOURCE
+/// (the static-bearer itself vs. an attached Aura).
+///
+/// **Lignify / Humility (CR 613.7).** The Python source-of-truth
+/// `_static_bonuses` skips static-anthem contributions from a
+/// `_source_layer6_wiped` source. Phase 1 of the static-abilities
+/// substrate does NOT yet model layer-6 ability-wipes on the Rust
+/// side; no EoE / DSK card in the loader-admitted pool today carries
+/// a `lose_all_abilities` continuous effect that would wipe a
+/// static-anthem source, so the simplification is parity-clean for
+/// the live pool. The honest-stop is documented in
+/// `docs/SEARCH_LIMITATIONS.md`.
+pub(crate) fn static_anthem_grants_keyword_to(
+    state: &GameState,
+    target_controller_idx: usize,
+    target_id: u32,
+    keyword: &str,
+) -> bool {
+    let source_player = match state.players.get(target_controller_idx) {
+        Some(p) => p,
+        None => return false,
+    };
+    for source in source_player.battlefield.iter() {
+        let Some(printing) = state.registry.lookup(source.printing_id) else {
+            continue;
+        };
+        if printing.static_anthems.is_empty() {
+            continue;
+        }
+        for anthem in printing.static_anthems.iter() {
+            // Scope admit: `other_creatures_you_control` excludes the
+            // source itself; `creatures_you_control` admits every
+            // creature under the controller (including the source).
+            let admits = match anthem.scope.as_str() {
+                "creatures_you_control" => true,
+                "other_creatures_you_control" => source.id != target_id,
+                _ => false,
+            };
+            if !admits {
+                continue;
+            }
+            if anthem.granted_keywords.iter().any(|k| k == keyword) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Read effective power for a battlefield creature, returning 0 for
 /// non-creatures or unknown ids. "Effective" =
 /// `base + ueot_power_bonus + obj.counters` per CR 613 layer 7c
@@ -497,7 +570,18 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     // attached_to-matching auras / equipment. Equipment riders are
     // not yet folded in on the Rust side; this branch covers Auras
     // only (S1 sub-shape: granted_keywords like trample / hexproof).
-    aura_grants_keyword_to(state, obj_id, keyword)
+    if aura_grants_keyword_to(state, obj_id, keyword) {
+        return true;
+    }
+    // Static / layered abilities substrate — Phase 1 first-deliverable
+    // (round-79): layer-6 keyword grants from any battlefield
+    // permanent's `static_anthems` whose scope + controller filter
+    // admit this target. The reader walks per-controller (only the
+    // target's controller's battlefield contributes — see the
+    // helper's docstring for the CR 613 layer-2 simplification),
+    // mirroring Python's `_static_bonuses` per-source `applies_to`
+    // walk.
+    static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword)
 }
 
 /// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
