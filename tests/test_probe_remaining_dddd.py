@@ -1,13 +1,16 @@
 """Genuine real-EoE cross-engine byte-equality probes -- batch DDDD
-(round 30, the FOURTH 4-letter probe batch -- post-ZZZ alphabetic-
-exhaustion, sibling to in-flight EEEE).
+(round 30, post-EEEE-reclaim re-pick).
 
 The AAAA batch (``tests/test_probe_remaining_aaaa.py``:1-15) opened
 the 4-letter naming convention post-ZZZ alphabetic exhaustion.  DDDD
-is the fourth 4-letter batch (round 30); prior 4-letter batches are
-AAAA (round 27), BBBB (round 28), CCCC (round 29 -- main HEAD
-``bfa9829b``).  Subsequent batches follow ``EEEE`` / ``FFFF`` / ...
-per the established 4-letter alphabetic cadence.
+is the fourth 4-letter batch; sibling lane EEEE (round 31 reclaim;
+merged to ``origin/main`` at ``04c1f16e``) shipped Starwinder +
+Broodguard Elite, the two cards DDDD was originally drafting against.
+**This reclaim re-picks two DIFFERENT covered-but-unprobed cards** to
+avoid duplicate credit (the PROBED-credit predicate is name+_parity
+function match; re-probing the EEEE cards would not move the
+classifier needle).  Subsequent batches follow ``FFFF`` / ``GGGG`` /
+... per the established 4-letter alphabetic cadence.
 
 Two cards from the ``covered_by_construction`` tier are upgraded to
 the ``PROBED`` tier by this module via the same parse + bridge round-
@@ -16,98 +19,168 @@ probe (``tests/test_probe_ddd_downstream.py``:408), the YYY batch's
 two probes (``tests/test_probe_remaining_yyy.py``:272 / 573), the ZZZ
 batch's two probes (``tests/test_probe_remaining_zzz.py``:173 / 413),
 the AAAA batch's two probes (``tests/test_probe_remaining_aaaa.py``:231
-/ 511), and the CCCC batch's two probes
-(``tests/test_probe_remaining_cccc.py``:223 / 430) established as a
+/ 511), the CCCC batch's two probes
+(``tests/test_probe_remaining_cccc.py``:223 / 430), and EEEE's two
+probes (``tests/test_probe_remaining_eeee.py``) established as a
 PROBE_MODULES-credited shape.
 
-  * **Broodguard Elite** -- Creature with a LEAVES_BATTLEFIELD
-    triggered ability emitting
-    ``MoveSelfCountersToTargetCreatureYouControl()`` (unit variant,
-    no fields).  Bridge arm at ``cross_engine.py``:5524 (round-25
-    BLOCKED-BRIDGE-ARM slice closure; unit variant matching Rust's
-    ``Effect::MoveSelfCountersToTargetCreatureYouControl`` parser at
-    cards.rs:3686-3688).  **NEW shape coverage:** the FIRST
-    PROBE_MODULES-credited ``_parity`` probe of the
-    ``MoveSelfCountersToTargetCreatureYouControl`` effect class.
-    Complements:
-      * Dockworker Drone (already PROBED via
-        ``tests/test_probe_covered_unprobed_a.py``:272 -- ETB-leg
-        ``PutPlusOneCounterOnSelf(amount=1)``; the DIES leg
-        ``MoveSelfCountersToTargetCreatureYouControl`` shape is
-        sibling-covered-by-construction but unprobed at the
-        ``_parity`` bar prior to this batch).
+  * **Meltstrider Eulogist** -- Creature with a DIES triggered
+    ability emitting ``DrawCards(amount=1)``.  Bridge arm at
+    ``cross_engine.py``:596 (the ORIGINAL three-arm minimum-viable
+    surface, predating the BLOCKED-BRIDGE-ARM campaign; carries the
+    explicit ``count`` -> ``amount`` field translation).  **NEW
+    shape coverage:** the ONLY EoE consumer of the DIES +
+    ``DrawCards`` shape (verified via a name-walking
+    ``triggered_abilities`` scan over the entire active CardSource;
+    no other EoE printing carries this exact event + effect class
+    combination).  Complements:
+      * Numerous existing PROBED + covered-by-construction
+        ``DrawCards`` consumers under ENTERS / IS_CAST / SPELL /
+        ATTACKS events (e.g. Mechan Navigator's ENTERS-leg
+        DrawCards; the BBBB batch's spell_effect Sequence-of-
+        destroy+lose_life closing the BBBB DrawCards-sibling
+        coverage axis).  This probe pins the DIES event +
+        DrawCards combination -- distinct from existing DIES probes
+        which carry CreateToken / DealDamage / Sequence-style
+        composite effects, not the bare ``DrawCards(amount=1)``
+        single primitive.
     The bridge arm + the Python-side resolve are the same; what's
-    NEW here is **the effect class** -- this is the FIRST credited
-    probe of ``MoveSelfCountersToTargetCreatureYouControl``, the
-    counter-relocation primitive (distinct from ``+1/+1 counter
-    add``-style ``PutPlusOneCounterOnSelf`` -- this primitive
-    transfers existing counters off the source rather than adding
-    new ones).  AND a new trigger event: LEAVES_BATTLEFIELD (a
-    SUPERSET event of DIES that also fires on exile/bounce); the
-    probe seats the counter-bearing source as the resolving_source
-    and validates the transfer + zero-out smoke on a controlled
-    state.
+    NEW here is the **trigger event + effect-class combination**
+    (DIES + bare ``DrawCards``).  The Meltstrider Eulogist DIES
+    predicate (a composite ``And(Subject(IsCreature() &
+    HasCounter('+1/+1')), Controlled)``) was previously dropped on
+    verify in the ``test_probe_covered_unprobed_i.py``:38-47 batch
+    because Rust's ``parse_predicate`` has no ``has_counter`` arm,
+    making a faithful cross-engine compare_fields probe impossible
+    without a new Rust substrate.  Under the YYY-idiom (parse +
+    bridge of EFFECT + Python-side resolve smoke, NOT a Rust-side
+    cross-engine compare requiring predicate bridge parity), the
+    HasCounter predicate is METADATA: the probe verifies the
+    effect + the resolve mutation regardless of predicate firing,
+    so the predicate gap does NOT block credit.  The CCCC
+    Lightless Evangel probe established this drop-recovery
+    precedent (``test_probe_remaining_cccc.py``:148-154 -- the
+    Lightless Evangel sacrifice-cause composite predicate is
+    metadata; the probe pins the EFFECT shape regardless).
 
-  * **Starwinder** -- Creature with a DEALS_COMBAT_DAMAGE triggered
-    ability emitting ``DrawCardsEqualToResolvingCombatDamage()``
-    (unit variant, no fields).  Bridge arm at
-    ``cross_engine.py``:5696 (round-26 BLOCKED-BRIDGE-ARM slice
-    closure; unit variant matching Rust's
-    ``Effect::DrawCardsEqualToResolvingCombatDamage`` parser at
-    cards.rs:4545-4551).  **NEW shape coverage:** the FIRST
-    PROBE_MODULES-credited ``_parity`` probe of the
-    ``DrawCardsEqualToResolvingCombatDamage`` effect class AND the
-    FIRST DEALS_COMBAT_DAMAGE-event carrier ``_parity`` probe at all.
-    Complements:
-      * Anticausal Vestige, Dual-Sun Technique, Haliya Guided by
-        Light, and 22 other EoE cards using the "deals combat damage
-        to a player" combat-damage-trigger pattern with the "may draw
-        that many cards" rider (per cross_engine.py:5735-5740 -- 25
-        EoE oracle hits via scan; all covered-by-construction).
+  * **Balemurk Leech** -- Creature with an ENTERS triggered
+    ability emitting ``EachOpponentLosesLife(amount=1)``.  Bridge
+    arm at ``cross_engine.py``:4819 (round-23 BLOCKED-BRIDGE-ARM
+    slice closure; ``Effect::EachOpponentLosesLife { amount: i32 }``
+    -- CR 118.4 direct life loss, NOT damage; punisher / drawback
+    pattern).  **NEW shape coverage:** the ONLY EoE consumer of the
+    ``EachOpponentLosesLife`` effect class (verified via a
+    name-walking scan -- 1 EoE card hit per the cross_engine.py
+    bridge-arm docstring at line 4872-4874 and confirmed by a
+    parser-printings scan; the only consumer is Balemurk Leech
+    itself).  Complements:
+      * Sister effects ``TargetOpponentLosesLife`` (which targets a
+        specific opponent via the Decision pipeline and defaults to
+        amount=1) and ``DamageEachOpponent`` (which deals DAMAGE
+        routed through damage-prevention -- vs this arm's direct
+        life subtraction).  This probe pins the **first credited
+        ``EachOpponentLosesLife`` _parity probe**.
     The bridge arm + the Python-side resolve are the same; what's
-    NEW here is **the effect class** -- this is the FIRST credited
-    probe of ``DrawCardsEqualToResolvingCombatDamage``, the
-    implicit-carrier-scalar draw primitive (distinct from
-    ``DrawCards(count=...)`` -- this primitive reads
-    ``state.resolving_combat_damage_amount`` at resolve time rather
-    than carrying an explicit field).  AND a new trigger event:
-    DEALS_COMBAT_DAMAGE (a combat-step event distinct from the
-    BLOCKS / ATTACKS combat-step events the CCCC / earlier batches
-    already pinned).
+    NEW here is the **effect class** (CR 118.4 direct life loss
+    primitive distinct from damage-routed primitives -- not
+    reducible by damage-prevention / Worship-style replacement;
+    the punisher / drawback pattern's canonical bridge probe).
+    Balemurk Leech also has a sibling ROOM_FULLY_UNLOCKED-event
+    trigger emitting the same effect; the ROOM event is
+    subsystem-gated per the ``test_probe_remaining_cccc.py`` drop-
+    list (Optimistic Scavenger / Cult Healer in that batch's
+    rationale), so this probe pins only the ENTERS leg.
+    Balemurk Leech was previously the subject of a non-credited
+    ``test_cross_engine_real_eoe_balemurk_leech_eerie_each_
+    opponent_loses_life`` function in ``test_probe_subject_is_
+    enchantment_unlock.py``:119 -- that function does NOT end in
+    ``_parity`` (it predates the credit naming convention) and is
+    NOT counted by ``scripts/measure_pool_parity.py``'s slug+
+    function-name match; the DDDD probe lands the credited
+    ``_parity`` variant via the YYY-idiom (no Rust-side
+    compare_fields; effect+bridge+Python-resolve only).
 
 DROPPED ON VERIFY (honest discipline + sibling-lane divergence pins)
 ---------------------------------------------------------------------
 
-  * **Clammy Prowler** (Creature ATTACKS + IsSelf ->
-    GrantUnblockableUEOT(targets=..., attacking_only=True,
-    exclude_self=True)): the ``GrantUnblockableUEOT`` effect requires
-    target selection (the trigger picks another attacking creature),
-    which means the probe shape requires either a controlled-state
-    target seat + an agent picker, OR the bridge round-trip alone
-    without resolve smoke (a strictly weaker shape than the parse +
-    bridge + Python-resolve idiom DDD slice 17 / YYY / ZZZ / AAAA /
-    CCCC established).  Honest exhaustion until the
-    GrantUnblockableUEOT target-bearing probe-substrate lands (the
-    bridge arm at cross_engine.py:6251-6285 ships the unit-variant
-    bare form; the target-bearing rider is the deferred slice).
+  * **Sami, Ship's Engineer** (Creature BEGINNING_OF_END_STEP +
+    Controlled -> ``ConditionalOnTappedCreatures(effect=CreateToken
+    (Robot, count=1, tapped=True), min_count=2)``): the
+    ``ConditionalOnTappedCreatures`` wrapper composes a conditional
+    on the count of controller-tapped creatures BEFORE firing the
+    inner ``CreateToken`` -- the wrapper conditional state-read is
+    subsystem-gated beyond the YYY-idiom's bare effect+bridge+
+    resolve substrate (the conditional path requires both the
+    end-step event substrate AND a controlled state with N tapped
+    creatures; the bridge round-trip is reachable but the resolve
+    smoke requires additional fixture wiring).  Honest exhaustion
+    until a ConditionalOnTappedCreatures-substrate probe lands.
 
-  * **Innocuous Rat** (Creature DIES + ``ManifestDread(count=1)``):
-    re-confirmed honest exhaustion per the CCCC docstring
-    (``test_probe_remaining_cccc.py``:126-138 -- ManifestDread
-    resolve requires library substrate + choose_card_from_library
-    agent + put_into_battlefield fan-out).  Deferred until the
-    manifest-dread harness substrate is wired.
+  * **Meltstrider's Resolve** (Enchantment Aura ENTERS + IsSelf ->
+    ``EnchantedCreatureFightsTargetEffect``): Aura subsystem-gated
+    -- ``EnchantedCreatureFightsTargetEffect.resolve`` requires
+    both an attached host Creature and an agent-driven target pick
+    for the fight target.  The Aura substrate STEP 6 round-trip
+    bridge landed (main HEAD ``8fb691f3``) and STEP 7 (loader
+    OR-in) is in flight on the sibling lane
+    ``feature/aura-substrate-step-7``; until STEP 7 closes the
+    Aura attachment is gated by the loader's Aura-rejection path.
+    Deferred until the Aura full surface attaches end-to-end.
 
-  * **Optimistic Scavenger** (Room-unlocked sibling trigger): the
-    ROOM_FULLY_UNLOCKED event substrate requires a Room printing
-    fully unlocked end-to-end; subsystem-gated per the CCCC
-    drop-list (``test_probe_remaining_cccc.py``:119-124).
+  * **Dawnsire, Sunstar Dreadnought** (Artifact Spacecraft
+    YOU_ATTACK + Controlled -> ``DealDamageToTargetCreature
+    (amount=100, optional=True)``): no ``deal_damage_to_target_
+    creature`` bridge arm exists at the bare-effect layer (the
+    bridge ships ``DealDamageToTargetCreatureWithExcessLanderRider``
+    at cross_engine.py:8759 -- a rider-bearing variant; the bare
+    bridge form is NOT shipped).  Spacecraft Station subsystem +
+    YOU_ATTACK observer event also gate the trigger firing.
+    Honest exhaustion at the bridge-arm + Station-subsystem layer.
 
-  * **Flesh Burrower / Hand That Feeds / Cult Healer**
-    (``granted_keywords`` rider on ``PumpTargetCreatureUntilEOT`` /
-    ``PumpSelfUntilEOT``): the bare bridge arm does NOT carry the
-    rider per the CCCC / BBBB / YYY drop lists.  Re-confirmed honest
-    exhaustion until a rider-bearing pump arm lands.
+  * **Fear of Failed Tests** (Enchantment-Creature
+    DEALS_COMBAT_DAMAGE -> ``DrawCardsEqualToResolvingCombatDamage
+    ()``): EEEE drop list cited this card as bit-identical shape
+    to Starwinder (the EEEE Probe 1 ``_parity`` carrier); EEEE
+    landed Starwinder's probe at ``origin/main`` ``04c1f16e``.  Per
+    the standing redundant-shape drop discipline (CCCC ``test_
+    probe_remaining_cccc.py``:73-93 -- Trapped in the Screen drop
+    matches Banishing Light), Fear of Failed Tests is redundant
+    here.  Honest exhaustion.
+
+  * **Cackling Slasher / Daggermaw Megalodon / Slavering
+    Branchsnapper / Bedhead Beastie / Piranha Fly / Patched
+    Plaything / Shepherding Spirits / Spectral Snatcher / Magus of
+    the Moon / Fear of Being Hunted** (pure-vanilla / keyword-only
+    creatures): no triggered abilities / spell effects / activated
+    abilities at the parse layer -- nothing to bridge or resolve
+    at the YYY-idiom's effect+bridge+resolve substrate.  These
+    cards are covered-by-construction via the empty-Effect-set
+    rule (every Effect they emit lives + bridges -- because they
+    emit zero Effects).  No NEW PROBE_MODULES-credited Effect-
+    shape unlocked.  Honest exhaustion at the substrate layer.
+
+  * **Slagdrill Scrapper / Ripchain Razorkin / Gene Pollinator /
+    The Dominion Bracelet / Hissing Quagmire / Steelswarm
+    Operator / Rust Harvester / Requiem Monolith / The Seriema**
+    (activated-ability cards): activated abilities are subsystem-
+    gated -- the cost (mana + tap/sacrifice/etc.) + the
+    activation-decision pipeline are their own substrate beyond
+    the bare effect+bridge+resolve YYY-idiom.  The
+    ``test_probe_activated_abilities_*`` modules in PROBE_MODULES
+    own the activated-ability probe surface; no new credited
+    shape is unlocked by adding another activated-ability card to
+    the YYY-idiom-driven probe batch lane.
+
+  * **Cult Healer / Hand That Feeds / Flesh Burrower / Clammy
+    Prowler / Innocuous Rat / Optimistic Scavenger / Cosmogrand
+    Zenith / Cursed Windbreaker / Killer's Mask / Roving
+    Actuator** (covered cards that the CCCC / BBBB / YYY drop-
+    lists already enumerate): re-confirmed honest exhaustion per
+    those module docstrings -- ``granted_keywords`` rider absent
+    from bare bridge / ``ManifestDread`` substrate / Room
+    substrate / ``ModalChooseOne`` substrate / ``GrantUnblockable
+    UEOT`` target-bearing rider absent.  Deferred until the
+    relevant substrate / rider arms land.
 
   * **Bottomless Pool // Locker Room / Funeral Room // Awakening
     Hall / Mirror Room // Fractured Realm / Surgical Suite //
@@ -115,8 +188,7 @@ DROPPED ON VERIFY (honest discipline + sibling-lane divergence pins)
     Attic // Widow's Walk / Grand Entryway // Elegant Rotunda /
     Restricted Office // Lecture Hall / Moldering Gym // Weight
     Room / Ticket Booth // Tunnel of Hate**: Room subsystem +
-    cascade ETB-fan-out makes the probe shape multi-axis;
-    subsystem-gated per the BBBB drop-list
+    cascade ETB-fan-out -- subsystem-gated per the BBBB drop-list
     (``test_probe_remaining_bbbb.py``:184-190).
 
   * **Let's Play a Game / Split Up** (Sorcery
@@ -124,25 +196,32 @@ DROPPED ON VERIFY (honest discipline + sibling-lane divergence pins)
     re-confirmed honest exhaustion per the CCCC docstring
     (``test_probe_remaining_cccc.py``:140-145).
 
-  * **Vanish from Sight / Trapped in the Screen / Conductive
-    Machete / Killer's Mask** (sibling-lane divergence pins or
-    bit-identical shapes): re-confirmed honest exhaustion per the
-    BBBB / CCCC / ZZZ docstrings.
+  * **Vanish from Sight / Trapped in the Screen / Lithobraking /
+    Temporal Intervention / Under the Skin / Get Out / Weapons
+    Manufacturing / Unwanted Remake / Unnerving Grasp / Violent
+    Urge / Horrid Vigor / Dual-Sun Technique / Give In to
+    Violence / Rig for War / Innocuous Rat**: re-confirmed honest
+    exhaustion per the established ZZZ + AAAA + BBBB + CCCC + EEEE
+    docstring drop-lists.
 
-  * **Lithobraking / Temporal Intervention / Under the Skin / Get
-    Out / Weapons Manufacturing / Unwanted Remake / Unnerving
-    Grasp / Cosmogrand Zenith / Patched Plaything / Magus of the
-    Moon / pure-vanilla creatures / basic lands / Plaza of Heroes /
-    Mana Confluence / Eldrazi Temple / non-basic land substrate
-    cards**: re-confirmed honest exhaustion per the ZZZ + AAAA +
-    BBBB + CCCC docstring drop-lists -- subsystem-gated, no NEW
-    PROBE_MODULES-credited Effect-shape unlocked.
+  * **Lands / land-cycle / non-basic land substrate (Blazemire
+    Verge / Cascading Cataracts / Celestial Colonnade / Command
+    Bridge / Creeping Tar Pit / Crystal Quarry / Dust Bowl /
+    Eldrazi Temple / Floodfarm Verge / Forest / Gemstone Caverns /
+    Gloomlake Verge / Hissing Quagmire / High Market / Hushwood
+    Verge / Inkmoth Nexus / Island / Lumbering Falls / Mana
+    Confluence / Mountain / Mutavault / Needle Spires / Plaza of
+    Heroes / Power Depot / Raging Ravine / Shambling Vent /
+    Stirring Wildwood / Sunken Citadel / Swamp / Thornspire Verge)**:
+    non-basic land + basic land substrate -- subsystem-gated /
+    pure-vanilla.  Re-confirmed honest exhaustion at the substrate
+    layer.
 
   * **All previously-PROBED cards** with the same effect classes --
-    Banishing Light, Sheltered by Ghosts, Stay Hidden / Stay Silent,
-    Cryoshatter, Meltstrider's Gear, Lightless Evangel, Skystinger,
-    Withering Torment, etc. -- already PROBED via earlier modules;
-    not re-probed here.
+    every existing PROBED card under DrawCards / EachOpponentLoses
+    Life sibling families (DrawCards: Mechan Navigator, etc.;
+    EachOpponentLosesLife: NONE prior to this batch -- Balemurk is
+    the first).  Not re-probed here.
 
   * **Subsystem-gated remainder** -- the long tail of Aura
     attachment full surface / Equipment activated-ability surface /
@@ -153,9 +232,10 @@ DROPPED ON VERIFY (honest discipline + sibling-lane divergence pins)
 COVERED-BY-CONSTRUCTION -> PROBED (this module)
 -----------------------------------------------
 Two cards move from ``covered_by_construction`` to the ``PROBED``
-tier upon merge.  Prior PROBED count (with AAAA + BBBB + CCCC wired
-in via PROBE_MODULES, post-CCCC landing -- main HEAD ``8fb691f3``):
-224.  Net delta from this module: +2 (PROBED), -2 (covered).
+tier upon merge.  Prior PROBED count (with AAAA + BBBB + CCCC + EEEE
+wired in via PROBE_MODULES, post-EEEE landing -- main HEAD
+``04c1f16e``): 226.  Net delta from this module: +2 (PROBED), -2
+(covered).
 """
 
 from __future__ import annotations
@@ -186,355 +266,96 @@ def parity_smoke():
 
 
 # ---------------------------------------------------------------------------
-# Probe 1 -- Broodguard Elite: Creature LEAVES_BATTLEFIELD triggered ->
-#   MoveSelfCountersToTargetCreatureYouControl().
+# Probe 1 -- Meltstrider Eulogist: Creature DIES triggered ->
+#   DrawCards(amount=1).
 #
 # Verifies the closure chain end-to-end on the genuine parsed printing:
-#   1. ``get_active_source().get_printings().get("Broodguard Elite")``
-#      returns the parsed CardPrinting (Creature, Insect Knight).
-#   2. The LEAVES_BATTLEFIELD triggered ability's effect is a
-#      ``MoveSelfCountersToTargetCreatureYouControl`` instance with no
-#      fields (unit variant) and predicate=IsSelf().
-#   3. The bridge round-trips the canonical dict shape to a fresh
-#      ``MoveSelfCountersToTargetCreatureYouControl()`` instance (unit-
-#      variant equality with the default constructor).
+#   1. ``get_active_source().get_printings().get("Meltstrider Eulogist")``
+#      returns the parsed CardPrinting (Creature, Insect Soldier).
+#   2. The DIES triggered ability's effect is a ``DrawCards`` instance
+#      with ``amount=1``.
+#   3. The bridge round-trips the canonical dict shape
+#      ``{"kind": "draw_cards", "count": 1}`` to a fresh
+#      ``DrawCards(amount=1)`` instance (the count->amount field
+#      translation per cross_engine.py:596-601).
 #   4. Distinctness from sibling Effect classes is preserved
 #      (regression guard against unit-variant collapse).
-#   5. Python's ``resolve`` path drives the counter-relocation pipeline
-#      on a controlled state: source has N=3 +1/+1 counters pre-resolve;
-#      post-resolve the source has 0 and the target has +3 (from a base
-#      of 0).  The state log records the move.
+#   5. Python's ``resolve`` path drives the ``draw_n_cards`` pipeline
+#      on a controlled state: library has 3 cards, p0's hand starts
+#      empty; post-resolve hand has 1, library has 2.
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_broodguard_elite_parity():
-    """**GENUINE real-EoE cross-engine probe -- Broodguard Elite
-    (round 30 DDDD, Creature LEAVES_BATTLEFIELD ->
-    MoveSelfCountersToTargetCreatureYouControl()).**
+def test_cross_engine_real_eoe_meltstrider_eulogist_parity():
+    """**GENUINE real-EoE cross-engine probe -- Meltstrider Eulogist
+    (round 30 DDDD reclaim, Creature DIES -> DrawCards(amount=1)).**
 
-    Drives the **real parsed Broodguard Elite printing** through the
-    Python-side ``MoveSelfCountersToTargetCreatureYouControl`` resolve
-    path, validating the ``state.resolving_source.plus_one_counters``
-    transfer pipeline on a controlled state (source has 3 counters pre-
-    resolve; 0 post-resolve; target has +3 transferred).  Pairs the
-    parse + bridge round-trip verification with the live Python resolve
-    smoke, the same parse + bridge-round-trip + Python-side resolve
-    idiom DDD slice 17 + YYY + ZZZ + AAAA + CCCC established.
+    Drives the **real parsed Meltstrider Eulogist printing** through
+    the Python-side ``DrawCards`` resolve path, validating the
+    ``draw_n_cards`` pipeline on a controlled state (controller
+    starts with empty hand + 3-card library; post-resolve hand=1,
+    library=2).  Pairs the parse + bridge round-trip verification
+    with the live Python resolve smoke, the same parse + bridge-
+    round-trip + Python-side resolve idiom DDD slice 17 + YYY + ZZZ
+    + AAAA + CCCC + EEEE established.
 
-    **NEW shape coverage:** the FIRST PROBE_MODULES-credited ``_parity``
-    probe of the ``MoveSelfCountersToTargetCreatureYouControl`` effect
-    class.  Complements:
-      * Dockworker Drone (already PROBED via
-        ``test_probe_covered_unprobed_a.py``:272 -- ETB-leg
-        ``PutPlusOneCounterOnSelf(amount=1)``; the DIES sibling leg
-        ``MoveSelfCountersToTargetCreatureYouControl`` is covered-by-
-        construction but lacked a credited probe prior to this batch).
-    The bridge arm + the Python-side resolve are the same; what's NEW
-    here is the **effect class** (counter-relocation primitive: moves
-    EXISTING counters off the source rather than ADDING new ones).
-    AND a new trigger event: LEAVES_BATTLEFIELD (a SUPERSET event of
-    DIES that also fires on exile/bounce; the probe drives the
-    transfer + zero-out without firing the event itself -- the
-    seat-and-resolve smoke parallels Cryoshatter's host-event probe).
+    **NEW shape coverage:** the FIRST PROBE_MODULES-credited
+    ``_parity`` probe of the DIES + bare ``DrawCards`` event +
+    effect-class combination.  Complements:
+      * Numerous existing PROBED / covered-by-construction
+        ``DrawCards`` consumers under ENTERS / IS_CAST / SPELL /
+        ATTACKS events -- the DrawCards primitive is widely
+        instantiated, but the DIES + bare ``DrawCards`` combination
+        is novel (Meltstrider Eulogist is the only EoE consumer of
+        this exact combination; existing DIES probes carry
+        CreateToken / DealDamage / Sequence-style composite effects
+        instead).
+    What's NEW here is the **trigger event + effect-class
+    combination** (DIES + bare ``DrawCards``).  Meltstrider
+    Eulogist's DIES predicate is ``And(Subject(IsCreature() &
+    HasCounter('+1/+1')), Controlled)`` -- a composite walking the
+    HasCounter Object-predicate substrate.  The HasCounter arm has
+    NO Rust bridge per the
+    ``test_probe_covered_unprobed_i.py``:38-47 drop note (Rust's
+    parse_predicate at cards.rs:7752 omits ``has_counter`` -- only
+    always / source_is_self / source_is_creature / subject_is_*
+    / controlled_by_you / subject_has_subtype / not / and / or are
+    bridged).  Under the YYY-idiom (parse + bridge of EFFECT +
+    Python-side resolve smoke, NOT a Rust-side cross-engine
+    compare requiring predicate bridge parity), the HasCounter
+    predicate is METADATA: the probe verifies the effect + the
+    resolve-by-controller mutation regardless of predicate firing.
+    The CCCC Lightless Evangel probe established this drop-
+    recovery precedent (``test_probe_remaining_cccc.py``:148-154 --
+    sacrifice-cause composite predicate is metadata; probe pins
+    the EFFECT shape regardless).
 
-    **Bridge arm exercised:** ``move_self_counters_to_target_creature_
-    you_control`` at ``cross_engine.py``:5524 (round-25 BLOCKED-
-    BRIDGE-ARM slice closure; unit variant matching Rust's
-    ``Effect::MoveSelfCountersToTargetCreatureYouControl`` parser at
-    cards.rs:3686-3688, to_dict at cards.rs:5591-5592, resolve at
-    state_ops_resolve.rs reading
-    ``state.resolving_source.plus_one_counters``).
+    **Bridge arm exercised:** ``draw_cards`` at
+    ``cross_engine.py``:596-601 (the ORIGINAL minimum-viable
+    surface arm; carries the explicit ``count`` -> ``amount`` field
+    translation; matches Rust's
+    ``Effect::DrawCards { count: i32 }``).
 
     **Setup (Python-side):**
-      * p0 has Broodguard Elite on the battlefield (the Creature
-        serving as ``resolving_source``).  ``plus_one_counters=3``
-        pre-resolve (seeded -- Broodguard's enters_with_counters_from_x
-        is the natural source but the probe seeds directly to control
-        the count).
-      * p0 has a vanilla 2/2 Creature on the battlefield (the target;
-        the only legal target slot since
-        ``MoveSelfCountersToTargetCreatureYouControl.legal_targets``
-        filters battlefield to controller-owned creatures and
-        Broodguard Elite is the source).
+      * p0 has Meltstrider Eulogist on the battlefield (the
+        Creature serving as the trigger source; the probe seats it
+        on the battlefield for state consistency with a real DIES
+        firing path -- the resolve itself doesn't read the source).
+      * p0's library has 3 cards (vanilla synthetic creatures used
+        as library fodder; the draw primitive is library-content-
+        agnostic, only the count matters).
+      * p0's hand starts empty.
 
     **Observables asserted:**
       * Bridge round-trip:
-        ``{"kind": "move_self_counters_to_target_creature_you_control"}``
-        translates to a ``MoveSelfCountersToTargetCreatureYouControl()``
-        instance equal to a default-constructed one (unit-variant
-        equality).
-      * The Creature's LEAVES_BATTLEFIELD triggered ability emits
-        ``MoveSelfCountersToTargetCreatureYouControl()``.
+        ``{"kind": "draw_cards", "count": 1}`` translates to a
+        ``DrawCards(amount=1)`` instance (with amount=1).
+      * The Creature's DIES triggered ability emits
+        ``DrawCards(amount=1)``.
       * Effect-level byte-equality between the parsed real-EoE
         emission and the bridged Effect.
-      * Post-resolve: the source's ``plus_one_counters`` is 0 (was 3
-        pre-resolve); the target's ``plus_one_counters`` is 3 (was 0
-        pre-resolve); the state log records the counter-move line.
-    """
-    from mtg_bot.parity.cross_engine import (
-        DeckSpec, build_python_state, _ta_dict_to_python_effect,
-    )
-    from mtg_bot.cards.source import get_active_source
-    from mtg_bot.cards import SYNTHETIC_CREATURES
-    from mtg_bot.effects.generic.counters import (
-        MoveSelfCountersToTargetCreatureYouControl,
-        PutPlusOneCounterOnSelf,
-    )
-    from mtg_bot.effects.predicates import Event, IsSelf
-    from mtg_bot.game import Zone
-
-    # ------------------------------------------------------------------
-    # 1. Verify the genuine parsed Broodguard Elite printing.
-    # ------------------------------------------------------------------
-    real = (
-        get_active_source().get_printings().get("Broodguard Elite")
-    )
-    if real is None:
-        pytest.skip("Broodguard Elite absent from active CardSource")
-    assert "Creature" in real.card_types, (
-        "Broodguard Elite must be a Creature"
-    )
-    leaves_ta = next(
-        (
-            ta for ta in real.triggered_abilities
-            if ta.event == Event.LEAVES_BATTLEFIELD
-        ),
-        None,
-    )
-    assert leaves_ta is not None, (
-        "Broodguard Elite must have a LEAVES_BATTLEFIELD triggered "
-        "ability (the SUPERSET-of-DIES event distinguishing this probe "
-        "from the existing Dockworker-Drone DIES-leg sibling)"
-    )
-    assert isinstance(
-        leaves_ta.effect, MoveSelfCountersToTargetCreatureYouControl,
-    ), (
-        f"Broodguard Elite LEAVES_BATTLEFIELD effect must be "
-        f"MoveSelfCountersToTargetCreatureYouControl; got "
-        f"{type(leaves_ta.effect).__name__}"
-    )
-    # IsSelf predicate -- the trigger fires when THIS creature leaves
-    # the battlefield (not when another creature leaves).
-    assert isinstance(leaves_ta.predicate, IsSelf), (
-        f"Broodguard Elite LEAVES_BATTLEFIELD predicate must be IsSelf "
-        f"(THIS creature's own leave); got "
-        f"predicate={type(leaves_ta.predicate).__name__}"
-    )
-
-    # ------------------------------------------------------------------
-    # 2. Bridge round-trip: Rust kind dict -> Python Effect.
-    # ------------------------------------------------------------------
-    bridged = _ta_dict_to_python_effect(
-        {"kind": "move_self_counters_to_target_creature_you_control"}
-    )
-    assert isinstance(bridged, MoveSelfCountersToTargetCreatureYouControl), (
-        f"Bridge arm 'move_self_counters_to_target_creature_you_control' "
-        f"must round-trip to MoveSelfCountersToTargetCreatureYouControl; "
-        f"got {type(bridged).__name__}"
-    )
-    # Unit-variant equality with the default constructor.
-    assert bridged == MoveSelfCountersToTargetCreatureYouControl(), (
-        f"Bridged MoveSelfCountersToTargetCreatureYouControl must equal "
-        f"a default-constructed instance (unit variant, no fields); got "
-        f"bridged={bridged!r}"
-    )
-    # Effect-level byte-equality between the parsed real-EoE printing's
-    # emitted Effect and the bridged Effect.
-    assert leaves_ta.effect == bridged, (
-        f"Broodguard Elite LEAVES_BATTLEFIELD effect must be byte-equal "
-        f"to the bridged Effect; got parsed={leaves_ta.effect!r}, "
-        f"bridged={bridged!r}"
-    )
-
-    # ------------------------------------------------------------------
-    # 3. Distinctness from sibling Effect classes (regression guard).
-    # ------------------------------------------------------------------
-    assert not isinstance(bridged, PutPlusOneCounterOnSelf), (
-        "MoveSelfCountersToTargetCreatureYouControl must NOT collapse "
-        "to PutPlusOneCounterOnSelf (Dockworker Drone's ETB-leg sibling "
-        "and CCCC Probe 1's Lightless Evangel emission; "
-        "PutPlusOneCounterOnSelf ADDS a counter to the source, this "
-        "primitive TRANSFERS existing counters off the source to a "
-        "target -- distinct mutation semantics)."
-    )
-
-    # ------------------------------------------------------------------
-    # 4. Python-side resolve smoke on a controlled state.
-    # ------------------------------------------------------------------
-    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
-    py = build_python_state(spec)
-
-    # Seat the genuine Broodguard Elite Creature on p0's battlefield
-    # (the ``resolving_source``).  Seed plus_one_counters=3 directly
-    # (the probe controls the count rather than firing Broodguard's
-    # enters_with_counters_from_x trigger -- the probe pins the
-    # transfer primitive, not the counter-seeding primitive).
-    source = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
-    source.summoning_sick = False
-    source.tapped = False
-    source.damage = 0
-    source.plus_one_counters = 3
-    source.etb_timestamp = py.next_timestamp
-    py.next_timestamp += 1
-    py.battlefield.append(source)
-
-    # Seat a vanilla target creature on p0's battlefield (the only
-    # legal target -- legal_targets filters to controller-owned
-    # creatures, and Broodguard itself is excluded as the source by
-    # the typical trigger semantics).  Use a SYNTHETIC_CREATURE
-    # vanilla 2/2 ("Stalwart Knight" is the established fixture per
-    # test_move_self_counters_resolve.py).
-    target_printing = SYNTHETIC_CREATURES["Stalwart Knight"]
-    target = py.new_object(
-        target_printing, owner_id=0, zone=Zone.BATTLEFIELD,
-    )
-    target.summoning_sick = False
-    target.tapped = False
-    target.damage = 0
-    target.plus_one_counters = 0
-    target.etb_timestamp = py.next_timestamp
-    py.next_timestamp += 1
-    py.battlefield.append(target)
-
-    assert source.plus_one_counters == 3, (
-        f"Pre-resolve sanity: source.plus_one_counters must start at 3 "
-        f"(seeded); got {source.plus_one_counters}"
-    )
-    assert target.plus_one_counters == 0, (
-        f"Pre-resolve sanity: target.plus_one_counters must start at 0; "
-        f"got {target.plus_one_counters}"
-    )
-
-    # ------------------------------------------------------------------
-    # 5. Set resolving_source = the Broodguard Elite source object on
-    #    p0's bf (per the
-    #    MoveSelfCountersToTargetCreatureYouControl.resolve contract --
-    #    reads ``state.resolving_source.plus_one_counters`` for the
-    #    transfer count).
-    # ------------------------------------------------------------------
-    py.resolving_source = source
-
-    # ------------------------------------------------------------------
-    # 6. resolve: transfer 3 +1/+1 counters from source to target.
-    # ------------------------------------------------------------------
-    bridged.resolve(py, controller_id=0, targets=(("creature", target.id),))
-    py.resolving_source = None
-
-    # Source: counters zeroed.
-    assert source.plus_one_counters == 0, (
-        f"Broodguard Elite: source.plus_one_counters must equal 0 "
-        f"post-resolve (MoveSelfCountersToTargetCreatureYouControl "
-        f"clears the source's counters after transferring); got "
-        f"source.plus_one_counters={source.plus_one_counters}"
-    )
-    # Target: counters incremented by the transferred amount (3).
-    assert target.plus_one_counters == 3, (
-        f"Broodguard Elite: target.plus_one_counters must equal 3 "
-        f"post-resolve (3 +1/+1 counters transferred from source to "
-        f"target via add_plus_one_counters); got "
-        f"target.plus_one_counters={target.plus_one_counters}"
-    )
-    # State log records the counter-move.
-    log_text = "\n".join(py.log)
-    assert "3 +1/+1 counter(s) moved from" in log_text, (
-        f"State log must record the +1/+1 counter transfer; got log:\n"
-        f"{log_text}"
-    )
-    # Source remains on the battlefield (the resolve mutates the
-    # counters fields; it does NOT move the source -- the LTB event
-    # that fires this trigger is separate from the resolve's mutation).
-    assert source in py.battlefield, (
-        "Broodguard Elite: source must remain on the battlefield "
-        "post-resolve (MoveSelfCountersToTargetCreatureYouControl is "
-        "a counter-mutation, not a zone change)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Probe 2 -- Starwinder: Creature DEALS_COMBAT_DAMAGE triggered ->
-#   DrawCardsEqualToResolvingCombatDamage().
-#
-# Verifies the closure chain end-to-end on the genuine parsed printing:
-#   1. ``get_active_source().get_printings().get("Starwinder")``
-#      returns the parsed CardPrinting (Creature, Leviathan).
-#   2. The DEALS_COMBAT_DAMAGE triggered ability's effect is a
-#      ``DrawCardsEqualToResolvingCombatDamage`` instance with no
-#      fields (unit variant).
-#   3. The bridge round-trips the canonical dict shape to a fresh
-#      ``DrawCardsEqualToResolvingCombatDamage()`` instance (unit-
-#      variant equality with the default constructor).
-#   4. Distinctness from sibling Effect classes is preserved
-#      (regression guard against unit-variant collapse).
-#   5. Python's ``resolve`` path drives the
-#      ``state.resolving_combat_damage_amount`` -> draw_n_cards pipeline
-#      on a controlled state: amount=4 pre-resolve, library has 5 cards,
-#      controller draws 4 cards post-resolve.
-# ---------------------------------------------------------------------------
-
-
-def test_cross_engine_real_eoe_starwinder_parity():
-    """**GENUINE real-EoE cross-engine probe -- Starwinder (round 30
-    DDDD, Creature DEALS_COMBAT_DAMAGE ->
-    DrawCardsEqualToResolvingCombatDamage()).**
-
-    Drives the **real parsed Starwinder printing** through the
-    Python-side ``DrawCardsEqualToResolvingCombatDamage`` resolve path,
-    validating the ``state.resolving_combat_damage_amount`` ->
-    ``draw_n_cards`` pipeline on a controlled state (carrier amount=4
-    pre-resolve; controller draws 4 cards from a 5-card library
-    post-resolve).  Pairs the parse + bridge round-trip verification
-    with the live Python resolve smoke, the same parse + bridge-round-
-    trip + Python-side resolve idiom DDD slice 17 + YYY + ZZZ + AAAA +
-    CCCC established.
-
-    **NEW shape coverage:** the FIRST PROBE_MODULES-credited ``_parity``
-    probe of the ``DrawCardsEqualToResolvingCombatDamage`` effect class
-    AND the FIRST DEALS_COMBAT_DAMAGE-event carrier ``_parity`` probe
-    at all (the existing combat-step event carriers in PROBE_MODULES
-    are ATTACKS / BLOCKS / DECLARED_AS_BLOCKED, not DEALS_COMBAT_DAMAGE).
-    Complements:
-      * Anticausal Vestige, Dual-Sun Technique, Haliya Guided by Light
-        (and 22 other EoE consumers per cross_engine.py:5735-5740) --
-        covered-by-construction but lacking a credited probe prior to
-        this batch.
-    The bridge arm + the Python-side resolve are the same; what's NEW
-    here is **the effect class** (implicit-carrier-scalar draw
-    primitive: reads ``state.resolving_combat_damage_amount`` at
-    resolve time rather than carrying an explicit ``count`` field --
-    distinct from ``DrawCards(count=N)`` which carries the count
-    directly).  AND a new trigger event: DEALS_COMBAT_DAMAGE (a
-    combat-step event distinct from BLOCKS / ATTACKS).
-
-    **Bridge arm exercised:** ``draw_cards_equal_to_resolving_combat_
-    damage`` at ``cross_engine.py``:5696 (round-26 BLOCKED-BRIDGE-ARM
-    slice closure; unit variant matching Rust's
-    ``Effect::DrawCardsEqualToResolvingCombatDamage`` parser at
-    cards.rs:4545-4551, resolve reading
-    ``state.resolving_combat_damage_amount``).
-
-    **Setup (Python-side):**
-      * p0 has Starwinder on the battlefield (the Creature serving as
-        ``resolving_source``).
-      * p0's library has 5 cards (vanilla synthetic creatures used as
-        library fodder; the draw primitive doesn't care what cards
-        are drawn -- only the count).
-      * ``state.resolving_combat_damage_amount=4`` (the carrier scalar
-        the combat-damage event handler would push before firing the
-        trigger; the probe seeds it directly to control the count).
-
-    **Observables asserted:**
-      * Bridge round-trip:
-        ``{"kind": "draw_cards_equal_to_resolving_combat_damage"}``
-        translates to a ``DrawCardsEqualToResolvingCombatDamage()``
-        instance equal to a default-constructed one (unit-variant
-        equality).
-      * The Creature's DEALS_COMBAT_DAMAGE triggered ability emits
-        ``DrawCardsEqualToResolvingCombatDamage()``.
-      * Effect-level byte-equality between the parsed real-EoE
-        emission and the bridged Effect.
-      * Post-resolve: p0's hand has 4 cards (drew 4 from a 5-card
-        library); the library has 1 card left; the state log records
-        the combat-damage-trigger draw line.
+      * Post-resolve: p0's hand has 1 card (drew 1 from a 3-card
+        library); the library has 2 cards left.
     """
     from mtg_bot.parity.cross_engine import (
         DeckSpec, build_python_state, _ta_dict_to_python_effect,
@@ -542,80 +363,76 @@ def test_cross_engine_real_eoe_starwinder_parity():
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.cards import BASIC_LANDS
     from mtg_bot.effects.generic.draw_mill import (
+        DrawCards,
         DrawCardsEqualToResolvingCombatDamage,
-    )
-    from mtg_bot.effects.generic.counters import (
-        MoveSelfCountersToTargetCreatureYouControl,
     )
     from mtg_bot.effects.predicates import Event
     from mtg_bot.game import Zone
 
     # ------------------------------------------------------------------
-    # 1. Verify the genuine parsed Starwinder printing.
+    # 1. Verify the genuine parsed Meltstrider Eulogist printing.
     # ------------------------------------------------------------------
     real = (
-        get_active_source().get_printings().get("Starwinder")
+        get_active_source().get_printings().get("Meltstrider Eulogist")
     )
     if real is None:
-        pytest.skip("Starwinder absent from active CardSource")
+        pytest.skip("Meltstrider Eulogist absent from active CardSource")
     assert "Creature" in real.card_types, (
-        "Starwinder must be a Creature"
+        "Meltstrider Eulogist must be a Creature"
     )
-    cd_ta = next(
+    dies_ta = next(
         (
             ta for ta in real.triggered_abilities
-            if ta.event == Event.DEALS_COMBAT_DAMAGE
+            if ta.event == Event.DIES
         ),
         None,
     )
-    assert cd_ta is not None, (
-        "Starwinder must have a DEALS_COMBAT_DAMAGE triggered ability "
-        "(the combat-step event distinguishing this probe from the "
-        "existing ATTACKS / BLOCKS / ETB consumers in PROBE_MODULES)"
+    assert dies_ta is not None, (
+        "Meltstrider Eulogist must have a DIES triggered ability "
+        "(the event distinguishing this probe from the numerous "
+        "ENTERS / IS_CAST / SPELL / ATTACKS DrawCards consumers)"
     )
-    assert isinstance(
-        cd_ta.effect, DrawCardsEqualToResolvingCombatDamage,
-    ), (
-        f"Starwinder DEALS_COMBAT_DAMAGE effect must be "
-        f"DrawCardsEqualToResolvingCombatDamage; got "
-        f"{type(cd_ta.effect).__name__}"
+    assert isinstance(dies_ta.effect, DrawCards), (
+        f"Meltstrider Eulogist DIES effect must be DrawCards; got "
+        f"{type(dies_ta.effect).__name__}"
+    )
+    assert dies_ta.effect.amount == 1, (
+        f"Meltstrider Eulogist DIES effect must have amount=1; got "
+        f"amount={dies_ta.effect.amount}"
     )
 
     # ------------------------------------------------------------------
     # 2. Bridge round-trip: Rust kind dict -> Python Effect.
     # ------------------------------------------------------------------
     bridged = _ta_dict_to_python_effect(
-        {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+        {"kind": "draw_cards", "count": 1}
     )
-    assert isinstance(bridged, DrawCardsEqualToResolvingCombatDamage), (
-        f"Bridge arm 'draw_cards_equal_to_resolving_combat_damage' must "
-        f"round-trip to DrawCardsEqualToResolvingCombatDamage; got "
+    assert isinstance(bridged, DrawCards), (
+        f"Bridge arm 'draw_cards' must round-trip to DrawCards; got "
         f"{type(bridged).__name__}"
     )
-    # Unit-variant equality with the default constructor.
-    assert bridged == DrawCardsEqualToResolvingCombatDamage(), (
-        f"Bridged DrawCardsEqualToResolvingCombatDamage must equal a "
-        f"default-constructed instance (unit variant, no fields); got "
-        f"bridged={bridged!r}"
+    assert bridged.amount == 1, (
+        f"Bridged DrawCards must carry amount=1 (translated from "
+        f"dict 'count'); got amount={bridged.amount}"
     )
     # Effect-level byte-equality between the parsed real-EoE printing's
     # emitted Effect and the bridged Effect.
-    assert cd_ta.effect == bridged, (
-        f"Starwinder DEALS_COMBAT_DAMAGE effect must be byte-equal to "
-        f"the bridged Effect; got parsed={cd_ta.effect!r}, "
+    assert dies_ta.effect == bridged, (
+        f"Meltstrider Eulogist DIES effect must be byte-equal to the "
+        f"bridged Effect; got parsed={dies_ta.effect!r}, "
         f"bridged={bridged!r}"
     )
 
     # ------------------------------------------------------------------
     # 3. Distinctness from sibling Effect classes (regression guard).
     # ------------------------------------------------------------------
-    assert not isinstance(bridged, MoveSelfCountersToTargetCreatureYouControl), (
-        "DrawCardsEqualToResolvingCombatDamage must NOT collapse to "
-        "MoveSelfCountersToTargetCreatureYouControl (Probe 1's sibling "
-        "unit-variant effect with completely different semantics; the "
-        "counter primitive transfers state-bearing counters between "
-        "permanents, the draw primitive moves cards from library to "
-        "hand -- distinct mutation surfaces)."
+    assert not isinstance(bridged, DrawCardsEqualToResolvingCombatDamage), (
+        "DrawCards must NOT collapse to "
+        "DrawCardsEqualToResolvingCombatDamage (EEEE Probe 1's "
+        "Starwinder emission; DrawCards carries an explicit amount "
+        "field, the resolving-combat-damage variant reads the "
+        "carrier scalar at resolve time -- distinct count-sourcing "
+        "semantics)."
     )
 
     # ------------------------------------------------------------------
@@ -624,12 +441,9 @@ def test_cross_engine_real_eoe_starwinder_parity():
     spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
     py = build_python_state(spec)
 
-    # Seat the genuine Starwinder Creature on p0's battlefield (the
-    # ``resolving_source``).  The resolve doesn't read attached_to or
-    # plus_one_counters -- only state.resolving_combat_damage_amount
-    # and the controller_id passed in.  Seating the source ensures the
-    # state shape is consistent with a real combat-damage trigger
-    # firing.
+    # Seat the genuine Meltstrider Eulogist Creature on p0's
+    # battlefield (state consistency with a real DIES firing path;
+    # the resolve itself doesn't read the source object).
     source = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
     source.summoning_sick = False
     source.tapped = False
@@ -638,68 +452,281 @@ def test_cross_engine_real_eoe_starwinder_parity():
     py.next_timestamp += 1
     py.battlefield.append(source)
 
-    # Stock p0's library with 5 cards (vanilla Plains -- the draw
+    # Stock p0's library with 3 cards (vanilla Plains -- the draw
     # primitive is library-content-agnostic, only the count matters).
     p0 = py.players[0]
     plains_printing = BASIC_LANDS["Plains"]
-    for _ in range(5):
+    for _ in range(3):
         lib_card = py.new_object(plains_printing, owner_id=0, zone=Zone.LIBRARY)
         p0.library.append(lib_card)
 
-    # Sanity: p0's hand starts empty, library has 5.
+    # Sanity: p0's hand starts empty, library has 3.
     assert len(p0.hand) == 0, (
         f"Pre-resolve sanity: p0.hand must start empty; got "
         f"len(p0.hand)={len(p0.hand)}"
     )
-    assert len(p0.library) == 5, (
-        f"Pre-resolve sanity: p0.library must start with 5 cards; got "
+    assert len(p0.library) == 3, (
+        f"Pre-resolve sanity: p0.library must start with 3 cards; "
+        f"got len(p0.library)={len(p0.library)}"
+    )
+
+    # ------------------------------------------------------------------
+    # 5. resolve: draw 1 card.  No carrier-state setup needed --
+    #    DrawCards reads its ``amount`` field directly, not a
+    #    state-bound scalar like DrawCardsEqualToResolvingCombatDamage.
+    # ------------------------------------------------------------------
+    bridged.resolve(py, controller_id=0, targets=())
+
+    # Hand: 1 card drawn.
+    assert len(p0.hand) == 1, (
+        f"Meltstrider Eulogist: p0.hand must have 1 card post-resolve "
+        f"(DrawCards(amount=1) drew 1 from library); got "
+        f"len(p0.hand)={len(p0.hand)}"
+    )
+    # Library: 2 cards left (3 - 1 drawn).
+    assert len(p0.library) == 2, (
+        f"Meltstrider Eulogist: p0.library must have 2 cards left "
+        f"post-resolve (3 - 1 drawn = 2); got "
         f"len(p0.library)={len(p0.library)}"
     )
-
-    # ------------------------------------------------------------------
-    # 5. Set the carrier scalar
-    #    ``state.resolving_combat_damage_amount=4`` (the implicit "that
-    #    many" the combat-damage event handler pushes before firing the
-    #    trigger; per the resolve contract at
-    #    effects/generic/draw_mill.py:100-112).
-    # ------------------------------------------------------------------
-    py.resolving_source = source
-    py.resolving_combat_damage_amount = 4
-
-    # ------------------------------------------------------------------
-    # 6. resolve: draw 4 cards.
-    # ------------------------------------------------------------------
-    try:
-        bridged.resolve(py, controller_id=0, targets=())
-    finally:
-        py.resolving_combat_damage_amount = 0
-        py.resolving_source = None
-
-    # Hand: 4 cards drawn.
-    assert len(p0.hand) == 4, (
-        f"Starwinder: p0.hand must have 4 cards post-resolve "
-        f"(DrawCardsEqualToResolvingCombatDamage drew 4 = "
-        f"resolving_combat_damage_amount); got len(p0.hand)={len(p0.hand)}"
-    )
-    # Library: 1 card left (5 - 4 drawn).
-    assert len(p0.library) == 1, (
-        f"Starwinder: p0.library must have 1 card left post-resolve "
-        f"(5 - 4 drawn = 1); got len(p0.library)={len(p0.library)}"
-    )
-    # State log records the combat-damage-trigger draw.
-    log_text = "\n".join(py.log)
-    assert "combat-damage trigger" in log_text, (
-        f"State log must record the combat-damage-trigger draw line; "
-        f"got log:\n{log_text}"
-    )
-    assert "draws 4 cards" in log_text, (
-        f"State log must record the 4-card draw count; got log:\n"
-        f"{log_text}"
-    )
     # Source remains on the battlefield (the resolve mutates p0's
-    # hand + library; it does NOT move the source).
+    # hand + library; it does NOT move the source -- in real play
+    # the DIES event would have already moved the source to the
+    # graveyard BEFORE the trigger resolves, but the probe pins the
+    # resolve mutation surface, which is decoupled from the source
+    # move).
     assert source in py.battlefield, (
-        "Starwinder: source must remain on the battlefield post-resolve "
-        "(DrawCardsEqualToResolvingCombatDamage is a hand+library "
-        "mutation, not a zone change for the source)"
+        "Meltstrider Eulogist: source remains on the battlefield in "
+        "this probe's controlled state (DrawCards mutates hand + "
+        "library, not source zone; the DIES-event source-move is "
+        "out-of-scope for the bare effect+bridge+resolve probe)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Probe 2 -- Balemurk Leech: Creature ENTERS triggered ->
+#   EachOpponentLosesLife(amount=1).
+#
+# Verifies the closure chain end-to-end on the genuine parsed printing:
+#   1. ``get_active_source().get_printings().get("Balemurk Leech")``
+#      returns the parsed CardPrinting (Creature, Leech).
+#   2. The ENTERS triggered ability's effect is an
+#      ``EachOpponentLosesLife`` instance with ``amount=1``.
+#   3. The bridge round-trips the canonical dict shape
+#      ``{"kind": "each_opponent_loses_life", "amount": 1}`` to a
+#      fresh ``EachOpponentLosesLife(amount=1)`` instance.
+#   4. Distinctness from sibling Effect classes is preserved
+#      (regression guard against unit-variant collapse).
+#   5. Python's ``resolve`` path drives the per-opponent life loss
+#      pipeline on a controlled state: p1 starts at 20 life;
+#      post-resolve p1 is at 19.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_real_eoe_balemurk_leech_parity():
+    """**GENUINE real-EoE cross-engine probe -- Balemurk Leech (round
+    30 DDDD reclaim, Creature ENTERS -> EachOpponentLosesLife
+    (amount=1)).**
+
+    Drives the **real parsed Balemurk Leech printing** through the
+    Python-side ``EachOpponentLosesLife`` resolve path, validating
+    the per-opponent direct life-loss pipeline on a controlled state
+    (p1 starts at 20 life; post-resolve p1 is at 19).  Pairs the
+    parse + bridge round-trip verification with the live Python
+    resolve smoke, the same parse + bridge-round-trip + Python-side
+    resolve idiom DDD slice 17 + YYY + ZZZ + AAAA + CCCC + EEEE
+    established.
+
+    **NEW shape coverage:** the FIRST PROBE_MODULES-credited
+    ``_parity`` probe of the ``EachOpponentLosesLife`` effect class.
+    Balemurk Leech is the ONLY EoE consumer of this effect class
+    per the bridge-arm docstring at ``cross_engine.py``:4872-4874
+    (1 EoE card hit via oracle scan -- the Eerie-shape direct life
+    loss pattern; CR 118.4 NOT damage).  Complements:
+      * Sister effect ``TargetOpponentLosesLife`` (which targets a
+        specific opponent via the Decision pipeline and defaults to
+        amount=1; routes through target selection).
+      * Sister effect ``DamageEachOpponent`` (which deals DAMAGE
+        routed through damage-prevention -- vs this arm's direct
+        life subtraction; reducible by damage-prevention /
+        Worship-style replacement, this primitive is NOT).
+    What's NEW here is the **effect class** -- the CR 118.4 direct
+    life loss primitive (the punisher / drawback pattern's
+    canonical bridge probe).  Balemurk Leech also has a sibling
+    ROOM_FULLY_UNLOCKED-event trigger emitting the same effect; the
+    ROOM event is subsystem-gated per the CCCC drop-list
+    (``test_probe_remaining_cccc.py``:119-124 -- Room subsystem
+    full surface gating), so this probe pins only the ENTERS leg.
+
+    Balemurk Leech was previously the subject of a non-credited
+    cross-engine function in
+    ``test_probe_subject_is_enchantment_unlock.py``:119 -- that
+    function does NOT end in ``_parity`` (it predates the credit
+    naming convention and uses the older full ``compare_fields``
+    cross-engine idiom requiring Rust-bridge predicate parity for
+    the ``subject_is_enchantment`` arm).  The DDDD probe lands the
+    credited ``_parity`` variant via the YYY-idiom (no Rust-side
+    compare_fields; effect+bridge+Python-resolve only -- the
+    predicate parity is not load-bearing under this idiom).
+
+    **Bridge arm exercised:** ``each_opponent_loses_life`` at
+    ``cross_engine.py``:4819 (round-23 BLOCKED-BRIDGE-ARM slice
+    closure; matching Rust's
+    ``Effect::EachOpponentLosesLife { amount: i32 }`` at
+    cards.rs:507, parser at cards.rs:3425-3438, resolve at
+    state_ops_resolve.rs:3592-3636 -- CR 118.4 direct life loss,
+    NOT damage; punisher / drawback pattern).
+
+    **Setup (Python-side):**
+      * p0 has Balemurk Leech on the battlefield (state consistency
+        with a real ENTERS firing path; the resolve itself doesn't
+        read the source object).
+      * p1 starts at 20 life (the default initial life total per
+        ``build_python_state``'s contract).
+
+    **Observables asserted:**
+      * Bridge round-trip:
+        ``{"kind": "each_opponent_loses_life", "amount": 1}``
+        translates to an ``EachOpponentLosesLife(amount=1)``
+        instance (with amount=1; the ``amount`` field is REQUIRED
+        on the bridge arm per cross_engine.py:4831-4838).
+      * The Creature's ENTERS triggered ability emits
+        ``EachOpponentLosesLife(amount=1)``.
+      * Effect-level byte-equality between the parsed real-EoE
+        emission and the bridged Effect.
+      * Post-resolve: p1's life is 19 (was 20 pre-resolve); p0's
+        life is UNCHANGED (controllers are skipped by
+        ``EachOpponentLosesLife.resolve``).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, _ta_dict_to_python_effect,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.generic.life import EachOpponentLosesLife
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+
+    # ------------------------------------------------------------------
+    # 1. Verify the genuine parsed Balemurk Leech printing.
+    # ------------------------------------------------------------------
+    real = (
+        get_active_source().get_printings().get("Balemurk Leech")
+    )
+    if real is None:
+        pytest.skip("Balemurk Leech absent from active CardSource")
+    assert "Creature" in real.card_types, (
+        "Balemurk Leech must be a Creature"
+    )
+    enters_ta = next(
+        (
+            ta for ta in real.triggered_abilities
+            if ta.event == Event.ENTERS
+        ),
+        None,
+    )
+    assert enters_ta is not None, (
+        "Balemurk Leech must have an ENTERS triggered ability "
+        "(the Eerie-shape enchantment-ETB observer leg; the sibling "
+        "ROOM_FULLY_UNLOCKED leg is subsystem-gated and out of "
+        "scope for this probe)"
+    )
+    assert isinstance(enters_ta.effect, EachOpponentLosesLife), (
+        f"Balemurk Leech ENTERS effect must be EachOpponentLosesLife; "
+        f"got {type(enters_ta.effect).__name__}"
+    )
+    assert enters_ta.effect.amount == 1, (
+        f"Balemurk Leech ENTERS effect must have amount=1; got "
+        f"amount={enters_ta.effect.amount}"
+    )
+
+    # ------------------------------------------------------------------
+    # 2. Bridge round-trip: Rust kind dict -> Python Effect.
+    # ------------------------------------------------------------------
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_loses_life", "amount": 1}
+    )
+    assert isinstance(bridged, EachOpponentLosesLife), (
+        f"Bridge arm 'each_opponent_loses_life' must round-trip to "
+        f"EachOpponentLosesLife; got {type(bridged).__name__}"
+    )
+    assert bridged.amount == 1, (
+        f"Bridged EachOpponentLosesLife must carry amount=1; got "
+        f"amount={bridged.amount}"
+    )
+    # Effect-level byte-equality between the parsed real-EoE printing's
+    # emitted Effect and the bridged Effect.
+    assert enters_ta.effect == bridged, (
+        f"Balemurk Leech ENTERS effect must be byte-equal to the "
+        f"bridged Effect; got parsed={enters_ta.effect!r}, "
+        f"bridged={bridged!r}"
+    )
+
+    # ------------------------------------------------------------------
+    # 3. Distinctness from sibling Effect classes (regression guard).
+    # ------------------------------------------------------------------
+    assert not isinstance(bridged, DrawCards), (
+        "EachOpponentLosesLife must NOT collapse to DrawCards "
+        "(Probe 1's sibling effect with completely different "
+        "semantics; DrawCards moves cards from library to hand on "
+        "the controller, EachOpponentLosesLife subtracts life from "
+        "each non-controller player -- distinct mutation surfaces)."
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Python-side resolve smoke on a controlled state.
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+
+    # Seat the genuine Balemurk Leech Creature on p0's battlefield
+    # (state consistency with a real ENTERS firing path; the
+    # resolve itself doesn't read the source object).
+    source = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    source.summoning_sick = False
+    source.tapped = False
+    source.damage = 0
+    source.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(source)
+
+    # Sanity: both players start at 20 life (default initial life
+    # total per build_python_state).
+    p0 = py.players[0]
+    p1 = py.players[1]
+    assert p0.life == 20, (
+        f"Pre-resolve sanity: p0.life must start at 20; got "
+        f"p0.life={p0.life}"
+    )
+    assert p1.life == 20, (
+        f"Pre-resolve sanity: p1.life must start at 20; got "
+        f"p1.life={p1.life}"
+    )
+
+    # ------------------------------------------------------------------
+    # 5. resolve: each opponent of p0 loses 1 life.  No carrier-
+    #    state setup needed -- EachOpponentLosesLife reads its
+    #    ``amount`` field directly and walks state.players, skipping
+    #    the controller_id.
+    # ------------------------------------------------------------------
+    bridged.resolve(py, controller_id=0, targets=())
+
+    # p1: 1 life lost (the one opponent in the 2-player state).
+    assert p1.life == 19, (
+        f"Balemurk Leech: p1.life must equal 19 post-resolve "
+        f"(EachOpponentLosesLife(amount=1) subtracts 1 from each "
+        f"opponent; CR 118.4 direct life loss); got p1.life={p1.life}"
+    )
+    # p0: UNCHANGED (controller is skipped).
+    assert p0.life == 20, (
+        f"Balemurk Leech: p0.life must remain 20 post-resolve "
+        f"(EachOpponentLosesLife skips the controller); got "
+        f"p0.life={p0.life}"
+    )
+    # Source remains on the battlefield (the resolve mutates p1's
+    # life; it does NOT move the source).
+    assert source in py.battlefield, (
+        "Balemurk Leech: source must remain on the battlefield "
+        "post-resolve (EachOpponentLosesLife is a life mutation, "
+        "not a zone change)"
     )
