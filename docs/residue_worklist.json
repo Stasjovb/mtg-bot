@@ -98,11 +98,16 @@
       "card": "Lightstall Inquisitor",
       "claimed_missing_effect": "EachOpponentExilesFromHand",
       "aliases": [
-        "EachOpponentExilesFromHand"
+        "EachOpponentExilesFromHand",
+        "EachOpponentExilesCardFromHandWithCastPermission"
       ],
-      "status": "genuinely_missing",
+      "status": "closed",
+      "resolved_variant": "EachOpponentExilesCardFromHandWithCastPermission",
+      "reclassified_to": "PROBED-PARTIAL (real-EoE each-opponent-exile-portion byte-equal probe shipped slice-20; persistent cast-from-exile permission substrate remains genuinely_missing as the sister CastFromExileWithCostHike entry)",
+      "closed_round": "slice-20 (20th Rust slice; XXX Pin 3 honest-stop closure)",
+      "_orig_status": "genuinely_missing",
       "verified_absent_at_commit": "e17802c9",
-      "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor; the real parse fuses both halves into the single bespoke EachOpponentExilesCardFromHandWithCastPermission composite, no separate shipped EachOpponentExilesFromHand Effect). Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live printing's sole Event.ENTERS effect is EachOpponentExilesCardFromHandWithCastPermission (bespoke Python class, NOT in the live 112-variant Rust enum); no alias resolves to a live Rust variant; printed name in NO wired bridge arm. TRUE new-Rust-Effect ask. Prior re-verifies: 31ef47ff (round-56 N2)."
+      "note": "CLOSED by slice 20: Effect::EachOpponentExilesCardFromHandWithCastPermission unit variant shipped (parse + to_pydict + bridge + resolve arm) covering the each-opponent-exile portion of the fused bespoke effect. Post-resolve zone counts (card moves from each opponent's hand to that opponent's exile) are byte-equal across engines under deterministic hand[0]-first-legal pick. The persistent cast_from_exile_with_lightstall_surcharge permission substrate (legal-actions emission + cast-machinery + +{1} surcharge + tapped-land-entry riders) is HONEST-STOPPED in slice 20 -- tracked separately as the sister 'CastFromExileWithCostHike' entry above which remains genuinely_missing. Probes: tests/test_probe_xxx_pin3_downstream.py (3 probes; each-opponent-exile portion only). Pre-closure history: verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first); 31ef47ff (round-56 N2)."
     },
     {
       "entry": "SacUnlessYouTap",

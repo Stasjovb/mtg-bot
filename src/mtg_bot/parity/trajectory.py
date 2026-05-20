@@ -4263,6 +4263,150 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_simple_aura(printing) -> bool:
+    """True iff a CardPrinting is a Phase-1 bridge-supported Aura
+    (sub-shape S1 in ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §1):
+    a static P/T-or-keyword Aura with no triggered/spell/activated/
+    static effects, no control-swap or replacement riders, and a
+    parseable cost.
+
+    **Aura-attachment substrate — Phase 1 first-deliverable
+    (round-77).** This is the §2 positive-allowlist predicate the
+    plan's §3 Phase 1 step 7 specifies. It does NOT (this slice) get
+    OR'd into :func:`_filter_deck_to_bridge_supported`'s 5-disjunct
+    admit chokepoint — substrate-only, no Aura reaches the bench. The
+    remaining Phase-1 steps (Rust ``parse_printing`` aura-key parse +
+    cast-time enchant-target decision + Rust aura-resolution arm +
+    CR-704.5n SBA + bidirectional bridge arms) are honest-stopped;
+    once they land, the wire-up into the 5-disjunct is a one-line
+    change here. See the plan §3 Phase 1 for the remaining items.
+
+    Phase-1 admit set: sub-shape **S1** ONLY (Frantic Strength,
+    Shardmage's Rescue per the plan §1). Every other Aura sub-shape
+    (S2 control-changing, S3 replacement, S4 triggered) stays
+    positively declined here — Phase 2/3/4 land them.
+
+    The §2 teeth (declines that would silently mistranslate, mirroring
+    the warp / spell guardrail's rider-rejection blocks):
+
+      * Must be ``is_aura`` (CR 205.3h — Enchantment - Aura).
+      * No ``triggered_abilities`` (S4 — Phase 4).
+      * No ``activated_abilities`` (no Aura in the EoE pool carries
+        one today; defensive).
+      * No ``static_abilities`` (Phase 2 — anthem-style Auras).
+      * No ``spell_effect`` (Auras are permanents, not Instant/
+        Sorcery; defensive).
+      * No ``warp_cost`` / ``kicker_cost`` / ``impending_cost`` /
+        ``room_halves`` / ``loyalty`` (alt-cost riders — other
+        substrates).
+      * No ``cost_reductions`` / ``external_cost_reductions``.
+      * No ``attached_grants_control`` / ``attached_grants_lose_all_
+        abilities`` / ``attached_sets_base_pt`` / ``attached_grants_
+        subtype`` / ``attached_prevents_untap`` (S2 — Phase 2).
+      * No ``replaces_first_tokens_with_copies`` (S3 — Phase 4).
+      * No ``ward_cost`` (defensive — mirrors the simple-creature
+        guardrail).
+      * No ``dynamic_pt_formula`` (defensive — Auras don't have one,
+        but the CardDef bridge would silently drop it).
+      * Either no ``keywords``, OR every keyword in
+        :data:`_SAFE_KEYWORDS` (the parser-on-the-Aura keyword set;
+        Frantic Strength's ``flash`` is OUTSIDE _SAFE_KEYWORDS — see
+        below; Shardmage's ``flash`` ditto).
+
+        **Phase-1-S1 carrier reality (verify-first).** Frantic Strength
+        carries ``flash`` as a STATIC keyword on the printing AND a
+        ``trample`` keyword on the granted ``equipment_bonuses`` tuple.
+        The granted-keyword (the +2/+2/trample rider) lives on a
+        SEPARATE field from the printing's static ``keywords`` — the
+        bridge round-trips them via different paths. Phase-1 admits
+        ONLY the granted-keyword subset that's in
+        :data:`_SAFE_KEYWORDS`; the printing's own static ``flash``
+        keyword is the §2 decline reason for both Frantic Strength
+        and Shardmage's Rescue in THIS slice. This matches the round-
+        61 N1 scout's finding that S1 has zero realizable-yield decks
+        today (both cards have 0 EoE 17lands decks; the long-tail
+        admit is the substrate's value, not the deck count).
+
+      * Aura's ``equipment_bonuses`` (the (power_bonus,
+        toughness_bonus, granted_keywords) tuple) — when present, the
+        granted_keywords must all be in :data:`_SAFE_KEYWORDS`. The
+        bonus deltas have no upper bound.
+      * Mana cost is parseable into (generic, colored).
+
+    **Substrate-only this slice — no production deck signal:** the
+    predicate IS exposed (importable, callable) and tested, but
+    :func:`_filter_deck_to_bridge_supported` does NOT call it yet.
+    Phase 1 of the plan completes when the remaining Rust steps land
+    and a single ``or _printing_is_bridge_simple_aura(printing)`` is
+    added to the 5-disjunct.
+    """
+    if not getattr(printing, "is_aura", False):
+        return False
+    # Triggered / static / activated / spell-effect riders — other
+    # Aura sub-shapes (S4 = triggered, S2 = static control-swap).
+    if printing.triggered_abilities:
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    # Alt-cost / mode riders — defensive (no EoE Aura today carries
+    # any of these, but the same §2 rider-rejection pattern as the
+    # warp / spell guardrails keeps the gate honest).
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    # S2 control-changing / S3 replacement riders — Phase 2/4 of the
+    # plan; positively declined here.
+    if printing.attached_grants_control:
+        return False
+    if printing.attached_grants_lose_all_abilities:
+        return False
+    if printing.attached_sets_base_pt is not None:
+        return False
+    if printing.attached_grants_subtype is not None:
+        return False
+    if printing.attached_prevents_untap:
+        return False
+    if printing.replaces_first_tokens_with_copies:
+        return False
+    # Defensive — Auras don't carry ward / dynamic-PT today, but keep
+    # the substrate honest (mirrors the simple-creature guardrail).
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    # Static keyword set on the printing itself — every Phase-1 S1
+    # carrier (Frantic Strength, Shardmage's Rescue) carries ``flash``
+    # which is OUTSIDE _SAFE_KEYWORDS. This is the §2 decline that
+    # keeps the substrate from accidentally admitting an S1 carrier
+    # this slice; the round-61 N1 scout's "0 realizable decks" finding
+    # is faithful here. When Phase 1 widens _SAFE_KEYWORDS (or a future
+    # Phase ships flash-on-static-aura), the predicate continues to
+    # decline correctly via the bonus-set check below.
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    # Granted-keyword check on equipment_bonuses (the +P/+T/keywords
+    # rider). The bonus tuple is (power_bonus, toughness_bonus,
+    # granted_keywords); granted_keywords must all be in _SAFE_KEYWORDS.
+    if printing.equipment_bonuses is not None:
+        _, _, granted_kws = printing.equipment_bonuses
+        if granted_kws and not granted_kws.issubset(_SAFE_KEYWORDS):
+            return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_is_bridge_basic_land(printing) -> bool:
     """True if a CardPrinting is a basic Land the harness can model.
 
@@ -4466,6 +4610,46 @@ def _printing_to_card_def(printing) -> CardDef:
                 printing, "warp_additional_life_cost", 0),
             warp_from_graveyard=getattr(
                 printing, "warp_castable_from_graveyard", False),
+        )
+    if _printing_is_bridge_simple_aura(printing):
+        # Aura-attachment substrate — Phase 1 first-deliverable
+        # (round-77; spec at ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md``
+        # §3 Phase 1). The Phase-1 S1 (static P/T-or-keyword Aura)
+        # CardDef shape — the printing's ``is_aura`` /
+        # ``aura_enchant_type`` / ``aura_yours_only`` /
+        # ``equipment_bonuses`` round-trip via the CardDef aura fields.
+        # ``card_type="Enchantment"`` (Phase-1 Auras are pure
+        # enchantments — no Creature/Artifact overlap); the "Aura"
+        # subtype is materialized by ``_card_def_to_python_printing``.
+        # NOT REACHED THIS SLICE: ``_filter_deck_to_bridge_supported``
+        # does not call this branch because
+        # :func:`_printing_is_bridge_simple_aura` is not yet OR'd into
+        # the 5-disjunct. This branch exists so the conversion is
+        # testable in isolation (round-77 Phase-1-first-deliverable
+        # pin) and so a later round's one-line wire-up flip closes the
+        # loop without a second edit here.
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "")
+        if printing.equipment_bonuses is not None:
+            pb, tb, gks = printing.equipment_bonuses
+            aura_power_bonus = pb
+            aura_toughness_bonus = tb
+            aura_granted_keywords = tuple(sorted(gks))
+        else:
+            aura_power_bonus = 0
+            aura_toughness_bonus = 0
+            aura_granted_keywords = ()
+        return CardDef(
+            name=printing.name,
+            card_type="Enchantment",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            is_aura=True,
+            aura_enchant_type=printing.aura_enchant_type,
+            aura_yours_only=printing.aura_yours_only,
+            aura_power_bonus=aura_power_bonus,
+            aura_toughness_bonus=aura_toughness_bonus,
+            aura_granted_keywords=aura_granted_keywords,
         )
     if _printing_is_bridge_simple_spell(printing):
         # Spell-card-bridge lever, Phase 1 (round-70): a pure

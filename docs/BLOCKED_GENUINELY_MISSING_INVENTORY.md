@@ -8,7 +8,7 @@ sequencing guide**: every other parity work is BLOCKED-non-effect (2
 cards), BLOCKED-subsystem-gated (149 cards, see
 `docs/SUBSYSTEM_ROADMAP.md`), or PROBED/covered (320 cards).
 
-**Snapshot HEAD:** post-slice-19-merge (2026-05-20).
+**Snapshot HEAD:** post-slice-20-merge (2026-05-20).
 **Source of truth:** `docs/residue_worklist.json` (the residue
 worklist's per-card re-walk is the AUTHORITY on genuine Effect absence
 — round-63 N5 verify-first re-walk at `e6f95002`). The 4 cards below
@@ -34,6 +34,19 @@ Pain for All's residual scope stays **medium** (NOT "small") — the
 substrate-sharing flip only fires once Phase 1 of the substrate plan
 ships.
 
+**Round-77 update (2026-05-20): Phase 1 first-deliverable LANDED
+(PARTIAL).** Steps 1+2 partial (CardDef aura fields + bridge
+emission/materialization) and step 7 partial (the loader admit
+predicate `_printing_is_bridge_simple_aura` — defined + tested + NOT
+yet OR'd into the 5-disjunct) shipped on the `feature/aura-substrate-
+phase-1` slice. Steps 3-6 (Rust `parse_printing` aura-key parse +
+cast-time enchant-target decision + Rust aura-resolution arm +
+CR-704.5n SBA + bidirectional bridge arms) are honest-stopped. **Pain
+for All's scope estimate is UNCHANGED** — the substrate-sharing
+medium→small flip still requires the Rust Phase-1 steps to land
+(Pain for All sits at Phase 3 of the substrate plan, ≥2 rounds out
+even after Phase 1 closes).
+
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
 Pain for All 4,367 + Sothera 2,108). Some decks contain multiple
@@ -49,8 +62,8 @@ NOT in this tier; they're carried under the Aura subsystem in
 
 | Card | bespoke.py (or generic) class | LoC | 17lands decks | Substrate ask | Scope |
 |---|---|---:|---:|---|---|
-| Command Bridge — CLOSED (slice 20) | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing (already wired) + tap-a-permanent agent decision (PendingDecision::TapPermanentChoice landed) | n/a (CLOSED) |
-| Lightstall Inquisitor | `effects/generic/discard.py::EachOpponentExilesCardFromHandWithCastPermission` | 173-214 | 4,371 | persistent `cast_from_exile_with_lightstall_surcharge` flag + cost-hike legality | large (6+) |
+| Command Bridge — CLOSED (slice 20 / VVV Pin 2) | `effects/combinators.py::SacrificeSelfUnlessTapPermanent` | 95-168 | 24,522 | land-ETB-trigger plumbing (already wired) + tap-a-permanent agent decision (PendingDecision::TapPermanentChoice landed) | n/a (CLOSED) |
+| Lightstall Inquisitor — PARTIAL CLOSED (slice 20 / XXX Pin 3) | `effects/generic/discard.py::EachOpponentExilesCardFromHandWithCastPermission` | 173-214 | 4,371 | persistent `cast_from_exile_with_lightstall_surcharge` flag + cost-hike legality + tapped-land-entry rider (Effect+exile portion CLOSED in slice 20; permission substrate stays open) | large (6+) — substrate-only after slice 20 partial closure |
 | Pain for All | `bespoke.py::PainForAllETBEffect` + `::PainForAllDamageEchoEffect` | 352-463 | 4,367 | Aura `attached_to` damage source + dealt-damage event echo (substrate-shared with Meltstrider's Resolve) | medium (3-5) |
 | Sothera, the Supervoid | `effects/generic/exile.py::ReanimateOneExiledWithSourceWithCounters` + `::SacrificeSelfPreservingExileLink` + `effects/generic/opponent_punishers.py::EachOpponentExilesOwnCreature` | 149-217 / 1122-1216 / 1221-1273 | 2,108 | `GameObject.exiled_by_source` source-link + on-leave auto-return suppression + recall-first/sac-second ordering | large (6+) |
 
@@ -61,6 +74,7 @@ NOT in this tier; they're carried under the Aura subsystem in
 |---|---|---|---|
 | Roving Actuator | 18th (slice 18) | `Effect::RovingActuatorETBEffect { max_mv: u8 }` + parse + resolve + bridge — Effect closed AND full game byte-equal under the short-circuit-the-stack shortcut | n/a (the short-circuit-the-stack shortcut closes the full card) |
 | Meltstrider's Resolve | 19th (slice 19, honest-stop) | `Effect::EnchantedCreatureFightsTarget` unit variant + parse + to_pydict + bridge + honest-stop resolve arm (Effect-level closure) | Aura attach substrate Phases 1-2 per `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` — `attached_to` is never set on Rust Aura resolve today; the loader admits no Aura. Full byte-equal of the real card requires this substrate. |
+| Lightstall Inquisitor (partial) | 20th (slice 20, honest-stop) | `Effect::EachOpponentExilesCardFromHandWithCastPermission` unit variant + parse + to_pydict + bridge + resolve arm (each-opponent-exile portion) — Effect-level + exile-portion byte-equal cross-engine | Persistent `cast_from_exile_with_lightstall_surcharge` substrate (GameObject field + legal-actions emission + cast-from-exile cost machinery + +{1} surcharge + tapped-land-entry rider). Lightstall stays in BLOCKED tier on `docs/POOL_PARITY.md` because the sister `CastFromExileWithCostHike` residue entry remains genuinely_missing; closing it requires the full permission substrate (large 6+ cycles). |
 
 Scope key (calibrated against this session's slices):
 
@@ -186,7 +200,12 @@ genuinely-missing).
   ships, but the *real-EoE* byte-equal game-trajectory still
   requires the full substrate.
 
-### 3. Lightstall Inquisitor — 4,371 decks
+### 3. Lightstall Inquisitor — 4,371 decks — PARTIAL CLOSED (slice 20)
+
+**Status (post-slice-20):** Effect-level + each-opponent-exile portion
+**CLOSED**; persistent permission substrate **HONEST-STOPPED** (still
+genuinely_missing as the sister `CastFromExileWithCostHike` residue
+entry).
 
 - **Bespoke class:** `src/mtg_bot/effects/generic/discard.py:173-214`
   (`EachOpponentExilesCardFromHandWithCastPermission`).
@@ -194,32 +213,53 @@ genuinely-missing).
   fusing both halves of the oracle text: each opponent exiles a card
   from hand + may play that card while exiled + {1} surcharge + tapped
   land entry.
-- **Effect variants needed:** two genuinely_missing worklist entries
-  for the same card:
-  - `Effect::EachOpponentExilesFromHand` (the exile-from-hand half)
-  - `Effect::CastFromExileWithCostHike` (the cast-from-exile half +
-    {1} surcharge + tapped land entry rider)
-  - In practice the real parse fuses them into ONE composite arm
-    matching the Python — a single composite variant, not two
-    independent ones.
-- **Substrate dependencies:**
+- **What slice 20 shipped (the EachOpponentExilesFromHand half):**
+  - `Effect::EachOpponentExilesCardFromHandWithCastPermission` unit
+    variant + `each_opponent_exiles_card_from_hand_lightstall` parse
+    arm + `effect_to_pydict` arm + bridge arm
+    (`cross_engine.py::_ta_dict_to_python_effect`).
+  - Resolve arm (`state_ops_resolve.rs`) mirrors Python step-for-step
+    on the each-opponent-exile portion: source-controller 5-zone walk
+    + stack scan; 2-player "each opponent" → "the one opponent";
+    empty-hand silent no-op; pop hand[0] deterministically (matches
+    Python's `agent.choose_discard` returning `hand_ids[0]`); CR 400.7
+    zone-change reset; push to opponent's exile.
+  - 3 downstream probes
+    (`tests/test_probe_xxx_pin3_downstream.py`) pin the exile-portion
+    byte-equality across engines.
+- **What slice 20 honest-stopped (the CastFromExileWithCostHike half):**
   - Persistent `cast_from_exile_with_lightstall_surcharge` flag on the
-    `GameObject` for each exiled card — survives across turns, lives
-    on the card while in exile, drives legal-actions to surface
-    CastSpell/PlayLand from exile.
+    `GameObject` for each exiled card — Rust's `GameObject` struct has
+    no such field today. Python sets `card.cast_from_exile_with_
+    lightstall_surcharge = True` on the exiled card; Rust does not.
+  - Legal-actions emission must surface the exiled card as castable
+    (new exile-as-cast-source code path).
   - Cost-modification path: spell cast this way costs {1} more than
     its normal cost. Rust has no cost-hike-on-spell-resolve plumbing
     today.
   - Tapped-land-entry rider: a land played this way ETBs tapped — Rust
     has tapped-ETB plumbing for static "ETB tapped" lands but not the
     contextual "this play instance was via the surcharge route" path.
-- **Scope:** **large (6+ cycles).** New persistent permission flag +
-  new cost-modification subsystem + contextual-tap-on-entry rider.
-  Per-opponent loop over hands (a fresh decision per opponent) is also
-  a new decision-contract shape for Rust.
+- **Cross-engine parity boundary today:** A probe that drives ETB
+  resolution and inspects post-resolve zones is **byte-equal across
+  engines** (P1 hand -1, P1 exile +1, deterministic hand[0] identity).
+  A probe that further attempts to cast the exiled card on the OWNER's
+  next priority is **NOT byte-equal** — Python surfaces the cast in
+  legal_actions; Rust does not. `docs/POOL_PARITY.md` correctly lists
+  Lightstall in BLOCKED-genuinely_missing because the sister
+  `CastFromExileWithCostHike` residue entry remains open.
+- **Scope (substrate-only after slice 20):** **large (6+ cycles).**
+  The remaining work is purely the persistent permission substrate —
+  new `GameObject` field + legal-actions emission + cast-from-exile
+  cost machinery + +{1} surcharge + tapped-land-entry rider. The
+  Effect-level + exile-portion scaffolding makes the hot-path branch
+  ready-to-flip when the substrate's first phase ships.
 - **Per-deck leverage:** 4,371 decks × large scope = poor cycles
   ratio. Defer until the cast-from-exile substrate is needed by a
-  second card (none currently in `genuinely_missing`).
+  second card (none currently in `genuinely_missing` — the substrate
+  has no in-tier sibling post-slice-18 because Roving Actuator closed
+  via the short-circuit-the-stack shortcut, NOT a real free-cast
+  pipeline).
 
 ### 4. Pain for All — 4,367 decks
 
