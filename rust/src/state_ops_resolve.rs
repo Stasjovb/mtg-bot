@@ -473,6 +473,7 @@ pub(crate) fn dispatch_event(
         && event != Event::CountersAdded
         && event != Event::IsSacrificed
         && event != Event::DealtDamage
+        && event != Event::BeginningOfPostcombatMain
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired; \
@@ -481,8 +482,9 @@ pub(crate) fn dispatch_event(
              Event::BecomesTapped, Event::DealsDamage, \
              Event::BeginningOfEndStep, Event::BeginningOfUpkeep, \
              Event::BeginningOfCombat, Event::YouAttack, \
-             Event::CountersAdded, Event::IsSacrificed, Event::DealtDamage \
-             (Slice 9 + r58 + r13 + r14 + r15 + r16-RR)"
+             Event::CountersAdded, Event::IsSacrificed, Event::DealtDamage, \
+             Event::BeginningOfPostcombatMain \
+             (Slice 9 + r58 + r13 + r14 + r15 + r16-RR + PPP)"
         )));
     }
 
@@ -1030,6 +1032,35 @@ fn first_legal_trigger_target(
                 Some(pid as u32)
             }
         }
+        // **PPP Pin 2 (10th Rust slice).** PutPlusOneCounterOnTargetCreature:
+        // bare "target creature" — no controller restriction. Scan
+        // `bf_iter_etb_sorted` (smallest-bf-index order across both
+        // players) for the first Creature (and when
+        // `attacking_only=true`, the first attacking Creature). The
+        // shared seat ensures both engines deterministically pick the
+        // SAME object. `count_min=1` semantics (the matching
+        // `lever_trigger_requires_target` entry below fizzles the
+        // trigger when no legal target exists, CR 603.3c).
+        Effect::PutPlusOneCounterOnTargetCreature {
+            attacking_only,
+            ..
+        } => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state
+                        .registry
+                        .printings
+                        .get(obj.printing_id as usize)?;
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        return None;
+                    }
+                    if *attacking_only && !state.attackers.contains(&obj.id) {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+        }
         // Every other effect (all existing untargeted safe triggers,
         // and any non-lever targeted trigger the engine handles
         // elsewhere): NOT a target-seating consumer — the helper is
@@ -1063,6 +1094,12 @@ fn lever_trigger_requires_target(effect: &Effect) -> bool {
         effect,
         Effect::PutPlusOneCounterOnOpponentsCreature { .. }
             | Effect::SeedshipImpactEffect { .. }
+            // PPP Pin 2: PutPlusOneCounterOnTargetCreature is a
+            // count_min=1 targeted ability — with no legal target the
+            // trigger fizzles per CR 603.3c. Byte-equal with Python's
+            // `_put_triggered_ability_on_stack` "no legal targets"
+            // return-False path.
+            | Effect::PutPlusOneCounterOnTargetCreature { .. }
     )
 }
 
@@ -5526,6 +5563,59 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // **PPP Pin 1 (10th Rust slice).** TargetPlayerLosesLife: the
+        // PRE-FIXED target player loses `amount` life. Distinct from
+        // TargetOpponentLosesLife — that arm auto-picks the defending
+        // opponent at resolve time; this arm reads the pre-wired
+        // target player id from the payload-target seat.
+        //
+        // **First-slice resolve path.** Read
+        // `current_resolve_payload_target_id` — the dispatch site
+        // (e.g. the DISCARDS_CARD `fixed_targets` plumbing for
+        // Entropic Battlecruiser's 1+ tier) sets this to the player
+        // id BEFORE the trigger resolves. Convention is the same
+        // small-id-namespace used by PutPoisonCountersOnTargetPlayer
+        // (8th Rust slice, JJJ Pin 2): values 0 or 1 are player ids
+        // in the 2-player engine.
+        //
+        // **No-target observable.** Unset payload-target (None) →
+        // silent fizzle. Mirrors Python's TargetPlayerLosesLife.resolve
+        // (life.py:90) which early-returns when `targets` is empty.
+        // This is byte-equal with the canonical "no target supplied"
+        // no-op; production end-to-end use depends on the
+        // DISCARDS_CARD `fixed_targets` dispatch path being wired,
+        // which lands in a follow-on slice.
+        //
+        // **amount<0 raises**; **amount=0 is a legal no-op**.
+        Effect::TargetPlayerLosesLife { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "TargetPlayerLosesLife amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Read the pre-fixed target player id from the payload
+            // seat. Unset → no target supplied → silent fizzle.
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // Player ids are 0 or 1 in the 2-player engine; the seat
+            // is set to `pid as u32` by the dispatch site (mirrors
+            // PutPoisonCountersOnTargetPlayer's seat convention).
+            let pid = payload_target as u8;
+            let player_idx_opt = state
+                .players
+                .iter()
+                .position(|p| p.id == pid);
+            let Some(pidx) = player_idx_opt else {
+                return Ok(()); // unknown pid → silent fizzle
+            };
+            state.players[pidx].life =
+                state.players[pidx].life.saturating_sub(*amount);
+        }
         // EachOpponentDiscards: CR 701.8 — "discard a card." Each
         // opponent of the SOURCE's controller discards `count` cards.
         // Let's Play a Game pattern — 2 cards in the EoE pool per
@@ -9054,6 +9144,81 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in zone.iter_mut() {
                 if obj.id == target_id {
+                    obj.counters = obj.counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
+        // **PPP Pin 2 (10th Rust slice).** PutPlusOneCounterOnTargetCreature:
+        // bare "target creature" (no controller restriction). Reads
+        // the payload-target seat (set at push time by
+        // `first_legal_trigger_target`). Optional `attacking_only`
+        // rider restricts to attacking creatures only (Hospital Room
+        // half). amount<0 raises; amount=0 short-circuits.
+        //
+        // **CR 608.2b resolve-time re-legality.** The seated target
+        // must still be on SOME bf and still a Creature (and still
+        // attacking when `attacking_only=true`). Failure → silent
+        // fizzle, byte-equal with Python's
+        // `PutPlusOneCounters.resolve`/`_slot_target_still_legal`.
+        //
+        // **Unseeded payload.** None → silent fizzle (mirrors the
+        // `PutPlusOneCounterOnOpponentsCreature` defense-in-depth).
+        // The production push path always seats via
+        // `lever_trigger_requires_target` + `first_legal_trigger_target`.
+        Effect::PutPlusOneCounterOnTargetCreature {
+            amount,
+            attacking_only,
+        } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnTargetCreature amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // Scan both bfs for the target. The target may be on
+            // EITHER player's bf (no controller restriction here).
+            let mut tgt_loc: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) =
+                    player.battlefield.iter().find(|o| o.id == payload_target)
+                {
+                    let printing = match state
+                        .registry
+                        .printings
+                        .get(obj.printing_id as usize)
+                    {
+                        Some(p) => p,
+                        None => return Ok(()),
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        return Ok(()); // no longer a creature → fizzle
+                    }
+                    if *attacking_only {
+                        // Check the engine's attacker registry — a
+                        // Vec<u32> of attacker object ids.
+                        if !state.attackers.contains(&obj.id) {
+                            return Ok(()); // no longer attacking → fizzle
+                        }
+                    }
+                    tgt_loc = Some(pidx);
+                    break;
+                }
+            }
+            let Some(tidx) = tgt_loc else {
+                return Ok(()); // target left the bf → silent fizzle
+            };
+            let delta = *amount;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[tidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == payload_target {
                     obj.counters = obj.counters.saturating_add(delta);
                     break;
                 }

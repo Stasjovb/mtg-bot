@@ -1045,6 +1045,31 @@ pub enum Effect {
     /// explicit choice callback. Negative `amount` raises; amount=0
     /// is a legal no-op.
     TargetOpponentLosesLife { amount: i32 },
+    /// **PPP Pin 1 (10th Rust slice).** Target player loses `amount`
+    /// life. Mirrors Python's `TargetPlayerLosesLife(amount: int = 1)`
+    /// (`effects/generic/life.py:80`).
+    ///
+    /// **Pre-fixed-target variant.** Distinct from
+    /// `TargetOpponentLosesLife` (which auto-picks the defending
+    /// opponent at resolve time): this variant reads the target
+    /// player id from `current_resolve_payload_target_id` (set at
+    /// dispatch time by the trigger that knows which player to hit,
+    /// e.g. the DISCARDS_CARD `fixed_targets` plumbing for Entropic
+    /// Battlecruiser's 1+ tier).
+    ///
+    /// **First-slice resolve.** Reads the payload-target slot; if
+    /// the slot is `Some(pid)` and `pid` resolves to a valid player
+    /// id, subtracts `amount` from that player's life. Unset payload
+    /// or invalid pid → silent fizzle (mirrors the broader "no target
+    /// supplied" handling in Python's `TargetPlayerLosesLife.resolve`
+    /// at `effects/generic/life.py:90` which early-returns on empty
+    /// targets).
+    ///
+    /// **amount<0 raises** loudly (defense-in-depth — parse_effect
+    /// catches at register time). **amount=0 is a legal no-op**
+    /// (mirrors GainLife / LoseLife / TargetOpponentLosesLife
+    /// zero-amount conventions).
+    TargetPlayerLosesLife { amount: i32 },
     /// Each opponent of the source's controller discards a card (CR
     /// 701.8). Let's Play a Game pattern — 2 cards in the EoE pool
     /// per round-20 measurement. Mirrors Python's
@@ -2479,6 +2504,41 @@ pub enum Effect {
     /// the implicit shape via the resolve arm's selection logic.
     /// negative `amount` raises; `amount=0` is a legal no-op.
     PutPlusOneCounterOnCreatureYouControl { amount: i32 },
+    /// **PPP Pin 2 (10th Rust slice).** Put `amount` +1/+1 counter(s)
+    /// on target creature (no controller restriction). Mirrors
+    /// Python's `PutPlusOneCounterOnTargetCreature(amount: int = 1,
+    /// attacking_only: bool = False)` (`counters.py:637`).
+    ///
+    /// **Bare "target creature" form.** Distinct from
+    /// `PutPlusOneCounterOnCreatureYouControl` (own-side only) and
+    /// `PutPlusOneCounterOnOpponentsCreature` (opponent-side only):
+    /// this variant has NO controller restriction. Hospital Room
+    /// half adds an `IsAttacking` rider via `attacking_only=true`.
+    ///
+    /// **Payload-target seat (Tier-C convention).** Reads the
+    /// push-time-seated target from
+    /// `current_resolve_payload_target_id`. The seat is computed by
+    /// `first_legal_trigger_target` at `push_triggered_ability` time:
+    /// scan `bf_iter_etb_sorted` (smallest-bf-index order across both
+    /// players) for the first creature (and attacking, when
+    /// `attacking_only=true`). `count_min=1` semantics — when no
+    /// legal target exists, `lever_trigger_requires_target` causes
+    /// the trigger to fizzle (CR 603.3c).
+    ///
+    /// **Resolve-time re-legality (CR 608.2b).** Target must still be
+    /// on SOME bf and still a Creature (and still attacking when the
+    /// rider is set). Failure → silent fizzle, byte-equal with
+    /// Python's `PutPlusOneCounters.resolve` `_slot_target_still_legal`.
+    ///
+    /// **amount<0 raises**; **amount=0 is a legal no-op**.
+    ///
+    /// **6 EoE cards unblocked**: Drix Fatemaker, Mm'menon Uthros
+    /// Exile, Optimistic Scavenger (x2 triggers), Surgical Suite //
+    /// Hospital Room (`attacking_only=true`), Shrewd Storyteller.
+    PutPlusOneCounterOnTargetCreature {
+        amount: i32,
+        attacking_only: bool,
+    },
     /// **Tier-C target-seating sub-substrate (lever-a, Sunset
     /// Saboteur).** Put `amount` +1/+1 counter(s) on a target
     /// creature an OPPONENT of the source's controller controls.
@@ -4349,6 +4409,31 @@ pub enum Event {
     /// EoE cards unlocked: Requiem Monolith, Pain for All
     /// (RR Pin 3 closure).
     DealtDamage,
+    /// "At the beginning of your postcombat main phase" — PPP Pin 3
+    /// (10th Rust slice). Fired by `advance_phase` when the new phase
+    /// is `PHASE_MAIN2` (the postcombat main step). Single-subject
+    /// shape: subject = the active player whose postcombat main is
+    /// beginning (`("player",)` per Python's `EVENT_SUBJECTS`).
+    ///
+    /// **Player subject convention.** Same `PLAYER_SUBJECT_OFFSET`
+    /// sentinel as `BeginningOfEndStep`/`BeginningOfUpkeep`/
+    /// `BeginningOfCombat`. `ControlledByYou` resolves the player
+    /// index from the sentinel range; `Always` ignores the subject_id.
+    ///
+    /// **The "survivor" predicate pattern.** All 5 blocked EoE cards
+    /// share the predicate composition `And(And(Controlled(YOU),
+    /// IsSelf), Source(IsTapped))` — "at the beginning of your
+    /// postcombat main phase, if this creature is tapped". The
+    /// `Source(IsTapped)` predicate is already wired (round-21 RR
+    /// closure); the only blocker was this event arm.
+    ///
+    /// Mirrors Python's `Event.BEGINNING_OF_POSTCOMBAT_MAIN` (string
+    /// value `"beginning_of_postcombat_main"`,
+    /// `src/mtg_bot/effects/predicates.py:135`).
+    ///
+    /// 5 EoE cards unblocked: Savior of the Small, Cautious Survivor,
+    /// Defiant Survivor, House Cartographer, Shrewd Storyteller.
+    BeginningOfPostcombatMain,
 }
 
 /// Sentinel offset used by phase-step dispatch to pass a **player
@@ -4395,6 +4480,13 @@ pub enum Predicate {
     /// its card_types. Building block for shapes like "when ANOTHER
     /// creature enters — your creature has this ability".
     SourceIsCreature,
+    /// **PPP slice — Source(IsTapped()) predicate.** Mirrors Python's
+    /// `Source(inner=IsTapped())` (the "if this creature is tapped"
+    /// idiom; ``effects/object_predicates.py:253``). The 5 "survivor"
+    /// BEGINNING_OF_POSTCOMBAT_MAIN cards all carry this as part of
+    /// their predicate composition. Pins the tapped-state check to
+    /// the source permanent rather than the (player) event subject.
+    SourceIsTapped,
     /// Matches when the **subject's** printing has "Land" in its
     /// card_types. Mirrors Python's `Subject(None, IsLand())` —
     /// the canonical "a land enters" filter used by landfall-shape
@@ -4505,6 +4597,18 @@ impl Predicate {
             Predicate::SourceIsSelf => source_id == subject_id,
             Predicate::SourceIsCreature => {
                 source_has_card_type(state, source_id, "Creature")
+            }
+            Predicate::SourceIsTapped => {
+                // **PPP slice — Source(IsTapped()) predicate.** Walk
+                // the battlefield zones on both players for an object
+                // matching `source_id`; return `obj.tapped`. Objects
+                // off the battlefield (the source has changed zones
+                // between dispatch and predicate check) → `false`,
+                // mirrors Python's `IsTapped.test` which reads
+                // `getattr(obj, "tapped", False)` — non-permanent
+                // objects have no `tapped` attribute and the helper
+                // returns False.
+                source_is_tapped(state, source_id)
             }
             Predicate::SubjectIsLand => {
                 subject_has_card_type(state, subject_id, "Land")
@@ -4624,6 +4728,26 @@ fn source_has_card_type(
     card_type: &str,
 ) -> bool {
     object_has_card_type(state, obj_id, card_type)
+}
+
+/// **PPP slice — SourceIsTapped helper.** Walks battlefield zones on
+/// both players for an object matching `obj_id`; returns
+/// `obj.tapped`. Off-battlefield sources (zone-changed between
+/// dispatch and predicate check) → `false`, mirrors Python's
+/// `IsTapped.test` returning False for non-permanent / missing-
+/// attribute objects.
+fn source_is_tapped(
+    state: &crate::state::GameState,
+    obj_id: u32,
+) -> bool {
+    for player in &state.players {
+        for obj in player.battlefield.iter() {
+            if obj.id == obj_id {
+                return obj.tapped;
+            }
+        }
+    }
+    false
 }
 
 /// Subject-anchored sibling of `source_has_card_type`. Same shape;
@@ -5921,6 +6045,36 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 )));
             }
             Ok(Effect::TargetOpponentLosesLife { amount })
+        }
+        "target_player_loses_life" => {
+            // **PPP Pin 1 (10th Rust slice).** Python's
+            // `TargetPlayerLosesLife(amount: int = 1)` (life.py:80)
+            // has an `amount` field defaulting to 1. Mirror the
+            // sibling `target_opponent_loses_life` arm shape:
+            // missing `amount` defaults to 1, present extracts as
+            // i32, negative amount surfaces at register time.
+            //
+            // **Distinct from `target_opponent_loses_life`.**
+            // `target_opponent_loses_life` auto-picks the defending
+            // opponent at resolve time; `target_player_loses_life`
+            // receives a PRE-FIXED target player via the
+            // payload-target seat (Entropic Battlecruiser's
+            // DISCARDS_CARD trigger pre-wires the discarding player
+            // as the target).
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "target_player_loses_life.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "target_player_loses_life: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::TargetPlayerLosesLife { amount })
         }
         "each_opponent_discards" => {
             // Python's `EachOpponentDiscards(count: int = 1)` dataclass
@@ -7268,6 +7422,41 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnCreatureYouControl { amount })
         }
+        "put_plus_one_counter_on_target_creature" => {
+            // **PPP Pin 2 (10th Rust slice).** Python's
+            // `PutPlusOneCounterOnTargetCreature(amount: int = 1,
+            // attacking_only: bool = False)` (counters.py:637).
+            // Mirrors the sibling
+            // `put_plus_one_counter_on_creature_you_control` arm
+            // shape for the `amount` default + non-negative contract,
+            // adds optional `attacking_only` bool (default false) for
+            // the Hospital Room rider.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_target_creature.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_target_creature: amount must be non-negative, got {amount}"
+                )));
+            }
+            let attacking_only: bool = match dict.get_item("attacking_only")? {
+                Some(b) => b.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_target_creature.attacking_only must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            Ok(Effect::PutPlusOneCounterOnTargetCreature {
+                amount,
+                attacking_only,
+            })
+        }
         "put_plus_one_counter_on_opponents_creature" => {
             // Tier-C target-seating lever-a (Sunset Saboteur). Python's
             // PutPlusOneCounterOnOpponentsCreature uses the
@@ -8300,6 +8489,15 @@ fn parse_triggered_ability(
         // No spelling skew.
         // EoE cards unlocked: Requiem Monolith, Pain for All.
         "dealt_damage" => Event::DealtDamage,
+        // PPP Pin 3 (10th Rust slice): "at the beginning of your
+        // postcombat main phase" triggered abilities. Fires on entry
+        // to PHASE_MAIN2 (the postcombat main step). Single-subject
+        // shape: subject = PLAYER_SUBJECT_OFFSET + active_player.
+        // Mirrors Python's `Event.BEGINNING_OF_POSTCOMBAT_MAIN`
+        // (value `"beginning_of_postcombat_main"`). No spelling skew.
+        // 5 EoE cards unlocked: Savior of the Small, Cautious Survivor,
+        // Defiant Survivor, House Cartographer, Shrewd Storyteller.
+        "beginning_of_postcombat_main" => Event::BeginningOfPostcombatMain,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
@@ -8307,8 +8505,9 @@ fn parse_triggered_ability(
                  leaves_battlefield, becomes_tapped, deals_damage, \
                  beginning_of_end_step, beginning_of_upkeep, \
                  beginning_of_combat, you_attack, \
-                 counters_added, is_sacrificed, dealt_damage \
-                 (Slice 9 + r58 + r13 + r14 + r15 + r16-RR)"
+                 counters_added, is_sacrificed, dealt_damage, \
+                 beginning_of_postcombat_main \
+                 (Slice 9 + r58 + r13 + r14 + r15 + r16-RR + PPP)"
             )));
         }
     };
@@ -8376,6 +8575,10 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         "always" => Ok(Predicate::Always),
         "source_is_self" => Ok(Predicate::SourceIsSelf),
         "source_is_creature" => Ok(Predicate::SourceIsCreature),
+        // **PPP slice — Source(IsTapped()) predicate.** Mirrors
+        // Python's `Source(inner=IsTapped())`. Used by all 5
+        // BEGINNING_OF_POSTCOMBAT_MAIN "survivor" cards.
+        "source_is_tapped" => Ok(Predicate::SourceIsTapped),
         "subject_is_land" => Ok(Predicate::SubjectIsLand),
         "subject_is_artifact" => Ok(Predicate::SubjectIsArtifact),
         "subject_is_creature" => Ok(Predicate::SubjectIsCreature),
@@ -8472,6 +8675,7 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         other => Err(PyValueError::new_err(format!(
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
+             source_is_tapped, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
              subject_is_enchantment, has_power_at_most, \
              controlled_by_you, subject_has_subtype, not, and, or, \
@@ -8791,6 +8995,12 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "target_opponent_loses_life")?;
             d.set_item("amount", *amount)?;
         }
+        Effect::TargetPlayerLosesLife { amount } => {
+            // PPP Pin 1 (10th Rust slice). Round-trip pair with the
+            // `target_player_loses_life` parse_effect arm.
+            d.set_item("kind", "target_player_loses_life")?;
+            d.set_item("amount", *amount)?;
+        }
         Effect::EachOpponentDiscards { count } => {
             d.set_item("kind", "each_opponent_discards")?;
             d.set_item("count", *count)?;
@@ -9054,6 +9264,16 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_creature_you_control")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::PutPlusOneCounterOnTargetCreature { amount, attacking_only } => {
+            // PPP Pin 2 (10th Rust slice). Round-trip pair with the
+            // `put_plus_one_counter_on_target_creature` parse_effect
+            // arm. `attacking_only` defaults to false on the Python
+            // side; always emit the field so the round-trip preserves
+            // the rider explicitly.
+            d.set_item("kind", "put_plus_one_counter_on_target_creature")?;
+            d.set_item("amount", *amount)?;
+            d.set_item("attacking_only", *attacking_only)?;
         }
         Effect::PutPlusOneCounterOnOpponentsCreature { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_opponents_creature")?;
