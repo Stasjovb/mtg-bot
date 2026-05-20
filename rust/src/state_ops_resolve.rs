@@ -11816,6 +11816,193 @@ fn apply_effect(
             // `fire_landfall_triggers`.
             state.pending_etb_dispatches.extend(entered_ids);
         }
+        // **16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer
+        // ETB.** "Return target noncreature, nonland permanent card
+        // with mana value X or less from your graveyard to the
+        // battlefield, where X is the amount of mana spent to cast
+        // this creature." Mirrors Python's
+        // `AstelliReclaimerETBEffect.resolve`
+        // (`effects/bespoke.py:62-82`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //   source = state.resolving_source             (Rust: source_obj_id on bf)
+        //   if source is None: return                   (off-bf → silent no-op)
+        //   x = warp_cost.total if cast_via_warp else mana_cost.total
+        //   pick the first GY card with is_permanent && !is_creature
+        //        && !is_land && mana_cost.total <= x
+        //   if no card matches: return                  (Python parity)
+        //   remove from GY; put_into_battlefield(card, controller)
+        //   queue Event::Enters dispatch (post-pop, via the
+        //   pending_etb_dispatches queue)
+        //
+        // **No PendingDecision.** Python's `requires_target()` is
+        // True, but the target binding is a `legal_targets`-driven
+        // deterministic first-legal pick at resolve time on both
+        // sides (no choice plumbed — the bespoke effect is
+        // graveyard-order deterministic).
+        Effect::AstelliReclaimerETBEffect => {
+            // Source-controller resolution — same shape as
+            // `FamishedWorldsireLookTopXByPowerPutLandsTapped`
+            // (round 54): "your graveyard" = the SOURCE's
+            // controller's graveyard, CR 119.5 / 608.2.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            let controller_u8 = controller;
+            // Locate the source on the controller's battlefield (the
+            // ETB trigger fires AFTER move_source_post_resolve has
+            // stamped the entered permanent onto bf). If absent
+            // (counterspelled pre-resolve / blinked away mid-stack /
+            // any other off-bf path), silent no-op — mirrors Python's
+            // `if source is None: return` chained guards.
+            let (cast_via_warp, printing_id) = {
+                let bf = &state.players[controller_idx].battlefield;
+                match bf.iter().find(|o| o.id == source_obj_id) {
+                    Some(obj) => (obj.warp_exile_pending, obj.printing_id),
+                    None => return Ok(()),
+                }
+            };
+            // X = mana spent to cast self. `warp_exile_pending` is
+            // Rust's `cast_via_warp` flag (set at `cast_creature_warp`
+            // time on the stack-resident source, rides through
+            // `move_source_post_resolve` onto the entered bf object —
+            // confirmed by `state_ops_cast.rs:1242-1265` doc comment).
+            // If the warp-cast flag is set AND the printing carries a
+            // `warp_cost` payload, X = warp_cost total. Otherwise
+            // X = printing.mana_cost total. Mirrors Python's
+            // `_x_from_source` (`bespoke.py:40-46`):
+            //   if source.cast_via_warp and warp_cost is not None:
+            //       return warp_cost.total
+            //   return mana_cost.total
+            let printing = match state.registry.lookup(printing_id) {
+                Some(p) => p,
+                None => return Ok(()),
+            };
+            let x: u32 = if cast_via_warp {
+                match printing.warp_cost.as_ref() {
+                    Some(wc) => {
+                        wc.generic as u32
+                            + wc.white as u32
+                            + wc.blue as u32
+                            + wc.black as u32
+                            + wc.red as u32
+                            + wc.green as u32
+                    }
+                    None => {
+                        let mc = &printing.mana_cost;
+                        mc.generic as u32
+                            + mc.white as u32
+                            + mc.blue as u32
+                            + mc.black as u32
+                            + mc.red as u32
+                            + mc.green as u32
+                    }
+                }
+            } else {
+                let mc = &printing.mana_cost;
+                mc.generic as u32
+                    + mc.white as u32
+                    + mc.blue as u32
+                    + mc.black as u32
+                    + mc.red as u32
+                    + mc.green as u32
+            };
+            // First-legal graveyard scan — pick the FIRST card in
+            // insertion order whose printing is a noncreature,
+            // nonland permanent with mana_cost.total <= X. Mirrors
+            // Python's `legal_targets` shape (a list comprehension
+            // over `p.graveyard` in insertion order) plus the
+            // first-legal pick the requires_target target binding
+            // makes deterministic. `is_permanent` =
+            // `card_types intersects {Creature, Artifact, Land,
+            // Enchantment, Planeswalker}`; the `!is_creature` and
+            // `!is_land` filters reject Creature and Land, so the
+            // survivors are Artifact / Enchantment / Planeswalker
+            // permanent cards (CR 110.4 + Python's
+            // `cards/base.py:1068-1076` `is_permanent` property).
+            let target_idx: Option<usize> = {
+                let gy = &state.players[controller_idx].graveyard;
+                let mut found: Option<usize> = None;
+                for (i, obj) in gy.iter().enumerate() {
+                    let pr = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let is_creature =
+                        pr.card_types.iter().any(|t| t == "Creature");
+                    let is_land =
+                        pr.card_types.iter().any(|t| t == "Land");
+                    let is_artifact =
+                        pr.card_types.iter().any(|t| t == "Artifact");
+                    let is_enchantment =
+                        pr.card_types.iter().any(|t| t == "Enchantment");
+                    let is_planeswalker =
+                        pr.card_types.iter().any(|t| t == "Planeswalker");
+                    let is_permanent = is_creature
+                        || is_artifact
+                        || is_land
+                        || is_enchantment
+                        || is_planeswalker;
+                    if !is_permanent || is_creature || is_land {
+                        continue;
+                    }
+                    let mc = &pr.mana_cost;
+                    let mv: u32 = mc.generic as u32
+                        + mc.white as u32
+                        + mc.blue as u32
+                        + mc.black as u32
+                        + mc.red as u32
+                        + mc.green as u32;
+                    if mv <= x {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            let pick_idx = match target_idx {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            // Reserve a fresh ETB timestamp BEFORE the player-mut
+            // borrow (same pattern as Famished Worldsire +
+            // SearchLibraryForBasicLandTapped).
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // Remove from graveyard; stamp battlefield-entry fields
+            // and push to bf. The picked card is a noncreature
+            // permanent — per CR 302.1 + 612.6 (slice 14 TTT Pin 2
+            // closure) `summoning_sick = false` for non-creature
+            // entries. Tapped = false (Astelli Reclaimer's ETB does
+            // NOT specify "tapped" — Python's
+            // `put_into_battlefield` uses the printing's
+            // `enters_tapped` flag which is False for noncreature
+            // non-land permanents in EoE; we mirror the un-tapped
+            // default).
+            let entered_id: u32 = {
+                let player = &mut state.players[controller_idx];
+                let gy = Arc::make_mut(&mut player.graveyard);
+                let mut obj = gy.remove(pick_idx);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                let id = obj.id;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+                id
+            };
+            // Queue ENTERS dispatch — drained AFTER the resolving
+            // Astelli Reclaimer ETB trigger frame pops. Mirrors
+            // Python's `put_into_battlefield`'s
+            // `dispatch_event(Event.Enters, ...)` (which lands as a
+            // triggers-this-turn entry and resolves at the next
+            // priority cycle).
+            state.pending_etb_dispatches.push(entered_id);
+        }
         // Round-28 ModalChooseOne first-slice. Pushes a
         // ChooseModeChoice carrying every mode's Effect on the heap
         // and short-circuits. Controller drains via

@@ -8,8 +8,16 @@ candidates the SSS probe agent dropped during honest exhaustion
 **Slice 14 closure status:** Pin 1 (Lightless Evangel IS_SACRIFICED
 ordering) + Pin 2 (Atomic Microsizer non-creature ETB summoning_sick)
 are CLOSED -- renamed to ``*_FIXED_parity`` with the sentinels
-inverted.  Pin 3 (Astelli Reclaimer no Rust Effect variant) remains
-OPEN as the sole remaining divergence pin in this batch.
+inverted.
+
+**Slice 16 closure status:** Pin 3 (Astelli Reclaimer no Rust
+Effect variant) is CLOSED -- new ``Effect::AstelliReclaimerETBEffect``
+variant + parse arm + resolve arm in Rust + bridge arm in
+``cross_engine.py``; renamed to ``..._FIXED_parity`` with the
+sentinel inverted.  This is the LARGEST single-card
+BLOCKED-genuinely_missing closure to date (4,565 17lands decks).
+All 3 TTT pins are now ``_FIXED_parity`` -- the batch is FULLY
+closed.
 
 Each pin test originally named ``test_..._divergence_pin`` ASSERTS
 the CURRENT divergent behavior rather than parity.  The PROBED-tier
@@ -573,59 +581,61 @@ def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_divergence_pin():
-    """Pin Astelli Reclaimer's ETB effect lacking a Rust counterpart.
+def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_FIXED_parity():
+    """**16th Rust slice (TTT Pin 3 closure)** -- Astelli Reclaimer
+    ETB now has a matching Rust ``Effect::AstelliReclaimerETBEffect``
+    variant + parse arm + resolve arm + bridge arm.
 
-    Astelli Reclaimer's ETB body parses to a bespoke
-    ``AstelliReclaimerETBEffect`` class on the Python side
-    (``src/mtg_bot/effects/bespoke.py:25-89``) that returns target
+    Pre-closure (the divergence TTT Pin 3 locked in): Python's
+    bespoke ``AstelliReclaimerETBEffect``
+    (``src/mtg_bot/effects/bespoke.py:25-89``) returned a target
     noncreature, nonland permanent card with mana value <= X from
-    the controller's graveyard, where X is the mana spent to cast
-    the source.  Rust's ``Effect`` enum at ``rust/src/cards.rs``
-    has no matching variant -- the printing's ETB body cannot
-    round-trip through the bridge.  This is one of 7 cards on the
-    ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing list (the
-    canonical new-Rust-Effect ask shape).
+    the controller's graveyard (X = mana spent to cast self).
+    Rust's ``Effect`` enum had no matching variant -- the printing's
+    ETB body could not round-trip through the bridge.  This was one
+    of 7 cards on the ``docs/POOL_PARITY.md``
+    BLOCKED-genuinely_missing list and the LARGEST single-card
+    closure in that tier (4,565 17lands decks).
 
-    Probe shape:
-      1. Confirm Python's bespoke ``AstelliReclaimerETBEffect``
-         class exists with the expected interface (legal_targets +
-         resolve + _x_from_source helper).
-      2. Sentinel: the Rust crate's source files contain NO
-         reference to ``AstelliReclaimer`` /
-         ``astelli_reclaimer`` / any obvious matching effect
-         variant name.
-      3. The pin is the structural absence: no defensive
-         assertion about field count or arm body -- the Rust side
-         is simply silent on this effect today.
+    Post-closure (asserted here): a new
+    ``Effect::AstelliReclaimerETBEffect`` (unit variant; X dynamic
+    from the source's ``mana_cost``/``warp_cost`` at resolve via
+    the ``warp_exile_pending`` flag stamped at warp-cast time)
+    lands in ``rust/src/cards.rs`` with parse arm, to_pydict arm,
+    resolve arm in ``rust/src/state_ops_resolve.rs``, and bridge
+    arm in ``src/mtg_bot/parity/cross_engine.py``.
 
-    Closure indicator: a new ``Effect::AstelliReclaimerETBEffect``
-    (or parameterized
-    ``ReturnNoncreatureNonlandPermanentFromYourGraveyardWithMVLEManaSpent``)
-    variant lands in ``rust/src/cards.rs``, with a parse arm
-    + resolve arm in ``state_ops_resolve.rs`` + bridge arm in
-    ``cross_engine.py``.  Pin renames to ``..._FIXED_parity``
-    asserting the variant + parse arm + resolve arm are present.
+    Closure shape:
+      1. Python's bespoke ``AstelliReclaimerETBEffect`` class is
+         unchanged (the SoT side; the closure was Rust-side).
+      2. Sentinel inverted: the Rust crate's source files NOW
+         contain ``AstelliReclaimerETBEffect`` /
+         ``astelli_reclaimer_etb_effect`` (the new variant + parse
+         arm + resolve arm).
+      3. The bridge arm round-trips Rust's
+         ``{"kind": "astelli_reclaimer_etb_effect"}`` to Python's
+         ``AstelliReclaimerETBEffect()``.
 
-    EoE card scale: 1 (Astelli Reclaimer; 4565 decks in the 17lands
-    deck-weight column per docs/RESIDUE_CARD_PLANS.md).
+    EoE card scale: 1 (Astelli Reclaimer; 4,565 decks in the
+    17lands deck-weight column per
+    ``docs/RESIDUE_CARD_PLANS.md``).  The LARGEST single-card
+    BLOCKED-genuinely_missing closure to date.
     """
-    # 1. Python's bespoke class exists with the expected interface.
+    # 1. Python's bespoke class exists with the expected interface
+    #    (the SoT side; unchanged by this slice).
     from mtg_bot.effects.bespoke import AstelliReclaimerETBEffect
     from mtg_bot.effects.base import Effect as _EffectBase
 
     assert issubclass(AstelliReclaimerETBEffect, _EffectBase), (
         "AstelliReclaimerETBEffect should be an Effect subclass "
-        "(effects/bespoke.py:25-89).  If this fails, the bespoke class "
-        "was restructured -- update this pin."
+        "(effects/bespoke.py:25-89)."
     )
 
     # 1a. The expected helper + interface methods are present.
     inst = AstelliReclaimerETBEffect()
     assert hasattr(inst, "_x_from_source"), (
         "AstelliReclaimerETBEffect should have an '_x_from_source' "
-        "helper (reads mana spent from state.resolving_source).  If "
-        "absent, the class was restructured -- update this pin."
+        "helper (reads mana spent from state.resolving_source)."
     )
     assert hasattr(inst, "legal_targets"), (
         "AstelliReclaimerETBEffect should have a 'legal_targets' "
@@ -646,20 +656,19 @@ def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_dive
     assert "put_into_battlefield" in resolve_src, (
         "AstelliReclaimerETBEffect.resolve should call "
         "put_into_battlefield to bring the graveyard target onto the "
-        "battlefield.  If absent, the Python convention changed -- "
-        "update this pin."
+        "battlefield."
     )
 
-    # 2. Rust crate: NO reference to AstelliReclaimer / astelli_reclaimer
-    #    in cards.rs or state_ops_resolve.rs.
+    # 2. **Closure sentinel** -- Rust crate now contains the
+    #    ``Effect::AstelliReclaimerETBEffect`` variant + parse arm
+    #    + resolve arm (inverted from the pre-closure pin assertion).
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
 
     assert rust_cards_path.exists(), (
-        f"Rust source file should exist at {rust_cards_path!r}.  "
-        "If the file moved, update this test's path resolution."
+        f"Rust source file should exist at {rust_cards_path!r}."
     )
     assert rust_resolve_path.exists(), (
         f"Rust source file should exist at {rust_resolve_path!r}."
@@ -668,45 +677,38 @@ def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_dive
     cards_src = rust_cards_path.read_text(encoding="utf-8")
     resolve_src_rs = rust_resolve_path.read_text(encoding="utf-8")
 
-    # Case-insensitive sweep over a small set of plausible variant
-    # name fragments.
-    forbidden_substrings = [
-        "AstelliReclaimer",
-        "astelli_reclaimer",
-        "ReturnNoncreatureNonlandFromGYWithMVLE",
-        "return_noncreature_nonland_from_gy_with_mv_le",
-        "ReturnPermanentCardWithMVXorLessFromGY",
-    ]
-    for needle in forbidden_substrings:
-        assert needle not in cards_src, (
-            f"Pin sentinel: rust/src/cards.rs should NOT yet contain "
-            f"{needle!r} (no Astelli Reclaimer Effect variant exists).  "
-            "If this assertion fails, the closure may have landed -- "
-            "audit the Rust enum + parse arm + resolve arm and flip "
-            "this pin to _FIXED_parity."
-        )
-        assert needle not in resolve_src_rs, (
-            f"Pin sentinel: rust/src/state_ops_resolve.rs should NOT "
-            f"yet contain {needle!r} (no Astelli Reclaimer resolve arm "
-            "exists).  If this assertion fails, the resolve arm has "
-            "landed -- flip to _FIXED_parity."
-        )
-
-    # 3. POOL_PARITY's BLOCKED-genuinely_missing list contains Astelli
-    #    Reclaimer (the documented worklist entry for this gap).
-    pool_parity_path = repo_root / "docs" / "POOL_PARITY.md"
-    assert pool_parity_path.exists(), (
-        f"docs/POOL_PARITY.md should exist at {pool_parity_path!r}.  "
-        "If the doc moved, update this pin's reference."
+    # Variant name appears in cards.rs (enum variant + parse arm
+    # match + to_pydict arm).
+    assert "AstelliReclaimerETBEffect" in cards_src, (
+        "Closure sentinel: rust/src/cards.rs should now contain "
+        "'AstelliReclaimerETBEffect' (the new Effect enum variant)."
     )
-    pool_parity_src = pool_parity_path.read_text(encoding="utf-8")
-    assert "Astelli Reclaimer" in pool_parity_src, (
-        "Pin invariant: docs/POOL_PARITY.md should list 'Astelli "
-        "Reclaimer' (the BLOCKED-genuinely_missing entry).  If absent, "
-        "the worklist was updated -- audit this pin's BLOCKED status."
+    assert "astelli_reclaimer_etb_effect" in cards_src, (
+        "Closure sentinel: rust/src/cards.rs should now contain the "
+        "parse-arm string literal 'astelli_reclaimer_etb_effect'."
+    )
+    # Resolve arm in state_ops_resolve.rs.
+    assert "AstelliReclaimerETBEffect" in resolve_src_rs, (
+        "Closure sentinel: rust/src/state_ops_resolve.rs should now "
+        "contain the 'Effect::AstelliReclaimerETBEffect' resolve arm."
     )
 
-    # 4. EoE cards affected.
+    # 3. Bridge arm round-trips the new Rust dict to the bespoke
+    #    Python class.
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "astelli_reclaimer_etb_effect"}
+    )
+    assert isinstance(bridged, AstelliReclaimerETBEffect), (
+        "Closure sentinel: the cross_engine bridge arm should "
+        "round-trip {'kind': 'astelli_reclaimer_etb_effect'} to "
+        "Python's AstelliReclaimerETBEffect()."
+    )
+    # Default-constructor equality (frozen dataclass shape).
+    assert bridged == AstelliReclaimerETBEffect()
+
+    # 4. EoE cards affected (unchanged from pre-closure).
     affected_eoe_cards = [
         "Astelli Reclaimer",
         # {3}{W}{W} Creature -- Angel Warrior, Flying, Warp {2}{W}.
@@ -714,12 +716,14 @@ def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_dive
         # nonland permanent card with mana value X or less from your
         # graveyard to the battlefield, where X is the amount of mana
         # spent to cast this creature."  Bespoke
-        # AstelliReclaimerETBEffect on Python; no Rust counterpart.
+        # AstelliReclaimerETBEffect on Python; new
+        # Effect::AstelliReclaimerETBEffect on Rust (slice 16).
         # 4565 17lands decks per docs/RESIDUE_CARD_PLANS.md.
     ]
     assert len(affected_eoe_cards) == 1, (
-        "The Astelli Reclaimer ETB gap affects 1 EoE card directly.  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries."
+        "The Astelli Reclaimer ETB closure unblocks 1 EoE card "
+        f"directly.  Enumerated list has {len(affected_eoe_cards)} "
+        "entries."
     )
 
 
@@ -729,12 +733,14 @@ def test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_dive
 
 
 def test_ttt_pin_inventory_complete():
-    """Sanity check: the TTT batch has 1 remaining divergence pin +
-    2 FIXED parity sentinels.
+    """Sanity check: the TTT batch has 0 remaining divergence pins +
+    3 FIXED parity sentinels (full closure).
 
     Pin batch TTT (round 23 pin-side) originally targeted 3 divergence
     pins.  Slice 14 closed Pins 1 + 2 (renamed to ``_FIXED_parity``
-    with sentinels inverted); Pin 3 (Astelli Reclaimer) remains open.
+    with sentinels inverted); slice 16 closed Pin 3 (Astelli Reclaimer
+    -- the LARGEST single-card BLOCKED-genuinely_missing closure,
+    4,565 17lands decks).  All 3 are now ``_FIXED_parity`` sentinels.
     This inventory check guards against accidental deletion or rename
     of any of the 3 functions.
     """
@@ -747,20 +753,20 @@ def test_ttt_pin_inventory_complete():
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_FIXED_parity")
     ]
-    expected_pins = {
-        "test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_divergence_pin",
-    }
+    expected_pins: set[str] = set()
     expected_fixed = {
         "test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_FIXED_parity",
         "test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick_FIXED_parity",
+        "test_cross_engine_real_eoe_astelli_reclaimer_etb_effect_no_rust_variant_FIXED_parity",
     }
     assert set(pin_fns) == expected_pins, (
-        "TTT pin inventory mismatch.  Expected exactly 1 open pin:\n"
+        "TTT pin inventory mismatch.  Expected 0 open pins (slice 16 "
+        "closed Pin 3):\n"
         f"  {sorted(expected_pins)}\n"
         f"Got:\n  {sorted(pin_fns)}"
     )
     assert set(fixed_fns) == expected_fixed, (
-        "TTT FIXED-parity inventory mismatch.  Expected exactly 2 "
+        "TTT FIXED-parity inventory mismatch.  Expected exactly 3 "
         f"FIXED-parity sentinels:\n  {sorted(expected_fixed)}\n"
         f"Got:\n  {sorted(fixed_fns)}"
     )
