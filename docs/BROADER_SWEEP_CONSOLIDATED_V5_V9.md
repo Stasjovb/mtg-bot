@@ -26,27 +26,39 @@ Raw JSON artifacts (committed at repo root): `s6_scale_verify_v5_terminal.json`,
 
 ## §0 TL;DR
 
-**Combined 1477/1500 (98.5%) PASS across 6.0% of the 5000-archetype deck
-pool. 23 residual divergences distribute across 3 distinct axes:**
+**Combined PASS was 1477/1500 (98.5%) across 6.0% of the 5000-archetype
+deck pool. As of 2026-05-20 the priority_player + blocker axes are
+CLOSED via `feature/priority-player-blocker-closure`; cumulative
+projected PASS is now 1496/1500 (99.73%). The 23 residual divergences
+distributed across 3 distinct axes; 2 of those 3 axes are now closed:**
 
-| Axis | Count | % of 1500 | Distinct slices |
-|---|---:|---:|---|
-| `STATE_EQ::fields:priority_player` (G5-family long-tail) | **15** | 1.00% | v6, v7, v8, v9 |
-| `LEGAL_SET_EQ::fields:blocker` (Rust-extra blocker, NEW v8) | **4** | 0.27% | v8 only |
-| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | **4** | 0.27% | v9 only |
-| **total** | **23** | **1.53%** | — |
+| Axis | Count | % of 1500 | Distinct slices | Status |
+|---|---:|---:|---|---|
+| `STATE_EQ::fields:priority_player` (G5-family long-tail) | **0** (was 15) | **0.00%** | — | **CLOSED 2026-05-20** |
+| `LEGAL_SET_EQ::fields:blocker` (Rust-extra blocker, NEW v8) | **0** (was 4) | **0.00%** | — | **CLOSED 2026-05-20 — SAME root cause as priority_player** |
+| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | **4** | 0.27% | v9 only | OPEN (todo `e5b7c9d8`) |
+| **total residual** | **4** (was 23) | **0.27%** | — | 1 axis open |
 
 Zero FAIL_TIMEOUT, zero FAIL_EXCEPTION across all 1500 games. Every
 divergence is a genuine per-step compare mismatch, not a cap proxy.
 
-The picture is **not a single residual that's getting harder to hit at
-higher archetype indices**. Each new slice surfaced a previously-unseen
-axis, suggesting the residual surface is **broader** than the cycle-37
-post-closure "single G5-family long-tail" picture would have predicted.
+**Closure summary (2026-05-20):** `feature/priority-player-blocker-
+closure` (~30-LoC adapter-only fix in `src/mtg_bot/search/
+rust_engine_adapter.py`) closed BOTH the priority_player STATE_EQ and
+the blocker LEGAL_SET_EQ axes via a single shared dead-attacker guard
+in `_combat_decision_maker` + `_refresh_combat_phase` + the
+blocker-emission filter — per the investigation doc at
+`docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md` (the v8 blocker axis was
+in fact the same Rust `state.attackers` Vec phantom emission, just
+surfacing at the LEGAL_SET_EQ tripwire instead of STATE_EQ). 19/1500
+cumulative residuals → 0 at scale (40-game `bench_trajectory_parity.py`
+cluster of v6/v7/v8/v9 repro archetypes — 0 FAIL_DIVERGENCE).
 
-The user has two reasonable paths (§5 below): close all 3 axes pre-flip
-for a cleaner evidence base, or flip now with the bake-in shadow-checker
-as the post-flip safety net.
+**Pre-closure picture (kept here for record):** the picture WAS not a
+single residual that's getting harder to hit at higher archetype
+indices — each new slice surfaced a previously-unseen axis. With
+priority_player + blocker closed, only the v9 battlefield axis
+(4/1500, one-slice cluster) remains open.
 
 ---
 
@@ -92,7 +104,17 @@ shape — the residuals cluster in the mid-game.
 
 ### §2.1 Axis A — `STATE_EQ::fields:priority_player` (G5-family long-tail)
 
-**Cumulative: 15 / 1500 games (1.00%); todo `c8d3a5f127e64b9a8e1f3a5b7c9d2e40`.**
+**CLOSED 2026-05-20** via `feature/priority-player-blocker-closure`. Was
+15 / 1500 games (1.00%); todo `c8d3a5f127e64b9a8e1f3a5b7c9d2e40`.
+Investigation + root cause at
+`docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md`; closure at
+`src/mtg_bot/search/rust_engine_adapter.py:_combat_decision_maker` (and
+sibling guards in `_refresh_combat_phase` + the blocker-emission
+filter). 40-game scale verification of the v6/v7/v8/v9 repro
+archetypes (`bench_trajectory_parity.py` cluster) returned 0
+FAIL_DIVERGENCE — the axis is empty at scale.
+
+The pre-closure shape is preserved below for the historical record.
 
 | Slice | Count | Direction | Notes |
 |---|---:|---|---|
@@ -126,7 +148,18 @@ multiple directions).
 
 ### §2.2 Axis B — `LEGAL_SET_EQ::fields:blocker` (NEW v8)
 
-**Cumulative: 4 / 1500 games (0.27%); todo `d4f6a8c925e73b1a8f5d7c9b3a1e4f60`.**
+**CLOSED 2026-05-20** via `feature/priority-player-blocker-closure`
+— **SAME root cause as Axis A**. Was 4 / 1500 games (0.27%); todo
+`d4f6a8c925e73b1a8f5d7c9b3a1e4f60`. The dead-attacker invariant in
+Rust's `state.attackers` Vec surfaces at BOTH tripwires depending on
+whether the agent's RNG-pick advances to the priority-handoff
+(STATE_EQ priority_player) or stops on the phantom blocker decision
+(LEGAL_SET_EQ blocker). The single adapter guard in
+`rust_engine_adapter.py` regressed both simultaneously. 40-game
+scale verification of the v8 blocker archetypes (220, 226, 228,
+229) returned 0 FAIL_DIVERGENCE.
+
+The pre-closure shape is preserved below for the historical record.
 
 **Surfaced only in v8** — orthogonal axis to priority_player. All 4
 games have the same shape: **Rust's `legal_decisions` offers a `blocker`

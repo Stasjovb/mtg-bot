@@ -172,17 +172,33 @@ footnote that this section originally carried).**
 
 | Axis | Count | % of 1500 | Direction | Follow-up todo |
 |---|---:|---:|---|---|
-| `STATE_EQ::fields:priority_player` (G5-family long-tail) | 15 | 1.00% | bidirectional (8 py-extra, 7 rust-extra) | `c8d3a5f1` |
-| `LEGAL_SET_EQ::fields:blocker` (NEW v8) | 4 | 0.27% | one-sided (Rust-extra) | `d4f6a8c9` |
+| `STATE_EQ::fields:priority_player` (G5-family long-tail) | **0** (was 15; **CLOSED** 2026-05-20) | **0.00%** | — | `c8d3a5f1` ✅ |
+| `LEGAL_SET_EQ::fields:blocker` (NEW v8) | **0** (was 4; **CLOSED** 2026-05-20) | **0.00%** | — | `d4f6a8c9` ✅ |
 | `STATE_EQ::fields:battlefield` (NEW v9) | 4 | 0.27% | mixed (verify-first required) | `e5b7c9d8` |
-| **total** | **23** | **1.53%** | | 3 todos |
+| **total** | **4** (was 23) | **0.27%** | | 1 todo open |
 
-Each new 60-archetype slice has surfaced a previously-unseen axis —
-the residual surface is **broader** than the post-cycle-37 closure
+Each new 60-archetype slice had surfaced a previously-unseen axis —
+the residual surface was **broader** than the post-cycle-37 closure
 picture would have predicted (single G5-family long-tail). The
-"CLOSED on C4-class" claim still holds on archetypes 0–59 (300/300
-PASS); the broader sweep refines the picture and is filed as 3
-follow-up axes for the divergence-pin cadence.
+"CLOSED on C4-class" claim held on archetypes 0–59 (300/300 PASS).
+
+**2026-05-20 closure:** `feature/priority-player-blocker-closure`
+closed BOTH the priority_player STATE_EQ and the blocker
+LEGAL_SET_EQ axes via a single ~30-LoC adapter-only fix in
+`rust_engine_adapter.py` (the `_combat_decision_maker` /
+`_refresh_combat_phase` / blocker-emission dead-attacker guard;
+same shape as the cycle-37 `86411a99` reconciliation pattern). The
+investigation doc at
+`docs/PRIORITY_PLAYER_AXIS_INVESTIGATION.md` had identified both
+axes as a **single shared root cause** (Rust `state.attackers` Vec
+retaining dead attacker ids after on-the-stack removal mid-DA), so
+both closed in lockstep. 19/1500 cumulative residuals → 0 at scale
+(verified via `bench_trajectory_parity.py` 40-game cluster of v6/
+v7/v8/v9 repro archetypes — 0 FAIL_DIVERGENCE).
+
+**Remaining axis:** v9 battlefield STATE_EQ (4/1500, todo
+`e5b7c9d8`) is the next divergence-pin cadence target. Cumulative
+PASS at scale is now **1496/1500 (99.73%)**.
 
 ### What landed
 
