@@ -4596,7 +4596,27 @@ pub enum Predicate {
     /// canonical "under your control" qualifier on ETB triggers
     /// like "whenever a creature enters under your control" and
     /// "whenever a land enters under your control".
-    ControlledByYou,
+    ///
+    /// **Slot field (12th Rust slice — Closure A).** Optional
+    /// payload mirroring Python's ``Controlled(by, subject:
+    /// str | None)`` slot. ``None`` (the back-compat default and
+    /// the slot=None Python case) means "the event's only declared
+    /// subject" — used by ENTERS / DIES / ATTACKS single-subject
+    /// events. ``Some("controller")`` is the slot-aware variant
+    /// used by multi-subject events (IS_CAST's ``("spell",
+    /// "controller")`` / PLAYS_LAND's ``("land", "controller")``).
+    /// The Rust ``matches`` arm is INVARIANT to the slot value for
+    /// the currently-dispatched events: subject_id passed to
+    /// ``dispatch_event`` always resolves through
+    /// ``find_object_controller`` to the same controller id either
+    /// way (the spell's controller == the casting player == the
+    /// 'controller' slot value). The slot is stored for round-trip
+    /// fidelity + Python-bridge symmetry; future events with a
+    /// non-actor controller slot would need a slot-driven dispatch
+    /// API. 4 EoE cards unblocked (Cosmogrand Zenith, Sunstar
+    /// Lightsmith, Illvoi Operative, Station Monitor — all carry
+    /// ``Controlled(YOU, subject="controller")`` on IS_CAST).
+    ControlledByYou { slot: Option<String> },
     /// **MMM Pin 3 (11th Rust slice) — ControlledByOpponent.** Matches
     /// when the **subject** is controlled by an OPPONENT of the
     /// source's controller. Dual of `ControlledByYou`. Mirrors
@@ -4623,7 +4643,14 @@ pub enum Predicate {
     /// (DISCARDS_CARD + ControlledByOpponent + TargetPlayerLosesLife).
     /// Broader "observer-opponent" trigger shapes — opponent-side
     /// DIES / ETBS / ATTACKS — all share this predicate variant.
-    ControlledByOpponent,
+    ///
+    /// **Slot field (12th Rust slice — Closure A).** Symmetric with
+    /// ``ControlledByYou``'s slot: optional payload mirroring
+    /// Python's ``Controlled(OPPONENT, subject: str | None)``.
+    /// Slot=None is back-compat (single-subject DISCARDS_CARD); a
+    /// non-None slot covers multi-subject opponent-controlled cases
+    /// (PLAYS_LAND's ``Controlled(OPPONENT, subject="controller")``).
+    ControlledByOpponent { slot: Option<String> },
     /// Matches when the **subject's** printing carries the given
     /// subtype string. Mirrors Python's `Subject(None, HasSubtype(s))`
     /// — the canonical Kavu/Sliver/Equipment-enters predicate from
@@ -4728,7 +4755,7 @@ impl Predicate {
             Predicate::SubjectIsEnchantment => {
                 subject_has_card_type(state, subject_id, "Enchantment")
             }
-            Predicate::ControlledByYou => {
+            Predicate::ControlledByYou { slot: _ } => {
                 // Subject's controller == source's controller. Mirrors
                 // Python's `Controlled(by=YOU)` on a permanent subject:
                 // ``obj.controller_id == source.controller_id``.
@@ -4779,7 +4806,7 @@ impl Predicate {
                     }
                 }
             }
-            Predicate::ControlledByOpponent => {
+            Predicate::ControlledByOpponent { slot: _ } => {
                 // **MMM Pin 3 — ControlledByOpponent.** Inverse of
                 // ControlledByYou. Subject's controller != source's
                 // controller. Same PLAYER_SUBJECT_OFFSET sentinel
@@ -8741,12 +8768,49 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         // Python's `Subject(None, IsEnchantment())` from
         // `src/mtg_bot/effects/object_predicates.py:142`.
         "subject_is_enchantment" => Ok(Predicate::SubjectIsEnchantment),
-        "controlled_by_you" => Ok(Predicate::ControlledByYou),
+        "controlled_by_you" => {
+            // **Slot-aware bridge form (12th Rust slice — Closure A).**
+            // Optional ``"subject"`` field threads through to the
+            // ``slot`` payload of ``ControlledByYou``. Absent →
+            // ``None`` (back-compat — single-subject ENTERS / DIES /
+            // ATTACKS). Present (typically ``"controller"``) → the
+            // slot-aware variant used by IS_CAST / PLAYS_LAND cards
+            // like Cosmogrand Zenith ("your second spell each turn"
+            // family). The Rust ``matches`` arm is invariant to slot
+            // value for the currently-dispatched events (subject_id
+            // resolves through ``find_object_controller`` to the same
+            // controller either way), so the slot is stored for
+            // round-trip fidelity but doesn't change the comparison.
+            let slot: Option<String> = match dict.get_item("subject")? {
+                Some(v) => Some(v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "predicate.controlled_by_you.subject must be a \
+                         string (got: {e})"
+                    ))
+                })?),
+                None => None,
+            };
+            Ok(Predicate::ControlledByYou { slot })
+        }
         // **MMM Pin 3 (11th Rust slice) — controlled_by_opponent.**
         // Dual of `controlled_by_you`. Mirrors Python's
         // `Controlled(by=OPPONENT, subject=None)` — Entropic
         // Battlecruiser's "an opponent discards" trigger gate.
-        "controlled_by_opponent" => Ok(Predicate::ControlledByOpponent),
+        //
+        // **Slot-aware bridge form (12th Rust slice — Closure A).**
+        // Symmetric with the ``controlled_by_you`` arm.
+        "controlled_by_opponent" => {
+            let slot: Option<String> = match dict.get_item("subject")? {
+                Some(v) => Some(v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "predicate.controlled_by_opponent.subject must be a \
+                         string (got: {e})"
+                    ))
+                })?),
+                None => None,
+            };
+            Ok(Predicate::ControlledByOpponent { slot })
+        }
         // HasPowerAtMost substrate slice — "with power N or less"
         // qualifier for Vicious Clown / Irreverent Gremlin ETB triggers
         // (EoE batch K/N). Dict shape: `{"kind": "has_power_at_most",
