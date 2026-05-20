@@ -8143,7 +8143,7 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         from mtg_bot.effects.bespoke import (
             RovingActuatorETBEffect,
         )
-        max_mv_raw = d.get("max_mv", 2)
+        max_mv_raw = eff_dict.get("max_mv", 2)
         return RovingActuatorETBEffect(max_mv=int(max_mv_raw))
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card

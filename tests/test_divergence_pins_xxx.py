@@ -9,15 +9,23 @@ BLOCKED-genuinely_missing candidates from
 ``docs/POOL_PARITY.md`` (6-card list remaining after slice 16
 closed Astelli Reclaimer).
 
-Each pin test is named ``test_..._divergence_pin`` and ASSERTS the
-CURRENT divergent behavior rather than parity.  The PROBED-tier
-detector excludes ``*_divergence_pin`` functions, so these tests
-grow the test surface without touching the PROBED metric.
+**Slice 18 closure status:** Pin 2 (Roving Actuator no Rust Effect
+variant) is CLOSED -- new ``Effect::RovingActuatorETBEffect
+{ max_mv: u8 }`` variant + parse arm + resolve arm in Rust + bridge
+arm in ``cross_engine.py``; renamed to ``..._FIXED_parity`` with
+the sentinel inverted.  Pins 1 (House Cartographer) and 3
+(Lightstall Inquisitor) remain OPEN ``_divergence_pin``.
+
+Each open pin test is named ``test_..._divergence_pin`` and
+ASSERTS the CURRENT divergent behavior rather than parity.  The
+PROBED-tier detector excludes ``*_divergence_pin`` functions, so
+these tests grow the test surface without touching the PROBED
+metric.
 
 Pin closure cadence: when a sibling Rust slice closes the
 underlying gap, the relevant assertion fires and the pin is
 renamed ``*_FIXED_parity`` with the sentinel inverted (PPP / MMM /
-JJJ / RRR / TTT / VVV Pin 1 precedent).
+JJJ / RRR / TTT / VVV Pin 1 / XXX Pin 2 precedent).
 
 Pinned bugs
 -----------
@@ -488,58 +496,64 @@ def test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_vari
 
 
 # ---------------------------------------------------------------------------
-# Pin 2 -- Roving Actuator's RovingActuatorETBEffect bespoke effect has
-#          no Rust Effect variant.  Cast-from-exile-copy-for-free
-#          subsystem gap; one of 6 cards on docs/POOL_PARITY.md::BLOCKED
-#          -- genuinely_missing.  1 EoE card affected: Roving Actuator.
+# Pin 2 -- Roving Actuator's RovingActuatorETBEffect bespoke effect now
+#          HAS a Rust Effect variant (Effect::RovingActuatorETBEffect
+#          { max_mv: u8 }) + parse arm + resolve arm + bridge arm
+#          (18th Rust slice closure).  1 EoE card unblocked: Roving
+#          Actuator (3,400 17lands decks).
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergence_pin():
-    """Pin Roving Actuator's Void ETB effect lacking a Rust counterpart.
+def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_parity():
+    """**18th Rust slice (XXX Pin 2 closure)** -- Roving Actuator's
+    Void ETB now has a matching Rust ``Effect::RovingActuatorETBEffect
+    { max_mv: u8 }`` variant + parse arm + resolve arm + bridge arm.
 
-    Roving Actuator's ENTERS triggered ability resolves to
-    ``RovingActuatorETBEffect`` on the Python side
-    (``src/mtg_bot/effects/bespoke.py:630-718``).  The effect's
-    ``resolve`` implements the Void body: filter the controller's
-    graveyard for instant / sorcery cards with mana value <= 2,
-    exile the chosen card, copy its ``spell_effect``, and immediately
-    re-resolve the copy with freshly-picked targets (without paying
-    the mana cost; the copy doesn't go on the stack).  Rust's
-    ``Effect`` enum has NO matching variant -- the printing's ETB
-    body cannot round-trip through the bridge.  One of 6 cards on
-    the ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing list; 3400
-    17lands decks per ``docs/RESIDUE_CARD_PLANS.md``:96.
+    Pre-closure (the divergence XXX Pin 2 locked in): Python's
+    bespoke ``RovingActuatorETBEffect``
+    (``src/mtg_bot/effects/bespoke.py:630-718``) filtered the
+    controller's graveyard for instant/sorcery cards with mana value
+    <= 2, exiled the chosen card, and immediately re-resolved the
+    exiled card's ``spell_effect`` with freshly-picked targets (no
+    stack item; the copy can't be countered).  Rust's ``Effect`` enum
+    had no matching variant -- the printing's ETB body could not
+    round-trip through the bridge.  This was one of 6 cards on the
+    ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing list.
 
-    Probe shape:
-      1. Confirm Python's ``RovingActuatorETBEffect`` class exists
-         with the expected interface (``resolve`` method present;
-         filters graveyard by instant/sorcery + MV<=2; routes
-         through ``spell_effect.resolve``).
-      2. Sentinel: the Rust crate's source files contain NO
-         reference to ``RovingActuator`` / ``roving_actuator`` /
-         ``RovingActuatorETBEffect`` /
-         ``VoidExileFromGYCopyAndCastForFree`` -- the Rust side is
-         silent on this effect today.
-      3. Confirm Roving Actuator is loadable + carries the ENTERS
-         triggered ability on the Python side, with the bespoke
-         effect attached.
-      4. Confirm ``docs/POOL_PARITY.md``'s BLOCKED-genuinely_missing
-         list contains Roving Actuator (the documented worklist
-         entry for this gap).
+    Post-closure (asserted here): a new
+    ``Effect::RovingActuatorETBEffect { max_mv: u8 }`` variant lands
+    in ``rust/src/cards.rs`` with parse arm, to_pydict arm, resolve
+    arm in ``rust/src/state_ops_resolve.rs``, and bridge arm in
+    ``src/mtg_bot/parity/cross_engine.py``.  The resolve arm mirrors
+    Python step-for-step: source-controller resolution; first-legal
+    graveyard scan filtered to ``(is_instant || is_sorcery) &&
+    mana_cost.total() <= max_mv``; silent no-op on empty filter;
+    remove from gy, stamp ``zone=ZONE_EXILE``, push to controller's
+    exile; recursively ``apply_effect`` each child of the exiled
+    card's ``printing.effects`` (the single-element spell_effect
+    list) with the EXILED card's id as new source and the source-
+    controller transient pinned -- mirrors Python's
+    ``spell_effect.resolve(state, controller_id, copy_targets)``
+    direct dispatch.
 
-    Closure indicator:
-    ``Effect::RovingActuatorETBEffect { max_mv: u8 }`` (or a more
-    general ``GraveyardExileCopyCastForFree`` shape) lands in
-    ``rust/src/cards.rs``, with a parse arm + resolve arm in
-    ``state_ops_resolve.rs`` + bridge arm in ``cross_engine.py``.
-    Pin renames to ``..._FIXED_parity`` asserting the variant +
-    parse arm + resolve arm are present.
+    Closure shape:
+      1. Python's bespoke ``RovingActuatorETBEffect`` class is
+         unchanged (the SoT side; the closure was Rust-side).
+      2. Sentinel inverted: the Rust crate's source files NOW
+         contain ``RovingActuatorETBEffect`` /
+         ``roving_actuator_etb`` (the new variant + parse arm +
+         resolve arm).
+      3. The bridge arm round-trips Rust's
+         ``{"kind": "roving_actuator_etb", "max_mv": 2}`` to
+         Python's ``RovingActuatorETBEffect(max_mv=2)``.
 
-    EoE card scale: 1 directly (Roving Actuator; 3400 17lands decks).
+    EoE card scale: 1 directly (Roving Actuator; 3,400 17lands decks
+    per ``docs/RESIDUE_CARD_PLANS.md``:96).  Cast-from-exile-copy-
+    for-free subsystem gap closed (no broader cluster — Roving
+    Actuator is the only EoE printing with this shape).
     """
     # 1. Python's RovingActuatorETBEffect class exists with the
-    #    expected interface.
+    #    expected interface (the SoT side; unchanged by this slice).
     from mtg_bot.effects.bespoke import RovingActuatorETBEffect
     from mtg_bot.effects.base import Effect as _EffectBase
 
@@ -584,9 +598,9 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergen
         "to Zone.EXILE.  If absent, the Python convention changed."
     )
 
-    # 2. Rust crate: NO reference to RovingActuator / roving_actuator
-    #    / VoidExileFromGYCopyAndCastForFree in cards.rs or
-    #    state_ops_resolve.rs.
+    # 2. Rust crate: sentinels INVERTED -- the Rust source files now
+    #    contain Effect::RovingActuatorETBEffect + the parse-arm kind
+    #    string + the resolve arm.
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
@@ -602,27 +616,23 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergen
     cards_src = rust_cards_path.read_text(encoding="utf-8")
     resolve_src_rs = rust_resolve_path.read_text(encoding="utf-8")
 
-    forbidden_substrings = [
-        "RovingActuator",
-        "roving_actuator",
-        "RovingActuatorETBEffect",
-        "roving_actuator_etb",
-        "VoidExileFromGYCopyAndCastForFree",
-        "void_exile_from_gy_copy_and_cast_for_free",
-    ]
-    for needle in forbidden_substrings:
-        assert needle not in cards_src, (
-            f"Pin sentinel: rust/src/cards.rs should NOT yet contain "
-            f"{needle!r} (no Roving Actuator Effect variant exists).  "
-            "If this assertion fails, the closure may have landed -- "
-            "audit the Rust enum + parse arm + resolve arm and flip "
-            "this pin to _FIXED_parity."
-        )
-        assert needle not in resolve_src_rs, (
-            f"Pin sentinel: rust/src/state_ops_resolve.rs should NOT "
-            f"yet contain {needle!r} (no Roving Actuator resolve arm "
-            "exists)."
-        )
+    # Closure assertions: the Effect variant + parse-arm kind string
+    # land in cards.rs, the resolve arm lands in state_ops_resolve.rs.
+    assert "RovingActuatorETBEffect" in cards_src, (
+        "Closure assertion: rust/src/cards.rs SHOULD contain "
+        "'RovingActuatorETBEffect' -- the new Effect variant added "
+        "by the 18th Rust slice."
+    )
+    assert "roving_actuator_etb" in cards_src, (
+        "Closure assertion: rust/src/cards.rs SHOULD contain "
+        "'roving_actuator_etb' -- the parse-arm kind string the "
+        "bridge produces."
+    )
+    assert "RovingActuatorETBEffect" in resolve_src_rs, (
+        "Closure assertion: rust/src/state_ops_resolve.rs SHOULD "
+        "contain 'RovingActuatorETBEffect' -- the new resolve arm "
+        "added by the 18th Rust slice."
+    )
 
     # 3. Roving Actuator is loadable + carries the expected ETB trigger.
     from mtg_bot.cards.source import get_active_source
@@ -631,9 +641,8 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergen
     pr = src.get_printings().get("Roving Actuator")
     assert pr is not None, (
         "Pin invariant: 'Roving Actuator' should be present in the "
-        "active CardSource (per docs/POOL_PARITY.md BLOCKED-"
-        "genuinely_missing list).  If missing, the EoE data file "
-        "was regenerated -- update this pin."
+        "active CardSource.  If missing, the EoE data file was "
+        "regenerated -- update this pin."
     )
     enters_ta = next(
         (ta for ta in pr.triggered_abilities if ta.event == Event.ENTERS),
@@ -650,19 +659,28 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergen
         f"{type(enters_ta.effect).__name__}."
     )
 
-    # 4. POOL_PARITY's BLOCKED-genuinely_missing list contains Roving
-    #    Actuator (the documented worklist entry for this gap).
-    pool_parity_path = repo_root / "docs" / "POOL_PARITY.md"
-    assert pool_parity_path.exists(), (
-        f"docs/POOL_PARITY.md should exist at {pool_parity_path!r}."
-    )
-    pool_parity_src = pool_parity_path.read_text(encoding="utf-8")
-    assert "Roving Actuator" in pool_parity_src, (
-        "Pin invariant: docs/POOL_PARITY.md should list 'Roving "
-        "Actuator' (the BLOCKED-genuinely_missing entry).  If "
-        "absent, the worklist was updated -- audit this pin's "
-        "BLOCKED status."
-    )
+    # 4. Bridge round-trip: parse_effect({"kind":"roving_actuator_etb",
+    #    "max_mv": 2}) → Rust variant → bridged → Python
+    #    RovingActuatorETBEffect(max_mv=2).
+    try:
+        import mtg_bot_engine  # noqa: F401
+    except ImportError:
+        # Rust extension not built; skip the round-trip assertion
+        # (it's covered by the dedicated downstream probe file).
+        pass
+    else:
+        from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+        dict_payload = {"kind": "roving_actuator_etb", "max_mv": 2}
+        bridged = _ta_dict_to_python_effect(dict_payload)
+        assert isinstance(bridged, RovingActuatorETBEffect), (
+            f"Closure assertion: bridge should round-trip "
+            f"{{'kind': 'roving_actuator_etb', 'max_mv': 2}} to "
+            f"RovingActuatorETBEffect.  Got: {type(bridged).__name__}."
+        )
+        assert bridged.max_mv == 2, (
+            f"Closure assertion: bridge should preserve max_mv=2.  "
+            f"Got: max_mv={bridged.max_mv}."
+        )
 
     # 5. EoE cards affected.
     affected_eoe_cards = [
@@ -905,24 +923,42 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
 
 
 def test_xxx_pin_inventory_complete():
-    """Sanity check: the XXX batch declares exactly 3 pin tests.
+    """Sanity check: the XXX batch declares exactly 3 pin tests
+    (2 OPEN _divergence_pin + 1 CLOSED _FIXED_parity after the 18th
+    Rust slice).
 
     Pin batch XXX (round 25 pin-side) targets 3 divergence pins per
-    the lane discipline; this guards against accidental deletion or
-    rename of any pin function.
+    the lane discipline.  Pin 2 (Roving Actuator) was closed by the
+    18th Rust slice and renamed ``..._FIXED_parity``; Pins 1 and 3
+    remain OPEN ``..._divergence_pin``.  This guards against
+    accidental deletion or rename of any pin function (open or
+    closed).
     """
     import tests.test_divergence_pins_xxx as _self_mod
-    pin_fns = [
+    open_pin_fns = [
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_divergence_pin")
     ]
-    expected_pins = {
+    closed_pin_fns = [
+        name for name in dir(_self_mod)
+        if name.startswith("test_") and name.endswith("_FIXED_parity")
+    ]
+    expected_open_pins = {
         "test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_divergence_pin",
-        "test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_divergence_pin",
         "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_divergence_pin",
     }
-    assert set(pin_fns) == expected_pins, (
-        "XXX pin inventory mismatch.  Expected exactly the 3 pin tests:\n"
-        f"  {sorted(expected_pins)}\n"
-        f"Got:\n  {sorted(pin_fns)}"
+    expected_closed_pins = {
+        "test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_parity",
+    }
+    assert set(open_pin_fns) == expected_open_pins, (
+        "XXX open-pin inventory mismatch.  Expected exactly the 2 "
+        "open pin tests:\n"
+        f"  {sorted(expected_open_pins)}\n"
+        f"Got:\n  {sorted(open_pin_fns)}"
+    )
+    assert set(closed_pin_fns) == expected_closed_pins, (
+        "XXX closed-pin inventory mismatch.  Expected exactly the 1 "
+        "closed pin test (Pin 2 closed by 18th Rust slice):\n"
+        f"  {sorted(expected_closed_pins)}\n"
+        f"Got:\n  {sorted(closed_pin_fns)}"
     )
