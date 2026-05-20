@@ -364,7 +364,7 @@ test_trajectory_parity.py + test_trajectory.py`).
 
 ### Phase 1 (Rust + bridge + loader) — the attach substrate core: static P/T-or-keyword Aura
 
-**Status (round-78, 2026-05-20): PARTIAL — STEPs 1+2+3 + step-7 partial LANDED.**
+**Status (round-78, 2026-05-20): PARTIAL — STEPs 1+2+3+4+5 + step-7 partial LANDED.**
 Steps 1+2 (CardDef aura representation + the bridge-side
 `printing_dict` emission + the Python-side `_card_def_to_python_printing`
 materialization + the **Rust `parse_printing` aura-key parse arm**) and
@@ -386,17 +386,64 @@ dispatcher (binds chosen host onto the matching spell StackItem's
 `target_obj_id`), auto-resolve arm with `"enchant_target_first"` /
 `"default"` strategies, `stack_top_target_id()` read-only getter,
 `Action::CastSpell` dispatcher tries `cast_aura` first then falls
-through to `cast_spell_noncreature` / `cast_creature`. Steps 4-6
-(Rust aura-resolution arm + CR-704.5n SBA + bidirectional bridge
-arms) remain honest-stopped; the predicate is callable + pinned
-against every live EoE Aura but NO Aura reaches the bench yet (the
-pin `tests/test_aura_substrate_phase1.py::
+through to `cast_spell_noncreature` / `cast_creature`. **STEP 4
+(Aura-resolution attach arm — stamp `aura.attached_to =
+Some(host_id)` + apply the layer-7c P/T + layer-6 keyword grant) is
+LANDED** — see commit `feature/aura-substrate-step-4`: new
+`move_aura_post_resolve` helper in `state_ops_resolve.rs` reads the
+StackItem's `target_obj_id`, re-checks legality per CR 608.2b (host
+on bf + type matches `aura_enchant_type` + `aura_yours_only`
+respected), and either (a) routes the Aura to the caster's
+graveyard on fizzle OR (b) lands the Aura on the caster's
+battlefield with `attached_to = Some(host_id)`. The
+`resolve_top_of_stack` arm branches on `printing.is_aura` to pick
+the aura mover, leaving every non-Aura permanent / instant /
+sorcery on its prior `move_source_post_resolve` path bit-equal.
+Layer-7c P/T grant + layer-6 keyword grant flow through two new
+crate-visible helpers in `state_ops_combat.rs`
+(`aura_pt_bonus_on(state, host_id) -> (i32,i32)` and
+`aura_grants_keyword_to(state, host_id, keyword) -> bool`) that
+walk every bf object with `attached_to == Some(host_id)`, filter on
+`printing.is_aura`, and sum / OR in the printing's
+`aura_power_bonus` / `aura_toughness_bonus` /
+`aura_granted_keywords`. The three readers
+(`battlefield_creature_power`, `battlefield_creature_toughness`,
+`battlefield_has_keyword`) AND the two SBA-side toughness recipes
+(`collect_sba_victims`, `is_lethal`) fold those bonuses in on top
+of the existing UEOT / counter pipeline. **STEP 5 (Rust CR-704.5q /
+audit-704.5n SBA — host-less / illegal-host Aura bury + host-leave
+detection) is LANDED** — see commit `feature/aura-substrate-step-5`:
+new `collect_aura_sba_victims` helper in `state_ops_sba.rs` walks
+every bf Aura in ETB-timestamp order and flags any whose
+`attached_to` is `None` / points off-bf / points at a host whose
+printing fails `aura_enchant_type` / points at a host whose
+controller violates `aura_yours_only`. `move_aura_to_owners_graveyard`
+performs the destructive move (Arc::make_mut on both bf + owner-
+graveyard Vecs; field resets per Python's `move_off_battlefield`),
+queues a LEAVES_BATTLEFIELD dispatch (no DIES — Auras aren't
+creatures), and the `apply_sbas` wire-in fires the scan AFTER the
+creature-destruction pass + LEAVES/DIES dispatches so a host that
+just died via 704.5f/g is observed gone in the SAME SBA pass
+(mirrors Python's `turn.py:1327-1358` in-pass ordering). Host-leave
+detection is implicit: any bf-exit (SBA destroy, generic
+`move_object` to exile / hand / library / graveyard, bf-to-bf
+controller move) leaves the Aura's stale `attached_to` for the
+SBA scan to find on the next priority window. **Honest-stop:** the
+"host loses creature type via a UEOT layered effect" branch reads
+the host's PRINTED card_types only — UEOT add_type "creature" /
+lose-all-types animations have no Rust analogue yet
+(`is_creature_now` at `game.py:831` is Python-only), benign for
+Phase-1 S1 because Frantic Strength + Shardmage's Rescue target
+creature-typed printings exclusively. STEP 6 (bidirectional bridge
+arms for `attached_to` + the `aura_*` printing fields) remains
+the only Phase-1 honest-stop; the loader predicate
+`_printing_is_bridge_simple_aura` is callable + pinned against
+every live EoE Aura but NO Aura reaches the bench yet (the pin
+`tests/test_aura_substrate_phase1.py::
 test_loader_does_not_yet_admit_any_aura` is the honest-stop
-sentinel). Once steps 4-6 land, a one-line wire-up flip at
+sentinel). Once STEP 6 lands and STEP 7's one-line wire-up flip at
 `src/mtg_bot/parity/trajectory.py:_filter_deck_to_bridge_supported`
-closes Phase 1 for sub-shape S1. **STEP 4 (Aura-resolution attach
-arm — stamp `aura.attached_to = Some(host_id)` + apply the
-layer-7 P/T + keyword grant) is next.**
+fires, Phase 1 for sub-shape S1 closes.
 
 **Scope:** sub-shape S1 only (Frantic Strength, Shardmage's Rescue) —
 the smallest self-contained Aura: a continuous P/T/keyword grant, no

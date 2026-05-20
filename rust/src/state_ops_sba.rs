@@ -105,6 +105,45 @@
 //!   Damage on non-battlefield objects is ignored (it shouldn't exist
 //!   there in normal play, and the lethal-damage SBA is intrinsically
 //!   battlefield-scoped).
+//!
+//! ## Aura-attachment SBA (CR 704.5q — host-less / illegal-host Aura)
+//!
+//! **STEP 5 (round-78, 2026-05-20):** the Aura-attachment substrate
+//! Phase-1 SBA. CR 704.5q (historically labelled 704.5n in this
+//! codebase's audit): "An Aura that's attached to an illegal object
+//! or player, or is not attached to an object or player, is put into
+//! its owner's graveyard." This is a continuous state-based action
+//! that fires whenever a bf Aura's `attached_to` reference becomes
+//! stale (host destroyed/exiled/returned-to-hand, host no longer
+//! satisfies `aura_enchant_type` / `aura_yours_only`).
+//!
+//! The implementation lives in `collect_aura_sba_victims` +
+//! `move_aura_to_owners_graveyard`, fired from `apply_sbas` AFTER
+//! the creature-destruction pass. The intra-pass ordering matters:
+//! when a creature dies via 704.5f/g and an Aura was attached to
+//! it, the aura SBA must observe the post-destroy battlefield (host
+//! is gone) and bury the aura in the SAME `apply_sbas` call — the
+//! quiescence-loop driver `apply_sbas_until_quiescent` would
+//! otherwise need a second pass.
+//!
+//! **Host-leave detection** (the second STEP-5 surface): when the
+//! host moves off the battlefield via ANY path (SBA destroy, exile
+//! effect, return-to-hand effect, generic `move_object`-driven
+//! zone change), its absence from the bf is exactly what this SBA
+//! detects on the next priority window. There is no explicit
+//! "host-leave hook" needed — the SBA's stale `attached_to` scan
+//! is the host-leave detector.
+//!
+//! **Honest-stop:** the "host loses its creature type via a layered
+//! effect" branch is implemented as a coarse `type_matches_host`
+//! check that reads the host's printing card_types. UEOT type
+//! changes (CR 613 layer 4 add_type "creature" / lose-all-types
+//! Spirit-creature animations) are NOT folded in on the Rust side
+//! yet — `is_creature_now` (`game.py:831`) has no Rust analogue.
+//! Frantic Strength + Shardmage's Rescue (the only S1 cards) have
+//! `aura_enchant_type = "creature"` and Rust S1 hosts are always
+//! creature-typed printings, so this honest-stop has zero observable
+//! impact on Phase-1 sub-shape S1.
 
 use crate::state::{GameObject, GameState};
 use crate::state_ops_zones::mark_left_battlefield_if_nonland;
@@ -114,9 +153,182 @@ use std::sync::Arc;
 // Zone constants — duplicated from state_ops_zones.rs (per the
 // per-slice isolation rule; a follow-up consolidation slice can
 // share these via a common module once the parallel-slice constraint
-// relaxes).
+// relaxes). Hoisted above the STEP-5 Aura SBA helpers so they're in
+// scope for the `move_aura_to_owners_graveyard` zone resets below.
 const ZONE_GRAVEYARD: u8 = 3;
 const ZONE_BATTLEFIELD: u8 = 2;
+
+/// **Aura-attachment substrate — Phase 1 STEP 5 (round-78, 2026-05-20).**
+/// Read-only scan: collect every bf Aura whose attachment is illegal
+/// per CR 704.5q. Returns `(owner_id, aura_obj_id)` pairs — the
+/// outer caller is responsible for the destructive move.
+///
+/// An Aura is illegal when ANY of these holds:
+///   1. `attached_to == None` (no host bound — should not happen post-
+///      STEP 4 attach, but defensive).
+///   2. `attached_to == Some(id)` and `id` is NOT on any bf
+///      (host left between resolves — host-leave detection).
+///   3. `attached_to == Some(id)`, host is on bf, but the host's
+///      printing does not satisfy `aura_enchant_type` (creature /
+///      artifact / land mismatch).
+///   4. `attached_to == Some(id)`, host is on bf, type-matches, but
+///      `aura_yours_only == true` AND the host's controller differs
+///      from the Aura's controller.
+///
+/// Mirrors Python's `turn.py:1327-1358` Aura-attachment-legality
+/// scan in `state_based_actions`. Walks both bfs in ETB-timestamp
+/// order via `bf_iter_etb_sorted` so the bury order is deterministic
+/// and matches Python's `state.battlefield` walk.
+///
+/// `owner_id` is the Aura's `controller` (Phase-1 cast origin is
+/// hand, so controller == owner; STEP-6 cast-from-exile may
+/// diverge — when it lands, this site is the one to revisit).
+fn collect_aura_sba_victims(state: &GameState) -> Vec<(u8, u32)> {
+    let mut victims: Vec<(u8, u32)> = Vec::new();
+    for aura in crate::bf_iter::bf_iter_etb_sorted(state) {
+        let Some(aura_printing) = state.registry.lookup(aura.printing_id)
+        else {
+            continue;
+        };
+        if !aura_printing.is_aura {
+            continue;
+        }
+        // Branch 1: no host bound.
+        let Some(host_id) = aura.attached_to else {
+            victims.push((aura.controller, aura.id));
+            continue;
+        };
+        // Branch 2: bound id not on any bf.
+        let host: Option<(&GameObject, u8)> = {
+            let mut found: Option<(&GameObject, u8)> = None;
+            'find: for player in state.players.iter() {
+                for obj in player.battlefield.iter() {
+                    if obj.id == host_id {
+                        found = Some((obj, obj.controller));
+                        break 'find;
+                    }
+                }
+            }
+            found
+        };
+        let Some((host_obj, host_controller)) = host else {
+            victims.push((aura.controller, aura.id));
+            continue;
+        };
+        let Some(host_printing) =
+            state.registry.lookup(host_obj.printing_id)
+        else {
+            // Host on bf but its printing went missing — treat as
+            // illegal attachment. Should not occur on real states.
+            victims.push((aura.controller, aura.id));
+            continue;
+        };
+        // Branch 3: enchant_type mismatch.
+        // Honest-stop: layered type-change effects (UEOT add_type
+        // "creature" / lose-all-types) are NOT folded in on the Rust
+        // side — this reads the host's printed card_types only.
+        // Phase-1 S1 hosts are always creature-typed printings, so
+        // this is benign for the shipped scope; see module docstring.
+        let kind = aura_printing.aura_enchant_type.as_str();
+        let type_ok = match kind {
+            "creature" => host_printing
+                .card_types
+                .iter()
+                .any(|t| t == "Creature"),
+            "artifact" => host_printing
+                .card_types
+                .iter()
+                .any(|t| t == "Artifact"),
+            "land" => host_printing
+                .card_types
+                .iter()
+                .any(|t| t == "Land"),
+            // Unknown kinds (player-enchant, etc.) are out of scope.
+            // Treat as legal so an unsupported but in-flight Aura
+            // doesn't get spuriously buried — mirrors Python's
+            // turn.py:1351 "Other kinds aren't in scope."
+            _ => true,
+        };
+        if !type_ok {
+            victims.push((aura.controller, aura.id));
+            continue;
+        }
+        // Branch 4: yours_only with controller mismatch.
+        if aura_printing.aura_yours_only
+            && host_controller != aura.controller
+        {
+            victims.push((aura.controller, aura.id));
+            continue;
+        }
+    }
+    victims
+}
+
+/// **Aura-attachment substrate — Phase 1 STEP 5 (round-78,
+/// 2026-05-20).** Destructive move helper for the host-less / illegal-
+/// host Aura SBA. Removes the Aura from its current bf and pushes it
+/// onto its owner's graveyard. Returns `true` when the Aura was
+/// found + moved; `false` if it was no longer on any bf (concurrent
+/// mutation / already-buried within the same pass).
+///
+/// Field resets on the way out match the bare-SBA-destroy convention
+/// in `apply_sbas` and Python's `move_off_battlefield`
+/// (turn.py:216-229): `damage = 0`, `tapped = false`, `attached_to
+/// = None`. Counters stay (Python's `move_off_battlefield` doesn't
+/// clear them, and an Aura carrying counters is exceptional anyway).
+///
+/// Pushes a LEAVES_BATTLEFIELD dispatch onto the deferred queue (no
+/// DIES — an Aura is not a creature, so CR 700.4 "a creature dies"
+/// doesn't fire). The caller drains the queue at apply_sbas' tail,
+/// matching the existing post-loop ordering.
+///
+/// `owner_id` is the Aura's controller from collect_aura_sba_victims
+/// (Phase-1 cast origin is hand → owner == controller).
+fn move_aura_to_owners_graveyard(
+    state: &mut GameState,
+    owner_id: u8,
+    obj_id: u32,
+) -> bool {
+    // Find + remove from its current bf. The Aura's controller per
+    // `collect_aura_sba_victims` is the most likely host bf, but
+    // walk both for defensive symmetry.
+    let mut taken: Option<GameObject> = None;
+    for player in state.players.iter_mut() {
+        let pos = player.battlefield.iter().position(|o| o.id == obj_id);
+        if let Some(idx) = pos {
+            let bf = Arc::make_mut(&mut player.battlefield);
+            taken = Some(bf.remove(idx));
+            break;
+        }
+    }
+    let Some(mut obj) = taken else {
+        return false;
+    };
+    let printing_id = obj.printing_id;
+    let dying_obj_id = obj.id;
+    obj.zone = ZONE_GRAVEYARD;
+    obj.controller = owner_id;
+    obj.damage = 0;
+    obj.tapped = false;
+    obj.attached_to = None;
+    let target = &mut state.players[owner_id as usize];
+    Arc::make_mut(&mut target.graveyard).push(obj);
+    // Round-29 Void LTB tracking: an Aura leaving the bf is a
+    // bf-exit of a nonland permanent → flips the per-turn flag.
+    mark_left_battlefield_if_nonland(state, printing_id);
+    // ETB-trigger Slice 8: every bf-exit fires LEAVES_BATTLEFIELD.
+    // Auras are not creatures, so DIES is NOT pushed (mirrors the
+    // walker-SBA gate in collect_sba_victims above + Python's
+    // `move_off_battlefield` only firing DIES for creature-typed
+    // objects).
+    state.pending_leaves_dispatches.push(dying_obj_id);
+    // Round-55: a token Aura ceasing-to-exist sibling. Auras are
+    // very rarely tokens (no real EoE card is a token aura) but
+    // keep the gate-in-one-place invariant — the LEAVES drain tail
+    // is a no-op if the printing isn't a token.
+    crate::state_ops_zones::queue_token_cease(state, dying_obj_id);
+    true
+}
 
 /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner granted
 /// dies-rider honoring (module-private, re-derived here per the
@@ -288,8 +500,19 @@ impl GameState {
                 .ueot_base_pt_override()
                 .map(|(_, t)| t)
                 .unwrap_or(toughness as i32);
+            // Aura-attachment substrate STEP 4 (round-78): fold in
+            // the layer-7c toughness bonus from any Aura attached to
+            // this object. Same Equipment-rider/Aura
+            // equipment_bonuses scan as
+            // state_ops_combat::battlefield_creature_toughness. This
+            // is load-bearing for the SBA: a 2/1 with Frantic
+            // Strength (+2/+2) sits at effective toughness 3 and
+            // must survive 2 damage. Without this fold the SBA would
+            // wrongly destroy it.
+            let (_aura_p, aura_t) =
+                crate::state_ops_combat::aura_pt_bonus_on(self, obj.id);
             let effective_toughness =
-                base_toughness + obj.counters + obj.ueot_toughness_bonus();
+                base_toughness + obj.counters + obj.ueot_toughness_bonus() + aura_t;
             // 704.5f first per CR ordering.
             if effective_toughness <= 0 {
                 victims.push((obj.controller, obj.id));
@@ -524,7 +747,41 @@ impl GameState {
         {
             perigee_return_tapped_if_marked(self, owner_id, dead_id);
         }
-        Ok(count)
+        // Aura-attachment substrate STEP 5 (round-78): CR 704.5q
+        // (audit-labelled 704.5n) — host-less / illegal-host Aura
+        // SBA. Run AFTER the creature-destruction pass + LEAVES /
+        // DIES dispatches + perigee return: those mutate the
+        // battlefield, and the Aura SBA must observe the post-
+        // mutation state (an Aura whose host just died via 704.5f/g
+        // sees its host gone in this same SBA call, not a second
+        // quiescence pass). Position is intentional — Python's
+        // `state_based_actions` (turn.py:1280-1395) runs creature
+        // destruction first, then the Aura legality scan at
+        // turn.py:1327-1358 within the same SBA pass.
+        let aura_victims = collect_aura_sba_victims(self);
+        let aura_count = aura_victims.len();
+        for (owner_id, aura_id) in &aura_victims {
+            move_aura_to_owners_graveyard(self, *owner_id, *aura_id);
+        }
+        // Drain the LEAVES dispatches the aura-bury pushed. Auras
+        // are not creatures so no DIES queue is touched; the
+        // LEAVES drain mirrors the post-creature-destruction shape
+        // above.
+        if aura_count > 0 {
+            crate::state_ops_resolve::drain_pending_leaves_dispatches(self)?;
+            crate::state_ops_zones::drain_pending_token_cease(self);
+        }
+        // Quiescence-loop contract: the return value is the count of
+        // SBA-driven bf-exits this pass — creatures (704.5f/g) PLUS
+        // STEP-5 Aura buries (704.5q). The `apply_sbas_until_quiescent`
+        // driver loops while this is nonzero; bundling the aura count
+        // ensures an Aura-only SBA event (e.g. an instant-speed
+        // bounce of the host between SBA passes) properly drives a
+        // second quiescence pass instead of terminating early.
+        // Pre-STEP-5 callers that read this as "creatures destroyed"
+        // are still correct in the common case where `aura_count ==
+        // 0`; the docstring above has been broadened.
+        Ok(count + aura_count)
     }
 
     /// Loop driver for state-based actions — CR 704.3 quiescence.
@@ -607,8 +864,15 @@ impl GameState {
                         .ueot_base_pt_override()
                         .map(|(_, t)| t)
                         .unwrap_or(toughness as i32);
+                    // Aura-attachment substrate STEP 4 (round-78):
+                    // lockstep with collect_sba_victims above —
+                    // fold in the layer-7c aura toughness bonus.
+                    let (_aura_p, aura_t) =
+                        crate::state_ops_combat::aura_pt_bonus_on(
+                            self, obj.id,
+                        );
                     let effective_toughness =
-                        base_toughness + obj.counters + obj.ueot_toughness_bonus();
+                        base_toughness + obj.counters + obj.ueot_toughness_bonus() + aura_t;
                     return Some(obj.damage as i32 >= effective_toughness);
                 }
             }
