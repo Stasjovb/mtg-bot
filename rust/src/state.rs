@@ -2690,6 +2690,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2741,6 +2746,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2805,6 +2815,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
     });
     let registry = builder.snapshot();
 
