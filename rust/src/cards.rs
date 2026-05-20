@@ -5906,6 +5906,99 @@ pub struct CardPrinting {
     /// satisfies the cost). See
     /// `additional_cost_sacrifice_creature_or_artifact`.
     pub additional_cost_choose_your_creature: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2 (round-78,
+    /// 2026-05-20).** `true` iff this printing is an Aura per
+    /// `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 1 sub-shape S1
+    /// (static P/T-or-keyword Aura, no triggers, no control swap, no
+    /// replacement). `false` (the back-compat default — every
+    /// pre-Phase-1 registry dict omits the `is_aura` key, which the
+    /// parser maps to `false`) for every non-Aura printing AND for
+    /// every Aura that the §2 loader predicate
+    /// `_printing_is_bridge_simple_aura` declines (so the field is
+    /// load-bearing only when paired with a bridge-admitted Aura,
+    /// which is currently NONE — STEP 7 wire-up + a later phase's
+    /// real-Aura admit is required before any Aura reaches the
+    /// registry as `is_aura=true`).
+    ///
+    /// Mirrors Python's `CardPrinting.is_aura` derivation (`card_types
+    /// contains "Enchantment" AND subtypes contains "Aura"` per
+    /// `cards/base.py:1060`) — except on the Rust side the value comes
+    /// straight from the explicit `is_aura` key the Python bridge
+    /// emits (`build_rust_state` at `cross_engine.py:10339`), NOT
+    /// derived from subtypes. The bridge ensures the boolean matches
+    /// the Python derivation; downstream Rust consumers gate on this
+    /// field rather than re-running the derivation.
+    ///
+    /// **Inert until STEPs 3-6 land.** This slice extends the parser
+    /// to STORE the value — no downstream Rust consumer reads it yet
+    /// (cast-time enchant-target decision, resolution attach arm,
+    /// CR-704.5n SBA, bidir bridge are all later Phase-1 steps —
+    /// honest-stopped per the plan). The field round-trips through
+    /// the bridge faithfully so STEPs 3-6 can read it without further
+    /// substrate changes.
+    pub is_aura: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Which permanent
+    /// type this Aura enchants: `"creature"` (Frantic Strength,
+    /// Shardmage's Rescue — Phase 1 carriers) or `"artifact"`
+    /// (Hardlight Containment, admitted later). Defaults to
+    /// `"creature"` (mirrors Python's `CardPrinting.aura_enchant_type`
+    /// default at `cards/base.py:507`) when the registry dict omits
+    /// the `aura_enchant_type` key OR when the printing is not an
+    /// Aura — the field is ignored unless `is_aura` is `true`. Phase 1
+    /// restricts to single-type Auras (modal "artifact or creature"
+    /// shapes are declined at the loader predicate per the plan §2).
+    pub aura_enchant_type: String,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff the
+    /// printed text is "Enchant <type> YOU CONTROL" (Shardmage's
+    /// Rescue). `false` is the default (back-compat — every pre-STEP-2
+    /// registry dict omits the key) and the printed shape for Frantic
+    /// Strength / Hardlight Containment / etc. The cast-time
+    /// enchant-target picker (Phase 1 STEP 3, not in this slice) will
+    /// filter legal hosts on this; STEP 2 carries the field through the
+    /// bridge ONLY.
+    pub aura_yours_only: bool,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** The layer-7
+    /// power bonus the attached host receives while this Aura is in
+    /// play. `0` (back-compat default — every pre-STEP-2 registry
+    /// dict omits the key) for keyword-only Auras and for every
+    /// non-Aura. Phase 1 admits ONLY static, layered grants; dynamic
+    /// or counter-based bonuses are out of scope. Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[0]` (the same `(power, tough,
+    /// keywords)` tuple shape Equipment uses — the Python parser
+    /// reuses `equipment_bonuses` for Auras and Equipment).
+    ///
+    /// **Wire shape.** The bridge emits a single dict
+    /// `aura_equipment_bonuses = {"power_bonus": int, "toughness_bonus":
+    /// int, "granted_keywords": [str, ...]}` (NOT three separate keys
+    /// — see `build_rust_state` at `cross_engine.py:10384`). The parse
+    /// arm reads the three sub-keys out of that dict.
+    pub aura_power_bonus: i16,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-7
+    /// toughness bonus; same parse + default + wire-shape semantics as
+    /// `aura_power_bonus`. Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[1]`.
+    pub aura_toughness_bonus: i16,
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-6
+    /// keyword grants the attached host receives while this Aura is in
+    /// play (`["trample", "flying", ...]`). Empty Vec (back-compat
+    /// default — every pre-STEP-2 registry dict omits the key) for
+    /// P/T-only Auras and for every non-Aura.
+    ///
+    /// **Storage shape.** Lowercase keyword names with spaces
+    /// converted to underscores ("first_strike", "double_strike") —
+    /// matches the Python bridge's emission at
+    /// `cross_engine.py:10387` (`kw.replace(" ", "_")`). The keyword
+    /// vocabulary is restricted to `_SAFE_KEYWORDS` at the loader
+    /// (`trajectory.py:_SAFE_KEYWORDS`) so the underscore-form is
+    /// closed: "first_strike", "double_strike", "flying", "vigilance",
+    /// "lifelink", "trample", "haste", "deathtouch", "menace",
+    /// "defender", "indestructible", "reach". Mirrors Python's
+    /// `CardPrinting.equipment_bonuses[2]` (a frozenset on the Python
+    /// side; ordered Vec here for round-trip stability). Future Rust
+    /// consumers that compare against the existing `keywords` field
+    /// (which stores space-separated lowercase) must underscore-map
+    /// before comparison.
+    pub aura_granted_keywords: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -8622,6 +8715,111 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         })?,
         None => 0,
     };
+    // Aura-attachment substrate — Phase 1 STEP 2 (round-78,
+    // 2026-05-20). Read the aura keys the Python bridge emits at
+    // `cross_engine.py:10339-10391` (`is_aura` + `aura_enchant_type`
+    // + `aura_yours_only` + `aura_equipment_bonuses` sub-dict). Every
+    // key uses the same back-compat
+    // `match get_item { Some => extract, None => default }` shape as
+    // every other optional field above — missing key => pre-substrate
+    // default, so every pre-Phase-1 registry dict parses bit-identical
+    // to before this slice landed.
+    //
+    // **Inert until STEPs 3-6 land.** STEP 2 stores the values in
+    // `CardPrinting` — no Rust consumer reads them yet. The Phase-1
+    // remaining steps (cast-time enchant-target decision, resolution
+    // attach arm, CR-704.5n SBA, bidir bridge) will read these fields
+    // off the printing rather than re-parsing the registry dict.
+    let is_aura = match dict.get_item("is_aura")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("is_aura must be a bool")
+        })?,
+        None => false,
+    };
+    // `aura_enchant_type` mirrors Python's default at
+    // `cards/base.py:507` ("creature"). The field is ignored unless
+    // `is_aura=true`, but we still default it consistently so a
+    // direct-construction path (state.rs synthetic printings) doesn't
+    // accidentally diverge from the parse-path default.
+    let aura_enchant_type = match dict.get_item("aura_enchant_type")? {
+        Some(v) => v.extract::<String>().map_err(|_| {
+            PyValueError::new_err(
+                "aura_enchant_type must be a string \
+                 (\"creature\" | \"artifact\")",
+            )
+        })?,
+        None => "creature".to_string(),
+    };
+    let aura_yours_only = match dict.get_item("aura_yours_only")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("aura_yours_only must be a bool")
+        })?,
+        None => false,
+    };
+    // `aura_equipment_bonuses` is a single nested dict
+    // `{"power_bonus": int, "toughness_bonus": int, "granted_keywords":
+    // [str, ...]}` (NOT three top-level keys — see
+    // `cross_engine.py:10384`). Missing top-level key OR a present-but-
+    // None inner key parses to the zero/empty default; an absent
+    // top-level key on a non-Aura registers as P/T-or-keyword-less.
+    // The bridge omits the top-level key when no bonus is meaningful
+    // (the Python `if card.aura_power_bonus or ... or
+    // card.aura_granted_keywords:` gate at `cross_engine.py:10374`).
+    let (aura_power_bonus, aura_toughness_bonus, aura_granted_keywords) =
+        match dict.get_item("aura_equipment_bonuses")? {
+            Some(bonuses_any) => {
+                let bonuses_dict = bonuses_any
+                    .downcast::<PyDict>()
+                    .map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses must be a dict",
+                        )
+                    })?;
+                let pwr = match bonuses_dict.get_item("power_bonus")? {
+                    Some(v) => v.extract::<i16>().map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses.power_bonus must \
+                             be an integer",
+                        )
+                    })?,
+                    None => 0,
+                };
+                let tgh = match bonuses_dict.get_item("toughness_bonus")? {
+                    Some(v) => v.extract::<i16>().map_err(|_| {
+                        PyValueError::new_err(
+                            "aura_equipment_bonuses.toughness_bonus \
+                             must be an integer",
+                        )
+                    })?,
+                    None => 0,
+                };
+                let kws = match bonuses_dict.get_item("granted_keywords")? {
+                    Some(kw_any) => {
+                        let iter = kw_any.try_iter().map_err(|_| {
+                            PyValueError::new_err(
+                                "aura_equipment_bonuses.granted_keywords \
+                                 must be an iterable of keyword strings",
+                            )
+                        })?;
+                        let mut out = Vec::new();
+                        for item in iter {
+                            let s: String = item?.extract().map_err(|_| {
+                                PyValueError::new_err(
+                                    "aura_equipment_bonuses.\
+                                     granted_keywords entries must be \
+                                     strings",
+                                )
+                            })?;
+                            out.push(s);
+                        }
+                        out
+                    }
+                    None => Vec::new(),
+                };
+                (pwr, tgh, kws)
+            }
+            None => (0i16, 0i16, Vec::new()),
+        };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -8643,6 +8841,12 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         additional_cost_sacrifice_creature_or_artifact,
         additional_cost_sacrifice_creature_or_enchantment,
         additional_cost_choose_your_creature,
+        is_aura,
+        aura_enchant_type,
+        aura_yours_only,
+        aura_power_bonus,
+        aura_toughness_bonus,
+        aura_granted_keywords,
     })
 }
 
@@ -10272,6 +10476,47 @@ impl Registry {
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let p = self.lookup(id)?;
         p.etb_effects.iter().map(|e| effect_to_pydict(py, e)).collect()
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff this
+    /// printing parsed as an Aura (the registry-dict carried
+    /// `is_aura=True`). Mirrors Python's `CardPrinting.is_aura`
+    /// derivation. Used by the test surface to confirm the STEP-2
+    /// parse arm landed.
+    fn get_printing_is_aura(&self, id: u32) -> PyResult<bool> {
+        Ok(self.lookup(id)?.is_aura)
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Which permanent
+    /// type this Aura enchants (`"creature"` | `"artifact"`). Defaults
+    /// to `"creature"` for non-Aura printings — gate on `is_aura`
+    /// before reading.
+    fn get_printing_aura_enchant_type(&self, id: u32) -> PyResult<String> {
+        Ok(self.lookup(id)?.aura_enchant_type.clone())
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** `true` iff this
+    /// Aura's printed text is "Enchant <type> YOU CONTROL" (Shardmage's
+    /// Rescue). `false` for non-Auras and for non-yours-only Auras.
+    fn get_printing_aura_yours_only(&self, id: u32) -> PyResult<bool> {
+        Ok(self.lookup(id)?.aura_yours_only)
+    }
+
+    /// **Aura-attachment substrate — Phase 1 STEP 2.** Layer-7 bonus
+    /// triple `(power_bonus, toughness_bonus, granted_keywords)`.
+    /// pyo3 auto-converts the Rust tuple to a Python tuple. `(0, 0,
+    /// [])` for non-Auras and for Auras whose bridge omitted the
+    /// `aura_equipment_bonuses` sub-dict.
+    fn get_printing_aura_grant(
+        &self,
+        id: u32,
+    ) -> PyResult<(i16, i16, Vec<String>)> {
+        let p = self.lookup(id)?;
+        Ok((
+            p.aura_power_bonus,
+            p.aura_toughness_bonus,
+            p.aura_granted_keywords.clone(),
+        ))
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict
