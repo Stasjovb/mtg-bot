@@ -27,17 +27,19 @@ Raw JSON artifacts (committed at repo root): `s6_scale_verify_v5_terminal.json`,
 ## §0 TL;DR
 
 **Combined PASS was 1477/1500 (98.5%) across 6.0% of the 5000-archetype
-deck pool. As of 2026-05-20 the priority_player + blocker axes are
-CLOSED via `feature/priority-player-blocker-closure`; cumulative
-projected PASS is now 1496/1500 (99.73%). The 23 residual divergences
-distributed across 3 distinct axes; 2 of those 3 axes are now closed:**
+deck pool. As of 2026-05-20 ALL 3 residual axes are CLOSED via
+`feature/priority-player-blocker-closure` (priority_player +
+blocker) AND `feature/battlefield-axis-closure` (battlefield STATE_EQ);
+cumulative projected PASS is now 1500/1500 (100.00%). The 23 residual
+divergences distributed across 3 distinct axes; ALL 3 of those axes
+are now closed:**
 
 | Axis | Count | % of 1500 | Distinct slices | Status |
 |---|---:|---:|---|---|
 | `STATE_EQ::fields:priority_player` (G5-family long-tail) | **0** (was 15) | **0.00%** | — | **CLOSED 2026-05-20** |
 | `LEGAL_SET_EQ::fields:blocker` (Rust-extra blocker, NEW v8) | **0** (was 4) | **0.00%** | — | **CLOSED 2026-05-20 — SAME root cause as priority_player** |
-| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | **4** | 0.27% | v9 only | OPEN (todo `e5b7c9d8`) |
-| **total residual** | **4** (was 23) | **0.27%** | — | 1 axis open |
+| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | **0** (was 4) | **0.00%** | — | **CLOSED 2026-05-20** via `feature/battlefield-axis-closure` (migrated `Effect::DestroyTargetArtifactOrTappedCreature` + `Effect::FocusFireEffect` to the `current_resolve_payload_target_id` pattern; bench at arch=253/257/281 × seeds 0-4 = 15 games / 0 FAIL_DIVERGENCE on battlefield STATE_EQ) |
+| **total residual** | **0** (was 23) | **0.00%** | — | **ALL 3 axes closed** |
 
 Zero FAIL_TIMEOUT, zero FAIL_EXCEPTION across all 1500 games. Every
 divergence is a genuine per-step compare mismatch, not a cap proxy.
