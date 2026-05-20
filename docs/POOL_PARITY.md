@@ -282,10 +282,20 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Zealous Display
 - Zookeeper Mechan
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (2)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (1)
 
 - Lightstall Inquisitor
-- Pain for All
+
+Pain for All is no longer in this tier: the Effect-level scaffolding
+(`Effect::PainForAllETBEffect` + `Effect::PainForAllDamageEchoEffect`
++ `Predicate::IsHost`) + bridge + honest-stop resolve arms shipped
+in the Pain for All closure slice (2026-05-20). The card now sits
+in the `subsystem-gated / Effect-uncovered` tier under
+**Aura-attachment substrate** (same place as Meltstrider's Resolve);
+full byte-equality awaits Phase 1 of the Aura attach substrate plan
+(Rust setting `attached_to` on Aura resolve). See
+`docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §4 and
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` Phase 3.
 
 ## BLOCKED — blocked_non_effect (non-Effect gate) (2)
 
