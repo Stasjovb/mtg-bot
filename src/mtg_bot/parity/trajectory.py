@@ -4753,6 +4753,26 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_power_bonus = 0
             aura_toughness_bonus = 0
             aura_granted_keywords = ()
+        # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+        # Thread the S2 static-grant fields from the parsed printing
+        # through to the CardDef. The §2 predicate above gates on the
+        # paired-shape (``attached_grants_control +
+        # attached_grants_lose_all_abilities``) and rejects
+        # ``attached_sets_base_pt`` / ``attached_grants_subtype`` /
+        # ``attached_prevents_untap``; so for the live admit set
+        # (Duskmourn's Domination) the values flowing through here
+        # are control=True / lose_abilities=True / set_base_pt=None.
+        # The Phase-1-S1 carriers (Frantic Strength, Shardmage's
+        # Rescue) have all three at the back-compat defaults, so
+        # they materialize bit-identical to before this slice.
+        attached_sets_base_pt = printing.attached_sets_base_pt
+        if attached_sets_base_pt is not None:
+            sp, st = attached_sets_base_pt
+            aura_set_base_power: int | None = int(sp)
+            aura_set_base_toughness: int | None = int(st)
+        else:
+            aura_set_base_power = None
+            aura_set_base_toughness = None
         return CardDef(
             name=printing.name,
             card_type="Enchantment",
@@ -4764,6 +4784,12 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_power_bonus=aura_power_bonus,
             aura_toughness_bonus=aura_toughness_bonus,
             aura_granted_keywords=aura_granted_keywords,
+            aura_grants_control=printing.attached_grants_control,
+            aura_grants_lose_abilities=(
+                printing.attached_grants_lose_all_abilities
+            ),
+            aura_set_base_power=aura_set_base_power,
+            aura_set_base_toughness=aura_set_base_toughness,
         )
     if _printing_is_bridge_simple_spell(printing):
         # Spell-card-bridge lever, Phase 1 (round-70): a pure
