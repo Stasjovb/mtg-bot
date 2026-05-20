@@ -273,6 +273,8 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_idiom_unlocked_multi_target_picker.py",
+    REPO_ROOT / "tests" / "test_probe_remaining_ooo.py",
+    REPO_ROOT / "tests" / "test_probe_remaining_qqq.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
