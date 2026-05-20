@@ -447,6 +447,36 @@ PROBE_MODULES: tuple[Path, ...] = (
     # classifier).  See module docstring for the full honest-
     # exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_eeee.py",
+    # Probe batch FFFF (round 32 relaunch covered-but-unprobed) — sixth
+    # 4-letter probe batch (this slot was previously claimed by an
+    # agent that timed out at worktree creation; that branch is gone,
+    # slot reclaimed fresh).  ONE card from the covered tier upgraded
+    # to PROBED via the same parse + bridge round-trip + Python-side
+    # resolve idiom DDD slice 17 / YYY / ZZZ / AAAA / CCCC / EEEE /
+    # DDDD established:
+    #   * Illvoi Operative (Creature IS_CAST ->
+    #     PutPlusOneCounterOnSelf(amount=1); FIRST IS_CAST-event
+    #     carrier of the PutPlusOneCounterOnSelf effect class to land
+    #     a credited probe -- the only EoE consumer of this
+    #     (event, effect-class) tuple.  Earlier YYY / SSS / UUU drops
+    #     deferred this card on cross-engine compare_fields grounds
+    #     (slice-12 IS_CAST stack-resolution-order divergence), but
+    #     the EEEE-idiom (parse + bridge round-trip + Python-side
+    #     resolve, NO cross-engine compare_fields) sidesteps that
+    #     gap entirely -- same drop-recovery precedent DDDD used for
+    #     Meltstrider Eulogist (HasCounter predicate gap) and EEEE
+    #     used for Starwinder (combat-damage harness gap).
+    # Honest-exhaustion is the dominant signal for the remainder of
+    # the covered_by_construction tier -- the magecraft-family
+    # siblings Cosmogrand Zenith / Station Monitor / Sunstar
+    # Lightsmith are blocked by their EFFECT-class wrappers (modal /
+    # token-registration / Sequence), not the IS_CAST event itself;
+    # the long tail of activated-ability cards, Equipment / Aura /
+    # Room subsystem cards, pump-rider cards, vanilla creatures,
+    # ManifestDread substrate, and non-basic lands carry their own
+    # subsystem / bridge-arm blockers (see module docstring for the
+    # full honest-exhaustion drop list).
+    REPO_ROOT / "tests" / "test_probe_remaining_ffff.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
