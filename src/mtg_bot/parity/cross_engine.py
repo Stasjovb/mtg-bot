@@ -8118,6 +8118,33 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             AstelliReclaimerETBEffect,
         )
         return AstelliReclaimerETBEffect()
+    if kind == "roving_actuator_etb":
+        # 18th Rust slice (XXX Pin 2 closure) — Roving Actuator Void
+        # ETB bridge arm. Rust's ``Effect::RovingActuatorETBEffect
+        # { max_mv: u8 }`` (cards.rs single-field variant added in
+        # this slice; parse + to_dict arms immediately after the
+        # slice-16 ``astelli_reclaimer_etb_effect``; resolve arm in
+        # ``state_ops_resolve.rs`` immediately after the slice-16
+        # Astelli arm) mirrors Python's ``RovingActuatorETBEffect``
+        # (``effects\bespoke.py:629-718``).
+        #
+        # **Single-field bridge.** ``max_mv`` (the printed mana-value
+        # threshold) round-trips as an int. Default to 2 if the key is
+        # omitted — mirrors Python's ``max_mv: int = 2`` dataclass
+        # default (parser emits the field explicitly but the bridge
+        # defaults belt-and-suspenders for any synthetic dict that
+        # omits it).
+        #
+        # **Real EoE consumer:** Roving Actuator (3,400 17lands decks)
+        # — the ONLY EoE card with this shape (cast-from-exile-copy-
+        # for-free substrate gated on Void). One of the 6 cards on
+        # ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing list; this
+        # slice closes it.
+        from mtg_bot.effects.bespoke import (
+            RovingActuatorETBEffect,
+        )
+        max_mv_raw = eff_dict.get("max_mv", 2)
+        return RovingActuatorETBEffect(max_mv=int(max_mv_raw))
     if kind == "exile_each_opponents_graveyard":
         # "Exile each opponent's graveyard." — untargeted, every card
         # in each opponent's graveyard moves to that player's own

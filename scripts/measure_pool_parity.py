@@ -301,6 +301,12 @@ PROBE_MODULES: tuple[Path, ...] = (
     # parse + bridge round-trip + Python-side resolve idiom DDD
     # slice 17's Honored Knight-Captain probe established:
     REPO_ROOT / "tests" / "test_probe_remaining_yyy.py",
+    # 18th Rust slice (XXX Pin 2 — Roving Actuator Void ETB; new
+    # Effect::RovingActuatorETBEffect { max_mv: u8 } variant +
+    # parse + resolve + bridge; cast-from-exile-copy-for-free
+    # substrate via recursive apply_effect on the exiled card's
+    # printing.effects with the source-controller transient pinned):
+    REPO_ROOT / "tests" / "test_probe_xxx_downstream.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

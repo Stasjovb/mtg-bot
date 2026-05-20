@@ -221,11 +221,14 @@
       "claimed_missing_effect": "ExileGraveyardCastFromExile",
       "aliases": [
         "ExileGraveyardCastFromExile",
-        "VoidExileFromGYCopyAndCastForFree"
+        "VoidExileFromGYCopyAndCastForFree",
+        "RovingActuatorETBEffect",
+        "roving_actuator_etb"
       ],
-      "status": "genuinely_missing",
+      "status": "closed",
+      "closed_at_slice": "18th Rust slice (XXX Pin 2 closure)",
       "verified_absent_at_commit": "e17802c9",
-      "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → the bespoke composite RovingActuatorETBEffect (Python class, NOT in the live 112-variant Rust enum — no shipped Rust Effect arm for the exile-then-cast-copy half); no alias resolves to a live Rust variant; printed name 'Roving Actuator' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
+      "note": "CLOSED in slice 18 (XXX Pin 2 closure). Effect::RovingActuatorETBEffect { max_mv: u8 } single-field payload variant + parse arm + to_pydict arm + resolve arm in Rust + bridge arm in cross_engine.py. The resolve arm mirrors Python's bespoke RovingActuatorETBEffect step-for-step: source-controller resolution (CR 119.5 / 608.2); first-legal graveyard scan filtered to (is_instant || is_sorcery) && mana_cost.total() <= max_mv; silent no-op on empty filter (\"up to one\"); remove from gy, stamp zone=ZONE_EXILE, push to controller's exile; clone the exiled card's printing.effects and recursively apply_effect each child with the EXILED card's id as new source — the copy resolves on the engine directly without going through the stack (intentional first-slice simplification matching Python's bespoke.py:683-711 \"doesn't go on the stack, can't be counterspelled\" comment). Source-controller transient pinned through the recursive call so DealDamage / DrawCards / GainLife arms attribute correctly to the Roving Actuator's controller. 3,400 17lands decks. Substrate-thinness honest-stop check (per the slice 18 task brief) passed — apply_effect_pub_with_controller's save-swap-restore pattern was sufficient substrate; no deeper engine work was required. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
     },
     {
       "entry": "FamishedWorldsire-composition",

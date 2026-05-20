@@ -3307,6 +3307,73 @@ pub enum Effect {
     /// to `AstelliReclaimerETBEffect()`. Mirrors the round-49 /
     /// round-54 unit-variant convention.
     AstelliReclaimerETBEffect,
+    /// **18th Rust slice (XXX Pin 2 closure) — Roving Actuator Void ETB.**
+    /// "Exile up to one target instant or sorcery card with mana value 2
+    /// or less from your graveyard. Copy it. You may cast the copy
+    /// without paying its mana cost." Mirrors Python's
+    /// `RovingActuatorETBEffect` (`effects/bespoke.py:630-718`) — the
+    /// ONLY EoE card with this shape, 3,400 17lands decks.
+    ///
+    /// **Single-field variant.** `max_mv: u8` — the printed mana-value
+    /// threshold (2 on Roving Actuator; surfacing the field as a payload
+    /// lets future "exile-from-gy MV<=N + cast-copy-for-free" siblings
+    /// reuse the variant if they ever appear). Mirrors Python's
+    /// `max_mv: int = 2` field on the `@dataclass(frozen=True)`.
+    ///
+    /// **Resolve semantics (mirrors `RovingActuatorETBEffect.resolve`).**
+    /// 1. Source-controller resolution via the transient
+    ///    `current_resolve_source_controller` (fallback
+    ///    `active_player`) — CR 119.5 / 608.2; "your graveyard" is the
+    ///    source's controller's graveyard.
+    /// 2. Walk the controller's graveyard in insertion order. Pick the
+    ///    FIRST card whose printing satisfies
+    ///    `(is_instant || is_sorcery) && mana_cost.total() <= max_mv`
+    ///    (mirrors Python's `legal_targets` filter; matches the bespoke
+    ///    effect's "graveyard_spell" target-kind set). If no card
+    ///    matches, silent no-op (Python parity — "up to one" is fine
+    ///    with 0 picks).
+    /// 3. Remove the picked card from the graveyard. Stamp
+    ///    `zone = ZONE_EXILE` (mirrors Python's `card.zone = Zone.EXILE`)
+    ///    and push to controller's exile (the "you exile" rider on the
+    ///    Void body). Clone the printing_id BEFORE the move so it
+    ///    survives the in-place mutation.
+    /// 4. Apply the exiled card's `spell_effect` (a copy of it — the
+    ///    Python convention is "the second `spell_effect` resolve fires
+    ///    on the engine directly without going through the stack"; the
+    ///    copy does NOT go on the stack and can NOT be countered, an
+    ///    intentional first-slice simplification). The exiled card's
+    ///    `printing.effects` is the single-element list Python's bridge
+    ///    builds from `card.spell_effect` (see
+    ///    `cross_engine.py:10207-10208`). Iterate the effects and call
+    ///    `apply_effect(state, effect, exiled_card_id)` recursively
+    ///    with the EXILED card's object id as the source — that's the
+    ///    "casting source" of the copy, so any source-controller-aware
+    ///    Effect arm (DealDamage / DrawCards / GainLife / ...) reads
+    ///    the right controller via the lookup-by-id zone scan + falls
+    ///    back to `current_resolve_source_controller` if the zone scan
+    ///    misses.
+    /// 5. The exiled card lives in exile (we just put it there) so the
+    ///    source-controller lookup in recursive `apply_effect` arms
+    ///    finds it there. The recursive call MUST happen AFTER the
+    ///    push-to-exile so the zone scan succeeds — otherwise arms that
+    ///    can't find the source fall through to `active_player` which
+    ///    can be wrong.
+    ///
+    /// **No PendingDecision.** Python's `requires_target() == True` and
+    /// `legal_targets()` is non-trivial, but the target binding is a
+    /// first-legal pick (mirrors the Astelli Reclaimer slice 16
+    /// closure's deterministic-graveyard-pick convention). The copy's
+    /// own targets (if its `spell_effect` is targeted, e.g. Plasma Bolt
+    /// dealing 2 damage) bind via the recursive arm's standard
+    /// first-legal pick (e.g. DealDamage to "the defender = opponent of
+    /// the source's controller"). Net effect: parity with Python's
+    /// `_PickFirstAgent`-driven test fixture path.
+    ///
+    /// **Schema parity with Python.** Single-field variant on both
+    /// sides — `max_mv: u8` on the Rust enum / `max_mv: int` on the
+    /// Python dataclass. The bridge translates this Rust variant to
+    /// `RovingActuatorETBEffect(max_mv=max_mv)`.
+    RovingActuatorETBEffect { max_mv: u8 },
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -7023,6 +7090,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // lands_tapped` unit-variant parse arm shape verbatim).
             Ok(Effect::AstelliReclaimerETBEffect)
         }
+        "roving_actuator_etb" => {
+            // 18th Rust slice (XXX Pin 2 closure) — Roving Actuator
+            // Void ETB. Single-field variant — `max_mv: u8` is the
+            // printed mana-value threshold (2 on Roving Actuator).
+            // Mirrors Python's `RovingActuatorETBEffect(max_mv: int = 2)`
+            // dataclass field. Default to 2 if the key is omitted
+            // (round-trip dict-shape consistency — same default as the
+            // Python dataclass).
+            let max_mv_i: i64 = match dict.get_item("max_mv")? {
+                Some(m) => m.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "roving_actuator_etb.max_mv must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 2,
+            };
+            if max_mv_i < 0 || max_mv_i > 255 {
+                return Err(PyValueError::new_err(format!(
+                    "roving_actuator_etb: max_mv must be in 0..=255, got {max_mv_i}"
+                )));
+            }
+            Ok(Effect::RovingActuatorETBEffect { max_mv: max_mv_i as u8 })
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -9769,6 +9859,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // round-54 `famished_worldsire_look_top_x_by_power_put_
             // lands_tapped` precedent).
             d.set_item("kind", "astelli_reclaimer_etb_effect")?;
+        }
+        Effect::RovingActuatorETBEffect { max_mv } => {
+            // 18th Rust slice (XXX Pin 2 closure). Single-field
+            // variant — `max_mv: u8` mirrors Python's
+            // `RovingActuatorETBEffect(max_mv: int = 2)` dataclass
+            // field. Always emit the key so the dict round-trips
+            // back to the same variant payload.
+            d.set_item("kind", "roving_actuator_etb")?;
+            d.set_item("max_mv", *max_mv as i64)?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;
