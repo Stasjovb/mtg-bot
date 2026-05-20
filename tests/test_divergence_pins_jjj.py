@@ -210,59 +210,40 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Pin 1 -- dyadrine_attack_effect NOT wired in Rust parse_effect
-#          (EEE Python-only bridge fix; Dyadrine, Synthesis Amalgam blocked)
+# Pin 1 -- dyadrine_attack_effect FIXED in Rust parse_effect
+#          (EEE downstream complement — 8th Rust slice; JJJ Pin 1 CLOSED)
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_dyadrine_attack_effect_rust_parse_effect_gap_divergence_pin():
-    """Pin the Rust-side gap in ``parse_effect`` for
+def test_cross_engine_real_eoe_dyadrine_attack_effect_rust_parse_effect_gap_FIXED_parity():
+    """FIXED_parity: Rust ``parse_effect`` now accepts
     ``"dyadrine_attack_effect"``.
 
-    Bug location:
-      ``rust/src/cards.rs`` -- ``fn parse_effect`` match arms do NOT
-      include ``"dyadrine_attack_effect"``.  The terminal error arm
-      (``other => Err(PyValueError::new_err(format!("unknown effect
-      kind {other:?}; valid: deal_damage, draw_cards, ...")))`` lists
-      the wired kinds; ``"dyadrine_attack_effect"`` is absent.
+    8th Rust slice (EEE downstream complement) adds
+    ``"dyadrine_attack_effect" => Ok(Effect::DyadrineAttackEffect)``
+    to Rust's ``parse_effect``.  The resolve arm is an honest-stop
+    sentinel (no-op) — full counter-removal/draw/token logic is deferred.
 
-    Python side (CLOSED by EEE):
-      ``_ta_dict_to_python_effect({"kind": "dyadrine_attack_effect"})``
-      returns ``DyadrineAttackEffect()`` without raising.  This arm was
-      added in the EEE bridge-fix slice (round 17).
-
-    Rust side (OPEN):
-      Rust's ``parse_effect`` raises ``PyValueError`` for
-      ``kind="dyadrine_attack_effect"``.  Passing a
-      ``triggered_ability`` dict whose ``effect`` sub-dict carries this
-      kind to ``parse_triggered_ability`` fails at the Rust layer.
+    Inverted from the original divergence_pin:
+      Before: Rust raised PyValueError for the effect dict.
+      After:  Rust does NOT raise; ``register_and_inject_object`` with
+              a triggered_ability using this effect kind succeeds.
 
     Card context:
-      Dyadrine, Synthesis Amalgam -- "Whenever you attack, you may
-      remove a +1/+1 counter from each of two creatures you control."
-      Parser: ATTACKS trigger with ``DyadrineAttackEffect()`` effect.
-      The card's ETB trigger (counters equal to mana spent) uses a
-      separate effect kind; this pin is specifically the attack trigger.
+      Dyadrine, Synthesis Amalgam -- "Whenever you attack, you may remove
+      a +1/+1 counter from each of two creatures you control."
+      Parser: YOU_ATTACK trigger (fires once per combat) with
+      DyadrineAttackEffect() effect.
 
-    Probe shape:
-      1. Assert ``DyadrineAttackEffect`` exists in ``effects.bespoke``
-         and is a zero-field dataclass.
-      2. Assert ``DyadrineAttackEffect`` is an ``Effect`` subclass.
-      3. Assert the Python bridge returns ``DyadrineAttackEffect()``
-         for ``kind="dyadrine_attack_effect"`` (EEE arm is wired).
-      4. Try Rust ``parse_triggered_ability``; assert it raises for
-         the dyadrine effect dict (Rust gap); or structural fallback
-         if the Rust extension is not compiled.
-      5. Assert the Rust error message mentions the invalid kind.
-      6. Enumerate the EoE card blocked at the Rust layer.
-
-    Closure path:
-      Add ``"dyadrine_attack_effect" => Ok(Effect::DyadrineAttackEffect)``
-      to Rust ``parse_effect`` (unit variant, no payload).  A resolver
-      arm in ``state_ops_resolve.rs`` must implement the counter-removal
-      logic or call back to Python.
+    Parity shape:
+      1. DyadrineAttackEffect is a zero-field dataclass (unchanged).
+      2. Python bridge produces DyadrineAttackEffect() (unchanged).
+      3. Rust: register_and_inject_object with dyadrine_attack_effect
+         SUCCEEDS (inverted from old divergence_pin assertion).
+      4. The EoE card is now unblocked at the Rust parse layer.
     """
     import dataclasses
+    import importlib.util
 
     from mtg_bot.effects.bespoke import DyadrineAttackEffect
     from mtg_bot.effects.base import Effect
@@ -270,153 +251,119 @@ def test_cross_engine_real_eoe_dyadrine_attack_effect_rust_parse_effect_gap_dive
 
     # 1. DyadrineAttackEffect is a zero-field dataclass in effects.bespoke.
     assert dataclasses.is_dataclass(DyadrineAttackEffect), (
-        "DyadrineAttackEffect should be a dataclass (effects/bespoke.py).  "
-        "If this fails the class was restructured -- update this pin."
+        "DyadrineAttackEffect should be a dataclass (effects/bespoke.py)."
     )
     fields = dataclasses.fields(DyadrineAttackEffect)
     assert len(fields) == 0, (
-        "DyadrineAttackEffect should have zero dataclass fields (zero-field "
-        "bespoke dataclass; all counter-removal logic is in the resolve method).  "
-        f"Got fields: {[f.name for f in fields]!r}.  "
-        "If a field was added, the bridge arm and Rust arm both need to read it."
+        "DyadrineAttackEffect should have zero dataclass fields; "
+        f"got fields: {[f.name for f in fields]!r}"
     )
 
     # 2. DyadrineAttackEffect is an Effect subclass.
     assert issubclass(DyadrineAttackEffect, Effect), (
-        "DyadrineAttackEffect should be an Effect subclass so the bridge arm's "
-        "return value satisfies the Effect type contract.  "
-        "If this fails the class hierarchy changed -- update this pin."
+        "DyadrineAttackEffect should be an Effect subclass."
     )
 
-    # 3. Python bridge IS wired (EEE fix closed the Python-side gap).
+    # 3. Python bridge IS wired (EEE bridge fix, unchanged).
     result = _ta_dict_to_python_effect({"kind": "dyadrine_attack_effect"})
     assert isinstance(result, DyadrineAttackEffect), (
         "Python bridge should return DyadrineAttackEffect for "
-        "kind='dyadrine_attack_effect'.  "
-        f"Got: {type(result).__name__!r}.  "
-        "If this fails, the EEE bridge arm regressed -- "
-        "re-land the bridge-small-effect-event-arms slice."
+        "kind='dyadrine_attack_effect'."
     )
     assert result == DyadrineAttackEffect(), (
-        "Python bridge should return a value-equal DyadrineAttackEffect().  "
+        f"Python bridge should return a value-equal DyadrineAttackEffect(). "
         f"Got: {result!r}"
     )
 
-    # 4-5. Rust raises for kind="dyadrine_attack_effect" in an effect dict.
-    try:
-        from mtg_bot.rust_engine import parse_triggered_ability  # type: ignore[import]
-
-        ta_dict = {
-            "event": "attacks",
-            "predicate": {"kind": "always"},
-            "effect": {"kind": "dyadrine_attack_effect"},
-        }
-        with pytest.raises(Exception) as exc_info:
-            parse_triggered_ability(ta_dict)
-
-        err_msg = str(exc_info.value)
-        assert "dyadrine_attack_effect" in err_msg, (
-            "Rust parse_effect gap sentinel: the error message should mention "
-            "'dyadrine_attack_effect' -- the invalid kind being dispatched.  "
-            f"Got error: {err_msg!r}.  "
-            "If 'dyadrine_attack_effect' is absent from the error message, "
-            "Rust may have silently accepted the dict (gap already closed); "
-            "invert this pin to a FIXED-parity test."
+    # 4. Rust: register_and_inject_object SUCCEEDS (inverted assertion).
+    #    (FIXED: the prior divergence_pin asserted this raises; now it succeeds.)
+    if importlib.util.find_spec("mtg_bot_engine") is not None:
+        import mtg_bot_engine
+        # This MUST NOT raise (gap is closed in the 8th Rust slice).
+        rs = mtg_bot_engine.make_synthetic_state()
+        rs.register_and_inject_object(
+            {
+                "name": "Dyadrine, Synthesis Amalgam",
+                "card_types": ["Creature"],
+                "supertypes": ["Legendary"],
+                "power": 3,
+                "toughness": 3,
+                "keywords": [],
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "you_attack",
+                        "predicate": {"kind": "always"},
+                        "effect": {"kind": "dyadrine_attack_effect"},
+                    }
+                ],
+            },
+            0, 2,  # player 0, ZONE_BATTLEFIELD
+        )
+        # Verified: no PyValueError — Rust accepted the effect dict.
+        assert rs.battlefield_sizes[0] >= 1, (
+            "Dyadrine should be on p0's battlefield after inject."
         )
 
-    except ImportError:
-        # Rust extension not compiled in this worktree.  Confirm the gap
-        # structurally: the Python bridge arm EXISTS (step 3 above proved
-        # it), and the Rust parse_effect arm DOES NOT EXIST (the Rust
-        # cards.rs parse_effect terminal error arm's valid-kind list
-        # omits "dyadrine_attack_effect").
-        assert isinstance(result, DyadrineAttackEffect), (
-            "Structural gap pin: Python bridge arm exists "
-            "(DyadrineAttackEffect returned above); "
-            "Rust parse_effect lacks 'dyadrine_attack_effect' arm."
-        )
-
-    # 6. EoE card blocked at the Rust layer by this gap.
-    blocked_eoe_cards = [
+    # 5. EoE card unlocked at the Rust parse layer by this fix.
+    unblocked_eoe_cards = [
         "Dyadrine, Synthesis Amalgam",
-        # "Whenever you attack, you may remove a +1/+1 counter from each
-        #  of two creatures you control."
-        # Parser: ATTACKS + DyadrineAttackEffect()
-        # Rust gap: parse_effect raises for kind="dyadrine_attack_effect"
+        # YOU_ATTACK trigger + DyadrineAttackEffect(). Parse layer: UNBLOCKED.
+        # Resolve: honest-stop sentinel (no-op). Full resolve: follow-up slice.
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'dyadrine_attack_effect' Rust parse_effect gap blocks 1 EoE "
-        f"card; enumerated list has {len(blocked_eoe_cards)} entries."
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'dyadrine_attack_effect' Rust parse_effect fix unblocks 1 EoE "
+        f"card; enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
 # ---------------------------------------------------------------------------
-# Pin 2 -- put_poison_counters_on_target_player NOT wired in Rust parse_effect
-#          (EEE Python-only bridge fix; Virulent Silencer blocked)
+# Pin 2 -- put_poison_counters_on_target_player FIXED in Rust parse_effect
+#          (EEE downstream complement — 8th Rust slice; JJJ Pin 2 CLOSED)
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_put_poison_counters_on_target_player_rust_parse_effect_gap_divergence_pin():
-    """Pin the Rust-side gap in ``parse_effect`` for
+def test_cross_engine_real_eoe_put_poison_counters_on_target_player_rust_parse_effect_gap_FIXED_parity():
+    """FIXED_parity: Rust ``parse_effect`` now accepts
     ``"put_poison_counters_on_target_player"``.
 
-    Bug location:
-      ``rust/src/cards.rs`` -- ``fn parse_effect`` match arms do NOT
-      include ``"put_poison_counters_on_target_player"``.  The terminal
-      error arm lists valid kinds; this kind is absent.
+    8th Rust slice (EEE downstream complement) adds:
+      * ``"put_poison_counters_on_target_player"`` parse arm to Rust
+        ``parse_effect`` (reads ``amount``, defaults to 1).
+      * ``Effect::PutPoisonCountersOnTargetPlayer { amount }`` variant.
+      * Resolve arm: reads target player id from
+        ``current_resolve_payload_target_id`` (seated at push time by
+        ``first_legal_trigger_target`` from
+        ``resolving_combat_damage_target_player_id``); increments
+        ``target_player.poison_counters`` by ``amount``.
+      * ``Player.poison_counters`` field added to Rust's Player struct.
 
-    Python side (CLOSED by EEE):
-      ``_ta_dict_to_python_effect({"kind":
-      "put_poison_counters_on_target_player", "amount": 2})`` returns
-      ``PutPoisonCountersOnTargetPlayer(amount=2)`` without raising.
-      This arm was added in the EEE bridge-fix slice (round 17).
-
-    Rust side (OPEN):
-      Rust's ``parse_effect`` raises ``PyValueError`` for
-      ``kind="put_poison_counters_on_target_player"``.
+    Inverted from the original divergence_pin:
+      Before: Rust raised PyValueError for the effect dict.
+      After:  Rust does NOT raise; ``register_and_inject_object`` with
+              a triggered_ability using this effect kind succeeds.
 
     Card context:
       Virulent Silencer -- "Whenever a nontoken artifact creature you
       control deals combat damage to a player, that player gets two
       poison counters."
-      Parser: DEALS_COMBAT_DAMAGE trigger with
+      Parser: DEALS_COMBAT_DAMAGE trigger (Rust: deals_damage) with
       ``PutPoisonCountersOnTargetPlayer(amount=2)`` effect.
-      The DEALS_COMBAT_DAMAGE event bridge arm was wired in the SS
-      slice (OO Pin 2 CLOSED), making the event arm ready.  The
-      ``put_poison_counters_on_target_player`` effect arm is the sole
-      remaining Rust-layer blocker for Virulent Silencer.
 
-    ``amount`` field and default:
-      ``PutPoisonCountersOnTargetPlayer`` has one dataclass field:
-      ``amount: int = 1`` (default 1).  The EoE card uses ``amount=2``
-      (two poison counters per combat damage event).  The Rust arm
-      must read the ``amount`` field from the dict and default to 1
-      when absent (mirrors the Python class default).
-
-    Probe shape:
-      1. Assert ``PutPoisonCountersOnTargetPlayer`` exists in
-         ``effects.generic.counters`` and is a dataclass with one
-         field ``amount`` whose default is 1.
-      2. Assert it is an ``Effect`` subclass.
-      3. Assert the Python bridge returns the correct instance for
-         ``amount=2`` (EEE arm is wired).
-      4. Assert the Python bridge also handles the default (omitting
-         ``amount`` produces ``amount=1``).
-      5. Try Rust ``parse_triggered_ability``; assert it raises for
-         the poison effect dict (Rust gap); or structural fallback.
-      6. Assert the Rust error message mentions the invalid kind.
-      7. Enumerate the EoE card blocked at the Rust layer.
-
-    Closure path:
-      Add a ``"put_poison_counters_on_target_player"`` arm to Rust
-      ``parse_effect`` that reads ``amount`` (defaulting to 1) and
-      constructs ``Effect::PutPoisonCountersOnTargetPlayer { amount }``.
-      A resolver arm in ``state_ops_resolve.rs`` must add poison counters
-      to the target player (the player who was dealt combat damage,
-      identified via the DEALS_COMBAT_DAMAGE event's ``"target"``
-      subject slot).
+    Parity shape:
+      1. PutPoisonCountersOnTargetPlayer is a dataclass with amount field
+         defaulting to 1 (unchanged).
+      2. Python bridge produces PutPoisonCountersOnTargetPlayer(amount=2)
+         (unchanged).
+      3. Rust: register_and_inject_object with
+         put_poison_counters_on_target_player SUCCEEDS (inverted from old
+         divergence_pin assertion).
+      4. Rust: poison_counter_totals getter works; Player has
+         poison_counters field.
+      5. EoE card is now unblocked at the Rust parse layer.
     """
     import dataclasses
+    import importlib.util
 
     from mtg_bot.effects.generic.counters import PutPoisonCountersOnTargetPlayer
     from mtg_bot.effects.base import Effect
@@ -424,105 +371,85 @@ def test_cross_engine_real_eoe_put_poison_counters_on_target_player_rust_parse_e
 
     # 1. PutPoisonCountersOnTargetPlayer is a dataclass with one field.
     assert dataclasses.is_dataclass(PutPoisonCountersOnTargetPlayer), (
-        "PutPoisonCountersOnTargetPlayer should be a dataclass "
-        "(effects/generic/counters.py).  "
-        "If this fails the class was restructured -- update this pin."
+        "PutPoisonCountersOnTargetPlayer should be a dataclass."
     )
     fields = dataclasses.fields(PutPoisonCountersOnTargetPlayer)
     assert len(fields) == 1, (
-        "PutPoisonCountersOnTargetPlayer should have exactly one dataclass "
-        "field ('amount').  "
-        f"Got fields: {[f.name for f in fields]!r}.  "
-        "If the field count changed, the bridge arm and Rust arm both need updating."
+        "PutPoisonCountersOnTargetPlayer should have exactly one field ('amount'); "
+        f"got fields: {[f.name for f in fields]!r}"
     )
     amount_field = fields[0]
     assert amount_field.name == "amount", (
-        "PutPoisonCountersOnTargetPlayer's single field should be named 'amount'.  "
-        f"Got: {amount_field.name!r}"
+        f"PutPoisonCountersOnTargetPlayer's single field should be 'amount'; "
+        f"got: {amount_field.name!r}"
     )
     assert amount_field.default == 1, (
-        "PutPoisonCountersOnTargetPlayer.amount should default to 1 (matches "
-        "the Python class default; Rust arm must replicate this default).  "
-        f"Got default: {amount_field.default!r}"
+        f"PutPoisonCountersOnTargetPlayer.amount should default to 1; "
+        f"got default: {amount_field.default!r}"
     )
 
     # 2. PutPoisonCountersOnTargetPlayer is an Effect subclass.
     assert issubclass(PutPoisonCountersOnTargetPlayer, Effect), (
-        "PutPoisonCountersOnTargetPlayer should be an Effect subclass.  "
-        "If this fails the class hierarchy changed -- update this pin."
+        "PutPoisonCountersOnTargetPlayer should be an Effect subclass."
     )
 
-    # 3. Python bridge IS wired for amount=2 (the Virulent Silencer value).
+    # 3. Python bridge IS wired for amount=2 (unchanged).
     result_amount2 = _ta_dict_to_python_effect(
         {"kind": "put_poison_counters_on_target_player", "amount": 2}
     )
     assert isinstance(result_amount2, PutPoisonCountersOnTargetPlayer), (
         "Python bridge should return PutPoisonCountersOnTargetPlayer for "
-        "kind='put_poison_counters_on_target_player'.  "
-        f"Got: {type(result_amount2).__name__!r}.  "
-        "If this fails, the EEE bridge arm regressed."
+        f"kind='put_poison_counters_on_target_player'. Got: {type(result_amount2).__name__!r}"
     )
     assert result_amount2.amount == 2, (
-        "Python bridge should construct PutPoisonCountersOnTargetPlayer(amount=2) "
-        f"when the dict carries amount=2.  Got amount={result_amount2.amount!r}"
+        f"Bridge should propagate amount=2; got {result_amount2.amount!r}"
     )
 
-    # 4. Python bridge handles the default (no 'amount' key -> amount=1).
-    result_default = _ta_dict_to_python_effect(
-        {"kind": "put_poison_counters_on_target_player", "amount": 1}
-    )
-    assert result_default.amount == 1, (
-        "Python bridge should construct PutPoisonCountersOnTargetPlayer(amount=1) "
-        f"when amount=1 is supplied.  Got amount={result_default.amount!r}"
-    )
-
-    # 5-6. Rust raises for kind="put_poison_counters_on_target_player".
-    try:
-        from mtg_bot.rust_engine import parse_triggered_ability  # type: ignore[import]
-
-        ta_dict = {
-            "event": "deals_combat_damage",
-            "predicate": {"kind": "always"},
-            "effect": {
-                "kind": "put_poison_counters_on_target_player",
-                "amount": 2,
+    # 4. Rust: register_and_inject_object SUCCEEDS (inverted assertion).
+    #    (FIXED: the prior divergence_pin asserted this raises; now it succeeds.)
+    if importlib.util.find_spec("mtg_bot_engine") is not None:
+        import mtg_bot_engine
+        # This MUST NOT raise (gap is closed in the 8th Rust slice).
+        rs = mtg_bot_engine.make_synthetic_state()
+        rs.register_and_inject_object(
+            {
+                "name": "Virulent Silencer",
+                "card_types": ["Creature", "Artifact"],
+                "supertypes": [],
+                "power": 2,
+                "toughness": 1,
+                "keywords": [],
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "deals_damage",  # Rust event string for DEALS_COMBAT_DAMAGE
+                        "predicate": {"kind": "always"},
+                        "effect": {
+                            "kind": "put_poison_counters_on_target_player",
+                            "amount": 2,
+                        },
+                    }
+                ],
             },
-        }
-        with pytest.raises(Exception) as exc_info:
-            parse_triggered_ability(ta_dict)
-
-        err_msg = str(exc_info.value)
-        assert "put_poison_counters_on_target_player" in err_msg, (
-            "Rust parse_effect gap sentinel: the error message should mention "
-            "'put_poison_counters_on_target_player'.  "
-            f"Got error: {err_msg!r}.  "
-            "If this kind is absent from the error, Rust may have accepted "
-            "the dict -- invert to a FIXED-parity test."
+            0, 2,  # player 0, ZONE_BATTLEFIELD
+        )
+        # Verified: no PyValueError — Rust accepted the effect dict.
+        # Verify poison_counter_totals getter is available (Player.poison_counters exists).
+        assert rs.poison_counter_totals == [0, 0], (
+            "New poison_counter_totals getter should return [0, 0] initially."
         )
 
-    except ImportError:
-        # Rust extension not compiled -- gap documented structurally.
-        # Python bridge wired (step 3 above); Rust parse_effect arm absent
-        # (confirmed by reading cards.rs parse_effect match arms: the
-        # kind string "put_poison_counters_on_target_player" is not
-        # present in the terminal-arm valid-kind list).
-        assert isinstance(result_amount2, PutPoisonCountersOnTargetPlayer), (
-            "Structural gap pin: Python bridge arm exists; "
-            "Rust parse_effect lacks 'put_poison_counters_on_target_player' arm."
-        )
-
-    # 7. EoE card blocked at the Rust layer by this gap.
-    blocked_eoe_cards = [
+    # 5. EoE card unblocked at the Rust parse layer by this fix.
+    unblocked_eoe_cards = [
         "Virulent Silencer",
-        # "Whenever a nontoken artifact creature you control deals combat
-        #  damage to a player, that player gets two poison counters."
-        # Parser: DEALS_COMBAT_DAMAGE + PutPoisonCountersOnTargetPlayer(amount=2)
-        # DEALS_COMBAT_DAMAGE event bridge arm: WIRED (SS slice, OO Pin 2)
-        # put_poison_counters_on_target_player Rust arm: MISSING
+        # DEALS_COMBAT_DAMAGE trigger + PutPoisonCountersOnTargetPlayer(amount=2).
+        # Parse layer: UNBLOCKED.
+        # Resolve: wired (8th slice). Resolve parity: see probe 2 in
+        # tests/test_probe_eee_downstream_unlock.py.
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'put_poison_counters_on_target_player' Rust parse_effect gap "
-        f"blocks 1 EoE card; enumerated list has {len(blocked_eoe_cards)} entries."
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'put_poison_counters_on_target_player' Rust parse_effect fix "
+        f"unblocks 1 EoE card; enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 

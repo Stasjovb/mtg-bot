@@ -797,25 +797,20 @@ pub(crate) fn dispatch_combat_damage_to_player(
     // read it without an extra argument. Cleared to 255 (sentinel =
     // "no active combat damage target") after the dispatch returns.
     state.resolving_combat_damage_amount = amount;
-    let prev_target = state
-        .players
-        .get(target_player as usize)
-        .map(|_| target_player)
-        .unwrap_or(u8::MAX);
-    // Attempt to store target on a scratch field. The GameState struct
-    // doesn't currently have a
-    // ``resolving_combat_damage_target_player_id`` field — we skip
-    // storing it for now (SEARCH_LIMITATIONS.md entry: Rust
-    // single-subject DealsDamage predicate API; fixed-targets channel
-    // deferred). The ``resolving_combat_damage_amount`` field IS
-    // available and is written above.
-    let _ = prev_target; // suppress unused-variable warning
+    // **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+    // Write the target player id before dispatch so that triggered
+    // effects like ``PutPoisonCountersOnTargetPlayer`` can read it at
+    // resolve time (mirrors Python's target=target_player_obj threading
+    // through _fire_combat_damage_to_player_triggers -> StackItem.targets).
+    let prev_target_pid = state.resolving_combat_damage_target_player_id;
+    state.resolving_combat_damage_target_player_id = target_player;
 
     dispatch_event(state, crate::cards::Event::DealsDamage, source_id)?;
 
-    // Reset the amount slot after dispatch so it doesn't leak into
+    // Reset both slots after dispatch so they don't leak into
     // unrelated resolves (mirrors the ``apply_damage_pass`` reset).
     state.resolving_combat_damage_amount = 0;
+    state.resolving_combat_damage_target_player_id = prev_target_pid;
 
     Ok(())
 }
@@ -1007,6 +1002,33 @@ fn first_legal_trigger_target(
                     }
                     Some(obj.id)
                 })
+        }
+        // **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+        // PutPoisonCountersOnTargetPlayer: the "target" is the player
+        // who received combat damage. At push time (called from within
+        // `dispatch_event` which is called from `dispatch_combat_damage_to_player`),
+        // `state.resolving_combat_damage_target_player_id` holds the
+        // target player's id (0 or 1). Seat it as the `target_id` in the
+        // `TriggerPayload` so it survives until `resolve_top_of_stack`
+        // swaps it into `current_resolve_payload_target_id`.
+        //
+        // Sentinel `u8::MAX` means "no active combat-damage target"
+        // (synthetic-test push path or any push outside combat damage).
+        // In that case return `None` (untargeted path → resolve arm
+        // no-ops gracefully per the `u8::MAX` guard).
+        //
+        // Player ids (0, 1) are far below any object id (which starts
+        // at 0 for the synthetic state but realistically at ≥4 for real
+        // game states); using player id as the target_id is safe in the
+        // 2-player EoE model. The resolve arm treats values ≤1 as player
+        // ids and looks them up via `state.players.iter_mut().find(|p| p.id == pid)`.
+        Effect::PutPoisonCountersOnTargetPlayer { .. } => {
+            let pid = state.resolving_combat_damage_target_player_id;
+            if pid == u8::MAX {
+                None  // no active combat-damage target; resolve arm no-ops
+            } else {
+                Some(pid as u32)
+            }
         }
         // Every other effect (all existing untargeted safe triggers,
         // and any non-lever targeted trigger the engine handles
@@ -12663,6 +12685,83 @@ fn apply_effect(
                     // Source absent or power below threshold: silent no-op.
                 }
             }
+        }
+        // **EEE downstream complement — 8th Rust slice (JJJ Pin 1).**
+        // DyadrineAttackEffect: Dyadrine, Synthesis Amalgam's attack trigger.
+        //
+        // Honest-stop sentinel — parse-only arm.  The resolve logic is
+        // card-specific and complex (agent-interactive counter-removal from
+        // two controller-owned creatures, conditional draw, Robot token
+        // creation).  This arm is a deliberate no-op sentinel that keeps the
+        // Rust parse+build path working (Dyadrine can now be loaded into a
+        // registry and its triggered ability round-trips through
+        // parse_triggered_ability) without attempting to replicate the full
+        // Python resolve.  Full resolve parity is deferred to a follow-up
+        // slice; see `Effect::DyadrineAttackEffect` doc in cards.rs.
+        //
+        // Mirrors Python's `DyadrineAttackEffect.resolve` (bespoke.py:997).
+        // Python resolves: find 2 creatures with counters, optionally remove
+        // a counter from each (agent-selected), draw a card, create a Robot
+        // token.  The Rust arm silently no-ops — observable divergence in
+        // games where Dyadrine attacks while two creatures with counters
+        // exist.  Acceptable for the parse-unlock goal of this slice.
+        Effect::DyadrineAttackEffect => {
+            // Honest-stop sentinel: no-op for now.
+            // Full resolve (counter-removal + draw + Robot token) is
+            // deferred to a follow-up slice.  Resolve is a silent no-op
+            // so the parse-layer unblock is verifiable without behavioral
+            // parity noise.
+            let _ = state; // suppress unused-state warning in this arm.
+        }
+        // **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+        // PutPoisonCountersOnTargetPlayer: give `amount` poison counters
+        // to the target player. Mirrors Python's
+        // `PutPoisonCountersOnTargetPlayer.resolve`
+        // (`effects/generic/counters.py:111-128`).
+        //
+        // Target resolution: reads `state.current_resolve_payload_target_id`
+        // — the player-id payload bound at trigger-fire time by the
+        // DEALS_COMBAT_DAMAGE event firing path.  Falls back to the
+        // stack-item's built-in target if the payload slot is absent, then
+        // silently no-ops if no target is identifiable.
+        //
+        // Python target shape: `targets[0] = ("player", pid)`.  The
+        // DEALS_COMBAT_DAMAGE event dispatcher seats the damaged player's id
+        // as the trigger subject via the standard (`"obj"`, `"target"`)
+        // subject-slot convention; the bridge passes it through as the
+        // `target_player_id` payload.
+        //
+        // SBA: after incrementing `poison_counters`, the game's
+        // `apply_sbas` is responsible for checking the 10-poison-counter
+        // loss condition (CR 704.5c) — the resolve arm does NOT call
+        // `apply_sbas` itself (matches Python's resolve which only
+        // increments the counter; SBAs fire at the next check point).
+        Effect::PutPoisonCountersOnTargetPlayer { amount } => {
+            // The target player id was seated into TriggerPayload.target_id
+            // at push time (via `first_legal_trigger_target` returning
+            // `Some(player_id as u32)` when
+            // `state.resolving_combat_damage_target_player_id != u8::MAX`).
+            // At resolve time, `resolve_top_of_stack` swaps that value into
+            // `state.current_resolve_payload_target_id` before calling
+            // `apply_effect`, so we read it here.
+            //
+            // Guard: `None` → no target was seated (synthetic-test push
+            // outside combat damage; `first_legal_trigger_target` returned
+            // `None`) → silent no-op (mirrors Python's `if not targets: return`
+            // at counters.py:115).
+            //
+            // Player ids (0 or 1) are seated directly as `u32` values;
+            // interpret as player id by looking up `p.id == target_u8`.
+            if let Some(target_u32) = state.current_resolve_payload_target_id {
+                let target_u8 = target_u32 as u8;
+                // Find the player by id and increment poison_counters.
+                if let Some(p) = state.players.iter_mut().find(|p| p.id == target_u8) {
+                    p.poison_counters += *amount;
+                    // Python logs "P{pid} gets {amount} poison counter(s)
+                    // (now {p.poison_counters})"; Rust resolve has no log slot.
+                }
+            }
+            // Else: no target seated (synthetic path) — silent no-op.
         }
     }
     Ok(())

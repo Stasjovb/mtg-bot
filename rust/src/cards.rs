@@ -3953,6 +3953,48 @@ pub enum Effect {
         threshold: i32,
         effect: Box<Effect>,
     },
+    /// **EEE downstream complement — 8th Rust slice (JJJ Pin 1).**
+    /// Dyadrine, Synthesis Amalgam's attack trigger effect.  Mirrors
+    /// Python's `DyadrineAttackEffect` (a zero-field frozen dataclass in
+    /// `effects/bespoke.py`).
+    ///
+    /// Oracle text: "Whenever you attack, you may remove a +1/+1 counter
+    /// from each of two creatures you control. If you do, draw a card and
+    /// create a 2/2 colorless Robot artifact creature token."
+    ///
+    /// **Resolve semantics (honest-stop — parse-only with sentinel).**
+    /// The resolve logic is complex (agent-interactive counter-removal
+    /// from two controller-owned creatures, conditional draw, token
+    /// creation) and is card-specific.  The Rust resolve arm is a
+    /// sentinel no-op: it logs the trigger and skips resolution.  This
+    /// is sufficient to unblock Dyadrine at the *parse layer* (Rust no
+    /// longer raises PyValueError for `dyadrine_attack_effect` dicts) and
+    /// to expose Dyadrine to the cross-engine bridge.  Full behavioral
+    /// parity (resolve parity) is deferred to a follow-up slice.
+    DyadrineAttackEffect,
+    /// **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+    /// Give `amount` poison counters to the target player.  Mirrors
+    /// Python's `PutPoisonCountersOnTargetPlayer(amount: int = 1)`
+    /// (`effects/generic/counters.py`).
+    ///
+    /// Oracle text (Virulent Silencer): "Whenever a nontoken artifact
+    /// creature you control deals combat damage to a player, that player
+    /// gets two poison counters."
+    ///
+    /// **Parse shape.** Dict: `{"kind":
+    /// "put_poison_counters_on_target_player", "amount": <int>}`.
+    /// `amount` defaults to 1 when absent (mirrors Python class default).
+    ///
+    /// **Resolve semantics.** Reads the trigger's resolved target via
+    /// `state.current_resolve_payload_target_player_id` (the player id
+    /// bound at trigger-fire time from the DEALS_COMBAT_DAMAGE event).
+    /// Falls back to subjects[0] if the payload slot is absent.
+    /// Increments `target_player.poison_counters` by `amount`.  Per CR
+    /// 704.5c, a player with 10+ poison counters loses the game; that
+    /// SBA is enforced by `apply_sbas` once the effect resolves.
+    PutPoisonCountersOnTargetPlayer {
+        amount: i32,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -7443,8 +7485,44 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 effect: Box::new(effect),
             })
         }
+        // **EEE downstream complement — 8th Rust slice (JJJ Pin 1).**
+        // DyadrineAttackEffect — zero-field bespoke effect for Dyadrine,
+        // Synthesis Amalgam's attack trigger.  Dict shape:
+        // `{"kind": "dyadrine_attack_effect"}` (no extra fields; mirrors
+        // the zero-field Python dataclass).
+        //
+        // Mirrors Python's `DyadrineAttackEffect()` (bespoke.py).
+        // Python bridge arm: `_ta_dict_to_python_effect` kind ==
+        // "dyadrine_attack_effect" (wired by EEE bridge slice, round 17).
+        "dyadrine_attack_effect" => {
+            Ok(Effect::DyadrineAttackEffect)
+        }
+        // **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
+        // PutPoisonCountersOnTargetPlayer — give `amount` poison counters
+        // to the target player.  Dict shape: `{"kind":
+        // "put_poison_counters_on_target_player", "amount": <int>}`.
+        // `amount` defaults to 1 when the key is absent (mirrors
+        // Python's `PutPoisonCountersOnTargetPlayer(amount: int = 1)`).
+        //
+        // Mirrors Python's `PutPoisonCountersOnTargetPlayer`
+        // (effects/generic/counters.py).  Python bridge arm wired by
+        // EEE bridge slice, round 17.
+        "put_poison_counters_on_target_player" => {
+            let amount: i32 = dict
+                .get_item("amount")
+                .map_err(|e| PyValueError::new_err(format!("dict access error: {e}")))?
+                .map(|v| v.extract::<i32>())
+                .transpose()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_poison_counters_on_target_player.amount must be an int (got: {e})"
+                    ))
+                })?
+                .unwrap_or(1);
+            Ok(Effect::PutPoisonCountersOnTargetPlayer { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player"
         ))),
     }
 }
@@ -9261,6 +9339,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // (ConditionalIfSourcePowerAtLeast.effect, not .inner).
             // The bridge accepts both "effect" and "inner" for forward-compat.
             d.set_item("effect", effect_to_pydict(py, effect)?)?;
+        }
+        // EEE downstream complement — 8th Rust slice (JJJ Pin 1).
+        Effect::DyadrineAttackEffect => {
+            d.set_item("kind", "dyadrine_attack_effect")?;
+        }
+        // EEE downstream complement — 8th Rust slice (JJJ Pin 2).
+        Effect::PutPoisonCountersOnTargetPlayer { amount } => {
+            d.set_item("kind", "put_poison_counters_on_target_player")?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)

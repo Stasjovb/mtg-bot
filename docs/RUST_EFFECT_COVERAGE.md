@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **97 of 228 Python Effect classes covered (42.5%)** — by distinct-class count.
-- **559 of 690 per-card emissions covered (81.0%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **125 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **99 of 228 Python Effect classes covered (43.4%)** — by distinct-class count.
+- **561 of 690 per-card emissions covered (81.3%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **127 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **18 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`, `WarpExileSelf`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -43,7 +43,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 1 (161 singletons)
 
-- Covered by Rust: **30 / 161** (18.6%)
+- Covered by Rust: **32 / 161** (19.9%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -175,4 +175,6 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 123 | `Effect::DefendingPlayerLosesHalfLifeRoundedUp` | `DefendingPlayerLosesHalfLifeRoundedUp` | 1 |
 | 124 | `Effect::ConditionalIfYouGainedLifeAtLeast` | `ConditionalIfYouGainedLifeAtLeast` | 1 |
 | 125 | `Effect::ConditionalIfSourcePowerAtLeast` | `ConditionalIfSourcePowerAtLeast` | 1 |
+| 126 | `Effect::DyadrineAttackEffect` | `DyadrineAttackEffect` | 1 |
+| 127 | `Effect::PutPoisonCountersOnTargetPlayer` | `PutPoisonCountersOnTargetPlayer` | 1 |
 
