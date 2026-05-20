@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **324 / 475 EoE cards (68.2%) are byte-equal at the Effect+bridge level**; of those, **228 (48.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 96 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **324 / 475 EoE cards (68.2%) are byte-equal at the Effect+bridge level**; of those, **230 (48.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 94 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **151 (31.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 228 | 48.0% |
-| Effect+bridge covered (not individually probed) | 96 | 20.2% |
+| PROBED byte-equal | 230 | 48.4% |
+| Effect+bridge covered (not individually probed) | 94 | 19.8% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 2 | 0.4% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -147,6 +147,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Icetill Explorer
 - Illvoi Galeblade
 - Illvoi Infiltrator
+- Illvoi Operative
 - Impossible Inferno
 - Infernal Phantom
 - Insatiable Skittermaw
@@ -210,6 +211,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Remnant Elemental
 - Rescue Skiff
 - Roaring Furnace // Steaming Sauna
+- Roving Actuator
 - Sami's Curiosity
 - Savior of the Small
 - Scorching Dragonfire
