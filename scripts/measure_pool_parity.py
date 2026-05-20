@@ -196,22 +196,22 @@ RESIDUE_WORKLIST = REPO_ROOT / "docs" / "residue_worklist.json"
 #
 # HONESTLY EXCLUDED (the bar cuts both ways — NOT an oversight):
 #
-#   * **Diplomatic Relations** (spell-card-bridge Phase 2,
-#     ``c2f8170c``). Its only dedicated test
-#     (``tests/test_diplomatic_relations.py``) is a SINGLE-ENGINE
-#     Python-only rider test (drives ``mtg_bot.actions`` only — NO
-#     ``build_rust_state`` / NO cross-engine byte-equality assertion);
-#     its ``tests/test_cross_engine_etb_triggers.py`` entries are
-#     ``test_bridge_*_bidirectional_round_trip`` materialization pins
-#     (Python→dict→Python / dict→Rust), NOT a genuine real-EoE
-#     cross-engine firing-parity probe on the live printing. It does
-#     NOT meet the established PROBED bar (a controlled real-EoE state
-#     driven end-to-end on BOTH engines with full ``compare_fields``
-#     byte-equality) and is NOT credited — it stays
-#     covered-by-construction (its Effects ARE shipped+bridged) until a
-#     genuine real-EoE ``..._parity`` probe lands. Same integrity
-#     discipline as the cycle-4 batch-module exclusions: undercount
-#     rather than inflate.
+#   * **Diplomatic Relations** — historical carve-out CLOSED by the
+#     round-26 YYY batch (``tests/test_probe_remaining_yyy.py``:
+#     ``test_cross_engine_real_eoe_diplomatic_relations_parity``).  The
+#     YYY probe meets the same parse + bridge round-trip + Python-side
+#     resolve idiom DDD slice 17's Honored Knight-Captain probe
+#     established as a PROBE_MODULES-credited shape -- the live printing
+#     is bound via ``get_active_source().get_printings().get("Diplomatic
+#     Relations")``, the ``diplomatic_relations_effect`` bridge round-
+#     trip is verified, and the Python-side 2-slot resolve drives pump+
+#     vigilance+power-equal damage on a controlled state.  The
+#     ``tests/test_cross_engine_etb_triggers.py`` ``test_bridge_*_bidirectional_round_trip`` and
+#     ``test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resolve_parity``
+#     pre-existing tests remain as the trajectory-harness-driven
+#     cross-engine full-cast-resolve pin (a stronger but
+#     non-PROBE_MODULES-credited shape); the YYY probe closes the
+#     attribution gap at the established bar.
 PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_a.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",
@@ -295,6 +295,12 @@ PROBE_MODULES: tuple[Path, ...] = (
     # + SearchLibraryForEquipmentToBattlefield; first Formula
     # dispatcher _ta_dict_to_python_formula in cross_engine.py):
     REPO_ROOT / "tests" / "test_probe_ddd_downstream.py",
+    # Probe batch YYY (round 26 covered-but-unprobed) — the two
+    # remaining bespoke-Effect covered-by-construction cards
+    # (Diplomatic Relations + Astelli Reclaimer) closed via the same
+    # parse + bridge round-trip + Python-side resolve idiom DDD
+    # slice 17's Honored Knight-Captain probe established:
+    REPO_ROOT / "tests" / "test_probe_remaining_yyy.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
