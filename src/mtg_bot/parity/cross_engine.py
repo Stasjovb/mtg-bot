@@ -10447,6 +10447,109 @@ def multi_blocker_deckspec() -> DeckSpec:
 # ---------------------------------------------------------------------------
 
 
+def build_rust_registry(spec: DeckSpec):
+    """Construct a Rust ``Registry`` from ``spec.card_defs`` alone.
+
+    Returns ``(reg, name_to_pid)``. The registry-dict building is the
+    same code path :func:`build_rust_state` uses internally — both
+    callers share one source of truth so a CardDef field that round-trips
+    on one path round-trips on the other.
+
+    **Aura-attachment substrate Phase 1 STEP 6.** Surfaced as a public
+    helper so cross-engine round-trip pins (and future probe lanes) can
+    read printing aura fields back out of the Rust ``Registry`` via the
+    STEP-2 getters (``get_printing_is_aura`` / ``...aura_enchant_type``
+    / ``...aura_yours_only`` / ``...aura_grant``) without dragging the
+    full ``make_state`` plumbing in. The Rust ``GameState`` itself does
+    NOT expose its registry handle to Python, so any path that needs to
+    inspect a printing's aura fields by ``printing_id`` after registry
+    construction goes through this helper.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    name_to_pid: dict[str, int] = {}
+    for card in spec.card_defs:
+        printing_dict = _spec_card_to_printing_dict(card)
+        pid = reg.register_printing(printing_dict)
+        name_to_pid[card.name] = pid
+    return reg, name_to_pid
+
+
+def _spec_card_to_printing_dict(card: "CardDef") -> dict:
+    """Build the Rust registry-dict for one :class:`CardDef`.
+
+    Single source of truth for the CardDef -> registry-dict shape used
+    by both :func:`build_rust_state` and :func:`build_rust_registry`.
+    Pulled out so any future CardDef field that round-trips through the
+    bridge only has to land once.
+    """
+    printing_dict: dict = {
+        "name": card.name,
+        "card_types": [card.card_type, *card.extra_card_types],
+        "mana_cost": dict(
+            (("generic", card.mana_cost_generic),) if card.mana_cost_generic else ()
+        ) | {color: n for color, n in card.mana_cost_colored},
+        "effects": [],
+    }
+    if card.mana_produced:
+        printing_dict["mana_produced"] = list(card.mana_produced)
+    if card.power is not None:
+        printing_dict["power"] = card.power
+    if card.toughness is not None:
+        printing_dict["toughness"] = card.toughness
+    if card.subtypes:
+        printing_dict["subtypes"] = list(card.subtypes)
+    if card.supertypes:
+        printing_dict["supertypes"] = list(card.supertypes)
+    elif card.card_type == "Land":
+        printing_dict["supertypes"] = ["Basic"]
+    if card.triggered_abilities:
+        printing_dict["triggered_abilities"] = [
+            dict(ta) for ta in card.triggered_abilities
+        ]
+    if card.keywords:
+        printing_dict["keywords"] = [
+            kw.replace(" ", "_") for kw in card.keywords
+        ]
+    if card.token_activated_abilities:
+        printing_dict["activated_abilities"] = [
+            dict(aa) for aa in card.token_activated_abilities
+        ]
+    if card.has_warp:
+        printing_dict["warp_cost"] = dict(
+            (("generic", card.warp_cost_generic),)
+            if card.warp_cost_generic else ()
+        ) | {color: n for color, n in card.warp_cost_colored}
+        if card.warp_life_cost:
+            printing_dict["warp_additional_life_cost"] = (
+                card.warp_life_cost
+            )
+        if card.warp_from_graveyard:
+            printing_dict["warp_castable_from_graveyard"] = True
+    if card.spell_effect is not None:
+        printing_dict["effects"] = [card.spell_effect]
+    if card.is_aura:
+        printing_dict["is_aura"] = True
+        printing_dict["aura_enchant_type"] = card.aura_enchant_type
+        if card.aura_yours_only:
+            printing_dict["aura_yours_only"] = True
+        if (
+            card.aura_power_bonus
+            or card.aura_toughness_bonus
+            or card.aura_granted_keywords
+        ):
+            printing_dict["aura_equipment_bonuses"] = {
+                "power_bonus": card.aura_power_bonus,
+                "toughness_bonus": card.aura_toughness_bonus,
+                "granted_keywords": [
+                    kw.replace(" ", "_")
+                    for kw in card.aura_granted_keywords
+                ],
+            }
+    return printing_dict
+
+
 def build_rust_state(spec: DeckSpec):
     """Construct a Rust ``GameState`` from ``spec``.
 
@@ -10459,195 +10562,13 @@ def build_rust_state(spec: DeckSpec):
     """
     import mtg_bot_engine
 
-    reg = mtg_bot_engine.Registry()
-    name_to_pid: dict[str, int] = {}
-    for card in spec.card_defs:
-        # Build the registry dict matching the Rust register_printing
-        # schema. The keys we use here are validated by the round-22
-        # bridge code; unknown keys are silently ignored, so any future
-        # CardDef field that Rust doesn't yet understand stays inert.
-        printing_dict = {
-            "name": card.name,
-            # Round-49 N1: primary type + any extra types (multi-type
-            # token printings — Robot=Artifact Creature, Glimmer=
-            # Enchantment Creature). Empty ``extra_card_types`` keeps
-            # the legacy single-element shape bit-identical.
-            "card_types": [card.card_type, *card.extra_card_types],
-            "mana_cost": dict(
-                (("generic", card.mana_cost_generic),) if card.mana_cost_generic else ()
-            ) | {color: n for color, n in card.mana_cost_colored},
-            "effects": [],
-        }
-        if card.mana_produced:
-            printing_dict["mana_produced"] = list(card.mana_produced)
-        if card.power is not None:
-            printing_dict["power"] = card.power
-        if card.toughness is not None:
-            printing_dict["toughness"] = card.toughness
-        # Subtypes substrate: pass through to Rust so subtype-anchored
-        # consumers (Predicate::HasSubtype follow-up; subtype-filtered
-        # sacrifice variants) see the same subtype tuple on both engines.
-        # Pre-substrate fixtures default to an empty tuple — Rust's
-        # parser maps a missing ``subtypes`` key to an empty Vec.
-        if card.subtypes:
-            printing_dict["subtypes"] = list(card.subtypes)
-        # Supertypes substrate (Round 30): pass through to Rust so
-        # supertype-anchored consumers (the `legendary_creature` arm
-        # of `Effect::SearchLibraryForCard`, future Predicate::Has-
-        # Supertype follow-ups) see the same supertype tuple on both
-        # engines. Pre-Round-30 fixtures default to an empty tuple —
-        # Rust's parser maps a missing ``supertypes`` key to an empty
-        # Vec, mirroring the ``subtypes`` parse shape.
-        #
-        # Round-37 supertypes-migration parity fix: when CardDef
-        # explicitly carries supertypes, pass them through verbatim;
-        # otherwise apply the SAME basic-land heuristic the Python
-        # builder below uses (Land card_type with no explicit
-        # supertypes -> ``("Basic",)``). Without this the Rust side
-        # would receive an empty supertypes Vec for the convenience-
-        # form Land CardDefs (e.g. `CardDef(name="Forest",
-        # card_type="Land", mana_produced=("G",))`), and the round-37
-        # supertypes-migrated `Effect::SearchLibraryForBasicLand-
-        # Tapped` predicate would fail to match those Forests —
-        # diverging from the Python side, which DOES auto-stamp
-        # `("Basic",)`. Cross-engine bridge contract is "both engines
-        # see the same supertype tuple"; this branch holds the line.
-        if card.supertypes:
-            printing_dict["supertypes"] = list(card.supertypes)
-        elif card.card_type == "Land":
-            printing_dict["supertypes"] = ["Basic"]
-        # ETB-trigger Slice 3: pass triggered_abilities through to the
-        # Rust registry so CE19-shape probes (predicate-path ENTERS
-        # triggers) can drive both engines from the same DeckSpec.
-        # The dict shape mirrors Rust's `parse_triggered_ability`
-        # parser (see `rust/src/cards.rs::parse_triggered_ability`):
-        # ``{"event": "enters", "predicate": {"kind": ...},
-        #    "effect": {"kind": ...}, "once_per_turn": bool}``.
-        # Pre-Slice-3 fixtures default to an empty tuple so this is a
-        # no-op for the existing cross-engine smoke specs.
-        if card.triggered_abilities:
-            printing_dict["triggered_abilities"] = [
-                dict(ta) for ta in card.triggered_abilities
-            ]
-        # Phase 6 carddef-substrate slice: pass keywords through to the
-        # Rust registry. The convention split (Python uses space-
-        # separated, Rust uses underscore-separated; see
-        # ``trajectory._inject_keyword_creature_on_p0_bf``) is handled
-        # here by replacing spaces with underscores on the way out.
-        # Pre-substrate fixtures default to an empty tuple so the key
-        # is omitted entirely and the Rust parser maps that absence to
-        # an empty Vec.
-        if card.keywords:
-            printing_dict["keywords"] = [
-                kw.replace(" ", "_") for kw in card.keywords
-            ]
-        # Round-52 N1 (Phase-3 precursor): pass token_activated_
-        # abilities through to the Rust registry under the
-        # ``activated_abilities`` key. Rust's ``parse_printing`` already
-        # consumes this key (CE20 substrate, on main) via
-        # ``parse_activated_ability`` — NO Rust change is needed; this
-        # slice is pure Python-lane. The dicts are passed verbatim
-        # (Rust's parser is the schema authority; the Python bridge
-        # ``_aa_dict_to_python_activated_ability`` consumes the SAME
-        # dicts, so the ability round-trips from ONE source). Pre-
-        # round-52 fixtures default to an empty tuple => key omitted =>
-        # Rust maps the absence to an empty Vec (modulo the orthogonal
-        # land mana-ability auto-wire, which Rust applies independently
-        # via apply_mana_produced_bridge).
-        if card.token_activated_abilities:
-            printing_dict["activated_abilities"] = [
-                dict(aa) for aa in card.token_activated_abilities
-            ]
-        # warp_cost substrate (Phase 1, round-63): emit the warp_cost
-        # key when the CardDef carries the pure fixed-cost warp shape.
-        # Same mana-dict shape as the base ``mana_cost`` above
-        # (``{"generic":N,"R":1}`` etc.) — exactly what Rust's
-        # ``parse_mana_cost`` consumes. A ``{3}`` warp ->
-        # ``{"generic":3}``; a ``{1}{R}`` warp ->
-        # ``{"generic":1,"R":1}``. ``has_warp=False`` (every pre-
-        # Phase-1 CardDef) omits the key; Rust's parser maps the
-        # absence to ``None`` (back-compat).
-        if card.has_warp:
-            printing_dict["warp_cost"] = dict(
-                (("generic", card.warp_cost_generic),)
-                if card.warp_cost_generic else ()
-            ) | {color: n for color, n in card.warp_cost_colored}
-            # warp_cost substrate (Phase 2): Timeline Culler's two
-            # riders. Omit the keys when 0/False so every pre-Phase-2
-            # CardDef's printing_dict is byte-identical — the Rust
-            # parser maps the absence to 0/false (matches the Phase-1
-            # warp_cost-key-omitted-when-no-warp convention).
-            if card.warp_life_cost:
-                printing_dict["warp_additional_life_cost"] = (
-                    card.warp_life_cost
-                )
-            if card.warp_from_graveyard:
-                printing_dict["warp_castable_from_graveyard"] = True
-        # Spell-card-bridge lever, Phase 1 (round-70): a spell CardDef
-        # carries exactly one ``spell_effect`` dict (the SAME schema
-        # Rust's ``parse_effect`` consumes — the round-64 per-card
-        # Tier-A round ships the matching ``parse_effect`` arm + the
-        # dict<->Python bridge arm; this lever just stops hardcoding
-        # ``[]`` for a spell). ``card_types`` is already ``["Instant"]``
-        # / ``["Sorcery"]`` via the existing
-        # ``[card.card_type, *card.extra_card_types]`` above — no
-        # change there. Non-spell CardDefs (spell_effect is None —
-        # every pre-lever fixture) keep the hardcoded ``effects: []``
-        # (back-compat).
-        if card.spell_effect is not None:
-            printing_dict["effects"] = [card.spell_effect]
-        # Aura-attachment substrate — Phase 1 first-deliverable
-        # (round-77; spec at
-        # ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §3 Phase 1). Emit
-        # the aura keys when the CardDef carries the Phase-1 static
-        # P/T-or-keyword shape. ``is_aura=False`` (every pre-substrate
-        # CardDef) omits the keys; Rust's ``parse_printing`` maps the
-        # absence to false / default — the same back-compat
-        # ``match get_item { Some => extract, None => default }`` shape
-        # every optional field uses (verified at
-        # ``rust/src/cards.rs:8341`` — ``parse_printing`` silently
-        # ignores any unknown key, so this slice does NOT require a
-        # Rust change. The Rust parse arm + cast-time enchant-target
-        # decision + aura-resolution arm + CR-704.5n SBA are the
-        # remaining Phase-1 steps — honest-stopped this slice. The
-        # field IS round-trippable: this slice's tests pin that a
-        # CardDef carrying an aura representation registers without
-        # raising, and that Python materializes the matching
-        # ``CardPrinting.is_aura`` + ``equipment_bonuses`` tuple on the
-        # other side. The Rust state's CardPrinting carries no aura
-        # field today — it stays effectless, exactly as it does for
-        # every Aura that reaches the registry. The §2 teeth — the
-        # loader's ``_filter_deck_to_bridge_supported`` 5-disjunct —
-        # is NOT widened in this slice (no Aura reaches the bench;
-        # this slice is substrate-only).
-        if card.is_aura:
-            printing_dict["is_aura"] = True
-            printing_dict["aura_enchant_type"] = card.aura_enchant_type
-            if card.aura_yours_only:
-                printing_dict["aura_yours_only"] = True
-            if (
-                card.aura_power_bonus
-                or card.aura_toughness_bonus
-                or card.aura_granted_keywords
-            ):
-                # The aura's continuous grant rides on Python's
-                # ``equipment_bonuses`` ``(power_bonus, toughness_bonus,
-                # granted_keywords)`` tuple (the parser reuses the
-                # Equipment bonus machinery for Auras; see
-                # ``cards/base.py:1496-1545``). The Rust registry-dict
-                # key matches the field name for clarity; Rust's
-                # parser will be extended to read it in the Phase-1
-                # Rust step (this slice ships the emission only).
-                printing_dict["aura_equipment_bonuses"] = {
-                    "power_bonus": card.aura_power_bonus,
-                    "toughness_bonus": card.aura_toughness_bonus,
-                    "granted_keywords": [
-                        kw.replace(" ", "_")
-                        for kw in card.aura_granted_keywords
-                    ],
-                }
-        pid = reg.register_printing(printing_dict)
-        name_to_pid[card.name] = pid
+    # **Aura-attachment substrate Phase 1 STEP 6.** The registry build
+    # is now factored out into :func:`build_rust_registry` so the
+    # CardDef -> registry-dict shape lives in ONE place
+    # (:func:`_spec_card_to_printing_dict`); STEP 6's round-trip pins
+    # call :func:`build_rust_registry` directly, the production
+    # state-builder call goes through ``make_state`` after.
+    reg, name_to_pid = build_rust_registry(spec)
 
     p0_lib_pids = [name_to_pid[n] for n in spec.p0_library]
     p1_lib_pids = [name_to_pid[n] for n in spec.p1_library]
@@ -11180,6 +11101,94 @@ def build_matched_states(spec: DeckSpec):
     step.
     """
     return build_python_state(spec), build_rust_state(spec)
+
+
+# ---------------------------------------------------------------------------
+# Aura-attachment substrate — Phase 1 STEP 6: Rust -> Python printing
+# aura-field read-back
+# ---------------------------------------------------------------------------
+
+
+def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
+    """Read the aura printing fields off a Rust ``Registry`` at
+    ``printing_id`` and return them in a Python dict shape matching the
+    ``aura_*`` slots on Python's :class:`mtg_bot.cards.base.CardPrinting`.
+
+    **Aura-attachment substrate Phase 1 STEP 6 — bidirectional bridge
+    round-trip.** STEP 2 landed the Rust ``parse_printing`` parse arm +
+    four ``Registry.get_printing_*`` getters on the Rust side; STEP 1
+    landed the Python emission of the aura keys into the registry dict;
+    this helper closes the Rust -> Python printing direction by surfacing
+    those getters in a single Python dict for round-trip pins. The
+    surfaced shape matches Python's ``CardPrinting`` aura slots
+    1:1::
+
+        {
+            "is_aura": bool,
+            "aura_enchant_type": str,
+            "aura_yours_only": bool,
+            "aura_power_bonus": int,
+            "aura_toughness_bonus": int,
+            "aura_granted_keywords": tuple[str, ...],
+            "equipment_bonuses": tuple[int, int, frozenset[str]] | None,
+        }
+
+    The ``equipment_bonuses`` slot is derived from the Rust grant triple
+    via the same rule the Python ``_card_def_to_python_printing`` uses
+    (zero-grant → ``None``; otherwise ``(p, t, frozenset(kws))``). The
+    keyword tuple is preserved verbatim from Rust (underscore-form, the
+    bridge convention).
+
+    Callers use this to verify a printing registered through
+    :func:`build_rust_state` survives a round-trip back to Python with
+    every aura field byte-equal.
+    """
+    is_aura = rust_registry.get_printing_is_aura(printing_id)
+    aura_enchant_type = rust_registry.get_printing_aura_enchant_type(
+        printing_id
+    )
+    aura_yours_only = rust_registry.get_printing_aura_yours_only(printing_id)
+    p_bonus, t_bonus, kw_list = rust_registry.get_printing_aura_grant(
+        printing_id
+    )
+    aura_granted_keywords = tuple(kw_list)
+    # Mirror Python's _card_def_to_python_printing equipment_bonuses
+    # derivation (zero-grant -> None; otherwise (p, t, frozenset(kws))).
+    if p_bonus or t_bonus or aura_granted_keywords:
+        equipment_bonuses: Optional[tuple[int, int, frozenset[str]]] = (
+            int(p_bonus),
+            int(t_bonus),
+            frozenset(aura_granted_keywords),
+        )
+    else:
+        equipment_bonuses = None
+    return {
+        "is_aura": bool(is_aura),
+        "aura_enchant_type": str(aura_enchant_type),
+        "aura_yours_only": bool(aura_yours_only),
+        "aura_power_bonus": int(p_bonus),
+        "aura_toughness_bonus": int(t_bonus),
+        "aura_granted_keywords": aura_granted_keywords,
+        "equipment_bonuses": equipment_bonuses,
+    }
+
+
+def rust_bf_object_attached_to(rust_state, obj_id: int) -> Optional[int]:
+    """Return ``attached_to`` for the bf object with ``obj_id``, or
+    ``None`` if the object isn't on a battlefield (or is unattached).
+
+    **Aura-attachment substrate Phase 1 STEP 6.** ``battlefield_snapshot``
+    in ``state_ops_snapshot.rs`` already emits ``attached_to`` as either
+    ``None`` (unattached) or the target id (Equipment + Aura post-STEP-4).
+    This helper is the symmetric Python-side accessor for round-trip pins
+    that want to read the field by id without scanning the snapshot list
+    twice.
+    """
+    for o in rust_state.battlefield_snapshot():
+        if o["id"] == obj_id:
+            val = o.get("attached_to")
+            return None if val is None else int(val)
+    return None
 
 
 # ---------------------------------------------------------------------------
