@@ -580,6 +580,25 @@ impl GameState {
                             candidates.iter().map(|id| json!(*id)).collect(),
                         ),
                     ]),
+                    // **Aura-attachment substrate — Phase 1 STEP 3
+                    // (round-78, 2026-05-20).** Cast-time enchant-
+                    // target choice. Candidate ids fully determine
+                    // the pending-state shape: re-resolving with a
+                    // different candidate set would surface a
+                    // different choice. Flat u32 list mirrors
+                    // `TapPermanentChoice`'s shape.
+                    PendingDecision::EnchantTargetChoice {
+                        source_obj_id,
+                        controller,
+                        candidates,
+                    } => Value::Array(vec![
+                        Value::String("EnchantTargetChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            candidates.iter().map(|id| json!(*id)).collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));
