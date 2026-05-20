@@ -328,6 +328,79 @@ pub(crate) fn aura_grants_keyword_to(
     false
 }
 
+/// **Static / layered abilities substrate — Phase 1 first-deliverable
+/// (round-79).** True iff any battlefield permanent's
+/// `static_anthems` grants the given lowercase underscore-form
+/// keyword to the target identified by `(target_controller_idx,
+/// target_id)`.
+///
+/// Mirrors Python's `_static_bonuses` / `effective_keywords` walk at
+/// `game.py:913-996` filtered to the anthem keyword-grant sub-shape:
+/// for each source on either player's battlefield, for each
+/// `StaticAnthem` on the source's printing, the grant applies iff:
+///   * The source is on the SAME controller as the target (the source
+///     `player_idx` walking the per-controller battlefield is the
+///     ground truth here; CR 613 layer-2 control-change retrofits
+///     aren't modeled this slice — back-compat with the Aura-substrate
+///     reader-site shape).
+///   * The anthem's `scope` admits the target (the `creatures_you_
+///     control` shape admits every target including the source itself;
+///     `other_creatures_you_control` excludes the source).
+///   * The target's `target_controller_idx == source_controller_idx`
+///     (the per-controller battlefield walk above ensures this; see
+///     the explicit comment below).
+///
+/// **Layer note.** CR 613.1c layer 6 (ability-granting effects). The
+/// fold is consistent with `aura_grants_keyword_to`'s precedent — the
+/// reader-side semantics are identical, the difference is the SOURCE
+/// (the static-bearer itself vs. an attached Aura).
+///
+/// **Lignify / Humility (CR 613.7).** The Python source-of-truth
+/// `_static_bonuses` skips static-anthem contributions from a
+/// `_source_layer6_wiped` source. Phase 1 of the static-abilities
+/// substrate does NOT yet model layer-6 ability-wipes on the Rust
+/// side; no EoE / DSK card in the loader-admitted pool today carries
+/// a `lose_all_abilities` continuous effect that would wipe a
+/// static-anthem source, so the simplification is parity-clean for
+/// the live pool. The honest-stop is documented in
+/// `docs/SEARCH_LIMITATIONS.md`.
+pub(crate) fn static_anthem_grants_keyword_to(
+    state: &GameState,
+    target_controller_idx: usize,
+    target_id: u32,
+    keyword: &str,
+) -> bool {
+    let source_player = match state.players.get(target_controller_idx) {
+        Some(p) => p,
+        None => return false,
+    };
+    for source in source_player.battlefield.iter() {
+        let Some(printing) = state.registry.lookup(source.printing_id) else {
+            continue;
+        };
+        if printing.static_anthems.is_empty() {
+            continue;
+        }
+        for anthem in printing.static_anthems.iter() {
+            // Scope admit: `other_creatures_you_control` excludes the
+            // source itself; `creatures_you_control` admits every
+            // creature under the controller (including the source).
+            let admits = match anthem.scope.as_str() {
+                "creatures_you_control" => true,
+                "other_creatures_you_control" => source.id != target_id,
+                _ => false,
+            };
+            if !admits {
+                continue;
+            }
+            if anthem.granted_keywords.iter().any(|k| k == keyword) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Read effective power for a battlefield creature, returning 0 for
 /// non-creatures or unknown ids. "Effective" =
 /// `base + ueot_power_bonus + obj.counters` per CR 613 layer 7c
@@ -349,6 +422,68 @@ pub(crate) fn aura_grants_keyword_to(
 /// `life_pX` divergence — Python dealt counter-adjusted power, Rust
 /// dealt base power. New code is right (written against the Python
 /// SoT); Python untouched.
+/// Compute the layer-7b dynamic base P/T for a creature whose
+/// printing carries a `dynamic_pt_formula` key. Returns `None`
+/// when the printing has no formula (the printed base wins) or
+/// when the obj cannot be located.
+///
+/// **Round-78 dynamic-P/T-formula substrate.** Dispatches on the
+/// formula key string in lockstep with Python's
+/// `game._dynamic_base_pt` (`src/mtg_bot/game.py:1318-1355`).
+/// Per the "new code is right" SoT-flip discipline, every formula
+/// key added on the Python side must land here too; an unknown
+/// key returns `None` (defensive — the bridge admit predicate
+/// guarantees only recognized keys reach this arm).
+///
+/// Recognized keys (in lockstep with Python):
+///   * `"harmonious_grovestrider"` — base P = T = number of lands
+///     controlled by the obj's controller. CR 208.2 / layer 7b
+///     CDA. Harmonious Grovestrider is the only EoE printing
+///     this lane covers today; sibling cards (Cosmogoyf, Emissary
+///     Escort) carry different per-formula shapes and are
+///     honest-stopped on the Rust side (they remain admit-filtered
+///     on the bridge until a per-card slice lands).
+pub(crate) fn dynamic_base_pt_pub(
+    state: &GameState,
+    obj_id: u32,
+) -> Option<(i32, i32)> {
+    let (player_idx, printing_id) =
+        locate_battlefield_obj(state, obj_id)?;
+    let printing = state.registry.lookup(printing_id)?;
+    let formula = printing.dynamic_pt_formula.as_deref()?;
+    let controller = state.players[player_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == obj_id)
+        .map(|o| o.controller)?;
+    match formula {
+        "harmonious_grovestrider" => {
+            // P = T = lands controlled by the obj's controller.
+            // Mirrors Python's `game._dynamic_base_pt` arm:
+            // `sum(1 for o in state.battlefield if
+            //  o.controller_id == obj.controller_id and
+            //  o.printing.is_land)`.
+            let mut n: i32 = 0;
+            for player in state.players.iter() {
+                for bf_obj in player.battlefield.iter() {
+                    if bf_obj.controller != controller {
+                        continue;
+                    }
+                    if let Some(p) =
+                        state.registry.lookup(bf_obj.printing_id)
+                    {
+                        if p.card_types.iter().any(|t| t == "Land") {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            Some((n, n))
+        }
+        _ => None,
+    }
+}
+
 fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
@@ -374,10 +509,19 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // SetBasePT cast on an already-animated land); this mirrors the
     // intuition that an explicit "has base P/T N/N" override is more
     // specific than the manland's intrinsic creature-half P/T.
+    //
+    // Round-78 dynamic-P/T-formula substrate: if a UEOT override
+    // is NOT present, fall through to the dynamic-base computation
+    // (CR 613 layer 7b CDA). The dynamic base supersedes the
+    // printed base but defers to UEOT/manland overrides (last
+    // applied wins; the Python arm has the same shape — see
+    // `_compute_effective_pt`'s 7b branch: registry SetBasePT, then
+    // dynamic, then printed).
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(p, _)| p)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(p, _)| p))
+        .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(p, _)| p))
         .unwrap_or(printed_base);
     let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
     // CR 613 layer 7d: the signed net +1/+1 / -1/-1 counter scalar
@@ -497,7 +641,18 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     // attached_to-matching auras / equipment. Equipment riders are
     // not yet folded in on the Rust side; this branch covers Auras
     // only (S1 sub-shape: granted_keywords like trample / hexproof).
-    aura_grants_keyword_to(state, obj_id, keyword)
+    if aura_grants_keyword_to(state, obj_id, keyword) {
+        return true;
+    }
+    // Static / layered abilities substrate — Phase 1 first-deliverable
+    // (round-79): layer-6 keyword grants from any battlefield
+    // permanent's `static_anthems` whose scope + controller filter
+    // admit this target. The reader walks per-controller (only the
+    // target's controller's battlefield contributes — see the
+    // helper's docstring for the CR 613 layer-2 simplification),
+    // mirroring Python's `_static_bonuses` per-source `applies_to`
+    // walk.
+    static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword)
 }
 
 /// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
@@ -564,10 +719,15 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // top. Round-28 manland animation also overrides the printed
     // base; SetBasePT takes precedence when both are present (same
     // semantics as battlefield_creature_power above).
+    // Round-78 dynamic-P/T-formula substrate: defer to the dynamic
+    // base after UEOT overrides, before printed base. Mirrors the
+    // `battlefield_creature_power` shape; see that function's comment
+    // for the layer-7b CDA semantics.
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(_, t)| t)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(_, t)| t))
+        .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(_, t)| t))
         .unwrap_or(printed_base);
     let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);
     // CR 613 layer 7d: signed net +1/+1 / -1/-1 counter scalar folds

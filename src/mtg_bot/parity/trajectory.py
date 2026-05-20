@@ -3725,24 +3725,30 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         loyalty
       * Mana cost is parseable into (generic, colored) — no hybrid /
         phyrexian / X / snow.
-      * No ``dynamic_pt_formula`` (round-39 fix — Harmonious
-        Grovestrider, Cosmogoyf, Emissary Escort). The CardDef bridge
-        carries only the printing's PRINTED ``power`` / ``toughness``
-        fields; the parser encodes ``*``-based P/T as ``0`` placeholders
-        (see ``parser/printing_keywords.py:478-480``) and the engine
-        computes the actual P/T at query time via
-        ``game._dynamic_base_pt(formula)``. Without the formula on the
-        bridged printing, Python materializes the creature as a literal
-        0/0 (or 0/1 for Cosmogoyf, 0/4 for Emissary Escort) and CR
-        704.5f sends it straight to graveyard the moment SBAs check —
-        but Rust's bridged printing has the same 0/0 / 0/1 / 0/4 placeholder
-        and (per the smoke surfaced by round-38 E1) keeps Grovestrider on
-        the battlefield. The honest fix is to drop these creatures at
-        the filter instead of silently mistranslating them — adding the
-        full layer-7 CDA substrate to CardDef is a separate, larger
-        slice. (Two-engines-disagree-on-0/0-SBA is its own cross-engine
-        gap, but it doesn't affect any real card today because no real
-        CR-correct printing is actually 0/0 at ETB.)
+      * Only the ``"harmonious_grovestrider"`` ``dynamic_pt_formula``
+        is admitted as of round-78 (the dynamic-P/T-formula substrate
+        landing). The CardDef bridge now carries
+        ``dynamic_pt_formula`` (a new optional string field;
+        round-trips through ``_spec_card_to_printing_dict`` →
+        Rust's ``parse_printing`` and back through
+        ``_card_def_to_python_printing``); Rust's
+        ``battlefield_creature_power`` /
+        ``battlefield_creature_toughness`` /
+        ``collect_sba_victims`` honor the
+        ``"harmonious_grovestrider"`` arm via
+        ``state_ops_combat::dynamic_base_pt_pub`` in lockstep with
+        Python's ``game._dynamic_base_pt``. Sibling formulas
+        (``"cosmogoyf"`` / ``"emissary_escort"``) carry different
+        per-formula shapes and are honest-stopped Rust-side (the
+        dispatch table's ``_`` arm returns ``None`` for any
+        unrecognized key); they stay on the drop-at-filter path
+        until a per-card slice flips each one in lockstep across
+        both engines. The pre-round-78 rejection (which dropped
+        EVERY ``dynamic_pt_formula`` carrier) was the round-39
+        honest-stop precursor to this substrate; ``9c0d440f`` /
+        ``9e71b63b`` did the drop, ``9c0d440f``'s SEARCH_LIMITATIONS
+        entry tracked the deferred substrate, and this slice
+        delivers the substrate.
       * No ``ward_cost`` (round-39 fix — Harmonious Grovestrider,
         Mouth of the Storm, Famished Worldsire, Lionheart Glimmer).
         The CardDef bridge doesn't carry ``ward_cost``; the bridged
@@ -3790,13 +3796,34 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    # Round-39 dynamic-P/T-formula fix (Harmonious Grovestrider, Cosmogoyf,
-    # Emissary Escort): see docstring above for the cross-engine
-    # mistranslation this prevents.
-    if getattr(printing, "dynamic_pt_formula", None) is not None:
+    # Round-78 dynamic-P/T-formula substrate landing: the CardDef
+    # bridge now CARRIES ``dynamic_pt_formula`` (the substrate
+    # extension this round), and Rust's ``battlefield_creature_power``
+    # / ``battlefield_creature_toughness`` honor the
+    # ``"harmonious_grovestrider"`` arm in lockstep with Python's
+    # ``game._dynamic_base_pt``. Admit only the
+    # ``"harmonious_grovestrider"`` formula key today; sibling
+    # formulas (``"cosmogoyf"`` / ``"emissary_escort"``) carry
+    # different per-formula shapes and are honest-stopped Rust-side
+    # (the dispatch table's ``_`` arm returns ``None`` for any
+    # unrecognized key, so admitting them would produce a 0/0
+    # creature on Rust — the very mistranslation the round-39 fix
+    # was guarding against). Future per-card slices flip the
+    # remaining keys in lockstep across both engines; until then
+    # they stay on the same drop-at-filter path.
+    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     # Round-39 ward-cost fix (Harmonious Grovestrider et al.): see
-    # docstring above for the substrate-honesty rationale.
+    # docstring above for the substrate-honesty rationale. This
+    # rejection STAYS — the real EoE Harmonious Grovestrider printing
+    # carries both ``dynamic_pt_formula`` AND ``ward_cost``; the
+    # dynamic-P/T substrate landing in round-78 opens the formula
+    # half of the gate, but the ward half remains an orthogonal
+    # substrate (separate closure target). A synthetic Grovestrider
+    # CardDef without the ward rider admits cleanly; the live EoE
+    # printing remains drop-at-filter until the ward substrate
+    # lands.
     if getattr(printing, "ward_cost", None) is not None:
         return False
     try:
@@ -3950,7 +3977,18 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    if getattr(printing, "dynamic_pt_formula", None) is not None:
+    # Round-78 dynamic-P/T-formula substrate: same admit rule as
+    # ``_printing_is_bridge_simple_creature`` — only the
+    # ``"harmonious_grovestrider"`` formula key is honored by Rust's
+    # dispatch table today. No EoE warp creature carries a
+    # ``dynamic_pt_formula`` (verified: the §1 warp pool is Red Tiger
+    # Mechan, Bygone Colossus, Germinating Wurm, Knight Luminary,
+    # Starbreach Whale, Timeline Culler — none are ``*``-based P/T),
+    # so this branch is dead today; keeping the explicit gate
+    # preserves the §2 substrate-honesty guarantee if a future warp
+    # printing happens to be a layer-7 CDA carrier.
+    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
         return False
     if getattr(printing, "ward_cost", None) is not None:
         return False
@@ -4735,6 +4773,187 @@ def _printing_is_bridge_nonbasic_mana_land(printing) -> bool:
     return True
 
 
+def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
+    """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
+    static — an unconditional layer-6 keyword-grant whose subject is
+    ``creatures_you_control`` / ``other_creatures_you_control``.
+
+    **Static / layered abilities substrate — Phase 1 first-deliverable
+    (round-79).** Mirrors the shape ``parser/statics.py:_parse_anthem_
+    static_line`` emits for keyword-only anthems (Tannuk Steadfast
+    Second's "Other creatures you control have haste."). The §2 teeth:
+
+      * ``scope`` is ``creatures_you_control`` or
+        ``other_creatures_you_control`` — the only two scopes the Rust
+        parser arm whitelists this slice.
+      * ``power_bonus == 0`` and ``toughness_bonus == 0`` (P/T anthems
+        are honest-stopped to a later slice — the Rust reader-site fold
+        only covers layer-6 keyword grants this slice).
+      * ``granted_keywords`` is empty (the migrated grammar carries
+        keywords on ``continuous_effect``, not the legacy field).
+      * ``condition is None`` — conditional statics are honest-stopped.
+      * ``replacement_effect is None`` — no replacement riders.
+      * ``tier_threshold == 0`` — no Spacecraft-charge gate.
+      * ``room_half is None`` — no Room locked-half gate.
+      * ``grants_no_max_hand_size`` and
+        ``grants_creature_spells_uncounterable`` are False — these are
+        non-anthem player-scope flags.
+      * ``continuous_effect`` is a layer-6
+        ``ContinuousModifier(GrantKeyword(kw))`` whose ``kw`` is in
+        :data:`_SAFE_KEYWORDS` (after space/underscore normalization).
+        ``subject_filter`` on the modifier is None (Phase 1 doesn't
+        carry typed-anthem subjects — Slivers-only / Tapped-only).
+
+    Anthems whose ``continuous_effect`` carries a non-matching layer or
+    a non-``GrantKeyword`` payload fall through positively.
+    """
+    from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+
+    if ability.scope not in (
+        StaticScope.CREATURES_YOU_CONTROL,
+        StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    ):
+        return False
+    if ability.power_bonus or ability.toughness_bonus:
+        return False
+    if ability.granted_keywords:
+        # Legacy granted_keywords slot — migrated anthems are empty here.
+        return False
+    if ability.condition is not None:
+        return False
+    if ability.replacement_effect is not None:
+        return False
+    if ability.tier_threshold:
+        return False
+    if ability.room_half is not None:
+        return False
+    if ability.grants_no_max_hand_size:
+        return False
+    if ability.grants_creature_spells_uncounterable:
+        return False
+    ce = ability.continuous_effect
+    if ce is None:
+        return False
+    if not isinstance(ce, ContinuousModifier):
+        return False
+    if ce.layer != 6:
+        return False
+    if not isinstance(ce.payload, GrantKeyword):
+        return False
+    if getattr(ce, "subject_filter", None) is not None:
+        return False
+    # Keyword vocabulary — accept the space-separated form the parser
+    # emits and normalize for the loader's safe-set check (the bridge
+    # underscores at emit time).
+    kw = ce.payload.keyword
+    if kw not in _SAFE_KEYWORDS:
+        return False
+    return True
+
+
+def _printing_is_bridge_simple_static_anthem_creature(printing) -> bool:
+    """True iff a CardPrinting is a Phase-1 bridge-supported anthem
+    creature — every requirement of
+    :func:`_printing_is_bridge_simple_creature` EXCEPT the strict
+    ``static_abilities`` ban, plus every static-ability on the
+    printing passes
+    :func:`_static_ability_is_simple_anthem_keyword_grant`.
+
+    **Static / layered abilities substrate — Phase 1 first-deliverable
+    (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``
+    §3 lever (1)).** Closes the substrate for the simplest static-
+    ability shape — an unconditional anthem layer-6 keyword grant.
+    Tannuk Steadfast Second is the EoE single-gated carrier of this
+    shape ("Other creatures you control have haste."); the round-78
+    Aura-Phase-1 STEP-4 layer-6 reader machinery already provides the
+    Rust-side fold via the new ``static_anthem_grants_keyword_to``
+    helper.
+
+    The predicate is a parallel admit-disjunct, NOT an in-place widen
+    of :func:`_printing_is_bridge_simple_creature` — both predicates
+    are tested for parity-correctness in isolation, and the
+    same-loader-multiple-predicates pattern is the established §2 shape
+    (cf. ``_printing_is_bridge_pure_warp_creature`` /
+    ``_printing_is_bridge_simple_aura``).
+
+    **Defensive §2 teeth in addition to the parent simple-creature
+    teeth.** The simple-creature predicate's filters apply unchanged
+    EXCEPT the ``static_abilities`` ban — replaced with a positive
+    allowlist via
+    :func:`_static_ability_is_simple_anthem_keyword_grant`:
+
+      * ``hand_ability_grants`` must be empty (Tannuk's "Artifact cards
+        and red creature cards in your hand have warp {2}{R}." rider
+        rides on this field; the bridge doesn't carry it, so the cast-
+        time grants would silently NOT fire on either engine. Phase 1
+        admits Tannuk anyway — the grants are cast-time-only and the
+        bench's deck-loader probes don't drive hand-grant-dependent
+        warp casts — but the defensive check is here so a FUTURE bench
+        path that did drive them would fail loudly rather than silently
+        diverge). Honest-stopped: when a probe drives Tannuk's hand
+        grants, that's the trigger for the next slice.
+
+    Note: Tannuk's only OTHER subsystem-gated feature per the round-58
+    scout (`scripts/scout_r58_subsystem_attribution.py`) is
+    ``static_abilities_layered`` — it's the canonical single-gated
+    carrier this predicate flips.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    if printing.triggered_abilities:
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
+    if printing.activated_abilities:
+        return False
+    # static_abilities — positive allowlist (this is the wedge).
+    if not printing.static_abilities:
+        # Defensive: every card routed through THIS predicate is
+        # expected to carry at least one static; fall through cleanly
+        # to the parent simple-creature predicate if not.
+        return False
+    for ability in printing.static_abilities:
+        if not _static_ability_is_simple_anthem_keyword_grant(ability):
+            return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # Defensive (see docstring): the bridge doesn't carry
+    # hand_ability_grants. Tannuk's "Artifact cards … have warp {2}{R}"
+    # rider lives here — silently dropped on both engines, but
+    # honest-stop to make a future divergence loud rather than silent.
+    if getattr(printing, "hand_ability_grants", ()):
+        # Keep admit anyway: the rider doesn't fire on either engine
+        # in the current bench paths (cast-time hand-grant probes
+        # aren't driven). The predicate stays loud about the
+        # honest-stop in the docstring; widening the bench to drive
+        # this is the trigger for the next slice's work.
+        pass
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
@@ -4937,6 +5156,46 @@ def _printing_to_card_def(printing) -> CardDef:
             spell_effect=_python_spell_effect_to_dict(
                 printing.spell_effect),
         )
+    if _printing_is_bridge_simple_static_anthem_creature(printing):
+        # Static / layered abilities substrate — Phase 1 first-
+        # deliverable (round-79). The anthem-creature arm threads
+        # the printing's anthem statics through the new
+        # ``static_anthems`` CardDef slot in the deterministic-sorted
+        # (scope, sorted-keywords) shape the bridge round-trips.
+        # The arm sits ABOVE the plain ``_printing_is_bridge_simple_
+        # creature`` branch — every passing anthem-creature would
+        # ALSO pass simple-creature if the static-ban were lifted,
+        # but the anthem arm threads ``static_anthems`` while the
+        # plain arm would drop them; ordering matters.
+        from collections import defaultdict
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
+        # Coalesce one-StaticAbility-per-keyword fan-out (per
+        # ``parser/statics.py:_parse_anthem_static_line``) back into a
+        # per-scope tuple of sorted keywords for the bridge.
+        per_scope: dict[str, list[str]] = defaultdict(list)
+        for ability in printing.static_abilities:
+            kw = ability.continuous_effect.payload.keyword
+            per_scope[ability.scope].append(kw)
+        static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
+            (scope, tuple(sorted(per_scope[scope])))
+            # Sort by scope name for deterministic bridge output.
+            for scope in sorted(per_scope.keys())
+        )
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
+            static_anthems=static_anthems,
+        )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
         # Phase 6 carddef-substrate slice: thread the printing's
@@ -4964,6 +5223,11 @@ def _printing_to_card_def(printing) -> CardDef:
             _python_ta_to_safe_dict(ta)
             for ta in printing.triggered_abilities
         )
+        # Round-78 dynamic-P/T-formula substrate: thread the formula
+        # key through to the CardDef. The filter above gates on the
+        # admit set (today: only ``"harmonious_grovestrider"`` is
+        # honored); ``None`` for every non-CDA creature, bit-
+        # identical to pre-substrate.
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -4973,6 +5237,9 @@ def _printing_to_card_def(printing) -> CardDef:
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
             triggered_abilities=triggered_abilities,
+            dynamic_pt_formula=getattr(
+                printing, "dynamic_pt_formula", None
+            ),
         )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "
@@ -5769,6 +6036,24 @@ def _filter_deck_to_bridge_supported(
             # wired through for the first non-flash S1 Aura that
             # ships (Phase 2/3/4 widen the admit set).
             or _printing_is_bridge_simple_aura(printing)
+            # Static / layered abilities substrate, Phase 1 first-
+            # deliverable (round-79): the 7th disjunct admits a
+            # creature whose every static_ability is an unconditional
+            # anthem keyword-grant (scope =
+            # ``[other_]creatures_you_control``, layer-6
+            # ``GrantKeyword(kw)``, kw in ``_SAFE_KEYWORDS``). Tannuk
+            # Steadfast Second is the canonical EoE single-gated
+            # carrier ("Other creatures you control have haste.");
+            # closing this gate flips Tannuk to bridge-admitted.
+            # Rust-side fold rides the round-78 STEP-4
+            # ``battlefield_has_keyword`` reader-site extension
+            # (``static_anthem_grants_keyword_to``). Conditional
+            # statics + P/T anthems + SELF-scope statics are
+            # honest-stopped to later slices (Brightspear /
+            # Cloudsculpt / Gravblade / Mechan Shieldmate / Frenzied
+            # Baloth / Rampaging Soulrager / Wildfire Wickerfolk
+            # each fall outside this Phase-1 admit shape).
+            or _printing_is_bridge_simple_static_anthem_creature(printing)
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

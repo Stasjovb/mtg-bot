@@ -2710,6 +2710,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.
@@ -2719,6 +2724,11 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2770,6 +2780,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.
@@ -2779,6 +2794,11 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2843,6 +2863,11 @@ pub fn make_synthetic_state(
         aura_power_bonus: 0,
         aura_toughness_bonus: 0,
         aura_granted_keywords: Vec::new(),
+        // Dynamic-P/T formula substrate (round-78): synthetic-state
+        // printings have no dynamic P/T. Back-compat default (every
+        // pre-substrate registry dict omits the `dynamic_pt_formula`
+        // key, parser maps the absence to None).
+        dynamic_pt_formula: None,
         // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
         // synthetic-state printings are not S2 Auras. Back-compat
         // defaults — every pre-S2 registry dict omits these keys.
@@ -2852,6 +2877,11 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     let registry = builder.snapshot();
 

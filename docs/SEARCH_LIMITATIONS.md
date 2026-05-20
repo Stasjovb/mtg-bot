@@ -3885,25 +3885,43 @@ Production self-play does not run both engines simultaneously.
 
 ---
 
-## CardDef bridge filter drops creatures with `dynamic_pt_formula` / `ward_cost`
+## CardDef bridge filter drops creatures with `dynamic_pt_formula` (PARTIAL CLOSURE round-78) / `ward_cost`
+
+**Status**: dynamic-P/T formula half **PARTIALLY CLOSED round-78**
+(Harmonious Grovestrider's `harmonious_grovestrider` formula key
+landed; Cosmogoyf / Emissary Escort still drop-at-filter).
+`ward_cost` half remains an orthogonal substrate (not closed).
 
 **Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_creature`
-(the two `if getattr(printing, ...) is not None: return False` lines
-guarding `dynamic_pt_formula` and `ward_cost`).
+— the dynamic-P/T gate now ADMITS the `harmonious_grovestrider` key
+(round-78 substrate landing); the `ward_cost` gate STAYS (the
+ward-substrate slice is a separate closure target).
 
 **What the shortcut is**: the trajectory-parity loader filters out
-every EoE creature that carries a `dynamic_pt_formula`
-(`*`-based P/T cards: Harmonious Grovestrider, Cosmogoyf, Emissary
-Escort) or a `ward_cost` (Harmonious Grovestrider, Mouth of the
-Storm, Famished Worldsire, Lionheart Glimmer). These creatures do
-NOT round-trip through the CardDef bridge today — the bridge's
-`CardDef` shape carries the printing's raw `power` / `toughness`
-ints (which the parser encodes as 0-placeholders for `*` cards —
-see `cards/parser/printing_keywords.py:478-480`) and has no field
-for either `dynamic_pt_formula` or `ward_cost`. Loading them
-across the bridge silently produces a 0/0 (or 0/1, 0/4) vanilla
-no-ward creature, which then disagrees cross-engine the moment
-SBAs check or a Ward trigger would have fired.
+every EoE creature that carries a `dynamic_pt_formula` whose key is
+NOT yet implemented in Rust's `state_ops_combat::dynamic_base_pt_pub`
+dispatch table, OR a `ward_cost`. Pre-round-78 every dynamic-P/T
+carrier was dropped; round-78 opened the formula half for Harmonious
+Grovestrider only. The bridge's `CardDef` now CARRIES
+`dynamic_pt_formula` (a new optional string field — round-trips
+through `_spec_card_to_printing_dict` → Rust's `parse_printing` and
+back through `_card_def_to_python_printing`); Rust's
+`battlefield_creature_power` / `battlefield_creature_toughness` /
+`collect_sba_victims` / `is_lethal` honor the
+`harmonious_grovestrider` arm via `dynamic_base_pt_pub` in lockstep
+with Python's `game._dynamic_base_pt`. Sibling formulas
+(`cosmogoyf` / `emissary_escort`) carry different per-formula shapes
+and are honest-stopped Rust-side (the dispatch table's `_` arm
+returns `None` for any unrecognized key); they stay on the
+drop-at-filter path until per-card slices flip each in lockstep.
+
+The `ward_cost` rejection is separate: the bridge has no `ward_cost`
+field and no Rust-side Ward replacement / counter-on-target
+machinery, so a real EoE Harmonious Grovestrider printing — which
+carries BOTH `dynamic_pt_formula` AND `ward_cost` — still drops at
+the ward gate. A synthetic Grovestrider CardDef without the ward
+rider admits cleanly (this is the round-78 probe at
+`test_parity_smoke.py::test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity`).
 
 **Why it's OK**: each card has a real engine-side implementation
 (Python's `game._dynamic_base_pt(formula)` + Python's full Ward
@@ -3911,30 +3929,34 @@ substrate; Rust's matching shapes for the keyword side) — they
 play correctly in production. The only context where the
 mistranslation surfaced is the production-deck trajectory-parity
 bench, where both engines are driven off the same CardDef
-registry. Dropping these cards at filter time keeps the bench
-honest. Extending CardDef to carry `dynamic_pt_formula` and
-`ward_cost` is the proper fix; it's a CardDef-schema slice on its
-own (Rust's `parse_printing` would need matching arms, plus the
-layer-7 CDA computation on both sides has to read the formula at
-P/T-query time).
+registry. Round-78 closed the dynamic-P/T half for the highest-
+deck-count single-gated member (Harmonious Grovestrider — 61
+17lands decks per the subsystem inventory). The remaining
+dynamic-P/T cards (Cosmogoyf / Emissary Escort) plus all
+`ward_cost` carriers still drop at filter time pending their
+own slices.
 
 **Failure mode (pre-fix)**: round-38 bench surfaced
 `cast_spell::graveyard_p0,battlefield` for Harmonious
 Grovestrider (2/5 of 18-game smoke failures). Python's SBA sent
 the 0/0 creature to graveyard on resolve; Rust kept it on the
-battlefield. The 0/0-SBA cross-engine asymmetry is its own
-latent bridge gap but doesn't affect any real CR-correct
-printing — no real card resolves as a literal 0/0 at ETB.
+battlefield. Round-78 fixed THIS specific failure on the
+Grovestrider side; the ward-rider still gates the LIVE printing,
+so the bench-trajectory effect is "synthetic Grovestrider-shape
+creatures now admit cleanly; live Grovestrider still drops at
+the ward gate".
 
-**Fix-scope estimate**: ~4 hours for the proper fix (CardDef
-schema extension + Rust parser arm + bridge translators on
-both sides) + ~1 hour parity test for Grovestrider/Cosmogoyf/
-Emissary Escort actually playing cross-engine.
+**Fix-scope estimate**: dynamic-P/T half — **DONE round-78** (~1
+cycle as estimated by the subsystem inventory). Remaining:
+~1 cycle each for Cosmogoyf + Emissary Escort (extend the Rust
+dispatch table arm + thread `_DYNAMIC_PT_FORMULA_LINES` admit
+keys through the bridge admit predicate); ~2-4 hours for the
+ward-substrate slice.
 
-**Impact estimate**: 3 EoE creatures + 4 EoE Ward-bearers
-unfilterable from the trajectory-parity coverage today. Reduces
-divergence noise from the bench (cast_spell::graveyard_p0,
-battlefield divergence count drops to 0 — verified round-39).
+**Impact estimate**: round-78 partial closure unblocks 61
+17lands decks (Harmonious Grovestrider single-gated member) for
+the dynamic-P/T half once the ward-substrate slice lands. Cosmogoyf
++ Emissary Escort each remain blocked on per-formula closure.
 
 ---
 
@@ -7744,6 +7766,97 @@ plugged cleanly into existing precedent (the warp exile-recast path
 in `cast_creature`, the warp `seen_castspell` HashSet skip in
 `legal_decisions`, the existing `move_from_hand_to_battlefield`
 shape for the play-land arm). No new subsystem was needed.
+
+## Static / layered abilities substrate — Phase 1 first-deliverable (round-79; 2026-05-20) — anthem keyword-grant sub-shape ONLY
+
+**Where:** `src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_static_anthem_creature`,
+`rust/src/state_ops_combat.rs::static_anthem_grants_keyword_to`,
+`src/mtg_bot/parity/cross_engine.py::CardDef.static_anthems`,
+`rust/src/cards.rs::CardPrinting.static_anthems`.
+
+**What the shortcut is.** The substrate ships ONLY the *unconditional
+anthem keyword-grant* static-ability sub-shape:
+
+* Scope: `creatures_you_control` or `other_creatures_you_control`.
+* Effect: a single layer-6
+  `ContinuousModifier(GrantKeyword(kw))` where `kw` is in
+  `trajectory._SAFE_KEYWORDS`.
+* No `condition`, no `replacement_effect`, no `power_bonus` /
+  `toughness_bonus`, no `tier_threshold`, no `room_half`, no
+  `grants_no_max_hand_size`, no
+  `grants_creature_spells_uncounterable`.
+
+Every other StaticAbility sub-shape is positively declined at the
+admit predicate. Tannuk, Steadfast Second — the EoE single-gated
+canonical carrier — is admitted; the other 7 EoE single-gated
+static-ability carriers (Brightspear / Cloudsculpt / Frenzied Baloth
+/ Gravblade / Mechan Shieldmate / Rampaging Soulrager / Wildfire
+Wickerfolk) each carry a different sub-shape and remain blocked.
+
+**Why it's OK.**
+
+* The §2 admit teeth are exhaustive — any sub-shape outside the
+  Phase-1 grammar is positively rejected, so we cannot silently
+  mistranslate.
+* The Rust reader-side fold is byte-equal with Python's
+  `_static_bonuses` walk for the admitted sub-shape (see
+  `tests/test_static_layered_abilities_phase1.py` for the cross-engine
+  pins).
+* `static_anthems` defaults to an empty Vec on Rust / empty tuple on
+  Python; every pre-substrate CardDef / printing round-trips
+  bit-identical to before the slice.
+
+**Scenarios where it would NOT be OK.**
+
+* A static-anthem source that is wiped by a `lose_all_abilities`
+  continuous effect (Humility / Lignify on the source). The Python
+  `_static_bonuses` skips wiped sources at layer 7; the Rust
+  reader-site walks them anyway because the layer-6 wipe
+  machinery is not yet ported. **No live EoE / DSK card today
+  admits a static-anthem source that's also wipeable** — no card in
+  the bridge-admitted pool generates a `lose_all_abilities`
+  continuous effect, so the parity is clean in practice. When the
+  first such card ships, the fix is to port
+  `_source_layer6_wiped` to Rust + skip wiped sources in
+  `static_anthem_grants_keyword_to` (the precedent exists in
+  Python at `game.py:861-910`).
+* CR 613 layer-2 control changes that retroactively re-controller a
+  static-anthem source between its ETB and the reader call. The
+  current Rust reader uses the source's per-controller-battlefield
+  position as the ground-truth controller (effectively the
+  `controller_id_before_any_aura_swap` baseline); a Duskmourn's
+  Domination-style control swap (Aura S2 sub-shape) would shift the
+  anthem's recipients on Python but not on Rust. **No live EoE card
+  admits an S2 Aura today** (Phase 2 of the Aura substrate is
+  deferred), so the divergence is unreachable in practice. When S2
+  ships, the fix is to use `effective_controller` (port from
+  `game.py:999-1042`).
+
+**Failure mode.** None reachable in the current bench corpus (Tannuk
+is the only static-anthem-bearing card admitted by the loader; no
+Humility / control-swap admit-carrier exists). The §2 teeth would
+catch a future card that strays outside the Phase-1 shape — it would
+land in the not-bridge-supported sink, not produce a silent
+mistranslation.
+
+**Fix scope estimate.** Each remaining static-ability sub-shape is a
+~3-5 cycle slice:
+
+* SELF + condition + layer-7 P/T (Cloudsculpt / Gravblade /
+  Brightspear) — needs per-Condition Rust port + SELF-scope
+  reader-site fold for `effective_power` / `effective_toughness`.
+* SELF + condition + layer-6 keyword RemoveKeyword (Mechan
+  Shieldmate's "can attack as though it didn't have defender") —
+  needs a `RemoveKeyword` modifier arm on the Rust reader.
+* `grants_creature_spells_uncounterable` flag (Frenzied Baloth) —
+  cast-side counterspell admit gate.
+* Other condition surfaces (Rampaging Soulrager's room-doors gate,
+  Wildfire Wickerfolk's Delirium gate) — per-condition Rust ports.
+
+**Impact estimate.** Phase 1 unlocks 1 of 8 single-gated cards in
+the static-abilities subsystem row. Per-card 17lands deck count for
+Tannuk specifically requires a re-attribution scout run; the row
+totals 34,526 single-gate decks for all 8 cards.
 
 ## Aura `flash` cast-timing rider dropped symmetrically (Aura-attachment Phase 2 first deliverable, round-79)
 
