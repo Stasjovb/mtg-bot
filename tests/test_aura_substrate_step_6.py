@@ -441,30 +441,37 @@ def test_python_built_hash_recipe_matches_native_fingerprint_for_aura_state():
 # ---------------------------------------------------------------------------
 
 
-def test_step_6_does_not_admit_any_aura_to_the_bench():
-    """Originally a STEP-6 honest-stop sentinel: STEP 6 landed the
-    bridge round-trip plumbing only and did NOT OR
-    ``_printing_is_bridge_simple_aura`` into the loader. STEP 7
-    (round-78) closed that gap, but Frantic Strength still doesn't
-    admit because the predicate's §2 teeth decline it (the printing
-    carries the non-``_SAFE_KEYWORDS`` ``flash`` keyword — the
-    documented decline reason). So this pin still passes, now
-    measuring the predicate's §2 correctness rather than the missing
-    OR-in. See ``test_aura_substrate_phase1.py``::
-    ``test_loader_admits_aura_simple_shape`` for the positive STEP-7
-    wire-up pin."""
+def test_step_6_bridge_plumbing_intact_after_phase_2_widen():
+    """Originally a STEP-6 honest-stop sentinel asserting "no Aura
+    admits to the bench". STEP 7 (round-78) OR'd the predicate into
+    the loader's 5-disjunct; **Phase 2 first deliverable (round-79)**
+    widened the predicate's keyword-set to include ``flash`` per the
+    symmetric-drop precedent, so Frantic Strength NOW admits — the
+    first live EoE Aura through the loader. This pin keeps the
+    bridge-plumbing assertion live: the loader emits the printing
+    name AND a materialized CardDef for the admitted Aura, the
+    STEP-6 plumbing flows end-to-end. See
+    ``test_aura_substrate_phase1.py``::
+    ``test_loader_admits_frantic_strength_phase_2_first_deliverable``
+    for the positive Phase 2 wire-up pin."""
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
     deck = ["Forest", "Forest", "Frantic Strength", "Forest"]
     not_bridged_sink: list[str] = []
-    filtered, _ = _filter_deck_to_bridge_supported(
+    filtered, card_defs = _filter_deck_to_bridge_supported(
         deck,
         printings,
         not_bridged_sink=not_bridged_sink,
     )
-    assert "Frantic Strength" not in filtered
-    assert "Frantic Strength" in not_bridged_sink
+    # Phase 2 first deliverable: Frantic Strength now flows through the
+    # loader as an admitted Aura (STEP-6 bridge plumbing was the
+    # prerequisite, Phase 2 the widen).
+    assert "Frantic Strength" in filtered
+    assert "Frantic Strength" not in not_bridged_sink
+    # The CardDef carries the aura plumbing (STEP 1 fields).
+    aura_cd = [cd for cd in card_defs if cd.name == "Frantic Strength"]
+    assert len(aura_cd) == 1 and aura_cd[0].is_aura is True
 
 
 # ---------------------------------------------------------------------------
