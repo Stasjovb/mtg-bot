@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **320 / 475 EoE cards (67.4%) are byte-equal at the Effect+bridge level**; of those, **214 (45.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 106 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **320 / 475 EoE cards (67.4%) are byte-equal at the Effect+bridge level**; of those, **216 (45.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 104 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **155 (32.6%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 214 | 45.1% |
-| Effect+bridge covered (not individually probed) | 106 | 22.3% |
+| PROBED byte-equal | 216 | 45.5% |
+| Effect+bridge covered (not individually probed) | 104 | 21.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 4 | 0.8% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -213,6 +213,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Seedship Impact
 - Seized from Slumber
 - Selfcraft Mechan
+- Sheltered by Ghosts
 - Shrewd Storyteller
 - Shroudstomper
 - Sinister Cryologist
@@ -224,6 +225,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Starfield Shepherd
 - Starfighter Pilot
 - Starport Security
+- Stay Hidden, Stay Silent
 - Strip Mine
 - Sunset Saboteur
 - Sunstar Chaplain
@@ -368,4 +370,5 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Green Sun's Zenith
 - Grove of the Burnwillows
 - … and 89 more
+
 

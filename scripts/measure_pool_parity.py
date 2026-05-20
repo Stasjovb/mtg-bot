@@ -307,6 +307,19 @@ PROBE_MODULES: tuple[Path, ...] = (
     # substrate via recursive apply_effect on the exiled card's
     # printing.effects with the source-controller transient pinned):
     REPO_ROOT / "tests" / "test_probe_xxx_downstream.py",
+    # Probe batch ZZZ (round 26 covered-but-unprobed) — the LAST
+    # alphabetic-named probe batch.  Reinstates two YYY drop-list
+    # entries that the YYY-idiom (parse + bridge round-trip +
+    # Python-side resolve, NO cross-engine compare_fields) DOES
+    # unblock -- Stay Hidden, Stay Silent (Aura ETB +
+    # TapEnchantedPermanent unit-variant) and Sheltered by Ghosts
+    # (Aura ETB + ExileOpponentsNonlandPermanentUntilLeaves; FIRST
+    # Aura-carrier shape on that effect class, distinct from the
+    # PROBED Banishing Light bare-Enchantment carrier).  Future
+    # probe batches (round 27+) must use a 4-letter or numeric
+    # naming convention -- the alphabetic 3-letter naming is
+    # exhausted by this batch.
+    REPO_ROOT / "tests" / "test_probe_remaining_zzz.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
