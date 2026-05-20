@@ -500,13 +500,43 @@ exercises the full attach core end-to-end. Requires:
 
 ### Phase 2 (Rust + bridge) — control-changing + layered static grants (sub-shape S2)
 
-Adds the layer-2 control-swap / layer-6 lose-abilities / layer-4
-subtype / layer-7 set-base-PT static-grant-on-attach analogue of
-`apply_aura_static_grants_on_attach` → admits Duskmourn's Domination
-(+1 card / +0 decks). Also unblocks Tractor Beam's static halves
-(control-swap + `attached_prevents_untap`) once its
-`TapEnchantedPermanent` ETB stops fizzling (the shipped Effect reads
-`attached_to`, which Phase 1 finally sets). Depends on Phase 1.
+**Status (round-79, 2026-05-20): PHASE 2 FIRST DELIVERABLE LANDED —
+S1 admit set widened to live EoE Auras via symmetric-drop precedent;
+S2 control-changing Rust slice remains deferred.**
+
+The first deliverable of Phase 2 (round-79) widens the
+`_printing_is_bridge_simple_aura` predicate's static-keyword check
+to admit cast-timing `flash` per the round-39 Ward / round-59
+shockland symmetric-drop precedent. The CardDef bridge's aura arm in
+`_printing_to_card_def` does NOT propagate the source printing's
+`keywords` field through to the materialized round-trip — both
+Python and Rust materialize the Aura with empty `keywords` from the
+CardDef, so the `flash` rider is symmetrically dropped on BOTH
+bridge sides bit-equally. This finally admits the **first live EoE
+Aura through the loader** — both S1 carriers (Frantic Strength,
+Shardmage's Rescue) now flow end-to-end through the
+Phase-1-substrate stack (Rust parse arm + cast-time enchant-target
+decision + Aura-resolution attach + CR-704.5n SBA + bidirectional
+bridge + loader OR-in). New constant `_AURA_SAFE_EXTRA_KEYWORDS =
+{"flash"}` (Aura-only extension) keeps the broader `_SAFE_KEYWORDS`
+unchanged — creature-side admit semantics are not affected. SL entry
+landed at `docs/SEARCH_LIMITATIONS.md` documenting the symmetric
+drop. **Live-EoE admit delta: +2 cards / +0 decks** (Frantic
+Strength + Shardmage's Rescue — both 0 17lands EoE decks per the
+plan §1 / the round-78 Phase 1 STEP-7 finding); the value is the
+**first live admit** of the substrate end-to-end, not deck count.
+Pinned by `tests/test_aura_substrate_phase_2.py` (8 tests, including
+cross-engine byte-equal round-trip).
+
+**Phase 2 remaining (S2 control-changing Rust slice — Duskmourn's
+Domination):** the layer-2 control-swap / layer-6 lose-abilities /
+layer-4 subtype / layer-7 set-base-PT static-grant-on-attach
+analogue of `apply_aura_static_grants_on_attach` → admits
+Duskmourn's Domination (+1 card / +0 decks). Also unblocks Tractor
+Beam's static halves (control-swap + `attached_prevents_untap`)
+once its `TapEnchantedPermanent` ETB stops fizzling (the shipped
+Effect reads `attached_to`, which Phase 1 finally sets). A full
+Rust-agent slice — depends on Phase 1's attach substrate.
 
 ### Phase 3 (Rust + bridge) — the residue Aura-shape Effects
 

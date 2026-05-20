@@ -7745,6 +7745,110 @@ in `cast_creature`, the warp `seen_castspell` HashSet skip in
 `legal_decisions`, the existing `move_from_hand_to_battlefield`
 shape for the play-land arm). No new subsystem was needed.
 
+## Aura `flash` cast-timing rider dropped symmetrically (Aura-attachment Phase 2 first deliverable, round-79)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_aura`
+(the new `_AURA_SAFE_EXTRA_KEYWORDS = frozenset({"flash"})` constant
++ the relaxed static-keyword check in the predicate body). Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 +
+`docs/AURA_ATTACHMENT_PHASE1_DESIGN.md` §3.7 / §3.8 (the symmetric-
+drop ``flash`` admit rationale).
+
+**What the shortcut is**: the production-deck trajectory-parity
+loader now admits the two live EoE S1 Auras — **Frantic Strength**
+and **Shardmage's Rescue** — through the new
+`_printing_is_bridge_simple_aura` predicate (Phase-1 STEP-7 wire-up)
+even though both carry the `flash` cast-timing keyword (CR 702.8) on
+the source printing. `flash` is NOT in `_SAFE_KEYWORDS` (the
+creature-keyword admit set) and is documented as a known cross-
+engine divergence on creature CastSpell emission at instant-speed
+windows (see `parity/cross_engine.py` CE19 Bear-Flash probe —
+Python's `legal.py:217-301` emits CastSpell for `is_instant or
+"flash" in keywords`; Rust's `state_ops_legal.rs:759-764` short-
+circuits CastSpell on `active_player == player_id && phase in MAIN
+&& stack.is_empty()` and never reads the flash keyword). For Auras
+specifically, the divergence is **bridged away** by the CardDef
+bridge's aura arm in `_printing_to_card_def` — the source's
+`keywords` field is NOT propagated through to the CardDef, so both
+Python's `_card_def_to_python_printing` and Rust's parse arm
+materialize the Aura with empty `keywords`. The `flash` rider is
+**symmetrically dropped** on BOTH bridge sides bit-equally before
+either engine sees the Aura.
+
+**Why it's OK**: the drop is **symmetric** — the CardDef bridge
+flattens the Aura's `keywords` to the empty frozenset identically on
+both engines, so Python and Rust each materialize the SAME
+``keywords=frozenset()`` printing and round-trip byte-equal on every
+aura field that DOES round-trip (`is_aura`, `aura_enchant_type`,
+`aura_yours_only`, `equipment_bonuses`). Pinned at three levels:
+(1) static — Phase 2 first-deliverable tests
+(`tests/test_aura_substrate_phase_2.py`,
+`test_carddef_bridge_drops_flash_symmetrically_for_*`) assert the
+post-bridge `keywords == frozenset()` on both engines for each S1
+carrier; (2) loader — `test_loader_admits_real_eoe_frantic_strength_deck`
+drives a mixed Forest + bridge-simple-creature + Frantic Strength
+deck through `_filter_deck_to_bridge_supported` divergence-free;
+(3) cross-engine — `test_phase_2_aura_decks_pec_round_trips_python_rust`
+builds the SAME DeckSpec on both engines and asserts the aura
+fields read back identically from Rust's registry via
+`read_rust_printing_aura_fields`. The bench's `attack_all`
+strategy only ever casts at sorcery speed where the `flash`-gate
+fork is irrelevant on BOTH engines (Rust's sorcery-timing
+predicate covers every non-instant spell; Python's instant-speed
+block is gated on `is_instant or "flash"` and runs at sorcery
+windows anyway via the falling-through sorcery emit). This is the
+**round-39 Ward / round-59 shockland precedent** exactly: a rider
+the bridge drops symmetrically, bit-equal under the bench play
+strategy, shipped blocked-at-fidelity rather than as a latent
+inter-engine divergence.
+
+**Failure mode**: a future probe (or a smarter bench strategy) that
+DRIVES a flash-Aura cast at *instant* speed at a priority window
+where `active_player != priority_player` would observe Python and
+Rust **agree with each other** post-CardDef-bridge (both treat the
+Aura as having no `flash` keyword, so neither emits CastSpell at
+the instant-speed window) but **disagree with the Comprehensive
+Rules** (the real Frantic Strength / Shardmage's Rescue can be cast
+at instant speed in response to e.g. an attack declaration). It is
+a shared CR-incompleteness, NOT a cross-engine divergence — the
+bench cannot surface it because neither engine models flash on the
+admitted Aura post-bridge, and `attack_all` never reaches an
+instant-speed cast window for an Aura anyway. The honest risk is
+that this masks the *absence* of Rust's instant-speed Aura CastSpell
+emit, not that it produces a wrong cross-engine comparison.
+
+**Fix-scope estimate**: a Rust slice that (a) propagates `flash`
+through the Aura's CardDef bridge (new field
+`CardDef.aura_static_keywords` or similar), (b) honors the rider on
+Rust's instant-speed CastSpell pass for Aura spells (mirror of the
+`state_ops_legal.rs::is_instant`-gate to also accept `is_aura &&
+aura_static_keywords contains "flash"`), (c) wires Python's
+`_card_def_to_python_printing` to set `keywords=frozenset({"flash"})`
+when `card.aura_static_keywords` carries it. Estimate: ~2-3h
+Rust slice + bridge + new probe asserting both engines emit
+CastSpell at an Aura-flash priority window. The CR-fidelity gap
+(flash being a real CR 702.8 keyword the engines model on creatures
+but symmetrically drop on Auras) becomes a real divergence the
+moment any cross-engine surface drives an instant-speed window —
+no such surface exists in the bench today.
+
+**Impact estimate**: **+2 cards / +0 cumulative 17lands decks**
+(Frantic Strength 0 + Shardmage's Rescue 0 — both 0 EoE decks per
+the round-61 N1 scout) unblocked into the production-deck bench,
+**0 strength cost** (no engine behavior changes; this is a bench-
+coverage admit that wires the Phase-1 attach substrate through to
+its first live EoE consumer). The value is the **first live EoE
+Aura admit** through the loader — Phase 1's substrate (STEPs 1-7
+landed round-77/78) becomes exercised end-to-end on real EoE
+printings rather than synthetic CardDef-only fixtures. The deck
+count is intentionally 0 (per the plan §1 verify-first finding —
+S1 carriers have 0 17lands deck presence regardless of admit
+gate); Phase 2's full S2 control-changing slice (Duskmourn's
+Domination) + Phase 3 (residue Aura-shape Effects: Meltstrider's
+Resolve, Pain for All, Tractor Beam) + Phase 4 (S3/S4 — Moonlit
+Meditation, Chorale of the Void) carry the real-bench-signal payoff
+of the broader substrate, and each is its own follow-up Rust slice.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,
