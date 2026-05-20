@@ -364,6 +364,23 @@ test_trajectory_parity.py + test_trajectory.py`).
 
 ### Phase 1 (Rust + bridge + loader) — the attach substrate core: static P/T-or-keyword Aura
 
+**Status (round-77, 2026-05-20): PARTIAL — first-deliverable shipped.**
+Steps 1+2 partial (CardDef aura representation + the bridge-side
+`printing_dict` emission + the Python-side `_card_def_to_python_printing`
+materialization) and step 7 partial (the loader admit predicate
+`_printing_is_bridge_simple_aura` is defined + tested but NOT yet
+OR'd into `_filter_deck_to_bridge_supported`'s 5-disjunct) are LANDED
+on main as the `feature/aura-substrate-phase-1` slice. Steps 3-6 (Rust
+`parse_printing` aura-key parse + cast-time enchant-target decision +
+Rust aura-resolution arm + CR-704.5n SBA + bidirectional bridge arms)
+are honest-stopped this round; the predicate is callable + pinned
+against every live EoE Aura but NO Aura reaches the bench yet (the
+pin `tests/test_aura_substrate_phase1.py::
+test_loader_does_not_yet_admit_any_aura` is the honest-stop
+sentinel). Once steps 3-6 land, a one-line wire-up flip at
+`src/mtg_bot/parity/trajectory.py:_filter_deck_to_bridge_supported`
+closes Phase 1 for sub-shape S1.
+
 **Scope:** sub-shape S1 only (Frantic Strength, Shardmage's Rescue) —
 the smallest self-contained Aura: a continuous P/T/keyword grant, no
 triggered effect, no control swap. This is the *minimum* slice that
