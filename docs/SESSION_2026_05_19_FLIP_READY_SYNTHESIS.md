@@ -181,12 +181,14 @@ the flip; if it lands first the flip commit just stacks on top.
    2026-05-20. The 6/1800 axis-3 residual collapsed to 0 on the
    repro bench; this IS the GO-ready commit per §3.
 3. **Run a fresh v-sweep at `5bca387a`** (or post-slice-15 HEAD).
-   Currently a v12-class sweep is running in the orchestrator shell
-   (`broader-archetype-sweep-360-419` worktree against `5bca387a`).
-   Confirms end-to-end (a) zero priority_player + zero blocker, and
-   (b) zero battlefield STATE_EQ now that the closure has landed.
-   Results — TBD at the time of this doc update; will pin
-   no-regression across ALL 3 closures.
+   The v11 sweep (`a65b1050`, merged at `79a1ba66`) on archetypes
+   360-419 against `7a127e87` (pre-battlefield-closure) returned
+   **300/300 PASS / ZERO divergences** — confirms axes 1+2 are
+   regression-free at fresh scale (and the battlefield axis happens
+   to be sparser than priority_player in this archetype range, 0/300).
+   A v12-class sweep against `5bca387a` (post-battlefield-closure)
+   is still required for full end-to-end verification of ALL 3
+   closures; currently running / TBD.
 4. **Execute Option P1 or P2** — atomic flag flip
    (`decision_source = "python" → "rust"`, B3-S5) on `5bca387a`
    (or post-slice-15 HEAD):
@@ -231,7 +233,9 @@ that frames why axes 2 + 3 closing is the GO unblock, with axes 1 +
 - [`docs/BATTLEFIELD_AXIS_INVESTIGATION.md`](BATTLEFIELD_AXIS_INVESTIGATION.md) — axis 3 root cause + closure scope
 - [`docs/G7_S6_BROADER_ARCHETYPE_V10_EVIDENCE.md`](G7_S6_BROADER_ARCHETYPE_V10_EVIDENCE.md) — post-closure regression-verify
 - Closure commit (axes 1+2): `7a127e87` (underlying `5b8608d1`)
-- Regression-verify commit: `b5035028` (v10, archetypes 300-359)
+- Regression-verify commits: `b5035028` (v10, archetypes 300-359);
+  `79a1ba66` (v11, archetypes 360-419, **300/300 PASS / ZERO
+  divergences** at fresh scale, evidence `a65b1050`)
 - Plan-update commit: `de0aff68` (§8 reflects the new state)
 - Battlefield closure (axis 3) — LANDED on `origin/main` at
   `5bca387a` 2026-05-20 (underlying commits `7db0590b` + `16c88726`)

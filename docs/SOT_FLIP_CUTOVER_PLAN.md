@@ -748,9 +748,13 @@ refreshed evidence:
      scale** (Path A COMPLETE).
   2. **Re-run the C4 bench on `5bca387a`** (Step 0 in §2). The
      v5_terminal scale evidence (`ca569619`) already exceeds the
-     recommended scale; a fresh v12-class sweep at `5bca387a` is
-     running in the orchestrator shell to pin no-regression across
-     ALL 3 closures end-to-end.
+     recommended scale; the v11 sweep (`a65b1050`, merged `79a1ba66`)
+     on archetypes 360-419 against `7a127e87` (pre-battlefield-
+     closure) returned **300/300 PASS / ZERO divergences** —
+     confirms axes 1+2 are regression-free at fresh scale. A
+     v12-class sweep at `5bca387a` (post-battlefield-closure) is
+     still required to pin no-regression across ALL 3 closures
+     end-to-end.
   3. **One full `mtg_bot iterate` with the shadow-checker active.**
      Bake-in exit criterion (§3) — production-representative volume
      completing with zero shadow-divergence. This is the only
@@ -970,8 +974,13 @@ to run one more iterate-with-shadow-checker before B3-S5.**
 - **The pending v-sweep at `5bca387a` IS the fresh C4 sweep.** It
   serves as Step 0 (`FLIP_READINESS_EVIDENCE_2026_05_19.md` §6) for
   Option P1 — pins no-regression across ALL 3 closures at the actual
-  flip-candidate commit. If slice 15 lands first and stacks on top,
-  a sweep at the post-slice-15 HEAD becomes the gating measurement.
+  flip-candidate commit. The v11 sweep (`79a1ba66`) at fresh scale
+  (archetypes 360-419) already returned 300/300 PASS / ZERO
+  divergences against `7a127e87` (pre-battlefield-closure), so
+  axes 1+2 are pinned regression-free at scale; the remaining
+  measurement is a sweep at `5bca387a` to also pin axis 3. If
+  slice 15 lands first and stacks on top, a sweep at the
+  post-slice-15 HEAD becomes the gating measurement.
 - **Slice 15 (VVV Pin 1) is concurrent.** A separate
   `feature/rust-slice-15-vvv-pin-1` lane was still in flight at the
   time of this update (5 Survivor postcombat-main cards,
@@ -994,7 +1003,10 @@ to run one more iterate-with-shadow-checker before B3-S5.**
   — overarching GO/NO-GO synthesis; §6 lists the standing gates
 - Closure commit (axes 1+2): `7a127e87` (priority+blocker, merged
   2026-05-20)
-- Regression-verify commit: `b5035028` (v10 sweep, merged 2026-05-20)
+- Regression-verify commits: `b5035028` (v10 sweep, archetypes
+  300-359, merged 2026-05-20); `79a1ba66` (v11 sweep, archetypes
+  360-419, **300/300 PASS / ZERO divergences**, evidence
+  `a65b1050`, merged 2026-05-20)
 - Closure commit (axis 3): `5bca387a` (battlefield, merged
   2026-05-20; underlying commits `7db0590b` + `16c88726`; root cause
   + recipe at `d99d85f3`)
