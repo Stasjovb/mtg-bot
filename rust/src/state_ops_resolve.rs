@@ -11170,7 +11170,17 @@ fn apply_effect(
             let mut obj = bf_mut.remove(pos);
             obj.zone = ZONE_EXILE;
             obj.tapped = false;
-            obj.summoning_sick = true; // r28 CE1 universal-true default
+            // **RRR Pin 1 closure (12th Rust slice).** Dropped the
+            // explicit summoning_sick stamp here. The CE13 closure
+            // (2026-05-12) standardised Rust LTB arms to PRESERVE
+            // summoning_sick across bf-exit (matching Python's
+            // ``move_off_battlefield`` which never touches the field
+            // — ``turn.py:141-315``). This Effect arm was missed by
+            // CE13; the bare ``remove`` -> ``push`` sequence
+            // preserves the pre-exile value naturally. 3 EoE cards
+            // parity-aligned: Banishing Light, Hardlight Containment,
+            // Seam Rip (the last via the ``WithMaxMvUntilLeaves``
+            // sibling arm below — sibling closure same shape).
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
@@ -11274,7 +11284,12 @@ fn apply_effect(
             let mut obj = bf_mut.remove(pos);
             obj.zone = ZONE_EXILE;
             obj.tapped = false;
-            obj.summoning_sick = true; // r28 CE1 universal-true default
+            // **RRR Pin 1 sibling closure (12th Rust slice).** Same
+            // drop as the bare ``ExileOpponentsNonlandPermanentUntilLeaves``
+            // arm above — preserve pre-exile ``summoning_sick`` via
+            // the bare ``remove`` -> ``push`` sequence. Seam Rip uses
+            // this ``max_mv``-rider variant; the closure aligns it
+            // with Banishing Light's bare-shape sibling.
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;

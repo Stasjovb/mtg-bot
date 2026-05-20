@@ -1,9 +1,23 @@
 """Divergence-pin tests: batch RRR (probe-batch-rrr, round 22).
 
-Each test is named ``test_cross_engine_real_eoe_<slug>_*_divergence_pin``
-and ASSERTS the CURRENT divergent behavior rather than parity.  The
-PROBED-tier detector excludes ``*_divergence_pin`` functions, so these
-tests grow the test surface without touching the PROBED metric.
+**Pin 1 CLOSED by the 12th Rust slice** (``feature/rust-slice-12-
+controlled-slot-aware-rrr-pin1``).  The
+``ExileOpponentsNonlandPermanentUntilLeaves`` summoning_sick stamp
+has been dropped at both the bare arm AND the ``WithMaxMv`` rider
+sibling -- the bf->exile transition now preserves the pre-exile
+value naturally, matching Python's ``move_off_battlefield``
+semantics (3 EoE cards unblocked: Banishing Light, Hardlight
+Containment, Seam Rip).  Pin 1's test is now
+``..._summoning_sick_stamp_FIXED_parity`` with the sentinel
+assertion inverted (stamp absent rather than present).
+
+**Pins 2 and 3 remain OPEN** (still ``..._divergence_pin``).
+
+Each remaining pin test is named ``test_cross_engine_real_eoe_<slug>
+_*_divergence_pin`` and ASSERTS the CURRENT divergent behavior
+rather than parity.  The PROBED-tier detector excludes
+``*_divergence_pin`` functions, so these tests grow the test surface
+without touching the PROBED metric.
 
 This batch is a single-family pin set: three closely-related
 divergences in the Rust ``state_ops_resolve.rs`` zone-change reset
@@ -361,48 +375,42 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_exile_opponents_nonland_permanent_until_leaves_summoning_sick_stamp_divergence_pin():
-    """Pin the Rust exile-bf-leave ``summoning_sick = true`` stamp.
+def test_cross_engine_real_eoe_exile_opponents_nonland_permanent_until_leaves_summoning_sick_stamp_FIXED_parity():
+    """Assert the Rust exile-bf-leave summoning_sick stamp has been
+    REMOVED (RRR Pin 1 closure -- 12th Rust slice).
 
-    Bug location (Rust):
-      ``rust/src/state_ops_resolve.rs:10965`` -- the
-      ``Effect::ExileOpponentsNonlandPermanentUntilLeaves`` resolve
-      arm hardcodes ``obj.summoning_sick = true`` after bf-removal
-      and before the exile push.  Comment cites "r28 CE1 universal-
-      true default" -- but the CE13 closure (2026-05-12) standardised
-      that Rust LTB arms PRESERVE summoning_sick to match Python's
-      ``move_off_battlefield`` semantics.  This Effect arm was missed
-      by CE13.
+    Fixed by: 12th Rust slice (``feature/rust-slice-12-controlled-
+    slot-aware-rrr-pin1``). The CE13 closure (2026-05-12)
+    standardised Rust LTB arms to PRESERVE summoning_sick on bf-exit
+    (matching Python's ``move_off_battlefield`` which never touches
+    the field -- ``turn.py:141-315``).  CE13 missed the
+    ``ExileOpponentsNonlandPermanentUntilLeaves`` arm AND its
+    ``WithMaxMv`` sibling.  Slice 12 dropped the explicit
+    ``obj.summoning_sick = true`` stamp at the bare arm
+    (state_ops_resolve.rs ~:11173) AND its ``WithMaxMv`` rider
+    sibling (~:11288) -- both Effect arms now preserve the pre-exile
+    summoning_sick value naturally via the bare ``remove`` -> ``push``
+    sequence.
 
-    Bug location (Python -- the correct behavior):
+    Bug location (Python -- the correct behavior the Rust arm now
+    matches):
       ``src/mtg_bot/effects/generic/exile.py:638-644`` --
       ``ExileOpponentsNonlandPermanentUntilLeaves.resolve`` calls
       ``move_off_battlefield(state, obj, destination="exile")``.
-      ``move_off_battlefield`` (``src/mtg_bot/turn.py:141-315``)
-      clears combat state but NEVER touches
+      ``move_off_battlefield`` clears combat state but NEVER touches
       ``obj.summoning_sick`` -- the pre-exile value persists.
 
-    Probe shape:
-      1. Assert the Python Effect class
-         ``ExileOpponentsNonlandPermanentUntilLeaves`` exists and is
-         a frozen dataclass with field ``max_mv`` (default 0).
-      2. Assert the Python ``move_off_battlefield`` function exists
-         and inspect its source to confirm it does NOT contain any
-         ``summoning_sick = `` assignment.
-      3. Assert the Python ``OwnerPutsTargetArtifactOrCreatureOnTop
-         OrBottomOfLibrary.resolve`` (Pin 2's class) follows the
-         same preserve-semantics (no ``summoning_sick = `` in its
-         inline housekeeping block).  Family-level invariant.
-      4. Sentinel: the Rust source file contains the explicit
-         ``obj.summoning_sick = true`` line inside the exile arm
-         (read the file directly).  If that line is REMOVED, the
-         pin should fail and be flipped to ``_FIXED_parity``.
-
-    Closure indicator:
-      Once ``rust/src/state_ops_resolve.rs:10965`` no longer
-      contains ``obj.summoning_sick = true``, this pin should be
-      renamed ``_FIXED_parity`` and its sentinel assertion
-      inverted to "the explicit stamp has been removed".
+    Closure shape (post-12th-slice):
+      1. Python Effect class structure UNCHANGED (still a frozen
+         dataclass with ``max_mv`` rider).
+      2. Python's ``move_off_battlefield`` still does NOT assign to
+         ``summoning_sick`` (the post-CE13 LTB preserve-semantics
+         invariant).
+      3. Python's resolve methods still delegate to
+         ``move_off_battlefield`` (no inline summoning_sick stamp).
+      4. **Sentinel inverted:** the Rust source's bare arm body now
+         does NOT contain ``obj.summoning_sick = true``.  3 EoE cards
+         unblocked: Banishing Light, Hardlight Containment, Seam Rip.
     """
     from mtg_bot.effects.generic.exile import (
         ExileOpponentsNonlandPermanentUntilLeaves,
@@ -469,75 +477,71 @@ def test_cross_engine_real_eoe_exile_opponents_nonland_permanent_until_leaves_su
         "convention changed -- update this pin."
     )
 
-    # 4. Sentinel: the Rust source file at
-    #    rust/src/state_ops_resolve.rs contains the explicit
-    #    'obj.summoning_sick = true' stamp inside the exile arm.  We
-    #    locate the file relative to the Python source tree's repo
-    #    root (parents[N] walk from this test file).
+    # 4. Sentinel (INVERTED post-12th-slice): the Rust source's bare
+    #    arm body no longer contains the explicit
+    #    'obj.summoning_sick = true' stamp.  The pre-exile value now
+    #    persists naturally through bf->exile.
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]  # tests/.. = repo root
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
     assert rust_resolve_path.exists(), (
         f"Rust source file should exist at {rust_resolve_path!r}.  "
-        "If the file moved, update this pin's path resolution."
+        "If the file moved, update this test's path resolution."
     )
     rust_src = rust_resolve_path.read_text(encoding="utf-8")
-    # The arm signature.
     arm_sig = "Effect::ExileOpponentsNonlandPermanentUntilLeaves"
     assert arm_sig in rust_src, (
         f"Rust source should contain the arm signature "
-        f"{arm_sig!r}.  If the variant was renamed, update this pin."
+        f"{arm_sig!r}.  If the variant was renamed, update this test."
     )
-    # Locate the arm's body and assert the stamp is present.  We
-    # search for the specific stamping line that is the divergence.
-    # The arm contains 'obj.summoning_sick = true' verbatim; if the
-    # stamp is removed by a Rust slice closure, this assertion will
-    # fail and surface the pin as ready to flip to _FIXED_parity.
+    # Locate the arm's body and assert the stamp has been REMOVED.
     arm_start = rust_src.find(arm_sig)
     assert arm_start >= 0
-    # Bound the search to the arm's body: from the signature to the
-    # next top-level 'Effect::' match (rough but sufficient -- we
-    # only need the stamp inside the immediate arm, not the sibling
-    # max_mv-rider arm a few hundred lines later).
     next_arm_start = rust_src.find("\n        Effect::", arm_start + 1)
     if next_arm_start < 0:
         next_arm_start = len(rust_src)
     arm_body = rust_src[arm_start:next_arm_start]
-    assert "obj.summoning_sick = true" in arm_body, (
-        "Pin sentinel: rust/src/state_ops_resolve.rs's "
+    assert "obj.summoning_sick = true" not in arm_body, (
+        "Post-12th-slice invariant: rust/src/state_ops_resolve.rs's "
         "Effect::ExileOpponentsNonlandPermanentUntilLeaves arm should "
-        "still contain the unconditional 'obj.summoning_sick = true' "
-        "stamp (this is the divergence Pin 1 locks in).  If this "
-        "assertion fails, the Rust stamp has been removed -- the "
-        "divergence is CLOSED; rename this test to "
-        "_FIXED_parity and invert the assertion.  Body excerpt:\n"
+        "NO LONGER contain the unconditional 'obj.summoning_sick = "
+        "true' stamp.  If this assertion fails, the stamp has been "
+        "reintroduced -- the divergence is REOPENED.  Body excerpt:\n"
         f"{arm_body[:500]!r}..."
     )
+    # Family invariant: the WithMaxMv sibling arm (Seam Rip) also has
+    # the stamp dropped in slice 12.
+    sibling_sig = "Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves"
+    if sibling_sig in rust_src:
+        sib_start = rust_src.find(sibling_sig)
+        sib_next = rust_src.find("\n        Effect::", sib_start + 1)
+        if sib_next < 0:
+            sib_next = len(rust_src)
+        sib_body = rust_src[sib_start:sib_next]
+        assert "obj.summoning_sick = true" not in sib_body, (
+            "Post-12th-slice sibling invariant: the "
+            "WithMaxMvUntilLeaves rider arm (Seam Rip) should also have "
+            "the stamp dropped.  Body excerpt:\n"
+            f"{sib_body[:500]!r}..."
+        )
 
-    # 5. EoE cards affected by this gap.
-    affected_eoe_cards = [
+    # 5. EoE cards unblocked by this closure.
+    unblocked_eoe_cards = [
         "Banishing Light",
         # {2}{W} Enchantment: "When this enchantment enters, exile target
         # nonland permanent an opponent controls until this enchantment
-        # leaves the battlefield."
-        # Effect: ExileOpponentsNonlandPermanentUntilLeaves() (bare).
-        # Already PROBED via name/count-based assertions in
-        # tests/test_parity_smoke.py (the divergence didn't surface in
-        # that probe shape because no compare_fields call inspected the
-        # exiled object's summoning_sick slot).
+        # leaves the battlefield."  Effect:
+        # ExileOpponentsNonlandPermanentUntilLeaves() (bare).
         "Hardlight Containment",
-        # {2}{W} Enchantment: ETB-only variant of the same effect
-        # (opponents_only rider).
+        # {2}{W} Enchantment: ETB-only variant of the same effect.
         "Seam Rip",
         # {W} Enchantment with max_mv=2 rider -- the sibling Rust arm
-        # at state_ops_resolve.rs ~10996+ has the same
-        # 'obj.summoning_sick = true' stamp.  Sibling closure scope.
+        # at state_ops_resolve.rs has the matching stamp drop.
     ]
-    assert len(affected_eoe_cards) == 3, (
-        "The exile-bf-leave summoning_sick-stamp divergence affects 3 EoE "
-        "cards (Banishing Light, Hardlight Containment, Seam Rip).  "
-        f"Enumerated list has {len(affected_eoe_cards)} entries.  "
-        "Update the list if new cards are found or the count changes."
+    assert len(unblocked_eoe_cards) == 3, (
+        "The exile-bf-leave summoning_sick-stamp closure unblocks 3 "
+        "EoE cards (Banishing Light, Hardlight Containment, Seam Rip).  "
+        f"Enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 

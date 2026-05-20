@@ -8990,7 +8990,23 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         # source_controller directly on the event subject. Same
         # observable semantics on single-subject events (ENTERS /
         # DIES / ATTACKS).
-        return Controlled(by=YOU, subject=None)
+        #
+        # **Slot-aware variant (12th Rust slice — Closure A).** When
+        # the dict carries an explicit ``"subject"`` field (e.g.
+        # ``"controller"``), thread it through to
+        # ``Controlled(by=YOU, subject=<slot>)``. Required for
+        # multi-subject events like IS_CAST whose ``EVENT_SUBJECTS``
+        # is ``("spell", "controller")`` — Python's
+        # ``_resolve_subject(subjects, None)`` returns ``None`` when
+        # ``len(subjects) == 2``, so a ``subject=None``
+        # ``Controlled(YOU)`` silently evaluates False. The 4 EoE
+        # "your second spell each turn" cards (Cosmogrand Zenith,
+        # Sunstar Lightsmith, Illvoi Operative, Station Monitor) all
+        # carry ``Controlled(YOU, subject="controller")`` so they
+        # bind to the casting-player slot. Default remains ``None``
+        # for single-subject back-compat (ENTERS / DIES / ATTACKS).
+        slot = pred_dict.get("subject")
+        return Controlled(by=YOU, subject=slot)
     if kind == "controlled_by_opponent":
         # **MMM Pin 3 (11th Rust slice) — controlled_by_opponent.**
         # Python's ``Controlled(by=OPPONENT, subject=None)`` — the
@@ -9003,8 +9019,15 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         # subject. Same observable semantics on single-subject
         # events whose subject carries a controller (DISCARDS_CARD,
         # IS_CAST, etc.).
+        #
+        # **Slot-aware variant (12th Rust slice — Closure A).**
+        # Symmetric with ``controlled_by_you``: an optional
+        # ``"subject"`` field threads through to
+        # ``Controlled(by=OPPONENT, subject=<slot>)``. Default is
+        # None for single-subject back-compat.
         from mtg_bot.effects.predicates import OPPONENT
-        return Controlled(by=OPPONENT, subject=None)
+        slot = pred_dict.get("subject")
+        return Controlled(by=OPPONENT, subject=slot)
     if kind == "subject_has_subtype":
         # Subtypes substrate Slice 2 — Python's
         # ``Subject(None, HasSubtype("Kavu"))`` from
