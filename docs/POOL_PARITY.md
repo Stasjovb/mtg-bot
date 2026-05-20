@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **314 / 475 EoE cards (66.1%) are byte-equal at the Effect+bridge level**; of those, **203 (42.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 111 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **314 / 475 EoE cards (66.1%) are byte-equal at the Effect+bridge level**; of those, **205 (43.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 109 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **161 (33.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 203 | 42.7% |
-| Effect+bridge covered (not individually probed) | 111 | 23.4% |
+| PROBED byte-equal | 205 | 43.2% |
+| Effect+bridge covered (not individually probed) | 109 | 22.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -144,6 +144,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Interceptor Mechan
 - Intrepid Tenderfoot
 - Inventors' Fair
+- Jump Scare
 - Kav Landseeker
 - Kavaron Harrier
 - Kavaron Skywarden
@@ -217,6 +218,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Starport Security
 - Strip Mine
 - Sunset Saboteur
+- Sunstar Chaplain
 - Sunstar Expansionist
 - Susurian Dirgecraft
 - Susurian Voidborn
