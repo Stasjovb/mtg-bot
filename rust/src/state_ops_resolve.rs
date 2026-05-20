@@ -12003,6 +12003,150 @@ fn apply_effect(
             // priority cycle).
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **19th Rust slice (honest-stop substrate landing) —
+        // Meltstrider's Resolve Aura ETB "fight".** "When this Aura
+        // enters, enchanted creature fights up to one target creature
+        // an opponent controls." Mirrors Python's
+        // `EnchantedCreatureFightsTargetEffect.resolve`
+        // (`effects/bespoke.py:538-575`).
+        //
+        // **HONEST-STOP semantics.** The Aura's source-side fighter is
+        // its `attached_to` host. Today Rust does NOT set `attached_to`
+        // when an Aura spell resolves (see docs/AURA_ATTACHMENT_
+        // SUBSTRATE_PLAN.md §2 — the largest §2-declined Rust
+        // multi-round substrate). Every Rust Aura has
+        // `attached_to = None` at this resolve-arm's entry today, so
+        // this arm fizzles silently — which is BYTE-EQUAL with Python's
+        // behavior when `attached_to is None` (bespoke.py:546-548:
+        // `if aura is None or aura.attached_to is None: return`). Once
+        // the Aura attach substrate lands (Phases 1-2 of the substrate
+        // plan), the hot-path branch below (both-fighters-present)
+        // becomes live and the full simultaneous-damage logic exercises.
+        //
+        // **Resolve flow (mirrors bespoke.py:541-575 step-for-step).**
+        //   1. Locate source object across all zones (Aura may still be
+        //      on bf as its ETB trigger fires).
+        //   2. Read source.attached_to. None → silent fizzle (honest-
+        //      stop; byte-equal with Python).
+        //   3. Resolve the enchanted creature on its controller's bf by
+        //      id. Not found (already left bf) → silent fizzle (CR
+        //      701.12c).
+        //   4. Pick the opponent-side target — FIRST creature on the
+        //      OPPONENT's bf (deterministic; mirrors
+        //      `FightTargetCreatureWithTargetCreature`'s opponent scan).
+        //      No opponent creature → silent fizzle ("up to one" =
+        //      legal 0-pick).
+        //   5. Compute BOTH effective powers BEFORE applying damage
+        //      (CR 701.12 simultaneous damage event). Apply via
+        //      `apply_damage_marker` + dispatch DEALT_DAMAGE for each
+        //      receiver — mirrors the Fight arm's machinery.
+        Effect::EnchantedCreatureFightsTarget => {
+            // 1. Locate source — scan all zones (mirrors Fight arm).
+            let mut src_zone_controller: Option<u8> = None;
+            let mut src_attached_to: Option<u32> = None;
+            'find_src: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_zone_controller = Some(obj.controller);
+                        src_attached_to = obj.attached_to;
+                        break 'find_src;
+                    }
+                }
+            }
+            // Source untrackable → silent fizzle (defensive — the
+            // ETB-trigger resolve path should keep the source findable
+            // on bf at this point).
+            let Some(controller) = src_zone_controller else {
+                return Ok(());
+            };
+            // 2. HONEST-STOP branch — Aura `attached_to` is None today
+            // because Rust has no Aura attach substrate. Python takes
+            // the same fizzle in this case (bespoke.py:546-548), so
+            // cross-engine state stays byte-equal. When the attach
+            // substrate lands (docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md
+            // Phases 1-2), `attached_to` becomes `Some(host_id)` and
+            // the code below the early-return runs.
+            //
+            // Helper: source-substitution for Aura `attached_to`. This
+            // is the substrate primitive future Aura-shape Effect arms
+            // (Pain for All ETB + damage echo — the substrate-sharing
+            // pattern in docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md §)
+            // reuse to route "source = the attached creature" without
+            // duplicating the lookup. Inlined here for the first
+            // consumer; lift to a helper once the second consumer
+            // lands (the Pain for All ETB slice).
+            let Some(enchanted_id) = src_attached_to else {
+                return Ok(()); // honest-stop fizzle
+            };
+            // 3. Resolve the enchanted creature on its controller's
+            // bf by id. The Aura's host is on the source-controller's
+            // bf (an Aura attaches to a permanent its controller can
+            // target; multi-player control changes are out of scope
+            // for this honest-stop slice — when the attach substrate
+            // lands the host's controller is read at resolve via the
+            // same all-zone scan).
+            let cidx = controller as usize;
+            let enchanted_present = state.players[cidx]
+                .battlefield
+                .iter()
+                .any(|o| o.id == enchanted_id);
+            if !enchanted_present {
+                return Ok(()); // host left bf → CR 701.12c fizzle
+            }
+            // 4. Pick the opponent-side target — FIRST creature on
+            // the OPPONENT's bf. Mirrors FightTargetCreatureWithTarget
+            // Creature's opponent-side scan.
+            let opponent: u8 = 1 - controller;
+            let oidx = opponent as usize;
+            let registry = &state.registry;
+            let opponent_fighter_id: Option<u32> = state.players[oidx]
+                .battlefield
+                .iter()
+                .find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                });
+            // "Up to one" — no opponent creature → legal 0-pick + the
+            // spell resolves with no fight applied (Python parity:
+            // bespoke.py:544 `if not targets: return`).
+            let Some(opp_id) = opponent_fighter_id else {
+                return Ok(());
+            };
+            // 5. Compute BOTH effective powers BEFORE applying any
+            // damage (CR 701.12 simultaneous-damage event). Mirrors
+            // Fight arm's same-shape read.
+            let enchanted_power = read_battlefield_creature_power(state, enchanted_id);
+            let opp_power = read_battlefield_creature_power(state, opp_id);
+            // Apply both damages. A fighter that takes lethal in this
+            // exchange still dealt its damage first because we read
+            // both powers BEFORE either deal_damage call (CR 701.12).
+            if enchanted_power > 0 {
+                apply_damage_marker(state, opp_id, enchanted_power);
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DealtDamage,
+                    opp_id,
+                )?;
+            }
+            if opp_power > 0 {
+                apply_damage_marker(state, enchanted_id, opp_power);
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DealtDamage,
+                    enchanted_id,
+                )?;
+            }
+        }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
         // Void ETB.** "Exile up to one target instant or sorcery card
         // with mana value 2 or less from your graveyard. Copy it. You
