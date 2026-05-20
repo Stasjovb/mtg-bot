@@ -320,6 +320,28 @@ PROBE_MODULES: tuple[Path, ...] = (
     # naming convention -- the alphabetic 3-letter naming is
     # exhausted by this batch.
     REPO_ROOT / "tests" / "test_probe_remaining_zzz.py",
+    # Probe batch AAAA (round 27 covered-but-unprobed) — the FIRST
+    # 4-letter probe batch, established post-ZZZ alphabetic exhaustion
+    # per the ZZZ docstring naming-convention note.  Two cards from
+    # the covered tier upgraded to PROBED via the same parse + bridge
+    # round-trip + Python-side resolve idiom DDD slice 17 / YYY / ZZZ
+    # established:
+    #   * Cryoshatter (Aura with BECOMES_TAPPED + DEALT_DAMAGE host-
+    #     event triggers -> DestroyEnchantedPermanent; FIRST Aura-
+    #     carrier with the DestroyEnchantedPermanent unit-variant
+    #     to land a credited _parity probe -- complements ZZZ's
+    #     Stay Hidden / Stay Silent Aura ETB + TapEnchantedPermanent
+    #     by pinning DESTROY-mutation + host-event-triggered firing).
+    #   * Meltstrider's Gear (Equipment ENTERS + IsSelf ->
+    #     AttachToTargetCreatureYouControl bare, no UEOT keyword
+    #     rider; FIRST Equipment-carrier ETB with the bare attach
+    #     to land a credited _parity probe -- the bridge docstring
+    #     at cross_engine.py:3367-3372 explicitly cited Meltstrider's
+    #     Gear as the cleanest real-EoE consumer of the bare shape).
+    # Subsequent 4-letter batches follow BBBB / CCCC / ... per the
+    # established alphabetic cadence, now widened by one letter to
+    # give the campaign another 26 batches of room.
+    REPO_ROOT / "tests" / "test_probe_remaining_aaaa.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
