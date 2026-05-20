@@ -1308,6 +1308,40 @@ pub(crate) fn drain_pending_leaves_dispatches(state: &mut GameState) -> PyResult
     Ok(())
 }
 
+/// **Slice 14 — IS_SACRIFICED sibling of
+/// `drain_pending_leaves_dispatches`.**
+/// Drains `state.pending_is_sacrificed_dispatches` in FIFO order,
+/// dispatching `Event::IsSacrificed` for each queued id. Called by
+/// the surrounding resolver AFTER the resolving sacrifice spell's
+/// stack pop, so the IS_SACRIFICED trigger lands on the now-empty
+/// top of stack rather than above the still-present resolving spell
+/// (which would cause the spell's epilogue `stack.pop()` to consume
+/// the trigger).
+///
+/// Mirrors Python's `turn.sacrifice` semantics where
+/// `dispatch_event(state, Event.IS_SACRIFICED, ...)` fires AFTER the
+/// spell's resolve has returned (trigger lands at the next SBA +
+/// priority cycle, original sacrifice spell no longer on the stack).
+///
+/// Re-entrant fills: an IS_SACRIFICED trigger whose resolution causes
+/// another sacrifice re-enters into the queue; the outer loop drains
+/// FIFO until the queue is empty.
+pub(crate) fn drain_pending_is_sacrificed_dispatches(
+    state: &mut GameState,
+) -> PyResult<()> {
+    loop {
+        let drained: Vec<u32> =
+            std::mem::take(&mut state.pending_is_sacrificed_dispatches);
+        if drained.is_empty() {
+            break;
+        }
+        for sac_id in drained {
+            dispatch_event(state, Event::IsSacrificed, sac_id)?;
+        }
+    }
+    Ok(())
+}
+
 /// Read effective power of a battlefield creature (printed +
 /// UEOT power-bonus modifiers, sized off the SetBasePT / become-
 /// land-creature overrides per CR 613.4 layer 7b/7c). Returns 0
@@ -2590,16 +2624,22 @@ fn apply_effect(
             // id is queued unconditionally; the is_token gate lives
             // in drain_pending_token_cease (CR 111.7 / 704.5d).
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
-            // Round-16 RR Pin 2: dispatch IS_SACRIFICED with the
-            // sacrificed permanent's id as subject. The object has
-            // already been moved to the graveyard, so dispatch_event
-            // uses the IS_SACRIFICED extra-observer walk (parallels
-            // DIES) to include the sacrificed object in the observer
-            // set even though it is no longer on the battlefield.
-            // Mirrors Python's ``dispatch_event(state,
-            // Event.IS_SACRIFICED, label="sacrifice",
-            // extra_observers=[obj], obj=obj)`` in ``turn.sacrifice``.
-            dispatch_event(state, crate::cards::Event::IsSacrificed, leaving_obj_id)?;
+            // Slice 14 (TTT Pin 1): defer IS_SACRIFICED dispatch via
+            // `pending_is_sacrificed_dispatches`. Mirrors the LEAVES
+            // sibling push above. The direct `dispatch_event` call
+            // this replaced fired DURING the sacrifice spell's
+            // resolve while the spell was still top-of-stack; the
+            // dispatcher pushed the IS_SACRIFICED trigger above the
+            // resolving spell and the spell's epilogue `stack.pop()`
+            // consumed the trigger before it could resolve. The
+            // queued id is drained later by
+            // `drain_pending_is_sacrificed_dispatches` AFTER the
+            // resolving slot is popped — mirrors Python's
+            // `turn.sacrifice` where the IS_SACRIFICED dispatch fires
+            // AFTER the spell's resolve has returned.
+            state
+                .pending_is_sacrificed_dispatches
+                .push(leaving_obj_id);
             }
         },
         // Round-15: AddCounters. Routes through round-2's signed net-
@@ -3288,6 +3328,22 @@ fn apply_effect(
             // intermixing correctly with timestamps from prior /
             // subsequent ETBs.
             let bf_etb_base = state.next_etb_timestamp;
+            // Slice 14 (TTT Pin 2 alignment with the Python fix at
+            // actions.py:2993): summoning sickness is a creature-only
+            // property per CR 302.1 + 612.6. Mirror `move_source_post_
+            // resolve`'s `&& creature` gate -- non-creature tokens
+            // (Lander artifact, Treasure, Food, Clue, etc.) enter with
+            // summoning_sick=false; creature tokens (Robot, Drone,
+            // Human Soldier, ...) still enter with summoning_sick=true.
+            // Read is_creature from the token printing's card_types
+            // (registry lookup; we already confirmed presence above).
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|printing| {
+                    printing.card_types.iter().any(|t| t == "Creature")
+                })
+                .unwrap_or(false);
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
@@ -3298,7 +3354,7 @@ fn apply_effect(
                     controller: active,
                     zone: ZONE_BATTLEFIELD,
                     tapped: false,
-                    summoning_sick: true,
+                    summoning_sick: token_is_creature,
                     damage: 0,
                     counters: 0,
                     charge_counters: 0,
@@ -3425,6 +3481,16 @@ fn apply_effect(
             for _ in 0..total_tokens {
                 fresh_ids.push(crate::state::reserve_object_id(state));
             }
+            // Slice 14 (TTT Pin 2 alignment) -- read the token printing's
+            // is_creature flag for the summoning_sick gate; mirrors the
+            // sister `CreateToken` arm above.
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|printing| {
+                    printing.card_types.iter().any(|t| t == "Creature")
+                })
+                .unwrap_or(false);
             // CE4 closure: stamp each token (across all recipients
             // combined) with a fresh strictly-monotonic etb_timestamp.
             let bf_etb_base = state.next_etb_timestamp;
@@ -3446,7 +3512,7 @@ fn apply_effect(
                         controller: recipient_u8,
                         zone: ZONE_BATTLEFIELD,
                         tapped: false,
-                        summoning_sick: true,
+                        summoning_sick: token_is_creature,
                         damage: 0,
                         counters: 0,
                         charge_counters: 0,
@@ -3550,6 +3616,16 @@ fn apply_effect(
                 token_ids.push(crate::state::reserve_object_id(state));
             }
 
+            // Slice 14 (TTT Pin 2 alignment) -- mirror sister
+            // `CreateToken` arm: non-creature tokens enter with
+            // summoning_sick=false per CR 302.1 + 612.6.
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|printing| {
+                    printing.card_types.iter().any(|t| t == "Creature")
+                })
+                .unwrap_or(false);
             // CE4 closure: stamp each token with a fresh strictly-
             // monotonic etb_timestamp (mirrors the sister arm).
             let bf_etb_base = state.next_etb_timestamp;
@@ -3568,7 +3644,7 @@ fn apply_effect(
                     // warp_exile_pending/warped defaults at this
                     // literal's tail; tokens are never warp-cast.)
                     tapped: true,
-                    summoning_sick: true,
+                    summoning_sick: token_is_creature,
                     damage: 0,
                     counters: 0,
                     charge_counters: 0,
@@ -6449,7 +6525,10 @@ fn apply_effect(
                         controller: recipient,
                         zone: ZONE_BATTLEFIELD,
                         tapped: false,
-                        summoning_sick: true,
+                        // Slice 14 (TTT Pin 2 alignment): Lander is a
+                        // non-creature (Token Artifact); per CR 302.1
+                        // + 612.6 it enters with summoning_sick=false.
+                        summoning_sick: false,
                         damage: 0,
                         counters: 0,
                         charge_counters: 0,
@@ -6609,7 +6688,10 @@ fn apply_effect(
                         controller: recipient,
                         zone: ZONE_BATTLEFIELD,
                         tapped: false,
-                        summoning_sick: true,
+                        // Slice 14 (TTT Pin 2 alignment): Lander is a
+                        // non-creature (Token Artifact); per CR 302.1
+                        // + 612.6 it enters with summoning_sick=false.
+                        summoning_sick: false,
                         damage: 0,
                         counters: 0,
                         charge_counters: 0,
@@ -13191,6 +13273,12 @@ impl GameState {
             // onto the now-empty top, mirroring the spell-path's
             // pop-then-fan-out ordering.
             drain_pending_leaves_dispatches(self)?;
+            // Slice 14 (TTT Pin 1) — drain any IS_SACRIFICED
+            // dispatches a trigger's effect deferred via the
+            // `Effect::Sacrifice` arm. Same defer-after-pop
+            // discipline as the LEAVES sibling. No-op (empty
+            // queue) for every pre-Slice-14 trigger resolution.
+            drain_pending_is_sacrificed_dispatches(self)?;
             // Auto-resolve any pending decisions the trigger effect
             // may have queued (Surveil on ETB, etc.). Matches the
             // spell-path's terminal call below.
@@ -13342,6 +13430,14 @@ impl GameState {
         // the resolving spell pops first, then LEAVES triggers
         // pushed during `apply_effect` land on the now-empty top.
         drain_pending_leaves_dispatches(self)?;
+        // Slice 14 (TTT Pin 1) — drain any IS_SACRIFICED dispatches
+        // the spell's Effect arms deferred via the
+        // `Effect::Sacrifice` arm's
+        // `pending_is_sacrificed_dispatches.push`. Mirrors the LEAVES
+        // sibling — defer-after-pop discipline so the IS_SACRIFICED
+        // trigger lands on the now-empty top of stack, not above the
+        // still-present resolving sacrifice spell.
+        drain_pending_is_sacrificed_dispatches(self)?;
         // Auto-resolve any pending decisions (Round-27 G20 closure).
         // Pre-r27 behavior: Surveil etc. resolved with deterministic
         // "keep all on top". The decision-callback substrate now
@@ -13409,6 +13505,9 @@ impl GameState {
             // Slice 10: drain LEAVES sibling — see the matching
             // comment in `resolve_top_of_stack`'s trigger branch.
             drain_pending_leaves_dispatches(self)?;
+            // Slice 14 (TTT Pin 1): drain IS_SACRIFICED sibling —
+            // see matching comment in `resolve_top_of_stack`.
+            drain_pending_is_sacrificed_dispatches(self)?;
             return Ok(Some(stack_item_to_dict(py, &popped)?));
         }
         let effects: Vec<Effect> = match find_source_printing_id(self, top.source_obj_id)
@@ -13482,6 +13581,9 @@ impl GameState {
         // Slice 10: drain LEAVES sibling — see the matching
         // comment in `resolve_top_of_stack`'s spell branch.
         drain_pending_leaves_dispatches(self)?;
+        // Slice 14 (TTT Pin 1): drain IS_SACRIFICED sibling — see
+        // matching comment in `resolve_top_of_stack`'s spell branch.
+        drain_pending_is_sacrificed_dispatches(self)?;
         Ok(Some(stack_item_to_dict(py, &popped)?))
     }
 

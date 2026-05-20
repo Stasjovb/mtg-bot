@@ -1914,6 +1914,28 @@ pub struct GameState {
     /// fingerprint: the queue is empty across stack resolution
     /// boundaries.
     pub pending_leaves_dispatches: Vec<u32>,
+    /// **IS_SACRIFICED substrate (Slice 14) — deferred dispatch queue.**
+    /// Mirror of `pending_leaves_dispatches` for the `IS_SACRIFICED`
+    /// event. The `Effect::Sacrifice` arm at
+    /// `state_ops_resolve.rs::apply_effect` pushes the sacrificed
+    /// permanent's id here; the natural caller drains via
+    /// `drain_pending_is_sacrificed_dispatches` AFTER the resolving
+    /// spell's stack pop. Without this defer-after-pop discipline a
+    /// direct `dispatch_event` during the sacrifice spell's apply
+    /// would push the IS_SACRIFICED trigger ABOVE the still-present
+    /// resolving spell, and the spell's epilogue `stack.pop()` would
+    /// consume the trigger before it could resolve.
+    ///
+    /// Mirrors Python's `turn.sacrifice` semantics where
+    /// `dispatch_event(Event.IS_SACRIFICED, ...)` fires AFTER the
+    /// spell's resolve has returned (the trigger lands at the next
+    /// SBA + priority cycle, with the original sacrifice spell no
+    /// longer on the stack).
+    ///
+    /// Like `pending_leaves_dispatches`, not serialized into the
+    /// fingerprint: the queue is empty across stack resolution
+    /// boundaries.
+    pub pending_is_sacrificed_dispatches: Vec<u32>,
     /// **Round-55 token-cease-to-exist queue (CR 111.7 / 704.5d).**
     /// Sibling of `pending_dies_dispatches` / `pending_leaves_
     /// dispatches`. `mark_left_battlefield_if_nonland` (the one
@@ -2120,6 +2142,7 @@ impl Clone for GameState {
             pending_etb_dispatches: self.pending_etb_dispatches.clone(),
             pending_dies_dispatches: self.pending_dies_dispatches.clone(),
             pending_leaves_dispatches: self.pending_leaves_dispatches.clone(),
+            pending_is_sacrificed_dispatches: self.pending_is_sacrificed_dispatches.clone(),
             pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
             current_resolve_payload_target_id_2: self.current_resolve_payload_target_id_2,
@@ -2702,6 +2725,10 @@ pub fn make_synthetic_state(
         // (move_object, apply_sbas, etc.) after the primitive
         // returns.
         pending_leaves_dispatches: Vec::new(),
+        // Slice 14: empty deferred IS_SACRIFICED queue at
+        // construction; drained by the surrounding resolver after
+        // the resolving sacrifice spell's stack pop.
+        pending_is_sacrificed_dispatches: Vec::new(),
         // Round-55: empty token-cease queue at construction; filled
         // by `mark_left_battlefield_if_nonland` on a token bf-exit,
         // drained at the tail of `drain_pending_leaves_dispatches`

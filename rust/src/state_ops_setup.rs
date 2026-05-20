@@ -443,6 +443,9 @@ pub fn make_state(
         // ETB-trigger Slice 8: empty deferred-LEAVES queue at
         // construction.
         pending_leaves_dispatches: Vec::new(),
+        // Slice 14: empty deferred IS_SACRIFICED queue at
+        // construction.
+        pending_is_sacrificed_dispatches: Vec::new(),
         // Round-55: empty token-cease queue at construction.
         pending_token_cease: Vec::new(),
         // CE20 follow-up Slice 4: transient payload-target slot;
