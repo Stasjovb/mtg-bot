@@ -34,18 +34,30 @@ Pain for All's residual scope stays **medium** (NOT "small") — the
 substrate-sharing flip only fires once Phase 1 of the substrate plan
 ships.
 
-**Round-77 update (2026-05-20): Phase 1 first-deliverable LANDED
-(PARTIAL).** Steps 1+2 partial (CardDef aura fields + bridge
-emission/materialization) and step 7 partial (the loader admit
-predicate `_printing_is_bridge_simple_aura` — defined + tested + NOT
-yet OR'd into the 5-disjunct) shipped on the `feature/aura-substrate-
-phase-1` slice. Steps 3-6 (Rust `parse_printing` aura-key parse +
-cast-time enchant-target decision + Rust aura-resolution arm +
-CR-704.5n SBA + bidirectional bridge arms) are honest-stopped. **Pain
-for All's scope estimate is UNCHANGED** — the substrate-sharing
-medium→small flip still requires the Rust Phase-1 steps to land
-(Pain for All sits at Phase 3 of the substrate plan, ≥2 rounds out
-even after Phase 1 closes).
+**Round-78 update (2026-05-20): AURA ATTACH SUBSTRATE PHASE 1
+COMPLETE.** STEPs 1+2+3+4+5+6+7 all LANDED on main: CardDef aura
+fields, bridge emission/materialization, Rust `parse_printing`
+aura-key parse arm, cast-time enchant-target decision (`cast_aura`
+primitive + `PendingDecision::EnchantTargetChoice`), Rust
+Aura-resolution attach arm (`move_aura_post_resolve` +
+layer-7/-6 grants), CR-704.5n SBA host-less / illegal-host Aura
+bury, bidirectional bridge round-trip (`attached_to` + `aura_*`
+printing fields), and the STEP-7 loader OR-in
+(`_printing_is_bridge_simple_aura` is now the 6th disjunct of
+`_filter_deck_to_bridge_supported`). The S1 substrate (static
+P/T-or-keyword Aura) is wired end-to-end through both engines.
+**Live-EoE admit delta of Phase 1 is ZERO** (every shipping S1
+carrier — Frantic Strength, Shardmage's Rescue — carries the
+non-`_SAFE_KEYWORDS` `flash` keyword, the predicate's documented
+decline reason); the value is the substrate. **Pain for All sits at
+Phase 3** (S4 — triggered-effect Auras on `attached_to` damage
+events) of the substrate plan. With Phase 1 closed, the
+substrate-sharing scope estimate moves from "Phase 1 not yet
+shipped" to "Phase 1 LANDED; Phase 2 (S2 control-changing — Tractor
+Beam) and Phase 3 (S4 triggered — Pain for All) are the next two
+hops"; the Pain-for-All medium→small flip still requires Phases
+2-3 to ship. **Tractor Beam** sits at Phase 2 of the substrate
+plan (S2 `attached_grants_control` — Duskmourn's Domination shape).
 
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +

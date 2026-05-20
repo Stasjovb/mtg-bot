@@ -442,10 +442,17 @@ def test_python_built_hash_recipe_matches_native_fingerprint_for_aura_state():
 
 
 def test_step_6_does_not_admit_any_aura_to_the_bench():
-    """STEP 6 lands the bridge round-trip plumbing only — it does NOT
-    OR ``_printing_is_bridge_simple_aura`` into the loader's 5-disjunct.
-    That's STEP 7. This pin guards against an accidental admit-widen
-    while STEP 6 is in flight."""
+    """Originally a STEP-6 honest-stop sentinel: STEP 6 landed the
+    bridge round-trip plumbing only and did NOT OR
+    ``_printing_is_bridge_simple_aura`` into the loader. STEP 7
+    (round-78) closed that gap, but Frantic Strength still doesn't
+    admit because the predicate's §2 teeth decline it (the printing
+    carries the non-``_SAFE_KEYWORDS`` ``flash`` keyword — the
+    documented decline reason). So this pin still passes, now
+    measuring the predicate's §2 correctness rather than the missing
+    OR-in. See ``test_aura_substrate_phase1.py``::
+    ``test_loader_admits_aura_simple_shape`` for the positive STEP-7
+    wire-up pin."""
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
