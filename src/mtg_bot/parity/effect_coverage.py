@@ -245,6 +245,23 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     "DestroyTargetCreatureThenDrawIfUndamaged": "DestroyTargetCreature",
     "PumpTargetCreatureUntilEotGrantDiesReturnTapped":
         "PumpTargetCreatureUntilEOT",
+    # 22nd Rust slice (Sothera + Requiem honest-stop) -- the Rust
+    # variant intentionally carries the ``Requiem`` suffix to mark it
+    # as the Requiem-Monolith-shape grant arm. Rust has no general
+    # layer-6 grant-triggered-ability registry yet (only the narrow
+    # Perigee ``GrantedDiesReturnTapped`` marker exists; see
+    # ``state.rs:299``). The Python class is the general
+    # ``GrantTriggeredAbilityUEOT`` (``effects/generic/grant_keywords
+    # .py:189-251``); the bridge arm reconstructs it from the fixed
+    # Requiem shape (trigger=this_dealt_damage,
+    # effect=DrawCardsAndLoseLifeEqualToResolvingDamage()). The Real
+    # Requiem Monolith printing parses to a Sequence whose first child
+    # IS ``GrantTriggeredAbilityUEOT(ability=...)`` -- verified
+    # round-trip via test_probe_sothera_requiem_downstream.py +
+    # test_requiem_monolith.py. Same precedent as the Faller's Faithful
+    # / Perigee Beckoner overrides above (same-named class does not
+    # exist; bridge round-trips through a real pool-walked class).
+    "GrantTriggeredAbilityUEOTRequiem": "GrantTriggeredAbilityUEOT",
 }
 
 # Rust variants that have NO direct Python counterpart in the current

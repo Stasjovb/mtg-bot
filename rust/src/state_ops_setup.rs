@@ -222,6 +222,7 @@ fn push_object(
         // hand/library/starting zones; nothing is warp-cast at setup.
         warp_exile_pending: false,
         warped: false,
+        cast_from_exile_with_lightstall_surcharge: false,
     });
     *next_id += 1;
 }

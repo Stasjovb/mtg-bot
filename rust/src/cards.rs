@@ -3541,52 +3541,42 @@ pub enum Effect {
     /// (`effects/generic/discard.py:172-214`) -- the ONLY EoE card with
     /// this shape, 4,371 17lands decks.
     ///
-    /// **HONEST-STOP CLOSURE -- Effect variant + parse + to_pydict +
-    /// bridge + resolve arm (each-opponent-exile portion) ship here;
-    /// the persistent `cast_from_exile_with_lightstall_surcharge` flag
-    /// substrate is DEFERRED.** The Rust resolve arm moves a card from
-    /// each opponent's hand to exile byte-equal to Python's
-    /// `EachOpponentExilesCardFromHandWithCastPermission.resolve`. What
-    /// it does NOT do is stamp the per-card persistent flag on the
-    /// exiled `GameObject` (Python sets
-    /// `card.cast_from_exile_with_lightstall_surcharge = True`; Rust's
-    /// `GameObject` struct has no such field today) and the legal-
-    /// actions / cast-machinery on the Rust side therefore has no
-    /// "you may play this card from exile" surface for that exiled
-    /// card. This is the substrate gap documented in
-    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3 ("Lightstall
-    /// Inquisitor -- 4,371 decks"; large scope 6+ cycles) and is the
-    /// **largest single-card §2 substrate-shaped decline** in the
-    /// BLOCKED-genuinely_missing tier post-slice-18.
+    /// **CLOSURE (cast-from-exile-with-cost-hike substrate).** Slice
+    /// 20 shipped the Effect variant + parse + to_pydict + bridge +
+    /// resolve arm (each-opponent-exile portion). This follow-up slice
+    /// closes the persistent permission substrate end-to-end:
+    ///   1. `GameObject` carries a new `cast_from_exile_with_lightstall
+    ///      _surcharge: bool` field (`state.rs`), stamped `true` on the
+    ///      exiled card by the resolve arm below.
+    ///   2. `state_ops_legal.rs` surfaces a `CastSpell` (non-land) or
+    ///      `PlayLand` (land) action for every exile object with this
+    ///      flag, at sorcery timing, scoped to the card's owner (CR
+    ///      400.7 reset put `controller = owner` at exile time).
+    ///   3. `state_ops_cast.rs::cast_creature` / `cast_spell_noncreature`
+    ///      detect the exile origin, pay `printing.mana_cost + {1}`
+    ///      generic surcharge (Python `actions.py:1494-1499`), and
+    ///      clear the flag at cast time on the stack-resident object
+    ///      (Python `actions.py:1505`). `play_land` honors the tapped-
+    ///      entry rider: a land played via this permission stamps
+    ///      `tapped = true` regardless of the printing's static
+    ///      `enters_tapped` (Python `actions.py:1083-1094`) and clears
+    ///      the flag at play time.
+    /// Lightstall Inquisitor's residue closure moves from
+    /// "PARTIAL CLOSED" to "FULL CLOSED" in
+    /// `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` §3 with this
+    /// slice. The 6+-cycle substrate-scope estimate was conservative;
+    /// the actual closure was a single-slice landing (~250 LOC across
+    /// 4 Rust files + bridge update + tests).
     ///
-    /// **Why honest-stop?** The persistent permission substrate is
-    /// load-bearing across THREE Rust subsystems:
-    ///   1. New `GameObject` field
-    ///      (`cast_from_exile_with_lightstall_surcharge: bool`) +
-    ///      fingerprint serializer slot + CR 400.7 zone-change reset.
-    ///   2. Legal-actions emission (`state_ops_legal.rs`) must surface
-    ///      the exiled card as castable -- new exile-as-source code
-    ///      path and a {1} surcharge rider on the mana-cost check.
-    ///   3. Cast machinery (`state_ops_cast.rs`) must honor: cast from
-    ///      exile (the card stays in exile until the cast completes /
-    ///      moves it to the stack), +{1} mana surcharge on spells,
-    ///      tapped-entry rider on lands.
-    /// That's the multi-cycle substrate scope `BLOCKED_GENUINELY_MISSING
-    /// _INVENTORY.md` flags as "large (6+)". This slice closes the
-    /// Effect-shape gap (byte-equal up to the exile-of-the-card step);
-    /// the cast-back-from-exile permission lands in a separate slice
-    /// when (a) a second consumer surfaces or (b) the substrate cost
-    /// is paid down on its own merits.
-    ///
-    /// **Cross-engine parity boundary.** A probe that drives ETB
+    /// **Cross-engine parity contract.** A probe that drives ETB
     /// resolution and inspects post-resolve zones (count of cards in
     /// each opponent's hand decreased by 1; count of cards in each
     /// opponent's exile increased by 1; chosen-card identity is the
     /// deterministic hand[0]-or-equivalent first-legal pick) is
-    /// byte-equal across engines today. A probe that further attempts
-    /// to cast the exiled card on the OWNER's next priority is NOT
-    /// byte-equal -- Python surfaces the cast in legal_actions; Rust
-    /// does not.
+    /// byte-equal across engines. A probe that further attempts to
+    /// cast the exiled card on the OWNER's next priority NOW also
+    /// round-trips: both engines surface the cast at sorcery timing,
+    /// apply the +{1} surcharge, and (for lands) stamp tapped-entry.
     ///
     /// **Resolve semantics (mirrors `EachOpponentExilesCardFromHand
     /// WithCastPermission.resolve` step-for-step on the exile portion).**
@@ -3721,6 +3711,144 @@ pub enum Effect {
     /// `EachOpponentExilesCardFromHandWithCastPermission` unit-
     /// variant convention.
     HouseCartographerSurvivalEffect,
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// Sothera, the Supervoid's "each opponent exiles a creature they
+    /// control" with optional source-link bookkeeping.** Mirrors
+    /// Python's `EachOpponentExilesOwnCreature(link_to_source: bool)`
+    /// (`effects/generic/opponent_punishers.py:148-217`) — the
+    /// per-opponent independent-choice primitive used by Sothera, the
+    /// Supervoid's DIES trigger ("Whenever a creature you control dies,
+    /// each opponent exiles a creature they control. Note the cards
+    /// exiled this way.").
+    ///
+    /// **HONEST-STOP CLOSURE — substrate landed, full byte-equality
+    /// deferred (slice-19 Meltstrider precedent).** The Effect variant
+    /// + parse + to_pydict + bridge arms ship here; the resolve arm
+    /// fizzles silently when the resolving source is missing OR when
+    /// `link_to_source = true` (the source-link bookkeeping requires a
+    /// new persistent `GameObject.exiled_by_source` field on every Rust
+    /// game object PLUS a `_release_exiled_until_leaves` on-leave hook
+    /// PLUS the one-shot `state.suppress_exiled_by_source_on_leave_for`
+    /// flag — large multi-cycle substrate per the
+    /// `BLOCKED_GENUINELY_MISSING_INVENTORY.md` Sothera entry). The
+    /// scaffolding closes the Effect-level cross-engine round-trip and
+    /// makes the hot-path branch ready-to-flip when the exile-source-
+    /// link substrate ships.
+    ///
+    /// **Schema parity with Python.** Single-field variant on both
+    /// sides — `link_to_source: bool` mirrors Python's
+    /// `link_to_source: bool = False` dataclass field. Bridge translates
+    /// this Rust variant to `EachOpponentExilesOwnCreature(link_to_
+    /// source=link_to_source)`.
+    EachOpponentExilesOwnCreature { link_to_source: bool },
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// "Put one creature card exiled with this permanent onto the
+    /// battlefield under your control with N additional +1/+1 counters
+    /// on it".** Mirrors Python's
+    /// `ReanimateOneExiledWithSourceWithCounters(counter_amount: int)`
+    /// (`effects/generic/exile.py:1121-1216`) — the recall-one half of
+    /// Sothera, the Supervoid's end-step ability (only consumer in the
+    /// EoE pool today).
+    ///
+    /// **HONEST-STOP CLOSURE — substrate landed, full byte-equality
+    /// deferred (slice-19 Meltstrider precedent).** The resolve arm
+    /// fizzles silently because no Rust GameObject carries an
+    /// `exiled_by_source` source-link today — the candidate set is
+    /// always empty (mirrors Python's same-case `if not candidates:
+    /// return` fizzle at `exile.py:1178-1179`). Closing requires the
+    /// new persistent source-link field; documented in the SacrificeSelfPreservingExileLink
+    /// substrate notes and `BLOCKED_GENUINELY_MISSING_INVENTORY.md`.
+    ///
+    /// **Schema parity with Python.** Single-field variant on both
+    /// sides — `counter_amount: i32` mirrors Python's
+    /// `counter_amount: int = 0` dataclass field.
+    ReanimateOneExiledWithSourceWithCounters { counter_amount: i32 },
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// "Sacrifice this permanent (preserving the source-link on any
+    /// cards still in exile)".** Mirrors Python's
+    /// `SacrificeSelfPreservingExileLink`
+    /// (`effects/generic/exile.py:1221-1273`) — the sac-second half
+    /// of Sothera, the Supervoid's end-step ability.
+    ///
+    /// **HONEST-STOP CLOSURE — substrate landed, full byte-equality
+    /// deferred (slice-19 Meltstrider precedent).** The resolve arm
+    /// sacrifices the source via the existing `sacrifice` path. The
+    /// one-shot `suppress_exiled_by_source_on_leave_for` arming is a
+    /// no-op in Rust today because the on-leave auto-return hook
+    /// itself isn't wired — both sides of the suppression machinery
+    /// (the auto-return AND the suppression) are deferred together,
+    /// so cross-engine state stays byte-equal on the sac event.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// no fields.
+    SacrificeSelfPreservingExileLink,
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// Requiem Monolith's UEOT grant of a quoted dealt-damage trigger.**
+    /// Mirrors Python's `GrantTriggeredAbilityUEOT(ability=...)`
+    /// (`effects/generic/grant_keywords.py:189-251`) — currently only
+    /// EoE consumer is Requiem Monolith, which grants a fixed quoted
+    /// trigger ("Whenever this creature is dealt damage, you draw that
+    /// many cards and lose that much life.") UEOT to a chosen creature.
+    ///
+    /// **HONEST-STOP CLOSURE — Effect-level scaffolding only.** Rust
+    /// has no general layer-6 grant-triggered-ability registry
+    /// (Python's `continuous_effects` + `game.effective_triggered_
+    /// abilities`); only the narrow Perigee `GrantedDiesReturnTapped`
+    /// marker exists (`state.rs:299`). Rather than building the full
+    /// nested-trigger-grant subsystem in this slice, the resolve arm
+    /// records nothing — the cross-engine round-trip closes for this
+    /// Effect class and the post-resolve hot-path branch becomes
+    /// ready-to-flip when the broader grant-triggered-ability registry
+    /// lands.
+    ///
+    /// **Schema parity with Python.** Unit variant on the Rust side —
+    /// the Python `ability` field (a `TriggeredAbility` dataclass) is
+    /// elided in Rust today because the substrate to *use* it isn't
+    /// wired. The bridge consumes the dict's `ability` payload and
+    /// reconstructs the Python `GrantTriggeredAbilityUEOT(ability=
+    /// TriggeredAbility(...))` from the inner dict; the Rust resolve
+    /// is the silent no-op described above. This is the slice-19-style
+    /// Effect-level honest-stop pattern.
+    GrantTriggeredAbilityUEOTRequiem,
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// "That creature's controller may have <source> deal N damage to
+    /// it".** Mirrors Python's
+    /// `MayHaveSourceDealDamageToTarget(amount: int)`
+    /// (`effects/generic/damage.py:1114-1186`) — Requiem Monolith's
+    /// optional-ping body.
+    ///
+    /// **HONEST-STOP CLOSURE — Effect-level scaffolding only.** The
+    /// resolve arm fizzles silently because the target's controller's
+    /// agent `choose_yes_no` hook is Python-only — Rust has no
+    /// `choose_yes_no` callback wiring at this site. The Python side
+    /// ALSO returns early when `target_controller.agent is None`
+    /// (`damage.py:1161`), so the no-agent branch IS byte-equal
+    /// cross-engine.
+    ///
+    /// **Schema parity with Python.** Single-field variant on both
+    /// sides — `amount: i32` mirrors Python's `amount: int = 1`
+    /// dataclass field.
+    MayHaveSourceDealDamageToTarget { amount: i32 },
+    /// **22nd Rust slice (Sothera + Requiem closures honest-stop) —
+    /// "You draw that many cards and lose that much life".** Mirrors
+    /// Python's `DrawCardsAndLoseLifeEqualToResolvingDamage`
+    /// (`effects/generic/damage.py:1072-1111`) — the granted UEOT
+    /// trigger body Requiem Monolith installs on a chosen creature.
+    ///
+    /// **HONEST-STOP CLOSURE — Effect-level scaffolding only.** This
+    /// effect is normally fired as the BODY of a granted UEOT trigger
+    /// that the `GrantTriggeredAbilityUEOTRequiem` (above) installed.
+    /// Since the granted-trigger subsystem isn't wired in Rust, this
+    /// arm only runs in a synthetic test that drives the Effect
+    /// directly (e.g. via `apply_effect` with `resolving_combat_damage_
+    /// amount` pre-set). When invoked, it reads `state.resolving_
+    /// combat_damage_amount`, fizzles silently if 0 or no source, and
+    /// otherwise applies `draw_card` × amount + `life -= amount` on
+    /// the source's controller (mirroring `damage.py:1089-1108`).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields.
+    DrawCardsAndLoseLifeEqualToResolvingDamage,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -7612,6 +7740,74 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // shape consistency.
             Ok(Effect::HouseCartographerSurvivalEffect)
         }
+        "each_opponent_exiles_own_creature" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Single-
+            // field variant — `link_to_source: bool` mirrors Python's
+            // `link_to_source: bool = False` dataclass field. Default
+            // False (matches Python).
+            let link_to_source: bool = match dict.get_item("link_to_source")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "each_opponent_exiles_own_creature.link_to_source must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            Ok(Effect::EachOpponentExilesOwnCreature { link_to_source })
+        }
+        "reanimate_one_exiled_with_source_with_counters" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Single-
+            // field variant — `counter_amount: i32` mirrors Python's
+            // `counter_amount: int = 0` dataclass field. Default 0.
+            let counter_amount: i32 = match dict.get_item("counter_amount")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "reanimate_one_exiled_with_source_with_counters.counter_amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount })
+        }
+        "sacrifice_self_preserving_exile_link" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant; no payload fields beyond `kind`. Extra fields
+            // silently ignored for round-trip consistency.
+            Ok(Effect::SacrificeSelfPreservingExileLink)
+        }
+        "grant_triggered_ability_ueot_requiem" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant on the Rust side — the Python `ability` field is
+            // a `TriggeredAbility` dataclass whose Rust mirror is
+            // deferred along with the broader grant-triggered-ability
+            // registry. Bridge round-trip stays closed: the to_pydict
+            // arm emits only `kind`, the Python bridge arm reconstructs
+            // the fixed Requiem-shaped `GrantTriggeredAbilityUEOT(
+            // ability=TriggeredAbility(trigger="this_dealt_damage",
+            // effect=DrawCardsAndLoseLifeEqualToResolvingDamage()))`.
+            // Extra fields silently ignored.
+            Ok(Effect::GrantTriggeredAbilityUEOTRequiem)
+        }
+        "may_have_source_deal_damage_to_target" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Single-
+            // field variant — `amount: i32` mirrors Python's
+            // `amount: int = 1` dataclass field. Default 1.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "may_have_source_deal_damage_to_target.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            Ok(Effect::MayHaveSourceDealDamageToTarget { amount })
+        }
+        "draw_cards_and_lose_life_equal_to_resolving_damage" => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant; no payload fields beyond `kind`. Extra fields
+            // silently ignored.
+            Ok(Effect::DrawCardsAndLoseLifeEqualToResolvingDamage)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -10513,6 +10709,46 @@ pub(crate) fn effect_to_pydict<'py>(
             // -- round-trip dict-shape consistency (slice-16 /
             // slice-19 / slice-20 unit-variant precedent).
             d.set_item("kind", "house_cartographer_survival")?;
+        }
+        Effect::EachOpponentExilesOwnCreature { link_to_source } => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop).
+            // Single-field variant — emit `link_to_source` so the dict
+            // round-trips back to the same variant payload.
+            d.set_item("kind", "each_opponent_exiles_own_creature")?;
+            d.set_item("link_to_source", *link_to_source)?;
+        }
+        Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount } => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop).
+            // Single-field variant — emit `counter_amount` for round-
+            // trip dict-shape consistency.
+            d.set_item("kind", "reanimate_one_exiled_with_source_with_counters")?;
+            d.set_item("counter_amount", *counter_amount)?;
+        }
+        Effect::SacrificeSelfPreservingExileLink => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant; no payload fields beyond `kind`.
+            d.set_item("kind", "sacrifice_self_preserving_exile_link")?;
+        }
+        Effect::GrantTriggeredAbilityUEOTRequiem => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant on the Rust side; the Python `ability` payload
+            // is reconstructed by the bridge arm from a fixed Requiem-
+            // shaped TriggeredAbility (this Rust variant is reserved
+            // for the Requiem-shape grant until the general grant-
+            // triggered-ability registry lands). No fields emitted.
+            d.set_item("kind", "grant_triggered_ability_ueot_requiem")?;
+        }
+        Effect::MayHaveSourceDealDamageToTarget { amount } => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop).
+            // Single-field variant — emit `amount` for round-trip
+            // dict-shape consistency.
+            d.set_item("kind", "may_have_source_deal_damage_to_target")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::DrawCardsAndLoseLifeEqualToResolvingDamage => {
+            // 22nd Rust slice (Sothera + Requiem honest-stop). Unit
+            // variant; no payload fields beyond `kind`.
+            d.set_item("kind", "draw_cards_and_lose_life_equal_to_resolving_damage")?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;

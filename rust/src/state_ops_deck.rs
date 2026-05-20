@@ -133,6 +133,10 @@ impl GameState {
                 // library cards are never warp-pending/warp-exiled.
                 warp_exile_pending: false,
                 warped: false,
+                // Cast-from-exile-with-cost-hike substrate (Lightstall
+                // Inquisitor residue closure): deck-loaded library
+                // cards never start with the Lightstall flag.
+                cast_from_exile_with_lightstall_surcharge: false,
             });
             next_id += 1;
         }

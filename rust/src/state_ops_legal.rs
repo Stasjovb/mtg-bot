@@ -2086,6 +2086,117 @@ impl GameState {
             actions.push(cast_spell_dict(py, obj.id)?);
         }
 
+        // **Cast-from-exile-with-cost-hike substrate (Lightstall
+        // Inquisitor residue closure).** A card sitting in exile with
+        // `cast_from_exile_with_lightstall_surcharge = true` is
+        // castable by the card's controller (per CR 400.7 the card's
+        // controller was reset to its owner at exile time, and the
+        // permission "they may play that card" -- "they" =
+        // owner-of-exiled-card -- means the priority player can cast
+        // it iff the card lives in their own exile zone). Pays the
+        // printed mana cost + {1} generic surcharge. Sorcery timing
+        // only on the LIVE surface (Lightstall exiles a chosen-by-
+        // the-opponent hand card and there are no instant printings
+        // bridge-admitted with this shape -- mirrors Python's oracle
+        // text reading at `legal.py:536-543`: "could cast it" gated
+        // at sorcery timing for the model). Lands played this way
+        // ETB tapped -- enforced by the cast pay path
+        // (`state_ops_cast.rs::play_land`), legal emitter just
+        // emits `play_land_dict`. Mirrors Python
+        // `legal.py:544-574`.
+        //
+        // Dedup is NOT performed across the exile-cast loop -- two
+        // distinct exiled cards of the same printing are independent
+        // castables (each emits its own action; the `obj.id` keys it).
+        // This mirrors Python's `legal.py:544-574` per-card loop
+        // (no `seen_castspell` insertion).
+        for obj in self.players[idx].exile.iter() {
+            if !obj.cast_from_exile_with_lightstall_surcharge {
+                continue;
+            }
+            // The warp + Lightstall flags are mutually exclusive on
+            // the live surface (warp-exile path doesn't stamp the
+            // Lightstall flag; the Lightstall resolve arm doesn't
+            // stamp `warped`), but guard against double-emission
+            // anyway since the warp exile-recast loop above already
+            // emits the base cast_spell_dict for `warped` objects.
+            // Mirrors Python `legal.py:547-548` (`if card.warped:
+            // continue`).
+            if obj.warped {
+                continue;
+            }
+            let Some(printing) = self.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            let is_land = printing
+                .card_types
+                .iter()
+                .any(|t| t == "Land");
+            if is_land {
+                // Land path: a Land played this way ETBs tapped (the
+                // tapped-entry rider). PlayLand has no mana cost --
+                // the only gate at the legal emitter is sorcery
+                // timing, which the outer `is_sorcery_timing` block
+                // already enforces. No per-turn-land-count gate
+                // (mirrors Rust's existing PlayLand divergence -- see
+                // module docstring; Python gates here, Rust does
+                // not). Emit `play_land_dict` keyed on `obj.id`; the
+                // cast pay path (`state_ops_cast.rs::play_land`)
+                // honors the exile origin via the flag (see
+                // `play_land` exile branch).
+                actions.push(play_land_dict(py, obj.id)?);
+                continue;
+            }
+            // Non-land: pay `printing.mana_cost + {1}` generic
+            // surcharge. Sorcery timing only -- the outer block
+            // already enforces this. Mirror Python's `legal.py:561-
+            // 574` (`base_with_surcharge = ManaCost(generic + 1,
+            // colored, x_pips)` then the `_can_cast / _targets_are_
+            // satisfiable / _additional_costs_payable` triad). The
+            // surcharge increments ONLY the `generic` slot (the {1}
+            // is colorless); colored pip slots are unchanged.
+            let sk = crate::state_ops_mana::SpellKind::Any;
+            let base_cost = eff(&printing.mana_cost);
+            let surcharged_cost = crate::cards::ManaCost {
+                generic: base_cost.generic.saturating_add(1),
+                white: base_cost.white,
+                blue: base_cost.blue,
+                black: base_cost.black,
+                red: base_cost.red,
+                green: base_cost.green,
+            };
+            if !crate::state_ops_mana::can_pay_cost(
+                self, idx, &surcharged_cost, &sk,
+            ) {
+                continue;
+            }
+            // **legal_decisions mana-awareness Slice 2 -- target-
+            // satisfiability prune (CR 601.2c).** Mirror Python's
+            // `_targets_are_satisfiable` gate at `legal.py:571`. The
+            // live surface for Lightstall-exiled cards is sourced
+            // from each opponent's hand -- the bridge-admitted hand
+            // is the same `_printing_is_bridge_simple_*` surface, so
+            // every castable target-bearing spell goes through the
+            // same satisfiability check as a normal hand-cast.
+            if !spell_targets_satisfiable(self, obj.printing_id, idx) {
+                continue;
+            }
+            // **legal_decisions mana-awareness Slice 3 -- additional-
+            // cost prune (CR 601.2f/601.2h).** Mirror Python's
+            // `_additional_costs_payable` gate at `legal.py:572`. No
+            // bridge-admitted card carries both a Lightstall-eligible
+            // exile origin AND an additional cost (the 4 EoE
+            // additional-cost cards are bridge-DECLINED), so this
+            // returns `true` trivially on the live surface; the
+            // faithful Python mirror + the single named extension
+            // point.
+            if !additional_costs_payable(self, obj.printing_id, idx) {
+                continue;
+            }
+            actions.push(cast_spell_dict(py, obj.id)?);
+        }
+
         // Python lines 612-829: ActivateAbility emission for activated
         // abilities on permanents the priority player controls. We
         // are INSIDE the sorcery-timing block at this point (Python's
