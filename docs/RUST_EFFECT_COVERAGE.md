@@ -155,8 +155,8 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 103 | `Effect::AstelliReclaimerETBEffect` | `AstelliReclaimerETBEffect` | 1 |
 | 104 | `Effect::RovingActuatorETBEffect` | `RovingActuatorETBEffect` | 1 |
 | 105 | `Effect::EnchantedCreatureFightsTarget` | `EnchantedCreatureFightsTargetEffect` | 1 |
-| 106 | `Effect::EachOpponentExilesCardFromHandWithCastPermission` | `EachOpponentExilesCardFromHandWithCastPermission` | 1 |
-| 107 | `Effect::HouseCartographerSurvivalEffect` | `HouseCartographerSurvivalEffect` | 1 |
+| 106 | `Effect::SacrificeSelfUnlessTapPermanent` | `SacrificeSelfUnlessTapPermanent` | 1 |
+| 107 | `Effect::EachOpponentExilesCardFromHandWithCastPermission` | `EachOpponentExilesCardFromHandWithCastPermission` | 1 |
 | 108 | `Effect::ChooseOneMode` | `ModalChooseOne` | 13 |
 | 109 | `Effect::IfYouDo` | `IfYouDo` | 4 |
 | 110 | `Effect::EachOpponentMillsCards` | `EachOpponentMillsCards` | 1 |

@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **321 / 475 EoE cards (67.6%) are byte-equal at the Effect+bridge level**; of those, **218 (45.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 103 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **321 / 475 EoE cards (67.6%) are byte-equal at the Effect+bridge level**; of those, **216 (45.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 105 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **154 (32.4%)** are BLOCKED, broken out below.
 
@@ -16,12 +16,12 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 218 | 45.9% |
-| Effect+bridge covered (not individually probed) | 103 | 21.7% |
+| PROBED byte-equal | 216 | 45.5% |
+| Effect+bridge covered (not individually probed) | 105 | 22.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 4 | 0.8% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 3 | 0.6% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 148 | 31.2% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 149 | 31.4% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -137,7 +137,6 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Hardlight Containment
 - Honor
 - Honored Knight-Captain
-- House Cartographer
 - Hullcarver
 - Hylderblade
 - Hymn of the Faller
@@ -192,7 +191,6 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Piggy Bank
 - Pinnacle Emissary
 - Pinnacle Kill-Ship
-- Plains
 - Plasma Bolt
 - Pulsar Squadron Ace
 - Pyroclasm
@@ -271,9 +269,8 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Zealous Display
 - Zookeeper Mechan
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (4)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (3)
 
-- Command Bridge
 - Lightstall Inquisitor
 - Pain for All
 - Sothera, the Supervoid
@@ -283,7 +280,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Dauntless Scrapbot
 - Tractor Beam
 
-## BLOCKED — subsystem-gated / Effect-uncovered (148)
+## BLOCKED — subsystem-gated / Effect-uncovered (149)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
@@ -302,11 +299,11 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 31 | 0 | 31 | 40,151 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 95 | 24 | 71 | 297,709 | 103,349 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 96 | 24 | 72 | 297,709 | 103,349 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
-| Non-safe triggered ability (unbridged event/shape) | 43 | 0 | 43 | 147,471 | 0 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 44 | 0 | 44 | 147,471 | 0 | diffuse |
 
-**Reconciliation:** 148 subsystem-gated = 71 single-gated + 77 multi-gated; the per-subsystem `1gate` column sums to 71 (== single-gated total). The breakout partitions exactly the same 148 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 149 subsystem-gated = 71 single-gated + 78 multi-gated; the per-subsystem `1gate` column sums to 71 (== single-gated total). The breakout partitions exactly the same 149 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -372,5 +369,5 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Gravblade Heavy
 - Green Sun's Zenith
 - Grove of the Burnwillows
-- … and 88 more
+- … and 89 more
 

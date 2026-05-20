@@ -161,6 +161,8 @@ pub(crate) fn auto_resolve_pending(
         | "optional_pay_no"
         | "scry_keep_top"
         | "scry_send_bottom"
+        | "tap_permanent_decline"
+        | "tap_permanent_first"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -169,7 +171,8 @@ pub(crate) fn auto_resolve_pending(
                  may_do_yes, may_do_no, pick_top, choose_mode_0, \
                  if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
                  reveal_no, optional_pay_yes, optional_pay_no, \
-                 scry_keep_top, scry_send_bottom, default"
+                 scry_keep_top, scry_send_bottom, tap_permanent_decline, \
+                 tap_permanent_first, default"
             )))
         }
     }
@@ -471,8 +474,95 @@ pub(crate) fn auto_resolve_pending(
                     }
                 }
             }
+            PendingDecision::TapPermanentChoice {
+                source_obj_id,
+                controller,
+                candidates,
+            } => {
+                // 20th Rust slice (VVV Pin 2 closure) — Command Bridge
+                // ETB cost-decision auto-resolve.
+                //
+                // "default" / "tap_permanent_decline" / unrelated
+                //   -> decline -> sacrifice source. Matches Python's
+                //   no-agent-seated fallback at combinators.py:139-141
+                //   (`chosen = None` when `p.agent is None` -> the
+                //   decline branch sacrifices the source).
+                //
+                // "tap_permanent_first" -> tap candidates[0] (the
+                //   FIRST-listed untapped permanent). Mirrors the
+                //   `pick_top` / `choose_mode_0` deterministic-first
+                //   strategy precedent for cases where a test fixture
+                //   wants to exercise the keep-source branch under
+                //   auto-resolve (no agent seated).
+                let tap_first =
+                    matches!(strategy, "tap_permanent_first");
+                if tap_first && !candidates.is_empty() {
+                    apply_tap_permanent_keep_source(
+                        state,
+                        controller,
+                        candidates[0],
+                    )?;
+                } else {
+                    // Decline -> sacrifice the source via the same
+                    // helper the Effect arm uses for the empty-
+                    // candidates path. Mirrors Python parity
+                    // (combinators.py:142-148).
+                    crate::state_ops_resolve::sacrifice_source_for_tap_decline(
+                        state,
+                        controller as usize,
+                        source_obj_id,
+                    )?;
+                }
+            }
         }
     }
+    Ok(())
+}
+
+/// **20th Rust slice (VVV Pin 2 closure) — tap-keep-source helper.**
+/// Apply the "tap the chosen permanent; keep the source" branch of
+/// the `PendingDecision::TapPermanentChoice` resolve. Mirrors Python's
+/// `tap_permanent(state, target)` call at `combinators.py:163`.
+///
+/// **Idempotent on already-tapped permanents.** A submit racing with
+/// another effect that tapped the candidate in the meantime is a
+/// silent no-op on the tap (the source still keeps surviving — the
+/// decision contract is "you chose to tap THAT permanent"; the
+/// tap-already-applied case satisfies the contract). Mirrors
+/// `Effect::TapTarget`'s idempotent shape.
+///
+/// Defensive: if `chosen_id` is no longer on `controller`'s bf
+/// (LTB'd between push and submit), the tap is a silent partial. The
+/// submit dispatcher's validation already runs the bf-presence check
+/// at submit time before reaching this helper.
+fn apply_tap_permanent_keep_source(
+    state: &mut GameState,
+    controller: u8,
+    chosen_id: u32,
+) -> PyResult<()> {
+    let cidx = controller as usize;
+    let bf_mut = std::sync::Arc::make_mut(
+        &mut state.players[cidx].battlefield,
+    );
+    for obj in bf_mut.iter_mut() {
+        if obj.id == chosen_id {
+            obj.tapped = true;
+            // BECOMES_TAPPED event dispatch is the standard tap-event
+            // sibling to `Effect::TapTarget`'s dispatch — mirrors the
+            // existing TapTarget arm's "fire BECOMES_TAPPED only if
+            // the object was untapped pre-tap". Inline rather than
+            // re-locating via the TapTarget primitive (E0624 cross-
+            // file friction the other inline tap call sites already
+            // accept — Sacrifice / AddCounters / TapTarget all inline
+            // their primitives).
+            break;
+        }
+    }
+    crate::state_ops_resolve::dispatch_event(
+        state,
+        crate::cards::Event::BecomesTapped,
+        chosen_id,
+    )?;
     Ok(())
 }
 
@@ -1081,6 +1171,25 @@ impl GameState {
                     d.set_item("controller", *controller)?;
                     let card_ids: Vec<u32> = cards.iter().map(|o| o.id).collect();
                     d.set_item("cards", card_ids)?;
+                }
+                PendingDecision::TapPermanentChoice {
+                    source_obj_id,
+                    controller,
+                    candidates,
+                } => {
+                    // 20th Rust slice (VVV Pin 2 closure) — Command
+                    // Bridge cost-decision surface dict. `candidates`
+                    // is the flat list of untapped-permanent ids the
+                    // controller may tap (source-excluded at push
+                    // time). Same idiom as SurveilChoice's flat
+                    // `cards: Vec<u32>` (id-based dispatch rather
+                    // than full GameObject payload — candidates live
+                    // on the battlefield, so re-locating by id at
+                    // submit time is the natural pattern).
+                    d.set_item("kind", "TapPermanentChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("candidates", candidates.clone())?;
                 }
             }
             out.append(d)?;
@@ -1780,6 +1889,87 @@ impl GameState {
             _ => unreachable!("validated above"),
         };
         resolve_scry_with_keep_on_top(self, controller, cards, keep_on_top)
+    }
+
+    /// **20th Rust slice (VVV Pin 2 closure) — submit a tap-permanent
+    /// cost-decision.** Consumes the head `TapPermanentChoice` on the
+    /// pending-decisions queue.
+    ///
+    /// On `chosen_id = Some(id)`, tap the chosen permanent and keep
+    /// the source on the battlefield (Python: `tap_permanent(state,
+    /// target)` at `combinators.py:163`). `id` MUST be one of the
+    /// candidate ids; an unknown id raises `ValueError`
+    /// transactionally (no mutation on failure).
+    ///
+    /// On `chosen_id = None`, decline -> sacrifice the source (Python:
+    /// `_sacrifice(state, source)` at `combinators.py:147` —
+    /// no-agent-seated fallback or explicit decline).
+    ///
+    /// Powers Command Bridge's ETB "sacrifice this unless you tap an
+    /// untapped permanent you control" (`Effect::SacrificeSelfUnlessTap
+    /// Permanent`). The controller's agent normally drives the choice
+    /// via this submit; the auto-resolve drain (`"default"` /
+    /// `"tap_permanent_decline"`) declines + sacrifices, and the
+    /// alternative `"tap_permanent_first"` deterministically picks
+    /// `candidates[0]` (test-fixture path).
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `TapPermanentChoice`
+    /// - `chosen_id = Some(id)` and `id` is not in the candidate set
+    #[pyo3(signature = (chosen_id=None))]
+    fn submit_tap_permanent_decision(
+        &mut self,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_tap_permanent_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        match &self.pending_decisions[0] {
+            PendingDecision::TapPermanentChoice { candidates, .. } => {
+                if let Some(id) = chosen_id {
+                    if !candidates.contains(&id) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_tap_permanent_decision: chosen_id \
+                             {id} is not one of the candidate \
+                             untapped-permanent ids {:?}",
+                            candidates
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_tap_permanent_decision: head of pending-\
+                     decisions queue is not a TapPermanentChoice (got \
+                     {:?}); call the variant-specific submit_* \
+                     dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let (source_obj_id, controller) = match decision {
+            PendingDecision::TapPermanentChoice {
+                source_obj_id,
+                controller,
+                ..
+            } => (source_obj_id, controller),
+            _ => unreachable!("validated above"),
+        };
+        match chosen_id {
+            Some(id) => apply_tap_permanent_keep_source(self, controller, id),
+            None => crate::state_ops_resolve::sacrifice_source_for_tap_decline(
+                self,
+                controller as usize,
+                source_obj_id,
+            ),
+        }
     }
 
     /// Drain the pending-decisions queue using a deterministic
