@@ -500,9 +500,15 @@ exercises the full attach core end-to-end. Requires:
 
 ### Phase 2 (Rust + bridge) — control-changing + layered static grants (sub-shape S2)
 
-**Status (round-79, 2026-05-20): PHASE 2 FIRST DELIVERABLE LANDED —
-S1 admit set widened to live EoE Auras via symmetric-drop precedent;
-S2 control-changing Rust slice remains deferred.**
+**Status (round-79+, 2026-05-20): PHASE 2 FIRST DELIVERABLE LANDED +
+PHASE 2 S2 FIRST DELIVERABLE LANDED.** Phase 2 first deliverable
+widened the S1 admit set to live EoE Auras via the symmetric-drop
+precedent (Frantic Strength + Shardmage's Rescue). Phase 2 S2 first
+deliverable adds the substrate plumbing + Rust reader fold for the
+control-changing Duskmourn's Domination shape (+1 card / +0 decks).
+Tractor Beam stays declined separately (its triggered ETB +
+`attached_prevents_untap` rider need their own Phase-2-S2-extension
+slice).
 
 The first deliverable of Phase 2 (round-79) widens the
 `_printing_is_bridge_simple_aura` predicate's static-keyword check
@@ -528,15 +534,100 @@ plan §1 / the round-78 Phase 1 STEP-7 finding); the value is the
 Pinned by `tests/test_aura_substrate_phase_2.py` (8 tests, including
 cross-engine byte-equal round-trip).
 
-**Phase 2 remaining (S2 control-changing Rust slice — Duskmourn's
-Domination):** the layer-2 control-swap / layer-6 lose-abilities /
-layer-4 subtype / layer-7 set-base-PT static-grant-on-attach
-analogue of `apply_aura_static_grants_on_attach` → admits
-Duskmourn's Domination (+1 card / +0 decks). Also unblocks Tractor
-Beam's static halves (control-swap + `attached_prevents_untap`)
-once its `TapEnchantedPermanent` ETB stops fizzling (the shipped
-Effect reads `attached_to`, which Phase 1 finally sets). A full
-Rust-agent slice — depends on Phase 1's attach substrate.
+**Phase 2 S2 first deliverable (round-79+, 2026-05-20).** Layer-2
+control-swap + layer-6 lose-abilities are now shipped end-to-end for
+the Duskmourn's Domination shape. Layer-7b set-base-PT is plumbed
+through the substrate (CardDef + bridge + Rust storage + bidir
+round-trip) but the Rust reader fold is honest-stopped per the §2
+discipline (no admitted S2 carrier today exercises it; Lignify-shape
+carriers aren't in the EoE pool).
+
+Implementation summary (round-79+, branch
+`feature/aura-substrate-phase-2-s2`):
+
+- **CardDef + bridge.** Four new fields on
+  `mtg_bot.parity.cross_engine.CardDef`:
+  `aura_grants_control` (bool, layer-2),
+  `aura_grants_lose_abilities` (bool, layer-6),
+  `aura_set_base_power` + `aura_set_base_toughness`
+  (Optional[int], layer-7b, paired-tuple shape). All four default to
+  False/None — every pre-S2 CardDef materializes bit-identically.
+  `_spec_card_to_printing_dict` emits the three S2 wire keys
+  (`aura_grants_control` / `aura_grants_lose_abilities` /
+  `aura_set_base_pt` sub-dict) only when set;
+  `_card_def_to_python_printing` round-trips them onto the matching
+  Python `CardPrinting.attached_grants_*` /
+  `attached_sets_base_pt` fields; `read_rust_printing_aura_fields`
+  surfaces all three back from the Rust registry.
+- **Rust storage.** Three new fields on `CardPrinting`:
+  `aura_grants_control` (bool), `aura_grants_lose_abilities`
+  (bool), `aura_set_base_pt` (Option<(i16, i16)>). `parse_printing`
+  reads the three optional keys with the same back-compat
+  missing-key → default pattern STEP 2 already established. Three
+  new Registry getters
+  (`get_printing_aura_grants_control` /
+  `..._aura_grants_lose_abilities` /
+  `..._aura_set_base_pt`).
+- **Rust attach arm.** `move_aura_post_resolve` in
+  `state_ops_resolve.rs` reads `aura_grants_control` after stamping
+  `attached_to`; if true, captures the host's prior `controller`
+  into the new `GameObject.controller_baseline` slot (only on first
+  grant) and flips `controller` to the resolving spell's controller
+  (the caster). Mirrors Python's
+  `apply_aura_static_grants_on_attach` control-change branch
+  (`actions.py:2828-2854`).
+- **Rust revert path.** `move_aura_to_owners_graveyard` in
+  `state_ops_sba.rs` snapshots the dying Aura's `attached_to` +
+  `aura_grants_control` flag BEFORE clearing the attachment, then
+  AFTER the graveyard push walks the bf for any OTHER attached
+  control-granting Aura on the same host
+  (`bf_any_other_aura_grants_control`); if none, calls
+  `revert_host_controller_from_baseline` which restores the host's
+  `controller` from `controller_baseline` and clears the baseline.
+- **Rust layer-6 reader fold.** `battlefield_has_keyword` in
+  `state_ops_combat.rs` short-circuits to `false` when
+  `aura_grants_lose_abilities_to(host_id)` is true — wipes printed
+  / UEOT-granted / aura-granted keywords. Honest-stop: strict CR
+  613 layer-6 timestamp interleaving with earlier-applied grants is
+  not modeled (no live admit set exercises it; SL-documented).
+- **Loader predicate widen.**
+  `_printing_is_bridge_simple_aura` admits the paired
+  `attached_grants_control + attached_grants_lose_all_abilities`
+  shape (Duskmourn's Domination). Lone-control,
+  lone-lose-abilities, and the paired-shape-plus-set-base-PT
+  (Lignify-full) all stay positively declined. Tractor Beam stays
+  declined on its triggered ETB + `attached_prevents_untap` rider.
+- **23 tests** under
+  `tests/test_aura_substrate_phase_2_s2.py` cover the CardDef
+  defaults + wire-emit, both bridge directions, the loader-admit
+  pin, the layer-2 attach + baseline-capture + revert-on-bury, the
+  layer-6 keyword wipe + sibling-isolation, and a cross-engine
+  CardDef → both engines round-trip pin. 140 total aura substrate
+  tests across `tests/test_aura_substrate*.py` green; 1254
+  `parity_smoke + cross_engine_*` green; 223 `tests/test_rust_*.py`
+  green.
+- **Live-EoE admit delta:** +1 card / +0 decks (Duskmourn's
+  Domination — 0 17lands EoE decks per the round-61 N1 scout). Value
+  is the **first end-to-end live admit of an S2 carrier**, not deck
+  count.
+
+**Phase 2 S2 remaining honest-stops + extensions:**
+
+- **Tractor Beam.** `attached_prevents_untap` Rust untap-step skip
+  + `TapEnchantedPermanent` ETB bridge (the shipped Effect reads
+  `source.attached_to` which Phase 1 sets; the trigger event
+  routing on the bridge needs a follow-up arm). A Phase-2-S2-
+  extension slice unblocks it.
+- **Lignify-shape Auras.** Layer-7b set-base-PT reader fold (host's
+  effective power / toughness override) — not in EoE pool today; a
+  future S2.5 slice can light it up.
+- **Multi-grant timestamp walk.** Multiple control-changing Auras on
+  the same host: current revert path assumes single outstanding
+  grant. Phase 3+ would add a continuous-effect registry for the
+  CR 613 layer-2 timestamp walk; no live admit set exercises this
+  today.
+
+A full Rust-agent slice — depends on Phase 1's attach substrate.
 
 ### Phase 3 (Rust + bridge) — the residue Aura-shape Effects
 
