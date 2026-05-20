@@ -4270,16 +4270,16 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     static effects, no control-swap or replacement riders, and a
     parseable cost.
 
-    **Aura-attachment substrate — Phase 1 first-deliverable
-    (round-77).** This is the §2 positive-allowlist predicate the
-    plan's §3 Phase 1 step 7 specifies. It does NOT (this slice) get
-    OR'd into :func:`_filter_deck_to_bridge_supported`'s 5-disjunct
-    admit chokepoint — substrate-only, no Aura reaches the bench. The
-    remaining Phase-1 steps (Rust ``parse_printing`` aura-key parse +
-    cast-time enchant-target decision + Rust aura-resolution arm +
-    CR-704.5n SBA + bidirectional bridge arms) are honest-stopped;
-    once they land, the wire-up into the 5-disjunct is a one-line
-    change here. See the plan §3 Phase 1 for the remaining items.
+    **Aura-attachment substrate — Phase 1 STEP 7 LANDED (round-78).**
+    This is the §2 positive-allowlist predicate the plan's §3 Phase 1
+    step 7 specifies, and it is now OR'd into
+    :func:`_filter_deck_to_bridge_supported`'s admit chokepoint as
+    the 6th disjunct. STEPs 1-6 (CardDef aura representation + Rust
+    ``parse_printing`` aura-key parse + cast-time enchant-target
+    decision + Rust aura-resolution attach arm + CR-704.5n SBA +
+    bidirectional bridge round-trip) all landed before this OR-in,
+    so a printing that passes the predicate flows end-to-end through
+    the bench loader, the Python side, and the Rust side.
 
     Phase-1 admit set: sub-shape **S1** ONLY (Frantic Strength,
     Shardmage's Rescue per the plan §1). Every other Aura sub-shape
@@ -4333,12 +4333,14 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         bonus deltas have no upper bound.
       * Mana cost is parseable into (generic, colored).
 
-    **Substrate-only this slice — no production deck signal:** the
-    predicate IS exposed (importable, callable) and tested, but
-    :func:`_filter_deck_to_bridge_supported` does NOT call it yet.
-    Phase 1 of the plan completes when the remaining Rust steps land
-    and a single ``or _printing_is_bridge_simple_aura(printing)`` is
-    added to the 5-disjunct.
+    **Wired into the loader as of STEP 7 (round-78):** the predicate
+    is the 6th disjunct of :func:`_filter_deck_to_bridge_supported`'s
+    admit chokepoint. The live EoE pool admits 0 Auras through this
+    disjunct today — every S1 carrier (Frantic Strength / Shardmage's
+    Rescue) carries the non-``_SAFE_KEYWORDS`` ``flash`` keyword, the
+    predicate's documented decline reason — but the substrate is
+    wired through for the first non-flash S1 Aura that ships, and
+    Phase 2/3/4 will widen the admit set.
     """
     if not getattr(printing, "is_aura", False):
         return False
@@ -4621,13 +4623,12 @@ def _printing_to_card_def(printing) -> CardDef:
         # ``card_type="Enchantment"`` (Phase-1 Auras are pure
         # enchantments — no Creature/Artifact overlap); the "Aura"
         # subtype is materialized by ``_card_def_to_python_printing``.
-        # NOT REACHED THIS SLICE: ``_filter_deck_to_bridge_supported``
-        # does not call this branch because
-        # :func:`_printing_is_bridge_simple_aura` is not yet OR'd into
-        # the 5-disjunct. This branch exists so the conversion is
-        # testable in isolation (round-77 Phase-1-first-deliverable
-        # pin) and so a later round's one-line wire-up flip closes the
-        # loop without a second edit here.
+        # STEP 7 (round-78): ``_filter_deck_to_bridge_supported``'s
+        # 6th disjunct now invokes :func:`_printing_is_bridge_simple_aura`,
+        # so a passing printing flows through this branch end-to-end.
+        # The branch was already testable in isolation by direct
+        # call (round-77 Phase-1-first-deliverable pin); STEP 7 closes
+        # the loader-to-CardDef wire-up.
         generic, colored = _parse_mana_cost_string(
             printing.mana_cost_str or "")
         if printing.equipment_bonuses is not None:
@@ -5491,6 +5492,25 @@ def _filter_deck_to_bridge_supported(
             # and round-trips through the reverse serializer. Wired
             # exactly like the round-63 pure-warp-creature predicate.
             or _printing_is_bridge_simple_spell(printing)
+            # Aura-attachment substrate, Phase 1 STEP 7 (round-78):
+            # the 6th disjunct admits a sub-shape S1 static P/T-or-
+            # keyword Aura. The predicate's §2 teeth (no triggered/
+            # static/activated/spell-effect, no control-swap /
+            # replacement riders, equipment_bonuses with granted
+            # keywords restricted to ``_SAFE_KEYWORDS``) keep the
+            # admit set bridge-correct. STEPs 2-6 (Rust parse arm +
+            # cast-time enchant-target decision + Aura-resolution
+            # attach + CR-704.5n SBA bury + bidirectional bridge
+            # round-trip) closed the prior honest-stops; with this
+            # OR-in Phase 1 closes for sub-shape S1. The live EoE
+            # pool admits 0 Auras today (every S1 carrier — Frantic
+            # Strength / Shardmage's Rescue — carries the non-
+            # ``_SAFE_KEYWORDS`` ``flash`` keyword, the predicate's
+            # documented decline reason), so this OR-in is a no-op
+            # for the current bench corpus but the substrate is
+            # wired through for the first non-flash S1 Aura that
+            # ships (Phase 2/3/4 widen the admit set).
+            or _printing_is_bridge_simple_aura(printing)
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

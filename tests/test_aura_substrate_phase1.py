@@ -456,28 +456,77 @@ def test_predicate_declines_aura_with_replacement():
 
 
 # ---------------------------------------------------------------------------
-# Loader wire-up: the predicate is NOT yet in the 5-disjunct
-# (substrate-only — Phase 1 honest-stop sentinel)
+# Loader wire-up: STEP 7 (round-78) — the predicate is now the 6th
+# disjunct of :func:`_filter_deck_to_bridge_supported`'s admit
+# chokepoint. Phase 1 closed.
 # ---------------------------------------------------------------------------
 
 
-def test_loader_does_not_yet_admit_any_aura():
-    """**Honest-stop sentinel.** Even though the predicate is
-    correctly defined + tested above,
-    :func:`_filter_deck_to_bridge_supported` MUST NOT admit any Aura
-    this slice — the predicate is NOT yet OR'd into the 5-disjunct
-    admit chokepoint. When the Phase-1 Rust steps (cast-target
-    decision + resolve arm + SBA) land, a one-line wire-up flip will
-    close the gap; until then this pin guards against an accidental
-    silent admit-widen.
+def test_loader_admits_aura_simple_shape():
+    """**STEP 7 wire-up pin (round-78).** The §2 positive allowlist
+    predicate :func:`_printing_is_bridge_simple_aura` is now OR'd into
+    :func:`_filter_deck_to_bridge_supported`'s admit chokepoint as the
+    6th disjunct. A synthetic Phase-1-S1 Aura that passes the predicate
+    flows end-to-end through the bench loader (filtered name preserved,
+    CardDef materialized with the aura fields populated).
 
-    The pin works by trying to load a deck containing a known-Aura
-    name (Frantic Strength) and asserting the Aura is dropped from
-    the filtered name list."""
+    Replaces the round-77 honest-stop sentinel that asserted "no Aura
+    is admitted". Phase 1 STEP 7 made the substrate one-line-flippable;
+    this pin confirms the flip is in place."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    pr = CardPrinting(
+        name="Synthetic S1 Aura",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("R", 1),)),
+        type_line="Enchantment - Aura",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Aura",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        aura_enchant_type="creature",
+        aura_yours_only=False,
+        equipment_bonuses=(2, 2, frozenset({"trample"})),
+    )
+    assert _printing_is_bridge_simple_aura(pr) is True, (
+        "synthetic S1 Aura must pass the §2 allowlist predicate"
+    )
+    printings = {"Synthetic S1 Aura": pr}
+    deck = ["Synthetic S1 Aura", "Synthetic S1 Aura"]
+    not_bridged_sink: list[str] = []
+    filtered, card_defs = _filter_deck_to_bridge_supported(
+        deck,
+        printings,
+        not_bridged_sink=not_bridged_sink,
+    )
+    # STEP 7 wire-up: the loader admits the Aura through the new
+    # 6th disjunct.
+    assert filtered == deck, (
+        "STEP 7 OR-in must admit a predicate-passing Aura: %r" % (filtered,)
+    )
+    assert not_bridged_sink == []
+    assert len(card_defs) == 1
+    cd = card_defs[0]
+    assert cd.name == "Synthetic S1 Aura"
+    assert cd.is_aura is True
+    assert cd.aura_enchant_type == "creature"
+    assert cd.aura_power_bonus == 2
+    assert cd.aura_toughness_bonus == 2
+    assert cd.aura_granted_keywords == ("trample",)
+
+
+def test_loader_still_declines_live_eoe_aura_carriers():
+    """Live-EoE coverage pin: every shipping S1 carrier in the EoE
+    pool (Frantic Strength + Shardmage's Rescue) carries the
+    non-``_SAFE_KEYWORDS`` ``flash`` keyword, and the predicate's §2
+    teeth correctly decline it. STEP 7's OR-in did NOT widen the live
+    admit set — the substrate is wired but no real Aura passes today.
+
+    The plan's §1 documents this: the value of Phase 1 is the
+    substrate, not the deck count. Phase 2 widens the admit set."""
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
-    # Use a deck mix that hits the existing 5-disjunct (Forest) AND
-    # includes an Aura that the §2 teeth would currently decline.
     deck = ["Forest", "Forest", "Frantic Strength", "Forest"]
     not_bridged_sink: list[str] = []
     filtered, _ = _filter_deck_to_bridge_supported(
@@ -485,13 +534,30 @@ def test_loader_does_not_yet_admit_any_aura():
         printings,
         not_bridged_sink=not_bridged_sink,
     )
-    assert "Frantic Strength" not in filtered, (
-        "Loader silently admitted an Aura — the Phase-1 first-deliverable "
-        "slice MUST keep the 5-disjunct unchanged. If Phase 1's remaining "
-        "steps have landed AND _printing_is_bridge_simple_aura was OR'd "
-        "in, drop this pin (it is the honest-stop sentinel)."
-    )
+    assert "Frantic Strength" not in filtered
     assert "Frantic Strength" in not_bridged_sink
+
+
+def test_loader_admits_zero_live_eoe_auras_pre_phase_2():
+    """Sweep the live EoE pool: no real Aura passes the OR'd-in
+    predicate this slice (every S1 carrier carries the ``flash``
+    decline reason; every S2/S3/S4 Aura is positively declined by
+    the §2 rider checks). Locks the Phase-1 STEP-7 admit-delta at
+    exactly ZERO new live cards — the bench corpus is bit-identical
+    to pre-OR-in for the EoE pool. The first non-flash S1 Aura that
+    ships will flow through without any further wire-up."""
+    from mtg_bot.cards.source import get_active_source
+    printings = get_active_source().get_printings()
+    admitted_auras = [
+        name for name, pr in printings.items()
+        if getattr(pr, "is_aura", False)
+        and _printing_is_bridge_simple_aura(pr)
+    ]
+    assert admitted_auras == [], (
+        "Live-EoE Aura admit-delta from STEP 7 must be zero this "
+        "slice — Phase 2 widens the admit set. Surprise admit: %r"
+        % (admitted_auras,)
+    )
 
 
 def test_loader_still_admits_basic_land_unchanged():
