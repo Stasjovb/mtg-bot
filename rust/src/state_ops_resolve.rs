@@ -12147,6 +12147,112 @@ fn apply_effect(
                 )?;
             }
         }
+        // **20th Rust slice (XXX Pin 3 honest-stop closure) --
+        // Lightstall Inquisitor each-opponent-exiles-card-from-hand-
+        // with-cast-permission.** Mirrors Python's
+        // `EachOpponentExilesCardFromHandWithCastPermission.resolve`
+        // (`effects/generic/discard.py:187-208`) on the exile portion;
+        // the persistent cast-from-exile permission flag substrate is
+        // HONEST-STOPPED (Rust's GameObject has no
+        // `cast_from_exile_with_lightstall_surcharge` field today; the
+        // legal-actions emission + cast-machinery + tapped-land-entry
+        // riders are not plumbed). See the Effect variant docstring
+        // for the substrate-scope breakdown.
+        //
+        // **Cross-engine byte-equal up to the exile step.** Both
+        // engines move a card from each opponent's hand to exile under
+        // identical determinism (Python's `agent.choose_discard`
+        // returning the first hand id == Rust's hand[0] pop). Post-
+        // resolve zone counts agree. The cast-back-from-exile branch
+        // is the partial-FIXED boundary -- Python surfaces the cast
+        // in legal_actions; Rust does not.
+        //
+        // **Resolve steps (mirror Python).**
+        // 1. Source-controller resolution -- 5-zone walk + stack scan
+        //    (mirrors round-24 EachOpponentDiscards / EachOpponentLoses
+        //    Life source-finder pattern). Source-not-found = silent
+        //    fizzle.
+        // 2. 2-player "each opponent" reduces to "the one opponent":
+        //    `opponent_idx = (1 - controller) as usize`.
+        // 3. Empty hand on the opponent = silent no-op (Python parity
+        //    -- `if not p.hand: continue` short-circuits the loop body).
+        // 4. Pop hand[0] of the opponent (deterministic first-legal
+        //    pick; Python's `agent.choose_discard` returning the first
+        //    hand id matches this pick byte-equal).
+        // 5. CR 400.7 zone-change reset on the moved object: tapped /
+        //    summoning_sick / damage / counters / attached_to /
+        //    exiled_with_source all cleared; zone = ZONE_EXILE.
+        // 6. Push the object to the opponent's exile vec.
+        //
+        // **No event dispatch.** This effect exiles (not discards) --
+        // no `Event::DiscardsCard` fires (Python parity:
+        // `discard.py:172-214` has no `fire_opponent_discards_triggers`
+        // call; only `EachOpponentDiscards` does, at `discard.py:163`).
+        // Honest-attribution boundary respected.
+        Effect::EachOpponentExilesCardFromHandWithCastPermission => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2. 2-player "each opponent" reduces to "the one
+            // opponent" — opponent_idx = 1 - controller.
+            let opponent_idx = (1 - controller) as usize;
+            // 3. Empty hand: silent no-op (Python parity).
+            if state.players[opponent_idx].hand.is_empty() {
+                return Ok(());
+            }
+            // 4. Pop hand[0] of the opponent (deterministic first-
+            // legal pick).
+            let hand_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[opponent_idx].hand);
+            let mut obj = hand_mut.remove(0);
+            // 5. CR 400.7 zone-change reset.
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            // 6. Push to opponent's exile.
+            //
+            // **HONEST-STOP MARKER.** Python ALSO stamps
+            // `card.cast_from_exile_with_lightstall_surcharge = True`
+            // on the exiled card here (`discard.py:203`). Rust does
+            // NOT, because GameObject has no such field today. This
+            // is the cross-engine divergence point for any probe that
+            // attempts to cast the exiled card on the owner's next
+            // priority — Python's legal-actions surface emits the
+            // cast; Rust's does not. See the Effect variant docstring
+            // for the substrate-scope breakdown.
+            Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
+        }
         // **18th Rust slice (XXX Pin 2 closure) — Roving Actuator
         // Void ETB.** "Exile up to one target instant or sorcery card
         // with mana value 2 or less from your graveyard. Copy it. You

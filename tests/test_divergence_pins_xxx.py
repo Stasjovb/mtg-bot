@@ -13,8 +13,22 @@ closed Astelli Reclaimer).
 variant) is CLOSED -- new ``Effect::RovingActuatorETBEffect
 { max_mv: u8 }`` variant + parse arm + resolve arm in Rust + bridge
 arm in ``cross_engine.py``; renamed to ``..._FIXED_parity`` with
-the sentinel inverted.  Pins 1 (House Cartographer) and 3
-(Lightstall Inquisitor) remain OPEN ``_divergence_pin``.
+the sentinel inverted.
+
+**Slice 20 closure status:** Pin 3 (Lightstall Inquisitor no Rust
+Effect variant) is PARTIALLY CLOSED -- new
+``Effect::EachOpponentExilesCardFromHandWithCastPermission`` unit
+variant + parse arm + resolve arm (each-opponent-exile portion) in
+Rust + bridge arm in ``cross_engine.py``; renamed to
+``..._partial_FIXED_parity`` with the sentinel inverted. The
+persistent ``cast_from_exile_with_lightstall_surcharge`` per-object
+flag + cast-from-exile legality + +{1} surcharge + tapped-land-entry
+riders are HONEST-STOPPED (substrate is large 6+ cycles --
+``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §3). Cross-engine
+byte-equality holds up to the exile-of-the-card step; any probe
+that further attempts to cast the exiled card on the owner's next
+priority is NOT byte-equal. Pin 1 (House Cartographer) remains
+OPEN ``_divergence_pin``.
 
 Each open pin test is named ``test_..._divergence_pin`` and
 ASSERTS the CURRENT divergent behavior rather than parity.  The
@@ -24,8 +38,9 @@ metric.
 
 Pin closure cadence: when a sibling Rust slice closes the
 underlying gap, the relevant assertion fires and the pin is
-renamed ``*_FIXED_parity`` with the sentinel inverted (PPP / MMM /
-JJJ / RRR / TTT / VVV Pin 1 / XXX Pin 2 precedent).
+renamed ``*_FIXED_parity`` (or ``*_partial_FIXED_parity`` for
+honest-stop closures) with the sentinel inverted (PPP / MMM / JJJ
+/ RRR / TTT / VVV Pin 1 / XXX Pin 2 / XXX Pin 3 precedent).
 
 Pinned bugs
 -----------
@@ -700,67 +715,82 @@ def test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_pa
 
 # ---------------------------------------------------------------------------
 # Pin 3 -- Lightstall Inquisitor's
-#          EachOpponentExilesCardFromHandWithCastPermission effect has
-#          no Rust Effect variant.  Persistent
-#          play-from-exile-with-surcharge permission subsystem gap;
-#          one of 6 cards on docs/POOL_PARITY.md::BLOCKED --
-#          genuinely_missing.  1 EoE card affected: Lightstall
-#          Inquisitor.
+#          EachOpponentExilesCardFromHandWithCastPermission effect NOW
+#          has a Rust Effect variant
+#          (Effect::EachOpponentExilesCardFromHandWithCastPermission)
+#          + parse arm + resolve arm (each-opponent-exile portion) +
+#          bridge arm (20th Rust slice -- honest-stop closure).
+#          1 EoE card unblocked (Effect-level + exile-portion byte-
+#          equality): Lightstall Inquisitor (4,371 17lands decks).
+#          The persistent cast-from-exile-with-surcharge permission
+#          substrate is HONEST-STOPPED -- documented at
+#          docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md §3 (large
+#          6+ cycles).
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_divergence_pin():
-    """Pin Lightstall Inquisitor's ETB effect lacking a Rust counterpart.
+def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity():
+    """**20th Rust slice (XXX Pin 3 honest-stop closure)** -- Lightstall
+    Inquisitor's ETB now has a matching Rust
+    ``Effect::EachOpponentExilesCardFromHandWithCastPermission`` unit
+    variant + parse arm + resolve arm (each-opponent-exile portion)
+    + bridge arm.
 
-    Lightstall Inquisitor's ENTERS triggered ability resolves to
-    ``EachOpponentExilesCardFromHandWithCastPermission`` on the
-    Python side (``src/mtg_bot/effects/generic/discard.py:172-214``).
-    Each opponent exiles a card from their hand and may play that
-    card for as long as it remains exiled; each spell cast this way
-    costs {1} more; each land played this way enters tapped.  The
-    exiled card is tagged
-    ``cast_from_exile_with_lightstall_surcharge=True``, and
-    ``legal.py`` + ``actions.py`` + ``game.py`` honour the flag to
-    grant + enforce the permission, surcharge, and tapped-entry
-    riders.  Rust's ``Effect`` enum has NO matching variant and no
-    awareness of the sticky flag.  One of 6 cards on the
-    ``docs/POOL_PARITY.md`` BLOCKED-genuinely_missing list; 4371
-    17lands decks per ``docs/RESIDUE_CARD_PLANS.md``:94.
+    Pre-closure (the divergence XXX Pin 3 locked in): Python's
+    ``EachOpponentExilesCardFromHandWithCastPermission``
+    (``src/mtg_bot/effects/generic/discard.py:172-214``) exiles a
+    card from each opponent's hand and tags it with
+    ``cast_from_exile_with_lightstall_surcharge=True``; ``legal.py``
+    + ``actions.py`` + ``game.py`` honour the flag to grant +
+    enforce the persistent permission, +{1} surcharge, and
+    tapped-land-entry riders.  Rust's ``Effect`` enum had no
+    matching variant and no awareness of the sticky flag.  This was
+    one of 6 cards on the ``docs/POOL_PARITY.md`` BLOCKED-
+    genuinely_missing list.
 
-    Probe shape:
-      1. Confirm Python's
-         ``EachOpponentExilesCardFromHandWithCastPermission`` class
-         exists with the expected interface (``resolve`` method
-         present; iterates non-controller alive players; routes
-         through ``choose_discard``; tags
-         ``cast_from_exile_with_lightstall_surcharge``).
-      2. Sentinel: the Rust crate's source files contain NO
-         reference to ``Lightstall`` / ``lightstall`` /
-         ``EachOpponentExilesCardFromHand`` /
-         ``cast_from_exile_with_lightstall_surcharge`` -- the Rust
-         side is silent on this effect today.
-      3. Confirm Lightstall Inquisitor is loadable + carries the
-         ENTERS triggered ability on the Python side, with the
-         expected effect attached.
-      4. Confirm ``docs/POOL_PARITY.md``'s BLOCKED-genuinely_missing
-         list contains Lightstall Inquisitor (the documented
-         worklist entry for this gap).
+    Post-closure (partial; asserted here): a new
+    ``Effect::EachOpponentExilesCardFromHandWithCastPermission``
+    unit variant lands in ``rust/src/cards.rs`` with parse arm,
+    to_pydict arm, resolve arm in
+    ``rust/src/state_ops_resolve.rs``, and bridge arm in
+    ``src/mtg_bot/parity/cross_engine.py``.  The resolve arm
+    mirrors Python step-for-step on the EACH-OPPONENT-EXILE
+    portion: source-controller resolution; 2-player "each opponent"
+    reduces to "the one opponent"; empty hand = silent no-op; pop
+    hand[0]; CR 400.7 zone-change reset; push to opponent's exile.
 
-    Closure indicator:
-    ``Effect::EachOpponentExilesCardFromHandWithCastPermission`` (or
-    a more general
-    ``EachOpponentExilesFromHandMayPlayCostHike`` shape) lands in
-    ``rust/src/cards.rs``, with a parse arm + resolve arm in
-    ``state_ops_resolve.rs`` + bridge arm in ``cross_engine.py`` +
-    the persistent-cast-from-exile-with-surcharge permission
-    substrate.  Pin renames to ``..._FIXED_parity`` asserting the
-    variant + parse arm + resolve arm are present.
+    **HONEST-STOP boundary.** The persistent
+    ``cast_from_exile_with_lightstall_surcharge`` per-object flag
+    + cast-from-exile legality + +{1} surcharge + tapped-land-
+    entry riders are NOT plumbed in this slice. Rust's
+    ``GameObject`` struct has no such field today;
+    ``state_ops_legal.rs`` does not surface exile-as-cast-source
+    for that flag; ``state_ops_cast.rs`` does not honor the
+    surcharge / tapped-entry riders. Cross-engine byte-equality
+    holds up to the exile step. Substrate scope: 6+ cycles
+    (``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` §3).
 
-    EoE card scale: 1 directly (Lightstall Inquisitor; 4371 17lands
-    decks).
+    Closure shape:
+      1. Python's ``EachOpponentExilesCardFromHandWithCastPermission``
+         class is unchanged (the SoT side; the closure was Rust-side).
+      2. Sentinel inverted: the Rust crate's source files NOW
+         contain ``EachOpponentExilesCardFromHandWithCastPermission`` /
+         ``each_opponent_exiles_card_from_hand_lightstall`` (the new
+         variant + parse arm + resolve arm).
+      3. The bridge arm round-trips Rust's
+         ``{"kind": "each_opponent_exiles_card_from_hand_lightstall"}``
+         to Python's
+         ``EachOpponentExilesCardFromHandWithCastPermission()``.
+
+    EoE card scale: 1 directly (Lightstall Inquisitor; 4,371 17lands
+    decks per ``docs/RESIDUE_CARD_PLANS.md``:94). Effect-level +
+    exile-portion byte-equality closure for the Effect-shape gap;
+    full cast-from-exile permission deferred to a future substrate
+    slice.
     """
     # 1. Python's EachOpponentExilesCardFromHandWithCastPermission
-    #    class exists with the expected interface.
+    #    class exists with the expected interface (the SoT side;
+    #    unchanged by this slice).
     from mtg_bot.effects.generic.discard import (
         EachOpponentExilesCardFromHandWithCastPermission,
     )
@@ -813,10 +843,9 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
         "the Python convention changed."
     )
 
-    # 2. Rust crate: NO reference to Lightstall / lightstall /
-    #    EachOpponentExilesCard /
-    #    cast_from_exile_with_lightstall_surcharge in cards.rs or
-    #    state_ops_resolve.rs.
+    # 2. Rust crate: sentinels INVERTED -- the Rust source files NOW
+    #    contain Effect::EachOpponentExilesCardFromHandWithCastPermission
+    #    + the parse-arm kind string + the resolve arm.
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_cards_path = repo_root / "rust" / "src" / "cards.rs"
@@ -832,29 +861,75 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
     cards_src = rust_cards_path.read_text(encoding="utf-8")
     resolve_src_rs = rust_resolve_path.read_text(encoding="utf-8")
 
-    forbidden_substrings = [
-        "Lightstall",
-        "lightstall",
-        "LightstallInquisitor",
-        "lightstall_inquisitor",
-        "EachOpponentExilesCardFromHand",
-        "each_opponent_exiles_card_from_hand",
-        "cast_from_exile_with_lightstall_surcharge",
-        "EachOpponentExilesFromHandMayPlayCostHike",
+    # Closure assertions: the Effect variant name + parse-arm kind
+    # string + bridge dict-kind MUST appear in cards.rs; the resolve
+    # arm MUST appear in state_ops_resolve.rs.
+    required_in_cards = [
+        "EachOpponentExilesCardFromHandWithCastPermission",
+        "each_opponent_exiles_card_from_hand_lightstall",
     ]
-    for needle in forbidden_substrings:
-        assert needle not in cards_src, (
-            f"Pin sentinel: rust/src/cards.rs should NOT yet contain "
-            f"{needle!r} (no Lightstall Inquisitor Effect variant "
-            "exists).  If this assertion fails, the closure may have "
-            "landed -- audit the Rust enum + parse arm + resolve arm "
-            "and flip this pin to _FIXED_parity."
+    for needle in required_in_cards:
+        assert needle in cards_src, (
+            f"Closure assertion: rust/src/cards.rs MUST contain "
+            f"{needle!r} (the Effect variant + parse-arm + to_pydict "
+            "arm landed by the 20th Rust slice).  If this fails, the "
+            "Rust-side closure was reverted -- audit the slice."
         )
-        assert needle not in resolve_src_rs, (
-            f"Pin sentinel: rust/src/state_ops_resolve.rs should NOT "
-            f"yet contain {needle!r} (no Lightstall Inquisitor "
-            "resolve arm exists)."
+    required_in_resolve = [
+        "EachOpponentExilesCardFromHandWithCastPermission",
+    ]
+    for needle in required_in_resolve:
+        assert needle in resolve_src_rs, (
+            f"Closure assertion: rust/src/state_ops_resolve.rs MUST "
+            f"contain {needle!r} (the resolve arm landed by the 20th "
+            "Rust slice -- each-opponent-exile portion).  If this "
+            "fails, the resolve arm was reverted -- audit the slice."
         )
+
+    # **HONEST-STOP boundary marker.** The persistent
+    # cast_from_exile_with_lightstall_surcharge flag substrate is NOT
+    # in Rust yet -- documenting the boundary here so a future
+    # substrate slice landing can find the assertion to invert.
+    # Sentinel: the Rust GameObject struct (state.rs) carries NO
+    # 'cast_from_exile_with_lightstall_surcharge' field. The variant
+    # docstring references the field-name string, but the actual
+    # Rust-side struct field does not exist. Checking for the field-
+    # declaration line ('cast_from_exile_with_lightstall_surcharge:')
+    # rather than the bare name (which appears in the docstring as
+    # the substrate-scope identifier) keeps the sentinel honest.
+    rust_state_path = repo_root / "rust" / "src" / "state.rs"
+    assert rust_state_path.exists(), (
+        f"Rust source file should exist at {rust_state_path!r}."
+    )
+    state_src_rs = rust_state_path.read_text(encoding="utf-8")
+    assert "cast_from_exile_with_lightstall_surcharge:" not in state_src_rs, (
+        "Honest-stop boundary: rust/src/state.rs's GameObject struct "
+        "should NOT yet carry a 'cast_from_exile_with_lightstall_"
+        "surcharge:' field declaration (the persistent permission "
+        "substrate is honest-stopped in the 20th Rust slice; see "
+        "docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md §3 for substrate "
+        "scope).  If this assertion fails, the persistent permission "
+        "substrate landed in a follow-up slice -- flip this pin to "
+        "..._FIXED_parity (drop the _partial_) and remove this "
+        "honest-stop assertion."
+    )
+
+    # 2a. The bridge arm round-trips the Rust dict to a Python
+    #     EachOpponentExilesCardFromHandWithCastPermission instance.
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect,
+    )
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_exiles_card_from_hand_lightstall"}
+    )
+    assert isinstance(
+        bridged, EachOpponentExilesCardFromHandWithCastPermission
+    ), (
+        f"Closure assertion: bridge arm should round-trip "
+        f"{{'kind': 'each_opponent_exiles_card_from_hand_lightstall'}} "
+        f"to EachOpponentExilesCardFromHandWithCastPermission().  Got: "
+        f"{type(bridged).__name__}."
+    )
 
     # 3. Lightstall Inquisitor is loadable + carries the expected
     #    ETB trigger.
@@ -889,21 +964,7 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
         f"{type(enters_ta.effect).__name__}."
     )
 
-    # 4. POOL_PARITY's BLOCKED-genuinely_missing list contains
-    #    Lightstall Inquisitor.
-    pool_parity_path = repo_root / "docs" / "POOL_PARITY.md"
-    assert pool_parity_path.exists(), (
-        f"docs/POOL_PARITY.md should exist at {pool_parity_path!r}."
-    )
-    pool_parity_src = pool_parity_path.read_text(encoding="utf-8")
-    assert "Lightstall Inquisitor" in pool_parity_src, (
-        "Pin invariant: docs/POOL_PARITY.md should list 'Lightstall "
-        "Inquisitor' (the BLOCKED-genuinely_missing entry).  If "
-        "absent, the worklist was updated -- audit this pin's "
-        "BLOCKED status."
-    )
-
-    # 5. EoE cards affected.
+    # 4. EoE cards affected.
     affected_eoe_cards = [
         "Lightstall Inquisitor",
         # Creature with each-opponent-exiles-card-from-hand + may-play
@@ -924,15 +985,19 @@ def test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_
 
 def test_xxx_pin_inventory_complete():
     """Sanity check: the XXX batch declares exactly 3 pin tests
-    (2 OPEN _divergence_pin + 1 CLOSED _FIXED_parity after the 18th
-    Rust slice).
+    (1 OPEN _divergence_pin + 1 CLOSED _FIXED_parity + 1 PARTIAL
+    _partial_FIXED_parity after the 18th + 20th Rust slices).
 
     Pin batch XXX (round 25 pin-side) targets 3 divergence pins per
     the lane discipline.  Pin 2 (Roving Actuator) was closed by the
-    18th Rust slice and renamed ``..._FIXED_parity``; Pins 1 and 3
-    remain OPEN ``..._divergence_pin``.  This guards against
-    accidental deletion or rename of any pin function (open or
-    closed).
+    18th Rust slice and renamed ``..._FIXED_parity``; Pin 3
+    (Lightstall Inquisitor) was partially closed by the 20th Rust
+    slice (Effect-level + each-opponent-exile portion byte-equal;
+    persistent cast-from-exile permission substrate honest-stopped)
+    and renamed ``..._partial_FIXED_parity``; Pin 1 (House
+    Cartographer) remains OPEN ``..._divergence_pin``.  This guards
+    against accidental deletion or rename of any pin function (open
+    / closed / partial).
     """
     import tests.test_divergence_pins_xxx as _self_mod
     open_pin_fns = [
@@ -942,17 +1007,24 @@ def test_xxx_pin_inventory_complete():
     closed_pin_fns = [
         name for name in dir(_self_mod)
         if name.startswith("test_") and name.endswith("_FIXED_parity")
+        and not name.endswith("_partial_FIXED_parity")
+    ]
+    partial_pin_fns = [
+        name for name in dir(_self_mod)
+        if name.startswith("test_") and name.endswith("_partial_FIXED_parity")
     ]
     expected_open_pins = {
         "test_cross_engine_real_eoe_house_cartographer_reveal_until_land_no_rust_variant_divergence_pin",
-        "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_divergence_pin",
     }
     expected_closed_pins = {
         "test_cross_engine_real_eoe_roving_actuator_void_etb_no_rust_variant_FIXED_parity",
     }
+    expected_partial_pins = {
+        "test_cross_engine_real_eoe_lightstall_inquisitor_exile_with_cast_permission_no_rust_variant_partial_FIXED_parity",
+    }
     assert set(open_pin_fns) == expected_open_pins, (
-        "XXX open-pin inventory mismatch.  Expected exactly the 2 "
-        "open pin tests:\n"
+        "XXX open-pin inventory mismatch.  Expected exactly the 1 "
+        "open pin test (Pin 1 still open):\n"
         f"  {sorted(expected_open_pins)}\n"
         f"Got:\n  {sorted(open_pin_fns)}"
     )
@@ -961,4 +1033,11 @@ def test_xxx_pin_inventory_complete():
         "closed pin test (Pin 2 closed by 18th Rust slice):\n"
         f"  {sorted(expected_closed_pins)}\n"
         f"Got:\n  {sorted(closed_pin_fns)}"
+    )
+    assert set(partial_pin_fns) == expected_partial_pins, (
+        "XXX partial-pin inventory mismatch.  Expected exactly the 1 "
+        "partial pin test (Pin 3 partial-closed by 20th Rust slice; "
+        "persistent permission substrate honest-stopped):\n"
+        f"  {sorted(expected_partial_pins)}\n"
+        f"Got:\n  {sorted(partial_pin_fns)}"
     )
