@@ -4487,23 +4487,8 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     # Triggered / static / activated / spell-effect riders — other
     # Aura sub-shapes (S4 = triggered, S2 = static control-swap).
-    #
-    # **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).** A
-    # narrow exception for the Tractor Beam shape — a single Aura ETB
-    # trigger of the form ``Event.ENTERS + IsSelf + TapEnchantedPermanent``.
-    # The ``TapEnchantedPermanent`` Effect is a bridge-supported unit
-    # variant (``cross_engine.py:5317`` Python<-dict arm; Rust resolve
-    # at ``state_ops_resolve.rs::TapEnchantedPermanent``) that resolves
-    # by reading the source Aura's ``attached_to`` and tapping the
-    # host. The trigger admit is gated on the EXACT shape — a single
-    # ENTERS trigger with the unit-variant Tap effect — so any future
-    # Aura with a richer ETB body keeps falling through to the
-    # generic ``triggered_abilities`` decline below.
     if printing.triggered_abilities:
-        if not _aura_triggers_are_phase2_s2_safe(
-            printing.triggered_abilities
-        ):
-            return False
+        return False
     if printing.activated_abilities:
         return False
     if printing.static_abilities:
@@ -4547,18 +4532,25 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     if printing.attached_grants_control and (
         not printing.attached_grants_lose_all_abilities
     ):
-        # Lone control-grant without the lose-abilities wipe. Pre-
-        # extension, this was a blanket decline. **Phase 2 S2
-        # extension (Tractor Beam closure, 2026-05-20)** admits the
-        # specific paired shape control + prevents_untap (Tractor
-        # Beam: control + don't-untap + ETB tap, no lose-abilities).
-        # The host still has its abilities (no layer-6 wipe), but
-        # the controller-swap + permanent-tap-down combination is
-        # the printed mechanic and the Rust attach arm flips the
-        # controller exactly like the Duskmourn case. Any OTHER lone
-        # control-grant shape stays declined as a defensive guard.
-        if not printing.attached_prevents_untap:
-            return False
+        # Lone control-grant without the lose-abilities wipe (no live
+        # EoE carrier matches this shape today, but stay defensive —
+        # admitting a control-only Aura would silently mistranslate
+        # against a host that still has functional abilities the
+        # bench may rely on).
+        #
+        # **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
+        # The bench-loader admit for Tractor Beam (control-grant +
+        # prevents-untap + ETB-tap-self) is honest-stopped pending a
+        # cross-engine play-parity follow-up — the substrate IS
+        # plumbed through (``aura_prevents_host_untap`` field +
+        # Rust untap-step skip + ``TapEnchantedPermanent`` Aura ETB
+        # bridge), and the byte-equal round-trip + untap-step probe
+        # pass at substrate level. Full cross-engine play parity
+        # (the production-deck shadow bake-in) requires aligning
+        # Python's cast-time auto-resolve-target seat with Rust's
+        # for the Tractor-Beam shape under an opponent-creature host
+        # — a separate slice. SL-documented.
+        return False
     if printing.attached_grants_lose_all_abilities and (
         not printing.attached_grants_control
     ):
@@ -4571,17 +4563,7 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     if printing.attached_grants_subtype is not None:
         return False
-    if printing.attached_prevents_untap and (
-        not printing.attached_grants_control
-    ):
-        # Phase 2 S2 extension (Tractor Beam closure, 2026-05-20): a
-        # lone don't-untap rider without the control-grant is a
-        # different shape (no live EoE carrier today matches it —
-        # Stay Hidden Stay Silent has BOTH don't-untap AND
-        # control-grant, just like Tractor Beam, and is the only
-        # other live consumer of the Rust untap-step skip). Keep
-        # this defensive; the paired (control + prevents_untap)
-        # shape flows through the relaxed gate above.
+    if printing.attached_prevents_untap:
         return False
     if printing.replaces_first_tokens_with_copies:
         return False

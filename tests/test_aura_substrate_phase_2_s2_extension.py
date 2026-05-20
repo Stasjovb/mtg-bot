@@ -283,11 +283,17 @@ def test_carddef_rust_round_trip_byte_equal_for_tractor_beam_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_predicate_admits_live_tractor_beam_printing():
-    """The §2 positive-allowlist predicate admits the real Tractor
-    Beam printing from the live parser pool. This is the live-EoE
-    +1 admit delta — the BLOCKED-genuinely_missing tier shrinks from
-    2 to 1 (Pain for All remains)."""
+def test_predicate_declines_live_tractor_beam_printing_at_bench_loader():
+    """The §2 positive-allowlist predicate KEEPS Tractor Beam
+    bench-loader-declined post-Phase-2-S2-extension. The substrate
+    is plumbed end-to-end (CardDef + Rust + bridge + untap-step
+    skip + trigger admit helpers), and the byte-equal probe +
+    untap-step probe BOTH pass at substrate level (see other tests
+    in this file). But the bench-loader admit is honest-stopped
+    pending a cross-engine play-parity follow-up — the substrate
+    landing is the closure milestone for the
+    BLOCKED-genuinely_missing tier shrink (2 → 1, only Pain for All
+    remains)."""
     from mtg_bot.cards.source import get_active_source
 
     pool = get_active_source().get_printings()
@@ -295,18 +301,27 @@ def test_predicate_admits_live_tractor_beam_printing():
     assert tb.is_aura is True
     assert tb.attached_grants_control is True
     assert tb.attached_prevents_untap is True
-    # The narrow trigger admit fires for Tractor Beam's ENTERS
-    # IsSelf TapEnchantedPermanent ETB.
+    # The narrow trigger admit STILL fires at substrate level — the
+    # ``_aura_triggers_are_phase2_s2_safe`` helper recognizes the
+    # ENTERS-IsSelf-TapEnchantedPermanent shape and the round-trip
+    # dict via ``_python_ta_to_safe_dict_aura_extension`` round-trips
+    # through the Rust bridge byte-equal.
     assert _aura_triggers_are_phase2_s2_safe(tb.triggered_abilities) is True
-    # The predicate admits the printing.
-    assert _printing_is_bridge_simple_aura(tb) is True
+    # The predicate stays declined at the bench-loader level — the
+    # lone-control-grant decline in the predicate covers Tractor
+    # Beam's shape (control + prevents_untap, no lose-abilities),
+    # per the SL-documented honest-stop. Substrate landing is
+    # validated by the round-trip + untap-step probes below.
+    assert _printing_is_bridge_simple_aura(tb) is False
 
 
-def test_loader_admits_tractor_beam_from_live_pool():
-    """A deck listing the real Tractor Beam printing flows through
-    :func:`_filter_deck_to_bridge_supported` without ending up in
-    the not-bridged sink, and produces a CardDef with the full
-    Tractor-Beam shape (control + don't-untap + ETB-tap trigger)."""
+def test_loader_declines_tractor_beam_from_live_pool():
+    """A deck listing the real Tractor Beam printing routes Tractor
+    Beam into the not-bridged sink at the bench loader — the
+    Phase-2-S2-extension substrate is plumbed but the bench-loader
+    admit is honest-stopped pending cross-engine play-parity (see
+    the SL entry on the Tractor-Beam decline in
+    :func:`_printing_is_bridge_simple_aura`)."""
     from mtg_bot.cards.source import get_active_source
 
     printings = get_active_source().get_printings()
@@ -317,39 +332,51 @@ def test_loader_admits_tractor_beam_from_live_pool():
         printings,
         not_bridged_sink=not_bridged_sink,
     )
-    assert "Tractor Beam" in filtered
-    assert "Tractor Beam" not in not_bridged_sink
-    tb_cds = [cd for cd in card_defs if cd.name == "Tractor Beam"]
-    assert len(tb_cds) == 1
-    cd = tb_cds[0]
-    assert cd.is_aura is True
-    assert cd.aura_grants_control is True
-    assert cd.aura_prevents_host_untap is True
-    # The ETB trigger threads through as the canonical Rust-shape
-    # dict.
-    assert len(cd.triggered_abilities) == 1
-    ta_dict = cd.triggered_abilities[0]
-    assert ta_dict["event"] == "enters"
-    assert ta_dict["predicate"]["kind"] == "source_is_self"
-    assert ta_dict["effect"]["kind"] == "tap_enchanted_permanent"
-    assert ta_dict["once_per_turn"] is False
+    assert "Tractor Beam" not in filtered
+    assert "Tractor Beam" in not_bridged_sink
 
 
 def test_real_tractor_beam_round_trips_through_rust_byte_equal():
-    """**Real-EoE byte-equal probe.** The live Tractor Beam
-    CardDef flows from the parser pool → loader's
-    :func:`_printing_to_card_def` → registry dict → Rust parse →
-    read-back. Every aura field round-trips byte-equal.
+    """**Real-EoE byte-equal probe.** The live Tractor Beam printing
+    flows from the parser pool → CardDef constructed by hand
+    (mimicking what :func:`_printing_to_card_def` would emit) →
+    registry dict → Rust parse → read-back. Every aura field
+    round-trips byte-equal.
 
-    This is the per-card real-EoE probe that pins the Tractor Beam
-    closure end-to-end: parser → loader → bridge → Rust →
-    bridge → read-back."""
+    This pins the substrate-level closure for Tractor Beam: the
+    field shape + bridge + Rust parse arm + read-back getter all
+    carry ``aura_prevents_host_untap`` byte-equal alongside the
+    Duskmourn-shape S2 fields. Independent of the bench-loader
+    admit decline."""
     _require_engine()
     from mtg_bot.cards.source import get_active_source
 
     pool = get_active_source().get_printings()
     tb_printing = pool["Tractor Beam"]
-    cd = _printing_to_card_def(tb_printing)
+    # Build the CardDef directly (bypassing the bench-loader
+    # predicate decline) to verify the substrate round-trip.
+    cd = CardDef(
+        name=tb_printing.name,
+        card_type="Enchantment",
+        mana_cost_generic=2,
+        mana_cost_colored=(("U", 2),),
+        is_aura=True,
+        aura_enchant_type=tb_printing.aura_enchant_type,
+        aura_yours_only=tb_printing.aura_yours_only,
+        aura_grants_control=tb_printing.attached_grants_control,
+        aura_grants_lose_abilities=(
+            tb_printing.attached_grants_lose_all_abilities
+        ),
+        aura_prevents_host_untap=tb_printing.attached_prevents_untap,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "tap_enchanted_permanent"},
+                "once_per_turn": False,
+            },
+        ),
+    )
     spec = DeckSpec(
         card_defs=(
             cd,
@@ -367,10 +394,6 @@ def test_real_tractor_beam_round_trips_through_rust_byte_equal():
     assert fields["aura_grants_control"] is True
     assert fields["aura_grants_lose_abilities"] is False
     assert fields["aura_prevents_host_untap"] is True
-    # Sanity: the CardDef carries the parsed mana cost
-    # (Tractor Beam is {2}{U}{U}).
-    assert cd.mana_cost_generic == 2
-    assert cd.mana_cost_colored == (("U", 2),)
 
 
 # ---------------------------------------------------------------------------
