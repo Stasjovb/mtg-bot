@@ -61,6 +61,26 @@ hops"; the Pain-for-All medium→small flip still requires Phases
 2-3 to ship. **Tractor Beam** sits at Phase 2 of the substrate
 plan (S2 `attached_grants_control` — Duskmourn's Domination shape).
 
+**Round-79 update (2026-05-20): AURA ATTACH SUBSTRATE PHASE 2 FIRST
+DELIVERABLE LANDED.** The `_printing_is_bridge_simple_aura`
+predicate now admits `flash` per the round-39 Ward / round-59
+shockland symmetric-drop precedent (new
+`_AURA_SAFE_EXTRA_KEYWORDS = frozenset({"flash"})` constant; the
+CardDef bridge does NOT propagate the source printing's `keywords`
+field, so the rider is symmetrically dropped on both engines
+bit-equally). **Live-EoE admit delta of Phase 2 first deliverable:
++2 cards / +0 decks** — the two S1 carriers (Frantic Strength,
+Shardmage's Rescue) now flow end-to-end through the loader as the
+**first live EoE Auras** admitted. Both have 0 17lands EoE decks
+per the round-61 N1 scout, so the bench-signal delta is zero; the
+value is the first live admit of the substrate end-to-end. SL entry
+documents the symmetric drop at `docs/SEARCH_LIMITATIONS.md`. The
+full Phase 2 (S2 control-changing Rust slice — Duskmourn's
+Domination, Tractor Beam halves) remains deferred. Pain for All and
+Tractor Beam scope estimates remain unchanged (medium / large —
+they depend on Phase 2 S2 + Phase 3 residue Effects, not the Phase 2
+first deliverable's keyword admit widen).
+
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
 Pain for All 4,367 + Sothera 2,108). Some decks contain multiple
