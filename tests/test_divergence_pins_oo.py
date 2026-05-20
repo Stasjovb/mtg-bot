@@ -172,69 +172,56 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``room_fully_unlocked`` event string in
-    ``_ta_dict_to_python_triggered_ability``.
+def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_FIXED_parity():
+    """**OO Pin 1 CLOSED (9th Rust slice — room_fully_unlocked bridge arm).**
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8838-8874`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` recognises only the
-      event strings ``"enters"``, ``"dies"``, ``"cast"``, ``"attacks"``,
-      ``"blocks"``, ``"leaves_battlefield"``, ``"becomes_tapped"``.  All
-      other strings fall through to:
+    The bridge gap for ``"room_fully_unlocked"`` in
+    ``_ta_dict_to_python_triggered_ability`` is now FIXED.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: event "
-              "'room_fully_unlocked' is not yet wired"
-          )
+    **What was broken (pre-9th-slice):**
+      ``_ta_dict_to_python_triggered_ability`` raised ``ValueError:
+      event 'room_fully_unlocked' is not yet wired`` for any
+      triggered-ability dict with ``"event": "room_fully_unlocked"``.
+      10 EoE Room-mechanic cards were blocked from cross-engine probing.
 
-      Python's ``Event`` enum has ``Event.ROOM_FULLY_UNLOCKED`` (value
-      ``"room_fully_unlocked"``); the enum member exists, but there is no
-      bridge arm to wire it.
+    **What was fixed:**
+      Added ``elif event_str == "room_fully_unlocked":``
+          ``event = Event.ROOM_FULLY_UNLOCKED``
+      to the event-string elif chain in ``_ta_dict_to_python_triggered_ability``
+      (``cross_engine.py``).  The bridge now maps the string value to the
+      correct ``Event`` enum member without raising.
 
-    Scale:
-      10 EoE Room cards carry triggered abilities on the
-      ``room_fully_unlocked`` event.  Representative cards: Cult Healer,
-      Optimistic Scavenger, Entity Tracker, Balemurk Leech.  None of those
-      cards can be exercised via a Rust-sourced cross-engine probe that
-      emits ``"event": "room_fully_unlocked"`` in a triggered-ability dict.
+    **Scope note:**
+      This fix is pure Python — no Rust extension change required.  The
+      ``UnlockRoomHalf`` dispatch in Rust is still a stub (``state_ops_actions.rs``
+      raises ``ValueError`` — Room half-state is not yet in Rust's
+      ``GameObject``).  The bridge arm lands independently; Room-unlock
+      triggers will fire in real cross-engine games once a future slice
+      adds ``unlocked_halves`` to Rust's ``GameObject`` and flips the
+      dispatch stub.
 
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_triggered_ability`` raises ``ValueError`` for
-      ``event="room_fully_unlocked"``; the same call with
-      ``event="becomes_tapped"`` (a wired event) succeeds.
+    **Assertions (inverted from the former divergence-pin):**
+      1. ``Event.ROOM_FULLY_UNLOCKED`` exists and has value
+         ``"room_fully_unlocked"``.
+      2. The bridge does NOT raise for ``event="room_fully_unlocked"``.
+      3. The result is a ``TriggeredAbility`` with
+         ``event == Event.ROOM_FULLY_UNLOCKED``.
+      4. Enumerate the 10 EoE cards unblocked at the bridge layer.
 
-    Subject structure:
-      ``Event.ROOM_FULLY_UNLOCKED`` carries subject ``("room",)`` per
-      ``EVENT_SUBJECTS`` (``effects/predicates.py:222``).  The bridge arm
-      must wire the event; predicate translation for Room-anchor triggers
-      follows the standard arms (``always``, ``source_is_self``, etc.).
-
-    Closure path:
-      Add ``elif event_str == "room_fully_unlocked":
-          event = Event.ROOM_FULLY_UNLOCKED``
-      in the event-string elif chain.  When that arm lands, the ValueError
-      will no longer be raised and this sentinel will flip to FAIL -- the
-      signal to promote to a parity probe.
-
-    Probe shape:
-      1. Assert ``Event.ROOM_FULLY_UNLOCKED`` exists (Python side present).
-      2. Assert the bridge raises ``ValueError`` for the unwired event.
-      3. Assert the message mentions ``"room_fully_unlocked"`` and
-         ``"not yet wired"``.
-      4. Assert a wired event (``"becomes_tapped"``) does NOT raise.
-      5. Enumerate the 10 EoE cards that carry this event (documentation).
-
-    This pin is pure Python (no Rust extension required).
+    **EoE cards unblocked at the bridge layer (10 cards):**
+      Cult Healer, Optimistic Scavenger, Entity Tracker, Balemurk Leech,
+      Dashing Bloodsucker, Erratic Apparition, Gremlin Tamer, Infernal
+      Phantom, Scrabbling Skullcrab, Skullsnap Nuisance.
     """
     from mtg_bot.effects.predicates import Event
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
 
-    # 1. The Python Event enum has ROOM_FULLY_UNLOCKED.
+    # 1. The Python Event enum has ROOM_FULLY_UNLOCKED with the correct value.
     assert hasattr(Event, "ROOM_FULLY_UNLOCKED"), (
         "Event.ROOM_FULLY_UNLOCKED should be a member of the Event enum "
         "(effects/predicates.py). If this fails the enum member was renamed "
-        "-- update both this pin and the bridge arm."
+        "-- update both this test and the bridge arm."
     )
     assert isinstance(Event.ROOM_FULLY_UNLOCKED, Event), (
         "Event.ROOM_FULLY_UNLOCKED should be an Event enum instance."
@@ -244,8 +231,8 @@ def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_div
         f"got {Event.ROOM_FULLY_UNLOCKED.value!r}"
     )
 
-    # 2-3. Bridge raises ValueError for the unwired event -- pin the gap.
-    unwired_ta_dict = {
+    # 2-3. Bridge NO LONGER raises for "room_fully_unlocked" -- OO Pin 1 CLOSED.
+    ta_dict = {
         "event": "room_fully_unlocked",
         "predicate": {"kind": "always"},
         "effect": {
@@ -253,23 +240,17 @@ def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_div
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "room_fully_unlocked" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'room_fully_unlocked' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert isinstance(result, TriggeredAbility), (
+        "Bridge should produce a TriggeredAbility for event='room_fully_unlocked'; "
+        f"got {type(result).__name__}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.ROOM_FULLY_UNLOCKED, (
+        "Bridge should map event_str 'room_fully_unlocked' to "
+        f"Event.ROOM_FULLY_UNLOCKED; got {result.event!r}."
     )
 
-    # 4. A WIRED event ("becomes_tapped") round-trips without error.
+    # Sanity: "becomes_tapped" (previously wired) still round-trips cleanly.
     wired_ta_dict = {
         "event": "becomes_tapped",
         "predicate": {"kind": "source_is_self"},
@@ -278,26 +259,19 @@ def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_div
             "count": 1,
         },
     }
-    try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
-            "Wired event 'becomes_tapped' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
-        )
-        assert result.event == Event.BECOMES_TAPPED, (
-            "Wired event 'becomes_tapped' should translate to "
-            f"Event.BECOMES_TAPPED; got {result.event!r}."
-        )
-    except ValueError as e:
-        raise AssertionError(
-            "Sanity: 'becomes_tapped' is a wired event and should NOT raise "
-            f"ValueError -- got: {e}"
-        ) from e
+    wired_result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+    assert isinstance(wired_result, TriggeredAbility), (
+        "Regression: 'becomes_tapped' should still produce a TriggeredAbility; "
+        f"got {type(wired_result).__name__}."
+    )
+    assert wired_result.event == Event.BECOMES_TAPPED, (
+        "Regression: 'becomes_tapped' should still translate to "
+        f"Event.BECOMES_TAPPED; got {wired_result.event!r}."
+    )
 
-    # 5. Document the 10 EoE Room cards blocked by this gap.
+    # 4. Enumerate the 10 EoE cards unblocked at the bridge layer.
     #    (Enumerated via OracleParserCardSource; verified 2026-05-19.)
-    blocked_eoe_cards = [
+    unblocked_eoe_cards = [
         "Cult Healer",
         "Optimistic Scavenger",
         "Entity Tracker",
@@ -309,10 +283,9 @@ def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_div
         "Scrabbling Skullcrab",
         "Skullsnap Nuisance",
     ]
-    # Assert the expected count (10 cards) matches the enumerated list.
-    assert len(blocked_eoe_cards) == 10, (
-        "The 'room_fully_unlocked' event gap blocks 10 EoE Room-mechanic "
-        f"cards; enumerated list has {len(blocked_eoe_cards)} entries."
+    assert len(unblocked_eoe_cards) == 10, (
+        "OO Pin 1 closure unblocks 10 EoE Room-mechanic cards at the bridge "
+        f"layer; enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 

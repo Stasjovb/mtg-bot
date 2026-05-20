@@ -9336,6 +9336,38 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         #
         # EoE cards unblocked: Requiem Monolith and Pain for All.
         event = Event.DEALT_DAMAGE
+    elif event_str == "room_fully_unlocked":
+        # **OO Pin 1 — ROOM_FULLY_UNLOCKED event bridge.**
+        # Python's ``Event.ROOM_FULLY_UNLOCKED`` (value
+        # ``"room_fully_unlocked"``) fires when a Room enchantment has
+        # both of its halves unlocked — i.e. ``len(unlocked_halves) ==
+        # len(printing.room_halves)`` (CR 715.3-4; DSK / EoE Room mechanic).
+        # The subject is the Room ``GameObject`` itself (``("room",)`` per
+        # ``EVENT_SUBJECTS`` at ``effects/predicates.py:222``).
+        #
+        # **No spelling skew.** Python's string value ``"room_fully_unlocked"``
+        # matches the future Rust ``Event::RoomFullyUnlocked`` string; no
+        # translation needed.
+        #
+        # **Single-subject shape.** ``EVENT_SUBJECTS[ROOM_FULLY_UNLOCKED]``
+        # is ``("room",)`` — just the Room permanent.  No predicate-slot
+        # rewrite is needed alongside this arm (unlike the two-subject
+        # DEALS_COMBAT_DAMAGE arm above).
+        #
+        # **Dispatch note.** The Rust UnlockRoomHalf dispatch is currently a
+        # stub (``state_ops_actions.rs`` raises ``ValueError`` — Room half-state
+        # missing from Rust's ``GameObject``).  This bridge arm lands
+        # independently: any Rust-sourced card whose triggered-ability dict
+        # carries ``"event": "room_fully_unlocked"`` can now round-trip through
+        # the bridge without a ValueError.  The event will fire in real games
+        # once a future Rust slice adds ``unlocked_halves`` to ``GameObject``
+        # and flips the ``UnlockRoomHalf`` dispatch.
+        #
+        # EoE cards unblocked at the bridge layer (10 cards): Cult Healer,
+        # Optimistic Scavenger, Entity Tracker, Balemurk Leech, Dashing
+        # Bloodsucker, Erratic Apparition, Gremlin Tamer, Infernal Phantom,
+        # Scrabbling Skullcrab, Skullsnap Nuisance.
+        event = Event.ROOM_FULLY_UNLOCKED
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
