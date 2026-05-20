@@ -223,6 +223,7 @@ fn push_object(
         warp_exile_pending: false,
         warped: false,
         cast_from_exile_with_lightstall_surcharge: false,
+        controller_baseline: None,
     });
     *next_id += 1;
 }

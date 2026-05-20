@@ -246,6 +246,21 @@ pub struct GameObject {
     /// surface, which had no Rust path pre-substrate, becomes
     /// observable).
     pub cast_from_exile_with_lightstall_surcharge: bool,
+    /// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
+    /// Captured baseline of `controller` BEFORE the first
+    /// control-changing Aura attached to this object. `None` when no
+    /// control-change is active. When the last control-changing Aura
+    /// leaves play (SBA bury / move-off-battlefield), the
+    /// `controller` field is reverted from this baseline and the
+    /// baseline cleared back to `None`.
+    ///
+    /// Mirrors Python's
+    /// `GameObject.controller_id_before_any_aura_swap`
+    /// (`game.py:580`). `None` is the back-compat default for every
+    /// freshly-allocated object; the per-object fingerprint tuple
+    /// does NOT include this slot, so pre-S2 pinned baselines stay
+    /// byte-equal.
+    pub controller_baseline: Option<u8>,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -2551,6 +2566,11 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // carries the Lightstall flag; stamped only at Effect-
         // resolution time on the exiled card.
         cast_from_exile_with_lightstall_surcharge: false,
+        // Aura-attachment substrate — Phase 2 S2 (round-79+,
+        // 2026-05-20): freshly-allocated objects have no captured
+        // baseline. Back-compat default; not in the per-object
+        // fingerprint tuple.
+        controller_baseline: None,
     }
 }
 
@@ -2695,6 +2715,17 @@ pub fn make_synthetic_state(
         // pre-substrate registry dict omits the `dynamic_pt_formula`
         // key, parser maps the absence to None).
         dynamic_pt_formula: None,
+        // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
+        // synthetic-state printings are not S2 Auras. Back-compat
+        // defaults — every pre-S2 registry dict omits these keys.
+        aura_grants_control: false,
+        aura_grants_lose_abilities: false,
+        aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2751,6 +2782,17 @@ pub fn make_synthetic_state(
         // pre-substrate registry dict omits the `dynamic_pt_formula`
         // key, parser maps the absence to None).
         dynamic_pt_formula: None,
+        // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
+        // synthetic-state printings are not S2 Auras. Back-compat
+        // defaults — every pre-S2 registry dict omits these keys.
+        aura_grants_control: false,
+        aura_grants_lose_abilities: false,
+        aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2820,6 +2862,17 @@ pub fn make_synthetic_state(
         // pre-substrate registry dict omits the `dynamic_pt_formula`
         // key, parser maps the absence to None).
         dynamic_pt_formula: None,
+        // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20):
+        // synthetic-state printings are not S2 Auras. Back-compat
+        // defaults — every pre-S2 registry dict omits these keys.
+        aura_grants_control: false,
+        aura_grants_lose_abilities: false,
+        aura_set_base_pt: None,
+        // Static / layered abilities substrate — Phase 1 first-
+        // deliverable (round-79): synthetic-state printings have no
+        // anthem statics. Back-compat default (every pre-substrate
+        // registry dict omits the `static_anthems` key).
+        static_anthems: Vec::new(),
     });
     let registry = builder.snapshot();
 

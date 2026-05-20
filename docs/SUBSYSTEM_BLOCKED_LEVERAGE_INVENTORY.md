@@ -48,7 +48,7 @@ estimate.
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status |
 |---|---:|---:|---:|---|---|---|
 | Aura-attachment substrate | 7 | 4 | 633 | sprawling | medium-large (Phase 1 LANDED; Phases 2-4 deferred) | Phase 1 SHIPPED round 78 |
-| Static / layered abilities | 15 | 8 | 34,526 | sprawling | medium-large (layer-7 CDA + grants + Static frontier) | OPEN |
+| Static / layered abilities | 15 | 8 | 34,526 | sprawling | medium-large (layer-7 CDA + grants + Static frontier) | Phase 1 SHIPPED round 79 (anthem keyword-grant sub-shape; Tannuk admitted) |
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium (5 cards realizable; 18 deferred behind sibling substrates) | partial (5 shipped round 60) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED |
 | warp_cost (declined cost-mechanic) | 10 | 3 | 15,436 | medium | medium (Phase 1+1.5+2 SHIPPED rounds 67-cycle-7) | Phase 1/1.5/2 SHIPPED |
@@ -75,12 +75,60 @@ Filtered to substrates that are **(a) named-and-bounded** (not the
 diffuse Effect-uncovered / Non-safe-trigger tails), **(b) not already
 fully closed**, and ranked by **decks(1g) ÷ remaining-closure-scope**.
 
-### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling
+### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling — Phase 1 SHIPPED round 79
 
 The dominant **un-shipped** named substrate by single-gate deck count.
 Includes Brightspear Zealot, Cloudsculpt Technician, Frenzied Baloth,
 Gravblade Heavy, Mechan Shieldmate, Rampaging Soulrager, Tannuk
-Steadfast Second, Wildfire Wickerfolk. The other 7 of the 15 are
+Steadfast Second, Wildfire Wickerfolk.
+
+**Phase 1 (round 79) — anthem keyword-grant sub-shape LANDED.** The
+simplest static-ability shape — an unconditional anthem layer-6
+keyword grant whose scope is `[other_]creatures_you_control` — is
+end-to-end through both engines. Substrate scope shipped:
+
+* CardDef `static_anthems: tuple[tuple[scope, tuple[keyword,...]], ...]`
+* Bridge round-trip (Python → registry dict → Rust parse arm → Rust
+  `CardPrinting.static_anthems: Vec<StaticAnthem>` → Python
+  `Registry.get_printing_static_anthems` getter)
+* Rust reader-site fold: `battlefield_has_keyword` extended with
+  `static_anthem_grants_keyword_to` (rides the round-78 Aura Phase 1
+  STEP-4 layer-6 reader precedent)
+* Python materialization via `_card_def_to_python_printing` builds
+  the one-StaticAbility-per-keyword fan-out the parser emits.
+* Loader admit-disjunct `_printing_is_bridge_simple_static_anthem_
+  creature` (7th disjunct of `_filter_deck_to_bridge_supported`).
+
+**Tannuk Steadfast Second** is the canonical EoE single-gated carrier
+of this shape ("Other creatures you control have haste.") and is now
+bridge-admitted. The remaining 7 single-gated cards are each
+honest-stopped to a later slice because they each carry a different
+non-Phase-1 sub-shape:
+
+* **Conditional self-statics** (Cloudsculpt Technician + Gravblade
+  Heavy: `ControlPermanent(IsArtifact())` rider; Brightspear Zealot:
+  `AtLeastNSpellsCastThisTurn(2)`; Mechan Shieldmate:
+  `ControlledArtifactEnteredThisTurn` rider on a `RemoveKeyword`
+  layer-6 modifier; Rampaging Soulrager: `UnlockedDoorsAmongRoomsAtLeast(2)`;
+  Wildfire Wickerfolk: `DeliriumActive()`). Each needs a
+  per-Condition Rust port + the SELF-scope reader-site walk.
+* **`grants_creature_spells_uncounterable` flag** (Frenzied Baloth's
+  "Creature spells you control can't be countered." — a non-anthem
+  cast-side static). Needs the counterspell-pipeline gate plumbed on
+  the Rust side.
+
+**Next slices in this substrate (recommended sequencing):**
+
+1. **Self-scope conditional layer-7 P/T statics** (Cloudsculpt /
+   Gravblade / Brightspear). Same condition surface as the existing
+   Aura Phase 1 layer-7c P/T-bonus reader; needs per-Condition Rust
+   port + a SELF-scope-only reader-site fold for `effective_power` /
+   `effective_toughness`. ~3-5 cycles.
+2. **`grants_creature_spells_uncounterable` flag** (Frenzied Baloth).
+   Cast-side gate at counterspell admit; not a layer-6/-7 fold.
+   ~1-2 cycles standalone.
+3. **Counter-gated anthem** (no EoE carrier today, but the predicate
+   surface exists). Out of EoE scope. The other 7 of the 15 are
 multi-gated (Exalted Sunborn warp+static; Loading Zone warp+static;
 Memorial Team Leader warp+static; Nexus of Fate effect-uncovered+
 non-safe-trig+static; Starfield Vocalist warp+static; Lumen-Class

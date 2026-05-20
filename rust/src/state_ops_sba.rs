@@ -306,6 +306,20 @@ fn move_aura_to_owners_graveyard(
     };
     let printing_id = obj.printing_id;
     let dying_obj_id = obj.id;
+    // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    // Snapshot the host id + whether this Aura was granting control
+    // BEFORE we clear `attached_to`. If yes, walk both bfs after the
+    // graveyard push to check whether any OTHER attached Aura still
+    // grants control of the same host; if none, revert the host's
+    // `controller` from `controller_baseline` and clear the
+    // baseline. Mirrors Python's `move_off_battlefield` aura-control-
+    // revert path (`turn.py:216-229` + `_recompute_obj_controller`).
+    let was_grants_control = state
+        .registry
+        .lookup(printing_id)
+        .map(|p| p.aura_grants_control)
+        .unwrap_or(false);
+    let prior_host_id = obj.attached_to;
     obj.zone = ZONE_GRAVEYARD;
     obj.controller = owner_id;
     obj.damage = 0;
@@ -313,6 +327,21 @@ fn move_aura_to_owners_graveyard(
     obj.attached_to = None;
     let target = &mut state.players[owner_id as usize];
     Arc::make_mut(&mut target.graveyard).push(obj);
+    // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    // Revert host's controller if (a) this Aura granted control and
+    // (b) no OTHER attached control-granting Aura remains on the
+    // host. Mirrors Python's _recompute_obj_controller cache refresh
+    // after move_off_battlefield drops the control_change entry.
+    if was_grants_control {
+        if let Some(host_id) = prior_host_id {
+            let any_other_grant = bf_any_other_aura_grants_control(
+                state, host_id, dying_obj_id,
+            );
+            if !any_other_grant {
+                revert_host_controller_from_baseline(state, host_id);
+            }
+        }
+    }
     // Round-29 Void LTB tracking: an Aura leaving the bf is a
     // bf-exit of a nonland permanent → flips the per-turn flag.
     mark_left_battlefield_if_nonland(state, printing_id);
@@ -328,6 +357,65 @@ fn move_aura_to_owners_graveyard(
     // is a no-op if the printing isn't a token.
     crate::state_ops_zones::queue_token_cease(state, dying_obj_id);
     true
+}
+
+/// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
+/// True iff any bf Aura OTHER than `excluding_aura_id` whose
+/// `attached_to == Some(host_id)` carries `aura_grants_control`.
+/// Used by `move_aura_to_owners_graveyard` to decide whether to
+/// revert the host's controller after one control-granting Aura
+/// leaves. Single-pass over both bfs.
+fn bf_any_other_aura_grants_control(
+    state: &GameState,
+    host_id: u32,
+    excluding_aura_id: u32,
+) -> bool {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.id == excluding_aura_id {
+                continue;
+            }
+            if obj.attached_to != Some(host_id) {
+                continue;
+            }
+            let Some(p) = state.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            if p.is_aura && p.aura_grants_control {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
+/// Revert the host's `controller` to `controller_baseline` if a
+/// baseline was captured, then clear the baseline. No-op if the
+/// host has no captured baseline (defensive — should not happen
+/// post-Phase-2-S2 attach but stays safe). Walks both bfs for the
+/// host since the host's controller may have already been flipped.
+fn revert_host_controller_from_baseline(
+    state: &mut GameState,
+    host_id: u32,
+) {
+    for player_idx in 0..state.players.len() {
+        let pos = state.players[player_idx]
+            .battlefield
+            .iter()
+            .position(|o| o.id == host_id);
+        if let Some(idx) = pos {
+            let bf = Arc::make_mut(
+                &mut state.players[player_idx].battlefield,
+            );
+            let h = &mut bf[idx];
+            if let Some(baseline) = h.controller_baseline {
+                h.controller = baseline;
+                h.controller_baseline = None;
+            }
+            return;
+        }
+    }
 }
 
 /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner granted

@@ -375,6 +375,37 @@ class CardDef:
     # ward-rider close (or a synthetic-ward-free probe of the
     # Grovestrider formula) can flip the production-deck admit.
     dynamic_pt_formula: Optional[str] = None
+    # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    # Control-changing + lose-abilities + set-base-PT static grants
+    # applied to the attached host on attach. Defaults are all
+    # back-compat — every pre-S2 CardDef omits these fields and the
+    # registry-dict emitter skips them, so the Rust parser maps every
+    # absent key to its zero default. Mirror Python's
+    # ``CardPrinting.attached_grants_control`` /
+    # ``attached_grants_lose_all_abilities`` /
+    # ``attached_sets_base_pt`` fields (`cards/base.py:604-635`).
+    aura_grants_control: bool = False
+    aura_grants_lose_abilities: bool = False
+    aura_set_base_power: Optional[int] = None
+    aura_set_base_toughness: Optional[int] = None
+    # Static / layered abilities substrate — Phase 1 first-deliverable
+    # (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``
+    # §3 lever (1)). The frozen, bridge-serializable representation of
+    # an *anthem*-shape static ability — one or more layer-6 keyword
+    # grants whose subject is ``creatures you control`` or ``other
+    # creatures you control`` (no condition, no P/T, no replacement
+    # rider). Mirrors Python's ``CardPrinting.static_abilities`` tuple
+    # of ``StaticAbility`` filtered to the anthem-keyword sub-shape.
+    #
+    # Each element is a tuple ``(scope, (keyword, keyword, ...))`` where
+    # ``scope`` is one of ``"creatures_you_control"`` /
+    # ``"other_creatures_you_control"`` (mirrors Python's
+    # ``StaticScope`` values for the same anthem shapes) and each
+    # ``keyword`` is the underscore-form lowercase keyword name from
+    # ``trajectory._SAFE_KEYWORDS`` (e.g. ``"haste"``, ``"flying"``).
+    # Empty tuple = no anthem statics — the back-compat default for
+    # every pre-substrate CardDef.
+    static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -10583,6 +10614,41 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # Option/serde-default pattern).
     if card.dynamic_pt_formula is not None:
         printing_dict["dynamic_pt_formula"] = card.dynamic_pt_formula
+    # Aura-attachment substrate — Phase 2 S2 (round-79+,
+    # 2026-05-20). Emit the S2 static-grant flags only when set
+    # so every pre-S2 CardDef registry dict is byte-identical to
+    # before this slice landed. The Rust parser maps every absent
+    # key to its zero default per the back-compat pattern every
+    # other optional field uses.
+    if card.aura_grants_control:
+        printing_dict["aura_grants_control"] = True
+    if card.aura_grants_lose_abilities:
+        printing_dict["aura_grants_lose_abilities"] = True
+    if (
+        card.aura_set_base_power is not None
+        and card.aura_set_base_toughness is not None
+    ):
+        printing_dict["aura_set_base_pt"] = {
+            "power": int(card.aura_set_base_power),
+            "toughness": int(card.aura_set_base_toughness),
+        }
+    # Static / layered abilities substrate — Phase 1 first-deliverable
+    # (round-79). Emit the anthem-keyword sub-shape as a list of dicts
+    # ``[{"scope": str, "granted_keywords": [str, ...]}, ...]``. The key
+    # is OMITTED when no anthem statics are present (every pre-substrate
+    # CardDef), keeping every pre-substrate registry dict byte-identical
+    # to before this slice. Mirrors the `aura_equipment_bonuses`
+    # omission pattern above.
+    if card.static_anthems:
+        printing_dict["static_anthems"] = [
+            {
+                "scope": scope,
+                "granted_keywords": [
+                    kw.replace(" ", "_") for kw in granted_keywords
+                ],
+            }
+            for scope, granted_keywords in card.static_anthems
+        ]
     return printing_dict
 
 
@@ -10989,6 +11055,36 @@ def _card_def_to_python_printing(card: "CardDef"):
         if "Aura" not in subtypes:
             subtypes = ("Aura", *subtypes)
         type_line = "Enchantment - Aura"
+    # Static / layered abilities substrate — Phase 1 first-deliverable
+    # (round-79). Materialize the Python ``StaticAbility`` tuple from
+    # the bridge's ``static_anthems`` slot. Each anthem entry is
+    # ``(scope, (keyword, ...))``; the Python ``StaticAbility`` carries
+    # one layer-6 ``ContinuousModifier(GrantKeyword(kw))`` per granted
+    # keyword (one StaticAbility per kw, mirroring the parser's
+    # one-StaticAbility-per-keyword fan-out at
+    # ``parser/statics.py:_parse_anthem_static_line``). The
+    # underscore-form keyword from the bridge is round-tripped to the
+    # space-separated form Python's keyword vocabulary expects ("first
+    # strike" not "first_strike"). Empty tuple = no anthem statics —
+    # back-compat default; the materialized CardPrinting is
+    # bit-identical to pre-substrate.
+    static_abilities: tuple = ()
+    if card.static_anthems:
+        from mtg_bot.cards.base import StaticAbility, StaticScope
+        from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+        sa_list: list[StaticAbility] = []
+        for scope, granted_keywords in card.static_anthems:
+            for kw in granted_keywords:
+                sa_list.append(
+                    StaticAbility(
+                        scope=scope,
+                        continuous_effect=ContinuousModifier(
+                            layer=6,
+                            payload=GrantKeyword(kw.replace("_", " ")),
+                        ),
+                    )
+                )
+        static_abilities = tuple(sa_list)
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -11051,6 +11147,28 @@ def _card_def_to_python_printing(card: "CardDef"):
         # ``game._dynamic_base_pt`` dispatches on this field at
         # P/T-read time.
         dynamic_pt_formula=card.dynamic_pt_formula,
+        # Aura-attachment substrate — Phase 2 S2 (round-79+,
+        # 2026-05-20). S2 static-grant fields. Defaults are
+        # back-compat (every pre-S2 CardDef has these = False / None);
+        # the materialized CardPrinting is bit-identical to
+        # pre-substrate for non-S2 Auras. The Python side reads these
+        # in ``apply_aura_static_grants_on_attach`` (`actions.py:2799`)
+        # to write the matching continuous-effect entries on attach.
+        attached_grants_control=card.aura_grants_control,
+        attached_grants_lose_all_abilities=card.aura_grants_lose_abilities,
+        attached_sets_base_pt=(
+            (card.aura_set_base_power, card.aura_set_base_toughness)
+            if (
+                card.aura_set_base_power is not None
+                and card.aura_set_base_toughness is not None
+            )
+            else None
+        ),
+        # Static / layered abilities substrate — Phase 1 first-
+        # deliverable (round-79). Anthem-shape statics only — see the
+        # materialization block above. Empty tuple = no anthem
+        # statics (back-compat default).
+        static_abilities=static_abilities,
     )
 
 
@@ -11205,6 +11323,26 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         )
     else:
         equipment_bonuses = None
+    # Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
+    # Read back the S2 static-grant flags via the new STEP-2-style
+    # getters so round-trip pins can verify the Rust parse arm
+    # carried them through.
+    aura_grants_control = rust_registry.get_printing_aura_grants_control(
+        printing_id
+    )
+    aura_grants_lose_abilities = (
+        rust_registry.get_printing_aura_grants_lose_abilities(printing_id)
+    )
+    set_base_pt = rust_registry.get_printing_aura_set_base_pt(printing_id)
+    if set_base_pt is None:
+        aura_set_base_power: Optional[int] = None
+        aura_set_base_toughness: Optional[int] = None
+        attached_sets_base_pt: Optional[tuple[int, int]] = None
+    else:
+        sp, st = set_base_pt
+        aura_set_base_power = int(sp)
+        aura_set_base_toughness = int(st)
+        attached_sets_base_pt = (int(sp), int(st))
     return {
         "is_aura": bool(is_aura),
         "aura_enchant_type": str(aura_enchant_type),
@@ -11213,6 +11351,17 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         "aura_toughness_bonus": int(t_bonus),
         "aura_granted_keywords": aura_granted_keywords,
         "equipment_bonuses": equipment_bonuses,
+        # Phase 2 S2 fields. Surfaced both as the bridge-wire names
+        # (``aura_grants_*``) AND the matching Python ``CardPrinting``
+        # field names (``attached_grants_*`` / ``attached_sets_base_pt``)
+        # so callers can assert against either projection.
+        "aura_grants_control": bool(aura_grants_control),
+        "aura_grants_lose_abilities": bool(aura_grants_lose_abilities),
+        "aura_set_base_power": aura_set_base_power,
+        "aura_set_base_toughness": aura_set_base_toughness,
+        "attached_grants_control": bool(aura_grants_control),
+        "attached_grants_lose_all_abilities": bool(aura_grants_lose_abilities),
+        "attached_sets_base_pt": attached_sets_base_pt,
     }
 
 
