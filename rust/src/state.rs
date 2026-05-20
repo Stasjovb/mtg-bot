@@ -1507,6 +1507,57 @@ pub enum PendingDecision {
         controller: u8,
         candidates: Vec<u32>,
     },
+    /// **Aura-attachment substrate — Phase 1 STEP 3 (round-78,
+    /// 2026-05-20).** Cast-time enchant-target choice for an Aura
+    /// spell. CR 303.4 / 601.2c — when a player casts an Aura they
+    /// MUST choose a legal enchant target as part of casting. Pushed
+    /// by `cast_aura` after the mana cost is paid and the spell is
+    /// rehomed onto the stack-store; the caster's agent drains via
+    /// `submit_enchant_target_decision(Some(target_id))` (binds the
+    /// chosen target onto the StackItem's `target_obj_id`) or
+    /// `submit_enchant_target_decision(None)` (no target — the Aura
+    /// will fizzle on resolve per STEP 4 / Python parity at
+    /// `actions.py:2740-2745`).
+    ///
+    /// **Payload.** Carries the source id (the Aura on the stack —
+    /// `source_obj_id` is the same id `cast_aura` pushed onto
+    /// `state.stack` as the StackItem's source), the controller (who
+    /// makes the choice — the caster), and the candidate ids (every
+    /// legal enchant target on EITHER battlefield, computed at push
+    /// time by `cast_aura` per the printing's `aura_enchant_type` +
+    /// `aura_yours_only` filter; same shape as `TapPermanentChoice`'s
+    /// flat `Vec<u32>` idiom).
+    ///
+    /// **Submit.** `submit_enchant_target_decision(Some(chosen_id))`
+    /// writes the chosen target onto the matching StackItem's
+    /// `target_obj_id` so STEP 4's resolve arm can read it and attach
+    /// the Aura. `chosen_id` MUST be one of the candidate ids (an
+    /// unknown id raises `ValueError` transactionally — no mutation
+    /// on failure). `submit_enchant_target_decision(None)` is the
+    /// explicit "no legal target was chosen" path — the StackItem's
+    /// `target_obj_id` stays `None` so STEP 4 fizzles on resolve.
+    ///
+    /// **Auto-resolve default.** `"default"` / `"enchant_target_first"`
+    /// picks `candidates[0]` (the deterministic-first legal host in
+    /// `bf_iter_etb_sorted` order — mirrors the
+    /// `_PickFirstLegalTargetAgent` bench/probe convention every
+    /// other cast-time target picker uses, e.g. Radiant Strike's
+    /// destroy half + Focus Fire + Seedship Impact at
+    /// `state_ops_cast.rs:1614-1714`).
+    ///
+    /// **Empty candidate set is impossible.** The cast arm only
+    /// pushes this decision when the candidate set is non-empty; the
+    /// empty-set case skips the push entirely (no decision queued —
+    /// the StackItem rides with `target_obj_id = None` and STEP 4
+    /// fizzles on resolve, matching Python's
+    /// `actions.py:1354 if legal:` short-circuit). Without this guard
+    /// the caster would face an "uncancellable" decision with no
+    /// legal id to submit.
+    EnchantTargetChoice {
+        source_obj_id: u32,
+        controller: u8,
+        candidates: Vec<u32>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
