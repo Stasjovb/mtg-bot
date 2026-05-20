@@ -10744,47 +10744,43 @@ def _dict_to_python_action(action_dict: dict):
 
 
 def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
-    """Harness-side mirror of Rust's auto-resolve-on-cast semantics (CE5 closure).
+    """Harness-side opt-in Python priority-loop drain.
 
-    Rust's ``cast_spell`` (``state_ops_cast.rs::cast_creature``) fuses
-    cast + resolve into one primitive — the card moves directly from
-    hand to battlefield, skipping the stack entirely (no-stack
-    semantics per the docstring at line 293). Python's ``_cast_spell``
-    pushes a ``StackItem`` onto ``state.stack`` and defers the bf
-    transition to ``resolve_top_of_stack``, which fires once both
-    players pass priority (CR 117.4) via ``simulate.priority_loop``.
+    Drains Python's stack down to ``floor`` items via the canonical
+    ``simulate.priority_loop`` pattern: pop one item, run SBAs, repeat
+    until the stack reaches ``floor``. Equivalent to running both
+    players passing priority repeatedly under CR 117.4 — the same
+    machinery production Python uses, just driven explicitly from the
+    harness layer instead of through the full priority loop.
 
-    To compare apples-to-apples on the cross-engine smoke without
-    growing Rust a full stack-and-priority surface, this harness
-    primitive drains Python's stack down to ``floor`` items after every
-    ``cast_spell`` action. The drain mirrors the canonical pattern in
-    ``simulate.priority_loop`` (line 257): pop one item, run SBAs,
-    repeat until the stack reaches the floor.
+    Callers use this (and its Rust sister
+    :func:`resolve_top_of_stack_rust`) when they need to advance both
+    engines past a stack-pushing action and re-compare the resolved
+    observable — e.g. after a ``cast_spell`` or
+    ``activate_ability`` decision, when the test wants to assert
+    field-view parity AFTER the spell / ability resolves rather than
+    on the pre-resolve "item on the stack" snapshot.
 
-    **Why ``floor``** — once the parity bridge admits cards whose
+    **Why ``floor``** — when the bridge admits cards whose
     ``play_land`` / cast / activate primitives push triggered abilities
     that PERSIST on the stack across actions (e.g. Icecave Crasher's
     landfall pump trigger, which both engines push but neither auto-
     resolves), the pre-existing stack can be non-empty when a later
-    ``cast_spell`` arrives. Rust's ``cast_creature`` is no-stack: it
-    leaves those pre-existing entries untouched. If the harness drained
-    to zero, Python's view would lose the pre-existing entries that
-    Rust still carries — a false divergence sourced in the harness,
-    not in either engine. Capturing the pre-cast stack depth at the
-    ``step_both`` call site and passing it here as ``floor`` keeps
-    Python's drain scoped to the just-pushed cast item (plus any
-    sub-triggers it pushes during resolution) and leaves the older
-    accumulated entries in place to match Rust's observable.
+    cast arrives. If the harness drained to zero unconditionally, it
+    would lose those pre-existing entries that the matched engine
+    state still carries — a false divergence sourced in the harness.
+    Capturing the pre-action stack depth at the call site and passing
+    it here as ``floor`` keeps the drain scoped to the just-pushed
+    item (plus any sub-triggers it pushes during resolution) and
+    leaves the older accumulated entries in place.
 
     This is the same pattern as :func:`advance_phase_python` — a
-    HARNESS-only Python mirror of a Rust primitive's semantics. The
-    production Python engine still drives spell resolution through the
-    real priority loop; this helper only runs from the cross-engine
-    walker.
+    HARNESS-only Python primitive. The production Python engine still
+    drives spell resolution through the real priority loop; this
+    helper only runs from the cross-engine walker.
 
     Returns the count of stack items drained (0 if the stack was
-    already at or below ``floor`` — a harmless no-op on non-cast
-    actions or on actions whose Python apply didn't push anything).
+    already at or below ``floor``).
     """
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.turn import state_based_actions
@@ -10795,7 +10791,7 @@ def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
     # priority loop's "keep resolving until empty" contract. Stop when
     # the stack returns to ``floor`` — pre-existing entries above that
     # mark belong to earlier actions (and have a matching pre-existing
-    # entry on Rust's stack) and must not be drained here.
+    # entry on the Rust side) and must not be drained here.
     while len(py_state.stack) > floor:
         resolve_top_of_stack(py_state)
         state_based_actions(py_state)
@@ -10803,78 +10799,32 @@ def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
     return drained
 
 
-# Action kinds whose Rust-side semantics fuse cast+resolve into a
-# single mutation — the harness drains Python's stack after these to
-# match Rust's empty-stack observable.
-#
-# **S7 — CE5 REMOVED (2026-05-18).** Empty per the locked-in plan in
-# ``docs/RUST_STACK_RESOLUTION_DESIGN.md`` (§S7) and
-# ``docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`` (§2). CE5 was the
-# cast-vs-resolve atomic-reconciliation mirror that auto-resolved
-# Python's stack on the harness side after every ``cast_spell``
-# decision, to mask the historical Rust atomic-cast-resolve hole.
-# The G7 closure chain (G1..G7-token-creation) has since shipped
-# real stack-and-priority resolution for ``cast_spell`` in the Rust
-# engine — Rust now actually pushes the StackItem, runs the priority
-# loop, and resolves through the same Effect-fan-out path Python
-# uses. The CE5 mirror is therefore obsolete; emptying the
-# frozenset turns the consumer in :func:`step_both` into a runtime
-# no-op while keeping the call site intact for the S7 closure-pin
-# window (a future cleanup slice can delete the dead branch + the
-# two ``resolve_top_of_stack_*`` helpers cleanly once S7 evidence
-# has fully landed and the source-of-truth cutover has occurred).
-#
-# Historical context (pre-S7): the frozenset previously contained
-# ``{"cast_spell"}``. If a future Rust primitive ever grows similar
-# no-stack semantics (e.g. an ``activate_non_mana_ability`` arm that
-# bypasses the stack), the right answer is to fix the Rust engine
-# rather than re-populate this set.
-_RUST_AUTO_RESOLVE_ACTION_KINDS: frozenset[str] = frozenset()
-
-
 def resolve_top_of_stack_rust(rust_state, *, floor: int = 0) -> int:
-    """Harness-side mirror of Python's priority-loop drain for Rust.
+    """Harness-side opt-in Rust priority-loop drain.
 
     Sister of :func:`resolve_top_of_stack_python`. Drains Rust's stack
     down to ``floor`` items via :meth:`GameState.resolve_top_of_stack`,
     which fires the same effect-fan-out + auto-resolve-pending
-    sequence as Python's ``actions.resolve_top_of_stack``.
-
-    **Why this exists** — Rust's ``cast_creature`` is no-stack: it
-    moves the card directly hand → bf in one mutation. BUT the move
-    fires ``dispatch_event(Event::Enters, ...)`` from inside
-    ``move_from_hand_to_battlefield``, which can push a
-    ``StackItem::TriggeredAbility`` onto Rust's stack for every ETB
-    trigger the printing declares (e.g. Thawbringer's
-    "when this creature enters, surveil 1"). Rust's no-stack
-    ``cast_creature`` does NOT run a priority loop, so those ETB
-    triggers stay on the stack indefinitely.
-
-    Python's :func:`resolve_top_of_stack_python` mirror drains Python
-    all the way down to the pre-cast floor (the resolving spell pops
-    first, then the ETB trigger it pushes also pops, leaving the
-    stack at floor). Without a matching drain on Rust, Python's
-    drained-to-floor stack diverges from Rust's stack-with-ETB-
-    trigger observable on every cast of a card with an ETB trigger
-    that pushes onto the stack.
+    sequence as Python's ``actions.resolve_top_of_stack``, followed by
+    ``apply_sbas`` after each resolve to mirror the Python sister's
+    pop→SBA→repeat contract.
 
     **SBA symmetry (round-73 — surfaced by the Lander-spell-token-
     seating sub-substrate).** Python's sister mirror runs
     ``state_based_actions(py_state)`` after EACH resolve (matching
     ``simulate.priority_loop``'s pop→SBA→repeat contract). Rust's
-    ``apply_sbas`` is the documented analog (see the
-    ``apply_sbas``/``state_based_actions`` pairing at lines
-    10800/11465/14864). Before round-73 the only cast-path Effects
-    admitted through ``step_both`` mutated state immediately inside
-    resolve (e.g. ``DepressurizeEffect`` calls ``destroy()``), so the
-    missing Rust SBA drain was unobservable. Orbital Plunge deals
-    DAMAGE and relies on the lethal-damage SBA to move the dead
-    creature to the graveyard — Python's drain fires that SBA, so
-    without the matching ``apply_sbas`` here Rust's damaged creature
-    lingered on the battlefield = a HARNESS asymmetry false-positive
-    (the engines agree; the mirror didn't). Mirroring the SBA call
-    restores apples-to-apples (the EXACT pattern every Effect-half
-    probe runs by hand: ``py_sba(py)`` + ``rs.apply_sbas()``).
+    ``apply_sbas`` is the documented analog. Before round-73 the only
+    cast-path Effects admitted through ``step_both`` mutated state
+    immediately inside resolve (e.g. ``DepressurizeEffect`` calls
+    ``destroy()``), so a missing Rust SBA drain was unobservable.
+    Orbital Plunge deals DAMAGE and relies on the lethal-damage SBA
+    to move the dead creature to the graveyard — Python's drain fires
+    that SBA, so without the matching ``apply_sbas`` here Rust's
+    damaged creature lingered on the battlefield = a HARNESS
+    asymmetry false-positive (the engines agree; the mirror didn't).
+    Mirroring the SBA call restores apples-to-apples (the EXACT
+    pattern every Effect-half probe runs by hand: ``py_sba(py)`` +
+    ``rs.apply_sbas()``).
 
     Returns the count of stack items drained (0 if Rust's stack was
     already at or below ``floor``).
@@ -10894,27 +10844,24 @@ def drain_stack_both(
     py_floor: int = 0,
     rust_floor: int = 0,
 ) -> tuple[int, int]:
-    """Harness-side priority-loop drain on BOTH engines (S7-A2 primitive).
+    """Harness-side priority-loop drain on BOTH engines.
 
     Drains both engines' stacks down to the supplied per-engine floors,
     interleaving the same resolve + SBA dance ``simulate.priority_loop``
     runs on the Python side and ``GameState.resolve_top_of_stack`` +
-    ``apply_sbas`` on the Rust side. The two engines now share the
-    same real stack-and-priority resolution machinery post-G7 closure,
-    so this primitive is a thin composer over the existing
-    :func:`resolve_top_of_stack_python` + :func:`resolve_top_of_stack_rust`
-    helpers — NOT a re-introduction of CE5's atomic-reconciliation
-    mirror. It is the explicit, opt-in replacement for the implicit
-    CE5 drain that ``step_both`` used to do post-``cast_spell``.
+    ``apply_sbas`` on the Rust side. Both engines share the same real
+    stack-and-priority resolution machinery, so this primitive is a
+    thin composer over :func:`resolve_top_of_stack_python` +
+    :func:`resolve_top_of_stack_rust`. The byte-equal contract is:
+    Python and Rust drain independently via their respective real
+    stack machinery, exactly as ``simulate.priority_loop`` and Rust's
+    ``process_stack_until_empty`` do in production.
 
     Why a single composer primitive instead of two separate calls —
-    callers that previously relied on CE5's post-cast drain need both
-    engines to drain in lock-step; bundling the two calls into one
-    primitive keeps the call sites narrow and reads "drain both" at
-    the harness layer in one line. The byte-equal contract is the
-    same: Python and Rust drain independently via their respective
-    real stack machinery, exactly as ``simulate.priority_loop`` and
-    Rust's ``process_stack_until_empty`` do in production.
+    callers that need to advance both engines past a stack-pushing
+    action need them to drain in lock-step; bundling the two calls
+    into one primitive keeps call sites narrow and reads "drain
+    both" at the harness layer in one line.
 
     **Failure mode (loud).** Both helpers raise on apply-time bugs
     (an Effect arm raising during resolve, an SBA hitting an
@@ -10925,10 +10872,6 @@ def drain_stack_both(
 
     Returns ``(py_drained, rust_drained)`` for callers that want to
     pin "exactly N items resolved on each engine".
-
-    See :func:`step_both` (whose CE5 branch is now a runtime no-op
-    post-S7) for the historical context that motivated this
-    primitive's existence.
     """
     py_drained = resolve_top_of_stack_python(py_state, floor=py_floor)
     rust_drained = resolve_top_of_stack_rust(rust_state, floor=rust_floor)
@@ -10943,23 +10886,15 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     the per-field divergence list. The step index is left at -1 by
     default — the outer harness fills it in.
 
-    **CE5 closure — cast-vs-resolve mirror.** When ``action_dict``'s
-    kind is in :data:`_RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
-    ``cast_spell``), the harness drains BOTH engines' stacks via
-    :func:`resolve_top_of_stack_python` and
-    :func:`resolve_top_of_stack_rust` AFTER both engines apply the
-    action and BEFORE the field-view compare runs. This parity-aligns
-    the cross-engine view on Rust's no-stack ``cast_creature``
-    semantics without modifying production Rust to grow a real stack.
-
-    **Why drain Rust too** — Rust's ``cast_creature`` is no-stack for
-    the cast itself but the ETB dispatch inside
-    ``move_from_hand_to_battlefield`` can push triggered abilities
-    (e.g. Thawbringer's "enters, surveil 1") onto Rust's stack that
-    no Rust primitive auto-resolves. Python's drain follows the
-    spell + its ETB trigger all the way down; for parity Rust must
-    drain the same scope. See :func:`resolve_top_of_stack_rust` for
-    the full rationale.
+    The per-step divergence list reflects the strict POST-APPLY,
+    PRE-RESOLVE snapshot: anything either engine pushed onto its
+    stack (the cast item itself, any ETB triggers fired by Rust's
+    no-stack ``cast_creature``, etc.) is still ON the stack when
+    the compare runs. Callers that want the post-resolution
+    observable should use :func:`step_both_drained` or pass
+    ``auto_drain_after_step=True`` to :func:`walk_both` — both
+    invoke :func:`drain_stack_both` after the step to advance both
+    engines through real stack-and-priority resolution.
     """
     from mtg_bot.actions import apply_action as py_apply_action
 
@@ -10985,27 +10920,8 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     actor = py_state.priority_player_idx
     if action_dict.get("kind") == "declare_blockers":
         actor = 1 - py_state.active_player_idx
-    # Snapshot pre-apply stack depths on BOTH engines BEFORE the new
-    # StackItem is pushed so the CE5 closure's drain knows where to
-    # stop — pre-existing triggered-ability entries (e.g. accumulated
-    # landfall triggers from earlier turns) must NOT be drained,
-    # because Rust's no-stack ``cast_creature`` leaves them in
-    # place. See :func:`resolve_top_of_stack_python` for full
-    # rationale.
-    py_stack_floor = len(getattr(py_state, "stack", ()))
-    rust_stack_floor = rust_state.stack_size()
     py_apply_action(py_state, actor, py_action)
     rust_state.apply_action(action_dict)
-
-    # CE5 closure: drain BOTH engines' stacks for actions whose Rust
-    # analog auto-resolves the spell itself but may leave ETB-triggered
-    # abilities sitting on the stack (Rust's no-stack ``cast_creature``
-    # pushes ENTERS triggers from inside ``move_from_hand_to_battlefield``
-    # without running a priority loop). See :func:`resolve_top_of_stack_rust`
-    # docstring for the full rationale.
-    if action_dict.get("kind") in _RUST_AUTO_RESOLVE_ACTION_KINDS:
-        resolve_top_of_stack_python(py_state, floor=py_stack_floor)
-        resolve_top_of_stack_rust(rust_state, floor=rust_stack_floor)
 
     ps = parity_smoke()
     py_view = build_python_field_view(py_state)
@@ -11023,7 +10939,7 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
 def step_both_drained(
     py_state, rust_state, action_dict: dict,
 ) -> CrossEngineStep:
-    """S7-A2 convenience composer: :func:`step_both` + :func:`drain_stack_both`.
+    """Convenience composer: :func:`step_both` + :func:`drain_stack_both`.
 
     Applies the action via :func:`step_both` (single-decision contract),
     then drains both engines' stacks via :func:`drain_stack_both` (real
@@ -11031,15 +10947,13 @@ def step_both_drained(
     post-drain field views so the returned :class:`CrossEngineStep`
     reflects the fully-resolved game state.
 
-    This is the explicit priority-loop replacement for what CE5's
-    atomic-reconcile mirror used to do inside ``step_both``'s
-    ``cast_spell`` branch — now opt-in at the call site. Mirrors
-    ``simulate.priority_loop``'s "apply action, then both players
-    pass, drain stack" cadence (the standard CR 117.4 stack-resolution
-    pattern). Use this from a test/helper that wants the decision-and-
-    resolve combined observable; use plain :func:`step_both` from a
-    test that wants the strict single-decision snapshot (e.g. tests
-    pinning that the cast item lands ON the stack — pre-resolve).
+    Mirrors ``simulate.priority_loop``'s "apply action, then both
+    players pass, drain stack" cadence (the standard CR 117.4
+    stack-resolution pattern). Use this from a test/helper that
+    wants the decision-and-resolve combined observable; use plain
+    :func:`step_both` from a test that wants the strict
+    single-decision snapshot (e.g. tests pinning that the cast item
+    lands ON the stack — pre-resolve).
 
     The per-step ``divergences`` reflect the POST-drain compare —
     same as :func:`walk_both` with ``auto_drain_after_step=True``.
@@ -11123,26 +11037,24 @@ def walk_both(
     flag a fake cross-engine divergence at step 0. Mirrors the
     round-25 ``--mode field-diff --inject-divergence`` pattern.
 
-    ``auto_drain_after_step`` (S7-A2): when True, call
+    ``auto_drain_after_step``: when True, call
     :func:`drain_stack_both` AFTER each ``step_both`` so any
     items left on either engine's stack are resolved via real
     stack-and-priority semantics before the per-step compare and
     before the next decision is emitted. This is the explicit
-    priority-loop driver at the harness layer — the replacement
-    for CE5's atomic-reconcile mirror that S7-1 removed. Tests
-    that need post-action stack resolution (creature casts that
-    must land on bf, instant casts that must resolve, etc.) opt
-    in by passing ``auto_drain_after_step=True``. The per-step
-    ``divergences`` are computed BEFORE the drain (so the per-step
-    snapshot still reflects the stack-non-empty state — the drain
-    advances the harness past it for the NEXT step), then a second
-    compare runs post-drain and is folded into the step's
-    divergences if any new ones appear. The
-    :class:`CrossEngineStep`'s ``py_view`` / ``rust_view`` reflect
-    the post-drain state so downstream observable-state assertions
-    can run against the resolved game state. Mirrors
-    ``simulate.priority_loop``'s "after each non-pass action, drain
-    until both engines pass" contract.
+    priority-loop driver at the harness layer. Tests that need
+    post-action stack resolution (creature casts that must land on
+    bf, instant casts that must resolve, etc.) opt in by passing
+    ``auto_drain_after_step=True``. The per-step ``divergences``
+    are computed BEFORE the drain (so the per-step snapshot still
+    reflects the stack-non-empty state — the drain advances the
+    harness past it for the NEXT step), then a second compare runs
+    post-drain and is folded into the step's divergences if any
+    new ones appear. The :class:`CrossEngineStep`'s ``py_view`` /
+    ``rust_view`` reflect the post-drain state so downstream
+    observable-state assertions can run against the resolved game
+    state. Mirrors ``simulate.priority_loop``'s "after each
+    non-pass action, drain until both engines pass" contract.
 
     Returns a :class:`CrossEngineWalkResult`.
     """
@@ -11174,10 +11086,10 @@ def walk_both(
             action_dict = selector(py_state, rust_state, step_index)
             step = step_both(py_state, rust_state, action_dict)
             if auto_drain_after_step:
-                # S7-A2 priority-loop primitive. Drain both engines'
-                # stacks via the real resolve_top_of_stack + SBA loop
-                # on each side. After the drain, rebuild the views so
-                # the step's recorded observable state reflects the
+                # Drain both engines' stacks via the real
+                # resolve_top_of_stack + SBA loop on each side.
+                # After the drain, rebuild the views so the step's
+                # recorded observable state reflects the
                 # post-resolution game state — that's the state the
                 # next selector call will see and the state downstream
                 # post-walk assertions inspect.
