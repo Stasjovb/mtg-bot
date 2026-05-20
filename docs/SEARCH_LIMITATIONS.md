@@ -7745,6 +7745,97 @@ in `cast_creature`, the warp `seen_castspell` HashSet skip in
 `legal_decisions`, the existing `move_from_hand_to_battlefield`
 shape for the play-land arm). No new subsystem was needed.
 
+## Static / layered abilities substrate — Phase 1 first-deliverable (round-79; 2026-05-20) — anthem keyword-grant sub-shape ONLY
+
+**Where:** `src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_static_anthem_creature`,
+`rust/src/state_ops_combat.rs::static_anthem_grants_keyword_to`,
+`src/mtg_bot/parity/cross_engine.py::CardDef.static_anthems`,
+`rust/src/cards.rs::CardPrinting.static_anthems`.
+
+**What the shortcut is.** The substrate ships ONLY the *unconditional
+anthem keyword-grant* static-ability sub-shape:
+
+* Scope: `creatures_you_control` or `other_creatures_you_control`.
+* Effect: a single layer-6
+  `ContinuousModifier(GrantKeyword(kw))` where `kw` is in
+  `trajectory._SAFE_KEYWORDS`.
+* No `condition`, no `replacement_effect`, no `power_bonus` /
+  `toughness_bonus`, no `tier_threshold`, no `room_half`, no
+  `grants_no_max_hand_size`, no
+  `grants_creature_spells_uncounterable`.
+
+Every other StaticAbility sub-shape is positively declined at the
+admit predicate. Tannuk, Steadfast Second — the EoE single-gated
+canonical carrier — is admitted; the other 7 EoE single-gated
+static-ability carriers (Brightspear / Cloudsculpt / Frenzied Baloth
+/ Gravblade / Mechan Shieldmate / Rampaging Soulrager / Wildfire
+Wickerfolk) each carry a different sub-shape and remain blocked.
+
+**Why it's OK.**
+
+* The §2 admit teeth are exhaustive — any sub-shape outside the
+  Phase-1 grammar is positively rejected, so we cannot silently
+  mistranslate.
+* The Rust reader-side fold is byte-equal with Python's
+  `_static_bonuses` walk for the admitted sub-shape (see
+  `tests/test_static_layered_abilities_phase1.py` for the cross-engine
+  pins).
+* `static_anthems` defaults to an empty Vec on Rust / empty tuple on
+  Python; every pre-substrate CardDef / printing round-trips
+  bit-identical to before the slice.
+
+**Scenarios where it would NOT be OK.**
+
+* A static-anthem source that is wiped by a `lose_all_abilities`
+  continuous effect (Humility / Lignify on the source). The Python
+  `_static_bonuses` skips wiped sources at layer 7; the Rust
+  reader-site walks them anyway because the layer-6 wipe
+  machinery is not yet ported. **No live EoE / DSK card today
+  admits a static-anthem source that's also wipeable** — no card in
+  the bridge-admitted pool generates a `lose_all_abilities`
+  continuous effect, so the parity is clean in practice. When the
+  first such card ships, the fix is to port
+  `_source_layer6_wiped` to Rust + skip wiped sources in
+  `static_anthem_grants_keyword_to` (the precedent exists in
+  Python at `game.py:861-910`).
+* CR 613 layer-2 control changes that retroactively re-controller a
+  static-anthem source between its ETB and the reader call. The
+  current Rust reader uses the source's per-controller-battlefield
+  position as the ground-truth controller (effectively the
+  `controller_id_before_any_aura_swap` baseline); a Duskmourn's
+  Domination-style control swap (Aura S2 sub-shape) would shift the
+  anthem's recipients on Python but not on Rust. **No live EoE card
+  admits an S2 Aura today** (Phase 2 of the Aura substrate is
+  deferred), so the divergence is unreachable in practice. When S2
+  ships, the fix is to use `effective_controller` (port from
+  `game.py:999-1042`).
+
+**Failure mode.** None reachable in the current bench corpus (Tannuk
+is the only static-anthem-bearing card admitted by the loader; no
+Humility / control-swap admit-carrier exists). The §2 teeth would
+catch a future card that strays outside the Phase-1 shape — it would
+land in the not-bridge-supported sink, not produce a silent
+mistranslation.
+
+**Fix scope estimate.** Each remaining static-ability sub-shape is a
+~3-5 cycle slice:
+
+* SELF + condition + layer-7 P/T (Cloudsculpt / Gravblade /
+  Brightspear) — needs per-Condition Rust port + SELF-scope
+  reader-site fold for `effective_power` / `effective_toughness`.
+* SELF + condition + layer-6 keyword RemoveKeyword (Mechan
+  Shieldmate's "can attack as though it didn't have defender") —
+  needs a `RemoveKeyword` modifier arm on the Rust reader.
+* `grants_creature_spells_uncounterable` flag (Frenzied Baloth) —
+  cast-side counterspell admit gate.
+* Other condition surfaces (Rampaging Soulrager's room-doors gate,
+  Wildfire Wickerfolk's Delirium gate) — per-condition Rust ports.
+
+**Impact estimate.** Phase 1 unlocks 1 of 8 single-gated cards in
+the static-abilities subsystem row. Per-card 17lands deck count for
+Tannuk specifically requires a re-attribution scout run; the row
+totals 34,526 single-gate decks for all 8 cards.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,
