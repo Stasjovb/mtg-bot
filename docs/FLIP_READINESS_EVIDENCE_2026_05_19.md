@@ -174,8 +174,8 @@ footnote that this section originally carried).**
 |---|---:|---:|---|---|
 | `STATE_EQ::fields:priority_player` (G5-family long-tail) | 15 | 1.00% | bidirectional (8 py-extra, 7 rust-extra) | `c8d3a5f1` |
 | `LEGAL_SET_EQ::fields:blocker` (NEW v8) | 4 | 0.27% | one-sided (Rust-extra) | `d4f6a8c9` |
-| `STATE_EQ::fields:battlefield` (NEW v9) | 4 | 0.27% | mixed (verify-first required) | `e5b7c9d8` |
-| **total** | **23** | **1.53%** | | 3 todos |
+| `STATE_EQ::fields:battlefield` (NEW v9) | ~~4~~ **0** | ~~0.27%~~ **0.00%** | **CLOSED** — 3 of 3 residual axes closed (todo `e5b7c9d8`) — migrated `Effect::DestroyTargetArtifactOrTappedCreature` + `Effect::FocusFireEffect` to the `current_resolve_payload_target_id` pattern in `state_ops_resolve.rs`; bench at arch=253/257/281 × seeds 0-4 = 15 games / 0 FAIL_DIVERGENCE on battlefield STATE_EQ | **closed** |
+| **total** | ~~**23**~~ **19** | ~~**1.53%**~~ **1.27%** | | 2 todos |
 
 Each new 60-archetype slice has surfaced a previously-unseen axis —
 the residual surface is **broader** than the post-cycle-37 closure

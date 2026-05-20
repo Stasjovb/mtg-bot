@@ -33,8 +33,8 @@ pool. 23 residual divergences distribute across 3 distinct axes:**
 |---|---:|---:|---|
 | `STATE_EQ::fields:priority_player` (G5-family long-tail) | **15** | 1.00% | v6, v7, v8, v9 |
 | `LEGAL_SET_EQ::fields:blocker` (Rust-extra blocker, NEW v8) | **4** | 0.27% | v8 only |
-| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | **4** | 0.27% | v9 only |
-| **total** | **23** | **1.53%** | — |
+| `STATE_EQ::fields:battlefield` (+ graveyard variant, NEW v9) | ~~**4**~~ **0 (CLOSED)** | ~~0.27%~~ **0.00%** | ~~v9 only~~ — **CLOSED 2026-05-20 by `feature/battlefield-axis-closure`** (migrated `Effect::DestroyTargetArtifactOrTappedCreature` + `Effect::FocusFireEffect` to the `current_resolve_payload_target_id` pattern; bench at arch=253/257/281 × seeds 0-4 = 15 games / 0 FAIL_DIVERGENCE on battlefield STATE_EQ — only remaining FAIL on those 15 is a sibling-axis priority_player trip, closed by `feature/priority-player-blocker-closure`) |
+| **total** | ~~**23**~~ **19** | ~~**1.53%**~~ **1.27%** | — |
 
 Zero FAIL_TIMEOUT, zero FAIL_EXCEPTION across all 1500 games. Every
 divergence is a genuine per-step compare mismatch, not a cap proxy.
