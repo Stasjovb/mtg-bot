@@ -75,7 +75,7 @@ Filtered to substrates that are **(a) named-and-bounded** (not the
 diffuse Effect-uncovered / Non-safe-trigger tails), **(b) not already
 fully closed**, and ranked by **decks(1g) ÷ remaining-closure-scope**.
 
-### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling — Phase 1 SHIPPED round 79
+### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling — Phase 1 SHIPPED round 79 / Phase 2 SHIPPED round 80 / Phase 3 SHIPPED round 81
 
 The dominant **un-shipped** named substrate by single-gate deck count.
 Includes Brightspear Zealot, Cloudsculpt Technician, Frenzied Baloth,
@@ -117,16 +117,42 @@ non-Phase-1 sub-shape:
   cast-side static). Needs the counterspell-pipeline gate plumbed on
   the Rust side.
 
+**Phase 2 (round 80) — `grants_creature_spells_uncounterable` flag
+LANDED.** Frenzied Baloth's cast-side + battlefield-static
+uncounterable riders both round-trip through the bridge and gate the
+Rust counterspell admit + resolve path. Closes Frenzied Baloth.
+
+**Phase 3 (round 81) — SELF-scope conditional bonus LANDED.**
+Closes Brightspear Zealot, Cloudsculpt Technician, and Gravblade
+Heavy. CardDef carries
+`static_self_bonuses: tuple[(condition_tag, condition_args, p, t,
+keywords), ...]`; bridge round-trip and Rust reader-site fold
+(`static_self_bonus_pt_on` for layer-7c,
+`static_self_bonus_grants_keyword` for layer-6) lit. Two condition
+tags in the dispatch table — `control_permanent_is_artifact`
+(Cloudsculpt, Gravblade) and `at_least_n_spells_cast_this_turn`
+(Brightspear, n=2). Loader admit-disjunct
+`_printing_is_bridge_simple_static_self_conditional_creature` (9th
+disjunct of `_filter_deck_to_bridge_supported`).
+
+**Remaining honest-stops post-Phase-3:**
+
+* **Mechan Shieldmate** — `ControlledArtifactEnteredThisTurn`
+  Condition + `RemoveKeyword(defender)` payload. Condition is
+  outside the Phase-3 two-tag table; Rust reader doesn't fold
+  layer-6 keyword-removal yet. Needs a Phase-3.5 slice that adds
+  both the Condition tag and the keyword-remove fold.
+* **Rampaging Soulrager** / **Wildfire Wickerfolk** — not in the
+  current EoE data snapshot; honest-stopped pending refresh +
+  per-Condition slice (`UnlockedDoorsAmongRoomsAtLeast` /
+  `DeliriumActive` respectively).
+
 **Next slices in this substrate (recommended sequencing):**
 
-1. **Self-scope conditional layer-7 P/T statics** (Cloudsculpt /
-   Gravblade / Brightspear). Same condition surface as the existing
-   Aura Phase 1 layer-7c P/T-bonus reader; needs per-Condition Rust
-   port + a SELF-scope-only reader-site fold for `effective_power` /
-   `effective_toughness`. ~3-5 cycles.
-2. **`grants_creature_spells_uncounterable` flag** (Frenzied Baloth).
-   Cast-side gate at counterspell admit; not a layer-6/-7 fold.
-   ~1-2 cycles standalone.
+1. ~~Self-scope conditional layer-7 P/T statics — DONE (Phase 3,
+   round 81).~~
+2. ~~`grants_creature_spells_uncounterable` flag — DONE (Phase 2,
+   round 80).~~
 3. **Counter-gated anthem** (no EoE carrier today, but the predicate
    surface exists). Out of EoE scope. The other 7 of the 15 are
 multi-gated (Exalted Sunborn warp+static; Loading Zone warp+static;

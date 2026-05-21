@@ -5323,6 +5323,193 @@ def _printing_is_bridge_simple_uncounterable_creature(printing) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 — SELF-scope conditional bonus admit (round-81)
+# ---------------------------------------------------------------------------
+
+
+def _static_ability_to_self_conditional_bonus(ability):
+    """Map a single Python ``StaticAbility`` into the bridge tuple
+    ``(condition_tag, condition_args, power_bonus, toughness_bonus,
+    granted_keywords)``, or ``None`` if the ability is not in the
+    Phase-3 admit shape.
+
+    **Static / layered abilities substrate — Phase 3 (round-81,
+    2026-05-20).** Admit shape:
+
+      * ``scope`` is ``StaticScope.SELF``.
+      * ``condition`` is one of the two recognized SELF-scope
+        conditions:
+          - ``ControlPermanent(IsArtifact())`` (Cloudsculpt
+            Technician, Gravblade Heavy).
+          - ``AtLeastNSpellsCastThisTurn(n)`` for some non-negative
+            ``n`` (Brightspear Zealot uses ``n=2``).
+      * ``continuous_effect`` is EITHER a layer-7
+        ``PowerToughnessBonus`` (the P/T arm) OR a layer-6
+        ``GrantKeyword`` whose keyword is in
+        :data:`_SAFE_KEYWORDS` (the keyword-grant arm).
+      * Every other StaticAbility slot at its default — no
+        replacement_effect, tier_threshold, room_half,
+        grants_no_max_hand_size, grants_creature_spells_
+        uncounterable, granted_keywords, power_bonus,
+        toughness_bonus.
+
+    The returned tuple is keyed for coalescing: two abilities with
+    the same condition fan-out into one bridge entry (the parser
+    emits Gravblade Heavy as two StaticAbilities sharing the same
+    condition — one P/T, one keyword — and the bridge collapses
+    them at admit time).
+    """
+    from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.conditions import (
+        AtLeastNSpellsCastThisTurn, ControlPermanent,
+    )
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+    )
+    from mtg_bot.effects.object_predicates import IsArtifact
+
+    if ability.scope not in (StaticScope.SELF, "self"):
+        return None
+    if ability.power_bonus or ability.toughness_bonus:
+        return None
+    if ability.granted_keywords:
+        return None
+    if ability.replacement_effect is not None:
+        return None
+    if ability.tier_threshold:
+        return None
+    if ability.room_half is not None:
+        return None
+    if ability.grants_no_max_hand_size:
+        return None
+    if ability.grants_creature_spells_uncounterable:
+        return None
+    cond = ability.condition
+    if cond is None:
+        return None
+    # Recognized condition shapes -> (tag, args).
+    if isinstance(cond, ControlPermanent):
+        # Only the artifact-filter variant this slice.
+        if not isinstance(cond.filter, IsArtifact):
+            return None
+        cond_tag = "control_permanent_is_artifact"
+        cond_args: tuple[int, ...] = ()
+    elif isinstance(cond, AtLeastNSpellsCastThisTurn):
+        if cond.n < 0:
+            return None
+        cond_tag = "at_least_n_spells_cast_this_turn"
+        cond_args = (int(cond.n),)
+    else:
+        return None
+    ce = ability.continuous_effect
+    if ce is None or not isinstance(ce, ContinuousModifier):
+        return None
+    if getattr(ce, "subject_filter", None) is not None:
+        return None
+    if ce.layer == 7 and isinstance(ce.payload, PowerToughnessBonus):
+        return (
+            cond_tag,
+            cond_args,
+            int(ce.payload.power_bonus),
+            int(ce.payload.toughness_bonus),
+            (),
+        )
+    if ce.layer == 6 and isinstance(ce.payload, GrantKeyword):
+        kw = ce.payload.keyword
+        if kw not in _SAFE_KEYWORDS:
+            return None
+        return (
+            cond_tag,
+            cond_args,
+            0,
+            0,
+            (kw,),
+        )
+    return None
+
+
+def _printing_is_bridge_simple_static_self_conditional_creature(
+    printing,
+) -> bool:
+    """True iff a CardPrinting is a Phase-3 bridge-supported
+    SELF-scope conditional creature.
+
+    **Static / layered abilities substrate — Phase 3 (round-81,
+    2026-05-20).** Closes Brightspear Zealot, Cloudsculpt
+    Technician, and Gravblade Heavy from Phase 1's honest-stop
+    list. Every static-ability on the printing must pass
+    :func:`_static_ability_to_self_conditional_bonus`; every other
+    creature requirement matches
+    :func:`_printing_is_bridge_simple_creature`.
+
+    The admit shape covers exactly the parser's emit for SELF-
+    scope "as long as <condition>, this creature gets +N/+M[ and
+    has <keyword>]." lines and the trailing-rider variant — both
+    surface forms produce the same `StaticAbility` tuple, so the
+    predicate doesn't care about surface order.
+
+    **Phase 3 honest-stops (documented in
+    ``docs/SEARCH_LIMITATIONS.md``):**
+
+    * The other two cards in Phase 1's honest-stop list (Mechan
+      Shieldmate, Rampaging Soulrager, Wildfire Wickerfolk) — each
+      needs a Condition variant not in this slice's two-tag
+      table (Mechan's ``ControlledArtifactEnteredThisTurn``,
+      Soulrager's ``UnlockedDoorsAmongRoomsAtLeast``, Wickerfolk's
+      ``DeliriumActive``). They stay drop-at-filter until a per-
+      Condition slice ports them; the predicate positively
+      rejects them via :func:`_static_ability_to_self_
+      conditional_bonus` returning ``None`` for an unrecognized
+      condition.
+    * The CR 613.7 layer-6 "lose all abilities" interaction
+      against a SELF-scope conditional source — Phase 1's
+      anthem-substrate already documents the simplification; the
+      same applies here. No EoE / DSK card in the loader-admitted
+      pool today carries a ``lose_all_abilities`` continuous
+      effect that would wipe one of the three Phase-3 sources, so
+      the parity is clean for the live pool.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    if printing.triggered_abilities:
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
+    if printing.activated_abilities:
+        return False
+    if not printing.static_abilities:
+        return False
+    for ability in printing.static_abilities:
+        if _static_ability_to_self_conditional_bonus(ability) is None:
+            return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
@@ -5563,6 +5750,64 @@ def _printing_to_card_def(printing) -> CardDef:
                 getattr(sa, "grants_creature_spells_uncounterable", False)
                 for sa in printing.static_abilities
             ),
+        )
+    if _printing_is_bridge_simple_static_self_conditional_creature(printing):
+        # Static / layered abilities substrate — Phase 3 (round-81,
+        # 2026-05-20). SELF-scope conditional bonus arm. Threads
+        # the printing's SELF-scope conditional statics through to
+        # the CardDef's ``static_self_bonuses`` slot, coalescing
+        # multiple StaticAbilities that share a condition tag
+        # (Gravblade Heavy emits two StaticAbilities — one P/T,
+        # one keyword — sharing ``control_permanent_is_artifact``;
+        # the bridge collapses both into a single entry with the
+        # P/T bonus AND the granted keyword).
+        from collections import defaultdict
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
+        # Coalesce per (condition_tag, condition_args).
+        per_cond: dict[
+            tuple[str, tuple[int, ...]], list[int]
+        ] = {}
+        per_cond_kws: dict[
+            tuple[str, tuple[int, ...]], list[str]
+        ] = defaultdict(list)
+        for ability in printing.static_abilities:
+            cond_tag, cond_args, p_bonus, t_bonus, granted_keywords = (
+                _static_ability_to_self_conditional_bonus(ability)
+            )
+            key = (cond_tag, cond_args)
+            if key not in per_cond:
+                per_cond[key] = [0, 0]
+            per_cond[key][0] += p_bonus
+            per_cond[key][1] += t_bonus
+            for kw in granted_keywords:
+                per_cond_kws[key].append(kw)
+        # Deterministic ordering: sort by (cond_tag, cond_args).
+        static_self_bonuses: tuple[
+            tuple[str, tuple[int, ...], int, int, tuple[str, ...]], ...
+        ] = tuple(
+            (
+                cond_tag,
+                cond_args,
+                per_cond[(cond_tag, cond_args)][0],
+                per_cond[(cond_tag, cond_args)][1],
+                tuple(sorted(per_cond_kws.get((cond_tag, cond_args), []))),
+            )
+            for (cond_tag, cond_args) in sorted(per_cond.keys())
+        )
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
+            static_self_bonuses=static_self_bonuses,
         )
     if _printing_is_bridge_simple_static_anthem_creature(printing):
         # Static / layered abilities substrate — Phase 1 first-
@@ -6483,6 +6728,28 @@ def _filter_deck_to_bridge_supported(
             # site walks; Phase 2 sequencing reserves them for the
             # next slice).
             or _printing_is_bridge_simple_uncounterable_creature(printing)
+            # Static / layered abilities substrate — Phase 3 (round-81,
+            # 2026-05-20): the 9th disjunct admits a creature whose
+            # every static_ability is a SELF-scope conditional bonus
+            # in the two-tag dispatch table (``control_permanent_is_
+            # artifact`` for Cloudsculpt Technician / Gravblade Heavy
+            # and ``at_least_n_spells_cast_this_turn`` for Brightspear
+            # Zealot). Closes 3 of the 6 honest-stops from Phase 1.
+            # Rust-side fold rides ``static_self_bonus_*`` helpers
+            # consulted by ``battlefield_creature_power`` /
+            # ``battlefield_creature_toughness`` /
+            # ``battlefield_has_keyword``. The remaining 3 of the 6
+            # stay honest-stopped (Mechan Shieldmate's
+            # ``ControlledArtifactEnteredThisTurn`` +
+            # ``RemoveKeyword`` payload, Rampaging Soulrager's
+            # ``UnlockedDoorsAmongRoomsAtLeast``, Wildfire
+            # Wickerfolk's ``DeliriumActive`` — each needs a Condition
+            # variant outside this slice's table OR a layer-6
+            # ``RemoveKeyword`` payload the Rust reader doesn't yet
+            # fold).
+            or _printing_is_bridge_simple_static_self_conditional_creature(
+                printing,
+            )
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

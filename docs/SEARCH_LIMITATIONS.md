@@ -7858,6 +7858,76 @@ the static-abilities subsystem row. Per-card 17lands deck count for
 Tannuk specifically requires a re-attribution scout run; the row
 totals 34,526 single-gate decks for all 8 cards.
 
+## Static / layered abilities substrate — Phase 3 (round-81; 2026-05-20) — SELF-scope conditional bonus sub-shape
+
+**Where**: `src/mtg_bot/parity/cross_engine.py::CardDef.static_self_bonuses`,
+`rust/src/cards.rs::CardPrinting.static_self_bonuses` /
+`StaticSelfBonus`, `rust/src/state_ops_combat.rs::static_self_bonus_pt_on`
+/ `static_self_bonus_grants_keyword` /
+`static_self_bonus_condition_matches`, and the 9th admit-disjunct in
+`_filter_deck_to_bridge_supported`
+(`_printing_is_bridge_simple_static_self_conditional_creature`). Spec:
+`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §3 lever (1) Phase 3.
+
+**What the substrate does**: closes the SELF-scope conditional P/T +
+keyword grant sub-shape — the parser-emitted shape for "this creature
+gets +N/+M[ and has <keyword>] as long as <condition>." (and its
+leading-rider variant). Two condition tags in the dispatch table:
+* `control_permanent_is_artifact` — Cloudsculpt Technician (+1/+0
+  while controlling an artifact) and Gravblade Heavy (+1/+0 AND
+  deathtouch grant while controlling an artifact).
+* `at_least_n_spells_cast_this_turn` (args `(n,)`) — Brightspear
+  Zealot (+2/+0 once `n=2` spells have been cast this turn).
+
+Each condition tag's Rust evaluator mirrors the matching Python
+`Condition.matches` exactly: artifact-walk over the viewer's
+battlefield; `player.spells_cast_this_turn >= n`.
+
+**Remaining honest-stops in this row** (require future slices):
+
+* **Mechan Shieldmate** — `ControlledArtifactEnteredThisTurn`
+  Condition + a `RemoveKeyword(defender)` payload (not a P/T or
+  keyword grant — a keyword REMOVAL). Needs a third Condition tag
+  AND a Rust reader fold for layer-6 keyword removal. The current
+  Rust `battlefield_has_keyword` walk has no removal arm.
+* **Rampaging Soulrager** — `UnlockedDoorsAmongRoomsAtLeast(2)`
+  Condition. Not in the current EoE data snapshot; would need a per-
+  Condition Rust port.
+* **Wildfire Wickerfolk** — `DeliriumActive` Condition + a layer-6
+  trample grant + a layer-7 +1/+1. Not in the current EoE data
+  snapshot; would need a per-Condition Rust port (graveyard
+  card-types-distinct walk).
+
+**Why it's OK in the live pool**: the 3 admitted carriers each pin
+a real-EoE byte-equal probe in
+`tests/test_static_layered_abilities_phase3.py::test_real_eoe_byte_equal_effective_pt_match`
+across the off / on gates of the condition; Python and Rust agree on
+`effective_power` and `effective_toughness` in both states. No CR
+613.7 lose-all-abilities effect in the live EoE pool wipes any of the
+3 sources, so the timestamp-order subtleties (which the layer-6 fold
+sidesteps) do not surface.
+
+**Failure mode**: a future card that combines one of these conditions
+with a non-Phase-3 layer payload (e.g. a SELF-scope conditional
+SetBasePT, a layer-7b override, a replacement effect) would fall
+through this admit predicate cleanly — the predicate's positive
+allow-list rejects any payload outside layer-6 `GrantKeyword` /
+layer-7 `PowerToughnessBonus`. The honest-stop chain is preserved.
+
+**Fix scope estimate**: a third Condition tag (e.g.
+`controlled_artifact_entered_this_turn`) is one new arm in
+`static_self_bonus_condition_matches` + a Python rehydrator entry +
+a parser-side admit case. The Mechan Shieldmate
+`RemoveKeyword(defender)` payload is a larger slice — it needs a new
+layer-6 negative-grant arm in the Rust `battlefield_has_keyword`
+reader. ~3-5 cycles for each remaining card.
+
+**Impact estimate**: Phase 3 unlocks 3 of 6 remaining single-gated
+cards from Phase 1's honest-stop list (Brightspear Zealot,
+Cloudsculpt Technician, Gravblade Heavy). Combined with Phase 1
+(Tannuk) and Phase 2 (Frenzied Baloth), 5 of the original 8 single-
+gated static-ability carriers are now bridge-admitted.
+
 ## Aura `flash` cast-timing rider dropped symmetrically (Aura-attachment Phase 2 first deliverable, round-79)
 
 **Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_aura`
