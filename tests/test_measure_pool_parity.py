@@ -454,15 +454,37 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # + bridge + honest-stop resolve arms; full-card byte-equality
     # stays gated on the Aura attach substrate's Phase 1, but the
     # Effect-level closure flips the residue tier).
-    # `missing` is now 1 distinct genuine new-Rust-Effect ask
-    # (Lightstall Inquisitor).
-    assert missing == {
-        "Lightstall Inquisitor",
-    }
-    assert non_effect == {
-        "Dauntless Scrapbot",
-        "Tractor Beam",
-    }
+    # Lightstall-residue-reconciliation fold (2026-05-20): Lightstall
+    # Inquisitor `CastFromExileWithCostHike` genuinely_missing -> closed
+    # — the cast-from-exile-with-cost-hike substrate landed end-to-end
+    # in merge `9c41ad08` (GameObject.cast_from_exile_with_lightstall_
+    # surcharge field + legal-actions exile-as-cast-source surface +
+    # cast-pay +{1} surcharge + tapped-land-entry rider), but the
+    # residue worklist + POOL_PARITY were not updated in the same merge
+    # and triggered the heuristic-vs-worklist WARNING. The reconciliation
+    # lane re-verified the substrate via a real-EoE byte-equal probe
+    # (the real Lightstall printing parses to EachOpponentExilesCard
+    # FromHandWithCastPermission → Rust stamps the flag → cast pays the
+    # surcharge → bear lands on bf with flag cleared) and flipped both
+    # Lightstall worklist entries to `closed`. `missing` is now empty —
+    # `BLOCKED — genuinely_missing` tier is at 0.
+    assert missing == set()
+    # Tractor Beam closure (merge d4ceecc5, 2026-05-20): Tractor Beam
+    # blocked_non_effect -> closed (Effect::TapEnchantedPermanent + the
+    # aura_prevents_host_untap rider landed, dropping the
+    # blocked_non_effect tier from 2 to 1 -- Dauntless Scrapbot was
+    # still in non_effect at that point).
+    # Dauntless Scrapbot closure fold (2026-05-20, dauntless-scrapbot-
+    # closure slice): Dauntless Scrapbot blocked_non_effect -> closed
+    # (Sequence + ExileEachOpponentsGraveyard + CreateToken[Lander]
+    # substrate end-to-end shipped + Effect-half real-EoE byte-equal
+    # probe; reclassified to BLOCKED-SUBSYSTEM on the production-deck
+    # loader's Sequence-in-safe-trigger admit, matching the Tractor
+    # Beam r80 / Pain for All r80 honest-stop substrate-landing
+    # precedent). This drives the BLOCKED-blocked_non_effect tier to
+    # ZERO — the last carrier (Dauntless Scrapbot) is closed, so
+    # `non_effect` is now the empty set, joining `missing` at 0.
+    assert non_effect == set()
     # Durable structural invariants (hold every round regardless of
     # which card is in which bucket):
     # - a card cannot be both genuinely_missing and blocked_non_effect

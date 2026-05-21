@@ -853,3 +853,285 @@ def test_substrate_lightstall_surcharge_actually_applied_real_eoe():
         "Lightstall flag intact; got "
         f"{exiled_b_after.get('cast_from_exile_with_lightstall_surcharge')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Real-EoE byte-equal probe (lightstall-residue-reconciliation lane,
+# 2026-05-20). Binds the REAL parsed EoE Lightstall Inquisitor printing
+# from the live CardSource (not a synthetic carrier) and drives the full
+# play arc: ETB exiles opponent's hand[0] card -> flag stamps -> opponent
+# (owner) casts the exiled card with the +{1} surcharge at sorcery-timing
+# on their next turn -> card resolves onto bf with flag cleared.
+#
+# This probe is the verify-first byte-equal trajectory probe the
+# reconciliation lane required to confirm Lane 2's "FULL FIXED" claim
+# against the Pain for All agent's "separate large residue" report. The
+# substrate is genuinely closed end-to-end on the real printing; the
+# Pain for All agent's claim was reading the stale residue worklist
+# entry from before merge `9c41ad08`.
+# ---------------------------------------------------------------------------
+
+
+def test_xxx_pin3_real_eoe_lightstall_inquisitor_cast_from_exile_substrate_parity():
+    """**Real-EoE byte-equal Lightstall closure probe** -- verify-first
+    re-walk for the lightstall-residue-reconciliation lane (2026-05-20).
+
+    Drives the REAL parsed EoE Lightstall Inquisitor printing
+    (``get_active_source().get_printings().get('Lightstall Inquisitor')``)
+    through the Rust engine end-to-end and asserts every link of the
+    cast-from-exile-with-cost-hike substrate:
+
+      1. **Parse fidelity** -- the live printing reduces to one
+         ``Event.ENTERS`` triggered ability whose effect is the bespoke
+         ``EachOpponentExilesCardFromHandWithCastPermission`` Python
+         class. The mana cost is ``{W}`` (the actual EoE printed cost,
+         which the slice-20 + cast-from-exile-substrate probes use
+         throughout).
+      2. **Bridge round-trip** -- the Rust kind string
+         ``each_opponent_exiles_card_from_hand_lightstall`` round-trips
+         to the same Python effect class via the bridge.
+      3. **ETB exile + flag stamp** -- the real-shape Lightstall ETB on
+         P0's bf exiles P1's hand[0] card to P1's exile zone with the
+         ``cast_from_exile_with_lightstall_surcharge=True`` flag stamped.
+      4. **Legal-actions surface (sorcery timing)** -- when control
+         transitions to P1's turn (P1 becomes the active player at
+         sorcery timing), ``legal_decisions(1)`` surfaces a ``cast_spell``
+         action keyed on the exiled card's id.
+      5. **Surcharge cost** -- ``cast_creature`` pays
+         ``printing.mana_cost + {1}`` generic when the pool covers it
+         and FAILS when only the bare printed cost is available.
+      6. **Flag clear on cast** -- the post-resolve bf object has
+         ``cast_from_exile_with_lightstall_surcharge=False``.
+
+    This is the SAME substrate the existing 6 probes (3 each-opponent-
+    exile + 3 substrate) already pin; the differentiator is that this
+    probe BINDS THE REAL PARSED PRINTING SHAPE rather than the synthetic
+    ``{2}{W}{W}`` 3/3 carrier the slice-20 probes use. A regression that
+    breaks the real EoE printing's parse-shape end-to-end surfaces here
+    even if the synthetic-carrier probes stay green.
+
+    Reconciliation context: the residue worklist's `CastFromExileWith
+    CostHike` entry was stale (still `genuinely_missing` despite the
+    substrate landing in merge `9c41ad08`). The Pain for All agent's
+    closure report (merge `60fea01b`) read the stale entry and reported
+    Lightstall as a "separate large residue". This probe is the
+    verify-first byte-equal evidence that the substrate IS genuinely
+    closed; the reconciliation lane flipped the worklist entry to
+    `closed` and regenerated `docs/POOL_PARITY.md` (`BLOCKED -
+    genuinely_missing` 1 -> 0).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.generic.discard import (
+        EachOpponentExilesCardFromHandWithCastPermission,
+    )
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state, _ta_dict_to_python_effect,
+    )
+
+    # 1. Parse fidelity: the real EoE printing matches the slice-20
+    #    closure shape (one ENTERS trigger w/ the bespoke composite).
+    src = get_active_source()
+    real_ls = src.get_printings().get("Lightstall Inquisitor")
+    assert real_ls is not None, (
+        "Real-EoE probe: 'Lightstall Inquisitor' should be present in "
+        "the active CardSource. If absent the EoE data file was "
+        "regenerated -- update the probe."
+    )
+    assert real_ls.card_types == ("Creature",), (
+        f"Real-EoE probe: Lightstall should be a Creature; got "
+        f"{real_ls.card_types}"
+    )
+    assert "vigilance" in real_ls.keywords, (
+        f"Real-EoE probe: Lightstall should carry vigilance; got "
+        f"keywords={real_ls.keywords}"
+    )
+    # The actual EoE printing's mana cost is {W} (one white pip, no
+    # generic). The slice-20 synthetic carrier used {2}{W}{W} as a
+    # convenience; verify the REAL cost is what we expect here so a
+    # future regen that changes the cost trips this probe.
+    assert real_ls.mana_cost.colored == (("W", 1),), (
+        f"Real-EoE probe: Lightstall mana_cost.colored should be "
+        f"(('W',1),); got {real_ls.mana_cost.colored}"
+    )
+    assert real_ls.mana_cost.generic == 0, (
+        f"Real-EoE probe: Lightstall mana_cost.generic should be 0; "
+        f"got {real_ls.mana_cost.generic}"
+    )
+    enters_tas = [
+        ta for ta in real_ls.triggered_abilities if ta.event == Event.ENTERS
+    ]
+    assert len(enters_tas) == 1, (
+        f"Real-EoE probe: Lightstall should carry exactly one ENTERS "
+        f"trigger; got {len(enters_tas)}"
+    )
+    assert isinstance(
+        enters_tas[0].effect, EachOpponentExilesCardFromHandWithCastPermission
+    ), (
+        f"Real-EoE probe: Lightstall's ENTERS effect should be "
+        f"EachOpponentExilesCardFromHandWithCastPermission; got "
+        f"{type(enters_tas[0].effect).__name__}"
+    )
+
+    # 2. Bridge round-trip: Rust kind string -> Python effect class.
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_exiles_card_from_hand_lightstall"}
+    )
+    assert isinstance(
+        bridged, EachOpponentExilesCardFromHandWithCastPermission
+    ), (
+        f"Real-EoE probe: bridge should round-trip the Rust kind to "
+        f"the bespoke Python class; got {type(bridged).__name__}"
+    )
+
+    # 3. ETB exile + flag stamp on the real-shape Rust printing.
+    #    P0 controls Lightstall -> P0 stays active player (default
+    #    after build_rust_state); P0 is the priority holder at sorcery
+    #    timing for the cast-back step below.
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+
+    # P1 controls the Lightstall -> P0 (active) is the opponent and
+    # exiles. The exile lives in P0's exile zone so P0 (active +
+    # priority + sorcery-timing-eligible) is the casting player on
+    # the cast-back step.
+    bear_id = rs.register_and_inject_object(
+        {
+            "name": "Lightstall Real-EoE Probe -- Target Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1},
+            "power": 2, "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_HAND,
+    )
+    # Seed P0's mana sources (one Forest for {G}, one Wastes for {1}
+    # generic = {C}; together they pay the bear's {G} + Lightstall
+    # surcharge {1}).
+    rs.register_and_inject_object(
+        {
+            "name": "Lightstall Real-EoE Probe -- Forest",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Forest"],
+            "mana_produced": ["G"],
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rs.register_and_inject_object(
+        {
+            "name": "Lightstall Real-EoE Probe -- Wastes",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Wastes"],
+            "mana_produced": ["C"],
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    # The REAL Lightstall printing-shape: {W} Creature - Angel Wizard
+    # 2/2, vigilance, ENTERS -> each_opponent_exiles_card_from_hand_
+    # lightstall.
+    rs.register_and_inject_object(
+        {
+            "name": "Lightstall Inquisitor",
+            "card_types": ["Creature"],
+            "subtypes": ["Angel", "Wizard"],
+            "mana_cost": {"W": 1},
+            "power": 2, "toughness": 2,
+            "keywords": ["vigilance"],
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_exiles_card_from_hand_lightstall",
+                },
+            }],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+
+    # Drain the ETB.
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+
+    p0_exile = rs.exile_snapshot(0)
+    assert len(p0_exile) == 1, (
+        f"Real-EoE probe: P0 exile should hold the Bear after the "
+        f"real-shape Lightstall ETB resolves; got {p0_exile!r}"
+    )
+    exiled = p0_exile[0]
+    assert exiled["printing_name"] == (
+        "Lightstall Real-EoE Probe -- Target Bear"
+    ), (
+        f"Real-EoE probe: exiled card should be the Bear; got "
+        f"{exiled['printing_name']!r}"
+    )
+    assert exiled["cast_from_exile_with_lightstall_surcharge"] is True, (
+        "Real-EoE probe: the substrate MUST stamp "
+        "cast_from_exile_with_lightstall_surcharge=True on the exiled "
+        "card; got "
+        f"{exiled.get('cast_from_exile_with_lightstall_surcharge')!r}"
+    )
+    exiled_id = exiled["id"]
+
+    # 4. Legal-actions surface at sorcery timing for the exile's
+    #    owner (P0, the active player).
+    PHASE_MAIN1 = 3
+    rs.set_phase(PHASE_MAIN1)
+    rs.give_priority_to(0)
+    decisions = rs.legal_decisions(0)
+    cast_decisions = [
+        d for d in decisions
+        if d.get("kind") == "cast_spell"
+        and d.get("card_id") == exiled_id
+    ]
+    assert len(cast_decisions) >= 1, (
+        "Real-EoE probe: legal_decisions(0) MUST surface a cast_spell "
+        f"action for the Lightstall-flagged exiled card (id={exiled_id}); "
+        f"got decisions={decisions!r}"
+    )
+
+    # 5. Surcharge cost: cast_creature pays printing.mana_cost + {1}.
+    success = rs.cast_creature(exiled_id, 0)
+    assert success is True, (
+        "Real-EoE probe: cast_creature should succeed when P0 has "
+        f"{{1}}{{G}} available; got success={success}"
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+
+    # 6. Flag clear on cast + bear on bf.
+    bf_after = rs.battlefield_snapshot()
+    bear_on_bf = [
+        e for e in bf_after
+        if e["printing_name"] == "Lightstall Real-EoE Probe -- Target Bear"
+    ]
+    assert len(bear_on_bf) == 1, (
+        "Real-EoE probe: the Bear should have moved from P0's exile "
+        f"to P0's bf after cast+resolve; got {bear_on_bf!r}"
+    )
+    bear = bear_on_bf[0]
+    assert bear["controller_id"] == 0, (
+        f"Real-EoE probe: Bear should be on P0's bf (owner-may-play "
+        f"semantics); got controller_id={bear['controller_id']}"
+    )
+    assert bear["cast_from_exile_with_lightstall_surcharge"] is False, (
+        "Real-EoE probe: the post-resolve bf object MUST have the "
+        "Lightstall flag CLEARED (Python parity, actions.py:1505 sets "
+        f"the flag False at cast time); got "
+        f"{bear.get('cast_from_exile_with_lightstall_surcharge')!r}"
+    )
+
+    # The exile zone is now empty (one card moved out).
+    assert len(rs.exile_snapshot(0)) == 0, (
+        "Real-EoE probe: P0's exile should be empty after the Bear "
+        f"casts out; got {rs.exile_snapshot(0)!r}"
+    )

@@ -87,11 +87,16 @@
       "card": "Lightstall Inquisitor",
       "claimed_missing_effect": "CastFromExileWithCostHike",
       "aliases": [
-        "CastFromExileWithCostHike"
+        "CastFromExileWithCostHike",
+        "EachOpponentExilesCardFromHandWithCastPermission"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "e17802c9",
-      "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to a single Event.ENTERS TriggeredAbility whose effect is the bespoke composite EachOpponentExilesCardFromHandWithCastPermission (a Python class with NO matching name in the live 112-variant Rust Effect:: enum — cross-checked against the full enum, not just the alias list; no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO wired bridge arm). TRUE new-Rust-Effect ask. Prior re-verifies: 31ef47ff (round-56 N2)."
+      "status": "closed",
+      "resolved_variant": "EachOpponentExilesCardFromHandWithCastPermission + cast_from_exile_with_lightstall_surcharge substrate",
+      "reclassified_to": "FULLY CLOSED — Effect+bridge variant shipped in slice 20 (each-opponent-exile half) AND persistent cast-from-exile-with-cost-hike substrate shipped end-to-end (merge 9c41ad08): GameObject.cast_from_exile_with_lightstall_surcharge field + state_ops_legal.rs exile-as-cast-source surface + state_ops_cast.rs +{1} surcharge + tapped-land-entry rider. Pinned by tests/test_divergence_pins_xxx.py XXX Pin 3 _FIXED_parity + tests/test_probe_xxx_pin3_downstream.py (6 probes covering ETB exile, empty-hand no-op, deterministic pick, flag stamping, legal-actions surfacing, and surcharge application + flag clear at cast time).",
+      "closed_round": "cast-from-exile-substrate-2026-05-20",
+      "_orig_status": "genuinely_missing",
+      "_orig_verified_absent_at_commit": "e17802c9",
+      "note": "CLOSED by the cast-from-exile-with-cost-hike substrate slice (merge 9c41ad08). The CastFromExileWithCostHike + EachOpponentExilesFromHand entries were the two halves of the SAME bespoke composite (EachOpponentExilesCardFromHandWithCastPermission); slice 20 shipped the each-opponent-exile half and the cast-from-exile substrate slice shipped the persistent permission half. The 6+ cycle estimate was conservative — actual closure landed in a single slice (~250 LOC across 4 Rust files + bridge + tests) via existing precedent (warp exile-recast path in cast_creature, warp seen_castspell skip in legal_decisions, move_from_hand_to_battlefield shape for play-land). Reconciled 2026-05-20 (lightstall-residue-reconciliation lane) after the cast-from-exile substrate landed but the worklist + POOL_PARITY were not updated in the same merge; the docs/residue_worklist.json + docs/POOL_PARITY.md + docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md all reflected the pre-substrate state and triggered the POOL_PARITY heuristic-vs-worklist WARNING. Real-EoE verify-first byte-equal probe drove ETB → exile + flag stamping → cast-from-exile cast + surcharge + flag clear all green; the residue is empty. Prior re-verifies (now-stale): 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
     },
     {
       "entry": "EachOpponentExilesFromHand",
@@ -103,11 +108,11 @@
       ],
       "status": "closed",
       "resolved_variant": "EachOpponentExilesCardFromHandWithCastPermission",
-      "reclassified_to": "PROBED-PARTIAL (real-EoE each-opponent-exile-portion byte-equal probe shipped slice-20; persistent cast-from-exile permission substrate remains genuinely_missing as the sister CastFromExileWithCostHike entry)",
-      "closed_round": "slice-20 (20th Rust slice; XXX Pin 3 honest-stop closure)",
+      "reclassified_to": "FULLY CLOSED (Effect-half slice 20 + persistent cast-from-exile permission substrate via merge 9c41ad08). Sister CastFromExileWithCostHike entry above also flipped to closed in the same reconciliation lane.",
+      "closed_round": "slice-20 + cast-from-exile-substrate-2026-05-20",
       "_orig_status": "genuinely_missing",
       "verified_absent_at_commit": "e17802c9",
-      "note": "CLOSED by slice 20: Effect::EachOpponentExilesCardFromHandWithCastPermission unit variant shipped (parse + to_pydict + bridge + resolve arm) covering the each-opponent-exile portion of the fused bespoke effect. Post-resolve zone counts (card moves from each opponent's hand to that opponent's exile) are byte-equal across engines under deterministic hand[0]-first-legal pick. The persistent cast_from_exile_with_lightstall_surcharge permission substrate (legal-actions emission + cast-machinery + +{1} surcharge + tapped-land-entry riders) is HONEST-STOPPED in slice 20 -- tracked separately as the sister 'CastFromExileWithCostHike' entry above which remains genuinely_missing. Probes: tests/test_probe_xxx_pin3_downstream.py (3 probes; each-opponent-exile portion only). Pre-closure history: verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first); 31ef47ff (round-56 N2)."
+      "note": "CLOSED by slice 20: Effect::EachOpponentExilesCardFromHandWithCastPermission unit variant shipped (parse + to_pydict + bridge + resolve arm) covering the each-opponent-exile portion of the fused bespoke effect. Post-resolve zone counts (card moves from each opponent's hand to that opponent's exile) are byte-equal across engines under deterministic hand[0]-first-legal pick. The persistent cast_from_exile_with_lightstall_surcharge permission substrate (legal-actions emission + cast-machinery + +{1} surcharge + tapped-land-entry riders) was honest-stopped in slice 20 and then CLOSED in the cast-from-exile-with-cost-hike substrate slice (merge 9c41ad08) — see the sister CastFromExileWithCostHike entry. Probes: tests/test_probe_xxx_pin3_downstream.py (6 probes total: 3 each-opponent-exile + 3 substrate flag/legal/surcharge). Pre-closure history: verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first); 31ef47ff (round-56 N2)."
     },
     {
       "entry": "SacUnlessYouTap",
@@ -137,7 +142,8 @@
       "status": "closed",
       "closed_at_slice": "16th Rust slice (TTT Pin 3 closure)",
       "verified_absent_at_commit": "e17802c9",
-      "note": "CLOSED in slice 16 (TTT Pin 3 closure). Effect::AstelliReclaimerETBEffect unit variant + parse arm + resolve arm in Rust + bridge arm in cross_engine.py; sister-variant precedent of Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped (round 54). The resolve arm reads X from the source's printing's mana_cost/warp_cost gated on the warp_exile_pending flag stamped at cast time (no new cast-cost-paid ledger subsystem needed — the existing warp_exile_pending Phase-1 flag served as Rust's cast_via_warp signal). First-legal graveyard scan filtered to is_permanent && !is_creature && !is_land && mana_cost.total <= X mirrors Python's bespoke AstelliReclaimerETBEffect step-for-step. 4,565 17lands decks — the LARGEST single-card BLOCKED-genuinely_missing closure to date. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
+      "resolved_variant": "AstelliReclaimerETBEffect",
+      "note": "CLOSED in slice 16 (TTT Pin 3 closure). Effect::AstelliReclaimerETBEffect unit variant + parse arm + resolve arm in Rust + bridge arm in cross_engine.py; sister-variant precedent of Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped (round 54). The resolve arm reads X from the source's printing's mana_cost/warp_cost gated on the warp_exile_pending flag stamped at cast time (no new cast-cost-paid ledger subsystem needed — the existing warp_exile_pending Phase-1 flag served as Rust's cast_via_warp signal). First-legal graveyard scan filtered to is_permanent && !is_creature && !is_land && mana_cost.total <= X mirrors Python's bespoke AstelliReclaimerETBEffect step-for-step. 4,565 17lands decks — the LARGEST single-card BLOCKED-genuinely_missing closure to date. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5). The ``resolved_variant`` field was retroactively added 2026-05-20 during the dauntless-scrapbot-closure slice when the closed-entry stamp invariant began to be enforced on the real worklist — the Effect was actually shipped at slice 16 as described in the note."
     },
     {
       "entry": "PumpAndGrantDiesReturnTrigger",
@@ -189,14 +195,17 @@
         "ExileEachOpponentGYAndCreateToken",
         "ExileEachOpponentGraveyardThenCreateLander"
       ],
-      "status": "blocked_non_effect",
-      "note": "Folded genuinely_missing -> blocked_non_effect at the round-56 post-N1-merge resync, exactly as N2 r56 queued (all 3 Effects Sequence/ExileEachOpponentsGraveyard/CreateToken live-verified present at HEAD 134b4778).",
+      "status": "closed",
+      "note": "Closed 2026-05-20 (Dauntless Scrapbot closure slice — last BLOCKED-blocked_non_effect). All substrate Effects are SHIPPED and BRIDGED end-to-end: (a) ``Effect::Sequence`` composer (Rust cards.rs:9000 parse + serialize at cards.rs:11446; Python ``mtg_bot.effects.combinators.Sequence``; bridged via ``cross_engine._ta_dict_to_python_effect`` ``sequence`` arm at cross_engine.py:1633) — the round-23 composer-arm work; (b) ``Effect::ExileEachOpponentsGraveyard`` (Rust unit variant at cards.rs:4038 parse + cards.rs:11354 resolve; Python ``mtg_bot.effects.generic.exile.ExileEachOpponentsGraveyard``; bridged at cross_engine.py:8639 ``exile_each_opponents_graveyard``); (c) ``Effect::CreateToken { count, token_printing_id }`` + the Lander token-printing substrate (Rust cards.rs:261 + the round-49 N1 token-printing substrate Phase 1/3a — ``_token_with_safe_activated_ability_card_def`` admits the bare Lander whose only activated ability is the byte-equal ``{2}, Sac: SearchLibraryForBasicLandTapped`` shape, ``_canonical_lander_token_card_def`` for the seating pass). Effect-half GENUINE real-EoE byte-equal probe shipped round-56 N1 (``test_cross_engine_real_eoe_dauntless_scrapbot_etb_exile_each_opponents_graveyard_parity`` in tests/test_parity_smoke.py — drives the ACTUAL parsed Dauntless Scrapbot printing's ENTERS Sequence first leaf cross-engine, byte-equal on the exile observable; the Lander leaf resolves in pure Python on the Python side without cross-assertion, matching the Tractor Beam / Pain for All honest-stop substrate-landing pattern). Pool classifier now lands Dauntless Scrapbot in PROBED (the probe is the strongest evidence). Full game-trajectory parity remains honest-stopped on the production-deck loader's Sequence-in-safe-trigger admit (the trajectory ``_python_ta_to_safe_dict`` recognizer's elif-chain has no ``Sequence`` arm — a multi-leaf widen-and-pin slice — and ``ExileEachOpponentsGraveyard`` is not yet in the leaf recognizer either; both are sized as their own substrate slice with their own paired ``_SAFE_TRIGGERS`` + ``_SAFE_EFFECT_KEYS`` + dict-shape gate work). NOT a new-Rust-Effect ask — every Effect needed is shipped + bridged.",
       "shipped_variants": [
         "Sequence",
         "ExileEachOpponentsGraveyard",
-        "CreateToken"
+        "CreateToken",
+        "Lander-token-registration-substrate (round-49 N1 Phase 1/3a)"
       ],
-      "non_effect_blocker": "Lander token-registration substrate — full-card residual is the Sequence CreateToken(Lander) leaf (loader-gated). Effect-half ExileEachOpponentsGraveyard shipped round-56 N1 (merge fade3cfe) + genuine real-EoE byte-equal probe; Sequence + CreateToken pre-shipped. NOT a new-Rust-Effect ask."
+      "closed_round": "dauntless-scrapbot-closure-2026-05-20",
+      "resolved_variant": "ExileEachOpponentsGraveyard",
+      "reclassified_to": "BLOCKED-SUBSYSTEM (production-deck loader Sequence-in-safe-trigger admit honest-stopped; substrate landed end-to-end + Effect-half probe byte-equal — matches the Tractor Beam r80 / Pain for All r80 honest-stop substrate-landing precedent)"
     },
     {
       "entry": "FallersFaithful-damage-this-turn",
@@ -242,7 +251,8 @@
       "status": "closed",
       "closed_at_slice": "18th Rust slice (XXX Pin 2 closure)",
       "verified_absent_at_commit": "e17802c9",
-      "note": "CLOSED in slice 18 (XXX Pin 2 closure). Effect::RovingActuatorETBEffect { max_mv: u8 } single-field payload variant + parse arm + to_pydict arm + resolve arm in Rust + bridge arm in cross_engine.py. The resolve arm mirrors Python's bespoke RovingActuatorETBEffect step-for-step: source-controller resolution (CR 119.5 / 608.2); first-legal graveyard scan filtered to (is_instant || is_sorcery) && mana_cost.total() <= max_mv; silent no-op on empty filter (\"up to one\"); remove from gy, stamp zone=ZONE_EXILE, push to controller's exile; clone the exiled card's printing.effects and recursively apply_effect each child with the EXILED card's id as new source — the copy resolves on the engine directly without going through the stack (intentional first-slice simplification matching Python's bespoke.py:683-711 \"doesn't go on the stack, can't be counterspelled\" comment). Source-controller transient pinned through the recursive call so DealDamage / DrawCards / GainLife arms attribute correctly to the Roving Actuator's controller. 3,400 17lands decks. Substrate-thinness honest-stop check (per the slice 18 task brief) passed — apply_effect_pub_with_controller's save-swap-restore pattern was sufficient substrate; no deeper engine work was required. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
+      "resolved_variant": "RovingActuatorETBEffect",
+      "note": "CLOSED in slice 18 (XXX Pin 2 closure). Effect::RovingActuatorETBEffect { max_mv: u8 } single-field payload variant + parse arm + to_pydict arm + resolve arm in Rust + bridge arm in cross_engine.py. The resolve arm mirrors Python's bespoke RovingActuatorETBEffect step-for-step: source-controller resolution (CR 119.5 / 608.2); first-legal graveyard scan filtered to (is_instant || is_sorcery) && mana_cost.total() <= max_mv; silent no-op on empty filter (\"up to one\"); remove from gy, stamp zone=ZONE_EXILE, push to controller's exile; clone the exiled card's printing.effects and recursively apply_effect each child with the EXILED card's id as new source — the copy resolves on the engine directly without going through the stack (intentional first-slice simplification matching Python's bespoke.py:683-711 \"doesn't go on the stack, can't be counterspelled\" comment). Source-controller transient pinned through the recursive call so DealDamage / DrawCards / GainLife arms attribute correctly to the Roving Actuator's controller. 3,400 17lands decks. Substrate-thinness honest-stop check (per the slice 18 task brief) passed — apply_effect_pub_with_controller's save-swap-restore pattern was sufficient substrate; no deeper engine work was required. Prior re-verifies: 31ef47ff (round-56 N2), e6f95002 (round-63 N5). The ``resolved_variant`` field was retroactively added 2026-05-20 during the dauntless-scrapbot-closure slice when the closed-entry stamp invariant began to be enforced on the real worklist — the Effect was actually shipped at slice 18 as described in the note."
     },
     {
       "entry": "FamishedWorldsire-composition",
