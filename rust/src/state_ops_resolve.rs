@@ -12668,6 +12668,71 @@ fn apply_effect(
                 player.life -= amount as i32;
             }
         }
+        // **Aura Phase 4 (Chorale of the Void substrate landing) —
+        // SacrificeSelfUnlessVoidActive.** End-step "sacrifice this
+        // Aura unless Void is active". Mirrors Python's
+        // `SacrificeSelfUnlessVoidActive.resolve`
+        // (`effects/combinators.py:179-197`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //
+        //   source = state.resolving_source  (Rust: source_obj_id on bf)
+        //   if source is None: return        (off-bf -> silent no-op)
+        //   if is_void_active(state): return (Void active -> log + no-op)
+        //   _sacrifice(state, source)        (Void NOT active -> sac)
+        //
+        // **Void state.** `state.is_void_active()` reads the engine-
+        // wide `permanent_left_battlefield_this_turn ||
+        // spell_warped_this_turn` flags (state.rs:2449-2455), set by
+        // the LeavesBattlefield event dispatch and the warp-cost
+        // cast path respectively. Same source of truth as Python's
+        // `is_void_active(state)` (game.py:724 — reads the
+        // `game.state` flags maintained by the same two dispatch
+        // sites).
+        //
+        // **Controller resolution.** Same pattern as the
+        // `SacrificeSelfUnlessTapPermanent` arm: prefer the transient
+        // `current_resolve_source_controller` set by the resolver
+        // around apply_effect, fall back to active_player. The end-
+        // step trigger fires for the active player (the player whose
+        // end step it is), so this transient is reliably populated
+        // for the Chorale shape.
+        Effect::SacrificeSelfUnlessVoidActive => {
+            // 1. Locate the source on its controller's bf. Mirrors
+            //    `SacrificeSelfUnlessTapPermanent` source-finder + the
+            //    Python `if source is None: return` fizzle at
+            //    combinators.py:186-188.
+            let controller_u8 = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller_u8 as usize;
+            let source_on_bf = state.players[controller_idx]
+                .battlefield
+                .iter()
+                .any(|o| o.id == source_obj_id);
+            if !source_on_bf {
+                // Off-bf -> silent no-op (Python parity:
+                // `if source is None: return` at combinators.py:186-188).
+                return Ok(());
+            }
+            // 2. If Void is active -> silent no-op (Python parity:
+            //    `if is_void_active(state): ...; return` at
+            //    combinators.py:189-193 — the Void-active branch just
+            //    logs and returns). Reads the same two engine-wide
+            //    flags as `Effect::ConditionalIfVoid` (line 14535):
+            //    `permanent_left_battlefield_this_turn ||
+            //    spell_warped_this_turn`. This is the byte-equal
+            //    Rust analogue of the pyo3 `is_void_active` getter
+            //    at state.rs:2449-2455.
+            let void_active = state.permanent_left_battlefield_this_turn
+                || state.spell_warped_this_turn;
+            if void_active {
+                return Ok(());
+            }
+            // 3. Otherwise -> sacrifice the source directly (Python
+            //    parity: `_sacrifice(state, source)` at
+            //    combinators.py:197).
+            sacrifice_source_inline(state, controller_idx, source_obj_id)?;
+        }
         // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
         // "sacrifice this unless you tap an untapped permanent you
         // control".** Mirrors Python's
