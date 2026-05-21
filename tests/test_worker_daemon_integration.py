@@ -47,14 +47,9 @@ from mtg_bot.cli import serve as serve_mod
 from mtg_bot.worker_daemon_storage import LocalFileUploader
 
 
-# Phase 2B coord rewrite needed before these can run again — see the
-# module docstring above.
-pytestmark = pytest.mark.skip(
-    reason=(
-        "coord /v2/report_result still expects multipart; Phase 2B "
-        "rewrites it to consume the drop-off JSON ping + fetch by URI"
-    ),
-)
+# Phase 2A + 2B both landed (2026-05-21 integration commit): coord
+# /v2/report_result now consumes the JSON ping and the worker emits
+# the JSON shape. These integration tests are live again.
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +102,12 @@ def _make_test_client_adapter(coordinator_app):
 
 
 def _build_coordinator_app(tmp_path: Path):
+    # report_executor=None forces synchronous report dispatch (the
+    # /v2/report_result handler does the fetch + DB write inline
+    # instead of submitting to a ThreadPoolExecutor). Production
+    # path is async (the load-bearing fix from the coord-async-
+    # storage refactor); the test path uses sync so post-drain
+    # assertions don't race the executor.
     return serve_mod.create_app(
         repo_url="https://example.test/mtg-bot.git",
         master_pubkey="ssh-ed25519 KEY",
@@ -118,6 +119,7 @@ def _build_coordinator_app(tmp_path: Path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        report_executor=None,
     )
 
 

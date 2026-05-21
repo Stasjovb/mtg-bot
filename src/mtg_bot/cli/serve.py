@@ -1245,7 +1245,8 @@ def main(argv=None) -> None:  # pragma: no cover
         f"http://{master_tailnet_name}:{args.port}/setup_remote.ps1).Content",
         file=sys.stderr,
     )
-    app.run(host=args.host, port=args.port, debug=False)
+    from waitress import serve as wsgi_serve
+    wsgi_serve(app, host=args.host, port=args.port, threads=8)
 
 
 if __name__ == "__main__":

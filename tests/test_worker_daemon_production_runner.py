@@ -1070,12 +1070,6 @@ def _make_test_client_adapter(coordinator_app):
 
 
 @pytest.mark.slow
-@pytest.mark.skip(
-    reason=(
-        "coord /v2/report_result still expects multipart; Phase 2B "
-        "rewrites it to consume the drop-off JSON ping + fetch by URI"
-    ),
-)
 @pytest.mark.skipif(
     os.environ.get("MTG_BOT_FAST_TESTS") == "1",
     reason="real-game smoke skipped under MTG_BOT_FAST_TESTS=1",
