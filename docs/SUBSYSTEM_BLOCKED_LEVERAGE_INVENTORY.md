@@ -164,15 +164,49 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-invasive-maneuvers
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                      267
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                       88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                        0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                        0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                      120
 ```
 
-**post-cut-propulsion delta (this lane):** strict **+1 PROBED / −1
+**post-invasive-maneuvers delta (this lane):** strict **+1 PROBED /
+−1 BLOCKED-subsystem-gated** (Invasive Maneuvers, 10,981 17lands
+single-gated decks — the highest-leverage simple-shape card on the
+23-card Effect-uncovered single-gated tail post-Cut-Propulsion).
+Genuine substrate close: new `Effect::InvasiveManeuversEffect { base,
+boosted }` two-int variant (Rust enum + parse + to_pydict + resolve
+arm), `state_ops_legal.rs` `spell_targets_satisfiable` any-creature
+arm (mirrors Cut Propulsion's `IsCreature()` ANY-creature shape),
+`cross_engine.py` `invasive_maneuvers_effect` dict→Python bridge
+(constructs `DealDamageToTargetCreatureSpacecraftBoosted(base=base,
+boosted=boosted)`), `trajectory.py` `_python_spell_effect_to_dict`
+two-int reverse-serializer leaf, `effect_coverage.py`
+`RUST_TO_PYTHON_OVERRIDES` mapping `InvasiveManeuversEffect` →
+`DealDamageToTargetCreatureSpacecraftBoosted`, plus 7 new probes in
+`tests/test_parity_smoke.py` (5 Rust pins: no-Spacecraft base damage,
+caster's-Spacecraft boost, opponent-Spacecraft-does-NOT-boost,
+no-creature fizzle, deterministic-first ETB-order pick; 1 auto-join
+admit-set pin; 1 GENUINE real-EoE cross-engine byte-equal probe
+driving the parsed Invasive Maneuvers printing against a 2/6
+creature with a caster-controlled Spacecraft → 5 damage / no SBA
+fire → full field-view byte-equal). The Spacecraft predicate reads
+`printing.subtypes` (NOT `card_types` — Spacecraft is a SUBTYPE per
+`cards/base.py:1056-1057`: `is_spacecraft = "Spacecraft" in
+subtypes`). Source-controller resolution mirrors the proven
+5-zone-walk + stack-scan from `FocusFireEffect` / `BiosynthicBurst
+Effect`. DEALT_DAMAGE receiver-side event dispatched after damage
+apply for aura-attached `enchanted_creature_dealt_damage` triggers
+byte-equal with Python's `_fire_enchanted_dealt_damage_triggers`.
+Auto-grow: the lever's §2 teeth fire on the Tier-A close having
+LANDED — Invasive Maneuvers's `{1}{R}` Instant flips into the spell-
+card-bridge admit set via the covered+bridged + reverse-serializer-
+round-trips gate (admit set 8→9). The `1gate` column on the Effect-
+uncovered row drops 23 → 22 (`decks(1g)` 91,359 → 80,378).
+
+**post-cut-propulsion delta (prior lane):** strict **+1 PROBED / −1
 BLOCKED-subsystem-gated** (Cut Propulsion, 11,990 17lands single-
 gated decks — the highest-leverage simple-shape card on the 24-card
 Effect-uncovered single-gated tail). Genuine substrate close: new
@@ -248,8 +282,12 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
 
 ## 1. Headline (current state)
 
-* **121 cards** are subsystem-gated; **46 single-gated**, **75 multi-gated**
-  (post-cut-propulsion 2026-05-21: Cut Propulsion flipped BLOCKED →
+* **120 cards** are subsystem-gated; **45 single-gated**, **75 multi-gated**
+  (post-invasive-maneuvers 2026-05-21: Invasive Maneuvers flipped
+  BLOCKED → PROBED via genuine Tier-A Rust substrate close — the
+  highest-leverage simple-shape card on the 23-card Effect-uncovered
+  single-gated tail post-Cut-Propulsion;
+  post-cut-propulsion 2026-05-21: Cut Propulsion flipped BLOCKED →
   PROBED via genuine Tier-A Rust substrate close; post-non-basic-
   land-P2 2026-05-21: 5 EoE Planet lands flipped via the new
   `_printing_is_bridge_simple_tapped_mana_land` admit predicate +
@@ -290,12 +328,15 @@ to reflect what substrate already exists post-session.
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
 | Rooms / doors | 3 | 0 | 0 | sprawling | large — 0 single-gated, 0 decks | DEFERRED (unchanged) |
 | Planeswalker loyalty | 1 | 0 | 0 | sprawling | large — 0 single-gated | DEFERRED (unchanged) |
-| Effect-uncovered (diffuse tail) | 93 | 23 | 91,359 | diffuse | per-card | per-card lane continues (Cut Propulsion closed 2026-05-21) |
+| Effect-uncovered (diffuse tail) | 92 | 22 | 80,378 | diffuse | per-card | per-card lane continues (Invasive Maneuvers closed 2026-05-21; Cut Propulsion closed 2026-05-21) |
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 121 subsystem-gated = 46 single-gated + 75
-multi-gated; `1gate` column sums to 46 (post-cut-propulsion 2026-05-21:
+**Reconciliation:** 120 subsystem-gated = 45 single-gated + 75
+multi-gated; `1gate` column sums to 45 (post-invasive-maneuvers
+2026-05-21: the Effect-uncovered row drops from 93/23/91359 to
+92/22/80378 — Invasive Maneuvers flipped to PROBED via a genuine
+Tier-A Rust substrate close; post-cut-propulsion 2026-05-21:
 the Effect-uncovered row drops from 94/24/103349 to 93/23/91359 — Cut
 Propulsion flipped to PROBED via a genuine Tier-A Rust substrate
 close; post-non-basic-land-P2 2026-05-21: the Non-basic-land row
@@ -479,15 +520,44 @@ respectively).
 ### (3) Effect-uncovered diffuse tail — per-card lane
 
 Not a substrate; per-card closures land 1 card at a time. The cheap
-Tier-A single-card lane is **EXHAUSTED**. Remaining **23 single-gated**
-members (post-cut-propulsion 2026-05-21 close, was 24) are Tier-C-ish
-(combat-shape divergence, larger Rust per card): Archenemy's Charm,
-Beyond the Quiet, Close Encounter, Coordinated Clobbering, Darkness,
-Devastating Onslaught, Drill Too Deep, Emergency Eject, Exorcise,
-Invasive Maneuvers, Mutinous Massacre, Pull Through the Weft, Reroute
-Systems, Ruinous Rampage, Scour for Scrap, Scout for Survivors,
-Shattered Wings, Singularity Rupture, Systems Override, Terminal
-Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
+Tier-A single-card lane is **EXHAUSTED**. Remaining **22 single-gated**
+members (post-invasive-maneuvers 2026-05-21 close, was 23) are
+Tier-C-ish (combat-shape divergence, larger Rust per card):
+Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
+Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
+Emergency Eject, Exorcise, Mutinous Massacre, Pull Through the Weft,
+Reroute Systems, Ruinous Rampage, Scour for Scrap, Scout for
+Survivors, Shattered Wings, Singularity Rupture, Systems Override,
+Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
+Ballad.
+
+**Invasive Maneuvers CLOSED (2026-05-21,
+`feature/invasive-maneuvers-slice`, +1 PROBED / 10,981 17lands
+decks).** A genuine substrate close following the Tier-A precedent
+(Biosynthic Burst, Focus Fire, Diplomatic Relations, Cut Propulsion):
+new `Effect::InvasiveManeuversEffect { base, boosted }` Rust two-int
+variant + parse + to_dict + resolve arm (reads source-controller via
+the proven 5-zone-walk + stack-scan, then walks the source-
+controller's bf for any object whose `printing.subtypes` contains
+`"Spacecraft"` — Spacecraft is a SUBTYPE per `cards/base.py:1056-1057`:
+`is_spacecraft = "Spacecraft" in subtypes` — and picks `boosted` (5)
+vs `base` (3) accordingly; dispatches DEALT_DAMAGE receiver-side
+event byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`), `cross_engine.py`
+dict→Python bridge (constructs
+`DealDamageToTargetCreatureSpacecraftBoosted(base=base,
+boosted=boosted)`), `trajectory.py` two-int reverse-serializer leaf,
+`effect_coverage.py` `RUST_TO_PYTHON_OVERRIDES` mapping
+`InvasiveManeuversEffect → DealDamageToTargetCreatureSpacecraftBoosted`
+— the auto-grow §2 teeth fired and Invasive Maneuvers's `{1}{R}`
+Instant flipped into the spell-card-bridge admit set with no
+hardcoded list (admit set 8→9). 7 new probes (5 Rust pins: no-
+Spacecraft base damage, caster's-Spacecraft boost, opponent-
+Spacecraft-does-NOT-boost, no-creature fizzle, deterministic-first
+ETB-order pick; 1 auto-join admit-set pin; 1 GENUINE real-EoE
+byte-equal driving the parsed printing against a 2/6 creature with a
+caster-controlled Spacecraft → 5 damage / no SBA fire, byte-equal
+full field-view on BOTH engines).
 
 **Cut Propulsion CLOSED (2026-05-21, `feature/effect-uncovered-slice`,
 +1 PROBED / 11,990 17lands decks).** A genuine substrate close
