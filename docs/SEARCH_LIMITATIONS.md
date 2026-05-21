@@ -9558,6 +9558,332 @@ of any control-change subsystem in `rust/src/`, the absence of
 any X-value tracking in `rust/src/`, the absence of any
 `(0, N)` admit arm in `_printing_is_bridge_simple_spell`.
 
+## Next-tractable-substrate hexad characterization — all 6 candidates require multi-cycle subsystem work, not a single per-card slice (HONEST-STOP, 2026-05-21)
+
+**Lane**: `feature/next-tractable-substrate` (verify-first walk
+following the Reroute Systems v2 merge `db3feaa6` that flipped
+PROBED 273 → 274 and grew the spell-card-bridge admit set 17 → 18
+via the per-mode target-binding substrate).
+
+**Scope of this lane**: pick the smallest tractable substrate among
+six BLOCKED-subsystem-gated single-gated cards flagged by prior
+lanes — Devastating Onslaught, Close Encounter, Scout for Survivors,
+Systems Override, Archenemy's Charm, Scour for Scrap — and ship a
+PROBED flip.
+
+**Finding (honest-stop, all 6 candidates declined)**: each card's
+gap is either (a) a multi-cycle subsystem already characterized by
+a prior lane (Devastating Onslaught shares Cycle 1 with Zero Point
+Ballad's X-value tracking, Systems Override shares the
+control-change-UEOT subsystem with Mutinous Massacre), or (b) a
+new multi-target admit-gate widen the spell-card-bridge has not
+yet implemented (Scout for Survivors, Archenemy's Charm mode 2,
+Pull Through the Weft), or (c) a brand-new resolve-time
+state-channel subsystem with no Rust counterpart (Close Encounter's
+`resolving_additional_cost_choice_id`, Scour for Scrap's
+`or_both=True` Cycle 1 widening). Per-card breakdown:
+
+### 1. Devastating Onslaught — shares Cycle 1 with Zero Point Ballad's X-value subsystem (multi-cycle)
+
+Oracle: `{X}{X}{R}` Sorcery — "Create X tokens that are copies of
+target artifact or creature you control. Those tokens gain haste
+until end of turn. Sacrifice them at the beginning of the next
+end step."
+
+Python parses to `CreateXTokensOfTargetPermanentWithHasteEndStepSac()`
+(bespoke unit class; `effects/generic/tokens.py:405`). Resolve reads
+`state.resolving_x_value` and creates X copy-tokens of the chosen
+target, granting haste UEOT, with a delayed-trigger end-step
+sacrifice.
+
+Gaps on Rust side (each a multi-cycle subsystem lane):
+1. **X-value subsystem** — `StackItem.x_value: Option<i32>` field +
+   `state.current_resolve_x_value` bracket around resolve +
+   admit-predicate widen at `_printing_is_bridge_simple_spell` to
+   accept `mc.x_pips > 0`. Shared with Zero Point Ballad's lane
+   (already characterized in the prior "Next-wrath-substrate triad"
+   honest-stop entry above).
+2. **Token-copy substrate** — Rust today carries
+   `Effect::CreateToken { count, token_printing_id }` which references
+   a PRE-REGISTERED printing in the Rust registry. "Copy a target's
+   printing" is a different shape: the token's printing is determined
+   at resolve time from the target's printing, not at cast time. Needs
+   a new `Effect::CreateXTokenCopiesOfTarget { with_haste: bool,
+   sac_at_end_step: bool }` variant whose resolve arm walks the
+   target's `Printing` fields and seats a fresh token-printing
+   entry into the registry (or carries a "virtual copy" shape that
+   skips registry registration). ~150 LoC + 4 cross-engine probes.
+3. **Delayed-trigger end-step sacrifice** — Rust does have the
+   `Effect::CreateToken { ..., schedule_end_of_combat_sacrifice }`
+   rider (for Kavaron Harrier), but the "next end step" timing is a
+   different trigger window than "end of combat". Reusable shape if
+   the variant carries an explicit `sac_timing: SacTimingShape`
+   enum.
+
+**Estimated cost**: 3-4 cycles (depends on Zero Point Ballad lane
+landing first to amortize the X-value subsystem). 2,238 17lands
+decks.
+
+### 2. Close Encounter — additional-cost runtime state-channel subsystem missing on Rust
+
+Oracle: `{1}{G}` Instant — "As an additional cost to cast this
+spell, choose a creature you control or a warped creature card you
+own in exile. Close Encounter deals damage equal to the power of
+the chosen creature or card to target creature."
+
+Python parses to `CloseEncounterEffect()` (bespoke unit class;
+`effects/bespoke.py:1065`). Resolve reads
+`state.resolving_additional_cost_choice_id` to look up the chosen
+object's effective power, then deals that much damage to the
+single target creature.
+
+Gaps on Rust side:
+1. **`resolving_additional_cost_choice_id` runtime channel** — a
+   new `GameState` field that the cast-pipeline writes at cost-pay
+   time and the resolve arm reads at resolve time. Rust today has
+   `printing.additional_cost_choose_your_creature` (a printing-level
+   bool — `cards.rs:6962`) and a legality gate
+   (`state_ops_legal.rs:1313`), but NO runtime state channel that
+   threads the CHOICE (the chosen object id) from cost-pay through
+   to resolve. Needs:
+   - `StackItem.additional_cost_choice_id: Option<u32>` field (the
+     chosen object's id, set at cast time).
+   - `state.current_resolve_additional_cost_choice_id` bracket
+     around resolve (mirrors the existing `current_resolve_kicked`
+     / `current_resolve_x_value` shape).
+   - Cast-pipeline plumbing that writes the choice into the
+     StackItem at cost-pay time (the choice is a `PendingDecision`
+     pump cycle the cast pipeline doesn't currently emit).
+2. **Effective-power-of-chosen-object resolver** — Rust's existing
+   damage arms read `target.power` from the StackItem's bound
+   target; this card's damage amount is sourced from a SECOND
+   object (the additional-cost choice), which may be on the
+   battlefield OR in the caster's exile (warped creature card —
+   exile pool reads printed power, not effective power). Needs a
+   new helper `effective_power_or_printed(state, obj_id) -> i32`
+   that walks both zones.
+3. **New `Effect::CloseEncounterEffect` variant** + parse +
+   to_pydict + resolve arms; bridge round-trip; admit auto-join
+   blocked until items (1) + (2) ship. ~200 LoC + 4 cross-engine
+   probes.
+
+**Estimated cost**: 2-3 cycles (the additional-cost runtime channel
+is the dominant lift; other cards in the EoE pool that print
+additional-cost choose-a-creature ride the same substrate so the
+amortization is per-channel not per-card). 16,098 17lands decks —
+the highest deck count among the six candidates.
+
+### 3. Scout for Survivors — multi-target admit-gate Phase 4 widen + sum-MV-budget resolve substrate
+
+Oracle: `{2}{W}` Sorcery — "Return up to three target creature
+cards with total mana value 3 or less from your graveyard to the
+battlefield. Put a +1/+1 counter on each of them."
+
+Python parses to
+`ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n=3,
+max_total_mv=3)` (constructor sugar on the unified
+`ReturnFromGraveyard` base; `effects/generic/bounce.py:296`).
+Resolve walks the controller's graveyard, picks up to N creature
+cards within the sum-MV budget, puts each on the battlefield with
+a +1/+1 counter.
+
+Shape: `target_count_range == (0, 3)`, `target_slot_kinds() ==
+("graveyard_creature",)` (repeated 3x in the legal-targets emit
+loop). The current admit predicate at
+`trajectory.py::_printing_is_bridge_simple_spell:4724` admits ONLY
+`(1, 1)` single-target (Phase 1), `(2, 2) (my_creature, creature)`
+heterogeneous pair (Phase 2), or `(0, 0)` no-target wrath
+(Phase 3). The `(0, 3)` multi-target shape stays POSITIVELY
+DECLINED.
+
+Gaps on Rust side (each its own cycle):
+1. **Phase 4 multi-target admit widen** — extend
+   `_printing_is_bridge_simple_spell` with a `(0, N) | (1, N)`
+   admit arm gated on a single uniform `slot_kind` (mirrors the
+   precedent comment at `:4756` — "every other target shape stays
+   declined"). Per-card teeth: the round-trip-or-bail serializer
+   gate continues to carry the no-fallback-hybrid load.
+2. **Multi-target cast-time binding** —
+   `StackItem.target_obj_id: Option<u32>` (single binding) widens
+   to `StackItem.target_obj_ids: SmallVec<[u32; 4]>` (or similar).
+   Every read site across `state_ops_resolve.rs` and
+   `state_ops_legal.rs` re-routes through a helper that reads the
+   N-element view. ~100 LoC across 5+ files; high cross-cutting
+   risk (mirrors the Cycle 2 risk profile of the control-change
+   subsystem).
+3. **Sum-MV-budget resolve substrate** — at resolve time, walk
+   the bound targets in pick order, deduct each card's mana value
+   from a running budget (initial = `max_total_mv`), skip any
+   over-budget pick with a log line. Python's
+   `ReturnFromGraveyard.resolve:209-242` is the SoT.
+4. **+1/+1 counter rider** — apply a +1/+1 counter to each
+   returned creature on its way to the battlefield. Mirrors the
+   existing `PutPlusOneCounterOnSelf` arm but the source is the
+   spell, not the moving permanent.
+5. **New `Effect::ReturnUpToNSmallCreaturesFromGraveyardWith
+   Counters { max_n: i32, max_total_mv: i32 }` variant** + parse
+   + to_pydict + resolve arms; bridge round-trip; admit auto-join
+   blocked until items (1)-(4) ship. ~250 LoC + 5 cross-engine
+   probes.
+
+**Estimated cost**: 3-4 cycles. The Phase 4 multi-target admit
+widen is the largest single lift (the cross-cutting StackItem
+extension); the sum-MV-budget + counter rider are local resolve-arm
+extensions. Pull Through the Weft and Archenemy's Charm mode 2
+would ride the same substrate. 4,170 17lands decks.
+
+### 4. Systems Override — shares control-change-UEOT subsystem with Mutinous Massacre (multi-cycle)
+
+Oracle: `{2}{R}` Sorcery — "Gain control of target artifact or
+creature until end of turn. Untap that permanent. It gains haste
+until end of turn. If it's a Spacecraft, put ten charge counters
+on it. If you do, remove ten charge counters from it at the
+beginning of the next end step."
+
+Python parses to `SystemsOverrideEffect()` (bespoke unit class).
+Resolve calls the same five subsystems Mutinous Massacre's grant
+of control to all creatures uses, plus a Spacecraft-conditional
+charge-counter rider with a delayed-trigger drain at the next end
+step.
+
+Gaps on Rust side: **identical** to Mutinous Massacre's
+control-change-UEOT subsystem (already characterized in the prior
+"Next-wrath-substrate triad" entry; C1-C3 there cover the shared
+substrate). The Spacecraft-conditional charge-counter rider is an
+additional per-card piece atop the shared substrate:
+- **Spacecraft-conditional charge-counter put** — a new resolve
+  branch that reads the target's `card_types`, sets ten charge
+  counters if "Spacecraft" is present.
+- **Delayed-trigger charge-counter drain at next end step** — a
+  new delayed-trigger shape (the Devastating Onslaught lane's
+  sac-at-end-step substrate is the closest precedent, but the
+  payload is different — drain N charge counters rather than
+  sacrifice).
+
+**Estimated cost**: 3-5 cycles (rides the Mutinous Massacre
+control-change lane's C1-C3 substrate; per-card slice is ~1
+cycle on top). 4,775 17lands decks. The control-change subsystem
+unlocks BOTH Systems Override AND Mutinous Massacre — the
+shared-amortization lane.
+
+### 5. Archenemy's Charm — three-mode ModalChooseOne with multi-target + multi-mode-shape gaps
+
+Oracle: `{B}{B}{B}` Instant — "Choose one — Exile target creature
+or planeswalker. — Return one or two target creature and/or
+planeswalker cards from your graveyard to your hand. — Put two
++1/+1 counters on target creature you control. It gains lifelink
+until end of turn."
+
+Python parses to `ModalChooseOne(modes=(ExileTargetCreature(),
+ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1),
+ArchenemysCharmMode3Effect()))` (the Mode 3 is a bespoke
+parameterless class wrapping +2/+2 counters + lifelink-UEOT).
+
+Gaps on Rust side:
+1. **Mode 1 (`ExileTargetCreature`)** — already covered in Rust
+   (`Effect::ExileTarget` shape). NO substrate gap.
+2. **Mode 2 (multi-target return-to-hand)** — needs the same
+   multi-target admit widen + multi-target cast-time binding as
+   Scout for Survivors (above). The Python class has
+   `target_count_range == (1, 2)` — a NEW shape not covered by
+   the (0, N) variant Scout would need.
+3. **Mode 3 (+2/+2 counters + lifelink UEOT)** — bespoke
+   composition. Rust today has `PutPlusOneCounterOnSelf` (round-15)
+   and `UeotModifier::GrantKeyword` (round-16) primitives, but
+   no single Effect variant that composes "put N counters on a
+   target then grant a keyword UEOT". Needs a new variant or a
+   sequence-composer extension.
+4. **ModalChooseOne 3-mode dispatch** — the existing modal
+   substrate handles 2-mode ModalChooseOne (Reroute Systems
+   demonstrated the per-mode target-binding shape); 3-mode adds
+   the per-mode detector table widen (more rows, no new
+   primitives).
+
+**Estimated cost**: 3-4 cycles (mode 2 carries the load — the
+multi-target return-to-hand substrate; mode 3 is ~1 cycle of
+composition work). 4,498 17lands decks.
+
+### 6. Scour for Scrap — `or_both=True` Cycle 1 widening from `Option<u8>` to `Option<Vec<u8>>`
+
+Oracle: `{3}{U}` Instant — "Choose one or both — Search your
+library for an artifact card, reveal it, put it into your hand,
+then shuffle. — Return target artifact card from your graveyard to
+your hand."
+
+Python parses to `ModalChooseOne(modes=(SearchLibraryForArtifact
+ToHand(), ReturnTargetArtifactCardFromYourGraveyardToHand()),
+or_both=True)`. The `or_both` flag lets the caster pick BOTH
+modes (or just one).
+
+Gaps on Rust side:
+1. **Cycle 1 widening `chosen_mode: Option<u8>` → `chosen_modes:
+   Option<Vec<u8>>`** — Rust's `StackItem.chosen_modes: Option<u8>`
+   (per the comment at `state.rs:1126` — "tuple[int, ...]" was the
+   Python contract but Rust shipped single-mode-only as Cycle 1).
+   Widening to `Vec<u8>` is a structural change touching every
+   parse / resolve / serialize / detector-table site. The current
+   serializer at `_python_spell_effect_to_dict` explicitly bails on
+   `or_both=True` (trajectory.py:4709) — the Cycle 1 widen would
+   flip that to positive emission.
+2. **Mode 1 — `SearchLibraryForArtifact`** — not yet covered in
+   Rust. Needs a new `Effect::SearchLibraryForArtifactToHand`
+   variant (sibling of the existing
+   `SearchLibraryForBasicLandTapped` arm; the search-to-hand
+   destination is a different zone-write).
+3. **Mode 2 — `ReturnTargetArtifactCardFromYourGraveyardToHand`**
+   — not yet covered in Rust. Needs a new
+   `Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`
+   variant (sibling of the existing
+   `ReturnCreatureFromYourGraveyardToHand` arm; the artifact
+   filter is a one-line predicate swap).
+4. **Per-mode detector table widening** — the Cycle 5 substrate's
+   detector table needs entries for both new variants (mirrors
+   the Reroute Systems v2 closure's per-mode detector additions).
+
+**Estimated cost**: 2-3 cycles (the Cycle 1 widen is the
+cross-cutting structural change; the two per-mode Effect variants
+are local additions). 6,434 17lands decks.
+
+---
+
+**Cross-candidate amortization summary**:
+
+- Devastating Onslaught + Zero Point Ballad share the X-value
+  subsystem (Cycle 1 of the "Next-wrath-substrate triad" lane).
+- Systems Override + Mutinous Massacre share the
+  control-change-UEOT subsystem (C1-C3 of the same triad lane).
+- Scout for Survivors + Pull Through the Weft + Archenemy's Charm
+  mode 2 share the multi-target admit-gate Phase 4 widen.
+- Close Encounter is the only candidate with a standalone subsystem
+  gap (the additional-cost runtime channel; no current EoE sibling).
+- Scour for Scrap is the only candidate gated on a Cycle-internal
+  widening (or_both); the Cycle 1 widen amortizes across any future
+  or_both modal.
+
+**Cheapest-amortized lane**: the multi-target admit-gate Phase 4
+widen (unlocks 3 candidates: Scout for Survivors + Pull Through
+the Weft + Archenemy's Charm mode 2). The control-change-UEOT lane
+unlocks 2 candidates (Systems Override + Mutinous Massacre).
+
+**Honest-stop, no PROBED flip in this lane.** The
+SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md "19 single-gated members"
+list assumes per-card cost is 1-3 cycles each; this verify-first
+characterization confirms the prior "Next-wrath-substrate triad"
+caveat that several of those cards are NOT per-card slices but
+shared multi-cycle subsystems. The remaining single-gated cards in
+that list that have NOT yet been hand-characterized would benefit
+from a follow-up walk before scheduling any per-card lane.
+
+**Location**: `src/mtg_bot/parity/trajectory.py:4709` (`or_both`
+positive reject), `:4724-4756` (Phase 1/2/3 admit shapes — Phase 4
+multi-target shape is the structural gap), the absence of any
+control-change subsystem in `rust/src/` (re-iterating the prior
+triad's finding), the absence of any X-value subsystem in
+`rust/src/` (ditto), the absence of any
+`resolving_additional_cost_choice_id` runtime channel in
+`rust/src/state.rs`, the absence of any token-copy substrate in
+`rust/src/`.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,
