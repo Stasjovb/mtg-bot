@@ -3570,6 +3570,50 @@ pub enum Effect {
     /// target case." Both engines take the same shortcut for byte-
     /// equality + the inherent loop-guard.
     PainForAllDamageEchoEffect,
+    /// **Aura Phase 4 (Chorale of the Void substrate landing) —
+    /// SacrificeSelfUnlessVoidActive.** End-step "sacrifice this Aura
+    /// unless Void is active" — the Chorale-of-the-Void sustain. Mirrors
+    /// Python's `SacrificeSelfUnlessVoidActive`
+    /// (`effects/combinators.py:172-200`) — used today by Chorale of
+    /// the Void (2,783 17lands decks; the largest deck-count Aura in
+    /// the `blocked_subsystem_gated` tier per
+    /// `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §1 sub-shape S4).
+    ///
+    /// **Unit variant on both sides.** Python's
+    /// `SacrificeSelfUnlessVoidActive` is a `@dataclass(frozen=True)`
+    /// with no fields. The Rust enum mirrors that. Reads the
+    /// `is_void_active` state predicate (already plumbed engine-wide
+    /// — `state.rs:2449-2455`: true iff `permanent_left_battlefield_
+    /// this_turn || spell_warped_this_turn`) and `current_resolve_
+    /// source_controller` to determine which player's source to
+    /// sacrifice.
+    ///
+    /// **Resolve semantics (mirrors `combinators.py:179-197`).**
+    /// 1. Locate the source object on its controller's battlefield.
+    ///    Missing → silent no-op (Python parity:
+    ///    `if source is None: return` at combinators.py:186-188).
+    /// 2. If `is_void_active(state)` is true → silent no-op (Python
+    ///    parity: `if is_void_active(state): return` at combinators.py
+    ///    :189-193 — the Void-active branch just logs and returns).
+    /// 3. Otherwise → `sacrifice_source_inline` to send the source
+    ///    to its owner's graveyard (mirrors Python's
+    ///    `_sacrifice(state, source)` at combinators.py:197).
+    ///
+    /// **Bridge-correctness today.** The Effect variant ships full
+    /// Rust resolve semantics — this is NOT an honest-stop fizzle
+    /// (contrast Pain for All / Meltstrider's). Once the loader admit
+    /// gate widens to admit Chorale's full trigger surface (deferred
+    /// to a follow-up slice — the sibling
+    /// `ReanimateTargetCreatureCardFromDefendersGraveyard` ATTACKS
+    /// trigger needs targeted-graveyard substrate not yet in Rust),
+    /// the end-step sustain trigger flips live byte-equal across
+    /// engines for any admitted Aura that includes this Effect alone
+    /// in its trigger surface.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `SacrificeSelfUnlessVoidActive()` (field-free construction).
+    SacrificeSelfUnlessVoidActive,
     /// **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
     /// "sacrifice this unless you tap an untapped permanent you
     /// control".** Mirrors Python's `SacrificeSelfUnlessTapPermanent`
@@ -8170,6 +8214,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (Python parity).
             Ok(Effect::PainForAllDamageEchoEffect)
         }
+        "sacrifice_self_unless_void_active" => {
+            // **Aura Phase 4 (Chorale of the Void substrate landing)
+            // — SacrificeSelfUnlessVoidActive parse arm.** Unit
+            // variant; no payload fields beyond `kind` (source-and-
+            // controller are read from `state.current_resolve_source_
+            // controller` + the source's bf membership at resolve
+            // time, mirroring the Python `state.resolving_source`
+            // convention at combinators.py:186). Extra dict fields
+            // silently ignored for round-trip dict-shape consistency
+            // (mirrors slice-19 `enchanted_creature_fights_target` /
+            // Pain for All `pain_for_all_etb` unit-variant parse arm
+            // shape verbatim).
+            Ok(Effect::SacrificeSelfUnlessVoidActive)
+        }
         "sacrifice_self_unless_tap_permanent" => {
             // 20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
             // "sacrifice this unless you tap an untapped permanent you
@@ -11559,6 +11617,15 @@ pub(crate) fn effect_to_pydict<'py>(
             // consistency (slice-19 `enchanted_creature_fights_target`
             // precedent).
             d.set_item("kind", "pain_for_all_damage_echo")?;
+        }
+        Effect::SacrificeSelfUnlessVoidActive => {
+            // **Aura Phase 4 (Chorale of the Void substrate landing)
+            // — to_pydict.** Unit variant; mirrors Python's field-free
+            // @dataclass(frozen=True) at combinators.py:172-200. No
+            // other keys emitted — round-trip dict-shape consistency
+            // (slice-19 `enchanted_creature_fights_target` / Pain
+            // for All `pain_for_all_etb` precedent).
+            d.set_item("kind", "sacrifice_self_unless_void_active")?;
         }
         Effect::SacrificeSelfUnlessTapPermanent => {
             // 20th Rust slice (VVV Pin 2 closure). Unit variant; no
