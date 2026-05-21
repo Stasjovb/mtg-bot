@@ -224,6 +224,9 @@ fn push_object(
         warped: false,
         cast_from_exile_with_lightstall_surcharge: false,
         controller_baseline: None,
+        // Aura-attachment Phase 4 S3 closure (2026-05-21): setup-
+        // seeded objects are never Moonlit-substituted tokens.
+        token_supertype_override: false,
     });
     *next_id += 1;
 }

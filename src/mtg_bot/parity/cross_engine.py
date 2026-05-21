@@ -399,20 +399,23 @@ class CardDef:
     # Ignored unless ``is_aura == true``.
     aura_prevents_host_untap: bool = False
     # Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
-    # substrate landing, 2026-05-20). CR 614 token-creation
-    # replacement rider keyed on the Aura's ``attached_to`` host.
-    # Mirrors Python's ``CardPrinting.replaces_first_tokens_with_copies``
+    # CLOSURE, 2026-05-21). CR 614 token-creation replacement rider
+    # keyed on the Aura's ``attached_to`` host. Mirrors Python's
+    # ``CardPrinting.replaces_first_tokens_with_copies``
     # (`cards/base.py:651`). ``False`` is the back-compat default —
     # every pre-S3 CardDef omits it and the registry-dict emitter
     # skips it, so the Rust parser maps the absent key to ``false``.
-    # **Substrate-only round-trip in this slice** — Rust's
-    # CreateToken arm does NOT yet consume the rider (the Token-
-    # supertype-add on the host's printing is a runtime registry
-    # mutation that Rust doesn't expose today); the field surfaces
-    # through the bridge so a future slice can light up the consumer
-    # without further CardDef changes. The loader admit predicate
-    # stays declined at the ``replaces_first_tokens_with_copies``
-    # check. Ignored unless ``is_aura == true``.
+    # **Full closure in this slice** — Rust's CreateToken /
+    # CreateTokenTapped / CreateTokenEachPlayer / CreateToken-
+    # CopyOfTargetCreatureYouControl arms now consult the
+    # controller's attached Moonlit-shape Aura via
+    # ``moonlit_token_substitution`` (rust/src/state_ops_resolve.rs)
+    # and swap the token's printing_id to the host's printing with
+    # the per-object Token-supertype override stamped on the
+    # GameObject (rust/src/state.rs ``token_supertype_override``).
+    # The loader admit predicate
+    # (``_printing_is_bridge_simple_aura``) ADMITS this rider.
+    # Ignored unless ``is_aura == true``.
     aura_replaces_first_tokens_with_copies: bool = False
     # Static / layered abilities substrate — Phase 1 first-deliverable
     # (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``

@@ -168,8 +168,16 @@ pub(crate) fn drain_pending_token_cease(state: &mut GameState) {
                 (0u8, &player.library),
             ] {
                 if let Some(pos) = zone.iter().position(|o| {
+                    // Aura-attachment Phase 4 S3 closure (2026-05-21):
+                    // consult the per-object Token-supertype override
+                    // alongside the printing's static is_token bit, so
+                    // a Moonlit-Meditation-replacement token carrying
+                    // the host's non-Token printing_id still ceases on
+                    // bf-exit. Mirrors Python's `obj.printing.is_token`
+                    // read against the `_dc.replace`-injected supertype
+                    // tuple at `effects/generic/tokens.py:237-243`.
                     o.id == obj_id
-                        && state.registry.is_token(o.printing_id)
+                        && o.effective_is_token(&state.registry)
                 }) {
                     hit = Some((pidx, zone_tag, pos));
                     break 'scan;

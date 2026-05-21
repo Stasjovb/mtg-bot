@@ -138,6 +138,10 @@ impl GameState {
                 // cards never start with the Lightstall flag.
                 cast_from_exile_with_lightstall_surcharge: false,
                 controller_baseline: None,
+                // Aura-attachment Phase 4 S3 closure (2026-05-21):
+                // deck-loaded library cards are not Moonlit-substituted
+                // tokens. Back-compat default.
+                token_supertype_override: false,
             });
             next_id += 1;
         }

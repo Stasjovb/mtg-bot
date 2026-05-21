@@ -8301,81 +8301,93 @@ collateral closures. `tests/test_aura_substrate*.py` +
 `BLOCKED-genuinely_missing` tier 1 → 0 (only Pain for All remains
 in the BLOCKED-RUST-EFFECT inventory).
 
-## Aura Phase 4 S3 (Moonlit Meditation substrate landing): CreateToken arm does not yet swap token printing to host's printing (2026-05-21)
+## Aura Phase 4 S3 (Moonlit Meditation) — CLOSED 2026-05-21 via per-object Token-supertype override
 
-**Where**: `rust/src/state_ops_resolve.rs::Effect::CreateToken` /
-`CreateTokenTapped` / `CreateTokenEachPlayer` /
-`CreateTokenCopyOfTargetCreatureYouControl` — every Rust
-token-creation arm now flips the per-player
-`GameState.created_tokens_this_turn: [bool; 2]` slot on a non-zero-
-count batch (cleared at PHASE_CLEANUP entry alongside the void
-flags), but NONE of them yet consult attached Auras for the CR 614
-token-creation replacement Moonlit Meditation carries. Spec:
-`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 4 S3.
+**Status (CLOSED 2026-05-21).** The Phase 4 S3 honest-stop that
+shipped substrate-only at `44d283bb` (CreateToken arm did not yet
+swap token printing to host's printing because Rust had no
+"Token supertype add on a host printing" primitive) is now fully
+closed. Approach (b) from the substrate-only honest-stop notes was
+taken: a per-object Token-supertype override flag
+(`GameObject.token_supertype_override: bool`) was added to the
+GameObject struct, and a new `moonlit_token_substitution` helper
+in `rust/src/state_ops_resolve.rs` plumbs the substitution through
+every CreateToken-family resolve arm. The loader admit predicate
+`_printing_is_bridge_simple_aura` was widened to admit
+`replaces_first_tokens_with_copies` Auras.
 
-**What the shortcut is**: when the controller's per-player
-`created_tokens_this_turn` slot is unset AND they control a
-Moonlit-shape Aura (`aura_replaces_first_tokens_with_copies=True`)
-with a live `attached_to` host, Python's `CreateToken.resolve`
-(`effects/generic/tokens.py:217-247`) substitutes the requested
-token's printing with the host's printing (Token supertype added
-via `_dc.replace(base, supertypes=...)`). Rust's CreateToken arm
-DOES NOT yet do this swap — it always creates tokens of the
-`token_printing_id` carried in the Effect dict.
+**Closure mechanism (per the original (b) sketch).**
 
-**Why it's OK (today)**: the bench loader's
-`_printing_is_bridge_simple_aura` predicate STAYS declined at the
-`replaces_first_tokens_with_copies` check (`src/mtg_bot/parity/
-trajectory.py:4827`), so no Moonlit Meditation printing reaches a
-cross-engine bench probe. The substrate-only landing ships the
-CardPrinting field + parse arm + getter + per-player state slot +
-turn-cleanup reset + bridge round-trip so the cross-engine bridge
-no longer has a "no Rust translation for the rider" hole, and any
-future positive-admit slice doesn't have to re-establish the
-CardDef shape from scratch. The per-player flag flip on every
-Rust token-creation arm is **byte-equal-trackable** cross-engine
-(Python's set-membership read == Rust's per-player flag read), so a
-future Moonlit-replacement consumer can flip the loader gate
-without needing to instrument the state-slot lifecycle separately.
+* **GameObject field** — `token_supertype_override: bool`, false
+  default for every freshly-allocated object. Stamped `true` at
+  token-mint time when the Moonlit substitution fires AND the
+  host's printing does NOT already carry the Token supertype
+  (mirrors Python's conditional supertype append at
+  `tokens.py:240-242`). Surfaced through `object_to_pydict` in
+  the battlefield_snapshot so cross-engine probes can read it.
 
-**Failure mode**: admitting Moonlit Meditation at the bench loader
-TODAY would diverge immediately on the first token-creation each
-turn — Python creates copies of the host with Token supertype;
-Rust creates the spell's printed token type (e.g. a vanilla 1/1
-Soldier). Every downstream parity check on the bf snapshot (host's
-printing's power/toughness/keywords) would fire the divergence
-immediately.
+* **Effective is-token reader** —
+  `GameObject::effective_is_token(&registry)` returns
+  `override || registry.is_token(printing_id)`. Replaces three
+  printing-side `is_token` consumer sites
+  (`drain_pending_token_cease`, the
+  `EachOpponentSacrificesCreature` non-token filter, the
+  `WarpExileSelf` non-token gate).
 
-**Fix-scope estimate**: needs either (a) a Rust runtime-registry
-append primitive that mints a fresh `printing_id` for the
-host-with-Token-supertype copy at replacement time (then routes
-the substituted token through that pid), OR (b) a per-object
-override mechanism for the "Token" supertype check on a
-GameObject whose `printing_id` is borrowed from another bf object
-(read-time supertype-set extension). (a) is a registry-mutation
-substrate slice — touches every clone path, the wire-serialized
-fingerprint shape, and the parse-validation discipline. (b) is a
-GameObject-field substrate — adds a per-object override Vec / set
-that interleaves with the printing's supertypes at every read
-site. Estimate either path at **~6-10h Rust slice** with the
-honest-stop discipline (single-card driver, no probe today).
-After the swap-mechanism lands: ~1-2h to wire the CreateToken-arm
-consumer (find Moonlit Aura under controller, read attached_to,
-swap printing_id) + widen
-`_printing_is_bridge_simple_aura` to accept
-`replaces_first_tokens_with_copies` Auras + the loader-admit gate
-flips +1 carrier / +633 17lands decks.
+* **Moonlit substitution helper** — `moonlit_token_substitution(
+  state, controller_idx, requested_pid) -> (pid, override)` in
+  `state_ops_resolve.rs`. Mirrors Python's
+  `_find_moonlit_replacement_source` teeth: gates on the
+  controller's per-player `created_tokens_this_turn` flag,
+  locates a controlled Moonlit-shape Aura with a live
+  `attached_to` host, returns the host's `printing_id` +
+  `override=true` (skipping the override when the host's
+  printing already carries "Token" — degenerate-but-CR-legal
+  Moonlit-on-Token-host case, no-op for supertype injection).
 
-**Impact estimate**: **0 admit delta today** (substrate-only
-landing; Moonlit stays declined at the loader, all other Aura
-admits unchanged). Forward-looking value: unlocks **Moonlit
-Meditation (+1 card / +633 17lands decks)** as a bridge-admitted
-Aura once the host-as-token swap mechanism lands. The per-player
-flag flip on every Rust token-creation arm is also a
-prerequisite for any future CR 614 replacement effect that gates
-on "this player has created tokens this turn" (no current EoE
-sibling, but a future-set inclusion comes for free with the
-state-slot infrastructure already in place).
+* **CreateToken-family arm wiring** — all four arms
+  (`Effect::CreateToken`, `CreateTokenTapped`,
+  `CreateTokenEachPlayer`,
+  `CreateTokenCopyOfTargetCreatureYouControl`) now call
+  `moonlit_token_substitution` before minting. The each-player
+  variant does the substitution per recipient (each recipient's
+  own per-player flag + each recipient's own controlled Moonlit
+  Auras), mirroring Python's recipient loop at
+  `tokens.py:216-247`.
+
+**Bridge round-trip.** Python's `obj.printing.is_token` reads
+against the `_dc.replace`-injected supertype tuple are mirrored
+by Rust's `obj.effective_is_token(&registry)` — the answer to
+"is this object a Token?" is byte-equal cross-engine post-
+substitution. The bridge-truthy comparator
+(`battlefield_snapshot::object_to_pydict`) emits the new
+`token_supertype_override` key alongside the existing per-object
+fields; pre-substrate pinned baselines observe `false` on every
+object so they remain bit-equal.
+
+**Loader admit widen.**
+`_printing_is_bridge_simple_aura` no longer declines on
+`printing.replaces_first_tokens_with_copies`; the rejection at
+the prior site has been replaced with a comment block describing
+the closure.
+
+**Realized impact**: **+1 card admitted (Moonlit Meditation) /
++633 17lands decks**. The substrate-only landing's "0 admit
+delta today" honest-stop is replaced by the realized admit. All
+other Aura admits unchanged.
+
+**What remains honest-stopped (out-of-scope of this closure).**
+The other Phase-4 Aura declines that the substrate-only landing
+also documented are NOT touched by this closure:
+
+* Chorale of the Void — still declined at the
+  `ReanimateTargetCreatureCardFromDefendersGraveyard` trigger
+  gate (separate `Effect` variant slice).
+* Cracked Skull / Sporogenic Infection — still declined at
+  their respective multi-gated trigger shapes.
+
+The closure is scoped to the S3 replacement-rider lane only; the
+broader Phase-4 follow-ups are untouched.
 
 ---
 

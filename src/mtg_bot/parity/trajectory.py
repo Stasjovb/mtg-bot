@@ -4699,7 +4699,12 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
       * No ``attached_grants_control`` / ``attached_grants_lose_all_
         abilities`` / ``attached_sets_base_pt`` / ``attached_grants_
         subtype`` / ``attached_prevents_untap`` (S2 — Phase 2).
-      * No ``replaces_first_tokens_with_copies`` (S3 — Phase 4).
+      * ``replaces_first_tokens_with_copies`` (S3 — Phase 4) is
+        NOW ADMITTED post-closure (2026-05-21). The Rust
+        ``CreateToken`` arms consult the per-controller Moonlit-shape
+        Aura via ``moonlit_token_substitution`` and swap to the host's
+        printing with a per-object Token-supertype override. The
+        substrate predicate no longer rejects this rider.
       * No ``ward_cost`` (defensive — mirrors the simple-creature
         guardrail).
       * No ``dynamic_pt_formula`` (defensive — Auras don't have one,
@@ -4852,8 +4857,34 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         # bare don't-untap rider (Tilling Treefolk-shape) stays
         # declined here pending a separate slice.
         return False
-    if printing.replaces_first_tokens_with_copies:
-        return False
+    # Aura-attachment Phase 4 S3 closure (2026-05-21): Moonlit
+    # Meditation now admits at the loader. The Rust CreateToken /
+    # CreateTokenTapped / CreateTokenEachPlayer / CreateToken-
+    # CopyOfTargetCreatureYouControl arms consult the controller's
+    # attached Moonlit-shape Aura via ``moonlit_token_substitution``
+    # and swap the token's printing_id to the host's printing with
+    # the per-object Token-supertype override stamped. Mirrors
+    # Python's ``_find_moonlit_replacement_source`` +
+    # ``_dc.replace(base, supertypes=(*base, "Token"))`` shim at
+    # ``effects/generic/tokens.py:217-247`` — byte-equal on the
+    # post-resolution bf snapshot (the bridge round-trip surfaces
+    # the override via the ``token_supertype_override`` key in
+    # ``object_to_pydict``). The rejection that used to live here
+    # has been replaced by an admit; pre-closure pinned baselines
+    # for Moonlit Meditation under the bench loader were "still
+    # declined" — those are now positive admits.
+    #
+    # **What changed.** Prior to closure: this predicate returned
+    # False for any Aura carrying ``replaces_first_tokens_with_copies
+    # = True``, declining Moonlit Meditation (and any future
+    # CR-614-token-replacement Aura on the same rider). Post-closure:
+    # the predicate falls through to the rest of the simple-Aura
+    # admit checks, so an Aura whose ONLY rider is the Moonlit
+    # replacement is admitted as a bridge-simple Aura. The other
+    # Phase-4 declines (Chorale of the Void's reanimate trigger,
+    # Cracked Skull's destroy-host shape) remain declined — this
+    # closure is scoped to the S3 replacement-rider lane only.
+    pass
     # Defensive — Auras don't carry ward / dynamic-PT today, but keep
     # the substrate honest (mirrors the simple-creature guardrail).
     if getattr(printing, "ward_cost", None) is not None:

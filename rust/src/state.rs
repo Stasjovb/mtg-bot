@@ -261,6 +261,39 @@ pub struct GameObject {
     /// does NOT include this slot, so pre-S2 pinned baselines stay
     /// byte-equal.
     pub controller_baseline: Option<u8>,
+    /// **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    /// closure, 2026-05-21).** Per-object "Token" supertype override.
+    /// When `true`, every read site that asks "is this a Token?" must
+    /// answer YES regardless of whether the underlying
+    /// `printing.supertypes` contains `"Token"`. Set when this object
+    /// was minted as a Moonlit-Meditation-replacement token — its
+    /// `printing_id` points at the host's (non-Token) printing, but
+    /// CR 614 says the resulting permanent is still a token. Mirrors
+    /// Python's `_dc.replace(printing, supertypes=(*base, "Token"))`
+    /// shim at `effects/generic/tokens.py:237-243`: Python builds a
+    /// fresh CardPrinting instance with the Token supertype injected,
+    /// then `state.new_object(printing, ...)` uses that printing for
+    /// the freshly-created object. Rust avoids the runtime registry
+    /// mutation (no fresh `printing_id` is minted) and instead carries
+    /// the supertype injection per-object — the bridge round-trip is
+    /// honest because Python's snapshot of the token reports Token
+    /// supertype, and Rust's `is_token` reads through the override.
+    ///
+    /// `false` is the back-compat default for every freshly-allocated
+    /// object — pre-Phase-4-S3-closure objects keep the printing-only
+    /// is-token semantics bit-equivalent to before this slice. The
+    /// per-object fingerprint tuple does NOT include this slot
+    /// (pre-substrate pinned baselines stay byte-equal); the only
+    /// observable shift is in the post-Moonlit-resolution snapshot,
+    /// which is new behavior in this slice.
+    ///
+    /// Cleared (reset to `false`) on every zone change (CR 400.7
+    /// per-object state reset) — the override is a battlefield-scoped
+    /// concept stamped at token-mint time; an object that has ceased
+    /// to exist or transited zones drops the marker, exactly as
+    /// Python's per-token `state.new_object(printing, ...)` is a
+    /// fresh object whose supertype set is fixed at mint time.
+    pub token_supertype_override: bool,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -536,6 +569,41 @@ impl GameObject {
             }
         }
         false
+    }
+
+    /// **Aura-attachment Phase 4 S3 closure (2026-05-21).** Effective
+    /// "is this object a Token?" reader that consults BOTH the
+    /// per-object `token_supertype_override` flag AND the underlying
+    /// printing's supertypes. Returns `true` iff EITHER:
+    ///
+    /// * The override flag is set (a Moonlit-Meditation-replacement
+    ///   token that carries the host's `printing_id`, where the
+    ///   host's printing does NOT itself carry `"Token"`), OR
+    /// * The underlying printing's `supertypes` Vec contains
+    ///   `"Token"` (a normal token whose registry entry was minted
+    ///   with the Token supertype).
+    ///
+    /// Mirrors Python's `obj.printing.is_token` consumer pattern —
+    /// in Python, the `_dc.replace(base, supertypes=(*base, "Token"))`
+    /// shim produces a printing whose `is_token` already returns
+    /// `True`, so Python's consumers don't need a per-object
+    /// override branch. Rust's CardPrinting is registry-resident and
+    /// statically typed, so we add the override at the GameObject
+    /// layer — every call site that asked "is this a Token?" via
+    /// `registry.is_token(obj.printing_id)` should migrate to
+    /// `obj.effective_is_token(&registry)` to honor the override.
+    ///
+    /// Pre-Phase-4-S3-closure: `effective_is_token` and
+    /// `registry.is_token(printing_id)` agree byte-for-byte (the
+    /// override flag is `false` on every GameObject minted by every
+    /// pre-substrate call site). Post-closure: the divergence is
+    /// observable only on the Moonlit-substituted token path, which
+    /// is new behavior in this slice.
+    pub fn effective_is_token(&self, registry: &RegistryData) -> bool {
+        if self.token_supertype_override {
+            return true;
+        }
+        registry.is_token(self.printing_id)
     }
 }
 
@@ -2657,6 +2725,12 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // baseline. Back-compat default; not in the per-object
         // fingerprint tuple.
         controller_baseline: None,
+        // Aura-attachment substrate — Phase 4 S3 closure
+        // (2026-05-21): freshly-allocated objects have no Token
+        // supertype injected; the override is stamped only at
+        // Moonlit-Meditation-replacement token-mint time. Back-compat
+        // default; not in the per-object fingerprint tuple.
+        token_supertype_override: false,
     }
 }
 

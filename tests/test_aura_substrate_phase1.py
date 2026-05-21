@@ -313,23 +313,24 @@ def test_predicate_declines_non_aura():
     assert _printing_is_bridge_simple_aura(forest) is False
 
 
-def test_predicate_admits_live_eoe_s1_auras_post_phase_2():
-    """**Phase 3 / S4 (Pain for All closure, round-80, 2026-05-20).**
-    Phase 3 widens the admit set to include the Pain-for-All
-    triggered-Aura shape (``ENTERS+IsSelf+PainForAllETBEffect +
-    DEALT_DAMAGE+IsHost+PainForAllDamageEchoEffect``). Combined with
-    the prior Phase 1/Phase 2 first deliverable widenings, the
-    bench-loader admits four live EoE Auras: Frantic Strength,
-    Shardmage's Rescue (S1 — keyword + P/T), Duskmourn's Domination
-    (S2 — control + lose-abilities), and Pain for All (S4 —
-    triggered, the Phase 3 closure). Every other S4 carrier
+def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
+    """**Phase 4 S3 closure (Moonlit Meditation, 2026-05-21).** The
+    closure adds Moonlit Meditation to the admit set (the Rust
+    CreateToken arms now consult the controller's attached Moonlit
+    Aura via ``moonlit_token_substitution`` and swap to the host's
+    printing with a per-object Token-supertype override). Combined
+    with the prior Phase 1/Phase 2/Phase 3 first deliverable
+    widenings, the bench-loader admits SIX live EoE Auras:
+    Frantic Strength + Shardmage's Rescue (S1 — keyword + P/T),
+    Duskmourn's Domination (S2 — control + lose-abilities), Tractor
+    Beam (S2 — control + prevents_untap), Pain for All (S4 —
+    triggered, the Phase 3 closure), and Moonlit Meditation (S3 —
+    replacement, the Phase 4 S3 closure). Every other S4 carrier
     (Chorale of the Void, Cracked Skull, Sporogenic Infection)
-    stays declined on their non-Phase-3-safe trigger shape; Tractor
-    Beam stays declined on its lone-control + prevents_untap rider;
+    stays declined on their non-Phase-3-safe trigger shape;
     Meltstrider's Resolve stays declined on its
     ``EnchantedCreatureFightsTargetEffect`` trigger (separate
-    follow-up slice). Moonlit Meditation (S3 replacement) stays
-    declined on its ``replaces_first_tokens_with_copies`` rider.
+    follow-up slice).
 
     This pin captures the exact admit set so a future Phase widen
     has to update it explicitly (verify-first discipline)."""
@@ -344,22 +345,22 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_2():
             admitted.append(name)
         else:
             declined.append((name, "declined"))
-    # Phase 3 / S4 admit set + Tractor Beam cast-time auto-resolve
-    # closure: S1 carriers + S2 Duskmourn-shape + Tractor Beam +
-    # Pain for All. If this set changes (parser drift, future
-    # widen), update both this pin AND the deck-count expectations
-    # in the plan.
+    # Phase 4 S3 closure admit set: S1 carriers + S2 Duskmourn-shape +
+    # Tractor Beam + Pain for All + Moonlit Meditation. If this set
+    # changes (parser drift, future widen), update both this pin AND
+    # the deck-count expectations in the plan.
     assert sorted(admitted) == sorted([
         "Frantic Strength",
         "Shardmage's Rescue",
         "Duskmourn's Domination",
         "Tractor Beam",
         "Pain for All",
+        "Moonlit Meditation",
     ]), (
-        f"Phase 3 / S4 + Tractor-Beam-closure expected five carriers "
-        f"to admit; got {sorted(admitted)!r}. If this is intentional "
-        f"(a later Phase widen of the predicate's admit shape), update "
-        f"this pin to assert the new expected admit list explicitly."
+        f"Phase 4 S3 closure expected six carriers to admit; got "
+        f"{sorted(admitted)!r}. If this is intentional (a later Phase "
+        f"widen of the predicate's admit shape), update this pin to "
+        f"assert the new expected admit list explicitly."
     )
     # Sanity: the parser pool has at least the 14 Auras the scout
     # documented (round-61 N1 + round-63 N4 drift extensions).
@@ -535,15 +536,21 @@ def test_predicate_admits_tractor_beam_at_bench_loader_post_cast_time_alignment(
     assert _printing_is_bridge_simple_aura(tb) is True
 
 
-def test_predicate_declines_aura_with_replacement():
+def test_predicate_admits_aura_with_replacement_post_phase_4_s3_closure():
     """S3 sub-shape: an Aura that carries the
     ``replaces_first_tokens_with_copies`` replacement effect (Moonlit
     Meditation, the 633-deck single-gated single-card S3 carrier per
-    the plan §1) is positively declined — Phase 4 of the plan."""
+    the plan §1) ADMITS post-Phase-4-S3-closure (2026-05-21). The Rust
+    CreateToken arms now consult the controller's attached
+    Moonlit-shape Aura via ``moonlit_token_substitution`` and swap
+    the token's printing_id to the host's printing with the
+    per-object Token-supertype override stamped — byte-equal against
+    Python's ``_find_moonlit_replacement_source`` + ``_dc.replace``
+    shim."""
     moonlit = _live_printing("Moonlit Meditation")
     assert moonlit.is_aura is True
     assert moonlit.replaces_first_tokens_with_copies is True
-    assert _printing_is_bridge_simple_aura(moonlit) is False
+    assert _printing_is_bridge_simple_aura(moonlit) is True
 
 
 # ---------------------------------------------------------------------------
@@ -726,16 +733,26 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
         "Phase 3 / S4 expected Pain for All to admit. "
         "Admitted set: %r" % (admitted_auras,)
     )
+    # Phase 4 S3 closure (Moonlit Meditation, 2026-05-21): the
+    # ``replaces_first_tokens_with_copies`` rider now admits through
+    # the loader — the Rust CreateToken-family arms consult the
+    # controller's attached Moonlit-shape Aura via
+    # ``moonlit_token_substitution`` (rust/src/state_ops_resolve.rs)
+    # and substitute the host's printing with a per-object Token-
+    # supertype override.
+    assert "Moonlit Meditation" in admitted_auras, (
+        "Phase 4 S3 closure expected Moonlit Meditation to admit. "
+        "Admitted set: %r" % (admitted_auras,)
+    )
     must_decline = {
         "Cracked Skull",             # S4 triggered_abilities (non-Phase-3-safe)
         "Sporogenic Infection",      # S4 triggered_abilities (non-Phase-3-safe)
         "Chorale of the Void",       # S4 triggered_abilities (non-Phase-3-safe)
-        "Moonlit Meditation",        # S3 replaces_first_tokens_with_copies
         "Meltstrider's Resolve",     # residue triggered_abilities (non-Phase-3-safe — Fight effect)
     }
     leaked = must_decline & set(admitted_auras)
     assert leaked == set(), (
-        "S3/S4/residue Auras must stay positively declined by §2 "
+        "S4/residue Auras must stay positively declined by §2 "
         "teeth — surprise admit: %r" % (sorted(leaked),)
     )
 
