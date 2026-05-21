@@ -740,7 +740,9 @@ fn eff(cost: &crate::cards::ManaCost) -> &crate::cards::ManaCost {
 /// (`DepressurizeEffect`, `FocusFireEffect`,
 /// `DestroyTargetArtifactOrTappedCreature`, `SeedshipImpactEffect`,
 /// `DealDamageToTargetCreatureWithExcessLanderRider`,
-/// `BiosynthicBurstEffect`, `DiplomaticRelationsEffect`). Any other
+/// `BiosynthicBurstEffect`, `DiplomaticRelationsEffect`,
+/// `CutPropulsionEffect`,
+/// `DestroyTargetArtifactEnchantmentOrFlyingCreature`). Any other
 /// `Effect` (untargeted, or a not-yet-admitted targeted shape) takes
 /// the conservative `true` (trivially-satisfiable) branch — NEVER
 /// pruned. Conservative = NEVER narrower than Python ⇒ parity-neutral
@@ -1021,6 +1023,45 @@ fn spell_targets_satisfiable(
                             .unwrap_or(false)
                     });
                 if !any {
+                    return false;
+                }
+            }
+            // Shattered Wings's destroy half: `IsArtifact() |
+            // IsEnchantment() | (IsCreature() & HasKeyword("flying"))`,
+            // non-indestructible (Python
+            // `DestroyTargetArtifactEnchantmentOrFlyingCreature`
+            // `effects/generic/destroy.py:501-521`; the resolve arm's
+            // exact 3-way OR filter). The "flying" leg reads
+            // EFFECTIVE keywords via `battlefield_has_keyword`
+            // (Python's `HasKeyword.matches` reads `effective_
+            // keywords` — same fold). NOT controller-restricted.
+            Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature => {
+                let mut found = false;
+                for o in crate::bf_iter::bf_iter_etb_sorted(state) {
+                    let Some(p) = state.registry.lookup(o.printing_id)
+                    else {
+                        continue;
+                    };
+                    let is_artifact =
+                        p.card_types.iter().any(|t| t == "Artifact");
+                    let is_enchantment =
+                        p.card_types.iter().any(|t| t == "Enchantment");
+                    let is_creature =
+                        p.card_types.iter().any(|t| t == "Creature");
+                    let has_flying = is_creature
+                        && crate::state_ops_combat::battlefield_has_keyword(
+                            state, o.id, "flying",
+                        );
+                    if !(is_artifact || is_enchantment || has_flying) {
+                        continue;
+                    }
+                    if p.keywords.iter().any(|k| k == "indestructible") {
+                        continue;
+                    }
+                    found = true;
+                    break;
+                }
+                if !found {
                     return false;
                 }
             }
