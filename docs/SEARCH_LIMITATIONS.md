@@ -5318,6 +5318,120 @@ damaged slot-1 creature — no targeted-delta carve-out).
 
 ---
 
+## Cut Propulsion — `CutPropulsionEffect` (unit) Effect half shipped byte-equal; full Instant AUTO-JOINS the spell-card-bridge admit set; counters-inclusive effective-power + `battlefield_has_keyword`-driven flying doubler mirror the proven siblings
+
+**Location**: `rust/src/cards.rs`
+(`Effect::CutPropulsionEffect` field-free unit variant +
+`parse_effect` arm `cut_propulsion_effect` + `effect_to_dict` arm) +
+`rust/src/state_ops_resolve.rs` (the resolve match arm beside the
+Diplomatic Relations / Focus Fire / Biosynthic Burst / Depressurize
+Tier-A arms — single-target payload-target read off
+`current_resolve_payload_target_id` with a None-payload synthetic-test
+fallback to deterministic-first creature in ETB-timestamp order;
+counters-inclusive effective-power read; `battlefield_has_keyword
+(target, "flying")` folds printed + UEOT + aura + anthem keywords;
+`power <= 0` silent no-op; `obj.damage.saturating_add` + DEALT_DAMAGE
+receiver-side event dispatch). Legal-targets gate
+`rust/src/state_ops_legal.rs` (`spell_targets_satisfiable` any-
+creature arm). Bridge arm `src/mtg_bot/parity/cross_engine.py`
+(`cut_propulsion_effect`, immediately after the `focus_fire_effect`
+arm). Python→dict reverse-serializer leaf
+`src/mtg_bot/parity/trajectory.py` (`_python_spell_effect_to_dict`
+`_leaf` for `CutPropulsionEffect`). Python class (pre-existing, NOT
+new): `CutPropulsionEffect` (`src/mtg_bot/effects/bespoke.py:1821`).
+
+**What the shortcut is**: Cut Propulsion (~11,990 17lands decks) is
+an `[Instant] {2}{R}` printing "Target creature deals damage to
+itself equal to its power. If that creature has flying, it deals
+twice that much damage to itself instead." — the highest-leverage
+simple-shape Effect-uncovered single-gated card on the 24-card tail
+(the §3 lever (3) target). The genuine parsed `spell_effect` is
+`CutPropulsionEffect()` (field-free). Python's `resolve` reads
+`effective_power(state, obj)`, short-circuits on `power <= 0`, reads
+`"flying" in effective_keywords(state, obj)` for the doubler, then
+calls `_apply_damage(state, ("creature", obj.id), amount)` (which
+sets `obj.damage += amount`, `obj.damaged_this_turn = True`, and
+fires `_fire_enchanted_dealt_damage_triggers` for any aura-attached
+"when enchanted creature dealt damage" trigger). The Effect half
+closes byte-equal; like Biosynthic Burst / Focus Fire / Diplomatic
+Relations the **full Cut Propulsion Instant AUTO-JOINS the spell-
+card-bridge bench-admit set** — the lever's
+`_printing_is_bridge_simple_spell` guardrail queries the LIVE
+covered set + round-trips the reverse serializer + (Phase 1)
+single-target shape, so adding the Effect + bridge + the
+reverse-serializer leaf flips the printing in (no hardcoded list —
+the §2 auto-grow teeth).
+
+**§2 simplifications (mirrors the proven siblings, NOT new debt)**:
+two simplifications, each already cross-engine-proven byte-equal on
+the same admitted pool:
+
+1. **Effective-power read as the `DepressurizeEffect` /
+   `DiplomaticRelationsEffect` counters-inclusive formula** (`base =
+   ueot_base_pt_override().p OR printed_power`, `+ obj.counters`,
+   `+ obj.ueot_power_bonus()`) rather than Python's full
+   `_compute_effective_pt` layer-7 walk. Omits layer-7c static
+   anthems + 7e `switch_pt` — but the spell-card-bridge bench loader
+   admits ONLY basic lands + simple creatures + the bridged spells,
+   so NO static anthem / no switch_pt continuous effect can be on
+   the battlefield in any bench game (the exact assumption the
+   Depressurize + Diplomatic Relations arms rely on, cross-engine-
+   proven byte-equal). `power <= 0` short-circuits BEFORE the
+   damage path (Python parity: `if power <= 0: return` skips
+   `_apply_damage` entirely, so the receiver-side DEALT_DAMAGE event
+   does NOT fire either — byte-equal silent no-op).
+2. **`damaged_this_turn` ledger omitted on the Rust side.** Python
+   sets `obj.damaged_this_turn = True` inside `_apply_damage`. Rust
+   `GameObject` does not carry the field today (the round-23
+   `damaged_this_turn` ledger is documented at `cards.rs:221-228` as
+   loader-gated subsystem-half — not shipped on the bridged pool).
+   For the realistic Cut Propulsion case `obj.damage == 0` pre-
+   resolve ⇔ Python's `not obj.damaged_this_turn`, so the ledger
+   read sites that exist on the Rust side are byte-equal post-
+   resolve. A future "damaged-then-healed-to-0 within the same
+   turn" probe would surface the gap on the loader-gated subsystem
+   half, NOT on Cut Propulsion (the production-deck loader doesn't
+   admit any card that reads the ledger today).
+
+**Why it's OK**: each simplification is the EXACT shape of an
+already-cross-engine-proven Tier-A sibling on the same admitted
+pool. The target binding uses the same no-callback first-legal
+convention as Phase 1 (`bf_iter_etb_sorted` = Python's
+`state.battlefield` walk = the `_PickFirstLegalTargetAgent`
+deterministic-first). Target re-validation at resolve (CR 608.2b)
+mirrors Python exactly: bound target gone or no longer a creature →
+silent fizzle. DEALT_DAMAGE event IS dispatched after damage apply
+(the round-16 RR Pin 3 sibling) so aura-attached
+`enchanted_creature_dealt_damage` triggers (Cryoshatter / Pain for
+All) fire byte-equal with Python — no shortcut on the trigger
+fan-out.
+
+**Failure mode**: a bench game with a static power-anthem OR a
+`switch_pt` continuous effect on the targeted creature would diverge
+(Rust's counters-inclusive read omits layers 7c-static / 7e) — but
+such a permanent is structurally impossible in the spell-card-bridge
+bench (loader admits only basic lands + simple creatures + bridged
+spells; same as Depressurize / Diplomatic Relations). A future probe
+that needs a non-first target on the single slot would diverge (the
+agent has no say — shared with the Phase-1 deterministic-first
+entry).
+
+**Fix scope estimate**: fold the static-anthem / switch_pt layers
+into the Rust effective-power read IF the bench loader ever admits a
+static-pump permanent (a shared follow-on with Depressurize +
+Diplomatic Relations, same formula site). Thread an agent target
+decision for the single slot for the non-first-target case.
+
+**Impact estimate**: +1 Tier-A card (Cut Propulsion) flips
+loader-drop → bench-admit; ~11,990 17lands decks. PROBED 265 → 266;
+BLOCKED-subsystem-gated 122 → 121; Effect-uncovered single-gated
+24 → 23. Effect-half is genuinely probed (the actual parsed Cut
+Propulsion printing is driven against a 2/2 flyer → 4 self-damage →
+lethal → SBA → in graveyard, byte-equal full field-view on BOTH
+engines).
+
+---
+
 ## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
 
 **Location**: `scripts/parity_smoke.py` `_zone_signature` /

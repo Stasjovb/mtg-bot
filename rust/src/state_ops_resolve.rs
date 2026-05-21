@@ -8400,6 +8400,170 @@ fn apply_effect(
                 }
             }
         }
+        // **Effect-uncovered Tier-A — Cut Propulsion.** "Target
+        // creature deals damage to itself equal to its power. If that
+        // creature has flying, it deals twice that much damage to
+        // itself instead." Mirrors Python's `CutPropulsionEffect`
+        // (`effects/bespoke.py:1843-1873`) BIT-FOR-BIT against the
+        // Python source of truth.
+        //
+        // **Target binding.** Single target, ANY creature on either
+        // battlefield (Python's `legal_targets` is the centralized
+        // `state.battlefield` walk filtered by `printing.is_creature`
+        // — NOT controller-restricted). Read the cast-time-bound
+        // target id from `state.current_resolve_payload_target_id`
+        // (the established `FocusFireEffect` / `DepressurizeEffect`
+        // payload-target swap pattern). When `None` (synthetic-test
+        // `push_to_stack` path), fall back to the deterministic-
+        // first creature in ETB-timestamp order across BOTH bfs.
+        //
+        // **Resolve-time validation (CR 608.2b).** The target must
+        // still be on a battlefield AND its printing must satisfy
+        // `card_types ∋ "Creature"`. Illegal at resolve → silent
+        // fizzle (Python's `obj is None` short-circuit at
+        // `bespoke.py:1854-1858`).
+        //
+        // **Damage amount.** Read the target's effective power via
+        // the proven `DepressurizeEffect`/`DiplomaticRelationsEffect`
+        // counters-inclusive formula (`base = ueot_base_pt_override()
+        // .p OR printed_power, plus obj.counters, plus
+        // obj.ueot_power_bonus()`). If `power <= 0`, silent no-op
+        // (Python's `if power <= 0: return` at
+        // `bespoke.py:1860-1865` short-circuits BEFORE `_apply_damage`
+        // — so the receiver-side DEALT_DAMAGE dispatch does NOT fire
+        // either, byte-equal). Otherwise read effective keyword set:
+        // if "flying" is granted (`battlefield_has_keyword` folds
+        // printed + UEOT-granted + aura-granted + anthem-granted
+        // keywords; Python's `effective_keywords` walk), amount =
+        // `power * 2`; else amount = `power`. Apply via the proven
+        // `obj.damage.saturating_add(amount_i16)` shape. After
+        // applying, dispatch the DEALT_DAMAGE receiver-side event
+        // (Python's `_fire_enchanted_dealt_damage_triggers` call at
+        // the tail of `_apply_damage`, `effects/base.py:303-305`)
+        // so aura-attached "when enchanted creature is dealt damage"
+        // triggers (Cryoshatter, Pain for All) fire byte-equal.
+        Effect::CutPropulsionEffect => {
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if !printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback (the established
+                    // `FocusFireEffect` / `DepressurizeEffect` None-
+                    // payload fallback): deterministic-first creature
+                    // in ETB-timestamp order across BOTH bfs (mirrors
+                    // `bf_iter_etb_sorted` — Python's centralized
+                    // `state.battlefield` walk = the SoT).
+                    let registry = &state.registry;
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            let printing =
+                                registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some((obj.controller as usize, obj.id))
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            let Some((pidx, target_id)) = target else {
+                return Ok(()); // no eligible target → silent fizzle
+            };
+            // Effective power (counters-inclusive, UEOT-pump-
+            // inclusive). Re-derived privately per the file-isolation
+            // convention — identical to the `DiplomaticRelations
+            // Effect` `:8355-8371` / `DepressurizeEffect` body.
+            let power: i32 = {
+                let o = state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .find(|x| x.id == target_id)
+                    .expect("target id validated but not found");
+                let printing = state
+                    .registry
+                    .lookup(o.printing_id)
+                    .expect("target printing must resolve");
+                let printed_p = printing.power.unwrap_or(0) as i32;
+                let base_p = o
+                    .ueot_base_pt_override()
+                    .map(|(p, _)| p)
+                    .unwrap_or(printed_p);
+                base_p + o.counters + o.ueot_power_bonus()
+            };
+            if power <= 0 {
+                // Python `bespoke.py:1860-1865`: silent log-only no-
+                // op; the receiver-side DEALT_DAMAGE dispatch does
+                // NOT fire (no `_apply_damage` call). Byte-equal:
+                // skip the damage path entirely.
+                return Ok(());
+            }
+            // Flying doubler — read effective keyword set on the
+            // target. `battlefield_has_keyword` folds printed + UEOT
+            // grant + aura grant + anthem grant + self-grant (the
+            // established public reader). Lowercase match (the bridge
+            // already lowercases printed keywords at register time).
+            let amount: i32 = if crate::state_ops_combat::battlefield_has_keyword(
+                state, target_id, "flying",
+            ) {
+                power.saturating_mul(2)
+            } else {
+                power
+            };
+            let amount_i16 = amount.min(i16::MAX as i32) as i16;
+            // Apply damage marker. Mirrors the proven
+            // `apply_damage_marker` shape (no SBA inline, just the
+            // saturating_add on `obj.damage`).
+            let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[pidx].battlefield,
+            );
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.damage =
+                        obj.damage.saturating_add(amount_i16);
+                    break;
+                }
+            }
+            // Round-16 RR Pin 3 sibling: dispatch DEALT_DAMAGE for
+            // the creature that RECEIVED damage (receiver-side event).
+            // Mirrors Python's `_fire_enchanted_dealt_damage_triggers`
+            // at `effects/base.py:303-305`. Fires after the damage
+            // marker is applied — auras like Cryoshatter / Pain for
+            // All attached to the receiver see the post-damage state,
+            // byte-equal with Python.
+            dispatch_event(
+                state,
+                crate::cards::Event::DealtDamage,
+                target_id,
+            )?;
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

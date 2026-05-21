@@ -9228,6 +9228,62 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # to bench-admit; auto-grow, no hardcoded list).
         from mtg_bot.effects.bespoke import FocusFireEffect
         return FocusFireEffect(base=int(eff_dict.get("base", 2)))
+    if kind == "cut_propulsion_effect":
+        # **Effect-uncovered Tier-A — Cut Propulsion (~11,990 17lands
+        # decks).** Rust substrate ``Effect::CutPropulsionEffect``
+        # (cards.rs field-free UNIT variant; parser
+        # ``"cut_propulsion_effect"`` — the
+        # ``diplomatic_relations_effect`` / ``biosynthic_burst_effect``
+        # field-free idiom; resolve in state_ops_resolve.rs beside the
+        # Diplomatic Relations / Biosynthic Burst / Depressurize
+        # Tier-A arms).
+        #
+        # **Field shape.** Unit variant — no fields. Python's
+        # ``CutPropulsionEffect()`` (effects/bespoke.py:1821) carries
+        # no fields — the damage amount is intrinsic (read at resolve
+        # time from the target's effective power; doubled if the
+        # target has the "flying" effective keyword).
+        #
+        # **Resolve semantics (parity-relevant).** Rust reads the
+        # cast-time-bound target id from
+        # ``state.current_resolve_payload_target_id`` (the established
+        # ``FocusFireEffect`` / ``DepressurizeEffect`` payload-target
+        # swap pattern). The cast-time bind picks the deterministic-
+        # first creature on EITHER bf via the existing single-target
+        # default ``bf_iter_etb_sorted`` scan (matches Python's
+        # ``state.battlefield`` walk + the
+        # ``_PickFirstLegalTargetAgent`` deterministic-first
+        # convention). Resolve-time validates the bound target is
+        # still on a bf AND still a Creature (CR 608.2b — Python's
+        # ``obj is None`` short-circuit). Reads effective power
+        # counters-inclusive (the proven ``DepressurizeEffect`` /
+        # ``DiplomaticRelationsEffect`` formula). If ``power <= 0``,
+        # silent no-op (Python's ``if power <= 0: return`` at
+        # ``bespoke.py:1860-1865`` — the receiver-side DEALT_DAMAGE
+        # dispatch does NOT fire either). Else checks
+        # ``battlefield_has_keyword(target, "flying")`` (folds printed
+        # + UEOT-granted + aura-granted + anthem-granted keywords);
+        # amount = ``power * 2`` if flying else ``power``. Applies
+        # via ``obj.damage.saturating_add`` (the ``DealDamageAnyTarget``
+        # / ``FocusFireEffect`` damage-application shape) AND
+        # dispatches the DEALT_DAMAGE receiver-side event (Python's
+        # ``_fire_enchanted_dealt_damage_triggers`` at
+        # ``effects/base.py:303-305``) so aura-attached "when
+        # enchanted creature dealt damage" triggers (Cryoshatter,
+        # Pain for All) fire byte-equal.
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (the real EoE printing is parsed by the
+        # production parser, round-tripped through the reverse
+        # serializer, and driven byte-equal on the genuine target).
+        # The full Cut Propulsion **Instant** auto-joins the spell-
+        # card-bridge admit set (the lever's guardrail queries the
+        # LIVE covered set — adding this Effect + bridge + the
+        # Python→dict reverse serializer leaf flips
+        # ``_printing_is_bridge_simple_spell`` to bench-admit; auto-
+        # grow, no hardcoded list).
+        from mtg_bot.effects.bespoke import CutPropulsionEffect
+        return CutPropulsionEffect()
     if kind == "put_plus_one_counter_on_opponents_creature":
         # **Tier-C target-seating sub-substrate, lever-a — Sunset
         # Saboteur.** Single-target +1/+1 counter add restricted to

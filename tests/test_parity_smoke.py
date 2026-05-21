@@ -68402,6 +68402,381 @@ def test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity(
     ), "Rust: Bears id 9 in p1's graveyard (byte-equal)"
 
 
+# ============================================================
+# Cut Propulsion — Effect-uncovered Tier-A (~11,990 17lands
+# decks). ``{2}{R}`` Instant: "Target creature deals damage to
+# itself equal to its power. If that creature has flying, it
+# deals twice that much damage to itself instead." Rust
+# ``Effect::CutPropulsionEffect`` (cards.rs field-free UNIT
+# variant; resolve in state_ops_resolve.rs beside the Tier-A
+# Diplomatic Relations / Focus Fire / Biosynthic Burst /
+# Depressurize arms), bridged via cross_engine.py
+# ``cut_propulsion_effect`` ↔ Python ``CutPropulsionEffect``
+# (effects/bespoke.py:1821). Adding the Effect + bridge + the
+# trajectory.py reverse-serializer leaf flips the printing into
+# the spell-card-bridge admit set (the guardrail queries the LIVE
+# covered set + round-trips the reverse serializer — auto-grow,
+# no hardcoded list).
+# ============================================================
+
+
+def _build_rust_cut_propulsion_state(
+    *,
+    target_power: int = 2,
+    target_toughness: int = 2,
+    target_flying: bool = False,
+    target_owner: int = 1,
+    seed_target: bool = True,
+):
+    """Build a Rust state with a Cut Propulsion spell on p0's stack
+    targeting the seeded creature (when present). Returns
+    ``(rs, target_id_or_None)``."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    target_id = None
+    if seed_target:
+        printing = {
+            "name": "CP Target",
+            "card_types": ["Creature"],
+            "power": target_power,
+            "toughness": target_toughness,
+        }
+        if target_flying:
+            printing["keywords"] = ["flying"]
+        target_id = rs.register_and_inject_object(
+            printing, target_owner, ZB,
+        )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Cut Propulsion", "card_types": ["Instant"],
+         "effects": [{"kind": "cut_propulsion_effect"}]},
+        0, 0,
+    )
+    # No target seated via push_to_stack (low-level API) — the
+    # resolve arm's None-payload fallback picks the deterministic-
+    # first creature in ETB-timestamp order across BOTH bfs. The
+    # genuine bridged-cast path (`cast_spell_noncreature`) seats the
+    # target at cast time; the synthetic pin exercises the fallback
+    # leg (mirrors the FocusFire / Depressurize synthetic-fallback
+    # precedent).
+    rs.push_to_stack(spell_id, 0)
+    return rs, target_id
+
+
+def test_rust_cut_propulsion_self_damage_non_flyer():
+    """Rust pin (a): non-flying 2/2 target → 2 damage to itself.
+    Mirrors Python `test_cut_propulsion_self_damage_non_flyer`."""
+    rs, target = _build_rust_cut_propulsion_state(
+        target_power=2, target_toughness=2, target_flying=False,
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 2, (
+        f"non-flying 2/2 must take 2 self-damage; got "
+        f"damage={e['damage']}"
+    )
+
+
+def test_rust_cut_propulsion_doubled_for_flyer():
+    """Rust pin (b): flying 1/3 target → 2 damage (power 1 * 2)
+    despite low printed power. Mirrors Python
+    `test_cut_propulsion_doubled_for_flyer`."""
+    rs, target = _build_rust_cut_propulsion_state(
+        target_power=1, target_toughness=3, target_flying=True,
+    )
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 2, (
+        f"flying 1/3 must take 2 self-damage (1 doubled); got "
+        f"damage={e['damage']}"
+    )
+
+
+def test_rust_cut_propulsion_zero_power_deals_none():
+    """Rust pin (c): 0/5 wall (defender, no flying) → 0 damage
+    (silent no-op; Python's `if power <= 0: return` short-circuit).
+    Mirrors Python `test_cut_propulsion_zero_power_deals_none`."""
+    rs, target = _build_rust_cut_propulsion_state(
+        target_power=0, target_toughness=5, target_flying=False,
+    )
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 0, (
+        f"0-power target must take 0 self-damage; got "
+        f"damage={e['damage']}"
+    )
+
+
+def test_rust_cut_propulsion_no_creature_silent_fizzle():
+    """Rust pin (d): no creature on either bf → silent fizzle.
+    Mirrors Python `test_cut_propulsion_noop_paths` for the
+    no-legal-target path."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    # Inert artifact on p1's bf — NOT a Creature, must not be picked.
+    rs.register_and_inject_object(
+        {"name": "CP Inert Artifact", "card_types": ["Artifact"]},
+        1, 2,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Cut Propulsion", "card_types": ["Instant"],
+         "effects": [{"kind": "cut_propulsion_effect"}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0, "spell must resolve (fizzling)"
+    assert any(
+        e["printing_name"] == "CP Inert Artifact"
+        and e["damage"] == 0
+        for e in rs.battlefield_snapshot()
+    ), "no creature anywhere → silent no-op, artifact untouched"
+
+
+def test_rust_cut_propulsion_picks_first_creature_in_etb_order():
+    """Rust pin (e): the deterministic-first picker chooses the
+    creature with the LOWEST ETB timestamp across BOTH bfs (mirrors
+    `bf_iter_etb_sorted`). p1's creature seated BEFORE p0's must take
+    the damage."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    # First-seated creature: p1's 3/3 (no flying). This MUST be the
+    # damage target (lowest ETB timestamp).
+    p1_first = rs.register_and_inject_object(
+        {"name": "CP First", "card_types": ["Creature"],
+         "power": 3, "toughness": 3}, 1, ZB,
+    )
+    # Second-seated creature: p0's 2/2. Should NOT be picked.
+    p0_second = rs.register_and_inject_object(
+        {"name": "CP Second", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Cut Propulsion", "card_types": ["Instant"],
+         "effects": [{"kind": "cut_propulsion_effect"}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    e_first = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == p1_first)
+    e_second = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == p0_second)
+    assert e_first["damage"] == 3, (
+        f"deterministic-first must pick the lowest-ETB-timestamp "
+        f"creature (p1's 3/3 → 3 damage); got "
+        f"damage={e_first['damage']}"
+    )
+    assert e_second["damage"] == 0, (
+        f"second-seated creature must NOT take damage; got "
+        f"damage={e_second['damage']}"
+    )
+
+
+def test_cut_propulsion_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the Effect + bridge arm + the
+    ``trajectory._python_spell_effect_to_dict`` reverse-serializer
+    leaf landed, the genuine ``{2}{R}`` Cut Propulsion Instant is
+    now covered+bridged AND round-trips the reverse serializer, so
+    ``_printing_is_bridge_simple_spell`` admits it into the
+    spell-card-bridge bench-admit set (the guardrail queries the LIVE
+    covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the Tier-A close having LANDED)."""
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.bespoke import CutPropulsionEffect
+
+    real = get_active_source().get_printings().get("Cut Propulsion")
+    if real is None:
+        pytest.skip("Cut Propulsion absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, CutPropulsionEffect), (
+        f"genuine Cut Propulsion spell_effect must be "
+        f"CutPropulsionEffect; got {type(se).__name__}"
+    )
+    assert "CutPropulsionEffect" in covered_python_class_set(), (
+        "the Rust Effect::CutPropulsionEffect variant makes the "
+        "Python class covered"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {"kind": "cut_propulsion_effect"}, (
+        f"reverse serializer must emit the kind-only dict; got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, CutPropulsionEffect), (
+        f"dict→Python bridge must round-trip to CutPropulsionEffect;"
+        f" got {type(back).__name__}"
+    )
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Cut Propulsion must auto-join the spell-card-bridge admit "
+        "set now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_cut_propulsion_flying_doubler_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Cut Propulsion
+    (~11,990 17lands decks). Effect-uncovered Tier-A queue.**
+
+    Drives the **ACTUAL parsed Cut Propulsion printing** on the
+    Python side: ``get_active_source().get_printings()["Cut
+    Propulsion"]`` — which the live parser maps to a ``spell_effect``
+    of ``CutPropulsionEffect()`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {2}{R} — Target creature deals damage to itself
+         equal to its power. If that creature has flying, it deals
+         twice that much damage to itself instead."
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Instant auto-joins the spell-card-bridge admit set).** The new
+    Effect arm under test — ``Effect::CutPropulsionEffect`` — is
+    shipped this slice (Rust field-free UNIT variant + parse +
+    to_dict + resolve; the effective-power read is the proven
+    counters-inclusive ``DiplomaticRelationsEffect`` formula, the
+    flying-doubler reads ``battlefield_has_keyword`` which folds
+    printed + UEOT + aura-granted + anthem-granted keywords, the
+    damage application is the ``DealDamageAnyTarget`` /
+    ``FocusFireEffect`` ``obj.damage.saturating_add`` shape), bridged
+    via ``cross_engine.py`` ``cut_propulsion_effect`` to the
+    pre-existing Python ``CutPropulsionEffect``
+    (effects/bespoke.py:1821). The full Cut Propulsion **Instant**
+    auto-joins the spell-card-bridge bench-admit set (pinned in
+    ``test_cut_propulsion_auto_joins_spell_card_bridge_admit_set``).
+
+    **Deterministic, no RNG.** p0 has the genuine Cut Propulsion; p1
+    has a 2/2 flying creature (the doubler-active target). Bound
+    target is selected by the existing single-target cast-time bind
+    (first creature on EITHER bf in ``bf_iter_etb_sorted`` order —
+    here, p1's flyer is the only creature). The WHOLE field view is
+    asserted byte-equal post-resolve.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.bespoke import CutPropulsionEffect
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Cut Propulsion")
+    if real is None:
+        pytest.skip("Cut Propulsion absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, CutPropulsionEffect), (
+        f"genuine Cut Propulsion spell_effect must be "
+        f"CutPropulsionEffect; got {type(se).__name__}"
+    )
+
+    def _cp_flyer(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+            keywords=("flying",),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # p1 opponent 2/2 FLYER — the doubler-active target (only
+    # creature on either bf, so it is the deterministic-first pick).
+    py_target = py.new_object(
+        _cp_flyer("CP Real Target", 2, 2), owner_id=1,
+        zone=Zone.BATTLEFIELD)
+    py_target.summoning_sick = False
+    py.battlefield.append(py_target)
+    rs_target = rs.register_and_inject_object(
+        {"name": "CP Real Target", "card_types": ["Creature"],
+         "power": 2, "toughness": 2, "keywords": ["flying"]},
+        1, ZB,
+    )
+
+    # Cast the genuine Cut Propulsion on the flyer (Python: real
+    # spell_effect on a StackItem targeting the flyer; Rust: the
+    # bridged synthetic Instant with the bound target seated via
+    # current_resolve_payload_target_id — set via push_to_stack +
+    # set_resolve_payload_target).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_target.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Cut Propulsion", "card_types": ["Instant"],
+         "effects": [{"kind": "cut_propulsion_effect"}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # FULL byte-equal compare. The flyer takes 2 * 2 = 4 self-damage
+    # → lethal to its own 2 toughness → SBA-destroyed → in p1's
+    # graveyard byte-equal on BOTH engines.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Cut Propulsion post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines (effective-power read + "
+        f"flying-doubler + damage-apply); diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on top of the full
+    # field byte-equality).
+    assert not [o for o in py.battlefield if o.id == py_target.id], (
+        "Python: flying target took 4 damage (lethal to 2/2) → "
+        "destroyed by SBA"
+    )
+    assert not any(
+        e["id"] == rs_target for e in rs.battlefield_snapshot()
+    ), "Rust: flying target destroyed by SBA (byte-equal)"
+    assert any(
+        o.id == py_target.id for o in py.players[1].graveyard
+    ), "Python: flyer in p1's graveyard"
+    assert any(
+        e["id"] == rs_target for e in rs.graveyard_snapshot(1)
+    ), "Rust: flyer in p1's graveyard (byte-equal)"
+
+
 import pytest as _pytest_r72_warp_p2  # noqa: E402
 
 

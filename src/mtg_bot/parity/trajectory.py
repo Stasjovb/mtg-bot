@@ -4107,6 +4107,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
+        CutPropulsionEffect,
         DepressurizeEffect,
         DiplomaticRelationsEffect,
         FocusFireEffect,
@@ -4185,6 +4186,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # teeth).
         if isinstance(eff, DiplomaticRelationsEffect):
             return {"kind": "diplomatic_relations_effect"}
+        # Cut Propulsion (Effect-uncovered Tier-A; ~11,990 17lands
+        # decks). Pid-FREE covered unit variant — Rust's
+        # ``parse_effect`` ``"cut_propulsion_effect"`` arm takes NO
+        # fields and the dict→Python bridge arm (cross_engine.py
+        # ``cut_propulsion_effect``) constructs the field-free
+        # ``CutPropulsionEffect()``. The single creature target rides
+        # on the spell StackItem, NOT in this dict; the damage amount
+        # (target's effective power; doubled if flying) is intrinsic.
+        # No token pid → no :func:`_seat_token_printings` dependency;
+        # the round-trip is the clean ``biosynthic_burst_effect`` /
+        # ``diplomatic_relations_effect`` unit-leaf idiom. Adding this
+        # leaf is what flips Cut Propulsion into the spell-card-bridge
+        # admit set: with the Rust variant + bridge arm landed it is
+        # now covered+bridged AND round-trips here, so
+        # :func:`_printing_is_bridge_simple_spell` admits the ``{2}{R}``
+        # single-target Instant (auto-grow, no hardcoded list — the
+        # §2 teeth).
+        if isinstance(eff, CutPropulsionEffect):
+            return {"kind": "cut_propulsion_effect"}
         # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
         # the Lander-spell-token-seating sub-substrate (round-73; the
         # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their
