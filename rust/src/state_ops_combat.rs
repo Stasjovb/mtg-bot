@@ -364,6 +364,149 @@ pub(crate) fn aura_grants_keyword_to(
 /// static-anthem source, so the simplification is parity-clean for
 /// the live pool. The honest-stop is documented in
 /// `docs/SEARCH_LIMITATIONS.md`.
+/// **Static / layered abilities substrate — Phase 3 (round-81,
+/// 2026-05-20).** Evaluate a `StaticSelfBonus`'s `condition_tag` /
+/// `condition_args` against the current game state. The viewer is
+/// the source's controller (per the SOURCE-controller semantics
+/// every condition mirror in Python's
+/// `mtg_bot.effects.conditions`).
+///
+/// Returns `true` iff the condition matches. Unknown tags return
+/// `false` defensively — the registry-parse arm whitelist already
+/// rejects unknown tags, so this branch is unreachable for
+/// registry-loaded printings; it exists so a future caller passing
+/// a synthetic printing with an unrecognized tag fails closed
+/// rather than firing the bonus.
+///
+/// Dispatch table (lockstep with Python's
+/// `_static_self_bonus_condition_from_tag`):
+///
+///   * `"control_permanent_is_artifact"` (no args) — true iff
+///     `viewer` controls any battlefield permanent whose
+///     `card_types` contains `"Artifact"`. Mirrors Python's
+///     `ControlPermanent(IsArtifact()).matches`.
+///   * `"at_least_n_spells_cast_this_turn"` (args=`(n,)`) —
+///     true iff `viewer.spells_cast_this_turn >= n`. Mirrors
+///     Python's `AtLeastNSpellsCastThisTurn(n).matches`.
+pub(crate) fn static_self_bonus_condition_matches(
+    state: &GameState,
+    viewer_idx: usize,
+    bonus: &crate::cards::StaticSelfBonus,
+) -> bool {
+    let Some(viewer) = state.players.get(viewer_idx) else {
+        return false;
+    };
+    match bonus.condition_tag.as_str() {
+        "control_permanent_is_artifact" => {
+            for obj in viewer.battlefield.iter() {
+                let Some(printing) =
+                    state.registry.lookup(obj.printing_id)
+                else {
+                    continue;
+                };
+                if printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Artifact")
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        "at_least_n_spells_cast_this_turn" => {
+            let n = match bonus.condition_args.first() {
+                Some(n) => *n,
+                None => return false,
+            };
+            viewer.spells_cast_this_turn >= n
+        }
+        _ => false,
+    }
+}
+
+
+/// **Static / layered abilities substrate — Phase 3 (round-81,
+/// 2026-05-20).** Walk the SOURCE's own `static_self_bonuses` and
+/// return the layer-7c additive P/T contribution under the current
+/// condition gates. Each entry whose condition matches contributes
+/// its `(power_bonus, toughness_bonus)` to the sum; entries whose
+/// condition doesn't match contribute zero. Unknown ids and
+/// non-battlefield objects return `(0, 0)`.
+///
+/// Mirrors the Python `_static_bonuses(state, obj)` per-source
+/// per-static `applies_to` walk, narrowed to the SELF-scope case
+/// (the contributor IS the target).
+pub(crate) fn static_self_bonus_pt_on(
+    state: &GameState,
+    obj_id: u32,
+) -> (i16, i16) {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+        return (0, 0);
+    };
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        return (0, 0);
+    };
+    if printing.static_self_bonuses.is_empty() {
+        return (0, 0);
+    }
+    // Find the obj's controller (the viewer side for condition
+    // evaluation). The obj's printing lives on `player_idx`'s
+    // battlefield; CR 613 layer-2 control-change retrofits aren't
+    // modeled this slice (parity-clean for the live pool — no
+    // EoE/DSK card swaps control of one of the Phase-3 carriers).
+    let viewer_idx = player_idx;
+    let mut p_sum: i32 = 0;
+    let mut t_sum: i32 = 0;
+    for bonus in printing.static_self_bonuses.iter() {
+        if !static_self_bonus_condition_matches(state, viewer_idx, bonus) {
+            continue;
+        }
+        p_sum += bonus.power_bonus as i32;
+        t_sum += bonus.toughness_bonus as i32;
+    }
+    (
+        p_sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        t_sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+    )
+}
+
+
+/// **Static / layered abilities substrate — Phase 3 (round-81,
+/// 2026-05-20).** Returns true iff the obj's own
+/// `static_self_bonuses` grants the queried keyword under the
+/// current condition gates. Mirrors the layer-6 keyword-grant
+/// branch in Python's `_static_bonuses` walk.
+pub(crate) fn static_self_bonus_grants_keyword(
+    state: &GameState,
+    obj_id: u32,
+    keyword: &str,
+) -> bool {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+        return false;
+    };
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        return false;
+    };
+    if printing.static_self_bonuses.is_empty() {
+        return false;
+    }
+    let viewer_idx = player_idx;
+    for bonus in printing.static_self_bonuses.iter() {
+        if bonus.granted_keywords.is_empty() {
+            continue;
+        }
+        if !static_self_bonus_condition_matches(state, viewer_idx, bonus) {
+            continue;
+        }
+        if bonus.granted_keywords.iter().any(|k| k == keyword) {
+            return true;
+        }
+    }
+    false
+}
+
+
 pub(crate) fn static_anthem_grants_keyword_to(
     state: &GameState,
     target_controller_idx: usize,
@@ -549,7 +692,19 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // Python contributor at game.py:972-982 walks both auras and
     // equipment via the same equipment_bonuses tuple).
     let (aura_p, _aura_t) = aura_pt_bonus_on(state, obj_id);
-    let effective = base + bonus + net_counters + aura_p;
+    // Static / layered abilities substrate — Phase 3 (round-81,
+    // 2026-05-20). Fold in the layer-7c P/T contribution from any
+    // SELF-scope conditional bonuses on the obj's own printing
+    // (Brightspear Zealot's +2/+0 with `AtLeastNSpellsCastThisTurn(
+    // 2)`, Cloudsculpt Technician's +1/+0 / Gravblade Heavy's +1/+0
+    // with `ControlPermanent(IsArtifact())`). The Python source of
+    // truth `_static_bonuses` evaluates the matching
+    // `StaticAbility.applies_to` per-source per-static; this Rust
+    // reader narrows that to the SELF-scope case (the contributor IS
+    // the target). `(0, 0)` for every printing without entries (the
+    // back-compat default — pre-Phase-3 read path bit-identical).
+    let (self_p, _self_t) = static_self_bonus_pt_on(state, obj_id);
+    let effective = base + bonus + net_counters + aura_p + self_p as i32;
     // Saturate into i16 to match the existing return-shape contract;
     // a 32k+ effective power is unreachable on any real card.
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
@@ -665,7 +820,16 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     // helper's docstring for the CR 613 layer-2 simplification),
     // mirroring Python's `_static_bonuses` per-source `applies_to`
     // walk.
-    static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword)
+    if static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword) {
+        return true;
+    }
+    // Static / layered abilities substrate — Phase 3 (round-81,
+    // 2026-05-20): layer-6 keyword grants from the obj's OWN
+    // `static_self_bonuses` whose condition matches this turn
+    // (Gravblade Heavy's "has deathtouch as long as you control an
+    // artifact"). Mirrors the SELF-scope branch of Python's
+    // `_static_bonuses` walk applied to keyword grants.
+    static_self_bonus_grants_keyword(state, obj_id, keyword)
 }
 
 /// **Aura-attachment substrate — Phase 2 S2.5 (round-79+,
@@ -838,7 +1002,13 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // layer-7c toughness bonus contributed by every Aura attached to
     // this host. See sibling `battlefield_creature_power` above.
     let (_aura_p, aura_t) = aura_pt_bonus_on(state, obj_id);
-    let effective = base + ueot_bonus + net_counters + aura_t;
+    // Static / layered abilities substrate — Phase 3 (round-81,
+    // 2026-05-20). Fold in the layer-7c toughness contribution from
+    // any SELF-scope conditional bonuses on the obj's own printing.
+    // See sibling `battlefield_creature_power` for the full
+    // rationale. `(0, 0)` for every printing without entries.
+    let (_self_p, self_t) = static_self_bonus_pt_on(state, obj_id);
+    let effective = base + ueot_bonus + net_counters + aura_t + self_t as i32;
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 

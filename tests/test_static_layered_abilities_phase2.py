@@ -469,25 +469,23 @@ def test_filter_deck_admits_frenzied_baloth():
 
 
 def test_filter_still_rejects_phase1_honest_stops():
-    """The six Phase-1 honest-stops stay honest-stopped — Cloudsculpt
-    Technician, Gravblade Heavy, Brightspear Zealot, Mechan
-    Shieldmate. (Rampaging Soulrager / Wildfire Wickerfolk are not
-    in the current EoE data snapshot; they'd be honest-stopped via
-    the same path.)"""
+    """The remaining Phase-1 honest-stops stay honest-stopped after
+    Phase 3 closes 3 of the 6 (Brightspear Zealot, Cloudsculpt
+    Technician, Gravblade Heavy admit via the SELF-scope conditional
+    bonus arm). Mechan Shieldmate stays honest-stopped — its
+    ``ControlledArtifactEnteredThisTurn`` Condition + ``RemoveKeyword``
+    payload is outside the Phase-3 two-tag dispatch table.
+    (Rampaging Soulrager / Wildfire Wickerfolk are not in the current
+    EoE data snapshot.)"""
     src_mod = importlib.import_module("mtg_bot.cards.parser_source")
     src = src_mod.OracleParserCardSource()
     printings = src.get_printings()
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
-    for name in (
-        "Cloudsculpt Technician",
-        "Gravblade Heavy",
-        "Brightspear Zealot",
-        "Mechan Shieldmate",
-    ):
+    for name in ["Mechan Shieldmate"]:
         filtered_names, _ = _filter_deck_to_bridge_supported(
             [name], printings,
         )
         assert filtered_names == [], (
-            f"{name} should be honest-stopped (per-Condition substrate "
-            "deferred to next slice)"
+            f"{name} should be honest-stopped (Condition not in "
+            "Phase-3 dispatch table)"
         )

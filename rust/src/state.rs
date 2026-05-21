@@ -2734,6 +2734,10 @@ pub fn make_synthetic_state(
         // uncounterable flags. Back-compat default.
         spell_is_uncounterable: false,
         grants_creature_spells_uncounterable: false,
+        // Static / layered abilities substrate — Phase 3 (round-81,
+        // 2026-05-20): synthetic-state printings have no SELF-scope
+        // conditional bonuses. Back-compat default.
+        static_self_bonuses: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2809,6 +2813,10 @@ pub fn make_synthetic_state(
         // uncounterable flags. Back-compat default.
         spell_is_uncounterable: false,
         grants_creature_spells_uncounterable: false,
+        // Static / layered abilities substrate — Phase 3 (round-81,
+        // 2026-05-20): synthetic-state printings have no SELF-scope
+        // conditional bonuses. Back-compat default.
+        static_self_bonuses: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2897,6 +2905,10 @@ pub fn make_synthetic_state(
         // uncounterable flags. Back-compat default.
         spell_is_uncounterable: false,
         grants_creature_spells_uncounterable: false,
+        // Static / layered abilities substrate — Phase 3 (round-81,
+        // 2026-05-20): synthetic-state printings have no SELF-scope
+        // conditional bonuses. Back-compat default.
+        static_self_bonuses: Vec::new(),
     });
     let registry = builder.snapshot();
 

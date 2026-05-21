@@ -6723,6 +6723,39 @@ pub struct CardPrinting {
     /// Baloth's third line); the per-StaticAbility-tuple
     /// generalization is honest-stopped to a later slice.
     pub grants_creature_spells_uncounterable: bool,
+    /// **Static / layered abilities substrate — Phase 3 (round-81,
+    /// 2026-05-20).** SELF-scope conditional P/T + keyword grants
+    /// carried by this printing. Each `StaticSelfBonus` declares a
+    /// layer-7 P/T contribution AND/OR a layer-6 keyword grant
+    /// applied to the source itself while the printed condition
+    /// matches (CR 613). `Vec::new()` (the back-compat default —
+    /// every pre-Phase-3 registry dict omits the
+    /// `static_self_bonuses` key) for every non-Phase-3 printing.
+    ///
+    /// Mirrors Python's `CardPrinting.static_abilities` tuple
+    /// filtered to the SELF-scope conditional sub-shape (per
+    /// `parser/statics.py:_parse_static_ability_line` — one
+    /// `StaticAbility` per layer-payload, all sharing the same
+    /// SELF scope and conditional gate).
+    ///
+    /// **Reader sites.** `battlefield_creature_power` /
+    /// `battlefield_creature_toughness` fold in the P/T
+    /// contribution; `battlefield_has_keyword` folds in the
+    /// keyword grants. Both sites short-circuit when the printing
+    /// carries no entries (`is_empty()`), keeping every non-
+    /// Phase-3 printing's read path byte-identical to pre-Phase-3.
+    ///
+    /// **Phase 3 scope teeth.** Only the SELF-scope shape this
+    /// slice. Other scopes (`creatures_you_control`, slivers, etc.)
+    /// remain in `static_anthems`. Mechan Shieldmate's
+    /// `ControlledArtifactEnteredThisTurn` + `RemoveKeyword`
+    /// payload, Rampaging Soulrager's
+    /// `UnlockedDoorsAmongRoomsAtLeast`, and Wildfire
+    /// Wickerfolk's `DeliriumActive` remain honest-stopped (each
+    /// needs a Condition variant outside this slice's two-tag
+    /// table or a `RemoveKeyword` payload the Rust reader does
+    /// not yet fold).
+    pub static_self_bonuses: Vec<StaticSelfBonus>,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -6745,6 +6778,52 @@ pub struct StaticAnthem {
     /// Lowercase underscore-form keyword names (e.g. `"haste"`,
     /// `"first_strike"`). Vocabulary restricted to
     /// `trajectory._SAFE_KEYWORDS` by the loader predicate.
+    pub granted_keywords: Vec<String>,
+}
+
+/// **Static / layered abilities substrate — Phase 3 (round-81,
+/// 2026-05-20).** One SELF-scope conditional bonus on a creature:
+/// a layer-7 P/T contribution AND/OR a layer-6 keyword grant that
+/// the source contributes to ITSELF (`scope=self` in Python's
+/// StaticScope) while the printed condition matches. Mirrors
+/// Python's `StaticAbility(scope=SELF, condition=<C>,
+/// continuous_effect=ContinuousModifier(layer={6 or 7},
+/// payload=<GrantKeyword(kw) or PowerToughnessBonus(p, t)>))`
+/// shape collapsed into a per-(condition_tag, condition_args)
+/// tuple — Gravblade Heavy's parser-emitted two StaticAbilities
+/// (sharing condition; one P/T, one keyword) coalesce into one
+/// `StaticSelfBonus` carrying both payloads.
+///
+/// **Reader sites.** `battlefield_creature_power` /
+/// `battlefield_creature_toughness` (layer-7c additive fold) and
+/// `battlefield_has_keyword` (layer-6 grant fold) consult
+/// `static_self_bonuses` on the obj's own printing AFTER checking
+/// the condition tag against the current game state. The fold is
+/// per-object (not battlefield-walking like anthems): the bonus
+/// fires only on the source itself.
+#[derive(Clone, Debug)]
+pub struct StaticSelfBonus {
+    /// Identifier the reader-site evaluator dispatches on. Lockstep
+    /// with the Python `_static_self_bonus_condition_from_tag`
+    /// helper:
+    ///   * `"control_permanent_is_artifact"` — viewer controls any
+    ///     artifact permanent (Cloudsculpt Technician, Gravblade
+    ///     Heavy).
+    ///   * `"at_least_n_spells_cast_this_turn"` — viewer's
+    ///     `spells_cast_this_turn >= n` (Brightspear Zealot, n=2).
+    pub condition_tag: String,
+    /// Integer args for `condition_tag`. Empty for arg-less
+    /// conditions; one i32 for the `n` arg of
+    /// `at_least_n_spells_cast_this_turn`. Bridge serialization
+    /// uses a `[int, ...]` list.
+    pub condition_args: Vec<i32>,
+    /// Layer-7c additive P/T contribution to the SOURCE while the
+    /// condition matches (CR 613.3c).
+    pub power_bonus: i16,
+    pub toughness_bonus: i16,
+    /// Layer-6 keyword grants to the SOURCE while the condition
+    /// matches. Lowercase underscore-form names from
+    /// `trajectory._SAFE_KEYWORDS` (e.g. `"deathtouch"`).
     pub granted_keywords: Vec<String>,
 }
 
@@ -9873,6 +9952,176 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     // `game._dynamic_base_pt`; this parser does NOT validate the key
     // string here (a future cross-engine probe lane would catch any
     // typo via a parity-divergence rather than at parse time).
+    // Static / layered abilities substrate — Phase 3 (round-81,
+    // 2026-05-20). Parse the `static_self_bonuses` list — each entry
+    // is a dict
+    //   {"condition_tag": str,
+    //    "condition_args": [int, ...],
+    //    "power_bonus": int,
+    //    "toughness_bonus": int,
+    //    "granted_keywords": [str, ...]}.
+    // Missing top-level key parses to an empty Vec (back-compat default
+    // — every pre-substrate registry dict omits the key, mirroring the
+    // `static_anthems` parse shape).
+    let static_self_bonuses: Vec<StaticSelfBonus> =
+        match dict.get_item("static_self_bonuses")? {
+            Some(bonuses_any) => {
+                let iter = bonuses_any.try_iter().map_err(|_| {
+                    PyValueError::new_err(
+                        "static_self_bonuses must be an iterable of \
+                         {condition_tag, condition_args, power_bonus, \
+                         toughness_bonus, granted_keywords} dicts",
+                    )
+                })?;
+                let mut out = Vec::new();
+                for item in iter {
+                    let item = item?;
+                    let entry = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err(
+                            "static_self_bonuses entries must be dicts",
+                        )
+                    })?;
+                    let condition_tag = match entry.get_item("condition_tag")? {
+                        Some(v) => v.extract::<String>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_self_bonuses[].condition_tag \
+                                 must be a string",
+                            )
+                        })?,
+                        None => return Err(PyValueError::new_err(
+                            "static_self_bonuses[] is missing required \
+                             key 'condition_tag'",
+                        )),
+                    };
+                    // Whitelist the tag to the two Phase-3 shapes. A
+                    // tag we don't recognize is a bridge-vs-Rust
+                    // disagreement — fail loudly so a future extension
+                    // can't silently mis-translate.
+                    if condition_tag != "control_permanent_is_artifact"
+                        && condition_tag != "at_least_n_spells_cast_this_turn"
+                    {
+                        return Err(PyValueError::new_err(format!(
+                            "static_self_bonuses[].condition_tag must be \
+                             'control_permanent_is_artifact' or \
+                             'at_least_n_spells_cast_this_turn' (got: {})",
+                            condition_tag
+                        )));
+                    }
+                    let condition_args = match entry.get_item("condition_args")? {
+                        Some(args_any) => {
+                            let args_iter = args_any.try_iter().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_self_bonuses[].condition_args \
+                                     must be an iterable of ints",
+                                )
+                            })?;
+                            let mut args = Vec::new();
+                            for a in args_iter {
+                                let n: i32 = a?.extract().map_err(|_| {
+                                    PyValueError::new_err(
+                                        "static_self_bonuses[].\
+                                         condition_args entries must be \
+                                         ints",
+                                    )
+                                })?;
+                                args.push(n);
+                            }
+                            args
+                        }
+                        None => Vec::new(),
+                    };
+                    // Per-tag arity validation — mirrors the Python
+                    // `_static_self_bonus_condition_from_tag` helper's
+                    // arity checks.
+                    match condition_tag.as_str() {
+                        "control_permanent_is_artifact" => {
+                            if !condition_args.is_empty() {
+                                return Err(PyValueError::new_err(format!(
+                                    "static_self_bonuses[].condition_args \
+                                     must be empty for tag \
+                                     'control_permanent_is_artifact' \
+                                     (got: {:?})",
+                                    condition_args
+                                )));
+                            }
+                        }
+                        "at_least_n_spells_cast_this_turn" => {
+                            if condition_args.len() != 1 {
+                                return Err(PyValueError::new_err(format!(
+                                    "static_self_bonuses[].condition_args \
+                                     must have exactly 1 int (n) for tag \
+                                     'at_least_n_spells_cast_this_turn' \
+                                     (got: {:?})",
+                                    condition_args
+                                )));
+                            }
+                            if condition_args[0] < 0 {
+                                return Err(PyValueError::new_err(format!(
+                                    "static_self_bonuses[].condition_args[0] \
+                                     (n) must be non-negative for tag \
+                                     'at_least_n_spells_cast_this_turn' \
+                                     (got: {})",
+                                    condition_args[0]
+                                )));
+                            }
+                        }
+                        _ => unreachable!(
+                            "condition_tag whitelisted above",
+                        ),
+                    }
+                    let power_bonus = match entry.get_item("power_bonus")? {
+                        Some(v) => v.extract::<i16>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_self_bonuses[].power_bonus must \
+                                 be an integer",
+                            )
+                        })?,
+                        None => 0,
+                    };
+                    let toughness_bonus = match entry.get_item("toughness_bonus")? {
+                        Some(v) => v.extract::<i16>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_self_bonuses[].toughness_bonus \
+                                 must be an integer",
+                            )
+                        })?,
+                        None => 0,
+                    };
+                    let granted_keywords = match entry.get_item("granted_keywords")? {
+                        Some(kw_any) => {
+                            let kw_iter = kw_any.try_iter().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_self_bonuses[].granted_keywords \
+                                     must be an iterable of strings",
+                                )
+                            })?;
+                            let mut kws = Vec::new();
+                            for k in kw_iter {
+                                let s: String = k?.extract().map_err(|_| {
+                                    PyValueError::new_err(
+                                        "static_self_bonuses[].\
+                                         granted_keywords entries must \
+                                         be strings",
+                                    )
+                                })?;
+                                kws.push(s);
+                            }
+                            kws
+                        }
+                        None => Vec::new(),
+                    };
+                    out.push(StaticSelfBonus {
+                        condition_tag,
+                        condition_args,
+                        power_bonus,
+                        toughness_bonus,
+                        granted_keywords,
+                    });
+                }
+                out
+            }
+            None => Vec::new(),
+        };
     let dynamic_pt_formula = match dict.get_item("dynamic_pt_formula")? {
         Some(v) => {
             if v.is_none() {
@@ -9924,6 +10173,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         static_anthems,
         spell_is_uncounterable,
         grants_creature_spells_uncounterable,
+        static_self_bonuses,
         dynamic_pt_formula,
     })
 }
@@ -11794,6 +12044,31 @@ impl Registry {
         id: u32,
     ) -> PyResult<bool> {
         Ok(self.lookup(id)?.grants_creature_spells_uncounterable)
+    }
+
+    /// **Static / layered abilities substrate — Phase 3 (round-81,
+    /// 2026-05-20).** Returns this printing's `static_self_bonuses`
+    /// as a Python-friendly list of tuples
+    /// `[(condition_tag, condition_args, power_bonus,
+    /// toughness_bonus, granted_keywords), ...]`. Empty when the
+    /// printing has no entries (every pre-Phase-3 printing).
+    fn get_printing_static_self_bonuses(
+        &self,
+        id: u32,
+    ) -> PyResult<Vec<(String, Vec<i32>, i16, i16, Vec<String>)>> {
+        let p = self.lookup(id)?;
+        Ok(p.static_self_bonuses
+            .iter()
+            .map(|b| {
+                (
+                    b.condition_tag.clone(),
+                    b.condition_args.clone(),
+                    b.power_bonus,
+                    b.toughness_bonus,
+                    b.granted_keywords.clone(),
+                )
+            })
+            .collect())
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict
