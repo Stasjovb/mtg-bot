@@ -973,6 +973,31 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // Cut Propulsion: ANY-creature scan (NOT controller-
+            // restricted). Mirrors Python `CutPropulsionEffect.legal_
+            // targets` (`effects/bespoke.py:1834-1841`: every creature
+            // on `state.battlefield`) — the established
+            // `DepressurizeEffect` ANY-creature shape. The flying-
+            // doubler is intrinsic to the resolve amount, NOT a
+            // legality predicate.
+            Effect::CutPropulsionEffect => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Diplomatic Relations: the only 2-slot grammar
             // (`target_slot_kinds() == ("my_creature", "creature")`,
             // `min_t == 2`). Python `_targets_are_satisfiable`

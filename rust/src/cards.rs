@@ -1497,6 +1497,72 @@ pub enum Effect {
     /// damage) are shipped + cross-engine-proven; this is the fused
     /// composite arm + the 2-slot binding only.
     DiplomaticRelationsEffect,
+    /// **Effect-uncovered Tier-A — Cut Propulsion (~11,990 17lands
+    /// decks).** "Target creature deals damage to itself equal to its
+    /// power. If that creature has flying, it deals twice that much
+    /// damage to itself instead."
+    ///
+    /// Mirrors Python's `CutPropulsionEffect`
+    /// (`effects/bespoke.py:1821-1879`) — the ONLY EoE card with this
+    /// shape. Single-target self-damage with a flying-doubler. The
+    /// Phase-1 single-target spell-card-bridge shape
+    /// (`target_count_range == (1, 1)`, `target_slot_kinds == ()`,
+    /// any-creature filter — Python's `legal_targets` is "every
+    /// creature on `state.battlefield`", NOT controller-restricted).
+    ///
+    /// **Field-free unit variant** (the `BiosynthicBurstEffect` /
+    /// `DiplomaticRelationsEffect` idiom): no dict payload — the
+    /// damage amount is intrinsic (read from the target's effective
+    /// power at resolve time; doubled if the target has flying).
+    /// Mirrors Python's `CutPropulsionEffect()` `@dataclass`-style
+    /// field-free instance.
+    ///
+    /// **Resolve semantics (mirrors `bespoke.py:1843-1873` byte-equal
+    /// to the SoT):**
+    /// 1. Read the cast-time-bound target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    `FocusFireEffect` / `DepressurizeEffect` payload-target swap
+    ///    pattern). When `None` (synthetic-test `push_to_stack` path
+    ///    that doesn't seat a target), fall back to the
+    ///    deterministic-first creature in ETB-timestamp order across
+    ///    BOTH battlefields (mirrors `bf_iter_etb_sorted` — Python's
+    ///    `state.battlefield` centralized walk = the SoT).
+    /// 2. Re-validate the bound target at resolve (CR 608.2b): the
+    ///    target must still be on a battlefield AND still satisfy
+    ///    `card_types ∋ "Creature"`. Illegal target → silent fizzle
+    ///    (Python's `obj is None` short-circuit returns early — no
+    ///    damage either).
+    /// 3. Read the target's effective power. Saturating into i32 from
+    ///    `effective_power(state, obj)` semantics — `base + counters +
+    ///    ueot_power_bonus()` (Python's `mtg_bot.game.effective_power`
+    ///    folds the same three contributions). If `power <= 0`, silent
+    ///    no-op (NO damage event fires — Python's `if power <= 0:
+    ///    return` short-circuits before `_apply_damage`, so the
+    ///    receiver-side DEALT_DAMAGE dispatch does not fire either).
+    /// 4. If the target's effective keyword set contains "flying"
+    ///    (`battlefield_has_keyword` — folds printed + UEOT-granted +
+    ///    aura-granted + static-anthem keywords; the established
+    ///    public reader), damage amount is `power * 2`; else `power`.
+    /// 5. Apply damage via `obj.damage.saturating_add(amount_i16)` —
+    ///    the established `DealDamageAnyTarget` / `FocusFireEffect`
+    ///    damage-application shape. Set `damaged_this_turn = true`
+    ///    on the receiver (mirrors Python's `obj.damaged_this_turn =
+    ///    True` at `effects/base.py:300`). Dispatch the DEALT_DAMAGE
+    ///    receiver-side event for any aura-attached
+    ///    `enchanted_creature_dealt_damage` triggers (Cryoshatter,
+    ///    Pain for All) — mirrors Python's
+    ///    `_fire_enchanted_dealt_damage_triggers` call at the tail of
+    ///    `_apply_damage`. The damage marker is set BEFORE the event
+    ///    so aura readers see the post-damage state, matching Python
+    ///    (which sets `obj.damage += amount` before invoking the
+    ///    fire-triggers helper).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `CutPropulsionEffect()` (field-free construction). Mirrors the
+    /// `BiosynthicBurstEffect` / `DiplomaticRelationsEffect` Tier-A
+    /// unit-variant convention.
+    CutPropulsionEffect,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -7657,6 +7723,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // StackItem, NOT in this dict.
             Ok(Effect::DiplomaticRelationsEffect)
         }
+        "cut_propulsion_effect" => {
+            // Effect-uncovered Tier-A — Cut Propulsion. Unit variant;
+            // no fields (mirrors the `biosynthic_burst_effect` /
+            // `diplomatic_relations_effect` field-free idiom).
+            // Python's `CutPropulsionEffect()` carries no fields —
+            // the damage amount is intrinsic (read from the target's
+            // effective power at resolve, doubled if the target has
+            // flying). The single target rides on the StackItem
+            // (`current_resolve_payload_target_id`), NOT in this dict.
+            Ok(Effect::CutPropulsionEffect)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -11343,6 +11420,16 @@ pub(crate) fn effect_to_pydict<'py>(
             // reverse-serializer leaf. The 2-slot targets are NOT
             // serialized here — they ride on the StackItem.
             d.set_item("kind", "diplomatic_relations_effect")?;
+        }
+        Effect::CutPropulsionEffect => {
+            // Effect-uncovered Tier-A — Cut Propulsion. Unit variant
+            // — `kind` only (the `biosynthic_burst_effect` /
+            // `diplomatic_relations_effect` field-free to_dict idiom).
+            // Bidirectional with the `cut_propulsion_effect` parse
+            // arm + the cross_engine.py bridge arm + the trajectory.py
+            // reverse-serializer leaf. The single target is NOT
+            // serialized here — it rides on the StackItem.
+            d.set_item("kind", "cut_propulsion_effect")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;
