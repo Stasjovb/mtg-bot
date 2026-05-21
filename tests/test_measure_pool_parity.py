@@ -827,8 +827,18 @@ def test_known_card_subsystem_attribution(scout, attr):
     assert bp["gates"] == [scout.SUB_NONBASIC_LAND]
     assert bp["last_mile"] == scout.SUB_NONBASIC_LAND
     assert bp["multi_gated"] is False
-    # Bygone Colossus: warp_cost-gated.
-    assert scout.SUB_WARP in cards["Bygone Colossus"]["gates"]
+    # warp_cost-gated card: the 3 Phase-3 single-gated cards (Red
+    # Tiger Mechan, Bygone Colossus, Timeline Culler) moved to the
+    # PROBED tier post-Phase-3 (round-83, 2026-05-20 — see
+    # ``scripts/measure_pool_parity.py:loader_admits`` + the
+    # ``_parity``-named warp probe aliases in
+    # ``tests/test_parity_smoke.py``), so the multi-gated warp tail
+    # is the surviving subsystem-attribution carrier. Starfield
+    # Vocalist is warp + static_abilities — still subsystem-gated
+    # (the static-abilities Phase-3.5 substrate is the remaining
+    # lever to close it; see SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
+    # §3 lever (1)).
+    assert scout.SUB_WARP in cards["Starfield Vocalist"]["gates"]
     # The honest unclassified bucket is exactly the two documented
     # rule-static enchantments (no force-guess).
     unclass = set(attr["by_subsystem"].get(scout.SUB_UNCLASSIFIED, []))

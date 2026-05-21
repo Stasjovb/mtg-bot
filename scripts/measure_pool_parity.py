@@ -780,15 +780,35 @@ def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
     EXACT gate the bench corpus runs through
     (``trajectory._printing_is_bridge_basic_land`` OR
-    ``_printing_is_bridge_simple_creature``). Reused, not reimplemented,
-    so the bench tier and the real bench can never disagree on what
-    "admitted" means."""
+    ``_printing_is_bridge_simple_creature`` OR
+    ``_printing_is_bridge_pure_warp_creature``). Reused, not
+    reimplemented, so the bench tier and the real bench can never
+    disagree on what "admitted" means.
+
+    **warp_cost Phase 3 (round-83, 2026-05-20):** the
+    ``_printing_is_bridge_pure_warp_creature`` predicate is the third
+    admit arm. Phases 1+1.5+2 of the warp_cost substrate shipped the
+    full warp lifecycle on both engines (CardDef warp fields + Rust
+    ``CardPrinting.warp_cost`` + ``cast_creature_warp`` + the END-step
+    exile sweep + the exile-recast + Timeline Culler's life-rider +
+    graveyard-warp), and the production-deck loader at
+    ``trajectory.py:5552`` already routes warp creatures through this
+    predicate ahead of the plain simple-creature arm. Including it in
+    ``loader_admits`` makes the metric tier-classifier see those
+    admitted warp printings as bridge-admitted (so they correctly tier
+    as PROBED when a ``_parity`` probe pins them, or as
+    BRIDGE_ADMITTED otherwise), closing the warp_cost Phase 3
+    measurement-attribution gap (the 3 single-gated warp cards — Red
+    Tiger Mechan, Bygone Colossus, Timeline Culler — accounting for
+    15,436 17lands single-gate decks per the round-58 attribution
+    scout)."""
     from mtg_bot.parity import trajectory as traj
 
     try:
         return bool(
             traj._printing_is_bridge_basic_land(printing)
             or traj._printing_is_bridge_simple_creature(printing)
+            or traj._printing_is_bridge_pure_warp_creature(printing)
         )
     except Exception:
         return False

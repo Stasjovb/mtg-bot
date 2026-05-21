@@ -1,14 +1,17 @@
 # Subsystem-blocked tier — leverage inventory + closure sequence
 
 A focused, current-snapshot **synthesis** of the BLOCKED-subsystem-gated
-tier (146 cards, the **only** non-empty BLOCKED tier on `docs/POOL_PARITY.md`
-after the 2026-05-19/20 massive-closure session). This doc is **not the
-authoritative living roadmap** — `docs/SUBSYSTEM_ROADMAP.md` is that,
-with its full cycle-by-cycle orchestrator history. This doc is the
-short "what should I grind next, why, in what order" reference.
+tier (143 cards post-warp_cost-Phase-3, the **only** non-empty BLOCKED
+tier on `docs/POOL_PARITY.md` after the 2026-05-19/20 massive-closure
+session). This doc is **not the authoritative living roadmap** —
+`docs/SUBSYSTEM_ROADMAP.md` is that, with its full cycle-by-cycle
+orchestrator history. This doc is the short "what should I grind next,
+why, in what order" reference.
 
-**Snapshot HEAD:** `62222ffe` (post-tractor-beam cast-time auto-resolve
-merge, post-static-abilities Phase 3 merge, post-Aura Phase 3/S4 merge,
+**Snapshot HEAD:** post-`feature/warp-cost-phase-3` merge (round-83,
+2026-05-20: 3 warp single-gated cards flipped PROBED, blocked tier
+146→143). Predecessor was `62222ffe` (post-tractor-beam cast-time
+auto-resolve, post-static-abilities Phase 3, post-Aura Phase 3/S4,
 post-dauntless-scrapbot closure).
 **Source data:** `scripts/scout_r58_subsystem_attribution.py` (re-runnable;
 the same attribution helper `measure_pool_parity` imports, so this doc
@@ -66,22 +69,27 @@ recommendations are now overwhelmingly **executed**, not pending.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe
-PROBED                                                221         232
-covered-by-construction                                95          97
-BLOCKED — genuinely_missing                             3           0
-BLOCKED — blocked_non_effect                            2           0
-BLOCKED — subsystem-gated                             154         146
+                                                  ce564786  →  62222ffe  →  post-warp-P3
+PROBED                                                221         232          235
+covered-by-construction                                95          97           97
+BLOCKED — genuinely_missing                             3           0            0
+BLOCKED — blocked_non_effect                            2           0            0
+BLOCKED — subsystem-gated                             154         146          143
 ```
 
-Subsystem-gated dropped by 8; **both itemized BLOCKED tiers reached 0**.
-The 146 tail is now the *only* non-empty BLOCKED tier.
+Subsystem-gated dropped by 11 total; **both itemized BLOCKED tiers
+reached 0**. The 143 tail is now the *only* non-empty BLOCKED tier.
+Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
+Bygone Colossus, Timeline Culler → PROBED on the existing Phase 1/1.5/2
+substrate via two measurement-attribution fixes (loader_admits widen +
+`_parity`-named probe aliases).
 
 ## 1. Headline (current state)
 
-* **146 cards** are subsystem-gated; **71 single-gated**, **75 multi-gated**.
-  (`75` multi-gated reflects the round-58 tier-rebuild post-Lightstall +
-  Pain for All flips — net –1 from the original 76 the inventory cited.)
+* **143 cards** are subsystem-gated; **68 single-gated**, **75 multi-gated**
+  (post warp_cost Phase 3 round-83: the 3 single-gated warp cards — Red
+  Tiger Mechan, Bygone Colossus, Timeline Culler — flipped to PROBED).
+  The 75 multi-gated total is unchanged.
 * **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
   those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
@@ -102,7 +110,7 @@ to reflect what substrate already exists post-session.
 | Static / layered abilities | 15 | 8 | 34,526 | sprawling | small-medium per remaining card (Phases 1+2+3 substrate built) | **PARTIAL** — 4 of 8 single-gated closed; 4 remain (Mechan Shieldmate + 3 not in EoE snapshot) |
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium for ~5 cards realizable; 18 deferred behind sibling substrates | DEFERRED (unchanged) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
-| warp_cost | 10 | 3 | 15,436 | medium | medium — Phase 1/1.5/2 SHIPPED; remaining 3 single-gated need a Phase 3 slice | DEFERRED-3 |
+| warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
 | Dynamic-P/T formula | 1 | 1 | unknown | medium | small-medium per formula (substrate landed `6a8b6402`) | **PARTIAL** — Grovestrider closed; Cosmogoyf remains (different formula shape) |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (§2-declined) | DEFERRED (unchanged) |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; 0 single-gated) | DEFERRED (unchanged) |
@@ -116,8 +124,9 @@ to reflect what substrate already exists post-session.
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 146 subsystem-gated = 71 single-gated + 75
-multi-gated; `1gate` column sums to 71.
+**Reconciliation:** 143 subsystem-gated = 68 single-gated + 75
+multi-gated; `1gate` column sums to 68 (post-warp_cost Phase 3 round-83;
+the warp_cost row is now 7/0/0 — only the multi-gated tail survives).
 
 ## 3. The remaining highest-leverage levers (re-ranked)
 
@@ -210,13 +219,35 @@ Remaining single-gated: **Cosmogoyf** (different formula shape — card
 type counting in graveyards). ~1-2 cycle slice on the same dispatch
 table substrate (extend the Rust formula-key arm + bridge admit).
 
-### (5) warp_cost remaining-3 — Phase 3 slice
+### (5) warp_cost remaining-3 — Phase 3 — **SHIPPED** (round-83, 2026-05-20)
 
-Phase 1/1.5/2 SHIPPED. 3 single-gated remaining: **Bygone Colossus, Red
-Tiger Mechan, Timeline Culler.** All are cards whose only loader-gate is
-the warp cost grammar arm. A Phase 3 slice (1-2 cycles) extending the
-already-shipped warp grammar would close these. 15,436 decks of single-
-gate leverage.
+Phase 1/1.5/2/3 **all SHIPPED**. The 3 Phase-3 cards — **Bygone Colossus,
+Red Tiger Mechan, Timeline Culler** — flipped from
+BLOCKED-subsystem-gated → PROBED on `feature/warp-cost-phase-3` (round-83,
+2026-05-20). Phases 1+1.5+2 had already shipped the substrate end-to-end
+(CardDef warp fields + Rust `CardPrinting.warp_cost` +
+`Effect::WarpExileSelf` + `cast_creature_warp` life-debit + graveyard-warp
+loop + the bridge filter widen at `trajectory.py:5552`); Phase 3 closed
+the two measurement-attribution gaps that kept the 3 cards in the BLOCKED
+tier:
+
+1. `scripts/measure_pool_parity.py:loader_admits` did not consult
+   `_printing_is_bridge_pure_warp_creature` — widened to include it,
+   matching the production-deck loader.
+2. The full warp lifecycle probes used `_byte_equal` suffixes invisible
+   to the `_smoke_probed_cards` slug-keyed scanner — added 3 thin
+   `_parity`-named delegators in `tests/test_parity_smoke.py` so each
+   card earns PROBED credit via the canonical lifecycle byte-equality
+   evidence.
+
+Net: PROBED tier 232 → 235; warp_cost row 10/3/15,436 → 7/0/0
+(multi-gated tail unchanged — Starfield Vocalist + Memorial Team Leader +
+Exalted Sunborn + Loading Zone gated also on static_abilities; Codecracker
+Hound + Anticausal Vestige + Possibility Technician also on
+effect_uncovered+nonsafe_trigger). Bridging warp alone never flipped
+those 7 — they need their **other** gate to land first.
+
+**This was lever #2 in the §4 closure sequence; CLOSED.**
 
 ## 4. Recommended closure sequence (top 5, post-refresh)
 
@@ -225,10 +256,10 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
 | # | Lever | Decks(1g) | Cycles | Decks/cycle | Notes |
 |---|---|---:|---:|---:|---|
 | 1 | **Static / layered abilities — Mechan Shieldmate (Phase 3.5)** | (single card in the 8) | 1 | — | Sibling lane 1 in flight; substrate is paid for |
-| 2 | **warp_cost Phase 3 — Bygone Colossus / Red Tiger Mechan / Timeline Culler** | 15,436 | 1-2 | ~7,700 | Smallest remaining Rust slice; warp grammar already proven |
-| 3 | **Dynamic-P/T formula — Cosmogoyf** | small | 1-2 | — | Same dispatch table substrate; cheapest after Static |
-| 4 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Sibling lane 3 in flight |
-| 5 | **Effect-uncovered per-card drain — next 3-5 cheap single-gated** | varies (~5-15k cumulative) | 3-5 | ~3,000 | Cheaper Tier-A lane exhausted; remainder is Tier-C |
+| ~~2~~ | ~~**warp_cost Phase 3**~~ | ~~15,436~~ | — | — | **CLOSED round-83 (2026-05-20)** — `feature/warp-cost-phase-3`; +3 PROBED |
+| 2 | **Dynamic-P/T formula — Cosmogoyf** | small | 1-2 | — | Same dispatch table substrate; cheapest after Static |
+| 3 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Sibling lane 3 in flight |
+| 4 | **Effect-uncovered per-card drain — next 3-5 cheap single-gated** | varies (~5-15k cumulative) | 3-5 | ~3,000 | Cheaper Tier-A lane exhausted; remainder is Tier-C |
 
 **Sequencing rationale:**
 
@@ -279,9 +310,16 @@ sub-gates that the original `ce564786` inventory didn't surface:
   Skull / Sporogenic Infection each need their Aura half (shipped
   `35ede8b0`) + Effect-uncovered closure + nonsafe-trigger event bridge.
   These are now exactly that cleanly-decomposed.
-* **warp_cost Phase 3** — the 3 still-single-gated carriers (Bygone
-  Colossus, Red Tiger Mechan, Timeline Culler) need a small grammar
-  extension that the Phase 2 substrate has the infrastructure for.
+* **warp_cost Phase 3 — CLOSED round-83 (2026-05-20).** The 3 Phase-3
+  carriers (Bygone Colossus, Red Tiger Mechan, Timeline Culler) flipped
+  to PROBED on `feature/warp-cost-phase-3`. The Phase 1/1.5/2 substrate
+  was the real lift; Phase 3 turned out to be two measurement-
+  attribution fixes (widen `loader_admits` to include
+  `_printing_is_bridge_pure_warp_creature` + add 3 `_parity`-named probe
+  aliases that delegate to the existing canonical lifecycle probes), not
+  the "small grammar extension" the original Phase-3 scoping had
+  anticipated. Honest finding: the substrate had already shipped end-
+  to-end; only the metric-side wiring was missing.
 
 None of these are wholly new subsystems; they are sub-shapes of
 existing substrates that the session's substrate-builds clarified.
