@@ -8015,60 +8015,42 @@ any card today, but is the prerequisite for admitting any S2 +
 keyword-grant interleaving Aura combination that lands in a future
 set.
 
-## Aura Phase 2 S2.5 layer-7b set-base-PT: multi-Aura timestamp interleaving honest-stopped (reader fold lit) (Aura-attachment Phase 2 S2.5, round-79+)
+## Aura Phase 2 S2.5 layer-7b set-base-PT: multi-Aura timestamp interleaving CLOSED (round-80, 2026-05-20)
 
 **Where**: `rust/src/state_ops_combat.rs::aura_set_base_pt_on`
-(scans both bfs for the first Aura with `aura_set_base_pt`
-attached to `host_id`) — used by `battlefield_creature_power`,
+(walks every Aura attached to `host_id` across both bfs, returns
+the tuple from the one with the highest `etb_timestamp`) — used
+by `battlefield_creature_power`,
 `battlefield_creature_toughness`,
 `state_ops_sba::collect_sba_victims`, and
 `state_ops_sba::is_lethal`. Spec:
 `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 / S2.5.
 
-**Status update (round-79+, S2.5, 2026-05-20).** The
-reader-fold-honest-stop documented in the Phase 2 S2 slice is now
-**closed** — the Rust effective-P/T computation (both combat and
-SBA reader sites) reads `aura_set_base_pt` and slots it between
-the UEOT base override (last-applied wins, kept above set-base by
-precedent) and the dynamic-base / printed-base fallbacks. The 12
-tests in `tests/test_aura_substrate_phase_2_s2_5.py` exercise the
-fold via synthetic registry-dict injection (Lignify isn't in the
-EoE pool, but the substrate is ready for any future set carrier).
+**Status (round-80, 2026-05-20).** The Phase 2 S2.5 reader-fold
+honest-stop on multi-Aura set-base-PT timestamp interleaving is
+now **closed**. The closure piggybacks on the existing
+`etb_timestamp` field (state.rs:172): every Aura attach in Rust
+goes through `move_aura_post_resolve` (state_ops_resolve.rs:480)
+which stamps a fresh monotonic timestamp via
+`reserve_etb_timestamp`. Auras attach exactly when they enter
+the battlefield in today's lifecycle, so the ETB stamp IS the
+attach stamp. No new field; closure reuses the existing
+monotonic counter.
 
-**What the shortcut is (post-S2.5)**: when multiple set-base-PT
-Auras attach to the SAME host, CR 613.3b requires the latest by
-timestamp to win. The Rust `GameObject` carries no attach
-timestamp; `aura_set_base_pt_on` returns the FIRST attached
-set-base-PT Aura it encounters in the deterministic bf walk
-(player 0 then player 1, in registration order). For a real
-multi-set-base interleave this could disagree with Python's
-last-writer-wins continuous-effects registry.
+The helper now walks every set-base-PT Aura attached to the host
+across both players' battlefields, filters for `aura_set_base_pt
+is Some`, and returns the tuple from the Aura with the highest
+`etb_timestamp` (CR 613.3b latest-wins). Probe:
+`tests/test_aura_substrate_multi_set_base_timestamp.py` (8 tests
+covering both attach orders, three-Aura transitive ordering,
+cross-player ordering, non-set-base mixing, SBA lethal
+lock-step, detach + re-add, and the helper-None case).
 
-**Why it's OK**: the **bench admit set today has ZERO
-set-base-PT Auras**. `trajectory.py::_printing_is_bridge_simple_
-aura` still declines `attached_sets_base_pt is not None` because
-Lignify also carries `attached_grants_subtype` (layer 4 — separate
-substrate not yet wired in Rust). No live admit set exercises the
-multi-Aura interleave. The honest-stop is gate-protected by the
-admit predicate.
-
-**Failure mode**: a future agent that admits a Lignify-shape
-through the loader AND drives two of them onto the same host in a
-self-play game would observe a divergent set-base resolution
-between engines. The fix is to add an attach-time `timestamp:
-u64` slot on the `GameObject` (or store the set-base in a
-per-host continuous-effects registry mirroring Python's
-`_registry_set_base_pt` table) and use last-applied wins in the
-helper.
-
-**Fix-scope estimate**: ~2-4h Rust slice — add the timestamp
-slot, write at attach time, walk in reverse-timestamp order in
-the helper. Mirrors the shape Python's continuous-effects table
-already takes.
-
-**Impact estimate**: **0 today** — gated behind the admit
-predicate. Lit once a multi-Aura-set-base interleave joins the
-live admit set.
+**Residue (still open)**: when Aura re-attach lands as a Rust
+path (no current caller — Aura lifecycle is attach-once-at-
+resolve in Rust today), the re-attach site must re-stamp
+`etb_timestamp` per CR 613.7d. This is a future-slice concern,
+not a current honest-stop.
 
 ## Aura Phase 2 S2 multi-grant control-swap: single outstanding grant assumed for revert (Aura-attachment Phase 2 S2, round-79+)
 

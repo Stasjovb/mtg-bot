@@ -675,16 +675,27 @@ bidir round-trip); this slice wires the reader fold:
   decision; Rust's auto-resolve fizzles with no selected target).
   A separate follow-up slice closes that gap and flips the
   bench-loader admit.
-- **Multi-Aura set-base-PT timestamp interleaving.** CR 613.3b
-  requires the latest set-base wins by timestamp when two
-  set-base-PT Auras are on the same host. The Rust GameObject does
-  not carry an attach timestamp; ``aura_set_base_pt_on`` returns
-  the FIRST set-base-PT Aura it encounters in the bf walk. No live
-  admit set exercises the interleave today (Lignify isn't in the
-  EoE pool, and the bridge admit predicate still declines
-  ``attached_sets_base_pt is not None`` carriers). A future slice
-  can promote to per-Aura timestamps when a real interleave hits
-  the bench.
+- **Multi-Aura set-base-PT timestamp interleaving — LANDED
+  (round-80, 2026-05-20).** CR 613.3b requires the latest set-base
+  wins by timestamp when two set-base-PT Auras are on the same
+  host. The Rust GameObject's existing ``etb_timestamp`` field
+  (stamped at Aura attach in ``move_aura_post_resolve`` via
+  ``reserve_etb_timestamp``) doubles as the attach timestamp —
+  Auras attach exactly when they enter the battlefield in today's
+  lifecycle. ``aura_set_base_pt_on`` now walks every set-base-PT
+  Aura attached to the host across both players' battlefields and
+  returns the tuple from the one with the highest
+  ``etb_timestamp``. No new field; closure piggybacks the existing
+  monotonic counter. Probe:
+  ``tests/test_aura_substrate_multi_set_base_timestamp.py`` (8
+  tests pinning latest-wins under various attach orders, three-Aura
+  transitive ordering, cross-player ordering, non-set-base mixing,
+  SBA lock-step). Bridge-admitted POOL_PARITY remains byte-equal:
+  no live carrier exercises the interleave today (Lignify not
+  bridge-admitted; pool decline is a separate widening below).
+  Follow-up: when Aura re-attach lands as a Rust path, re-stamp
+  ``etb_timestamp`` at re-attach time per CR 613.7d (no current
+  caller).
 - **Bridge admit for Lignify-shape Auras.** The reader fold is
   lit (see Phase 2 S2.5 above), but
   ``trajectory.py::_printing_is_bridge_simple_aura`` still declines
