@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **252 (53.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 95 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **256 (53.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 91 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **128 (26.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 252 | 53.1% |
-| Effect+bridge covered (not individually probed) | 95 | 20.0% |
+| PROBED byte-equal | 256 | 53.9% |
+| Effect+bridge covered (not individually probed) | 91 | 19.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -73,6 +73,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Chrome Companion
 - Cloudsculpt Technician
 - Come Back Wrong
+- Command Bridge
 - Commune with Evil
 - Cosmogoyf
 - Cryogen Relic
@@ -164,6 +165,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Kavaron Skywarden
 - Knight Luminary
 - Lightless Evangel
+- Lightstall Inquisitor
 - Lionheart Glimmer
 - Live or Die
 - Living Phone
@@ -195,6 +197,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Nebula Dragon
 - Nova Hellkite
 - Nutrient Block
+- Optimistic Scavenger
 - Orbital Plunge
 - Oreplate Pangolin
 - Overlord of the Boilerbilges
@@ -265,6 +268,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Terramorphic Expanse
 - Thaumaton Torpedo
 - Thawbringer
+- The Seriema
 - Thrumming Hivepool
 - Timeline Culler
 - Tractor Beam
