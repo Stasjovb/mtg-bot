@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **250 (52.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 97 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **252 (53.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 95 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **128 (26.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 250 | 52.6% |
-| Effect+bridge covered (not individually probed) | 97 | 20.4% |
+| PROBED byte-equal | 252 | 53.1% |
+| Effect+bridge covered (not individually probed) | 95 | 20.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -119,6 +119,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Focus Fire
 - Found Footage
 - Frantic Strength
+- Frenzied Baloth
 - Friendly Ghost
 - Frontline War-Rager
 - Full Bore
@@ -259,6 +260,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Syr Vondam, Sunstar Exemplar
 - Syr Vondam, the Lucent
 - Tannuk, Memorial Ensign
+- Tannuk, Steadfast Second
 - Tapestry Warden
 - Terramorphic Expanse
 - Thaumaton Torpedo

@@ -37,17 +37,21 @@ gate. Folding the remaining 5 disjuncts in + 9 `_parity`-named
 delegator probes flipped 9 cards BLOCKED → PROBED (the 5 shocklands +
 Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate) with NO
 engine changes — a pure measurement-attribution close, same shape as
-the round-83 warp_cost Phase 3 close. Tannuk Steadfast Second +
-Frenzied Baloth honest-stop at COVERED pending real-EoE cross-engine
-byte-equal probes (the existing static-anthem / uncounterable probes
-exercise SYNTHETIC `CardDef("Tannuk")` / `CardDef("Frenzied Baloth")`
-shapes; no genuine-printing cross-engine byte-equal pin yet).
+the round-83 warp_cost Phase 3 close. The 2026-05-21
+tannuk-frenzied-baloth-probes follow-up lane then closed the two
+COVERED-pending carriers by writing the missing genuine real-EoE
+cross-engine byte-equal probes: Tannuk Steadfast Second (effective-
+keyword anthem haste-grant byte-equal on the genuine printing) and
+Frenzied Baloth (`spell_is_uncounterable` self-flag + battlefield-
+grant `grants_creature_spells_uncounterable` static byte-equal on the
+genuine printing). Both flipped COVERED → PROBED, completing the
+static-abilities Phase 1+2 measurement attribution.
 
 ### Top-5-recommendations status (from `ce564786`)
 
 | Original rec | Status | Closure commit(s) |
 |---|---|---|
-| (1) Static / layered abilities — close 8 single-gated | **PARTIAL** — Phases 1+2+3 SHIPPED; 4 of 8 single-gated cards closed (Tannuk Steadfast Second, Frenzied Baloth, Brightspear Zealot, Cloudsculpt Technician, Gravblade Heavy) | `3a7c483c` Phase 1 / `9ccefe08` Phase 2 / `ddd93684` Phase 3 |
+| (1) Static / layered abilities — close 8 single-gated | **PARTIAL** — Phases 1+2+3 SHIPPED; 6 of 8 single-gated cards PROBED (Brightspear Zealot, Cloudsculpt Technician, Gravblade Heavy, Mechan Shieldmate via loader_admits sweep; Tannuk Steadfast Second, Frenzied Baloth via the tannuk-frenzied-baloth-probes follow-up) | `3a7c483c` Phase 1 / `9ccefe08` Phase 2 / `ddd93684` Phase 3 / loader_admits sweep / tannuk-frenzied-baloth-probes |
 | (2) Dynamic-P/T formula — Harmonious Grovestrider | **CLOSED** — substrate LANDED round-78; Grovestrider PROBED end-to-end (ward-rider on real printing kept it loader-gated, but the formula-substrate single-gate it cited is closed). Round-84 (`feature/dynamic-pt-cosmogoyf`) extended the SAME dispatch table with the `"cosmogoyf"` arm, flipping Cosmogoyf → PROBED. Single-gated Dynamic-P/T tier now 0. | `6a8b6402` (Grovestrider) + this lane (Cosmogoyf) |
 | (3) Aura Phase 2 (S2 control-changing) | **SHIPPED** — Duskmourn admit + Tractor Beam reduce | `643163c6`, plus S2 extension `d4ceecc5` (Tractor Beam) |
 | (4) Aura Phase 3 (S4 triggered) | **SHIPPED** — Pain for All admit substrate end-to-end | `35ede8b0` |
@@ -83,13 +87,15 @@ shapes; no genuine-printing cross-engine byte-equal pin yet).
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep
-PROBED                                                221         232          235            236                 238                    247
-covered-by-construction                                95          97           97             97                  98                    100
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes
+PROBED                                                221         232          235            236                 238                    250                              252
+covered-by-construction                                95          97           97             97                  98                     97                               95
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128
 ```
+
+The tannuk-frenzied-baloth-probes lane delta is strict **+2 PROBED / −2 COVERED**: Tannuk Steadfast Second and Frenzied Baloth flipped COVERED → PROBED via the two new genuine-printing cross-engine byte-equal `_parity` probes. No engine changes, no subsystem-gated movement, no Effect-class movement.
 
 Subsystem-gated dropped by 26 total; **both itemized BLOCKED tiers
 reached 0**. The 128 tail is now the *only* non-empty BLOCKED tier.
@@ -107,7 +113,8 @@ added 9 `_parity` aliases — 9 more cards flipped BLOCKED → PROBED
 (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground /
 Watery Grave / Brightspear Zealot / Cloudsculpt Technician /
 Gravblade Heavy / Mechan Shieldmate; Tannuk Steadfast Second +
-Frenzied Baloth honest-stopped at COVERED).
+Frenzied Baloth honest-stopped at COVERED, then flipped to PROBED
+by the tannuk-frenzied-baloth-probes follow-up the same day).
 
 ## 1. Headline (current state)
 
@@ -135,7 +142,7 @@ to reflect what substrate already exists post-session.
 
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status (post-session) |
 |---|---:|---:|---:|---|---|---|
-| Static / layered abilities | 9 | 2 | 0 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 2026-05-21 loader_admits-attribution-sweep flipped Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate → PROBED + Tannuk / Frenzied Baloth → COVERED; 2 single-gated remain (Soulrager / Wickerfolk — not in EoE snapshot) |
+| Static / layered abilities | 9 | 2 | 0 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 2026-05-21 loader_admits-attribution-sweep flipped Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate → PROBED + Tannuk / Frenzied Baloth → COVERED; 2026-05-21 tannuk-frenzied-baloth-probes follow-up flipped Tannuk + Frenzied Baloth COVERED → PROBED via genuine-printing cross-engine byte-equal helpers; 2 single-gated remain (Soulrager / Wickerfolk — not in EoE snapshot) |
 | Non-basic land substrate | 18 | 18 | 16,510 | medium | small-medium for ~5 cards realizable; 13 deferred behind sibling substrates | **PARTIAL** — 2026-05-21 loader_admits-attribution-sweep flipped the 5 shocklands (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground / Watery Grave) → PROBED via the round-60 bench probe pin; 18 non-shockland non-basic lands remain DEFERRED |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
 | warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
@@ -157,7 +164,9 @@ multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
 attribution-sweep; the Static/layered-abilities row drops from 15/8/34526
 to 9/2/0 — Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate
 flipped to PROBED, Tannuk Steadfast Second + Frenzied Baloth flipped
-to COVERED. The Non-basic-land row drops from 23/23/34575 to
+to COVERED then PROBED via the same-day follow-up writing genuine-
+printing cross-engine byte-equal helpers. The Non-basic-land row drops
+from 23/23/34575 to
 18/18/16510 — the 5 shocklands flipped to PROBED via the round-60
 bench-probe pin. Post-Aura-Phase-1-flash-widening close 2026-05-21:
 the Aura row at 4/1/633 — Frantic Strength + Shardmage's Rescue +
@@ -186,14 +195,20 @@ Cloudsculpt / Gravblade / Mechan Shieldmate — all flipped to PROBED
 by the 2026-05-21 loader_admits-attribution-sweep via thin `_parity`
 delegators that re-use the existing `tests/test_static_layered_
 abilities_phase3.py::test_real_eoe_byte_equal_*` cross-engine pins)
-and 2 COVERED (Tannuk Steadfast Second + Frenzied Baloth — admitted
-through the loader filter but lacking an existing real-EoE cross-
-engine byte-equal helper binding the genuine printing; the static-
-anthem Phase-1 / uncounterable Phase-2 modules exercise SYNTHETIC
-`CardDef` carriers, not the genuine parsed EoE printings. Promoting
-to PROBED is a follow-up lane that writes the matching real-EoE
-helper first). The remaining single-gated cards under this gate row
-are:
+and 2 originally COVERED → PROBED (Tannuk Steadfast Second + Frenzied
+Baloth — the 2026-05-21 loader_admits-attribution-sweep widened the
+metric helper to admit them through the loader filter but they lacked
+a genuine real-EoE cross-engine byte-equal helper; the static-anthem
+Phase-1 / uncounterable Phase-2 modules already exercised SYNTHETIC
+`CardDef` carriers, so the same-day tannuk-frenzied-baloth-probes
+follow-up lane added the two missing genuine-printing probes
+(`test_cross_engine_real_eoe_tannuk_steadfast_second_static_anthem_parity`
+exercises the haste anthem grant byte-equal across both engines on the
+genuine parsed printing;
+`test_cross_engine_real_eoe_frenzied_baloth_static_uncounterable_parity`
+exercises both `spell_is_uncounterable` and
+`grants_creature_spells_uncounterable` byte-equal). The remaining
+single-gated cards under this gate row are:
 
 * **Rampaging Soulrager** — `UnlockedDoorsAmongRoomsAtLeast(2)`
   Condition. Not in the current EoE data snapshot. Would need a
