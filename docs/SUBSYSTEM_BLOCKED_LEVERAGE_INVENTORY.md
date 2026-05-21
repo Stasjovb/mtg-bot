@@ -48,7 +48,7 @@ estimate.
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status |
 |---|---:|---:|---:|---|---|---|
 | Aura-attachment substrate | 7 | 4 | 633 | sprawling | medium-large (Phase 1 LANDED; Phases 2-4 deferred) | Phase 1 SHIPPED round 78 |
-| Static / layered abilities | 15 | 8 | 34,526 | sprawling | medium-large (layer-7 CDA + grants + Static frontier) | Phase 1 SHIPPED round 79 (anthem keyword-grant sub-shape; Tannuk admitted) |
+| Static / layered abilities | 15 | 8 | 34,526 | sprawling | medium-large (layer-7 CDA + grants + Static frontier) | Phase 1 SHIPPED round 79 / Phase 2 round 80 / Phase 3 round 81 / Phase 3.5 round 82 (Mechan Shieldmate; 5/8 single-gated closed) |
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium (5 cards realizable; 18 deferred behind sibling substrates) | partial (5 shipped round 60) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED |
 | warp_cost (declined cost-mechanic) | 10 | 3 | 15,436 | medium | medium (Phase 1+1.5+2 SHIPPED rounds 67-cycle-7) | Phase 1/1.5/2 SHIPPED |
@@ -75,7 +75,7 @@ Filtered to substrates that are **(a) named-and-bounded** (not the
 diffuse Effect-uncovered / Non-safe-trigger tails), **(b) not already
 fully closed**, and ranked by **decks(1g) ÷ remaining-closure-scope**.
 
-### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling — Phase 1 SHIPPED round 79 / Phase 2 SHIPPED round 80 / Phase 3 SHIPPED round 81
+### (1) Static / layered abilities — 8 single-gated, 34,526 decks, sprawling — Phase 1 SHIPPED round 79 / Phase 2 SHIPPED round 80 / Phase 3 SHIPPED round 81 / Phase 3.5 (Mechan Shieldmate closure) SHIPPED round 82
 
 The dominant **un-shipped** named substrate by single-gate deck count.
 Includes Brightspear Zealot, Cloudsculpt Technician, Frenzied Baloth,
@@ -135,13 +135,26 @@ tags in the dispatch table — `control_permanent_is_artifact`
 `_printing_is_bridge_simple_static_self_conditional_creature` (9th
 disjunct of `_filter_deck_to_bridge_supported`).
 
-**Remaining honest-stops post-Phase-3:**
+**Phase 3.5 (round 82, 2026-05-20) — Mechan Shieldmate closure
+SHIPPED.** Extends the Phase-3 substrate with:
 
-* **Mechan Shieldmate** — `ControlledArtifactEnteredThisTurn`
-  Condition + `RemoveKeyword(defender)` payload. Condition is
-  outside the Phase-3 two-tag table; Rust reader doesn't fold
-  layer-6 keyword-removal yet. Needs a Phase-3.5 slice that adds
-  both the Condition tag and the keyword-remove fold.
+* A third condition tag `controlled_artifact_entered_this_turn`
+  in the dispatch table (Python + Rust + parse whitelist),
+  reading a new per-Player counter
+  `artifacts_entered_under_your_control_this_turn` bumped in
+  `drain_pending_etb_dispatches` (the centralized bf-entry
+  chokepoint) and reset at cleanup, mirroring Python.
+* A layer-6 `RemoveKeyword` payload arm in
+  `_static_ability_to_self_conditional_bonus` and the
+  `removed_keywords` 6th tuple slot in `static_self_bonuses` /
+  `StaticSelfBonus`. The `battlefield_has_keyword` Rust reader
+  applies REMOVE folds AFTER the positive (printed + UEOT +
+  aura-grant + anthem-grant + self-grant) hit — additive ADDs
+  minus per-source REMOVEs — mirroring Python's post-walk
+  `kws.discard(payload.keyword)`. Closes Mechan Shieldmate.
+
+**Remaining honest-stops post-Phase-3.5:**
+
 * **Rampaging Soulrager** / **Wildfire Wickerfolk** — not in the
   current EoE data snapshot; honest-stopped pending refresh +
   per-Condition slice (`UnlockedDoorsAmongRoomsAtLeast` /
