@@ -4954,6 +4954,158 @@ def _printing_is_bridge_simple_static_anthem_creature(printing) -> bool:
     return True
 
 
+def _static_ability_is_simple_uncounterable_grant(ability) -> bool:
+    """True iff ``ability`` is a Phase-2 bridge-admittable
+    uncounterable-grant static — a SELF-scoped sentinel that flips
+    only ``grants_creature_spells_uncounterable=True``, with no
+    continuous_effect and no condition.
+
+    **Static / layered abilities substrate — Phase 2 (round-80,
+    2026-05-20).** Mirrors the shape ``parser/creature_builder.py``
+    emits for Frenzied Baloth's "Creature spells you control can't
+    be countered." line — exactly one StaticAbility carrying:
+
+      * ``scope == "self"``
+      * ``grants_creature_spells_uncounterable is True``
+      * ``continuous_effect is None``
+      * ``condition is None``
+      * Every other slot at its default (no power_bonus /
+        toughness_bonus / granted_keywords / replacement_effect /
+        tier_threshold / room_half / grants_no_max_hand_size).
+
+    A printing-level flag on Rust's ``CardPrinting`` does the same
+    job (avoiding a per-StaticAbility Rust slot for a single shape).
+    The Python predicate stays at StaticAbility granularity so the
+    parser's per-line emit shape round-trips cleanly.
+    """
+    from mtg_bot.cards.base import StaticScope
+
+    if ability.scope not in (StaticScope.SELF, "self"):
+        return False
+    if not ability.grants_creature_spells_uncounterable:
+        return False
+    if ability.continuous_effect is not None:
+        return False
+    if ability.condition is not None:
+        return False
+    if ability.replacement_effect is not None:
+        return False
+    if ability.power_bonus or ability.toughness_bonus:
+        return False
+    if ability.granted_keywords:
+        return False
+    if ability.tier_threshold:
+        return False
+    if ability.room_half is not None:
+        return False
+    if ability.grants_no_max_hand_size:
+        return False
+    return True
+
+
+def _printing_is_bridge_simple_uncounterable_creature(printing) -> bool:
+    """True iff a CardPrinting is a Phase-2 bridge-supported
+    uncounterable creature.
+
+    **Static / layered abilities substrate — Phase 2 (round-80,
+    2026-05-20; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_
+    INVENTORY.md`` §3 lever (1) Phase 1's honest-stop list).** Closes
+    the substrate for Frenzied Baloth — the canonical EoE single-
+    gated carrier of the ``grants_creature_spells_uncounterable``
+    flag. Frenzied Baloth has BOTH the cast-side
+    ``spell_is_uncounterable=True`` ("This spell can't be
+    countered.") AND a battlefield-static
+    ``grants_creature_spells_uncounterable`` rider ("Creature spells
+    you control can't be countered."), so this predicate admits both
+    in one disjunct.
+
+    **Substrate carriers.**
+    * The bridge dict carries the cast-side flag at
+      ``printing_dict["spell_is_uncounterable"]`` (omitted when
+      False, back-compat).
+    * The grant flag is carried at
+      ``printing_dict["grants_creature_spells_uncounterable"]``
+      (omitted when False, back-compat).
+    * Rust's ``CardPrinting`` carries both as bool slots; the
+      ``Effect::CounterTargetSpell`` resolver consults them at
+      counter-resolve time (CR 101.2 gate), mirroring Python's
+      ``CounterTargetSpell._is_uncounterable`` walk.
+    * Python's ``CardPrinting.static_abilities`` materializes the
+      grant flag as a sentinel
+      ``StaticAbility(grants_creature_spells_uncounterable=True)``
+      via :func:`_card_def_to_python_printing` so the Python walk
+      fires too.
+
+    **Defensive §2 teeth.** The simple-creature filter applies
+    UNCHANGED except for the ``static_abilities`` ban — replaced
+    with a positive allowlist of the uncounterable-grant sentinel
+    shape via :func:`_static_ability_is_simple_uncounterable_grant`.
+    The cast-side flag ``spell_is_uncounterable`` is admitted on the
+    printing-level bool slot.
+
+    **Honest-stop:** Frenzied Baloth's "Combat damage can't be
+    prevented." rider (``combat_damage_cant_be_prevented=True`` on
+    the Python CardPrinting) does NOT round-trip through the bridge
+    — the Rust side doesn't model damage prevention at all (no EoE
+    preventer card has landed), so the bridge silently drops it. The
+    rider is parity-clean as long as no probe drives a prevention
+    source against a creature whose damage is gated by this flag.
+    This mirrors the Tannuk ``hand_ability_grants`` honest-stop
+    precedent — admit the card now, surface a later divergence
+    loudly when a future probe path drives the missing rider.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    if printing.triggered_abilities:
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
+    if printing.activated_abilities:
+        return False
+    # Must carry EITHER spell_is_uncounterable OR an
+    # uncounterable-grant static (or both — Frenzied Baloth has both).
+    has_cast_flag = bool(
+        getattr(printing, "spell_is_uncounterable", False)
+    )
+    if printing.static_abilities:
+        for ability in printing.static_abilities:
+            if not _static_ability_is_simple_uncounterable_grant(ability):
+                return False
+        has_grant_static = True
+    else:
+        has_grant_static = False
+    if not (has_cast_flag or has_grant_static):
+        # Neither flag set — falls through to the plain simple-creature
+        # path (where the empty-static-abilities case is the back-compat
+        # default for vanilla creatures).
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
@@ -5155,6 +5307,41 @@ def _printing_to_card_def(printing) -> CardDef:
             mana_cost_colored=colored,
             spell_effect=_python_spell_effect_to_dict(
                 printing.spell_effect),
+        )
+    if _printing_is_bridge_simple_uncounterable_creature(printing):
+        # Static / layered abilities substrate — Phase 2 (round-80,
+        # 2026-05-20). Frenzied Baloth arm. Threads the two
+        # uncounterable flags through to the CardDef. Sits ABOVE the
+        # anthem-creature arm because the anthem predicate would
+        # decline the printing (its static_abilities are SELF-scoped
+        # sentinels, not anthem-scoped grants) — order doesn't
+        # functionally matter for these two predicates, but the arm
+        # ordering mirrors the predicate-disjunct order in
+        # ``_filter_deck_to_bridge_supported`` (anthem before
+        # uncounterable would already drop here for Frenzied Baloth
+        # since its statics aren't anthem-shape). Keywords ride the
+        # standard SAFE-keyword tuple shape (haste, trample).
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
+            spell_is_uncounterable=bool(
+                getattr(printing, "spell_is_uncounterable", False)
+            ),
+            grants_creature_spells_uncounterable=any(
+                getattr(sa, "grants_creature_spells_uncounterable", False)
+                for sa in printing.static_abilities
+            ),
         )
     if _printing_is_bridge_simple_static_anthem_creature(printing):
         # Static / layered abilities substrate — Phase 1 first-
@@ -6054,6 +6241,27 @@ def _filter_deck_to_bridge_supported(
             # Baloth / Rampaging Soulrager / Wildfire Wickerfolk
             # each fall outside this Phase-1 admit shape).
             or _printing_is_bridge_simple_static_anthem_creature(printing)
+            # Static / layered abilities substrate — Phase 2 (round-80,
+            # 2026-05-20): the 8th disjunct admits a creature whose
+            # static_abilities consist of one uncounterable-grant
+            # sentinel ``StaticAbility(grants_creature_spells_
+            # uncounterable=True)`` AND/OR whose printing carries
+            # ``spell_is_uncounterable=True``. Frenzied Baloth is the
+            # canonical EoE single-gated carrier — has BOTH (the cast-
+            # side flag and the battlefield-static rider). Closing
+            # this admits Frenzied Baloth through the loader filter.
+            # Rust-side gate rides the printing-level bool slots
+            # (``spell_is_uncounterable`` /
+            # ``grants_creature_spells_uncounterable``) consulted by
+            # ``Effect::CounterTargetSpell`` and the round-7
+            # ``counter_spell`` primitive. The remaining 6 of the 7
+            # honest-stops from Phase 1 stay honest-stopped
+            # (Brightspear / Cloudsculpt / Gravblade / Mechan
+            # Shieldmate / Rampaging Soulrager / Wildfire Wickerfolk
+            # all need per-Condition Rust ports + SELF-scope reader-
+            # site walks; Phase 2 sequencing reserves them for the
+            # next slice).
+            or _printing_is_bridge_simple_uncounterable_creature(printing)
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

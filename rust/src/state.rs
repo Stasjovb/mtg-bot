@@ -2729,6 +2729,11 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        // Static / layered abilities substrate — Phase 2 (round-80,
+        // 2026-05-20): synthetic-state printings have no
+        // uncounterable flags. Back-compat default.
+        spell_is_uncounterable: false,
+        grants_creature_spells_uncounterable: false,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -2799,6 +2804,11 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        // Static / layered abilities substrate — Phase 2 (round-80,
+        // 2026-05-20): synthetic-state printings have no
+        // uncounterable flags. Back-compat default.
+        spell_is_uncounterable: false,
+        grants_creature_spells_uncounterable: false,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2882,6 +2892,11 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        // Static / layered abilities substrate — Phase 2 (round-80,
+        // 2026-05-20): synthetic-state printings have no
+        // uncounterable flags. Back-compat default.
+        spell_is_uncounterable: false,
+        grants_creature_spells_uncounterable: false,
     });
     let registry = builder.snapshot();
 

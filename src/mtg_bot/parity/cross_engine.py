@@ -416,6 +416,29 @@ class CardDef:
     # Empty tuple = no anthem statics — the back-compat default for
     # every pre-substrate CardDef.
     static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Static / layered abilities substrate — Phase 2 (round-80,
+    # 2026-05-20). Frenzied Baloth's "This spell can't be countered."
+    # rider — a cast-side per-printing flag. ``False`` is the back-
+    # compat default for every pre-Phase-2 CardDef; the bridge omits
+    # the ``spell_is_uncounterable`` registry-dict key when False,
+    # keeping every pre-substrate registry dict byte-identical to
+    # pre-Phase-2.
+    spell_is_uncounterable: bool = False
+    # Static / layered abilities substrate — Phase 2 (round-80,
+    # 2026-05-20). Frenzied Baloth's "Creature spells you control
+    # can't be countered." rider — a battlefield-static cast-side
+    # gate. Encoded here as a per-printing flag (the simpler shape:
+    # one static-ability slot of ``grants_creature_spells_
+    # uncounterable=True``, scope=self, no continuous_effect). The
+    # Rust ``CounterTargetSpell`` resolve arm skips a creature stack
+    # item if any battlefield permanent under its controller carries
+    # this flag. Python materializes this CardDef field into one
+    # ``StaticAbility(scope="self",
+    # grants_creature_spells_uncounterable=True)`` so the Python
+    # ``CounterTargetSpell._is_uncounterable`` walk also fires. False
+    # is the back-compat default — the bridge omits the key when
+    # False.
+    grants_creature_spells_uncounterable: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -10747,6 +10770,15 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # pattern every other optional field uses.
     if card.aura_prevents_host_untap:
         printing_dict["aura_prevents_host_untap"] = True
+    # Static / layered abilities substrate — Phase 2 (round-80,
+    # 2026-05-20). Frenzied Baloth's two uncounterable flags. Emitted
+    # only when True so every pre-Phase-2 CardDef registry dict is
+    # byte-identical. Mirrors the ``aura_prevents_host_untap``
+    # omission pattern above.
+    if card.spell_is_uncounterable:
+        printing_dict["spell_is_uncounterable"] = True
+    if card.grants_creature_spells_uncounterable:
+        printing_dict["grants_creature_spells_uncounterable"] = True
     return printing_dict
 
 
@@ -11183,6 +11215,29 @@ def _card_def_to_python_printing(card: "CardDef"):
                     )
                 )
         static_abilities = tuple(sa_list)
+    # Static / layered abilities substrate — Phase 2 (round-80,
+    # 2026-05-20). Frenzied Baloth's "Creature spells you control
+    # can't be countered." rider — materialized as a sentinel
+    # ``StaticAbility(scope="self", grants_creature_spells_
+    # uncounterable=True, continuous_effect=None)`` so Python's
+    # ``CounterTargetSpell._is_uncounterable`` walk (which iterates
+    # ``obj.printing.static_abilities`` looking for this flag) fires
+    # at cast/counter time. This is the SAME shape the parser emits
+    # for Frenzied Baloth's third line. The flag attaches to the
+    # same ``static_abilities`` tuple as the Phase-1 anthems above,
+    # appended at the end so deterministic ordering is preserved
+    # (anthem-keyword statics first, then the uncounterable-grant
+    # sentinel).
+    if card.grants_creature_spells_uncounterable:
+        from mtg_bot.cards.base import StaticAbility
+        static_abilities = (
+            *static_abilities,
+            StaticAbility(
+                scope="self",
+                grants_creature_spells_uncounterable=True,
+                continuous_effect=None,
+            ),
+        )
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -11272,6 +11327,11 @@ def _card_def_to_python_printing(card: "CardDef"):
         # materialization block above. Empty tuple = no anthem
         # statics (back-compat default).
         static_abilities=static_abilities,
+        # Static / layered abilities substrate — Phase 2 (round-80,
+        # 2026-05-20). Frenzied Baloth's "This spell can't be
+        # countered." rider. ``False`` for every pre-Phase-2 CardDef
+        # (back-compat default — bit-identical CardPrinting).
+        spell_is_uncounterable=card.spell_is_uncounterable,
     )
 
 
