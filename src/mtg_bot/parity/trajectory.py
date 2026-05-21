@@ -1394,6 +1394,31 @@ _AURA_SAFE_EXTRA_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
+# Dynamic-P/T-formula substrate (round-78 + round-84). Admit-set for
+# the simple-creature bridge predicate's ``dynamic_pt_formula``
+# whitelist. Mirrors the Rust dispatch table in
+# ``state_ops_combat::dynamic_base_pt_pub`` (lockstep with Python's
+# ``game._dynamic_base_pt``). One entry per ROUND that landed a
+# formula shape end-to-end on both engines:
+#
+#   * ``"harmonious_grovestrider"`` — round-78 (CDA P=T=lands-controlled).
+#   * ``"cosmogoyf"`` — round-84 (CDA P=N, T=N+1 where
+#     N = controller's-exile-zone count).
+#
+# Honest-stopped (NOT in this set, still drop-at-filter):
+#
+#   * ``"emissary_escort"`` — printed-base + X-from-other-artifact-MV
+#     shape (different from the CDA-only dispatch arms above); the
+#     Rust dispatch table's ``_`` arm returns ``None`` for any
+#     unrecognized key, so admitting Escort would produce a 0/0
+#     creature on Rust. Escort's slice extends the dispatch table
+#     when it lands.
+_DYNAMIC_PT_FORMULA_ADMIT_SET: frozenset[str] = frozenset({
+    "harmonious_grovestrider",
+    "cosmogoyf",
+})
+
+
 # Phase 6 carddef-triggers slice: triggered-ability shapes that BOTH
 # engines model byte-for-byte today via the existing
 # ``cross_engine._ta_dict_to_python_predicate`` /
@@ -3725,30 +3750,34 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         loyalty
       * Mana cost is parseable into (generic, colored) — no hybrid /
         phyrexian / X / snow.
-      * Only the ``"harmonious_grovestrider"`` ``dynamic_pt_formula``
-        is admitted as of round-78 (the dynamic-P/T-formula substrate
-        landing). The CardDef bridge now carries
-        ``dynamic_pt_formula`` (a new optional string field;
+      * Admitted ``dynamic_pt_formula`` keys (as of round-84):
+        ``"harmonious_grovestrider"`` (round-78) and ``"cosmogoyf"``
+        (round-84, this slice). The CardDef bridge carries
+        ``dynamic_pt_formula`` (an optional string field;
         round-trips through ``_spec_card_to_printing_dict`` →
         Rust's ``parse_printing`` and back through
         ``_card_def_to_python_printing``); Rust's
         ``battlefield_creature_power`` /
         ``battlefield_creature_toughness`` /
-        ``collect_sba_victims`` honor the
-        ``"harmonious_grovestrider"`` arm via
+        ``collect_sba_victims`` honor each admitted key via
         ``state_ops_combat::dynamic_base_pt_pub`` in lockstep with
-        Python's ``game._dynamic_base_pt``. Sibling formulas
-        (``"cosmogoyf"`` / ``"emissary_escort"``) carry different
-        per-formula shapes and are honest-stopped Rust-side (the
-        dispatch table's ``_`` arm returns ``None`` for any
-        unrecognized key); they stay on the drop-at-filter path
-        until a per-card slice flips each one in lockstep across
-        both engines. The pre-round-78 rejection (which dropped
+        Python's ``game._dynamic_base_pt``. The remaining sibling
+        formula (``"emissary_escort"``) reads
+        ``printing.power`` / ``printing.toughness`` and ADDS X
+        (greatest mana value among other artifacts the controller
+        controls); the CDA-only ``dynamic_pt_formula`` arm this
+        dispatch table covers today sets the BASE from scratch, so
+        Escort is a different per-formula shape and is
+        honest-stopped Rust-side (the dispatch table's ``_`` arm
+        returns ``None`` for any unrecognized key); it stays on
+        the drop-at-filter path until a per-card slice extends the
+        dispatch table. The pre-round-78 rejection (which dropped
         EVERY ``dynamic_pt_formula`` carrier) was the round-39
         honest-stop precursor to this substrate; ``9c0d440f`` /
         ``9e71b63b`` did the drop, ``9c0d440f``'s SEARCH_LIMITATIONS
-        entry tracked the deferred substrate, and this slice
-        delivers the substrate.
+        entry tracked the deferred substrate, round-78 delivered
+        the substrate for Grovestrider, and round-84 extends it
+        for Cosmogoyf.
       * No ``ward_cost`` (round-39 fix — Harmonious Grovestrider,
         Mouth of the Storm, Famished Worldsire, Lionheart Glimmer).
         The CardDef bridge doesn't carry ``ward_cost``; the bridged
@@ -3796,23 +3825,22 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         return False
     if printing.station_threshold:
         return False
-    # Round-78 dynamic-P/T-formula substrate landing: the CardDef
-    # bridge now CARRIES ``dynamic_pt_formula`` (the substrate
-    # extension this round), and Rust's ``battlefield_creature_power``
-    # / ``battlefield_creature_toughness`` honor the
-    # ``"harmonious_grovestrider"`` arm in lockstep with Python's
-    # ``game._dynamic_base_pt``. Admit only the
-    # ``"harmonious_grovestrider"`` formula key today; sibling
-    # formulas (``"cosmogoyf"`` / ``"emissary_escort"``) carry
-    # different per-formula shapes and are honest-stopped Rust-side
-    # (the dispatch table's ``_`` arm returns ``None`` for any
-    # unrecognized key, so admitting them would produce a 0/0
-    # creature on Rust — the very mistranslation the round-39 fix
-    # was guarding against). Future per-card slices flip the
-    # remaining keys in lockstep across both engines; until then
-    # they stay on the same drop-at-filter path.
+    # Dynamic-P/T-formula substrate (round-78 + round-84). The
+    # admit set is ``_DYNAMIC_PT_FORMULA_ADMIT_SET`` (module-level;
+    # see its docstring for the per-round closure history and the
+    # honest-stop on Emissary Escort). Rust's
+    # ``battlefield_creature_power`` /
+    # ``battlefield_creature_toughness`` /
+    # ``collect_sba_victims`` honor each admitted key via
+    # ``state_ops_combat::dynamic_base_pt_pub`` in lockstep with
+    # Python's ``game._dynamic_base_pt``. A formula key NOT in the
+    # admit set drops the printing here so we never ship a 0/0
+    # mistranslation on the Rust side.
     dpt_formula = getattr(printing, "dynamic_pt_formula", None)
-    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
+    if (
+        dpt_formula is not None
+        and dpt_formula not in _DYNAMIC_PT_FORMULA_ADMIT_SET
+    ):
         return False
     # Round-39 ward-cost fix (Harmonious Grovestrider et al.): see
     # docstring above for the substrate-honesty rationale. This
