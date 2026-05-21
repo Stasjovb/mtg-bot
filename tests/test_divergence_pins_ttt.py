@@ -525,8 +525,14 @@ def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick
         f"Preceding window:\n{preceding_window!r}"
     )
 
-    # 2. Rust source: move_source_post_resolve still gates the stamp
-    #    on ``&& creature`` (the CR-canonical reference behavior).
+    # 2. Rust source: move_source_post_resolve gates the
+    #    summoning_sick assignment on ZONE_BATTLEFIELD entry and
+    #    stamps `creature` (the Python-mirroring shape that ALSO
+    #    clears the flag to `false` for non-creatures — needed for
+    #    Aura/Equipment/Enchantment non-creature permanents that
+    #    land on bf with the deck-loader's default `summoning_sick =
+    #    true` flag. Updated 2026-05-20 with the cast-time
+    #    auto-resolve seat alignment slice (Tractor Beam closure).
     test_file_path = pathlib.Path(__file__).resolve()
     repo_root = test_file_path.parents[1]
     rust_resolve_path = repo_root / "rust" / "src" / "state_ops_resolve.rs"
@@ -536,12 +542,19 @@ def test_cross_engine_real_eoe_atomic_microsizer_non_creature_etb_summoning_sick
     assert fn_start >= 0, (
         f"Rust source should contain the function signature {fn_sig!r}."
     )
-    fn_body = rust_src[fn_start:fn_start + 2000]
-    assert "if dest_zone == ZONE_BATTLEFIELD && creature {" in fn_body, (
-        "Rust's move_source_post_resolve should still gate the "
-        "summoning_sick=true stamp on '&& creature' (CR-canonical "
-        "creature-only discipline -- the reference behavior Python "
-        f"converged on).  Function body excerpt:\n{fn_body[:800]!r}..."
+    fn_body = rust_src[fn_start:fn_start + 3000]
+    assert "if dest_zone == ZONE_BATTLEFIELD {" in fn_body, (
+        "Rust's move_source_post_resolve should gate the "
+        "summoning_sick stamp on the ZONE_BATTLEFIELD-entry branch. "
+        f"Function body excerpt:\n{fn_body[:1000]!r}..."
+    )
+    assert "obj.summoning_sick = creature;" in fn_body, (
+        "Rust's move_source_post_resolve should stamp "
+        "`obj.summoning_sick = creature;` on bf entry — explicitly "
+        "clearing the flag to false for non-creatures (the "
+        "deck-loader default is true; relying on the default would "
+        "preserve the cross-engine divergence on non-creature ETBs). "
+        f"Function body excerpt:\n{fn_body[:1000]!r}..."
     )
 
     # 3. EoE cards affected (illustrative; the closure applies to

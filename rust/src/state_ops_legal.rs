@@ -938,11 +938,27 @@ fn spell_targets_satisfiable(
             // controller_id` — the controller-restricted deviation;
             // the resolve arm's controller-only scan
             // `state_ops_resolve.rs:6285-6302`).
+            //
+            // **Walk BOTH battlefields and filter on
+            // `o.controller`** (NOT `state.players[controller_idx].
+            // battlefield`). A creature physically lives on its
+            // OWNER's battlefield list but its `controller` may have
+            // been flipped by a control-changing effect (Tractor
+            // Beam's `attached_grants_control` is the live driver —
+            // Aura-attachment Phase 2 S2). Python walks the combined
+            // `state.battlefield` and reads `o.controller_id`, so the
+            // owner-only walk pre-fix mis-narrowed the legal-target
+            // scan and missed control-flipped creatures the spell
+            // CAN legally target. Surfaced by the Tractor Beam
+            // bench-loader admit follow-up — arch14/s4/step2249
+            // LEGAL_SET_EQ asymmetry.
             Effect::BiosynthicBurstEffect => {
-                let any = state.players[controller_idx]
-                    .battlefield
-                    .iter()
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
                     .any(|o| {
+                        if o.controller != controller {
+                            return false;
+                        }
                         state
                             .registry
                             .lookup(o.printing_id)

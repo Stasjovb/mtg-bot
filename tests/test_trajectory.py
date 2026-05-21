@@ -717,7 +717,7 @@ def test_production_deck_to_deckspec_filters_unsupported_cards():
                 f"seated token {cd.name!r} must not be in any library"
             )
             continue
-        assert cd.card_type in ("Land", "Creature", "Instant", "Sorcery")
+        assert cd.card_type in ("Land", "Creature", "Instant", "Sorcery", "Enchantment")
         if cd.card_type == "Creature":
             assert cd.power is not None
             assert cd.toughness is not None
@@ -731,6 +731,12 @@ def test_production_deck_to_deckspec_filters_unsupported_cards():
             # token_printing_id, never the symbolic _token_card_def).
             assert isinstance(cd.spell_effect, dict)
             assert "_token_card_def" not in cd.spell_effect
+        if cd.card_type == "Enchantment":
+            # Phase-1/2 Aura admit: a bridge-simple Aura CardDef
+            # carries is_aura=True with the aura_* fields populated
+            # (round-79 first deliverable; expanded by Tractor Beam
+            # cast-time auto-resolve seat alignment 2026-05-20).
+            assert cd.is_aura is True
 
 
 def test_production_deck_to_deckspec_pads_to_target_size():

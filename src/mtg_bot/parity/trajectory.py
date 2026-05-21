@@ -4715,15 +4715,21 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     # Triggered / static / activated / spell-effect riders — other
     # Aura sub-shapes.
     #
-    # **Phase 3 / S4 (Pain for All closure; round-80, 2026-05-20).**
-    # Auras with one or more triggered abilities are admitted iff
-    # every trigger matches a Phase-3-safe shape per
+    # **Phase 3 / S4 (Pain for All closure; round-80, 2026-05-20)
+    # + Cast-time auto-resolve seat alignment (Tractor Beam closure,
+    # 2026-05-20).** Auras with one or more triggered abilities are
+    # admitted iff every trigger matches a Phase-3-safe shape per
     # :func:`_aura_triggers_are_phase3_safe`:
     #
     #   * ``ENTERS+IsSelf+TapEnchantedPermanent`` (Tractor-Beam
-    #     ETB-tap shape — Phase-2-S2-extension substrate). The
-    #     Tractor-Beam carrier itself is still declined below on
-    #     its lone-control + prevents_untap rider.
+    #     ETB-tap shape — Phase-2-S2-extension substrate).
+    #     **NOW ADMITTED end-to-end** post the cast-time auto-resolve
+    #     seat alignment slice (Rust ``apply_action`` drains the
+    #     ``EnchantTargetChoice`` synchronously after ``cast_aura``;
+    #     non-creature ``summoning_sick=false`` clear in
+    #     ``move_*_post_resolve``; aura-host-control revert helper for
+    #     non-SBA destroy sites; ``BiosynthicBurst`` legal/resolve scan
+    #     walks both bfs by controller).
     #   * ``ENTERS+IsSelf+PainForAllETBEffect`` (Pain for All ETB
     #     damage-to-any-target — the Aura Phase 3 first deliverable;
     #     Rust ``Effect::PainForAllETBEffect`` parity landed in the
@@ -4786,25 +4792,16 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     # S3 replacement riders — Phase 4; positively declined here.
     if printing.attached_grants_control and (
         not printing.attached_grants_lose_all_abilities
+    ) and (
+        not printing.attached_prevents_untap
     ):
-        # Lone control-grant without the lose-abilities wipe (no live
-        # EoE carrier matches this shape today, but stay defensive —
+        # Lone control-grant without the lose-abilities wipe AND
+        # without the don't-untap clause — no live EoE carrier matches
+        # this shape today (Tractor Beam pairs control-grant WITH the
+        # don't-untap rider, admitted below). Stay defensive —
         # admitting a control-only Aura would silently mistranslate
         # against a host that still has functional abilities the
-        # bench may rely on).
-        #
-        # **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
-        # The bench-loader admit for Tractor Beam (control-grant +
-        # prevents-untap + ETB-tap-self) is honest-stopped pending a
-        # cross-engine play-parity follow-up — the substrate IS
-        # plumbed through (``aura_prevents_host_untap`` field +
-        # Rust untap-step skip + ``TapEnchantedPermanent`` Aura ETB
-        # bridge), and the byte-equal round-trip + untap-step probe
-        # pass at substrate level. Full cross-engine play parity
-        # (the production-deck shadow bake-in) requires aligning
-        # Python's cast-time auto-resolve-target seat with Rust's
-        # for the Tractor-Beam shape under an opponent-creature host
-        # — a separate slice. SL-documented.
+        # bench may rely on.
         return False
     if printing.attached_grants_lose_all_abilities and (
         not printing.attached_grants_control
@@ -4818,7 +4815,14 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     if printing.attached_grants_subtype is not None:
         return False
-    if printing.attached_prevents_untap:
+    if printing.attached_prevents_untap and (
+        not printing.attached_grants_control
+    ):
+        # Lone don't-untap rider without the control-grant. Tractor
+        # Beam is the live EoE carrier pairing the two — admitted via
+        # the joint-shape gate above. Any future carrier with the
+        # bare don't-untap rider (Tilling Treefolk-shape) stays
+        # declined here pending a separate slice.
         return False
     if printing.replaces_first_tokens_with_copies:
         return False

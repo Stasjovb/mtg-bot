@@ -365,7 +365,7 @@ fn move_aura_to_owners_graveyard(
 /// Used by `move_aura_to_owners_graveyard` to decide whether to
 /// revert the host's controller after one control-granting Aura
 /// leaves. Single-pass over both bfs.
-fn bf_any_other_aura_grants_control(
+pub(crate) fn bf_any_other_aura_grants_control(
     state: &GameState,
     host_id: u32,
     excluding_aura_id: u32,
@@ -395,7 +395,7 @@ fn bf_any_other_aura_grants_control(
 /// host has no captured baseline (defensive — should not happen
 /// post-Phase-2-S2 attach but stays safe). Walks both bfs for the
 /// host since the host's controller may have already been flipped.
-fn revert_host_controller_from_baseline(
+pub(crate) fn revert_host_controller_from_baseline(
     state: &mut GameState,
     host_id: u32,
 ) {
@@ -416,6 +416,62 @@ fn revert_host_controller_from_baseline(
             return;
         }
     }
+}
+
+/// **Aura-attachment substrate — cast-time auto-resolve seat
+/// alignment follow-up (Tractor Beam closure, 2026-05-20).**
+///
+/// Call AFTER an object has left the battlefield to recompute the
+/// control state on its former host. If the leaving object was an
+/// Aura with `aura_grants_control` attached to a host, and no
+/// OTHER attached Aura on that host still grants control, revert
+/// the host's `controller` to its captured `controller_baseline`.
+///
+/// Mirrors Python's `_recompute_obj_controller` cache refresh after
+/// `move_off_battlefield` drops the control_change entry from the
+/// continuous-effect set (`turn.py:216-229`). This sits OUTSIDE the
+/// SBA destroy path (which already runs this dance inline at
+/// `move_aura_to_owners_graveyard`) so direct-destroy /
+/// sacrifice / exile / bounce arms in `state_ops_resolve.rs` that
+/// removed the Aura WITHOUT going through SBA can fire the same
+/// revert.
+///
+/// **Inputs.** `leaving_printing_id` + `prior_attached_to` are
+/// captured at the destroy site BEFORE the object's `attached_to`
+/// gets cleared on its way out. `leaving_obj_id` is the id of the
+/// Aura that just left (used to exclude self from the "any other
+/// attached Aura still grants control?" check).
+///
+/// **No-op cases (silent):**
+/// * The leaving object's printing is not an Aura or doesn't grant
+///   control.
+/// * `prior_attached_to` is `None` (Aura had no host bound at
+///   leave time — already fizzled / unattached).
+/// * Some OTHER attached Aura on the same host still grants
+///   control (its grant persists; revert would be wrong).
+/// * The host has no captured baseline (defensive — should not
+///   happen post-Phase-2-S2 attach but stays safe).
+pub(crate) fn revert_aura_host_control_on_leave(
+    state: &mut GameState,
+    leaving_obj_id: u32,
+    leaving_printing_id: u32,
+    prior_attached_to: Option<u32>,
+) {
+    let grants_control = state
+        .registry
+        .lookup(leaving_printing_id)
+        .map(|p| p.is_aura && p.aura_grants_control)
+        .unwrap_or(false);
+    if !grants_control {
+        return;
+    }
+    let Some(host_id) = prior_attached_to else {
+        return;
+    };
+    if bf_any_other_aura_grants_control(state, host_id, leaving_obj_id) {
+        return;
+    }
+    revert_host_controller_from_baseline(state, host_id);
 }
 
 /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner granted
