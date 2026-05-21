@@ -223,6 +223,47 @@ def test_phase3_safe_rejects_wrong_predicate_for_damage_echo():
     assert _aura_triggers_are_phase3_safe((ta,)) is False
 
 
+def test_phase3_safe_rejects_non_triggered_ability_input():
+    """Defensive: a non-``TriggeredAbility`` element in the input
+    tuple is rejected. Callers should pass parser-emitted
+    ``triggered_abilities`` tuples, but the gate stays honest
+    against accidental misuse."""
+    assert _aura_triggers_are_phase3_safe(("not_a_ta",)) is False
+
+
+def test_phase3_safe_rejects_wrong_predicate_subject_pain_for_all_etb():
+    """The ETB arm requires ``IsSelf(subject=None)`` — a non-None
+    subject slot (a different relational shape) is rejected so an
+    accidental subject-bound ETB doesn't get silently misrouted."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.bespoke import PainForAllETBEffect
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(subject="attacker"),
+        effect=PainForAllETBEffect(),
+    )
+    assert _aura_triggers_are_phase3_safe((ta,)) is False
+
+
+def test_phase3_safe_rejects_subject_bound_is_host_for_damage_echo():
+    """The damage-echo arm requires ``IsHost(subject=None)`` — the
+    multi-subject form (e.g. ``subject="attacker"``) is rejected
+    so a future equipment-shape DEALT_DAMAGE trigger doesn't
+    accidentally hit the Pain for All emitter arm."""
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsHost
+    from mtg_bot.effects.bespoke import PainForAllDamageEchoEffect
+
+    ta = TriggeredAbility(
+        event=Event.DEALT_DAMAGE,
+        predicate=IsHost(subject="attacker"),
+        effect=PainForAllDamageEchoEffect(),
+    )
+    assert _aura_triggers_are_phase3_safe((ta,)) is False
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 emitter
 # ---------------------------------------------------------------------------
