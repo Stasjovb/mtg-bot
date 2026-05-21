@@ -650,9 +650,11 @@ bidir round-trip); this slice wires the reader fold:
 
 **Phase 2 S2 remaining honest-stops + extensions:**
 
-- **Tractor Beam — substrate LANDED (2026-05-20), bench-loader
-  admit honest-stopped.** The Phase-2-S2-extension slice shipped
-  the full substrate plumbing:
+- **Tractor Beam — CLOSED (2026-05-20).** Substrate landed
+  Phase-2-S2-extension slice; bench-loader admit + cast-time
+  auto-resolve seat alignment closed the follow-up slice
+  `feature/tractor-beam-cast-time-autoresolve`. The Phase-2-S2-
+  extension slice shipped:
   - New `aura_prevents_host_untap` field on CardDef + Rust
     `CardPrinting` + bidir bridge round-trip via the new
     `get_printing_aura_prevents_host_untap` getter.
@@ -665,16 +667,32 @@ bidir round-trip); this slice wires the reader fold:
     (`_aura_triggers_are_phase2_s2_safe` +
     `_python_ta_to_safe_dict_aura_extension`) for the
     `Event.ENTERS + IsSelf + TapEnchantedPermanent` shape.
-  The byte-equal round-trip + untap-step game-state probe both
-  pass at substrate level (`tests/test_aura_substrate_phase_2_s2_extension.py`).
-  **The bench-loader admit predicate stays DECLINED** for the
-  Tractor-Beam shape (paired control + prevents_untap) — the
-  cross-engine production-deck shadow bake-in surfaced a
-  cast-time auto-resolve seat-alignment divergence (Python casts
-  Tractor Beam → put on the stack with a pending enchant-target
-  decision; Rust's auto-resolve fizzles with no selected target).
-  A separate follow-up slice closes that gap and flips the
-  bench-loader admit.
+  The cast-time auto-resolve seat alignment slice closed the
+  cross-engine play-parity gap by:
+  - Draining `EnchantTargetChoice` synchronously after `cast_aura`
+    in `rust/src/state_ops_actions.rs`'s `Action::CastSpell` arm
+    (mirrors Python's inline `_select_spell_targets` agent pick).
+  - Clearing `obj.summoning_sick = false` for non-creatures in
+    `move_source_post_resolve` / `move_aura_post_resolve` (Python
+    parity at `actions.py:3003-3006`).
+  - Reverting host-controller-baseline on non-SBA destroy paths
+    via the new `state_ops_sba::revert_aura_host_control_on_leave`
+    helper (wired into SeedshipImpact's destroy half; other
+    destroy sites can call it).
+  - Walking both bfs filtered by `o.controller` in
+    `BiosynthicBurstEffect`'s legal-target + resolve scans (the
+    pre-fix owner-bf-only scan missed control-flipped creatures).
+  The bench-loader admit predicate
+  (`src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_aura`)
+  now ADMITS Tractor Beam: the lone-control-grant decline requires
+  `not attached_prevents_untap`, the bare prevents-untap decline
+  requires `not attached_grants_control`, and the triggered-
+  abilities decline routes through `_aura_triggers_are_phase2_s2_safe`.
+  Production-deck shadow bake-in: arch2/seed1 (the original
+  step-874 honest-stop boundary) runs CLEAN to terminal at step
+  948; arch14/seed4 (collateral Tractor-Beam carrier surfaced by
+  the admit widen) runs CLEAN to terminal at step 2867. SL entry
+  flipped to CLOSED.
 - **Multi-Aura set-base-PT timestamp interleaving — LANDED
   (round-80, 2026-05-20).** CR 613.3b requires the latest set-base
   wins by timestamp when two set-base-PT Auras are on the same
@@ -848,12 +866,98 @@ the entire BLOCKED-genuinely_missing Aura residue is closed.**
 
 ### Phase 4 (Rust + bridge) — triggered-on-attach + replacement (S3, S4)
 
-Moonlit Meditation (S3, the only real-deck-count Aura at 633) needs
-the token-replacement substrate ON TOP of attach. The S4 trio (Chorale
-of the Void 2,783 / Cracked Skull / Sporogenic Infection) each need
-their missing bespoke Rust Effect + the unbridged trigger event ON TOP
-of attach — they are multi-gated, so even a complete attach substrate
-flips none of them alone. Largest blast radius, correctly last.
+**Status (2026-05-20, Chorale of the Void Effect-level substrate
+LANDED + Moonlit Meditation HONEST-STOPPED).** The Phase 4 first
+deliverable lands the Rust ``Effect::SacrificeSelfUnlessVoidActive``
+variant — the end-step "sacrifice unless Void is active" sustain
+trigger Chorale of the Void carries (and the canonical example of
+the Effect on the Python side). The Effect ships full byte-equal
+semantics with Python's ``SacrificeSelfUnlessVoidActive``
+(``effects/combinators.py:172-200``):
+
+* Parse + ``effect_to_pydict`` arms (``rust/src/cards.rs``).
+* Resolve arm (``rust/src/state_ops_resolve.rs``): locate source
+  on its controller's battlefield → silent no-op if off-bf
+  (Python parity ``combinators.py:186-188``); read the two
+  engine-wide void flags
+  (``permanent_left_battlefield_this_turn ||
+  spell_warped_this_turn``); silent no-op if Void active
+  (Python parity ``combinators.py:189-193``); else
+  ``sacrifice_source_inline`` (Python parity
+  ``combinators.py:197``).
+* Cross-engine bridge arm (``cross_engine.py``): Rust
+  ``{"kind": "sacrifice_self_unless_void_active"}`` ↔ Python
+  ``SacrificeSelfUnlessVoidActive()``.
+
+**HONEST-STOPS in this slice.**
+
+1. **Chorale of the Void's second triggered ability** —
+   ``ATTACKS + IsHost(subject="attacker") +
+   ReanimateTargetCreatureCardFromDefendersGraveyard`` —
+   needs targeted-graveyard substrate not yet in Rust
+   (no ``PendingDecision::GraveyardCardChoice``, no
+   targeting pump for "card-in-opponent-graveyard"). The
+   ``_aura_triggers_are_phase3_safe`` bench-loader gate is
+   all-or-nothing per the §2 discipline, so Chorale stays
+   declined at the loader until the reanimate substrate
+   lands. **Live-EoE admit delta this slice: +0 cards / +0
+   decks** — substrate-only landing in the slice-19
+   (Meltstrider's Resolve) / Pain-for-All-Effect-scaffolding
+   (``60fea01b``) tradition.
+
+2. **Moonlit Meditation (S3) honest-stopped.** The
+   ``replaces_first_tokens_with_copies=True`` rider is a
+   CR 614 token-creation replacement effect, keyed on the
+   Aura's ``attached_to`` host (copy template). Closing it
+   needs a Rust replacement-effect substrate:
+   - Rust ``CardPrinting.aura_replaces_first_tokens_with_copies``
+     field.
+   - Per-player ``tokens_created_this_turn_count`` state slot.
+   - Rust token-creation primitive that consults the active-
+     player's attached Auras for the replacement on the FIRST
+     token-creation per turn.
+   - CardDef bridge round-trip for the new field.
+   - Loader admit predicate widening.
+   That is a multi-piece substrate of its own; out of scope
+   for Phase 4's first deliverable. Loader stays declined at
+   the S3 ``replaces_first_tokens_with_copies`` check.
+
+**Pin set.** ``tests/test_aura_substrate_phase_4.py`` — 9 tests
+covering bridge round-trip, both Void-flag sources (LTB +
+warp), Void-inactive sacrifice via real-EoE Chorale printing,
+Python parity (mirror semantics with the Python source of
+truth), and the two Phase-4 honest-stop negative pins (Chorale
++ Moonlit stay declined) + a Phase-3-admit-regression check
+(Pain for All still admits unchanged).
+
+**Test surface deltas (post-Phase-4 substrate landing).**
+219/219 ``tests/test_aura_substrate*.py`` green;
+1255/1255 ``parity_smoke + cross_engine_*`` green;
+223/223 ``tests/test_rust_*.py`` green.
+
+#### Remaining Phase 4 follow-ups
+
+* **Chorale of the Void full admit** — ship Rust
+  ``Effect::ReanimateTargetCreatureCardFromDefendersGraveyard``
+  (with targeted-graveyard decision substrate
+  + ``PendingDecision::GraveyardCardChoice`` + bf-injection +
+  tapped/attacking field stamps + ETB dispatch). Once that
+  lands, widen ``_aura_triggers_are_phase3_safe`` to admit
+  both Chorale triggers. Unlocks 2,783 17lands decks
+  end-to-end byte-equal.
+* **Cracked Skull / Sporogenic Infection** (S4 multi-gated,
+  0 17lands decks each) — DEALT_DAMAGE+IsHost+Destroy
+  EnchantedPermanent + ENTERS+Look/Sacrifice shapes. Each
+  needs its own Effect variant slice.
+* **Moonlit Meditation full admit** — ship the token-
+  replacement substrate listed above. Unlocks 633 17lands
+  decks.
+
+#### Original (pre-substrate-landing) plan
+
+The original §3 Phase 4 framing remains valid as the rest-of-
+phase scoping (the per-card sub-shape S3/S4 carriers were
+described as "largest blast radius, correctly last"):
 
 ### Recommended round-62 pick
 

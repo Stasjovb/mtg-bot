@@ -427,7 +427,77 @@ impl GameState {
                             (card_id, player_id),
                         )?
                         .extract()?;
-                    if !cast_aura_ok {
+                    if cast_aura_ok {
+                        // **Cast-time auto-resolve seat alignment
+                        // (Phase 2 S2 extension follow-up — Tractor Beam
+                        // closure, 2026-05-20).**
+                        //
+                        // Python parity: `_select_spell_targets`
+                        // (`actions.py:1337-1357`) binds the chosen
+                        // enchant target **synchronously at cast time**
+                        // by invoking `p.agent.choose_target(...)` inline,
+                        // BEFORE the spell's StackItem leaves
+                        // `_cast_spell`. The bound target rides on the
+                        // StackItem; resolve reads it via the
+                        // `target_obj_id` slot. Rust's `cast_aura`
+                        // primitive (state_ops_cast.rs Phase 9) instead
+                        // pushes a `PendingDecision::EnchantTargetChoice`
+                        // onto the pending-decisions queue and returns
+                        // with the StackItem's `target_obj_id = None`
+                        // — leaving the binding for a later
+                        // `submit_enchant_target_decision(...)` /
+                        // `auto_resolve_pending_decisions(...)` call.
+                        //
+                        // Without an apply_action-side auto-drain the
+                        // cross-engine bench-loader path
+                        // (`step_both` + `drain_stack_both`) fizzles the
+                        // Aura on Rust: the next
+                        // `resolve_top_of_stack` reads
+                        // `top.target_obj_id = None`, routes through
+                        // `move_aura_post_resolve` with `target_obj_id =
+                        // None`, and the Aura goes to graveyard
+                        // (CR 608.2b illegal-target shape). Python
+                        // attaches normally because its agent picked the
+                        // target inline at cast time. Documented at
+                        // `docs/SEARCH_LIMITATIONS.md` under the
+                        // "Tractor Beam bench-loader admit honest-stop"
+                        // entry — a production-deck shadow bake-in
+                        // divergence at archetype 2 / seed 1 / step 874.
+                        //
+                        // Fix: drain the pending decision with the
+                        // deterministic-first `"default"` strategy
+                        // (the `EnchantTargetChoice` arm at
+                        // `state_ops_decisions.rs:518-555` binds
+                        // `candidates[0]` to the StackItem's
+                        // `target_obj_id` via
+                        // `bind_enchant_target_to_stack_item`). Mirrors
+                        // the `_PickFirstLegalTargetAgent` bench/probe
+                        // convention every other cast-time target picker
+                        // already uses (Radiant Strike, Focus Fire,
+                        // Seedship Impact).
+                        //
+                        // **Why scoped to the `cast_aura_ok=true`
+                        // branch.** `cast_spell_noncreature` and
+                        // `cast_creature` already bind their
+                        // deterministic-first target inline (see the
+                        // round-70 spell-card-bridge lever and the
+                        // round-4 creature path) — they DO NOT queue
+                        // any pending decisions. Draining here only
+                        // affects the Aura cast path. The `empty
+                        // candidates` aura cast (no legal hosts; cast
+                        // still completes per Python parity at
+                        // `actions.py:1354`) skips the
+                        // `pending_decisions.push` inside `cast_aura`
+                        // so the auto-resolve walk is a no-op for that
+                        // case — exactly the same shape Python's
+                        // `_select_spell_targets` produces when `legal`
+                        // is empty.
+                        let mut state = slf.borrow_mut();
+                        crate::state_ops_decisions::auto_resolve_pending(
+                            &mut state,
+                            "default",
+                        )?;
+                    } else {
                         let cast_spell_ok: bool = slf
                             .call_method1(
                                 "cast_spell_noncreature",

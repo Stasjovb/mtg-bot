@@ -332,8 +332,23 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
     // Take from current zone; if not found, treat as silent no-op.
     let (mut obj, controller, _src_zone) = take_source(state, source_obj_id)?;
     obj.zone = dest_zone;
-    if dest_zone == ZONE_BATTLEFIELD && creature {
-        obj.summoning_sick = true;
+    if dest_zone == ZONE_BATTLEFIELD {
+        // CR 302.1: only creatures have summoning sickness. A
+        // permanent's pre-bf `summoning_sick` is `true` by default
+        // (the deck-loader sets every library card to `true` for
+        // parity with Python's universal default). On battlefield
+        // entry, Python's `put_into_battlefield`
+        // (`actions.py:3003-3006`) EXPLICITLY clears the flag for
+        // non-creatures and stamps it `true` for creatures — neither
+        // branch relies on the default. Mirror that here so an
+        // Enchantment / Artifact / Planeswalker / Battle (or an Aura
+        // routed through this mover) doesn't carry a stale `true`
+        // summoning-sick bit onto the battlefield. Without the else
+        // branch, non-creature permanent casts diverge from Python on
+        // the per-object summoning_sick slot in the field-view /
+        // fingerprint (surfaced by the Tractor Beam production-deck
+        // shadow bake-in at archetype 2 / seed 1 / step 874).
+        obj.summoning_sick = creature;
     }
     // CE4 closure: when this resolution lands the source on the
     // battlefield (ResolveCreature / ResolveArtifact / Enchantment /
@@ -478,6 +493,15 @@ fn move_aura_post_resolve(
         obj.zone = ZONE_BATTLEFIELD;
         obj.attached_to = Some(host_id);
         obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
+        // CR 302.1: only creatures have summoning sickness. Auras are
+        // Enchantments — clear the summoning-sick flag the deck
+        // loader stamped on cards-in-library to mirror Python's
+        // `put_into_battlefield` `actions.py:3003-3006` non-creature
+        // branch. Without this, the resolved Aura carries a stale
+        // `summoning_sick=true` onto the bf (surfaced by the Tractor
+        // Beam production-deck shadow bake-in at archetype 2 / seed
+        // 1 / step 874).
+        obj.summoning_sick = false;
         // Sticky-controller convention: the Aura's controller is the
         // resolving spell's controller (the caster). Already set by
         // cast_aura's rehome path, but assert it via the owner walk
@@ -6928,12 +6952,31 @@ fn apply_effect(
                 // `DepressurizeEffect` arm all retain `+1/+1` counters
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
+                //
+                // **Aura-attachment substrate — cast-time auto-resolve
+                // seat alignment follow-up (Tractor Beam closure,
+                // 2026-05-20).** Snapshot `attached_to` BEFORE we
+                // clear it so the aura-host-control revert helper can
+                // see the prior host. Mirrors Python's
+                // `_recompute_obj_controller` cache refresh after
+                // `move_off_battlefield` drops the control_change
+                // entry — without this, a Seedship-Impact-destroyed
+                // Tractor Beam leaves its host stuck under the
+                // caster's control (surfaced by arch14/s4/step2256
+                // STATE_EQ asymmetry).
+                let prior_attached_to = obj.attached_to;
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard)
                     .push(obj);
+                crate::state_ops_sba::revert_aura_host_control_on_leave(
+                    state,
+                    leaving_obj_id,
+                    printing_id,
+                    prior_attached_to,
+                );
                 // Round-29 Void LTB: target is artifact/enchantment;
                 // helper gates on the printing.
                 mark_left_battlefield_if_nonland(state, printing_id);
@@ -7562,52 +7605,75 @@ fn apply_effect(
                 }
             }
             if let Some(controller) = src_controller {
-                let cidx = controller as usize;
-                // Pick first creature on the CONTROLLER's bf (the
-                // controller-restricted deviation — Python's
-                // legal_targets is controller-only).
-                let target_id: Option<u32> = {
-                    let bf = &state.players[cidx].battlefield;
-                    let registry = &state.registry;
-                    bf.iter().find_map(|obj| {
-                        let printing = registry
-                            .printings
-                            .get(obj.printing_id as usize)?;
-                        if printing
-                            .card_types
-                            .iter()
-                            .any(|t| t == "Creature")
-                        {
-                            Some(obj.id)
-                        } else {
-                            None
-                        }
-                    })
-                };
-                if let Some(target_id) = target_id {
-                    let zone: &mut Vec<GameObject> = Arc::make_mut(
-                        &mut state.players[cidx].battlefield,
-                    );
-                    for obj in zone.iter_mut() {
-                        if obj.id == target_id {
-                            // +1/+1 counter (the established
-                            // saturating_add scalar shape).
-                            obj.counters =
-                                obj.counters.saturating_add(1);
-                            // 3-keyword UEOT grant (the proven
-                            // GrantKeyword push shape, lowercase).
-                            for kw in
-                                ["reach", "trample", "indestructible"]
-                            {
-                                obj.ueot_modifiers.push(
-                                    UeotModifier::GrantKeyword {
-                                        keyword: kw.to_string(),
-                                    },
-                                );
+                // Pick first creature CONTROLLED by `controller`
+                // across BOTH battlefields (the controller-restricted
+                // deviation — Python's legal_targets is controller-
+                // only, walking `state.battlefield` and filtering on
+                // `o.controller_id`). The OWNER-only walk pre-fix
+                // missed creatures whose controller had been flipped
+                // by a control-changing effect (Tractor Beam's
+                // `attached_grants_control`); surfaced by the
+                // bench-loader admit follow-up — arch14/s4/step2249.
+                let target_id: Option<u32> =
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            if obj.controller != controller {
+                                return None;
                             }
-                            // Untap it.
-                            obj.tapped = false;
-                            break;
+                            let printing = state
+                                .registry
+                                .printings
+                                .get(obj.printing_id as usize)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some(obj.id)
+                            } else {
+                                None
+                            }
+                        });
+                if let Some(target_id) = target_id {
+                    // Locate the target's OWNER's battlefield (the
+                    // physical zone is keyed on owner; controller is
+                    // a separate per-object slot the bf-walker reads
+                    // and the apply-loop also reads).
+                    let target_owner_idx: Option<usize> = (0..state
+                        .players
+                        .len())
+                        .find(|&pidx| {
+                            state.players[pidx]
+                                .battlefield
+                                .iter()
+                                .any(|o| o.id == target_id)
+                        });
+                    if let Some(oidx) = target_owner_idx {
+                        let zone: &mut Vec<GameObject> = Arc::make_mut(
+                            &mut state.players[oidx].battlefield,
+                        );
+                        for obj in zone.iter_mut() {
+                            if obj.id == target_id {
+                                // +1/+1 counter (the established
+                                // saturating_add scalar shape).
+                                obj.counters =
+                                    obj.counters.saturating_add(1);
+                                // 3-keyword UEOT grant (the proven
+                                // GrantKeyword push shape, lowercase).
+                                for kw in
+                                    ["reach", "trample", "indestructible"]
+                                {
+                                    obj.ueot_modifiers.push(
+                                        UeotModifier::GrantKeyword {
+                                            keyword: kw.to_string(),
+                                        },
+                                    );
+                                }
+                                // Untap it.
+                                obj.tapped = false;
+                                break;
+                            }
                         }
                     }
                 }
@@ -12715,6 +12781,71 @@ fn apply_effect(
                 }
                 player.life -= amount as i32;
             }
+        }
+        // **Aura Phase 4 (Chorale of the Void substrate landing) —
+        // SacrificeSelfUnlessVoidActive.** End-step "sacrifice this
+        // Aura unless Void is active". Mirrors Python's
+        // `SacrificeSelfUnlessVoidActive.resolve`
+        // (`effects/combinators.py:179-197`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal:
+        //
+        //   source = state.resolving_source  (Rust: source_obj_id on bf)
+        //   if source is None: return        (off-bf -> silent no-op)
+        //   if is_void_active(state): return (Void active -> log + no-op)
+        //   _sacrifice(state, source)        (Void NOT active -> sac)
+        //
+        // **Void state.** `state.is_void_active()` reads the engine-
+        // wide `permanent_left_battlefield_this_turn ||
+        // spell_warped_this_turn` flags (state.rs:2449-2455), set by
+        // the LeavesBattlefield event dispatch and the warp-cost
+        // cast path respectively. Same source of truth as Python's
+        // `is_void_active(state)` (game.py:724 — reads the
+        // `game.state` flags maintained by the same two dispatch
+        // sites).
+        //
+        // **Controller resolution.** Same pattern as the
+        // `SacrificeSelfUnlessTapPermanent` arm: prefer the transient
+        // `current_resolve_source_controller` set by the resolver
+        // around apply_effect, fall back to active_player. The end-
+        // step trigger fires for the active player (the player whose
+        // end step it is), so this transient is reliably populated
+        // for the Chorale shape.
+        Effect::SacrificeSelfUnlessVoidActive => {
+            // 1. Locate the source on its controller's bf. Mirrors
+            //    `SacrificeSelfUnlessTapPermanent` source-finder + the
+            //    Python `if source is None: return` fizzle at
+            //    combinators.py:186-188.
+            let controller_u8 = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller_u8 as usize;
+            let source_on_bf = state.players[controller_idx]
+                .battlefield
+                .iter()
+                .any(|o| o.id == source_obj_id);
+            if !source_on_bf {
+                // Off-bf -> silent no-op (Python parity:
+                // `if source is None: return` at combinators.py:186-188).
+                return Ok(());
+            }
+            // 2. If Void is active -> silent no-op (Python parity:
+            //    `if is_void_active(state): ...; return` at
+            //    combinators.py:189-193 — the Void-active branch just
+            //    logs and returns). Reads the same two engine-wide
+            //    flags as `Effect::ConditionalIfVoid` (line 14535):
+            //    `permanent_left_battlefield_this_turn ||
+            //    spell_warped_this_turn`. This is the byte-equal
+            //    Rust analogue of the pyo3 `is_void_active` getter
+            //    at state.rs:2449-2455.
+            let void_active = state.permanent_left_battlefield_this_turn
+                || state.spell_warped_this_turn;
+            if void_active {
+                return Ok(());
+            }
+            // 3. Otherwise -> sacrifice the source directly (Python
+            //    parity: `_sacrifice(state, source)` at
+            //    combinators.py:197).
+            sacrifice_source_inline(state, controller_idx, source_obj_id)?;
         }
         // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
         // "sacrifice this unless you tap an untapped permanent you

@@ -8230,71 +8230,76 @@ together.
 **Impact estimate**: **0 today** — no multi-grant Aura scenario in
 the live EoE pool. Forward-looking fix.
 
-## Aura Phase 2 S2 extension: Tractor Beam bench-loader admit honest-stopped (cross-engine cast-time seat alignment) (Aura-attachment Phase 2 S2 extension, 2026-05-20)
+## ~~Aura Phase 2 S2 extension: Tractor Beam bench-loader admit honest-stopped~~ — **CLOSED** (cast-time auto-resolve seat alignment, 2026-05-20)
 
-**Where**: `src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_aura`
-(the lone-control-grant decline at the §2 teeth, just before the
-`attached_prevents_untap` decline). Spec:
-`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 2 "remaining
-honest-stops + extensions".
-
-**What the shortcut is**: the Phase-2-S2-extension slice landed the
-full substrate plumbing for the Tractor Beam shape (`is_aura` +
+**Closure**: cast-time auto-resolve seat alignment slice landed
+(`feature/tractor-beam-cast-time-autoresolve`). The Rust
+`apply_action`'s `Action::CastSpell` arm
+(`rust/src/state_ops_actions.rs`) now drains the pending
+`EnchantTargetChoice` decision synchronously after `cast_aura`
+returns `true`, mirroring Python's `_select_spell_targets`
+(`actions.py:1337-1357`) which binds the chosen enchant target
+inline at cast time via `p.agent.choose_target(...)`. The
+deterministic-first arm in `state_ops_decisions.rs:518-555`
+(already shipped in Phase 1 STEP 3) does the actual bind via
+`bind_enchant_target_to_stack_item(candidates[0])`. The
+bench-loader admit predicate in
+`src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_aura`
+now ADMITS the Tractor-Beam shape (joint
 `attached_grants_control` + `attached_prevents_untap` +
-`ENTERS-IsSelf-TapEnchantedPermanent` ETB): new
-`aura_prevents_host_untap` field on CardDef + Rust `CardPrinting`
-+ bidir bridge round-trip via
-`get_printing_aura_prevents_host_untap`, Rust untap-step skip in
-`state_ops_steps.rs::untap_all_for_player_inline` (walks both
-players' battlefields to pre-compute the don't-untap host set, then
-skips during the active-player sweep), and the narrow
-Aura-ETB-trigger admit
-(`_aura_triggers_are_phase2_s2_safe` +
-`_python_ta_to_safe_dict_aura_extension`).
+ENTERS-IsSelf-TapEnchantedPermanent ETB); the narrow trigger
+admit is gated through `_aura_triggers_are_phase2_s2_safe`.
 
-**The bench-loader admit predicate stays declined for Tractor
-Beam** — the lone-control-grant decline + the
-`attached_prevents_untap` decline (one paragraph above) both keep
-Tractor Beam in the not-bridged sink. The byte-equal round-trip +
-untap-step game-state probe BOTH pass at substrate level
-(`tests/test_aura_substrate_phase_2_s2_extension.py`).
+**Three collateral Rust closures landed on the same slice** (all
+surfaced by the production-deck shadow bake-in once the bench
+admit relaxed):
 
-**Why it's OK**: a relaxed admit during Phase-2-S2-extension surfaces
-a cross-engine production-deck shadow bake-in divergence at
-archetype 2 / seed 1 / step 874: Python casts Tractor Beam → puts
-it on the stack with a pending enchant-target decision, while Rust's
-auto-resolve fizzles with no selected target → Tractor Beam goes
-to graveyard on Rust but stays attached on Python. The cast-time
-auto-resolve seat needs Python<->Rust alignment for the
-Tractor-Beam shape under an opponent-creature host. The substrate
-landing is the closure milestone for the BLOCKED-genuinely_missing
-tier shrink (2 → 1 — only Pain for All remains); the bench-loader
-admit waits on the follow-up alignment slice.
+* **`move_source_post_resolve` non-creature `summoning_sick` clear**
+  (`rust/src/state_ops_resolve.rs:330-353`). Pre-fix, the
+  post-resolve mover stamped `obj.summoning_sick = true` for
+  creatures but did NOT clear the flag for non-creatures, leaving
+  the deck-loader's default `summoning_sick = true` stuck on
+  Aura / Equipment / Enchantment / Artifact permanents landing on
+  bf. Python's `put_into_battlefield` (`actions.py:3003-3006`)
+  explicitly clears the flag for non-creatures; Rust now matches
+  via `obj.summoning_sick = creature;`. `move_aura_post_resolve`
+  ships the same clear inline (Auras are non-creatures).
 
-**Failure mode**: a future agent that widens the predicate to
-admit the Tractor-Beam shape WITHOUT fixing the cast-time seat
-alignment would re-trigger the production-deck shadow bake-in
-divergence at the same archetype 2 / seed 1 / step 874 boundary —
-guaranteed parity gap on any deck containing Tractor Beam.
+* **Aura-host-control revert on non-SBA destroy paths**
+  (`rust/src/state_ops_resolve.rs::Effect::SeedshipImpactEffect`
+  — representative carrier; new helper
+  `state_ops_sba::revert_aura_host_control_on_leave` is callable
+  from any destroy site). Pre-fix, only the SBA path
+  (`move_aura_to_owners_graveyard`) reverted the host's controller
+  from `controller_baseline` after a control-granting Aura left
+  bf. Direct destroy effects (Seedship Impact targeting Tractor
+  Beam) left the host stuck under the Aura-caster's control. The
+  new helper consolidates the revert logic; SeedshipImpact's
+  destroy half invokes it.
 
-**Fix-scope estimate**: ~3-5h Rust slice — align Rust's
-`cast_aura` auto-resolve target-seat with Python's
-`_select_spell_targets` aura branch + `actions.py:1354` flow
-under the agent-not-yet-bound case (the divergence is in HOW the
-candidate seat is bound on Rust before `move_aura_post_resolve` is
-called; Python's flow places a pending decision on the stack and
-the agent-or-bench seat picks via `pool[0]`, but Rust's
-auto-resolve under no-decision-binding races to fizzle). Drop the
-two `_printing_is_bridge_simple_aura` decline arms guarding the
-Tractor-Beam shape, re-run the production-deck shadow bake-in to
-confirm closure.
+* **`BiosynthicBurstEffect` legal-target + resolve scans walk both
+  bfs filtered by controller** (`rust/src/state_ops_legal.rs:941-958`
+  + `rust/src/state_ops_resolve.rs::Effect::BiosynthicBurstEffect`).
+  Pre-fix, both arms walked `state.players[controller_idx].
+  battlefield` (the owner's bf list) instead of filtering on
+  `o.controller` across both bfs. Python iterates the combined
+  `state.battlefield` and filters on `o.controller_id`; Rust now
+  matches via `bf_iter_etb_sorted(state).filter(|o| o.controller
+  == controller)`. The pre-fix narrowing missed creatures whose
+  controller had been flipped by a control-changing effect
+  (Tractor Beam's `attached_grants_control`).
 
-**Impact estimate**: +1 admit (Tractor Beam) on the bench at fix
-time. Deck-count delta is minimal (Tractor Beam appears in one
-17lands archetype — archetype 2 — and isn't a multi-copy mainstay).
-The substrate is the load-bearing closure for the
-BLOCKED-genuinely_missing tier shrink; the bench-admit delta is
-opportunistic.
+**Validation**: arch2/seed1/step874 (the original honest-stop
+boundary) runs CLEAN to terminal at step 948. arch14/seed4
+(collateral Tractor-Beam-carrying archetype surfaced by the admit
+widen) runs CLEAN to terminal at step 2867 post the three
+collateral closures. `tests/test_aura_substrate*.py` +
+`tests/test_parity_smoke.py` + `tests/test_cross_engine_*.py` +
+`tests/test_rust_*.py` all pass byte-equal.
+
+**Impact realized**: +1 admit (Tractor Beam) on the bench loader.
+`BLOCKED-genuinely_missing` tier 1 → 0 (only Pain for All remains
+in the BLOCKED-RUST-EFFECT inventory).
 
 ---
 

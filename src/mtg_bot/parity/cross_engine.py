@@ -8461,6 +8461,50 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PainForAllDamageEchoEffect,
         )
         return PainForAllDamageEchoEffect()
+    if kind == "sacrifice_self_unless_void_active":
+        # **Aura Phase 4 (Chorale of the Void substrate landing) --
+        # SacrificeSelfUnlessVoidActive bridge arm.** Rust's
+        # ``Effect::SacrificeSelfUnlessVoidActive`` (cards.rs unit
+        # variant added in this slice; parse + to_pydict arms
+        # immediately after the Pain for All damage-echo arm; resolve
+        # arm in ``state_ops_resolve.rs`` immediately after the Pain
+        # for All damage-echo arm) mirrors Python's
+        # ``SacrificeSelfUnlessVoidActive``
+        # (``effects/combinators.py:172-200``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``SacrificeSelfUnlessVoidActive()`` reconstructs the Python
+        # @dataclass(frozen=True) (mirrors the slice-19 / Pain for
+        # All / Command Bridge unit-variant precedent).
+        #
+        # **Full closure -- NOT honest-stop.** The Rust resolve arm
+        # ships full byte-equal semantics with Python: locate source
+        # on bf; if Void is active (either of the two engine-wide
+        # flags ``permanent_left_battlefield_this_turn`` /
+        # ``spell_warped_this_turn`` is set) return; else
+        # sacrifice the source. The Void-active gate reads the same
+        # two flags as Python's ``is_void_active(state)``
+        # (``game.py:724``), maintained by the same two engine-wide
+        # dispatch sites (LTB events + warp casts). The end-step
+        # trigger dispatcher (``Event::BeginningOfEndStep``) is
+        # already wired so the trigger fires byte-equal when the
+        # carrying Aura admits.
+        #
+        # **Aura admit boundary.** Chorale of the Void (the only EoE
+        # card with this Effect; 2,783 17lands decks) has a SECOND
+        # triggered ability -- the ATTACKS-event
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard``
+        # which needs targeted-graveyard substrate not yet in Rust.
+        # The bench-loader's
+        # ``_aura_triggers_are_phase3_safe`` gate is all-or-nothing
+        # per the §2 discipline, so Chorale stays declined at the
+        # loader until the reanimate substrate lands. This slice
+        # closes the FIRST of Chorale's two triggers byte-equal
+        # cross-engine; the second is a separate follow-up.
+        from mtg_bot.effects.combinators import (
+            SacrificeSelfUnlessVoidActive,
+        )
+        return SacrificeSelfUnlessVoidActive()
     if kind == "enchanted_creature_fights_target":
         # 19th Rust slice (honest-stop substrate landing) -- Meltstrider's
         # Resolve Aura ETB "fight" bridge arm. Rust's

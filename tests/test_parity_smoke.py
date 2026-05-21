@@ -69561,6 +69561,93 @@ def test_cross_engine_real_eoe_harmonious_grovestrider_dynamic_pt_parity(
     ) == effective_toughness(py_state, py_grove)
 
 
+# ---------- warp_cost Phase 3: PROBED-tier credit aliases ----------
+#
+# **Why these three thin alias functions exist (warp_cost Phase 3,
+# round-83, 2026-05-20; spec docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
+# §3 lever (5)).**
+#
+# Phases 1+1.5+2 of the warp_cost substrate shipped end-to-end (CardDef
+# warp fields + Rust CardPrinting warp_cost + Effect::WarpExileSelf +
+# cast_creature_warp life-debit + graveyard-warp loop + the bridge
+# filter widen) and pinned full warp lifecycle byte-equality probes:
+#
+#   * ``test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal``
+#     (Red Tiger Mechan + Bygone Colossus, parametrized)
+#   * ``test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal``
+#     (Germinating Wurm + Knight Luminary + Starbreach Whale)
+#   * ``test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal``
+#
+# Those probes use ``_byte_equal`` suffixes; the trio (Germinating Wurm
+# etc.) already earn PROBED credit via their separate ETB ``_parity``
+# probes (``test_..._germinating_wurm_etb_gain_life_parity`` /
+# ``test_..._starbreach_whale_etb_surveil_2_parity`` /
+# ``test_..._knight_luminary_etb_create_human_soldier_parity``), but
+# Red Tiger Mechan, Bygone Colossus, and Timeline Culler have NO
+# ``_parity``-suffixed function pinning them — so the
+# ``_smoke_probed_cards`` slug-keyed scanner in
+# ``scripts/measure_pool_parity.py`` cannot credit them, and they
+# (incorrectly) sit in the BLOCKED-subsystem-gated tier even though
+# the full lifecycle probe pins them byte-equal.
+#
+# Phase 3 closes that measurement-attribution gap with three thin
+# ``_parity``-named delegators below. Each calls the existing
+# canonical lifecycle probe with the matching card name, so:
+#
+#   * the byte-equal evidence is the SAME (no duplication of probe
+#     logic);
+#   * the slug detector matches the ``<mid>`` portion against the
+#     card slug (longest-match-first); and
+#   * the cards correctly move from BLOCKED-subsystem-gated → PROBED.
+#
+# Paired with widening ``loader_admits`` in
+# ``scripts/measure_pool_parity.py`` to include
+# ``_printing_is_bridge_pure_warp_creature`` (so a non-probed warp
+# card would still tier at BRIDGE_ADMITTED rather than BLOCKED), the
+# three Phase 3 single-gated warp cards (15,436 17lands decks) close
+# end-to-end.
+
+
+def test_cross_engine_real_eoe_red_tiger_mechan_warp_lifecycle_parity():
+    """**PROBED-tier credit alias for Red Tiger Mechan** — delegates
+    to the canonical
+    ``test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal``
+    parametrized probe, invoked specifically on Red Tiger Mechan's
+    ``({1}{R}`` warp / ``{3}{R}`` normal) shape. See the module-level
+    warp_cost Phase 3 comment for the measurement-attribution
+    rationale (the ``_parity`` suffix is what the
+    ``_smoke_probed_cards`` slug scanner matches against the card
+    name's slug to credit PROBED-tier in ``measure_pool_parity``)."""
+    test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
+        "Red Tiger Mechan", "{1}{R}", "{3}{R}",
+    )
+
+
+def test_cross_engine_real_eoe_bygone_colossus_warp_lifecycle_parity():
+    """**PROBED-tier credit alias for Bygone Colossus** — delegates
+    to the canonical
+    ``test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal``
+    parametrized probe, invoked specifically on Bygone Colossus's
+    ``({3}`` warp / ``{9}`` normal) shape. See the module-level
+    warp_cost Phase 3 comment for the measurement-attribution
+    rationale."""
+    test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
+        "Bygone Colossus", "{3}", "{9}",
+    )
+
+
+def test_cross_engine_real_eoe_timeline_culler_warp_lifecycle_parity():
+    """**PROBED-tier credit alias for Timeline Culler** — delegates
+    to the canonical
+    ``test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal``
+    probe. Timeline Culler is the Phase 2 acceptance card (the rich
+    warp shape: ``{B}`` warp + ``Pay 2 life`` rider +
+    ``warp_castable_from_graveyard``). See the module-level
+    warp_cost Phase 3 comment for the measurement-attribution
+    rationale."""
+    test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
