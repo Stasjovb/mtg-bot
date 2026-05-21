@@ -1,18 +1,21 @@
 """Tests for ``mtg_bot.worker_daemon_storage``.
 
-Phase 1 surface: the ``ArtifactUploader`` ABC, the
-``LocalFileUploader`` and ``NullUploader`` concrete impls, the
+Surface: the ``ArtifactUploader`` ABC, the ``LocalFileUploader`` /
+``NullUploader`` / ``S3ArtifactUploader`` concrete impls, the
 ``uploader_from_uri`` factory, and the deterministic
-``build_artifact_key`` helper. The ``S3ArtifactUploader`` stub is
-intentionally uncovered (``# pragma: no cover``) -- Phase 2 will
-add ``moto``-backed tests for it.
+``build_artifact_key`` helper. The S3 path uses ``moto[s3]`` to mock
+the AWS API in-process — no real network, no real creds.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 from urllib.parse import urlparse
 
+import boto3
 import pytest
+from botocore.exceptions import ClientError
+from moto import mock_aws
 
 from mtg_bot.worker_daemon_storage import (
     ArtifactUploader,
@@ -147,18 +150,214 @@ def test_factory_unsupported_scheme_raises():
         uploader_from_uri("ftp://nope/")
 
 
-# ---- S3 stub is not yet implemented -------------------------------------
+# ---- S3 uploader (Phase 2A — moto-backed) ------------------------------
 
 
-def test_s3_uploader_phase1_stub_raises_not_implemented():
-    # Document the contract: instantiating is fine (so factory
-    # wiring works), but calling upload raises until Phase 2.
-    up = S3ArtifactUploader(bucket="mtg-bot-artifacts-630589799985")
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+_S3_REGION = "us-east-1"
+_S3_BUCKET = "mtg-bot-artifacts-test"
+
+
+@pytest.fixture
+def s3_client(monkeypatch):
+    """A moto-mocked boto3 S3 client + bucket.
+
+    Sets dummy AWS creds in the environment so boto3's credential-
+    resolution chain finds something even on hosts that have no real
+    AWS config — moto intercepts the request before any real signing
+    matters, but the SDK still demands the variables exist.
+    """
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", _S3_REGION)
+    with mock_aws():
+        client = boto3.client("s3", region_name=_S3_REGION)
+        client.create_bucket(Bucket=_S3_BUCKET)
+        yield client
+
+
+def test_s3_uploader_happy_put_returns_s3_uri_and_writes_bytes(s3_client):
+    up = S3ArtifactUploader(bucket=_S3_BUCKET, client=s3_client)
+    uri = up.upload(
+        b"PAYLOAD", kind="npz",
+        stage_id="iter_020_sp_v13s",
+        shard_label="mac-1",
+        claim_id="iter_020:000042",
+    )
+    # URI scheme + bucket + deterministic key derived from inputs.
+    assert uri == (
+        "s3://mtg-bot-artifacts-test/"
+        "iter_020_sp_v13s/mac-1/iter_020_000042.npz"
+    )
+    # Bytes actually landed at the expected key.
+    obj = s3_client.get_object(
+        Bucket=_S3_BUCKET,
+        Key="iter_020_sp_v13s/mac-1/iter_020_000042.npz",
+    )
+    assert obj["Body"].read() == b"PAYLOAD"
+
+
+def test_s3_uploader_prefix_is_prepended_to_key(s3_client):
+    up = S3ArtifactUploader(
+        bucket=_S3_BUCKET, prefix="mtg-bot/prod/", client=s3_client,
+    )
+    uri = up.upload(
+        b"X", kind="npz",
+        stage_id="s", shard_label="w", claim_id="c1",
+    )
+    # Prefix's leading/trailing slashes are stripped, then joined with
+    # the build_artifact_key result via a single '/'.
+    assert uri == "s3://mtg-bot-artifacts-test/mtg-bot/prod/s/w/c1.npz"
+    s3_client.head_object(
+        Bucket=_S3_BUCKET, Key="mtg-bot/prod/s/w/c1.npz",
+    )
+
+
+def test_s3_uploader_empty_prefix_does_not_add_leading_slash(s3_client):
+    up = S3ArtifactUploader(bucket=_S3_BUCKET, prefix="", client=s3_client)
+    uri = up.upload(
+        b"X", kind="npz",
+        stage_id="s", shard_label="w", claim_id="c1",
+    )
+    # No empty path segment — the key starts with the stage_id.
+    assert uri == "s3://mtg-bot-artifacts-test/s/w/c1.npz"
+
+
+def test_s3_uploader_retry_overwrites_with_same_key_and_uri(s3_client):
+    """Determinism: re-uploading with the same inputs writes byte-
+    identical content to the same key and returns the same URI. This
+    is what makes upload retries safe — the coordinator can fetch the
+    URI once and get the correct bytes regardless of how many worker-
+    side retries happened."""
+    up = S3ArtifactUploader(bucket=_S3_BUCKET, client=s3_client)
+    uri_a = up.upload(
+        b"AAA", kind="npz",
+        stage_id="s", shard_label="w", claim_id="c",
+    )
+    uri_b = up.upload(
+        b"AAA", kind="npz",
+        stage_id="s", shard_label="w", claim_id="c",
+    )
+    assert uri_a == uri_b
+    obj = s3_client.get_object(
+        Bucket=_S3_BUCKET, Key="s/w/c.npz",
+    )
+    assert obj["Body"].read() == b"AAA"
+
+
+def test_s3_uploader_retries_on_throttling_then_succeeds(monkeypatch):
+    """A transient ``Throttling`` ClientError retries on the
+    backoff schedule and eventually succeeds. We use a hand-rolled
+    mock client because moto doesn't surface throttling failures."""
+    calls: list[int] = []
+
+    class FlakyClient:
+        def put_object(self, *, Bucket, Key, Body):
+            calls.append(1)
+            if len(calls) < 3:
+                raise ClientError(
+                    {"Error": {"Code": "Throttling", "Message": "slow down"}},
+                    "PutObject",
+                )
+            return {"ETag": '"abc"'}
+
+    # Skip the real backoff sleeps to keep the test wall-time tiny.
+    from mtg_bot import worker_daemon_storage as _wds
+
+    monkeypatch.setattr(_wds.time, "sleep", lambda *_a, **_k: None)
+    up = S3ArtifactUploader(
+        bucket=_S3_BUCKET, client=FlakyClient(),
+    )
+    uri = up.upload(
+        b"X", kind="npz",
+        stage_id="s", shard_label="w", claim_id="c",
+    )
+    assert uri == "s3://mtg-bot-artifacts-test/s/w/c.npz"
+    assert len(calls) == 3  # 1 initial + 2 retries before success
+
+
+def test_s3_uploader_fails_loud_on_permission_error_no_retry(monkeypatch):
+    """``AccessDenied`` is an operator-config bug; the uploader must
+    raise on the first attempt rather than burn the retry budget on
+    something that won't get better."""
+    calls: list[int] = []
+
+    class DeniedClient:
+        def put_object(self, *, Bucket, Key, Body):
+            calls.append(1)
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "nope"}},
+                "PutObject",
+            )
+
+    from mtg_bot import worker_daemon_storage as _wds
+
+    monkeypatch.setattr(_wds.time, "sleep", lambda *_a, **_k: None)
+    up = S3ArtifactUploader(
+        bucket=_S3_BUCKET, client=DeniedClient(),
+    )
+    with pytest.raises(ClientError, match="AccessDenied"):
         up.upload(
-            b"x", kind="npz",
+            b"X", kind="npz",
             stage_id="s", shard_label="w", claim_id="c",
         )
+    assert len(calls) == 1  # one attempt — no retry burn
+
+
+def test_s3_uploader_retries_exhausted_raises_last_transient_error(
+    monkeypatch,
+):
+    """If the throttling never clears within the retry budget, the
+    last ClientError surfaces so the claim-loop's error handling sees
+    it (the loop's own retry/back-off then either succeeds on a later
+    game or marks the daemon ERROR)."""
+    calls: list[int] = []
+
+    class AlwaysThrottlingClient:
+        def put_object(self, *, Bucket, Key, Body):
+            calls.append(1)
+            raise ClientError(
+                {"Error": {"Code": "SlowDown", "Message": "too fast"}},
+                "PutObject",
+            )
+
+    from mtg_bot import worker_daemon_storage as _wds
+
+    monkeypatch.setattr(_wds.time, "sleep", lambda *_a, **_k: None)
+    up = S3ArtifactUploader(
+        bucket=_S3_BUCKET, client=AlwaysThrottlingClient(),
+    )
+    with pytest.raises(ClientError, match="SlowDown"):
+        up.upload(
+            b"X", kind="npz",
+            stage_id="s", shard_label="w", claim_id="c",
+        )
+    # 1 initial + len(S3_RETRY_BACKOFF_S) retries = 4 attempts total.
+    assert len(calls) == 1 + len(_wds.S3_RETRY_BACKOFF_S)
+
+
+def test_s3_uploader_factory_returns_s3_uploader_for_s3_scheme():
+    """The factory wiring + the no-pragma path through ``uploader_from_uri``
+    builds an S3ArtifactUploader with the parsed bucket + prefix."""
+    # Constructing through the factory pulls in the real boto3 client
+    # path; patch it so we don't need AWS creds for this construct
+    # test.
+    fake = MagicMock()
+    import mtg_bot.worker_daemon_storage as _wds
+
+    real_init = _wds.S3ArtifactUploader.__init__
+
+    def patched_init(self, bucket, prefix="", *, client=None):
+        real_init(self, bucket, prefix, client=client or fake)
+
+    _wds.S3ArtifactUploader.__init__ = patched_init
+    try:
+        up = uploader_from_uri("s3://my-bucket/some/prefix")
+        assert isinstance(up, S3ArtifactUploader)
+        assert up.bucket == "my-bucket"
+        assert up.prefix == "some/prefix"
+    finally:
+        _wds.S3ArtifactUploader.__init__ = real_init
 
 
 # ---- ABC contract -------------------------------------------------------

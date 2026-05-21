@@ -40,6 +40,7 @@ import pytest
 
 from mtg_bot import worker_daemon
 from mtg_bot import worker_daemon_claim_loop as cl
+from mtg_bot.worker_daemon_storage import LocalFileUploader, NullUploader
 
 
 # ---------------------------------------------------------------------------
@@ -93,22 +94,16 @@ class FakeCoordinator:
                 return 204, b"", {}
             claim = self.claims_queue.pop(0)
             return 200, json.dumps(claim).encode("utf-8"), {}
+        if url.endswith("/v2/report_result"):
+            # Drop-off-protocol coord: small JSON ping carrying meta +
+            # URIs, not a multipart blob. The fake just records what
+            # the worker sent so tests can assert on the body shape.
+            self.reports_received.append(payload)
+            if self.report_script:
+                status, body = self.report_script.pop(0)
+                return status, json.dumps(body).encode("utf-8"), {}
+            return 200, json.dumps({"accepted": True}).encode("utf-8"), {}
         raise AssertionError(f"unexpected POST to {url}")
-
-    def http_post_multipart(
-        self,
-        url: str,
-        fields: dict[str, str],
-        files: dict[str, tuple[str, bytes, str]],
-        timeout: float = 30.0,
-    ) -> tuple[int, bytes, dict[str, str]]:
-        assert url.endswith("/v2/report_result"), url
-        meta = json.loads(fields["meta"])
-        self.reports_received.append(meta)
-        if self.report_script:
-            status, body = self.report_script.pop(0)
-            return status, json.dumps(body).encode("utf-8"), {}
-        return 200, json.dumps({"accepted": True}).encode("utf-8"), {}
 
 
 def _make_claim(game_idx: int, stage_id: str = "stage_X") -> dict:
@@ -174,7 +169,9 @@ def _build_loop(
         retry_backoff_s=retry_backoff_s,
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        # NullUploader keeps these unit tests focused on the wire
+        # surface (the integration test below covers a real upload).
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     loop = cl.ClaimLoopRunner(cfg, cbs, runner)
@@ -789,11 +786,14 @@ def test_claim_loop_plays_seeded_games_and_reports_each():
     assert snap["games_claimed_in_flight"] == 0
     assert len(fake.reports_received) == 4
     # Each report carries the corresponding claim_id and the
-    # callable-runner-produced "completed" outcome.
+    # callable-runner-produced "completed" outcome. The drop-off
+    # protocol wraps the per-game telemetry under ``meta`` (alongside
+    # the new ``npz_uri`` / ``replay_uri`` / size fields).
     for i, report in enumerate(fake.reports_received):
-        assert report["claim_id"] == f"stage_X:{i:06d}"
-        assert report["outcome"] == "completed"
-        assert report["shard_label"] == "test-worker"
+        meta = report["meta"]
+        assert meta["claim_id"] == f"stage_X:{i:06d}"
+        assert meta["outcome"] == "completed"
+        assert meta["shard_label"] == "test-worker"
 
 
 # ---------------------------------------------------------------------------
@@ -1115,9 +1115,10 @@ def test_claim_loop_runner_crash_reports_crashed_then_errors():
     assert state.error and "claim loop thread" in state.error
     assert "simulated runner crash" in state.error
     # The crash was reported to the coordinator before re-raise so
-    # the queue accounting stays sane.
+    # the queue accounting stays sane. The drop-off protocol wraps
+    # per-game telemetry under ``meta``.
     assert len(fake.reports_received) == 1
-    assert fake.reports_received[0]["outcome"] == "crashed"
+    assert fake.reports_received[0]["meta"]["outcome"] == "crashed"
 
 
 def test_claim_loop_fatal_4xx_on_claim_raises():
@@ -1151,7 +1152,7 @@ def test_claim_loop_setup_failure_marks_error():
         retry_backoff_s=(0.0,),
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "x", n_workers=1)
@@ -1237,7 +1238,7 @@ def test_claim_loop_runs_n_workers_threads_concurrently():
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "stage_X", n_workers=n_workers)
@@ -1298,7 +1299,7 @@ def test_claim_loop_threads_share_runner_setup():
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "stage_X", n_workers=3)
@@ -1357,7 +1358,7 @@ def test_claim_loop_bounded_join_fires_only_after_stop_requested(caplog):
         drain_join_timeout_s=0.25,
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "stage_X", n_workers=n_workers)
@@ -1446,7 +1447,7 @@ def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
-        http_post_multipart=fake.http_post_multipart,
+        artifact_uploader=NullUploader(),
     )
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "stage_X", n_workers=n_workers)
@@ -1464,10 +1465,15 @@ def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
 
 
 def test_default_http_get_post_against_local_flask(tmp_path):
-    """Exercise the stdlib-urllib path against a Flask app served on a
-    real port -- this is the only place we need to bind a socket, so
-    we use a single small test to cover all three transport functions
-    in one go."""
+    """Exercise the stdlib-urllib transport path against a Flask app
+    served on a real port -- this is the only place we need to bind a
+    socket, so we cover GET 200, GET 404, and POST JSON in one go.
+
+    (The drop-off-protocol rewrite removed the multipart POST path —
+    workers no longer multipart-POST the .npz blob; that's now a JSON
+    ping with a URI to shared storage. The S3 / file:// upload paths
+    are covered by ``tests/test_worker_daemon_storage.py``.)
+    """
     import socket
     import threading
     from werkzeug.serving import make_server
@@ -1486,15 +1492,6 @@ def test_default_http_get_post_against_local_flask(tmp_path):
     @app.route("/get404", methods=["GET"])
     def get404():
         return jsonify({"error": "nope"}), 404
-
-    @app.route("/multipart", methods=["POST"])
-    def multipart():
-        meta = request.form.get("meta")
-        npz = request.files.get("npz")
-        return jsonify({
-            "meta": meta,
-            "npz_bytes": npz.read().decode("utf-8") if npz else None,
-        })
 
     # Find a free port.
     s = socket.socket()
@@ -1515,18 +1512,6 @@ def test_default_http_get_post_against_local_flask(tmp_path):
 
         status, body, _ = cl._http_post_json(f"{base}/post200", {"x": 1})
         assert status == 200 and json.loads(body) == {"echo": {"x": 1}}
-
-        status, body, _ = cl._http_post_multipart(
-            f"{base}/multipart",
-            fields={"meta": '{"hello":"world"}'},
-            files={
-                "npz": ("0.npz", b"NPZ", "application/octet-stream"),
-            },
-        )
-        assert status == 200
-        parsed = json.loads(body)
-        assert parsed["meta"] == '{"hello":"world"}'
-        assert parsed["npz_bytes"] == "NPZ"
     finally:
         srv.shutdown()
 
@@ -1569,7 +1554,7 @@ def test_create_app_with_runner_factory_spawns_real_runner(tmp_path):
         # with mutable fields -- this is a fair test seam.
         cfg.http_get = fake.http_get
         cfg.http_post_json = fake.http_post_json
-        cfg.http_post_multipart = fake.http_post_multipart
+        cfg.artifact_uploader = NullUploader()
         cfg.retry_backoff_s = (0.0,)
         return real_factory(kind, cfg, cbs)
 
@@ -1607,26 +1592,126 @@ def test_create_app_with_runner_factory_spawns_real_runner(tmp_path):
     assert setup_calls[0] == ("http://coord:5099", "self_play", 2)
 
 
-def test_encode_multipart_round_trips_through_werkzeug():
-    """The hand-rolled multipart body parses cleanly via Werkzeug's
-    form parser -- that's what the coordinator's flask handler uses."""
-    body, content_type = cl._encode_multipart(
-        fields={"meta": '{"claim_id":"x:000001"}'},
-        files={
-            "npz": ("0.npz", b"NPZBYTES", "application/octet-stream"),
-            "replay": ("0.json.gz", b"REPLAYBYTES", "application/gzip"),
-        },
-    )
-    # Werkzeug's parse_form_data takes a WSGI-style environ.
-    from werkzeug.formparser import parse_form_data
+# ---------------------------------------------------------------------------
+# Drop-off protocol: artifact upload + JSON-ping wire shape
+# ---------------------------------------------------------------------------
 
-    environ = {
-        "REQUEST_METHOD": "POST",
-        "CONTENT_TYPE": content_type,
-        "CONTENT_LENGTH": str(len(body)),
-        "wsgi.input": __import__("io").BytesIO(body),
+
+def test_report_one_uploads_blobs_and_posts_uri_json_ping(tmp_path):
+    """End-to-end: a single ``_report_one`` cycle with a
+    LocalFileUploader pointed at ``tmp_path`` lands the npz + replay
+    bytes on disk, and the JSON POST body the coord sees carries the
+    derived URIs + sizes (NOT the blobs)."""
+    fake = FakeCoordinator(claims_queue=[_make_claim(0)])
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    uploader = LocalFileUploader(tmp_path)
+
+    def play_one(claim, shard_label):
+        return cl.GameResult(
+            outcome="completed",
+            winner=0,
+            n_samples=42,
+            duration_s=0.001,
+            npz_bytes=b"NPZ_PAYLOAD_BYTES",
+            replay_bytes=b"REPLAY_PAYLOAD_BYTES",
+        )
+
+    runner = cl.CallableGameRunner(play_one)
+    cfg = cl.ClaimLoopConfig(
+        coordinator_url="http://fake-coord:5099",
+        stage_id="stage_X",
+        kind="self_play",
+        n_workers=1,
+        worker_id="test-worker",
+        weights_root=Path("trained_weights_test"),
+        shard_label="mac-1",
+        retry_backoff_s=(0.0, 0.0, 0.0),
+        http_get=fake.http_get,
+        http_post_json=fake.http_post_json,
+        artifact_uploader=uploader,
+    )
+    cbs = _state_callbacks_for(state)
+    state.try_start("self_play", "stage_X", n_workers=1)
+    loop = cl.ClaimLoopRunner(cfg, cbs, runner)
+    loop.run()
+
+    # Daemon drained cleanly.
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 1
+
+    # The coord saw exactly one JSON ping. Body shape:
+    # {meta:{...}, npz_uri, replay_uri, npz_size_bytes, replay_size_bytes}.
+    assert len(fake.reports_received) == 1
+    body = fake.reports_received[0]
+    assert set(body.keys()) == {
+        "meta", "npz_uri", "replay_uri",
+        "npz_size_bytes", "replay_size_bytes",
     }
-    _, form, files = parse_form_data(environ)
-    assert form["meta"] == '{"claim_id":"x:000001"}'
-    assert files["npz"].read() == b"NPZBYTES"
-    assert files["replay"].read() == b"REPLAYBYTES"
+    # Multipart blobs are GONE from the wire; only sizes + URIs.
+    assert body["npz_size_bytes"] == len(b"NPZ_PAYLOAD_BYTES")
+    assert body["replay_size_bytes"] == len(b"REPLAY_PAYLOAD_BYTES")
+
+    # URIs are file:// pointing at the LocalFileUploader's root.
+    assert body["npz_uri"].startswith("file:///")
+    assert body["npz_uri"].endswith("stage_X/mac-1/stage_X_000000.npz")
+    assert body["replay_uri"].startswith("file:///")
+    assert body["replay_uri"].endswith(
+        "stage_X/mac-1/stage_X_000000.json.gz"
+    )
+
+    # Bytes actually landed at the expected on-disk path.
+    npz_path = tmp_path / "stage_X" / "mac-1" / "stage_X_000000.npz"
+    replay_path = (
+        tmp_path / "stage_X" / "mac-1" / "stage_X_000000.json.gz"
+    )
+    assert npz_path.read_bytes() == b"NPZ_PAYLOAD_BYTES"
+    assert replay_path.read_bytes() == b"REPLAY_PAYLOAD_BYTES"
+
+    # Meta still carries the per-game telemetry the coord expects.
+    meta = body["meta"]
+    assert meta["claim_id"] == "stage_X:000000"
+    assert meta["outcome"] == "completed"
+    assert meta["winner"] == 0
+    assert meta["n_samples"] == 42
+    assert meta["shard_label"] == "mac-1"
+
+
+def test_report_one_no_blobs_sends_null_uris_and_zero_sizes():
+    """A GameResult without npz/replay bytes (e.g. a crashed-game
+    report) still posts a JSON ping — URIs are None, sizes are 0."""
+    fake = FakeCoordinator(claims_queue=[_make_claim(0)])
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    def play_one(claim, shard_label):
+        return cl.GameResult(outcome="completed", winner=0, n_samples=0)
+
+    loop, _ = _build_loop(fake, state=state, play_one=play_one)
+    loop.run()
+    assert len(fake.reports_received) == 1
+    body = fake.reports_received[0]
+    assert body["npz_uri"] is None
+    assert body["replay_uri"] is None
+    assert body["npz_size_bytes"] == 0
+    assert body["replay_size_bytes"] == 0
+
+
+def test_report_one_accepts_both_200_and_202_during_rollout():
+    """Phase 2B's async-write coord returns 202 (rehydrates blob off-
+    thread). Phase 2A's coord still returns 200. The worker must
+    accept BOTH so the rollout can land worker-first without flipping
+    the gate, then coord-side switches to 202 without breaking
+    workers."""
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(0), _make_claim(1)],
+        report_script=[
+            (202, {"accepted": True}),  # Phase 2B coord
+            (200, {"accepted": True}),  # Phase 2A coord (back-compat)
+        ],
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    loop, _ = _build_loop(fake, state=state)
+    loop.run()
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 2
