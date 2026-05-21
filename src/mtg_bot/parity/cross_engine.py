@@ -795,6 +795,30 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageEachOpponent(
             amount=eff_dict.get("amount", 0),
         )
+    if kind == "exile_all_artifacts_with_mana_value_at_most":
+        # **ModalChooseOne envelope — Cycle 4 (per-leaf Effect for
+        # all-untargeted modal cards, 2026-05-21).** Untargeted "Exile
+        # all artifacts with mana value N or less". Rust's
+        # ``Effect::ExileAllArtifactsWithManaValueAtMost { max_mv: i32 }``
+        # (cards.rs) and Python's
+        # ``ExileAllArtifactsWithManaValueAtMost(max_mv=N)`` at
+        # ``effects/generic/exile.py:474`` resolve byte-equal on the
+        # 2-player EoE harness: both engines snapshot the battlefield,
+        # filter for artifacts with total MV `<= max_mv`, and route each
+        # to its owner's exile zone. Ruinous Rampage's anti-artifact
+        # mode (the other mode is ``DamageEachOpponent``).
+        #
+        # ``max_mv`` is REQUIRED in the round-trip dict shape (mirrors
+        # the Rust ``parse_effect`` ``require("max_mv")?`` contract —
+        # missing key raises). The reverse serializer at
+        # ``trajectory.py::_python_spell_effect_to_dict``'s ``_leaf``
+        # arm always emits the field.
+        from mtg_bot.effects.generic.exile import (
+            ExileAllArtifactsWithManaValueAtMost,
+        )
+        return ExileAllArtifactsWithManaValueAtMost(
+            max_mv=eff_dict["max_mv"],
+        )
     if kind == "deal_damage":
         # "Deal N damage to target X." Rust's
         # ``Effect::DealDamage { amount: i32, target: TargetFilter }``

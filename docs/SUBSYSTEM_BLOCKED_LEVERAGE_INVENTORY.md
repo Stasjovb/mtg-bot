@@ -556,11 +556,17 @@ Shattered Wings CLOSED (round-87, 2026-05-21:
 target filter Artifact OR Enchantment OR (Creature AND flying),
 7,793 17lands decks; the outer `Sequence(destroy, Surveil 1)`
 runs through the pre-shipped Effect::Sequence + Effect::Surveil
-arms). Remaining **22 single-gated** members:
+arms). **Ruinous Rampage closed 2026-05-21** via
+`feature/modal-chooseone-cycle-4` (ModalChooseOne envelope Cycle 4
+— new `Effect::ExileAllArtifactsWithManaValueAtMost` Rust variant +
+per-leaf serializer arms for `DealDamageEachOpponent` and
+`ExileAllArtifactsWithManaValueAtMost` + admit-predicate widen on
+the `(0, 0)`-shape all-untargeted ModalChooseOne path; 305 17lands
+decks). Remaining **21 single-gated** members:
 Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
 Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
 Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
-Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for
+Pull Through the Weft, Reroute Systems, Scour for
 Scrap, Scout for Survivors, Singularity Rupture, Systems Override,
 Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
 Ballad.

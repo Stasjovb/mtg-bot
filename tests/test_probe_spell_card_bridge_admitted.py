@@ -99,25 +99,36 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-# Re-anchored at the `feature/wrath-admit-widening` landing (2026-05-21).
-# The wrath-admit-widening lane added the Phase-3 ``(0, 0)``-shape wrath
-# admit arm to `_printing_is_bridge_simple_spell` (target_count_range ==
-# (0, 0), no slot_kinds, no printing-level ``targets``) PLUS three new
-# wrath-shape serializer leaves (DealNDamageToEachCreature [Pyroclasm-
-# shape], bare DestroyAllCreatures, ManifestDread). The auto-grow §2
-# teeth then admitted 4 new wraths: Pyroclasm (single DealNDamageTo
-# EachCreature; ~0 17lands decks — already PROBED via its dedicated
-# effect-close probe), Manifest Dread / Break Down the Door / Under the
-# Skin (each single ManifestDread(count=1); duskmourn.json pool
-# members loaded into the active source). The set grew 11→15. The
-# Phase 2 2-slot card (Diplomatic Relations) remains the SOLE 2-slot
-# admit; the Phase 3 wrath arm carries the 4 new ``(0, 0)`` admits.
+# Re-anchored at the `feature/modal-chooseone-cycle-4` landing
+# (2026-05-21). Cycle 4 of the ModalChooseOne envelope adds the per-
+# leaf Effect variants for the all-untargeted modal cards
+# (DealDamageEachOpponent already shipped; the new
+# ExileAllArtifactsWithManaValueAtMost lands in this cycle) AND
+# widens the admit predicate at trajectory.py:4564 (the previous
+# unconditional ModalChooseOne reject is removed; the round-trip-or-
+# bail teeth + the existing (0, 0)-shape Phase-3 wrath admit arm now
+# carry the modal admit load). The set grew 15→16 with Ruinous
+# Rampage (the only all-untargeted modal whose leaves are all
+# serializable today). The some-targeted modal cards (Reroute Systems
+# / Scour for Scrap / Archenemy's Charm / Drill Too Deep / Warping
+# Wail / Twist Reality / Live or Die — 7 cards) STAY DECLINED via
+# the target-grammar gate (they report (1, 1) / (2, 2) / (0, 1)
+# shapes; the (0, 0)-only admit arm rejects them; the per-mode target
+# binding slice = Cycle 5).
+#
+# Pre-Cycle-4 history: wrath-admit-widening (2026-05-21) grew 11→15
+# (Pyroclasm + Manifest Dread + Break Down the Door + Under the
+# Skin). Phase 2 (round-76) flipped Diplomatic Relations DECLINE→
+# ADMITTED, 6→7. Round-73 Lander-spell-token-seating sub-substrate
+# admitted Seedship Impact / Orbital Plunge, 4→6. Round-70 Phase-1
+# landing: {Depressurize, Radiant Strike} (4 admits).
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Biosynthic Burst", "Break Down the Door", "Cut Propulsion",
     "Depressurize", "Diplomatic Relations", "Emergency Eject",
     "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
-    "Orbital Plunge", "Pyroclasm", "Radiant Strike", "Seedship Impact",
+    "Orbital Plunge", "Pyroclasm", "Radiant Strike",
+    "Ruinous Rampage", "Seedship Impact",
     "Shattered Wings", "Under the Skin",
 ]
 # The two members this module's carrier-sweep probes drive directly

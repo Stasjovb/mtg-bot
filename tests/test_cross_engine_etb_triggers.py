@@ -21295,6 +21295,17 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # .json pool members loaded into the active source; Pyroclasm is a
     # genuine EoE-pool member already PROBED by its dedicated effect-
     # close probe). 11 → 15 — all AUTO-JOINED via the §2 auto-grow teeth.
+    # **modal-chooseone-cycle-4 (2026-05-21):** the ModalChooseOne
+    # envelope's Cycle 4 widened the admit predicate (the unconditional
+    # ModalChooseOne reject is removed; round-trip-or-bail + the
+    # ``(0, 0)``-shape arm now carry the modal admit load) AND added
+    # the per-leaf ``DealDamageEachOpponent`` +
+    # ``ExileAllArtifactsWithManaValueAtMost`` serializer leaves +
+    # the Rust ``Effect::ExileAllArtifactsWithManaValueAtMost``
+    # variant. AUTO-JOINED 1 new modal: Ruinous Rampage (the only
+    # all-untargeted ModalChooseOne in the EoE pool today; some-
+    # targeted modals stay declined via the target-grammar gate
+    # pending Cycle 5's per-mode target binding). 15 → 16.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
@@ -21303,16 +21314,17 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Biosynthic Burst", "Break Down the Door", "Cut Propulsion",
         "Depressurize", "Diplomatic Relations", "Emergency Eject",
         "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
-        "Orbital Plunge", "Pyroclasm", "Radiant Strike", "Seedship Impact",
+        "Orbital Plunge", "Pyroclasm", "Radiant Strike",
+        "Ruinous Rampage", "Seedship Impact",
         "Shattered Wings", "Under the Skin",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 15 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 4 Phase-3 wrath admits — the set "
-        f"grew 11→15 via the wrath-admit-widening's ``(0, 0)``-shape "
-        f"admit arm + DealNDamageToEachCreature / DestroyAllCreatures /"
-        f" ManifestDread serializer leaves; auto-grows further as the "
-        f"remaining Tier-A spells close)")
+        f"exactly the 16 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 4 Phase-3 wrath admits + 1 "
+        f"Cycle-4 modal admit (Ruinous Rampage) — the set grew "
+        f"15→16 via the modal-chooseone-cycle-4 widen + per-leaf "
+        f"Effect serializer leaves; auto-grows further as the "
+        f"remaining Tier-A and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
