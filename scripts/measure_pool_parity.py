@@ -833,69 +833,96 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through
-    (``trajectory._printing_is_bridge_basic_land`` OR
-    ``_printing_is_bridge_simple_creature`` OR
-    ``_printing_is_bridge_pure_warp_creature`` OR
-    ``_printing_is_bridge_simple_aura``). Reused, not reimplemented, so
-    the bench tier and the real bench can never disagree on what
-    "admitted" means.
+    EXACT gate the bench corpus runs through. Mirrors all 9 disjuncts
+    of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
+
+    1. ``_printing_is_bridge_basic_land``
+    2. ``_printing_is_bridge_nonbasic_mana_land``
+    3. ``_printing_is_bridge_pure_warp_creature``
+    4. ``_printing_is_bridge_simple_creature``
+    5. ``_printing_is_bridge_simple_spell``
+    6. ``_printing_is_bridge_simple_aura``
+    7. ``_printing_is_bridge_simple_static_anthem_creature``
+    8. ``_printing_is_bridge_simple_uncounterable_creature``
+    9. ``_printing_is_bridge_simple_static_self_conditional_creature``
+
+    Reused, not reimplemented, so the bench tier and the real bench can
+    never disagree on what "admitted" means.
 
     **warp_cost Phase 3 (round-83, 2026-05-20):** the
-    ``_printing_is_bridge_pure_warp_creature`` predicate is the third
-    admit arm. Phases 1+1.5+2 of the warp_cost substrate shipped the
-    full warp lifecycle on both engines (CardDef warp fields + Rust
+    ``_printing_is_bridge_pure_warp_creature`` predicate is admit-arm 3.
+    Phases 1+1.5+2 of the warp_cost substrate shipped the full warp
+    lifecycle on both engines (CardDef warp fields + Rust
     ``CardPrinting.warp_cost`` + ``cast_creature_warp`` + the END-step
     exile sweep + the exile-recast + Timeline Culler's life-rider +
     graveyard-warp), and the production-deck loader at
     ``trajectory.py:5552`` already routes warp creatures through this
     predicate ahead of the plain simple-creature arm. Including it in
     ``loader_admits`` makes the metric tier-classifier see those
-    admitted warp printings as bridge-admitted (so they correctly tier
-    as PROBED when a ``_parity`` probe pins them, or as
-    BRIDGE_ADMITTED otherwise), closing the warp_cost Phase 3
-    measurement-attribution gap (the 3 single-gated warp cards — Red
-    Tiger Mechan, Bygone Colossus, Timeline Culler — accounting for
-    15,436 17lands single-gate decks per the round-58 attribution
+    admitted warp printings as bridge-admitted, closing the warp_cost
+    Phase 3 measurement-attribution gap (the 3 single-gated warp cards
+    — Red Tiger Mechan, Bygone Colossus, Timeline Culler — accounting
+    for 15,436 17lands single-gate decks per the round-58 attribution
     scout).
 
     **Aura Phase 1 flash widening attribution close (2026-05-21):**
-    the ``_printing_is_bridge_simple_aura`` predicate is the fourth
-    admit arm. The trajectory-side Phase 2 round-79 widen
+    the ``_printing_is_bridge_simple_aura`` predicate is admit-arm 6.
+    The trajectory-side Phase 2 round-79 widen
     (``_AURA_SAFE_EXTRA_KEYWORDS = {"flash"}``) already lets the real
-    loader admit Frantic Strength + Shardmage's Rescue end-to-end (the
-    two live S1 carriers in EoE — both carry static ``flash`` plus a
-    P/T-bonus rider), and the Phase 2 S2 / Phase 3 / Phase 4 follow-ups
-    extended the predicate further (Duskmourn's Domination, Pain for
-    All, Tractor Beam, Moonlit Meditation substrate). Including the
-    Aura disjunct in ``loader_admits`` makes the metric tier-classifier
-    see those admitted Aura printings as bridge-admitted, so a 0-Effect
-    keyword-only Aura (every S1 carrier today — ``equipment_bonuses``
-    carries the rider, never an :class:`Effect`) tiers as TIER_COVERED
-    via the ``not eff_classes and admitted`` arm of the COVERED rule
-    (and as TIER_PROBED whenever a ``_parity`` probe in the smoke file
-    pins it). Without this widen, both cards stayed BLOCKED in the
-    metric even though the real loader admits them — a pure
-    measurement-attribution gap, not a substrate gap.
+    loader admit Frantic Strength + Shardmage's Rescue end-to-end.
 
-    The other admit disjuncts the real loader carries
-    (``_printing_is_bridge_nonbasic_mana_land``,
-    ``_printing_is_bridge_simple_spell``,
-    ``_printing_is_bridge_simple_static_anthem_creature``,
-    ``_printing_is_bridge_simple_uncounterable_creature`` and the
-    Phase 3+ static-layered creature variants) remain OUT of this
-    helper for now — same attribution-gap shape, but closing them is
-    each carrier-class's own lane (this lane is narrowly scoped to
-    the Aura Phase 1 flash carriers per
-    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (2))."""
+    **loader_admits attribution sweep (2026-05-21):** disjuncts 2 / 5 /
+    7 / 8 / 9 — the remaining 5 of the real loader's 9 admit arms — are
+    folded in here. Each closes a pure measurement-attribution gap (the
+    real loader admits them; the metric helper was stale):
+
+    * ``_printing_is_bridge_nonbasic_mana_land`` — the 5 EoE shocklands
+      (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground
+      / Watery Grave); 0-Effect, BLOCKED → COVERED post-widen, then
+      PROBED via the round-60 shockland bench probe in this file (see
+      ``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``).
+    * ``_printing_is_bridge_simple_spell`` — the 7 EoE simple
+      Instant/Sorcery cards (Biosynthic Burst / Depressurize /
+      Diplomatic Relations / Focus Fire / Orbital Plunge / Radiant
+      Strike / Seedship Impact); ALL already PROBED via existing
+      ``_parity`` probes, so this widen is metric-truthfulness only
+      (tier counts unchanged).
+    * ``_printing_is_bridge_simple_static_anthem_creature`` — Tannuk,
+      Steadfast Second; static-abilities Phase 1 round-79 substrate.
+    * ``_printing_is_bridge_simple_uncounterable_creature`` — Frenzied
+      Baloth; static-abilities Phase 2 round-80 substrate.
+    * ``_printing_is_bridge_simple_static_self_conditional_creature`` —
+      Brightspear Zealot / Cloudsculpt Technician / Gravblade Heavy /
+      Mechan Shieldmate; static-abilities Phase 3/3.5 rounds 81/82.
+
+    Each carrier has an existing engine-level byte-equal lifecycle
+    pin (the canonical probes live in
+    ``tests/test_static_layered_abilities_phase{1,2,3}.py`` and in this
+    file's shockland bench probe); the ``_parity``-named delegators
+    added alongside this widen credit the slug-keyed scanner so the
+    cards move all the way to PROBED. Pattern follows the round-83
+    warp_cost Phase 3 / round-84 Cosmogoyf idiom: thin delegators
+    re-use existing byte-equal helpers, no duplicated probe logic, no
+    engine changes."""
     from mtg_bot.parity import trajectory as traj
 
     try:
         return bool(
             traj._printing_is_bridge_basic_land(printing)
-            or traj._printing_is_bridge_simple_creature(printing)
+            or traj._printing_is_bridge_nonbasic_mana_land(printing)
             or traj._printing_is_bridge_pure_warp_creature(printing)
+            or traj._printing_is_bridge_simple_creature(printing)
+            or traj._printing_is_bridge_simple_spell(printing)
             or traj._printing_is_bridge_simple_aura(printing)
+            or traj._printing_is_bridge_simple_static_anthem_creature(
+                printing,
+            )
+            or traj._printing_is_bridge_simple_uncounterable_creature(
+                printing,
+            )
+            or traj._printing_is_bridge_simple_static_self_conditional_creature(
+                printing,
+            )
         )
     except Exception:
         return False

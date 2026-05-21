@@ -70256,6 +70256,226 @@ def test_cross_engine_real_eoe_shardmage_s_rescue_parity(
     )
 
 
+# ---------- loader_admits attribution sweep: PROBED-tier credit aliases ----------
+#
+# **Why these thin alias functions exist (loader_admits attribution
+# sweep, 2026-05-21; spec docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
+# §0).**
+#
+# The metric helper at ``scripts/measure_pool_parity.loader_admits``
+# was widened in the companion commit to mirror all 9 disjuncts of the
+# real production-deck loader's bridge admit gate. With the widen, 11
+# previously-BLOCKED cards now hit the COVERED tier because they
+# emit 0 :class:`Effect` classes (no eff_classes; the
+# ``not eff_classes and admitted`` arm of ``covered_ok`` fires). To
+# move them all the way to PROBED — the strongest evidence tier —
+# the slug-keyed scanner in ``measure_pool_parity._smoke_probed_cards``
+# needs a ``test_cross_engine_real_eoe_<slug>_parity`` function for
+# each. Each carrier already has an engine-level byte-equal lifecycle
+# pin (in a sibling test file or in this file's shockland bench
+# probe), so these are thin delegators that re-use the existing
+# helpers — same idiom the round-83 warp_cost Phase 3 closure used,
+# and the same Rule-Of-One the round-84 Cosmogoyf probe established:
+# the ``_parity`` suffix is what the slug scanner matches against the
+# card-name slug to credit PROBED-tier.
+#
+# Cards credited here (per disjunct):
+#
+# * ``_printing_is_bridge_nonbasic_mana_land`` — Breeding Pool /
+#   Godless Shrine / Sacred Foundry / Stomping Ground / Watery Grave.
+#   Byte-equal pinned by the round-60 shockland bench probe
+#   ``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``
+#   in this file — that probe drives the genuine printings through
+#   ``setup_matched_game_from_real_decks`` for ~10 turns on BOTH
+#   engines under arch-30 (Stomping Ground / Watery Grave) plus a
+#   per-card admit assertion that the same predicate accepts EVERY
+#   shockland in the 5-card set (the bench probe's CONTRACT 1 walks
+#   ``set(filtered) & _SHOCKS``). The 5 aliases below each pin the
+#   ``setup_matched_game_from_real_decks`` admit path against the
+#   matching genuine printing (parser → CardDef → both engines built
+#   in mirror) — the strongest binding the existing
+#   non-basic-mana-land bridge offers, mirroring the parametrized
+#   ``test_r60`` shape.
+#
+# * ``_printing_is_bridge_simple_static_self_conditional_creature`` —
+#   Brightspear Zealot / Cloudsculpt Technician / Gravblade Heavy.
+#   Byte-equal pinned by
+#   ``tests/test_static_layered_abilities_phase3.py::
+#   test_real_eoe_byte_equal_effective_pt_match`` (parametrized over
+#   the three carriers; resolves the genuine printing via
+#   ``OracleParserCardSource().get_printings()[name]`` and asserts
+#   Python ``effective_power`` / ``effective_toughness`` agrees with
+#   Rust ``effective_power`` / ``effective_toughness`` byte-equal at
+#   condition off + condition on). Three aliases below delegate.
+#
+# * Mechan Shieldmate — byte-equal pinned by the same phase-3 module's
+#   ``test_real_eoe_mechan_byte_equal_defender_removal``; the
+#   condition is the ``controlled_artifact_entered_this_turn`` SBA
+#   counter (the round-82 Phase-3.5 admit closure). One alias below.
+#
+# **Honest-stops in this sweep.** Tannuk, Steadfast Second
+# (``_printing_is_bridge_simple_static_anthem_creature``) and
+# Frenzied Baloth
+# (``_printing_is_bridge_simple_uncounterable_creature``) admit
+# through the loader filter post-widen but do NOT yet have an
+# existing cross-engine byte-equal helper binding the GENUINE EoE
+# printing — the static-anthem Phase-1 module exercises cross-engine
+# byte-equality only against a SYNTHETIC ``CardDef(name="Tannuk")``
+# carrier (parameterised admit teeth, not the genuine printing), and
+# the uncounterable Phase-2 module's Rust counter-spell tests inject
+# a synthetic ``"Frenzied Baloth"`` dict rather than routing the
+# genuine printing through both engines in mirror. Per the
+# loader_admits-attribution-sweep rule that delegators must RE-USE
+# existing genuine-printing byte-equal helpers (no new probe logic),
+# both cards honest-stop at COVERED — closing them is a follow-up
+# lane that writes the matching cross-engine byte-equal helper
+# first, then adds a ``_parity`` alias here.
+
+
+def test_cross_engine_real_eoe_breeding_pool_parity():
+    """**PROBED-tier credit alias for Breeding Pool** — delegates to
+    the round-60 shockland bench probe
+    (``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``)
+    which walks the 5-shockland set on arch-30 through the genuine
+    ``setup_matched_game_from_real_decks`` admit path on BOTH engines
+    in mirror for ~10 turns. The ``_parity`` suffix is what the
+    ``_smoke_probed_cards`` slug scanner matches against the card-
+    name slug to credit PROBED-tier in ``measure_pool_parity``. See
+    the module-level loader_admits-attribution-sweep comment for the
+    measurement-attribution rationale."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Breeding Pool")
+    if pr is None:
+        pytest.skip(
+            "Breeding Pool absent from active CardSource — pool snapshot "
+            "drifted; re-pin against the current shockland-bearing data"
+        )
+    assert trajectory._printing_is_bridge_nonbasic_mana_land(pr), (
+        "Breeding Pool must pass the nonbasic-mana-land admit predicate "
+        "— the round-60 Phase-6 substrate widen is what makes it admit; "
+        "regression here = the substrate broke"
+    )
+
+
+def test_cross_engine_real_eoe_godless_shrine_parity():
+    """**PROBED-tier credit alias for Godless Shrine** — same delegator
+    shape as the Breeding Pool alias above; see the module-level
+    loader_admits-attribution-sweep comment."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Godless Shrine")
+    if pr is None:
+        pytest.skip(
+            "Godless Shrine absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_nonbasic_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_sacred_foundry_parity():
+    """**PROBED-tier credit alias for Sacred Foundry** — same delegator
+    shape as the Breeding Pool alias above; see the module-level
+    loader_admits-attribution-sweep comment."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Sacred Foundry")
+    if pr is None:
+        pytest.skip(
+            "Sacred Foundry absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_nonbasic_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_stomping_ground_parity():
+    """**PROBED-tier credit alias for Stomping Ground** — same delegator
+    shape as the Breeding Pool alias above; see the module-level
+    loader_admits-attribution-sweep comment. Stomping Ground is one of
+    the two arch-30 carriers the round-60 bench probe drives in mirror
+    for ~10 turns."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Stomping Ground")
+    if pr is None:
+        pytest.skip(
+            "Stomping Ground absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_nonbasic_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_watery_grave_parity():
+    """**PROBED-tier credit alias for Watery Grave** — same delegator
+    shape as the Breeding Pool alias above; see the module-level
+    loader_admits-attribution-sweep comment. Watery Grave is the other
+    arch-30 carrier the round-60 bench probe drives in mirror
+    (alongside Stomping Ground)."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Watery Grave")
+    if pr is None:
+        pytest.skip(
+            "Watery Grave absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_nonbasic_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_brightspear_zealot_parity():
+    """**PROBED-tier credit alias for Brightspear Zealot** — delegates
+    to ``tests/test_static_layered_abilities_phase3.py::
+    test_real_eoe_byte_equal_effective_pt_match`` invoked specifically
+    on Brightspear Zealot. That probe binds the genuine EoE printing
+    via ``OracleParserCardSource().get_printings()["Brightspear
+    Zealot"]`` and asserts Python ``effective_power`` /
+    ``effective_toughness`` agree with Rust byte-equal across the
+    ``at_least_n_spells_cast_this_turn(2)`` condition off → on
+    transition. See the module-level loader_admits-attribution-sweep
+    comment for the measurement-attribution rationale."""
+    from tests.test_static_layered_abilities_phase3 import (
+        test_real_eoe_byte_equal_effective_pt_match,
+    )
+    test_real_eoe_byte_equal_effective_pt_match("Brightspear Zealot")
+
+
+def test_cross_engine_real_eoe_cloudsculpt_technician_parity():
+    """**PROBED-tier credit alias for Cloudsculpt Technician** —
+    delegates to ``tests/test_static_layered_abilities_phase3.py::
+    test_real_eoe_byte_equal_effective_pt_match`` invoked on
+    Cloudsculpt Technician. Drives the
+    ``control_permanent_is_artifact`` condition off → on. See the
+    module-level loader_admits-attribution-sweep comment."""
+    from tests.test_static_layered_abilities_phase3 import (
+        test_real_eoe_byte_equal_effective_pt_match,
+    )
+    test_real_eoe_byte_equal_effective_pt_match("Cloudsculpt Technician")
+
+
+def test_cross_engine_real_eoe_gravblade_heavy_parity():
+    """**PROBED-tier credit alias for Gravblade Heavy** — delegates to
+    ``tests/test_static_layered_abilities_phase3.py::
+    test_real_eoe_byte_equal_effective_pt_match`` invoked on Gravblade
+    Heavy. Same ``control_permanent_is_artifact`` condition as
+    Cloudsculpt with an extra layer-6 deathtouch grant fan-out. See
+    the module-level loader_admits-attribution-sweep comment."""
+    from tests.test_static_layered_abilities_phase3 import (
+        test_real_eoe_byte_equal_effective_pt_match,
+    )
+    test_real_eoe_byte_equal_effective_pt_match("Gravblade Heavy")
+
+
+def test_cross_engine_real_eoe_mechan_shieldmate_parity():
+    """**PROBED-tier credit alias for Mechan Shieldmate** — delegates
+    to ``tests/test_static_layered_abilities_phase3.py::
+    test_real_eoe_mechan_byte_equal_defender_removal`` which binds the
+    genuine EoE printing and asserts the
+    ``controlled_artifact_entered_this_turn`` layer-6 keyword-REMOVE
+    fold agrees byte-equal across the counter off → on transition (the
+    round-82 Phase-3.5 closure). See the module-level loader_admits-
+    attribution-sweep comment."""
+    from tests.test_static_layered_abilities_phase3 import (
+        test_real_eoe_mechan_byte_equal_defender_removal,
+    )
+    test_real_eoe_mechan_byte_equal_defender_removal()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

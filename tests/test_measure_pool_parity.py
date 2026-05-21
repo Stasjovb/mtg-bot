@@ -328,20 +328,28 @@ def test_loader_admits_credits_simple_aura_disjunct(mod):
     forest = printings.get("Forest")
     if forest is not None:
         assert mod.loader_admits(forest) is True
-    # A printing the trajectory predicate REJECTS — a Sorcery — must
-    # NOT admit through any disjunct (the helper's contract is the
-    # exact loader gate). Use a known Sorcery from the EoE pool.
+    # A printing the trajectory predicate REJECTS — a Sorcery that is
+    # NOT a simple_spell-shape (carries an Effect outside the
+    # spell-bridge admit teeth) — must NOT admit through any disjunct
+    # (the helper's contract is the exact loader gate). Embrace Oblivion
+    # / Decode Transmissions are EoE Sorceries that fall outside the
+    # simple_spell admit shape today — they remain bridge-rejected even
+    # after the 2026-05-21 attribution sweep folded
+    # ``_printing_is_bridge_simple_spell`` into ``loader_admits``.
     for sorcery_name in ("Embrace Oblivion", "Decode Transmissions"):
         sorcery = printings.get(sorcery_name)
         if sorcery is not None and "Sorcery" in sorcery.card_types:
-            # Spell-bridge is NOT in ``loader_admits`` (only the bench-
-            # admit gates are), so a Sorcery — even one with all-covered
-            # Effects — declines here.
+            # This sorcery falls outside ALL 9 admit disjuncts —
+            # post-sweep the helper covers basic land, nonbasic mana
+            # land, pure-warp creature, simple creature, simple spell,
+            # simple Aura, static-anthem creature, uncounterable
+            # creature, and static-self-conditional creature. The two
+            # named carriers above each emit an Effect outside the
+            # simple_spell admit teeth, so they decline here.
             assert mod.loader_admits(sorcery) is False, (
                 f"{sorcery_name!r} (Sorcery) must NOT admit through "
-                f"``loader_admits`` — the helper only covers the 4 "
-                f"bench-admit disjuncts (basic land, simple creature, "
-                f"pure-warp creature, simple Aura)"
+                f"``loader_admits`` — this Sorcery falls outside the "
+                f"simple_spell admit teeth and trips no other disjunct"
             )
             break
 
@@ -895,9 +903,16 @@ def test_known_card_subsystem_attribution(scout, attr):
     trips the warp gate; the honest unclassified residual is the two
     documented rule-static enchantments."""
     cards = attr["cards"]
-    # Breeding Pool: zero-Effect non-basic dual land — single-gated on
-    # the non-basic-land substrate.
-    bp = cards["Breeding Pool"]
+    # Abandoned Campground: zero-Effect non-basic land — single-gated
+    # on the non-basic-land substrate. (Previously Breeding Pool, which
+    # moved to PROBED post-loader_admits-attribution-sweep on 2026-05-21
+    # — the 5 shocklands now ride
+    # ``_printing_is_bridge_nonbasic_mana_land`` through the metric
+    # helper and a ``_parity`` delegator probe in
+    # ``tests/test_parity_smoke.py``; Abandoned Campground stays
+    # BLOCKED under the non-basic-land substrate, the surviving
+    # single-gate non-basic-land carrier.)
+    bp = cards["Abandoned Campground"]
     assert bp["gates"] == [scout.SUB_NONBASIC_LAND]
     assert bp["last_mile"] == scout.SUB_NONBASIC_LAND
     assert bp["multi_gated"] is False
