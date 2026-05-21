@@ -1283,3 +1283,122 @@ def test_parallel_stop_check_finalizes_progress_as_stopped(tmp_path):
     payload = json.loads(progress_path.read_text(encoding="utf-8"))
     assert payload["status"] == "stopped"
     assert payload["ended_at"] is not None
+
+
+# ---------- iter_019 BUG #4: subprocess pool leak guard -----------------
+
+
+def test_parallel_attaches_pool_workers_to_job_guard(monkeypatch):
+    """Pin that ``generate_training_data_parallel`` attaches the
+    Pool's workers to a Win32 job-object guard (iter_019 BUG #4).
+
+    The fix-shape: a ``JobObjectGuard`` is created BEFORE the Pool,
+    the Pool spawns its workers, then we call
+    ``guard.attach_pool_workers(pool)`` so each worker is in the
+    job. The guard's ``KILL_ON_JOB_CLOSE`` flag ensures that if the
+    master dies WITHOUT running Python cleanup (taskkill /F,
+    segfault, OOM), the kernel terminates the in-job workers when
+    the master's handle to the job closes on process exit.
+
+    We can't unit-test the actual SIGKILL-master kernel-kill behavior
+    in process. What we DO pin: the attach-pool-workers call fires
+    against the same Pool instance the driver iterates.
+    """
+    from mtg_bot.training import data_gen
+
+    calls: list[tuple[str, object]] = []
+
+    class _FakeGuard:
+        active = True
+        attached = 0
+
+        def __enter__(self):
+            calls.append(("guard_enter", None))
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("guard_exit", None))
+            return None
+
+        def attach_pool_workers(self, pool):
+            calls.append(("attach", pool))
+            self.attached = 1
+            return 1
+
+        def close(self):
+            pass
+
+    guard_instance = _FakeGuard()
+
+    monkeypatch.setattr(
+        data_gen, "JobObjectGuard", lambda: guard_instance,
+    )
+
+    # Stub the Pool to capture its construction without spawning
+    # real worker processes.
+    class _FakePool:
+        def __init__(self, *args, **kwargs):
+            calls.append(("pool_ctor", kwargs))
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            calls.append(("pool_enter", self))
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("pool_exit", self))
+            return None
+
+        def imap_unordered(self, fn, args_list, chunksize=1):
+            return iter(())  # zero results — driver loop ends fast
+
+        def terminate(self):
+            pass
+
+        def join(self):
+            pass
+
+    class _FakeCtx:
+        Pool = _FakePool
+
+    monkeypatch.setattr(data_gen, "mp", _FakeCtx)
+
+    data_gen.generate_training_data_parallel(
+        p0_factory=random_choice_factory,
+        p1_factory=random_choice_factory,
+        n_games=1,
+        n_workers=1,
+        base_seed=0,
+    )
+
+    kinds = [k for k, _ in calls]
+    assert "guard_enter" in kinds, "JobObjectGuard never entered"
+    assert "pool_ctor" in kinds, "Pool was never constructed"
+    assert "attach" in kinds, (
+        "attach_pool_workers was never called — workers stay "
+        "outside the kill-net"
+    )
+
+    # Order: guard enters first, pool is constructed and entered,
+    # attach fires, then everything exits in LIFO order so the pool
+    # exits BEFORE the guard (pool.terminate() drains workers before
+    # the kernel kill-net is dismantled).
+    g_enter = kinds.index("guard_enter")
+    p_ctor = kinds.index("pool_ctor")
+    p_enter = kinds.index("pool_enter")
+    attach = kinds.index("attach")
+    p_exit = kinds.index("pool_exit")
+    g_exit = kinds.index("guard_exit")
+    assert g_enter < p_ctor < p_enter < attach < p_exit < g_exit, (
+        f"unexpected call order: {kinds}"
+    )
+
+    # Attach was called with the actual pool instance, not a
+    # placeholder — the workers we attach must be the workers the
+    # Pool spawned.
+    attach_pool = next(arg for k, arg in calls if k == "attach")
+    pool_arg = next(arg for k, arg in calls if k == "pool_enter")
+    assert attach_pool is pool_arg, (
+        "attach_pool_workers received a different Pool instance "
+        "than the one being driven"
+    )
