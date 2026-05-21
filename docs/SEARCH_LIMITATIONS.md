@@ -4122,6 +4122,134 @@ subsystems, not behind this substrate.
 
 ---
 
+## 5 EoE Planet lands admitted as plain untapped mono-color lands — `enters_tapped` flag dropped on BOTH engines (round-85 phase 2; non-basic-land substrate)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_tapped_mana_land`
+(the new predicate, wired into `_filter_deck_to_bridge_supported` +
+`_printing_to_card_def` + `loader_admits` in
+`scripts/measure_pool_parity.py`). Companion: the round-60
+`_printing_is_bridge_nonbasic_mana_land` predicate (the untapped
+sibling that owns the 5 shocklands above).
+
+**What the shortcut is**: the production-deck trajectory-parity
+loader now admits the 5 EoE Planet lands — **Adagia, Windswept
+Bastion / Evendo, Waking Haven / Kavaron, Memorial World /
+Susur Secundi, Void Altar / Uthros, Titanic Godcore** — as plain
+untapped MONO-color lands (a `CardDef(card_type="Land",
+mana_produced=<sorted mono>)`, the exact shape the round-60
+shockland arm emits, just with a 1-element produces tuple). The
+real Magic card prints "This land enters tapped." plus a Station
+mechanic and a tier-gated activated ability (e.g. Kavaron's
+"{1}{R},{T},Sacrifice a land: create a 2/2 Robot + team haste").
+The live `OracleParserCardSource` flattens each Planet land to
+`produces={one color}` + `enters_tapped=True` + zero
+triggered/activated/static abilities + zero keywords — the parser
+DELIBERATELY drops Station + the tier-gated activated ability
+(`land_builder.py:692-727`: "the Station mechanic itself isn't
+modeled … drops Station + tier-gated abilities"). The CardDef
+bridge has no `enters_tapped` field and Rust's `register_printing`
+has no land tapped-entry path, so the `enters_tapped=True` flag is
+dropped a SECOND time symmetrically. Net: each Planet land is
+modeled as a vanilla untapped MONO-color land on BOTH engines — no
+Station, no tier-gated ability, no tapped-entry, ever.
+
+**Why it's OK**: the drop is **symmetric** — the parser flattens
+Station + the tier-gated activated ability identically before either
+engine sees the printing (Station is a campaign-wide §2-declined
+subsystem; the activated ability is the campaign-wide
+activated-ability §2 decline), and the CardDef bridge drops
+`enters_tapped` identically before either engine consumes the
+bridge dict. The combined symmetric drop is verified at two levels:
+(1) **static admit** — 12 cross-engine bridge pins
+(`test_r85_*` in `tests/test_trajectory.py`, parametrized over the
+5 Planet lands + the 13 declined siblings) assert each Planet land
+admits and round-trips to the same single-color Land CardDef on
+both engines, and each declined sibling is rejected;
+(2) **dynamic byte-equal** — the round-85 genuine real-EoE Planet
+land bench probe
+(`tests/test_parity_smoke.py::test_r85_genuine_real_eoe_planet_land_byte_equal_through_bench`)
+drives real 17lands archetype 65 (Adagia + Kavaron) through
+`setup_matched_game_from_real_decks` with the `attack_all` strategy
+on BOTH engines for ~10 turns and asserts divergence-free play.
+
+This is the **round-60 shockland symmetric-drop precedent** exactly
+(see the shockland entry above): a parser-structured rider the
+bridge drops symmetrically on both engines, bit-equal under the
+bench play strategy, shipped blocked-at-fidelity rather than as a
+latent inter-engine divergence. The round-39 Ward grandparent
+applies as well (`CardDef bridge filter drops creatures with
+ward_cost`).
+
+**Overruled prediction note**: `docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`
+§2 Class 2 (round-59 N2) predicted these 5 Planet lands would ship
+a "real inter-engine `enters_tapped` divergence" if admitted ("Python
+tapped vs Rust untapped … the moment the bridge admits it"). That
+prediction assumed `enters_tapped=True` would propagate to Python's
+bridged printing only. The empirical re-walk in round-85 found that
+`_card_def_to_python_printing` materializes the Python printing with
+`enters_tapped=False` (the field is not on `CardDef` — both
+construction sites default it) and Rust's `register_printing` has no
+land-tapped path, so the bridged shape on Python matches the bridged
+shape on Rust → no divergence. The prediction was correct for the
+DUAL-color sub-shape C (Duskmourn painlands,
+`enters_tapped_unless_any_player_life_at_most=13`) — those carry a
+parser-STRUCTURED conditional-tapped field Python honors
+(`actions.py:1099`) and Rust ignores; this predicate still declines
+them on that field.
+
+The guardrail predicate POSITIVELY asserts the parser-flattened
+mono-color tapped mana-only profile (non-basic Land, 1-2 produce
+colors, `enters_tapped=True`, NO activated/triggered/static
+abilities, NO keywords, NO conditional-tapped, NO clone) so it
+admits ONLY these 5 and DECLINES the other 13 non-shockland
+non-basic-land cards. The two predicates (round-60 untapped +
+round-85 tapped) are positively disjoint — one requires
+`enters_tapped=False`, the other `enters_tapped=True` — pinned by
+`tests/test_trajectory.py::test_r85_tapped_and_untapped_predicates_are_disjoint`.
+
+**Failure mode**: a future probe (or a smarter bench strategy) that
+DRIVES Station's charge counters or a Planet land's tier-gated
+activated ability would observe Python and Rust **agree with each
+other** (both omit the mechanic) but **disagree with the
+Comprehensive Rules** (a real Adagia can be stationed to a charge
+threshold then copy an artifact/enchantment, affecting board state).
+It is a shared CR-incompleteness, NOT a cross-engine divergence —
+the bench cannot surface it because neither engine models the
+mechanic. Honest risk is that this masks the absence of the Station
+substrate (a separate campaign-wide §2 decline subsystem; see the
+`Station / Spacecraft` row in `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`).
+
+**Fix-scope estimate**: the full-fidelity closure requires THREE
+separate substrates: (1) a `CardDef.enters_tapped: bool` field +
+Rust `register_printing` land-tapped path (the same Phase-3 §3 work
+estimated 4-6h for the shockland entry above); (2) the campaign-wide
+**Station** subsystem (Spacecraft / Planet mechanic; multi-week
+scope per the inventory's `Station / Spacecraft` row — `docs/STATION_SPACECRAFT_SUBSTRATE_PLAN.md`
+when written); (3) the campaign-wide **activated-ability**
+substrate (the production-loader CardDef has no
+`activated_abilities` field today — also multi-week scope; tracked
+as a §2 decline in the inventory). All three are out of scope for
+near-term rounds.
+
+**Impact estimate**: **+5 cards / +7,617 cumulative 17lands decks**
+(Kavaron 2,493 + Adagia 2,091 + Susur Secundi 1,656 + Evendo 775 +
+Uthros 602) unblocked into the production-deck bench. **0 strength
+cost** (no engine behavior changes; this is a bench-coverage admit,
+not a rules change). The non-basic-land substrate is now at
+**+10 cards / +25,682 cumulative decks** between round-60 (5
+shocklands) and round-85 (5 Planet lands). The roadmap's remaining
+~8,893-deck tail (13 cards: Secluded Starforge 7,570 + Cathedral of
+War 1,205 + Echoing Deeps 118 + 10 zero-deck Duskmourn painlands) is
+gated behind the deferred conditional-tapped substrate (the
+painlands' real Python-vs-Rust divergence on
+`enters_tapped_unless_any_player_life_at_most`), the clone-land
+substrate (Echoing Deeps' graveyard-copy replacement), the
+static-abilities substrate (Cathedral of War's Exalted), and the
+activated-ability substrate (Secluded Starforge's three AAs) — not
+behind THIS predicate.
+
+---
+
 ## Perigee Beckoner — `PumpTargetCreatureUntilEotGrantDiesReturnTapped` Effect half shipped byte-equal; full card stays loader-gated (general nested-trigger-grant subsystem + warp_cost)
 
 **Location**: `rust/src/state.rs`

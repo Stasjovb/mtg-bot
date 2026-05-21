@@ -6216,18 +6216,67 @@ _R60_NONBASIC_SHOCKLANDS = {
     "Sacred Foundry": ("R", "W"),
 }
 
-# The other 18 non-basic-land-gated cards the §2 guardrail MUST decline:
-#  - 5 Planet lands: enters_tapped=True + Station + activated ability
-#  - Secluded Starforge: no produces + 3 activated abilities
-#  - Cathedral of War: enters_tapped=True + Exalted static + no mana
-#  - Echoing Deeps: optional_copy_land_from_graveyard clone
-#  - 10 conditional painlands: enters_tapped_unless_any_player_life_at_most=13
+# The other 18 non-basic-land-gated cards the §2 ROUND-60 untapped
+# guardrail MUST decline. **Round-85 N1 update:** the 5 Planet lands
+# are now admitted by the SIBLING ``_printing_is_bridge_simple_tapped_
+# mana_land`` predicate (Phase 2 of the non-basic-land substrate);
+# they still decline the round-60 UNTAPPED predicate (the two
+# predicates are positively disjoint — round-60 requires
+# ``enters_tapped=False``, round-85 requires ``enters_tapped=True``).
+# This list remains the round-60 untapped-predicate's negative set:
+# every member here MUST be rejected by
+# ``_printing_is_bridge_nonbasic_mana_land``. The round-85 sibling has
+# its own negative-set pin further down — see
+# ``_R85_TAPPED_NONBASIC_DECLINE_13``.
 _R60_NONBASIC_DECLINE_18 = [
     "Kavaron, Memorial World",
     "Adagia, Windswept Bastion",
     "Susur Secundi, Void Altar",
     "Evendo, Waking Haven",
     "Uthros, Titanic Godcore",
+    "Secluded Starforge",
+    "Cathedral of War",
+    "Echoing Deeps",
+    "Abandoned Campground",
+    "Bleeding Woods",
+    "Etched Cornfield",
+    "Lakeside Shack",
+    "Murky Sewer",
+    "Neglected Manor",
+    "Peculiar Lighthouse",
+    "Raucous Carnival",
+    "Razortrap Gorge",
+    "Strangled Cemetery",
+]
+
+# Round-85 N1 — the 5 Planet lands the SIBLING tapped predicate
+# (``_printing_is_bridge_simple_tapped_mana_land``) admits. Each has
+# ``enters_tapped=True`` + ``produces={one color}`` + no abilities +
+# no keywords (the parser drops Station + the tier-gated AA). Bridge
+# round-trips byte-equal because the CardDef carries no
+# ``enters_tapped`` field, so both engines materialize an UNTAPPED
+# single-color land (round-39 Ward / round-60 shockland symmetric-drop
+# precedent; documented deliberate simplification in
+# SEARCH_LIMITATIONS.md). Mapped to the sorted mono-color produces
+# tuple the CardDef carries.
+_R85_TAPPED_NONBASIC_PLANET_LANDS = {
+    "Adagia, Windswept Bastion": ("W",),
+    "Evendo, Waking Haven": ("G",),
+    "Kavaron, Memorial World": ("R",),
+    "Susur Secundi, Void Altar": ("B",),
+    "Uthros, Titanic Godcore": ("U",),
+}
+
+# Round-85 N1 — the 13 non-Planet siblings the tapped predicate MUST
+# decline. The §2 teeth: each member here remains a real cross-engine
+# divergence (the painlands' parser-structured conditional-tapped is
+# the §2 reject), an absent-mana §2 decline (Cathedral of War's empty
+# produces + Exalted, Secluded Starforge's empty produces + dropped
+# AAs), or a clone-replacement decline (Echoing Deeps). Admitting any
+# via a bare ``enters_tapped`` widen would ship silent mistranslation
+# (the round-38-E5 count-chasing anti-pattern the §2 audit exists to
+# prevent).
+_R85_TAPPED_NONBASIC_DECLINE_13 = [
     "Secluded Starforge",
     "Cathedral of War",
     "Echoing Deeps",
@@ -6351,20 +6400,179 @@ def test_r60_nonbasic_shockland_admitted_by_production_loader():
 
 
 def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
-    """The two highest-deck-count traps — Secluded Starforge (7,570
-    decks, activated abilities) and Kavaron (2,493 decks,
-    enters_tapped) — must NOT survive the production-deck filter. This
-    is the loader-level §2 anti-count-chasing pin (the highest-value
-    silent-mistranslation traps)."""
+    """The §2 anti-count-chasing pin for the non-basic-land substrate.
+
+    **Round-85 N1 update:** Kavaron, Memorial World is now admitted by
+    the sibling ``_printing_is_bridge_simple_tapped_mana_land``
+    predicate (Phase 2 closure: the parser-flattened mono-color tapped
+    Planet land is bit-equal cross-engine — the bridge carries no
+    ``enters_tapped`` field, both engines materialize an untapped
+    single-color land, symmetric drop). The PRESERVED §2 trap is
+    Secluded Starforge (7,570 decks, ``produces=frozenset()`` after the
+    parser drops its three activated abilities — the bridge would not
+    even produce a usable land + the activated-ability §2 decline).
+    Cathedral of War (Exalted static + empty produces) and Echoing
+    Deeps (clone replacement) also stay declined, as do the 10
+    Duskmourn conditional painlands.
+    """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
     by = OracleParserCardSource().get_printings()
-    deck = ["Secluded Starforge", "Kavaron, Memorial World", "Forest"]
+    deck = ["Secluded Starforge", "Cathedral of War", "Echoing Deeps", "Forest"]
     filtered, _ = _filter_deck_to_bridge_supported(deck, by)
     assert "Secluded Starforge" not in filtered
-    assert "Kavaron, Memorial World" not in filtered
+    assert "Cathedral of War" not in filtered
+    assert "Echoing Deeps" not in filtered
     assert "Forest" in filtered  # control: a real basic still admits
+
+
+@pytest.mark.parametrize(
+    "name", sorted(_R85_TAPPED_NONBASIC_PLANET_LANDS),
+)
+def test_r85_tapped_mana_land_admits_each_planet_land(name):
+    """``_printing_is_bridge_simple_tapped_mana_land`` accepts each of
+    the 5 EoE Planet lands — the parser flattens them to a mono-color
+    mana-only land with ``enters_tapped=True`` and no abilities/
+    keywords; the bridge drops ``enters_tapped`` on both engines,
+    materializing an untapped single-color land bit-equal cross-engine.
+    Round-39 Ward / round-60 shockland symmetric-drop precedent;
+    documented deliberate simplification in SEARCH_LIMITATIONS.md."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_tapped_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    printing = by[name]
+    assert _printing_is_bridge_simple_tapped_mana_land(printing) is True
+    # And it is genuinely non-basic + structurally tapped on the parser
+    # (the two positive guards that distinguish this predicate from the
+    # round-60 untapped sibling).
+    assert "Basic" not in printing.supertypes
+    assert printing.enters_tapped is True
+
+
+@pytest.mark.parametrize("name", _R85_TAPPED_NONBASIC_DECLINE_13)
+def test_r85_tapped_mana_land_declines_the_other_13(name):
+    """The §2 guardrail's teeth: the tapped predicate MUST reject every
+    non-Planet non-basic-land sibling — Cathedral of War (Exalted +
+    empty produces), Secluded Starforge (empty produces + dropped
+    activated abilities), Echoing Deeps (clone replacement), and the
+    10 Duskmourn conditional painlands (parser-structured
+    ``enters_tapped_unless_any_player_life_at_most`` is a real
+    cross-engine divergence Python honors and Rust ignores). Admitting
+    any via a bare supertype-gate widen would ship silent
+    mistranslation (round-38-E5 count-chasing anti-pattern)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_tapped_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    assert _printing_is_bridge_simple_tapped_mana_land(by[name]) is False
+
+
+def test_r85_tapped_mana_land_exactly_five_pool_wide():
+    """No OTHER printing in the entire merged parser pool passes the
+    tapped guardrail — exactly the 5 Planet lands, zero spillover. This
+    pins the §2 "the guardrail's negative set is exhaustive" claim so a
+    future pool regen that introduces a new tapped mana-only nonbasic
+    fails loudly here rather than silently widening the admit set."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_tapped_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    passers = sorted(
+        nm for nm, p in by.items()
+        if _printing_is_bridge_simple_tapped_mana_land(p)
+    )
+    assert passers == sorted(_R85_TAPPED_NONBASIC_PLANET_LANDS), passers
+
+
+def test_r85_tapped_and_untapped_predicates_are_disjoint():
+    """The two non-basic-mana-land predicates partition cleanly: no
+    pool printing passes BOTH. The round-60 untapped predicate requires
+    ``enters_tapped=False``; the round-85 tapped predicate requires
+    ``enters_tapped=True``. These are positively disjoint, so the two
+    admit sets cannot overlap. Pinning the partition explicitly catches
+    any future widen that breaks the disjointness invariant (a card
+    admitted twice would be double-counted by ``loader_admits`` and
+    cause measurement drift)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_nonbasic_mana_land,
+        _printing_is_bridge_simple_tapped_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    overlap = [
+        nm for nm, p in by.items()
+        if (
+            _printing_is_bridge_nonbasic_mana_land(p)
+            and _printing_is_bridge_simple_tapped_mana_land(p)
+        )
+    ]
+    assert overlap == [], (
+        f"untapped + tapped non-basic-mana-land predicates overlap on "
+        f"{overlap}; the two admit sets MUST be disjoint (round-60 "
+        f"requires enters_tapped=False, round-85 requires "
+        f"enters_tapped=True)"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,expected_mana", sorted(_R85_TAPPED_NONBASIC_PLANET_LANDS.items()),
+)
+def test_r85_printing_to_card_def_planet_land_is_untapped_mono(
+    name, expected_mana,
+):
+    """``_printing_to_card_def(<planet land>)`` → the EXACT shape the
+    round-60 shockland arm produces, just with a mono-color
+    ``mana_produced`` tuple. The bridge drops ``enters_tapped`` on
+    both engines (no CardDef field carries it; Rust's registry has no
+    land enters_tapped path), so the materialized printing is a flat
+    mono-color mana-only land — bit-equal cross-engine. No CardDef
+    field change, no Rust change — same idiom as the round-60
+    shockland CardDef path."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    by = OracleParserCardSource().get_printings()
+    cd = _printing_to_card_def(by[name])
+    assert cd.name == name
+    assert cd.card_type == "Land"
+    assert cd.mana_produced == expected_mana
+    # The Planet land CardDef carries no creature/ability fields — it
+    # is a pure mana source, structurally identical to a basic-land /
+    # shockland CardDef.
+    assert cd.power is None and cd.toughness is None
+    assert cd.triggered_abilities == ()
+    assert cd.keywords == ()
+
+
+def test_r85_nonbasic_planet_lands_admitted_by_production_loader():
+    """End-to-end EoE-pool delta pin: the production-deck filter
+    (``_filter_deck_to_bridge_supported``) now ADMITS all 5 Planet lands
+    where main dropped them — the drop→admit flip that unblocks +5
+    cards / +7,617 cumulative 17lands decks into the bench."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    by = OracleParserCardSource().get_printings()
+    deck = list(_R85_TAPPED_NONBASIC_PLANET_LANDS) + ["Forest", "Island"]
+    filtered, defs = _filter_deck_to_bridge_supported(deck, by)
+    for nm in _R85_TAPPED_NONBASIC_PLANET_LANDS:
+        assert nm in filtered, (
+            f"{nm} must be admitted by the production-deck loader "
+            f"(round-85 phase-2 unblock); got {filtered}"
+        )
+    by_name = {d.name: d for d in defs}
+    for nm, mana in _R85_TAPPED_NONBASIC_PLANET_LANDS.items():
+        assert by_name[nm].card_type == "Land"
+        assert by_name[nm].mana_produced == mana
 
 
 # ---------------------------------------------------------------------------

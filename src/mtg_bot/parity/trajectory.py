@@ -5053,6 +5053,126 @@ def _printing_is_bridge_nonbasic_mana_land(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_simple_tapped_mana_land(printing) -> bool:
+    """True if a CardPrinting is a NON-basic mono-color tapped mana-only
+    land the bridge can round-trip byte-equal across both engines.
+
+    **Non-basic land substrate phase 2 (round-85 N1; sibling of the
+    round-60 untapped predicate above).** The motivating set is the 5
+    EoE Planet lands — Adagia, Windswept Bastion / Evendo, Waking Haven
+    / Kavaron, Memorial World / Susur Secundi, Void Altar / Uthros,
+    Titanic Godcore. The live ``OracleParserCardSource`` flattens each
+    to ``produces={one color}`` + ``enters_tapped=True`` + no triggered/
+    activated/static abilities + no keywords (the parser deliberately
+    drops Station + the tier-gated activated ability per
+    ``land_builder.py:692-727`` — "the Station mechanic itself isn't
+    modeled … drops Station + tier-gated abilities"; verified by
+    ``scripts/scout_r59_nonbasic_land_shapes.py``).
+
+    **Why bit-equal cross-engine.** The CardDef bridge does NOT carry
+    ``enters_tapped`` (``cross_engine.py:_spec_card_to_printing_dict`` /
+    ``_card_def_to_python_printing``) and Rust's ``register_printing``
+    has no ``enters_tapped`` path on lands (``rust/src/cards.rs``;
+    Rust lands are always-untapped mana sources). Both engines
+    therefore materialize the bridge-flattened Planet land as an
+    UNTAPPED single-color land — bit-equal cross-engine, but
+    CR-incomplete (a real Kavaron enters tapped). The "should enter
+    tapped" rider + the dropped Station/AA together compose a
+    symmetric drop the bridge carries identically on BOTH engines —
+    the same round-39 Ward / round-60 shockland precedent: a rider the
+    bridge drops *symmetrically*, admittable as a **documented
+    deliberate simplification** (see ``docs/SEARCH_LIMITATIONS.md`` —
+    ``trajectory.py:_printing_is_bridge_simple_tapped_mana_land``).
+
+    **The round-59 plan doc's pessimistic ``enters_tapped`` divergence
+    prediction was wrong on the empirical bridge shape.**
+    ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §2 Class 2 (round-59
+    N2) predicted "Python tapped vs Rust untapped is a real
+    *inter-engine divergence* the moment the bridge admits" the
+    Planet lands. That analysis assumed the bridge would propagate
+    ``enters_tapped=True`` to Python only — but the CardDef carries no
+    such field, so Python's ``_card_def_to_python_printing``
+    materializes ``enters_tapped=False`` from the default. Python's
+    ``actions.py:1087`` (``card.tapped = bool(card.printing.enters_
+    tapped)``) reads False; Rust reads False; **no divergence**. The
+    plan doc's verdict for sub-shape B is hereby superseded for the
+    SINGLE-COLOR profile by this empirical re-walk; the verdict for
+    the DUAL-COLOR sub-shape C (Duskmourn painlands,
+    ``enters_tapped_unless_any_player_life_at_most=13``) remains
+    correct (the painlands' tapped-entry rider IS parser-structured,
+    Python honors, Rust ignores — that's the predicate's §2 reject).
+
+    The predicate is the §2 Class-1 guardrail for the tapped
+    sub-shape: it admits ONLY the parser-flattened mono-color
+    mana-only profile (non-basic Land, EXACTLY 1 produce color,
+    enters_tapped=True, NO abilities, NO keywords, NO conditional-
+    tapped, NO clone). It MUST reject every other sibling sub-shape:
+
+      * **The 5 untapped shocklands** (enters_tapped=False) — the
+        round-60 ``_printing_is_bridge_nonbasic_mana_land`` predicate
+        owns those; this predicate's positive ``enters_tapped=True``
+        guard makes the two predicate sets disjoint.
+      * **Duskmourn painlands** (10 cards, produces=2) —
+        ``enters_tapped_unless_any_player_life_at_most=13`` set;
+        Python honors, Rust ignores; real cross-engine divergence
+        on tapped state (parser-structured conditional-tapped is
+        the §2 reject).
+      * **Cathedral of War** — enters_tapped=True + ``keywords={
+        'exalted'}`` + ``produces=frozenset()``. Caught by the
+        produces-size guard (``1 <= len(produces) <= 2`` rejects
+        empty) AND the keyword guard. Exalted is a §2-declined
+        static (campaign-wide).
+      * **Secluded Starforge** — ``produces=frozenset()`` (the parser
+        drops the {T}: Add {C} mana ability when the printing also
+        carries a non-mana activated ability shape it can't structure;
+        caught by the produces-size guard). The dropped {2},{T}:+X/+0
+        and {5},{T}: make-a-Robot are §2-declined activated abilities.
+      * **Echoing Deeps** — ``optional_copy_land_from_graveyard=True``
+        (caught by the clone-field guard; a graveyard-copy is a
+        replacement effect neither engine carries).
+    """
+    if "Land" not in printing.card_types:
+        return False
+    if "Basic" in printing.supertypes:
+        return False  # basic path owns these
+    if not printing.produces or not (1 <= len(printing.produces) <= 2):
+        return False  # rejects Cathedral / Starforge (empty produces)
+    if not getattr(printing, "enters_tapped", False):
+        return False  # disjoint from the untapped (round-60) predicate
+    if printing.activated_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    # int field; 0 (or absent) disables the conditional-tapped
+    # replacement (cards/base.py:733). A positive threshold (the
+    # Duskmourn painlands' 13) is a parser-structured tapped-entry
+    # Python honors and Rust ignores — a real cross-engine divergence
+    # (the painlands are §2-declined here; the round-60 predicate
+    # rejects them on enters_tapped=False, this predicate rejects them
+    # on the conditional-tapped guard).
+    if getattr(printing, "enters_tapped_unless_any_player_life_at_most", 0):
+        return False
+    if getattr(printing, "enters_as_copy_of_creature", False):
+        return False
+    if getattr(printing, "optional_copy_land_from_graveyard", False):
+        return False
+    # Keywords guard — defends against Cathedral of War's
+    # ``keywords={'exalted'}``. Cathedral is already caught by the
+    # ``produces=frozenset()`` guard above; this is a second §2 tooth
+    # so a future printing that combines mono-color produces +
+    # enters_tapped + a parser-structured keyword can't slip through.
+    # The neighboring round-60 untapped predicate has no analogous
+    # check because no admitted shockland carries a keyword (verified
+    # round-85 against the 5 shocklands' parser printings); the tapped
+    # sibling needs the explicit check because Cathedral of War's
+    # shape is one ``produces`` field away from admitting otherwise.
+    if getattr(printing, "keywords", frozenset()):
+        return False
+    return True
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -5647,6 +5767,28 @@ def _printing_to_card_def(printing) -> CardDef:
         # replacement field) — a documented deliberate simplification
         # (SEARCH_LIMITATIONS.md). No CardDef field change, no Rust
         # change.
+        return CardDef(
+            name=printing.name,
+            card_type="Land",
+            mana_produced=tuple(sorted(printing.produces)),
+        )
+    if _printing_is_bridge_simple_tapped_mana_land(printing):
+        # Non-basic land substrate phase 2 (round-85 N1): a mono-color
+        # tapped mana-only non-basic land flattens to the SAME CardDef
+        # shape the round-60 untapped sibling produces — the bridge
+        # carries no ``enters_tapped`` field, so Python's
+        # ``_card_def_to_python_printing`` builds the printing with
+        # ``enters_tapped=False`` (default) and Rust's
+        # ``register_printing`` has no ``enters_tapped`` path on lands
+        # at all. Both engines therefore materialize the Planet land
+        # as an UNTAPPED single-color land — bit-equal cross-engine,
+        # CR-incomplete (a real Kavaron enters tapped). The "should
+        # enter tapped" rider + the parser-dropped Station/AA together
+        # compose a symmetric drop the bridge carries identically on
+        # BOTH engines — a documented deliberate simplification (see
+        # ``SEARCH_LIMITATIONS.md`` ``_printing_is_bridge_simple_tapped_
+        # mana_land`` entry; same round-39 Ward / round-60 shockland
+        # pattern). No CardDef field change, no Rust change.
         return CardDef(
             name=printing.name,
             card_type="Land",
@@ -6916,6 +7058,31 @@ def _filter_deck_to_bridge_supported(
             or _printing_is_bridge_simple_static_self_conditional_creature(
                 printing,
             )
+            # Non-basic land substrate — phase 2 (round-85 N1): the
+            # 10th disjunct admits a mono-color tapped mana-only
+            # non-basic land. The 5 EoE Planet lands (Adagia /
+            # Evendo / Kavaron / Susur Secundi / Uthros) are the
+            # carriers — parser-flattened to ``produces={one color}``
+            # + ``enters_tapped=True`` + no abilities + no keywords
+            # (the parser drops Station + the tier-gated activated
+            # ability per ``land_builder.py:692-727``). The bridge
+            # carries no ``enters_tapped`` field and Rust's
+            # ``register_printing`` has no land ``enters_tapped``
+            # path, so both engines materialize the bridge-flattened
+            # CardDef as an UNTAPPED single-color land — bit-equal
+            # cross-engine, CR-incomplete (round-39 Ward / round-60
+            # shockland precedent). The 5 Planet lands carry 7,617
+            # 17lands decks (per round-58 attribution scout); the
+            # remaining 13 non-shockland non-basic-land siblings
+            # stay declined here (Duskmourn painlands' parser-
+            # structured conditional-tapped IS a real cross-engine
+            # divergence — Python's ``actions.py:1099`` honors the
+            # ``enters_tapped_unless_any_player_life_at_most`` field,
+            # Rust ignores it; the predicate's §2 teeth reject the
+            # 10 painlands on that field, the 3 specials
+            # Cathedral/Starforge/Echoing Deeps on the produces / clone
+            # guards).
+            or _printing_is_bridge_simple_tapped_mana_land(printing)
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

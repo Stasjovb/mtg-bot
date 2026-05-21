@@ -982,7 +982,7 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through. Mirrors all 9 disjuncts
+    EXACT gate the bench corpus runs through. Mirrors all 10 disjuncts
     of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
 
     1. ``_printing_is_bridge_basic_land``
@@ -994,6 +994,12 @@ def loader_admits(printing) -> bool:
     7. ``_printing_is_bridge_simple_static_anthem_creature``
     8. ``_printing_is_bridge_simple_uncounterable_creature``
     9. ``_printing_is_bridge_simple_static_self_conditional_creature``
+   10. ``_printing_is_bridge_simple_tapped_mana_land`` — non-basic
+       land substrate phase 2 (round-85 N1; admits the 5 EoE Planet
+       lands as untapped mono-color lands — the parser-flattened
+       ``enters_tapped=True`` mono-color shape; the bridge drops
+       ``enters_tapped`` on both engines; round-39 Ward / round-60
+       shockland symmetric-drop precedent).
 
     Reused, not reimplemented, so the bench tier and the real bench can
     never disagree on what "admitted" means.
@@ -1072,6 +1078,17 @@ def loader_admits(printing) -> bool:
             or traj._printing_is_bridge_simple_static_self_conditional_creature(
                 printing,
             )
+            # Non-basic land substrate — phase 2 (round-85 N1): the
+            # 10th admit arm of the real loader; mirrors
+            # ``_filter_deck_to_bridge_supported``. The 5 EoE Planet
+            # lands (Adagia / Evendo / Kavaron / Susur Secundi /
+            # Uthros) flip from BLOCKED -> COVERED here (0-Effect,
+            # admit-arm fires, ``not eff_classes and admitted`` arm
+            # of ``covered_ok``), and the 5 ``_parity``-named
+            # delegators added to ``tests/test_parity_smoke.py`` in
+            # the companion lane move them all the way to PROBED via
+            # the slug-keyed ``_smoke_probed_cards`` scanner.
+            or traj._printing_is_bridge_simple_tapped_mana_land(printing)
         )
     except Exception:
         return False
