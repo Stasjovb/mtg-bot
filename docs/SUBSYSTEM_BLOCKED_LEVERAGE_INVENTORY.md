@@ -172,7 +172,29 @@ BLOCKED — blocked_non_effect                            2           0         
 BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                      120
 ```
 
-**post-invasive-maneuvers delta (this lane):** strict **+1 PROBED /
+**post-reroute-systems delta (this lane, honest-stop):** **+0 PROBED /
++0 BLOCKED** (no headline movement). The lane was a verify-first
+substrate-cost characterization for Reroute Systems (6,132 17lands
+decks, `ModalChooseOne` bimodal envelope). Finding: the Rust
+`Effect::ChooseOneMode` envelope EXISTS at the resolve-time dispatch
+level only — it has NO cast-time mode binding on `StackItem`, and no
+per-mode target selection plumbing. The spell-card-bridge admit
+predicate (`trajectory.py:4368`) positively rejects every
+`ModalChooseOne`-wrapped spell, and the reverse serializer has no
+modal arm. Reroute Systems mode 0 ALSO needs an extension of
+`Effect::PumpTargetArtifactOrCreatureUntilEOT` with a
+`granted_keywords` field (currently power/toughness-only); mode 1
+needs a new `Effect::DealDamageToTargetTappedCreature` variant.
+**Honest-stopped at 3-5 cycles of substrate work** — not worth a
+single-lane force-close at 6,132 decks; ~2-3k decks/cycle amortized
+across all 13 EoE `ModalChooseOne` cards, below the
+warp_cost-class (~15k/cycle) and Tier-A-class (~10k/cycle) bars.
+The next-best Effect-uncovered single-gated card (a non-modal
+shape) continues the per-card lane at the lower fixed cost. Full
+slice list in `docs/SEARCH_LIMITATIONS.md` "Spell-card-bridge —
+`ModalChooseOne` envelope is a multi-round substrate effort".
+
+**post-invasive-maneuvers delta (prior lane):** strict **+1 PROBED /
 −1 BLOCKED-subsystem-gated** (Invasive Maneuvers, 10,981 17lands
 single-gated decks — the highest-leverage simple-shape card on the
 23-card Effect-uncovered single-gated tail post-Cut-Propulsion).
@@ -581,6 +603,50 @@ field-view on BOTH engines).
 * **Per-card cost:** 1-3 cycles each.
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
+
+**Reroute Systems honest-stop (2026-05-21,
+`feature/reroute-systems-slice`, +0 PROBED).** Verify-first walk
+characterized the substrate cost rather than forcing closure. Reroute
+Systems parses as
+`ModalChooseOne([PumpTargetArtifactOrCreatureUntilEOT(granted_keywords=
+{indestructible}), DealDamageToTargetTappedCreature(amount=2)])`
+(6,132 17lands decks). Component-by-component:
+
+- The Rust `Effect::ChooseOneMode { modes: Vec<Effect> }` envelope EXISTS
+  (`rust/src/cards.rs:4151`, round-28 "13 EoE cards" first slice) but
+  resolves only via the resolve-time `PendingDecision::ChooseModeChoice`
+  callback (`rust/src/state.rs:1357`,
+  `rust/src/state_ops_resolve.rs:14382`). Python `ModalChooseOne` uses
+  **cast-time** mode picking per CR 601.2e
+  (`actions._choose_modes_at_cast`); Rust has no cast-time
+  mode-binding on `StackItem`. The two engines pick at different times.
+- `Effect::PumpTargetArtifactOrCreatureUntilEOT` EXISTS but carries
+  ONLY `{ power_bonus, toughness_bonus }` (`cards.rs:4238`) — Python's
+  class carries `granted_keywords` as the primary payload for the
+  indestructible-UEOT shape Reroute Systems mode 0 emits.
+- `Effect::DealDamageToTargetTappedCreature` IS MISSING from Rust
+  entirely.
+- The spell-card-bridge admit predicate (`trajectory.py:4368`)
+  POSITIVELY REJECTS every `ModalChooseOne`-wrapped spell, and the
+  reverse serializer `_python_spell_effect_to_dict` has no
+  `ModalChooseOne` arm — even with the leaves added, the lever's
+  round-trip-or-bail tooth would refuse the modal envelope.
+
+**Substrate cost: 3-5 cycles** (slice list in `docs/SEARCH_LIMITATIONS.md`
+"Spell-card-bridge — `ModalChooseOne` envelope is a multi-round
+substrate effort" — 6 numbered slices: cast-time mode binding,
+per-mode target selection, reverse serializer arm, two per-leaf Rust
+variant extensions, admit-set widen + probes). Decks/cycle when
+amortized across the 13 EoE `ModalChooseOne` cards is ~2-3k decks/cycle
+— comparable to the Effect-uncovered single-card lane and BELOW
+closed substrates (warp_cost ~15k/cycle). **Honest-stop: not worth
+forcing as a single lane**; the next-best Effect-uncovered single-
+gated card off the §3 lever (3) tail (a non-modal shape) is the
+cheaper continuation. The `ModalChooseOne` substrate will be
+scheduled as a named multi-cycle lever in its own right when it
+clears the deck-cost/cycle bar (currently below the 2026-05-21 cut).
+Reroute Systems lane is the verify-first finding, not a force-close
+attempt.
 
 ### (4) Dynamic-P/T formula — **CLOSED** (round-84, 2026-05-20)
 
