@@ -597,16 +597,23 @@ def test_predicate_declines_meltstriders_resolve():
     assert _printing_is_bridge_simple_aura(p) is False
 
 
-def test_predicate_declines_tractor_beam():
-    """Tractor Beam stays bench-loader-declined — the lone-control
-    + prevents-untap shape is honest-stopped pending its own
-    cross-engine play-parity slice (Phase-2-S2-extension, unchanged
-    by Phase 3)."""
+def test_predicate_admits_tractor_beam_post_cast_time_seat_alignment():
+    """**Updated 2026-05-20 — cast-time auto-resolve seat alignment
+    follow-up slice landed.** Tractor Beam is now bench-loader-
+    ADMITTED: the cross-engine play-parity gap (cast-time enchant-
+    target seat alignment + non-creature summoning_sick clear +
+    aura-host-control revert on non-SBA destroy paths +
+    BiosynthicBurst legal/resolve walks both bfs by controller) is
+    closed. The Phase-3 safe-trigger gate
+    (``_aura_triggers_are_phase3_safe``) admits the
+    ``ENTERS+IsSelf+TapEnchantedPermanent`` ETB shape; the §2
+    teeth admit the joint ``attached_grants_control +
+    attached_prevents_untap`` rider combo."""
     from mtg_bot.cards.source import get_active_source
 
     p = get_active_source().get_printings()["Tractor Beam"]
     assert p.is_aura is True
-    assert _printing_is_bridge_simple_aura(p) is False
+    assert _printing_is_bridge_simple_aura(p) is True
 
 
 def test_predicate_declines_moonlit_meditation():
