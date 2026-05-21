@@ -17025,6 +17025,11 @@ impl GameState {
             trigger_payload: None,
             target_obj_id: None,
             target_obj_id_2: None,
+            // ModalChooseOne envelope — Cycle 1: this is the
+            // bespoke synthetic-spell push helper (no printing
+            // lookup); modal mode binding rides on the production
+            // `cast_spell_noncreature` path. Default `None`.
+            chosen_mode_idx: None,
         });
         Ok(next_id)
     }
