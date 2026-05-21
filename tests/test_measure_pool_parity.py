@@ -456,13 +456,23 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # Effect-level closure flips the residue tier).
     # `missing` is now 1 distinct genuine new-Rust-Effect ask
     # (Lightstall Inquisitor).
+    # Tractor Beam closure fold (round-80, 2026-05-20): Tractor Beam
+    # blocked_non_effect -> closed (Aura attach substrate Phase 2 S2
+    # extension landed end-to-end; reclassified to BLOCKED-SUBSYSTEM).
+    # Dauntless Scrapbot closure fold (2026-05-20, dauntless-scrapbot-
+    # closure slice): Dauntless Scrapbot blocked_non_effect -> closed
+    # (Sequence + ExileEachOpponentsGraveyard + CreateToken[Lander]
+    # substrate end-to-end shipped + Effect-half real-EoE byte-equal
+    # probe; reclassified to BLOCKED-SUBSYSTEM on the production-deck
+    # loader's Sequence-in-safe-trigger admit, matching the Tractor
+    # Beam r80 / Pain for All r80 honest-stop substrate-landing
+    # precedent). This drives the BLOCKED-blocked_non_effect tier to
+    # ZERO — the last carrier (Dauntless Scrapbot) is closed, so
+    # `non_effect` is now the empty set.
     assert missing == {
         "Lightstall Inquisitor",
     }
-    assert non_effect == {
-        "Dauntless Scrapbot",
-        "Tractor Beam",
-    }
+    assert non_effect == set()
     # Durable structural invariants (hold every round regardless of
     # which card is in which bucket):
     # - a card cannot be both genuinely_missing and blocked_non_effect

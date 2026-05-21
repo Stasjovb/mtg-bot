@@ -4,11 +4,12 @@ Canonical focused inventory of the **4 EoE cards** currently in the
 `BLOCKED — genuinely_missing` tier (`docs/POOL_PARITY.md`) — the cards
 that need a brand-new Rust `Effect::` variant + parse + bridge before
 they can be byte-equal cross-engine. This is the **post-flip long-tail
-sequencing guide**: every other parity work is BLOCKED-non-effect (2
-cards), BLOCKED-subsystem-gated (147 cards, see
-`docs/SUBSYSTEM_ROADMAP.md` for the full living roadmap and
+sequencing guide**: every other parity work is BLOCKED-non-effect (0
+cards — **tier closed 2026-05-20 by the Dauntless Scrapbot closure
+slice; see Round-80+ section below**), BLOCKED-subsystem-gated (146
+cards, see `docs/SUBSYSTEM_ROADMAP.md` for the full living roadmap and
 `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` for a short
-top-5-next-levers snapshot), or PROBED/covered (320 cards).
+top-5-next-levers snapshot), or PROBED/covered (328 cards).
 
 **Snapshot HEAD:** post-slice-20-merge (2026-05-20).
 **Source of truth:** `docs/residue_worklist.json` (the residue
@@ -127,6 +128,38 @@ honest-stopped)** — the residue worklist entry's
 admit honest-stopped pending cross-engine cast-time
 auto-resolve seat-alignment slice". **BLOCKED-genuinely_missing
 tier shrinks from 2 → 1 — only Pain for All remains.**
+
+**Round-80+ update (2026-05-20): DAUNTLESS SCRAPBOT CLOSED — LAST
+BLOCKED-blocked_non_effect TIER ZEROED.** Dauntless Scrapbot
+(`When this creature enters, exile each opponent's graveyard. Create a
+Lander token.` — ~18,378 17lands decks, the last carrier in the
+BLOCKED-blocked_non_effect tier after the round-56 N1 ExileEach-
+OpponentsGraveyard Effect-half closure) is now closed. **All
+substrate Effects are SHIPPED + BRIDGED end-to-end:** `Effect::Sequence`
+composer (round-23 ``sequence`` bridge arm at
+`cross_engine.py:1633`), `Effect::ExileEachOpponentsGraveyard`
+(round-56 N1 unit variant at `cards.rs:4038` + bridge at
+`cross_engine.py:8639`), `Effect::CreateToken { count,
+token_printing_id }` + the Lander token-registration substrate
+(round-49 N1 Phase 1 / round-53 N1 Phase 3a —
+`_token_with_safe_activated_ability_card_def` +
+`_canonical_lander_token_card_def`). **Effect-half GENUINE
+real-EoE byte-equal probe** lives at
+`test_cross_engine_real_eoe_dauntless_scrapbot_etb_exile_each_opponents_graveyard_parity`
+(tests/test_parity_smoke.py:61990) — drives the ACTUAL parsed
+printing's ENTERS Sequence first leaf cross-engine and asserts
+byte-equality on the exile observable. The pool classifier now lands
+Dauntless Scrapbot in **PROBED** (genuine-probe is the strongest
+evidence tier). Full game-trajectory parity remains honest-stopped on
+the production-deck loader's Sequence-in-safe-trigger admit (the
+trajectory `_python_ta_to_safe_dict` recognizer's elif-chain has no
+`Sequence` arm; `ExileEachOpponentsGraveyard` is not yet in the leaf
+recognizer either — both are sized as their own substrate slice with
+paired `_SAFE_TRIGGERS` + `_SAFE_EFFECT_KEYS` + dict-shape gate
+work). **BLOCKED-blocked_non_effect tier: 1 → 0.** Mirrors the
+Tractor Beam r80 / Pain for All r80 "honest-stop substrate-landing"
+precedent: substrate end-to-end shipped, Effect-half probed
+byte-equal, full-card admit deferred to a per-loader-recognizer slice.
 
 **Total deck reach of this tier:** 35,368 decks (sum of the per-card
 counts below: Command Bridge 24,522 + Lightstall Inquisitor 4,371 +
