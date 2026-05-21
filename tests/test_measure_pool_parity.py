@@ -293,6 +293,80 @@ def test_probe_module_synthetic_nonprobe_is_not_counted(
     ) == set()
 
 
+def test_loader_admits_credits_simple_aura_disjunct(mod):
+    """The Aura Phase 1 flash widening attribution close (2026-05-21):
+    ``loader_admits`` calls through to the same
+    ``_printing_is_bridge_simple_aura`` predicate the real production
+    loader uses, so a Phase-1-S1 carrier (Frantic Strength /
+    Shardmage's Rescue — pure ``equipment_bonuses`` + static ``flash``
+    keyword) admits via the metric's helper.
+
+    Without this disjunct a 0-Effect keyword-only Aura would stay
+    BLOCKED in the metric even after the round-79 trajectory predicate
+    widen — a pure measurement-attribution gap that this lane closed.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    printings = OracleParserCardSource().get_printings()
+    # Both real S1 carriers admit through the metric helper.
+    for name in ("Frantic Strength", "Shardmage's Rescue"):
+        p = printings.get(name)
+        if p is None:
+            # The Duskmourn-set Auras live in ``data/duskmourn.json``
+            # alongside the EoE pool. If they're absent the snapshot
+            # changed — skip cleanly; the test pins the substrate, not
+            # the pool composition.
+            continue
+        assert mod.loader_admits(p) is True, (
+            f"{name!r} must admit through the Aura disjunct of "
+            f"``loader_admits`` — the round-79 flash widen + 2026-05-21 "
+            f"metric attribution close should both be in effect"
+        )
+    # Negative-control: a vanilla creature still admits via the
+    # simple_creature disjunct (Aura widen must NOT regress the
+    # other arms).
+    forest = printings.get("Forest")
+    if forest is not None:
+        assert mod.loader_admits(forest) is True
+    # A printing the trajectory predicate REJECTS — a Sorcery — must
+    # NOT admit through any disjunct (the helper's contract is the
+    # exact loader gate). Use a known Sorcery from the EoE pool.
+    for sorcery_name in ("Embrace Oblivion", "Decode Transmissions"):
+        sorcery = printings.get(sorcery_name)
+        if sorcery is not None and "Sorcery" in sorcery.card_types:
+            # Spell-bridge is NOT in ``loader_admits`` (only the bench-
+            # admit gates are), so a Sorcery — even one with all-covered
+            # Effects — declines here.
+            assert mod.loader_admits(sorcery) is False, (
+                f"{sorcery_name!r} (Sorcery) must NOT admit through "
+                f"``loader_admits`` — the helper only covers the 4 "
+                f"bench-admit disjuncts (basic land, simple creature, "
+                f"pure-warp creature, simple Aura)"
+            )
+            break
+
+
+def test_loader_admits_exception_path_returns_false(mod):
+    """The ``try / except Exception`` envelope in ``loader_admits``
+    swallows any predicate-side blow-up (a defensive guard around
+    the trajectory disjuncts) and returns False — never True.
+    Pins the contract: a malformed-printing input falls to BLOCKED,
+    never spuriously admits.
+    """
+    class _BoomPrinting:
+        @property
+        def is_aura(self):
+            raise RuntimeError("intentional probe blow-up")
+
+        # Other attrs the underlying predicates touch; the property
+        # above will fire first.
+        keywords = frozenset()
+        card_types = ()
+        supertypes = ()
+
+    assert mod.loader_admits(_BoomPrinting()) is False
+
+
 def test_genuine_probed_cards_union_is_superset_of_smoke_only(mod):
     """The union detector can only ADD cards (set union) — it must
     never DROP a card the original smoke-only rule credited (the 60
