@@ -5432,6 +5432,122 @@ engines).
 
 ---
 
+## Shattered Wings — `DestroyTargetArtifactEnchantmentOrFlyingCreature` (unit) Effect half shipped byte-equal; full Sorcery AUTO-JOINS the spell-card-bridge admit set; 3-way OR target filter with EFFECTIVE-keyword flying leg mirrors the OrTapped sibling
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature` field-
+free unit variant + `parse_effect` arm
+`destroy_target_artifact_enchantment_or_flying_creature` +
+`effect_to_dict` arm) + `rust/src/state_ops_resolve.rs` (the
+resolve match arm beside the
+`DestroyTargetArtifactOrTappedCreature` sibling — cast-time-bound
+target read off `current_resolve_payload_target_id` with a
+None-payload synthetic-test fallback to deterministic-first
+permanent matching the 3-way OR filter in ETB-timestamp order;
+3-way OR filter re-checked at resolve per CR 608.2b — Artifact
+OR Enchantment OR (Creature AND
+`battlefield_has_keyword(target, "flying")`); flying leg reads
+EFFECTIVE keywords; indestructible-skip on scan; DIES dispatch
+creature-gated per CR 700.4; LEAVES + token-cease drained).
+Legal-targets gate `rust/src/state_ops_legal.rs`
+(`spell_targets_satisfiable` 3-way OR arm). Bridge arm
+`src/mtg_bot/parity/cross_engine.py`
+(`destroy_target_artifact_enchantment_or_flying_creature`,
+immediately after the
+`destroy_target_artifact_or_tapped_creature` arm). Python→dict
+reverse-serializer leaves
+`src/mtg_bot/parity/trajectory.py`
+(`_python_spell_effect_to_dict` `_leaf` for both
+`DestroyTargetArtifactEnchantmentOrFlyingCreature` AND `Surveil` —
+the outer Sequence's two children). Python class (pre-existing,
+NOT new): `DestroyTargetArtifactEnchantmentOrFlyingCreature`
+(`src/mtg_bot/effects/generic/destroy.py:501`).
+
+**What the shortcut is**: Shattered Wings (~7,793 17lands decks)
+is a `[Sorcery] {2}{G}` printing "Destroy target artifact,
+enchantment, or creature with flying. Surveil 1." — the next-best
+Effect-uncovered single-gated card on the post-Cut-Propulsion
+tail (the §3 lever (3) target). The genuine parsed `spell_effect`
+is `Sequence(DestroyTargetArtifactEnchantmentOrFlyingCreature(),
+Surveil(amount=1))` — the destroy variant is the only new arm;
+the Sequence wrapper and Surveil 1 leaf are pre-shipped
+(`Effect::Sequence` / `Effect::Surveil` round-15). Python's
+`Destroy.resolve` re-verifies the 3-way OR `TargetSpec` filter at
+resolution per CR 608.2b, calls `turn.destroy(state, obj)`
+(returns `False` on indestructible). The Effect half closes
+byte-equal; like Biosynthic Burst / Focus Fire / Diplomatic
+Relations / Cut Propulsion the **full Shattered Wings Sorcery
+AUTO-JOINS the spell-card-bridge bench-admit set** — the lever's
+`_printing_is_bridge_simple_spell` guardrail queries the LIVE
+covered set + round-trips the reverse serializer + (Phase 1)
+single-target shape, so adding the Effect + bridge + the two
+reverse-serializer leaves (destroy + Surveil) flips the printing
+in (no hardcoded list — the §2 auto-grow teeth).
+
+**§2 simplifications (mirrors the proven OrTapped sibling, NOT
+new debt)**: two simplifications, each already cross-engine-proven
+byte-equal on the same admitted pool:
+
+1. **`damaged_this_turn` ledger omitted on the Rust side** — same
+   shortcut as Cut Propulsion. Shattered Wings's destroy half does
+   NOT touch the damage ledger (it removes the target before any
+   damage step), so this is structurally a no-op for the
+   destroy-only path. Documented for completeness only.
+2. **Cast-time-bound target via
+   `current_resolve_payload_target_id`** with a None-payload
+   synthetic-test fallback (the proven OrTapped /
+   `SeedshipImpactEffect` payload-target swap pattern; CR 608.2b
+   honored on the genuine bridged-cast path). Identical observable
+   to the OrTapped sibling on every synthetic pin — no risk of
+   re-introducing the battlefield STATE_EQ axis bug because the
+   bug requires a NON-None bound target whose target ceased to be
+   legal (which is the path the genuine cast covers).
+
+**Why it's OK**: each simplification is the EXACT shape of an
+already-cross-engine-proven Tier-A sibling
+(`DestroyTargetArtifactOrTappedCreature`) on the same admitted
+pool. The 3-way OR filter's flying leg reads `battlefield_has_
+keyword` (folds printed + UEOT + aura + anthem) which is the same
+fold as Python's `HasKeyword.matches` reading
+`effective_keywords` — a creature granted flying by an aura /
+anthem / UEOT-pump is legally targetable on BOTH engines byte-
+equal. Target re-validation at resolve (CR 608.2b) mirrors
+Python exactly: bound target gone OR no longer matches the 3-way
+OR filter → silent fizzle. DIES dispatch is creature-gated per CR
+700.4 (the artifact + enchantment legs do NOT fire DIES; the
+flying-creature leg does) — mirrors the OrTapped sibling's R76-2
+/ R74-2 fix shape. Indestructible-skip on the scan mirrors the
+shipped `DestroyTargetArtifact` /
+`DestroyTargetArtifactOrTappedCreature` precedent. The Surveil 1
+outer-Sequence rider runs through the pre-shipped
+`Effect::Surveil` arm with no composition-specific code.
+
+**Failure mode**: same as the OrTapped sibling — a mixed
+indestructible+destroyable board would pick deterministic-first
+(out of probe scope, mirrors precedent). The non-first-target
+case (an agent wants to pick a NON-first-legal target) diverges
+on the single slot (the agent has no say — shared with the
+Phase-1 deterministic-first entry).
+
+**Fix scope estimate**: thread an agent target decision for the
+single slot for the non-first-target case (shared follow-on with
+every Tier-A single-target spell). Layered-anthem-keyword
+interactions on flying-grant cross-engine parity is already
+covered by the `battlefield_has_keyword` fold contract.
+
+**Impact estimate**: +1 single-gated card (Shattered Wings) flips
+loader-drop → bench-admit; ~7,793 17lands decks. PROBED 266 → 267;
+BLOCKED-subsystem-gated 121 → 120; Effect-uncovered single-gated
+23 → 22. Effect-half is genuinely probed (the actual parsed
+Shattered Wings printing is driven against a 2/2 flyer →
+destroyed → in graveyard, byte-equal full field-view on BOTH
+engines; the Surveil 1 leg is a structural no-op on the empty-
+library probe — Python examines 0 cards because the library is
+empty; Rust's `Effect::Surveil` clamps `n = min(count, lib_len)
+= 0` and pushes an empty SurveilChoice the auto-resolve discards).
+
+---
+
 ## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
 
 **Location**: `scripts/parity_smoke.py` `_zone_signature` /

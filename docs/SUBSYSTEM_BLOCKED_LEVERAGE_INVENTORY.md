@@ -174,13 +174,52 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-shattered-wings
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                       267
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                        88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                         0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                         0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                       120
 ```
+
+**post-shattered-wings delta (this lane):** strict **+1 PROBED /
+−1 BLOCKED-subsystem-gated** (Shattered Wings, 7,793 17lands
+single-gated decks per the round-58 attribution scout). Genuine
+Rust substrate close following the Cut Propulsion Tier-A precedent
+(`feature/effect-uncovered-slice` / `e2e45b46`): new
+`Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature`
+field-free unit variant (`rust/src/cards.rs`) + parse arm +
+to_pydict arm; resolve arm in `rust/src/state_ops_resolve.rs`
+beside the OrTapped sibling (cast-time-bound target via
+`current_resolve_payload_target_id`; 3-way OR predicate
+re-checked at resolve per CR 608.2b; flying leg reads EFFECTIVE
+keywords via `battlefield_has_keyword`; indestructible-skip on
+the scan; DIES creature-gated; LEAVES + token-cease drained);
+`state_ops_legal.rs::spell_targets_satisfiable` 3-way OR arm;
+bridge round-trip in `cross_engine.py` + the
+`trajectory.py::_python_spell_effect_to_dict` reverse-serializer
+adds two leaves (destroy + Surveil — the outer Sequence's
+children) so the {2}{G} Shattered Wings Sorcery auto-joins the
+spell-card-bridge admit set (6→9 across Cut Propulsion +
+Shattered Wings). 7 new probes: 5 Rust pins (artifact / enchant /
+flying-creature destroys + non-flying-creature silent fizzle +
+indestructible-survives), 1 auto-join admit-set pin, 1 GENUINE
+real-EoE cross-engine byte-equal probe driving the parsed
+printing against a 2/2 flyer → destroyed → in graveyard
+byte-equal on BOTH engines.
+
+**post-cut-propulsion delta:** strict **+1 PROBED / −1
+BLOCKED-subsystem-gated / −1 covered-by-construction** (Cut
+Propulsion, 11,990 17lands single-gated decks). Genuine Rust
+substrate close (Tier-A precedent — Biosynthic Burst / Focus
+Fire / Diplomatic Relations): new `Effect::CutPropulsionEffect`
+field-free unit variant + parse + to_pydict + resolve (effective-
+power read with counters-inclusive formula; flying-doubler via
+`battlefield_has_keyword`; saturating damage apply; receiver-
+side DEALT_DAMAGE event dispatched). Bridged via `cross_engine.py`
+`cut_propulsion_effect` + `trajectory.py` reverse-serializer
+leaf — the {2}{R} Cut Propulsion Instant auto-joins the
+spell-card-bridge admit set.
 
 **post-non-basic-land-P2 delta (this lane):** strict **+5 PROBED /
 −5 BLOCKED-subsystem-gated** (the 5 EoE Planet lands: Adagia,
@@ -457,15 +496,22 @@ respectively).
 ### (3) Effect-uncovered diffuse tail — per-card lane
 
 Not a substrate; per-card closures land 1 card at a time. The cheap
-Tier-A single-card lane is **EXHAUSTED**. Remaining **24 single-gated**
-members are Tier-C-ish (combat-shape divergence, larger Rust per card):
+Tier-A single-card lane is **EXHAUSTED**. Cut Propulsion CLOSED
+(round-86, 2026-05-21: `feature/effect-uncovered-slice` — Tier-A
+shape with intrinsic flying-doubler, 11,990 17lands decks) +
+Shattered Wings CLOSED (round-87, 2026-05-21:
+`feature/shattered-wings-slice` — single-gated tier, 3-way OR
+target filter Artifact OR Enchantment OR (Creature AND flying),
+7,793 17lands decks; the outer `Sequence(destroy, Surveil 1)`
+runs through the pre-shipped Effect::Sequence + Effect::Surveil
+arms). Remaining **22 single-gated** members:
 Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
-Clobbering, Cut Propulsion, Darkness, Devastating Onslaught, Drill Too
-Deep, Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
+Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
+Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
 Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for
-Scrap, Scout for Survivors, Shattered Wings, Singularity Rupture,
-Systems Override, Terminal Velocity, Vengeful Possession, Warping Wail,
-Zero Point Ballad.
+Scrap, Scout for Survivors, Singularity Rupture, Systems Override,
+Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
+Ballad.
 
 * **Per-card cost:** 1-3 cycles each.
 * **Pool-flip per cycle:** 1 card + its deck count.
