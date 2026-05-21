@@ -1118,6 +1118,23 @@ def _main_structured(args, parser) -> None:
                 "early_stop_patience": args.early_stop_patience,
                 "epochs_trained": len(history.train_losses),
                 "structured_config": train_config["structured_config"],
+                # Flat ``structured_*`` mirror of the nested dims
+                # above. The loader (``NNEvaluator.from_metadata``)
+                # reads either layout via ``_resolve_structured_dim``
+                # (flat wins); writing both means a metadata file
+                # round-trips through any historical loader version
+                # — including pre-iter_019 loaders that ONLY read the
+                # flat keys, so a fresh-trained model is still loadable
+                # under an old worker that hasn't picked up the
+                # loader-side compat shim yet. iter_019 BUG #2 fix.
+                "structured_emb_dim": structured_config.emb_dim,
+                "structured_n_heads": structured_config.n_heads,
+                "structured_n_layers": structured_config.n_layers,
+                "structured_hidden_dim": structured_config.hidden_dim,
+                "structured_action_history_n": (
+                    structured_config.action_history_n
+                ),
+                "structured_n_printings": structured_config.n_printings,
             },
             training_history={
                 "train_losses": history.train_losses,
