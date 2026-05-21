@@ -71560,6 +71560,459 @@ def test_cross_engine_real_eoe_moonlit_meditation_aura_phase_4_s3_parity():
     test_moonlit_meditation_substituted_token_carries_supertype_override()
 
 
+# ============================================================
+# Shattered Wings — Effect-uncovered single-gated tier (~7,793
+# 17lands decks). ``{2}{G}`` Sorcery: "Destroy target artifact,
+# enchantment, or creature with flying. Surveil 1." Rust
+# ``Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature``
+# (cards.rs field-free UNIT variant; resolve in
+# state_ops_resolve.rs beside the Tier-A
+# ``DestroyTargetArtifactOrTappedCreature`` arm), bridged via
+# cross_engine.py
+# ``destroy_target_artifact_enchantment_or_flying_creature`` ↔
+# Python ``DestroyTargetArtifactEnchantmentOrFlyingCreature``
+# (effects/generic/destroy.py:501). The outer
+# ``Sequence(destroy, Surveil(1))`` runs through the already-
+# live ``Effect::Sequence`` + ``Effect::Surveil`` arms.
+#
+# Adding the destroy Effect + bridge + the trajectory.py
+# reverse-serializer leaves (destroy + Surveil) flips the
+# printing into the spell-card-bridge admit set (the guardrail
+# queries the LIVE covered set + round-trips the reverse
+# serializer — auto-grow, no hardcoded list).
+# ============================================================
+
+
+def _build_rust_shattered_wings_state(
+    *,
+    artifact_target: bool = False,
+    enchantment_target: bool = False,
+    flying_creature_target: bool = False,
+    non_flying_creature_decoy: bool = False,
+    indestructible: bool = False,
+):
+    """Build a Rust state with a Shattered Wings spell on p0's stack
+    targeting the seeded permanent (when present). Returns
+    ``(rs, target_id_or_None)``.
+
+    Exactly one of ``artifact_target`` / ``enchantment_target`` /
+    ``flying_creature_target`` should be True for the happy-path
+    probes; ``non_flying_creature_decoy`` adds a creature that does
+    NOT have flying (to pin the fizzle leg). ``indestructible`` flips
+    the seeded target to indestructible (to pin the survives leg).
+
+    No target is seated via push_to_stack (low-level API) — the
+    resolve arm's None-payload fallback picks the deterministic-first
+    matching permanent in ETB-timestamp order across BOTH bfs
+    (mirrors the OrTapped sibling's synthetic-test fallback)."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    target_id = None
+    if artifact_target:
+        printing = {
+            "name": "SW Target Artifact",
+            "card_types": ["Artifact"],
+        }
+        if indestructible:
+            printing["keywords"] = ["indestructible"]
+        target_id = rs.register_and_inject_object(printing, 1, ZB)
+    elif enchantment_target:
+        printing = {
+            "name": "SW Target Enchantment",
+            "card_types": ["Enchantment"],
+        }
+        if indestructible:
+            printing["keywords"] = ["indestructible"]
+        target_id = rs.register_and_inject_object(printing, 1, ZB)
+    elif flying_creature_target:
+        printing = {
+            "name": "SW Target Flyer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "keywords": (
+                ["indestructible", "flying"]
+                if indestructible
+                else ["flying"]
+            ),
+        }
+        target_id = rs.register_and_inject_object(printing, 1, ZB)
+    if non_flying_creature_decoy:
+        # A non-flying creature that must NOT be picked (it fails the
+        # 3-way OR filter — it is a Creature but lacks flying, and it
+        # is not an Artifact or Enchantment). ETB-seated AFTER the
+        # main target so even if the deterministic-first fallback
+        # picks earliest-ETB, this decoy ranks LATER.
+        rs.register_and_inject_object(
+            {"name": "SW Decoy Non-Flyer",
+             "card_types": ["Creature"],
+             "power": 3, "toughness": 3},
+            1, ZB,
+        )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Shattered Wings", "card_types": ["Sorcery"],
+         "effects": [{"kind": "sequence", "effects": [
+             {"kind":
+              "destroy_target_artifact_enchantment_or_flying_creature"},
+             {"kind": "surveil", "count": 1},
+         ]}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    return rs, target_id
+
+
+def test_rust_shattered_wings_destroys_artifact():
+    """Rust pin (a): artifact-leg of the 3-way OR — vanilla Artifact
+    on p1's bf → destroyed → in p1's graveyard. Mirrors the
+    Python ``Destroy.resolve`` artifact branch."""
+    rs, target = _build_rust_shattered_wings_state(artifact_target=True)
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    assert not any(
+        e["id"] == target for e in rs.battlefield_snapshot()
+    ), "artifact target must leave the battlefield (destroyed)"
+    assert any(
+        e["id"] == target for e in rs.graveyard_snapshot(1)
+    ), "destroyed artifact must land in its controller's graveyard"
+
+
+def test_rust_shattered_wings_destroys_enchantment():
+    """Rust pin (b): enchantment-leg of the 3-way OR — vanilla
+    Enchantment on p1's bf → destroyed → in p1's graveyard.
+    Distinguishes Shattered Wings from the sibling
+    ``DestroyTargetArtifact`` / ``DestroyTargetArtifactOrTapped
+    Creature`` arms (neither admits a pure Enchantment)."""
+    rs, target = _build_rust_shattered_wings_state(
+        enchantment_target=True,
+    )
+    rs.resolve_top_of_stack()
+    assert not any(
+        e["id"] == target for e in rs.battlefield_snapshot()
+    ), "enchantment target must leave the battlefield"
+    assert any(
+        e["id"] == target for e in rs.graveyard_snapshot(1)
+    ), "destroyed enchantment must land in its controller's graveyard"
+
+
+def test_rust_shattered_wings_destroys_flying_creature():
+    """Rust pin (c): flying-creature-leg of the 3-way OR — a 2/2
+    flyer on p1's bf → destroyed → in p1's graveyard. The flying
+    leg reads EFFECTIVE keywords via ``battlefield_has_keyword``
+    (folds printed + UEOT + aura-granted + anthem-granted)."""
+    rs, target = _build_rust_shattered_wings_state(
+        flying_creature_target=True,
+    )
+    rs.resolve_top_of_stack()
+    assert not any(
+        e["id"] == target for e in rs.battlefield_snapshot()
+    ), "flying creature target must leave the battlefield"
+    assert any(
+        e["id"] == target for e in rs.graveyard_snapshot(1)
+    ), "destroyed flying creature must land in its graveyard"
+
+
+def test_rust_shattered_wings_silent_fizzle_non_flying_creature():
+    """Rust pin (d): non-flying creature on the bf does NOT satisfy
+    the 3-way OR filter — fizzle. The decoy must NOT be destroyed
+    even though it is the only permanent on the bf."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    decoy = rs.register_and_inject_object(
+        {"name": "SW Non-Flyer Decoy", "card_types": ["Creature"],
+         "power": 3, "toughness": 3},
+        1, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Shattered Wings", "card_types": ["Sorcery"],
+         "effects": [{"kind": "sequence", "effects": [
+             {"kind":
+              "destroy_target_artifact_enchantment_or_flying_creature"},
+             {"kind": "surveil", "count": 1},
+         ]}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0, "spell must resolve (fizzling)"
+    assert any(
+        e["id"] == decoy for e in rs.battlefield_snapshot()
+    ), (
+        "non-flying creature must NOT be destroyed (fails the 3-way "
+        "OR filter — it is a Creature but lacks flying, and it is "
+        "neither Artifact nor Enchantment)"
+    )
+
+
+def test_rust_shattered_wings_indestructible_survives():
+    """Rust pin (e): an indestructible artifact survives the destroy
+    (CR 702.12; mirrors the shipped ``DestroyTargetArtifact`` /
+    ``DestroyTargetArtifactOrTappedCreature`` indestructible-skip
+    precedent — the scan skips indestructible permanents, picking
+    nothing → silent fizzle)."""
+    rs, target = _build_rust_shattered_wings_state(
+        artifact_target=True, indestructible=True,
+    )
+    rs.resolve_top_of_stack()
+    assert any(
+        e["id"] == target for e in rs.battlefield_snapshot()
+    ), "indestructible artifact must survive the destroy"
+
+
+def test_shattered_wings_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the destroy Effect + bridge arm +
+    the ``trajectory._python_spell_effect_to_dict`` reverse-
+    serializer leaves (destroy + Surveil) landed, the genuine
+    ``{2}{G}`` Shattered Wings Sorcery is now covered+bridged AND
+    round-trips the reverse serializer, so
+    ``_printing_is_bridge_simple_spell`` admits it into the
+    spell-card-bridge bench-admit set (the guardrail queries the
+    LIVE covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the destroy variant + Surveil leaf
+    having LANDED).
+    """
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    real = get_active_source().get_printings().get("Shattered Wings")
+    if real is None:
+        pytest.skip("Shattered Wings absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, Sequence), (
+        f"Shattered Wings spell_effect must be Sequence; got "
+        f"{type(se).__name__}"
+    )
+    assert len(se.effects) == 2
+    assert isinstance(
+        se.effects[0], DestroyTargetArtifactEnchantmentOrFlyingCreature
+    ), (
+        f"Shattered Wings inner effects[0] must be "
+        f"DestroyTargetArtifactEnchantmentOrFlyingCreature; got "
+        f"{type(se.effects[0]).__name__}"
+    )
+    assert isinstance(se.effects[1], Surveil), (
+        f"Shattered Wings inner effects[1] must be Surveil; got "
+        f"{type(se.effects[1]).__name__}"
+    )
+    covered = covered_python_class_set()
+    assert "DestroyTargetArtifactEnchantmentOrFlyingCreature" in covered, (
+        "the Rust Effect::DestroyTargetArtifactEnchantmentOrFlying"
+        "Creature variant makes the Python class covered"
+    )
+    assert "Surveil" in covered, (
+        "Surveil is covered (round-15 Effect::Surveil variant)"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {
+        "kind": "sequence",
+        "effects": [
+            {"kind":
+             "destroy_target_artifact_enchantment_or_flying_creature"},
+            {"kind": "surveil", "count": 1},
+        ],
+    }, (
+        f"reverse serializer must emit the Sequence-of-destroy-then-"
+        f"surveil dict; got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, Sequence), (
+        f"dict→Python bridge must round-trip to Sequence; got "
+        f"{type(back).__name__}"
+    )
+    assert isinstance(
+        back.effects[0],
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+    assert isinstance(back.effects[1], Surveil)
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Shattered Wings must auto-join the spell-card-bridge admit "
+        "set now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_shattered_wings_destroy_target_artifact_enchantment_or_flying_creature_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Shattered Wings
+    (~7,793 17lands decks). Effect-uncovered single-gated tier.**
+
+    Drives the **ACTUAL parsed Shattered Wings printing** on the
+    Python side: ``get_active_source().get_printings()["Shattered
+    Wings"]`` — which the live parser maps to a ``spell_effect``
+    of ``Sequence(DestroyTargetArtifactEnchantmentOrFlyingCreature(),
+    Surveil(1))`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Sorcery] {2}{G} — Destroy target artifact, enchantment, or
+         creature with flying. Surveil 1."
+
+    **Honest split (§2 — destroy Effect closes byte-equal; the
+    Surveil leg leverages the pre-shipped Effect::Surveil arm; the
+    full Sorcery auto-joins the spell-card-bridge admit set).** The
+    new Effect arm under test —
+    ``Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature`` —
+    is shipped this slice (Rust field-free UNIT variant + parse +
+    to_dict + resolve; the 3-way OR predicate scans for Artifact OR
+    Enchantment OR (Creature AND ``battlefield_has_keyword(flying)``)
+    + skips indestructible; bridged via ``cross_engine.py``
+    ``destroy_target_artifact_enchantment_or_flying_creature`` to
+    the pre-existing Python
+    ``DestroyTargetArtifactEnchantmentOrFlyingCreature``
+    (effects/generic/destroy.py:501)). The Surveil 1 outer-Sequence
+    rider runs through the already-live ``Effect::Surveil`` arm.
+    The full Shattered Wings **Sorcery** auto-joins the spell-card-
+    bridge bench-admit set (pinned in
+    ``test_shattered_wings_auto_joins_spell_card_bridge_admit_set``).
+
+    **Deterministic, no RNG. Empty libraries on both engines** so
+    the Surveil 1 leg is a structural no-op on BOTH engines (Python
+    examines 0 cards because the library is empty; Rust's
+    ``Effect::Surveil`` clamps ``n = min(count, lib_len) = 0`` and
+    pushes an empty SurveilChoice that the post-resolve auto-resolve
+    discards — byte-equal both engines).
+
+    p0 has the genuine Shattered Wings; p1 has a 2/2 flying
+    creature (the flying-leg target — the only permanent on the bf
+    matching the 3-way OR filter, so deterministic-first on both
+    engines). The WHOLE field view is asserted byte-equal
+    post-resolve."""
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    )
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Shattered Wings")
+    if real is None:
+        pytest.skip("Shattered Wings absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, Sequence)
+    assert isinstance(
+        se.effects[0], DestroyTargetArtifactEnchantmentOrFlyingCreature
+    )
+    assert isinstance(se.effects[1], Surveil)
+
+    def _sw_flyer(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+            keywords=("flying",),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # p1 opponent 2/2 FLYER — the flying-leg target (only permanent
+    # on either bf matching the 3-way OR filter, so deterministic-
+    # first pick on both engines).
+    py_target = py.new_object(
+        _sw_flyer("SW Real Flyer", 2, 2), owner_id=1,
+        zone=Zone.BATTLEFIELD)
+    py_target.summoning_sick = False
+    py.battlefield.append(py_target)
+    rs_target = rs.register_and_inject_object(
+        {"name": "SW Real Flyer", "card_types": ["Creature"],
+         "power": 2, "toughness": 2, "keywords": ["flying"]},
+        1, ZB,
+    )
+
+    # Cast the genuine Shattered Wings on the flyer (Python: real
+    # spell_effect on a StackItem targeting the flyer; Rust: the
+    # bridged synthetic Sorcery — the resolve arm's None-payload
+    # fallback picks the only matching permanent on the bf, which
+    # IS the flyer here, so the deterministic-first observable is
+    # byte-equal with Python's explicit cast-time target bind).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_target.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Shattered Wings", "card_types": ["Sorcery"],
+         "effects": [{"kind": "sequence", "effects": [
+             {"kind":
+              "destroy_target_artifact_enchantment_or_flying_creature"},
+             {"kind": "surveil", "count": 1},
+         ]}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # FULL byte-equal compare. The flyer is destroyed by the 3-way
+    # OR's flying-leg → moved to p1's graveyard byte-equal on BOTH
+    # engines. Surveil 1 is a no-op on empty libraries.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Shattered Wings post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines (3-way OR filter + "
+        f"flying-leg pick + destroy → graveyard); diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on top of the full
+    # field byte-equality).
+    assert not [o for o in py.battlefield if o.id == py_target.id], (
+        "Python: flyer destroyed by the 3-way OR's flying leg"
+    )
+    assert not any(
+        e["id"] == rs_target for e in rs.battlefield_snapshot()
+    ), "Rust: flyer destroyed by the 3-way OR's flying leg (byte-equal)"
+    assert any(
+        o.id == py_target.id for o in py.players[1].graveyard
+    ), "Python: destroyed flyer in p1's graveyard"
+    assert any(
+        e["id"] == rs_target for e in rs.graveyard_snapshot(1)
+    ), "Rust: destroyed flyer in p1's graveyard (byte-equal)"
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

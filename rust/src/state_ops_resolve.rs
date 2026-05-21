@@ -8564,6 +8564,231 @@ fn apply_effect(
                 target_id,
             )?;
         }
+        // DestroyTargetArtifactEnchantmentOrFlyingCreature
+        // (Effect-uncovered single-gated tier — Shattered Wings,
+        // ~7,793 17lands decks). CR 701.7 with a 3-way OR target
+        // filter: (Artifact) OR (Enchantment) OR (Creature AND
+        // has-flying). Mirrors Python's
+        // `effects/generic/destroy.py:501 DestroyTargetArtifact
+        // EnchantmentOrFlyingCreature` whose `TargetSpec` filter is
+        // `IsArtifact() | IsEnchantment() | (IsCreature() &
+        // HasKeyword("flying"))`, re-verified at resolution per CR
+        // 608.2b against the centralized `state.battlefield` walk
+        // (no controller restriction).
+        //
+        // **Cast-time-bound target via
+        // `current_resolve_payload_target_id`** (the
+        // `DestroyTargetArtifactOrTappedCreature` /
+        // `SeedshipImpactEffect` payload-target swap pattern; CR
+        // 608.2b). Pre-fix would have self-scanned for the first
+        // matching permanent on either bf — diverging from Python
+        // whenever the cast-time-bound target ceased between cast
+        // and resolve (Python re-checks the ORIGINAL target id and
+        // fizzles).
+        //
+        // **None-payload synthetic-test fallback.** The cross-engine
+        // real-EoE probe + the spell-card-bridge use
+        // `cast_spell_noncreature` which binds the target at cast
+        // time. The low-level synthetic-test `push_to_stack` API
+        // does NOT seat a target. For that path — and ONLY that
+        // path — fall back to the deterministic-first scan
+        // (identical observable to the OrTapped sibling).
+        //
+        // **Flying-leg reads EFFECTIVE keywords.**
+        // `battlefield_has_keyword` folds printed + UEOT-granted +
+        // aura-granted + anthem-granted keywords. Python's
+        // `HasKeyword.matches` reads `effective_keywords` which is
+        // the same fold — so a creature granted flying by an aura
+        // / anthem / UEOT pump is legally targetable on BOTH
+        // engines byte-equal.
+        //
+        // **DIES dispatch is creature-gated** (CR 700.4 — only a
+        // creature death fires DIES). The R76-2 / R74-2 fix shape:
+        // the artifact + enchantment legs do NOT fire DIES; the
+        // flying-creature leg does. Push order: DIES via
+        // `pending_dies_dispatches` (creature only), LEAVES via
+        // `pending_leaves_dispatches` (always), token-cease
+        // (always); the drain order in `resolve_top_of_stack`
+        // matches the SBA path (DIES first then LEAVES; LIFO ⇒
+        // LEAVES resolves first), byte-equal with Python's
+        // `move_off_battlefield` sequence.
+        Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature => {
+            // Re-derive the 3-way OR predicate privately (file-iso
+            // — the `state_ops_legal.rs` `spell_targets_satisfiable`
+            // arm has its own copy; same convention as the OrTapped
+            // sibling). The "flying" leg reads effective keywords
+            // via the established `battlefield_has_keyword` reader
+            // (folds printed + UEOT + aura + anthem). The
+            // indestructible-skip leg matches the shipped
+            // `DestroyTargetArtifact` /
+            // `DestroyTargetArtifactOrTappedCreature` precedent.
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                let is_artifact = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact");
+                                let is_enchantment = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Enchantment");
+                                let is_creature = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature");
+                                let has_flying = is_creature
+                                    && crate::state_ops_combat::battlefield_has_keyword(
+                                        state, o.id, "flying",
+                                    );
+                                // 3-way OR filter re-checked at
+                                // resolve (defense-in-depth + the
+                                // CR 608.2b "still matches the
+                                // typed filter" leg).
+                                if !(is_artifact
+                                    || is_enchantment
+                                    || has_flying)
+                                {
+                                    return None;
+                                }
+                                if printing
+                                    .keywords
+                                    .iter()
+                                    .any(|k| k == "indestructible")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback — deterministic-first
+                    // permanent matching the 3-way OR filter across
+                    // BOTH bfs in ETB-timestamp order. Collect the
+                    // candidate ids in a first pass (immutable
+                    // borrow via the helper iter + a private
+                    // `has_flying` check on each), then walk again
+                    // to find the controller index by id. This
+                    // two-pass shape is required because
+                    // `battlefield_has_keyword` takes `&GameState`
+                    // and the bf walk gives us `&GameObject` —
+                    // both immutable borrows live happily side by
+                    // side.
+                    let mut picked: Option<(usize, u32)> = None;
+                    for obj in
+                        crate::bf_iter::bf_iter_etb_sorted(state).into_iter()
+                    {
+                        let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        else {
+                            continue;
+                        };
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_enchantment = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Enchantment");
+                        let is_creature = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        let has_flying = is_creature
+                            && crate::state_ops_combat::battlefield_has_keyword(
+                                state, obj.id, "flying",
+                            );
+                        if !(is_artifact || is_enchantment || has_flying) {
+                            continue;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            continue;
+                        }
+                        picked = Some((obj.controller as usize, obj.id));
+                        break;
+                    }
+                    picked
+                }
+            };
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here
+                // (CR 302.1 — sickness is battlefield-only state).
+                // See I35.
+                obj.damage = 0;
+                // R77-CFI1: counters NOT cleared on the dead object
+                // (the established byte-equal contract; same as the
+                // shipped `DestroyTargetArtifactOrTappedCreature`
+                // arm).
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) =
+                    (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+                // LTB fan-out (the `mark_left_battlefield_if_nonland`
+                // helper gates on the printing — artifact / enchantment
+                // / creature all reach the LTB mark; lands cannot
+                // satisfy the 3-way OR filter anyway).
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // R76-2 / R74-2 DIES dispatch — creature-gated (CR
+                // 700.4). The flying-creature leg fires DIES; the
+                // artifact + enchantment legs do not (no spurious
+                // DIES). Mirrors the shipped OrTapped sibling's
+                // creature-gate.
+                let victim_is_creature = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| {
+                        p.card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false);
+                if victim_is_creature {
+                    state
+                        .pending_dies_dispatches
+                        .push(leaving_obj_id);
+                }
+                // LEAVES fan-out (always — every bf-exit fires
+                // LEAVES per CR 603.6c / `Event::Leaves
+                // Battlefield`'s contract).
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Round-55: token-cease sibling of the LEAVES push.
+                // The id is queued unconditionally; the is_token
+                // gate lives in drain_pending_token_cease (CR
+                // 111.7 / 704.5d).
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

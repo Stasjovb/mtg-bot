@@ -4808,10 +4808,9 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # (Shattered Wings — "destroy target artifact, enchantment,
         # or creature with flying") is a separate
         # ``DestroyTargetArtifactEnchantmentOrFlyingCreature`` Effect
-        # variant on both engines. Cross-engine end-to-end probe
-        # deferred per round-17/18/19 synthetic-only-when-riders-
-        # cascade precedent (the targeting Decision pipeline is its
-        # own surface beyond the bare bridge-arm slice).
+        # variant on both engines (now CLOSED — see the
+        # ``destroy_target_artifact_enchantment_or_flying_creature``
+        # bridge arm below).
         from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
         return DestroyTargetArtifact()
     if kind == "destroy_target_nonland_permanent":
@@ -8977,6 +8976,48 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyTargetArtifactOrTappedCreature,
         )
         return DestroyTargetArtifactOrTappedCreature()
+    if kind == "destroy_target_artifact_enchantment_or_flying_creature":
+        # **Effect-uncovered single-gated tier — Shattered Wings
+        # (~7,793 17lands decks).** Rust substrate
+        # ``Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature``
+        # (cards.rs unit variant; parser
+        # ``"destroy_target_artifact_enchantment_or_flying_creature"``;
+        # resolve in state_ops_resolve.rs beside
+        # ``DestroyTargetArtifactOrTappedCreature``).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "destroy_target_artifact_enchantment_or_flying_
+        # creature"}``. Python's
+        # ``DestroyTargetArtifactEnchantmentOrFlyingCreature``
+        # (effects/generic/destroy.py:501) is a frozen dataclass with
+        # no constructor parameters (``__post_init__`` sets the
+        # ``targets`` tuple to ``TargetSpec(IsArtifact() |
+        # IsEnchantment() | (IsCreature() & HasKeyword("flying")))``).
+        # Bridge constructs the bare class — adds NO Python.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-indestructible permanent matching the 3-way OR filter
+        # (Artifact OR Enchantment OR (Creature AND has-flying)).
+        # The flying leg reads EFFECTIVE keywords via
+        # ``battlefield_has_keyword`` (folds printed + UEOT +
+        # aura-granted + anthem-granted) — matches Python's
+        # ``HasKeyword.matches`` which reads ``effective_keywords``.
+        # Python's ``Destroy.resolve`` re-verifies the same filter
+        # at resolution per CR 608.2b. Indestructible permanents
+        # survive on both engines. A non-flying creature is NOT a
+        # legal pick (the 3-way OR filter teeth).
+        #
+        # **Real EoE consumer**: Shattered Wings — Sorcery {2}{G}
+        # "Destroy target artifact, enchantment, or creature with
+        # flying. Surveil 1." The full spell is a Sequence of this
+        # destroy arm + the already-live Surveil{count:1} leaf; the
+        # Sequence wrapper and Surveil leaf are pre-shipped.
+        from mtg_bot.effects.generic.destroy import (
+            DestroyTargetArtifactEnchantmentOrFlyingCreature,
+        )
+        return DestroyTargetArtifactEnchantmentOrFlyingCreature()
     if kind == "seedship_impact_effect":
         # **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
         # Rust substrate ``Effect::SeedshipImpactEffect {

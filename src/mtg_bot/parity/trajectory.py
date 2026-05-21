@@ -4103,8 +4103,10 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.combinators import Sequence
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactEnchantmentOrFlyingCreature,
         DestroyTargetArtifactOrTappedCreature,
     )
+    from mtg_bot.effects.generic.library_lookat import Surveil
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
         CutPropulsionEffect,
@@ -4243,6 +4245,53 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "amount": int(eff.amount),
                 "_token_card_def": lcd,
             }
+        # Shattered Wings's destroy half (Effect-uncovered single-
+        # gated tier; ~7,793 17lands decks). Pid-FREE covered unit
+        # variant — Rust's ``parse_effect`` ``"destroy_target_
+        # artifact_enchantment_or_flying_creature"`` arm takes NO
+        # fields and the dict→Python bridge arm (cross_engine.py
+        # ``destroy_target_artifact_enchantment_or_flying_creature``)
+        # constructs the field-free
+        # ``DestroyTargetArtifactEnchantmentOrFlyingCreature()``. The
+        # 3-way OR filter (Artifact OR Enchantment OR (Creature AND
+        # has-flying)) is intrinsic. No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is
+        # the clean ``destroy_target_artifact_or_tapped_creature``
+        # unit-leaf idiom. Adding this leaf + the matching
+        # ``Surveil`` leaf below is what flips Shattered Wings into
+        # the spell-card-bridge admit set: with the Rust variant +
+        # bridge arm landed AND the outer Sequence's children all
+        # serializable, the {2}{G} Sorcery is now covered+bridged
+        # AND round-trips through the reverse serializer, so
+        # :func:`_printing_is_bridge_simple_spell` admits it
+        # (auto-grow, no hardcoded list — the §2 teeth).
+        if isinstance(eff, DestroyTargetArtifactEnchantmentOrFlyingCreature):
+            return {
+                "kind": (
+                    "destroy_target_artifact_enchantment_or_flying_"
+                    "creature"
+                ),
+            }
+        # Bare-shape Surveil leaf (no ``use_artifact_count`` rider).
+        # Mirrors the safe-trigger Surveil arm
+        # (:func:`_python_ta_to_safe_dict` Surveil case): Python's
+        # class carries an additional ``use_artifact_count`` flag
+        # that selects the Surveil-X-where-X=artifacts variant
+        # (``effects/generic/library_lookat.py:580``); Rust's
+        # ``Effect::Surveil { count: i32 }`` does NOT represent the
+        # X variant — gate on the rider being False so the X
+        # variant falls through to the bail path. Rust's spelling
+        # for the count field is ``count`` (not Python's
+        # ``amount``); the cross_engine bridge arm
+        # (``cross_engine.py:1030`` ``surveil``) reads ``count`` and
+        # constructs ``Surveil(amount=count)`` — bidirectional with
+        # what we emit here. Adding this leaf — together with the
+        # destroy leaf above — admits Shattered Wings's outer
+        # Sequence into the bridge admit set.
+        if isinstance(eff, Surveil):
+            if eff.use_artifact_count:
+                return None
+            return {"kind": "surveil", "count": int(eff.amount)}
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child

@@ -21265,26 +21265,35 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # Burst (+1 → 5); round-75 closed Tier-A #5 Focus Fire
     # (``FocusFireEffect { base }`` single-int variant + bridge +
     # reverse-serializer leaf — pid-free, single-target ``{W}``
-    # Instant, covered), which AUTO-JOINED via the §2 auto-grow teeth
-    # (the lever queries the LIVE covered set, NOT a hardcoded list —
+    # Instant, covered), which AUTO-JOINED via the §2 auto-grow teeth.
+    # round-76 closed Diplomatic Relations via the Phase-2 2-slot
+    # grammar widen (6→7). The Cut Propulsion close (Effect-uncovered
+    # Tier-A; ~11,990 17lands decks) AUTO-JOINED (+1 → 8); the
+    # Shattered Wings close (Effect-uncovered single-gated tier;
+    # ~7,793 17lands decks — destroy variant + Surveil 1 outer
+    # Sequence; the trajectory reverse-serializer Surveil leaf flipped
+    # the round-trip teeth) AUTO-JOINED (+1 → 9). The §2 auto-grow
+    # teeth keep firing as each subsequent per-card close lands — the
+    # lever queries the LIVE covered set, NOT a hardcoded list —
     # new-code-is-right per ``feedback_parity_new_code_is_right.md``;
-    # this guard's purpose is to be updated when a Tier-A close lands,
-    # NOT to forbid the growth it explicitly anticipates).
+    # this guard's purpose is to be updated when a Tier-A close
+    # lands, NOT to forbid the growth it explicitly anticipates.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Depressurize", "Diplomatic Relations",
-        "Focus Fire", "Orbital Plunge", "Radiant Strike",
-        "Seedship Impact",
+        "Biosynthic Burst", "Cut Propulsion", "Depressurize",
+        "Diplomatic Relations", "Focus Fire", "Orbital Plunge",
+        "Radiant Strike", "Seedship Impact", "Shattered Wings",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 7 covered+bridged Tier-A spells: the 6 "
+        f"exactly the 9 covered+bridged Tier-A spells: the 8 "
         f"single-target Phase-1 cards + Diplomatic Relations, the "
         f"Phase-2 2-slot card the round-76 grammar widening admitted "
-        f"— the set grew 6→7; it auto-grows further as the remaining "
-        f"Tier-A spells close)")
+        f"— the set grew 6→9 across Tier-A closes including Cut "
+        f"Propulsion and Shattered Wings; it auto-grows further as "
+        f"the remaining Tier-A spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

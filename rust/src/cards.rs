@@ -1563,6 +1563,78 @@ pub enum Effect {
     /// `BiosynthicBurstEffect` / `DiplomaticRelationsEffect` Tier-A
     /// unit-variant convention.
     CutPropulsionEffect,
+    /// **Effect-uncovered single-gated tier — Shattered Wings
+    /// (~7,793 17lands decks).** "Destroy target artifact,
+    /// enchantment, or creature with flying. Surveil 1."
+    ///
+    /// Mirrors Python's `DestroyTargetArtifactEnchantmentOrFlyingCreature`
+    /// (`effects/generic/destroy.py:501`) — the ONLY EoE card with this
+    /// 3-way OR target filter. The full Shattered Wings spell body is
+    /// `Sequence(DestroyTargetArtifactEnchantmentOrFlyingCreature(),
+    /// Surveil(1))` — the destroy arm is the only new variant; the
+    /// `Sequence` wrapper and the `Surveil { count: 1 }` leaf are
+    /// already shipped (`Effect::Sequence` round-15 /
+    /// `Effect::Surveil` round-15).
+    ///
+    /// **Field-free unit variant** (the `DestroyTargetArtifactOrTapped
+    /// Creature` idiom — the closest sibling). No dict payload — the
+    /// 3-way OR filter `IsArtifact() | IsEnchantment() | (IsCreature()
+    /// & HasKeyword("flying"))` is intrinsic to the variant. Python's
+    /// `__post_init__` sets `targets=(TargetSpec(IsArtifact() |
+    /// IsEnchantment() | (IsCreature() & HasKeyword("flying"))),)` and
+    /// the dataclass carries no constructor parameters.
+    ///
+    /// **Resolve semantics (mirrors `Destroy.resolve` at
+    /// `effects/generic/destroy.py:54-86` byte-equal to the SoT; the
+    /// same shape as the shipped `DestroyTargetArtifactOrTapped
+    /// Creature` arm with the predicate widened from `Artifact OR
+    /// (Creature AND tapped)` to `Artifact OR Enchantment OR (Creature
+    /// AND HasKeyword("flying"))`):**
+    /// 1. Read the cast-time-bound target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    `DestroyTargetArtifactOrTappedCreature` /
+    ///    `SeedshipImpactEffect` payload-target swap pattern). When
+    ///    `None` (synthetic-test `push_to_stack` path that doesn't
+    ///    seat a target), fall back to the deterministic-first
+    ///    permanent matching the 3-way OR filter in ETB-timestamp
+    ///    order across BOTH battlefields (mirrors
+    ///    `bf_iter_etb_sorted`).
+    /// 2. Re-validate the bound target at resolve (CR 608.2b): the
+    ///    target must still be on a battlefield AND still satisfy the
+    ///    `IsArtifact OR IsEnchantment OR (IsCreature AND
+    ///    HasKeyword("flying"))` filter. The "flying" leg reads
+    ///    EFFECTIVE keywords via `battlefield_has_keyword` (folds
+    ///    printed + UEOT-granted + aura-granted + anthem-granted
+    ///    keywords; matches Python's `HasKeyword.matches` which reads
+    ///    `effective_keywords`). Illegal target (gone, or no longer
+    ///    matches the filter) → silent fizzle.
+    /// 3. Indestructible permanents survive — the scan skips them
+    ///    (mirrors the shipped `DestroyTargetArtifact` /
+    ///    `DestroyTargetArtifactOrTappedCreature` precedent; Python's
+    ///    `turn.destroy()` returns False on indestructible, same
+    ///    observable).
+    /// 4. Destroy the target via the proven artifact-arm body shape:
+    ///    remove from bf, reset zone/tapped/damage/attached_to/
+    ///    exiled_with_source, push to graveyard, queue DIES dispatch
+    ///    if the victim was a Creature (CR 700.4; the R76-2 / R74-2
+    ///    fixed pattern — only a creature death fires DIES — so a
+    ///    destroyed artifact or enchantment OR the flying-creature
+    ///    leg ALL agree byte-equal with the existing OrTapped
+    ///    sibling), queue LEAVES dispatch, queue token-cease.
+    ///
+    /// **Surveil 1 outer-Sequence rider.** The full Shattered Wings
+    /// effect is `Sequence([this destroy, Surveil { count: 1 }])`;
+    /// the Surveil child runs via the already-live `Effect::Surveil`
+    /// arm immediately after this destroy arm returns Ok(()). No
+    /// composition-specific code needed here — the Sequence wrapper
+    /// dispatches children in order.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `DestroyTargetArtifactEnchantmentOrFlyingCreature()` (field-
+    /// free construction). Mirrors the `DestroyTargetArtifactOr
+    /// TappedCreature` Tier-A unit-variant convention.
+    DestroyTargetArtifactEnchantmentOrFlyingCreature,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -7734,6 +7806,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (`current_resolve_payload_target_id`), NOT in this dict.
             Ok(Effect::CutPropulsionEffect)
         }
+        "destroy_target_artifact_enchantment_or_flying_creature" => {
+            // Effect-uncovered single-gated tier — Shattered Wings
+            // (~7,793 17lands decks). Unit variant — no required
+            // fields. Filter is intrinsic ("Artifact OR Enchantment
+            // OR (Creature AND has flying), non-indestructible").
+            // Extra keys ignored. Mirrors
+            // `destroy_target_artifact_or_tapped_creature` parser
+            // arm shape (silent-drop convention for unrecognized
+            // keys); only the intrinsic filter differs (3-way OR
+            // with the flying-creature leg vs the 2-way artifact-
+            // OR-tapped-creature OR).
+            Ok(Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -11430,6 +11515,21 @@ pub(crate) fn effect_to_pydict<'py>(
             // reverse-serializer leaf. The single target is NOT
             // serialized here — it rides on the StackItem.
             d.set_item("kind", "cut_propulsion_effect")?;
+        }
+        Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature => {
+            // Effect-uncovered single-gated tier — Shattered Wings.
+            // Unit variant — `kind` only (the
+            // `destroy_target_artifact_or_tapped_creature` field-free
+            // to_dict idiom). Bidirectional with the
+            // `destroy_target_artifact_enchantment_or_flying_creature`
+            // parse arm + the cross_engine.py bridge arm + the
+            // trajectory.py reverse-serializer leaf. The single
+            // target is NOT serialized here — it rides on the
+            // StackItem.
+            d.set_item(
+                "kind",
+                "destroy_target_artifact_enchantment_or_flying_creature",
+            )?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;
