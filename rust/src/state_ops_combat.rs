@@ -642,11 +642,34 @@ pub(crate) fn static_anthem_grants_keyword_to(
 /// Recognized keys (in lockstep with Python):
 ///   * `"harmonious_grovestrider"` — base P = T = number of lands
 ///     controlled by the obj's controller. CR 208.2 / layer 7b
-///     CDA. Harmonious Grovestrider is the only EoE printing
-///     this lane covers today; sibling cards (Cosmogoyf, Emissary
-///     Escort) carry different per-formula shapes and are
-///     honest-stopped on the Rust side (they remain admit-filtered
-///     on the bridge until a per-card slice lands).
+///     CDA.
+///   * `"cosmogoyf"` — base P = N, T = N + 1 where N is the count
+///     of cards in the controller's exile zone. Mirrors the printed
+///     `*` / `1+*` shape from the oracle text "Cosmogoyf's power
+///     is equal to the number of cards you own in exile and its
+///     toughness is equal to that number plus 1." CR 208.2 / layer
+///     7b CDA. Round-84 cosmogoyf-arm extension (this slice).
+///
+///     **Owner-vs-controller cardinality.** The card text says
+///     "cards you OWN in exile". Python's
+///     `game._dynamic_base_pt` arm reads
+///     `len(state.player_by_id(obj.controller_id).exile)` — i.e.
+///     the count of objects in the CONTROLLER's exile zone, not a
+///     scan-all-zones-for-owner-matches. This Rust arm honors the
+///     "new code is right (matches the SoT)" discipline and ports
+///     that exact shape. The equivalence holds on every bench /
+///     probe path the bridge admits today (no
+///     `Effect::ControlMagic`-style controller transfer of
+///     Cosmogoyf himself; no exile-from-opponent-into-your-exile
+///     arm). A future divergence is honest-stopped on the Python
+///     side, NOT here — match Python.
+///
+///   * `"emissary_escort"` — still honest-stopped Rust-side. Its
+///     formula reads `printing.power` / `printing.toughness` and
+///     ADDS X (greatest mana value among other artifacts the
+///     controller controls); the CDA-only shape this dispatch
+///     table covers today sets the BASE from scratch. Emissary's
+///     slice extends the dispatch table when it lands.
 pub(crate) fn dynamic_base_pt_pub(
     state: &GameState,
     obj_id: u32,
@@ -683,6 +706,22 @@ pub(crate) fn dynamic_base_pt_pub(
                 }
             }
             Some((n, n))
+        }
+        "cosmogoyf" => {
+            // P = N, T = N + 1 where N = len(controller.exile).
+            // Mirrors Python's `game._dynamic_base_pt` arm at
+            // `src/mtg_bot/game.py:1328-1332`:
+            //   controller = state.player_by_id(obj.controller_id)
+            //   n = len(controller.exile)
+            //   return n, n + 1
+            //
+            // Round-84 cosmogoyf-arm extension. The controller-vs-
+            // owner cardinality SoT decision is documented in the
+            // function docstring above (Python uses
+            // `controller.exile.len()`, not an owner-tagged scan
+            // across all exile zones).
+            let n = state.players[controller as usize].exile.len() as i32;
+            Some((n, n + 1))
         }
         _ => None,
     }

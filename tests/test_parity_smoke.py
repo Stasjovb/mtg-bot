@@ -69648,6 +69648,249 @@ def test_cross_engine_real_eoe_timeline_culler_warp_lifecycle_parity():
     test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal()
 
 
+def test_cross_engine_real_eoe_cosmogoyf_dynamic_pt_parity(
+    parity_smoke,
+):
+    """**Probe: Cosmogoyf dynamic-P/T formula byte-equal across engines
+    (round-84 substrate extension; spec
+    docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md §3 lever (4)).**
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Cosmogoyf's power is equal to the number of cards you own in
+         exile and its toughness is equal to that number plus 1."
+
+    Printed P/T is ``*`` / ``1+*`` — the dynamic-P/T-formula CDA
+    (CR 208.2 / CR 613.7b) supplies the base from the formula key
+    ``"cosmogoyf"`` rather than the printed values. Mirrors Python's
+    ``game._dynamic_base_pt`` arm at ``src/mtg_bot/game.py:1328-1332``::
+
+        if formula == "cosmogoyf":
+            controller = state.player_by_id(obj.controller_id)
+            n = len(controller.exile)
+            return n, n + 1
+
+    Rust's ``state_ops_combat::dynamic_base_pt_pub`` carries the
+    matching arm (this slice). Unlike Harmonious Grovestrider — whose
+    REAL EoE printing also carries a ``ward_cost`` rider that keeps
+    it drop-at-filter under
+    ``_printing_is_bridge_simple_creature`` (forcing the Grovestrider
+    probe to drive a SYNTHETIC CardDef) — the real EoE Cosmogoyf
+    printing has NO ward / triggered / activated / static abilities
+    (verified via ``OracleParserCardSource`` against the live data
+    snapshot 2026-05-20), so this probe drives the GENUINE parsed
+    printing through the production bridge (the round-46 real-EoE-
+    signal discipline; the same idiom the warp Phase-1 lifecycle
+    probe uses).
+
+    Test surface (controller's exile-zone cardinality sweep):
+
+      * 0 exile cards → both engines read P = 0, T = 1.
+      * 3 controller-exile cards → both engines read P = 3, T = 4.
+      * +2 opponent-exile cards → both engines STILL read P = 3,
+        T = 4 (only the controller's exile counts — Python's
+        ``len(controller.exile)`` is the SoT, NOT a scan across both
+        players' exile zones; the Rust arm honors that same shape).
+
+    SBA-safety pin (CR 704.5f): a Cosmogoyf with 0 exile cards sits
+    at base T = 1 > 0; even with 0 power, the SBA does NOT destroy
+    it. The formula's `T = N + 1` is what gives Cosmogoyf its always-
+    nonzero floor toughness; the probe pins that the dispatch arm
+    fires at N=0 (the boundary case) on BOTH engines.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict,
+    )
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    # ----- Resolve the GENUINE Cosmogoyf printing from the live
+    # CardSource (round-46 real-EoE-signal discipline) and verify the
+    # parsed shape matches the round-84 admit predicate. -----
+    src = get_active_source().get_printings()
+    real = src.get("Cosmogoyf")
+    assert real is not None, (
+        "Cosmogoyf must be present in the active CardSource (EoE pool)."
+    )
+    # Verify-against-live: the genuine printing IS the pure
+    # dynamic-P/T CDA shape (no ward rider, no other riders).
+    assert real.dynamic_pt_formula == "cosmogoyf"
+    assert real.ward_cost is None
+    assert real.triggered_abilities == ()
+    assert real.static_abilities == ()
+    assert real.activated_abilities == ()
+    assert real.warp_cost is None
+    assert trajectory._printing_is_bridge_simple_creature(real), (
+        "Cosmogoyf must pass the round-84 bridge admit predicate."
+    )
+
+    # Round-trip the real printing through the production CardDef
+    # bridge (the same path `setup_matched_game_from_real_decks` uses).
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.dynamic_pt_formula == "cosmogoyf"
+
+    # Synthetic filler the bridge can carry — a vanilla 1/1 we exile
+    # to drive the formula. Mana cost is moot; we never cast it.
+    filler = CardDef(
+        name="Cosmofiller",
+        card_type="Creature",
+        mana_cost_generic=0,
+        mana_cost_colored=(),
+        power=1,
+        toughness=1,
+    )
+
+    spec = DeckSpec(
+        card_defs=(cd, filler),
+        p0_library=("Cosmogoyf",) + ("Cosmofiller",) * 5,
+        p1_library=("Cosmogoyf",) + ("Cosmofiller",) * 5,
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    cosmo_dict = _spec_card_to_printing_dict(cd)
+    filler_dict = _spec_card_to_printing_dict(filler)
+    ZONE_BATTLEFIELD = 2
+    ZONE_HAND = 0
+    ZONE_EXILE = 5
+
+    # ----- Inject Cosmogoyf onto p0's battlefield on both engines. -----
+    rust_cosmo_id = rust_state.register_and_inject_object(
+        cosmo_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    py_cosmo = py_state.players[0].library[0]
+    assert py_cosmo.printing.name == "Cosmogoyf"
+    assert py_cosmo.printing.dynamic_pt_formula == "cosmogoyf"
+    py_state.players[0].library.remove(py_cosmo)
+    py_cosmo.zone = Zone.BATTLEFIELD
+    py_state.battlefield.append(py_cosmo)
+
+    # Test case 1: 0 exile cards → P = 0, T = 1 on both engines
+    # (CDA at the boundary case — the +1 in T = N+1 is what keeps
+    # Cosmogoyf SBA-safe with an empty exile).
+    assert rust_state.effective_power(rust_cosmo_id) == 0
+    assert rust_state.effective_toughness(rust_cosmo_id) == 1
+    assert effective_power(py_state, py_cosmo) == 0
+    assert effective_toughness(py_state, py_cosmo) == 1
+
+    # Cross-engine: same numbers.
+    assert rust_state.effective_power(rust_cosmo_id) == effective_power(
+        py_state, py_cosmo
+    )
+    assert rust_state.effective_toughness(
+        rust_cosmo_id
+    ) == effective_toughness(py_state, py_cosmo)
+
+    # ----- Test case 2: add 3 controller-exile cards →
+    # P = 3, T = 4 on both engines. -----
+    #
+    # Rust: inject the filler objects into hand first (the
+    # ``register_and_inject_object`` `next_id` scan covers
+    # hand/library/battlefield/graveyard but NOT exile; injecting all
+    # fillers into hand BEFORE any of them move to exile ensures
+    # unique ids), then `move_object` each to ZONE_EXILE on the
+    # appropriate player (the move primitive supports ZONE_EXILE as
+    # both source and destination per state_ops_zones.rs:397). The
+    # 2 opponent-exile fillers are also injected here (still in hand,
+    # so the next-id scan still sees them) and moved to exile in
+    # phase 3 below — but we INJECT them now to keep the ids
+    # collision-free.
+    # Python: build matching GameObjects via the bridge-materialized
+    # filler printing and push directly onto each player's exile in
+    # the matching phase.
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+    filler_py_printing = _card_def_to_python_printing(filler)
+    p0_rust_filler_ids = [
+        rust_state.register_and_inject_object(filler_dict, 0, ZONE_HAND)
+        for _ in range(3)
+    ]
+    p1_rust_filler_ids = [
+        rust_state.register_and_inject_object(filler_dict, 1, ZONE_HAND)
+        for _ in range(2)
+    ]
+    # Sanity: all 5 ids are distinct (the next-id scan saw them all
+    # while they were still in hand).
+    assert len({*p0_rust_filler_ids, *p1_rust_filler_ids}) == 5, (
+        "the injected filler ids must be distinct — if any collide, "
+        "the next-id scan in register_and_inject_object missed a "
+        "zone (it scans hand/library/battlefield/graveyard only) "
+        "or another setup-side helper minted an overlapping id."
+    )
+
+    # Move p0's 3 fillers to p0 exile.
+    for fid in p0_rust_filler_ids:
+        moved = rust_state.move_object(fid, ZONE_EXILE, 0)
+        assert moved, "move_object must succeed for an injected obj"
+        filler_obj = py_state.new_object(
+            filler_py_printing, owner_id=0, zone=Zone.EXILE,
+        )
+        py_state.players[0].exile.append(filler_obj)
+
+    # Both engines see 3 cards in p0 exile.
+    assert len(py_state.players[0].exile) == 3
+    assert len(rust_state.exile_snapshot(0)) == 3
+
+    assert rust_state.effective_power(rust_cosmo_id) == 3, (
+        f"Rust Cosmogoyf P should be 3 with 3 controller-exile cards; "
+        f"got {rust_state.effective_power(rust_cosmo_id)}"
+    )
+    assert rust_state.effective_toughness(rust_cosmo_id) == 4, (
+        f"Rust Cosmogoyf T should be 4 (N+1) with 3 controller-exile "
+        f"cards; got {rust_state.effective_toughness(rust_cosmo_id)}"
+    )
+    assert effective_power(py_state, py_cosmo) == 3, (
+        f"Python Cosmogoyf P should be 3; got "
+        f"{effective_power(py_state, py_cosmo)}"
+    )
+    assert effective_toughness(py_state, py_cosmo) == 4
+
+    # Cross-engine: same numbers.
+    assert rust_state.effective_power(rust_cosmo_id) == effective_power(
+        py_state, py_cosmo
+    )
+    assert rust_state.effective_toughness(
+        rust_cosmo_id
+    ) == effective_toughness(py_state, py_cosmo)
+
+    # ----- Test case 3: move the 2 pre-injected p1-hand fillers to
+    # p1's exile → Cosmogoyf still reads P = 3, T = 4 (only the
+    # controller's exile counts; the formula's
+    # `len(controller.exile)` is the SoT — Python uses the
+    # controller's exile pile, NOT a scan-all-zones-for-owner-
+    # matches; the Rust arm honors that exact shape). -----
+    for fid in p1_rust_filler_ids:
+        moved = rust_state.move_object(fid, ZONE_EXILE, 1)
+        assert moved
+        filler_obj = py_state.new_object(
+            filler_py_printing, owner_id=1, zone=Zone.EXILE,
+        )
+        py_state.players[1].exile.append(filler_obj)
+
+    assert len(py_state.players[1].exile) == 2
+    assert len(rust_state.exile_snapshot(1)) == 2
+    # Controller's exile unchanged.
+    assert len(py_state.players[0].exile) == 3
+    assert len(rust_state.exile_snapshot(0)) == 3
+
+    assert rust_state.effective_power(rust_cosmo_id) == 3, (
+        f"Rust Cosmogoyf P should STILL be 3 (opponent's exile does "
+        f"NOT count toward the controller-exile-cardinality formula); "
+        f"got {rust_state.effective_power(rust_cosmo_id)}"
+    )
+    assert rust_state.effective_toughness(rust_cosmo_id) == 4
+    assert effective_power(py_state, py_cosmo) == 3
+    assert effective_toughness(py_state, py_cosmo) == 4
+    assert rust_state.effective_power(rust_cosmo_id) == effective_power(
+        py_state, py_cosmo
+    )
+    assert rust_state.effective_toughness(
+        rust_cosmo_id
+    ) == effective_toughness(py_state, py_cosmo)
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
