@@ -1706,6 +1706,79 @@ pub enum Effect {
     /// free construction). Mirrors the `DestroyTargetArtifactOr
     /// TappedCreature` Tier-A unit-variant convention.
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    /// **Effect-uncovered single-gated tier — Emergency Eject
+    /// (~6,291 17lands decks).** `{2}{W}` Instant: "Destroy target
+    /// nonland permanent. Its controller creates a Lander token."
+    /// Mirrors Python's
+    /// `DestroyTargetNonlandPermanentWithLanderForController`
+    /// (`effects/generic/destroy.py:589`).
+    ///
+    /// **Same Lander-pid carrier shape as `SeedshipImpactEffect` /
+    /// `DealDamageToTargetCreatureWithExcessLanderRider`.** Rust has
+    /// no intrinsic Lander concept; a bespoke token-minting arm must
+    /// carry the Lander's `token_printing_id: u32` exactly like
+    /// `Effect::CreateToken` (the round-49/56
+    /// `TOKEN_PRINTING_SUBSTRATE`). Python's class is field-free —
+    /// it resolves the Lander intrinsically via
+    /// `TOKEN_PRINTINGS["Lander"]`. The bridge **drops** the pid
+    /// (the bridge constructs the bare Python class). Both engines
+    /// seat the SAME "Lander" printing (Rust via the registered pid,
+    /// Python via TOKEN_PRINTINGS) so the created token is
+    /// byte-equal in the name-keyed field view.
+    ///
+    /// **Three deviations from `SeedshipImpactEffect`:**
+    /// 1. Filter widens from `IsArtifact OR "Enchantment" in
+    ///    card_types` to **non-land permanent** (CR 205.2a — any
+    ///    battlefield permanent without the `Land` card type).
+    ///    Indestructible permanents are still skipped at the scan
+    ///    (matching `DestroyTargetArtifact` / Seedship precedent;
+    ///    Python's `turn.destroy()` returns False on indestructible
+    ///    → no Lander consolation).
+    /// 2. **No MV gate.** Seedship's Lander rider fires iff
+    ///    `mv ≤ 2`; Emergency Eject's rider fires whenever the
+    ///    destroy succeeds. Drops the printed-MV read entirely.
+    /// 3. **Lander recipient = FORMER controller of the destroyed
+    ///    permanent** (the target's `controller` field at the moment
+    ///    of destroy), NOT the spell's source-controller. Python's
+    ///    `DestroyTargetNonlandPermanentWithLanderForController`
+    ///    snapshots `former_controller = obj.controller_id` BEFORE
+    ///    calling `destroy(state, obj)`, then mints the Lander
+    ///    under `former_controller`. This is the load-bearing
+    ///    cross-controller distinguishing feature vs Seedship —
+    ///    Emergency Eject typically targets an opponent's
+    ///    permanent, so the opponent gets the Lander as
+    ///    consolation, NOT the caster.
+    ///
+    /// **Resolve semantics (mirrors `DestroyTargetNonlandPermanent
+    /// WithLanderForController.resolve` at `effects/generic/
+    /// destroy.py:611-640`):**
+    /// 1. Read the cast-time-bound target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    `SeedshipImpactEffect` / `DestroyTargetArtifactOrTapped
+    ///    Creature` payload-target swap pattern). When `None`
+    ///    (synthetic-test `push_to_stack` path that doesn't seat a
+    ///    target), fall back to the deterministic-first non-land
+    ///    permanent in ETB-timestamp order across BOTH battlefields.
+    /// 2. Re-validate at resolve (CR 608.2b): target still on a
+    ///    battlefield, still NOT a Land, still NOT indestructible.
+    ///    Illegal target → silent fizzle (no Lander either).
+    /// 3. **Capture `former_controller` from the scanned object's
+    ///    `controller` field BEFORE the destroy** (the load-bearing
+    ///    step — once the object moves to graveyard the controller
+    ///    field is stamped to owner on the leaving copy, but the
+    ///    Lander rider needs the BATTLEFIELD-time controller per CR
+    ///    111.4 / 800.4).
+    /// 4. Destroy the target via the proven artifact-arm body
+    ///    (remove from bf, reset zone/tapped/damage/attached_to/
+    ///    exiled_with_source, push to graveyard, queue DIES
+    ///    dispatch if victim was Creature, queue LEAVES dispatch,
+    ///    queue token-cease).
+    /// 5. Mint one Lander under `former_controller` — registry-
+    ///    bounds-check the pid, reserve a fresh id from
+    ///    `next_object_id`, reserve a fresh `etb_timestamp`, push
+    ///    the GameObject onto `former_controller`'s battlefield,
+    ///    queue ETB dispatch.
+    EmergencyEjectEffect { token_printing_id: u32 },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -7915,6 +7988,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // OR-tapped-creature OR).
             Ok(Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature)
         }
+        "emergency_eject_effect" => {
+            // Effect-uncovered single-gated tier — Emergency Eject
+            // (~6,291 17lands decks). Single-field payload: the
+            // Lander's `token_printing_id` (registry index). Same
+            // pid-carrier shape as `seedship_impact_effect`: Rust
+            // has no intrinsic Lander, so the bespoke arm needs the
+            // pid to mint the Lander; Python's
+            // `DestroyTargetNonlandPermanentWithLanderForController`
+            // is field-free and mints from
+            // `TOKEN_PRINTINGS["Lander"]`; the bridge drops the pid.
+            let token_printing_id: u32 =
+                require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::EmergencyEjectEffect { token_printing_id })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -11640,6 +11727,18 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "destroy_target_artifact_enchantment_or_flying_creature",
             )?;
+        }
+        Effect::EmergencyEjectEffect { token_printing_id } => {
+            // Effect-uncovered single-gated tier — Emergency Eject.
+            // Single-field payload — `kind` + `token_printing_id`
+            // (the same pid-carrier to_dict shape as
+            // `seedship_impact_effect`). Bidirectional with the
+            // `emergency_eject_effect` parse arm + the cross_engine.py
+            // bridge arm + the trajectory.py reverse-serializer leaf.
+            // The single target is NOT serialized here — it rides
+            // on the StackItem (`current_resolve_payload_target_id`).
+            d.set_item("kind", "emergency_eject_effect")?;
+            d.set_item("token_printing_id", *token_printing_id)?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

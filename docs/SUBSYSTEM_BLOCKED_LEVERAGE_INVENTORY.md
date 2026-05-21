@@ -174,15 +174,60 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-shattered-wings
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                       267
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                        88
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                         0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                         0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                       120
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-shattered-wings  →  post-emergency-eject
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                       267                      268
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                        88                       88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                         0                        0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                         0                        0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                       120                      119
 ```
 
-**post-shattered-wings delta (this lane):** strict **+1 PROBED /
+**post-emergency-eject delta (this lane):** strict **+1 PROBED /
+−1 BLOCKED-subsystem-gated** (Emergency Eject, 6,291 17lands
+single-gated decks per the round-58 attribution scout). Genuine
+Rust substrate close following the same Lander-pid carrier shape
+as Seedship Impact / Orbital Plunge: new
+`Effect::EmergencyEjectEffect { token_printing_id }` single-pid
+variant (`rust/src/cards.rs`) + parse arm + to_pydict arm;
+resolve arm in `rust/src/state_ops_resolve.rs` beside the
+Seedship Impact arm (cast-time-bound target via
+`current_resolve_payload_target_id`; non-land filter re-checked
+at resolve per CR 608.2b; indestructible-skip on the scan; DIES
+creature-gated; LEAVES + token-cease drained); the
+`current_resolve_payload_target_id` self-scan fallback for
+synthetic-test no-target push. Three deviations from Seedship
+Impact (load-bearing for parity): (1) filter widens from
+artifact-OR-enchantment to non-land permanent; (2) **no MV
+gate** — Lander rider is unconditional whenever the destroy
+succeeds; (3) **Lander goes to the FORMER controller of the
+destroyed permanent** (NOT the source-controller — captured
+BEFORE destroy from `obj.controller`). `state_ops_legal.rs::
+spell_targets_satisfiable` non-land-permanent + non-
+indestructible arm; cast-time `is_emergency_eject` bind in
+`state_ops_cast.rs` mirroring `is_seedship_impact`. Bridged via
+`cross_engine.py` `emergency_eject_effect` (drops the pid,
+constructs the field-free Python
+`DestroyTargetNonlandPermanentWithLanderForController`) +
+`trajectory.py::_python_spell_effect_to_dict` Lander-pid leaf
+emitting symbolic `_token_card_def` (resolved by the seating
+pass once `"emergency_eject_effect"` is added to
+`_SPELL_TOKEN_PID_KINDS`) — the {2}{W} Emergency Eject Instant
+auto-joins the spell-card-bridge admit set (10→11). 8 new
+probes: 6 Rust pins (opp-artifact-destroy + Lander-for-opp,
+creature-destroy + unconditional Lander, enchantment-destroy +
+Lander, indestructible-survives + no-Lander, Land-filtered-out +
+silent fizzle, deterministic-first-non-land-pick-skipping-Land),
+1 auto-join admit-set pin, 1 GENUINE real-EoE cross-engine
+byte-equal probe driving the parsed printing against a 3/3
+mv-3 opponent creature → destroyed + Lander under p1 (former
+controller) byte-equal on BOTH engines. Round-69 fixture
+(`test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal`)
+re-derived per its own re-derivation contract: arch=9 seed=1's
+bench trajectory legitimately changed (it contains Emergency
+Eject); the new fixture is arch=7 seed=0 (also a cap-25
+FAIL_TIMEOUT that recovers to PASS at cap-60).
+
+**post-shattered-wings delta (prior lane):** strict **+1 PROBED /
 −1 BLOCKED-subsystem-gated** (Shattered Wings, 7,793 17lands
 single-gated decks per the round-58 attribution scout). Genuine
 Rust substrate close following the Cut Propulsion Tier-A precedent

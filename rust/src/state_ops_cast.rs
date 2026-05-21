@@ -1724,6 +1724,25 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
+        // Emergency Eject: takes any non-land permanent (Python's
+        // `DestroyTargetNonlandPermanentWithLanderForController
+        // .legal_targets` `effects/generic/destroy.py:602-609`).
+        // Same cast-time-bind shape as Seedship — the resolve arm
+        // reads `current_resolve_payload_target_id` and fizzles on
+        // stale (CR 608.2b). Without this dedicated arm, the
+        // default first-creature scan would mis-pick when the spell
+        // targets a non-creature permanent (artifact / enchantment
+        // / planeswalker).
+        let is_emergency_eject = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                matches!(
+                    p.effects.first(),
+                    Some(crate::cards::Effect::EmergencyEjectEffect { .. })
+                )
+            })
+            .unwrap_or(false);
         // **Battlefield STATE_EQ axis closure (todo `e5b7c9d8`).**
         // Per-effect cast-time binds for the two Effect arms migrated
         // to the `current_resolve_payload_target_id` pattern in
@@ -1892,6 +1911,34 @@ impl GameState {
                             .iter()
                             .any(|t| t == "Enchantment");
                         if !(is_artifact || is_enchantment) {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some(o.id)
+                    });
+                (t, None)
+            } else if is_emergency_eject {
+                // Emergency Eject: first non-land permanent on
+                // EITHER bf in `bf_iter_etb_sorted` order, non-
+                // indestructible (matches the resolve arm's scan
+                // filter + Python `legal_targets` exactly). The
+                // _PickFirstLegalTargetAgent bake-in convention.
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        let is_land = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land");
+                        if is_land {
                             return None;
                         }
                         if printing
