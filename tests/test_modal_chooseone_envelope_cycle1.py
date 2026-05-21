@@ -218,21 +218,17 @@ def test_cast_modal_spell_failed_cast_no_mode_bind():
 
 
 # ---------------------------------------------------------------------------
-# Cycle 1 isolates: resolve-time path is unchanged
+# Cast-time pick is visible across the cast → pre-resolve window
 # ---------------------------------------------------------------------------
 
 
-def test_cycle1_resolve_still_pushes_pending_decision():
-    """**Cycle 1 isolation guard.** The resolve arm at
-    `state_ops_resolve.rs:14832` STILL pushes
-    `PendingDecision::ChooseModeChoice` on resolve, regardless of
-    the cast-time mode bind. Cycle 2 will widen the resolve arm to
-    dispatch directly via `modes[chosen_mode_idx]` — until then, the
-    pre-cycle resolve-time decision substrate stays intact.
-
-    This guard pins the substrate-only landing: Cycle 1 adds the
-    cast-time bind without disturbing the existing resolve-time
-    path. Removing or modifying this test in Cycle 2 is expected.
+def test_cast_time_mode_idx_persists_until_resolve():
+    """**Cycle 1 pin: the cast-time bind is durable.** Between cast
+    and resolve, the StackItem's `chosen_mode_idx` stays readable
+    via `stack_top_chosen_mode_idx`. No intermediate priority pass
+    or SBA tick wipes it. This is the substrate's contract: a
+    multi-step driver (declare attackers → resolve combat → resolve
+    spell) reads the same bound mode on the way out.
     """
     _require_engine()
     state = _fresh_state()
@@ -242,18 +238,13 @@ def test_cycle1_resolve_still_pushes_pending_decision():
     state.add_mana(0, "C", 1)
     ok = state.cast_spell_noncreature(spell_id, 0)
     assert ok is True
-    assert state.stack_top_chosen_mode_idx() == 0
     # Pre-resolve: no pending decision yet (the decision is pushed
-    # DURING resolve, not at cast time).
+    # DURING resolve, not at cast time — modes are picked at cast,
+    # the resolve arm replays the pick).
     assert state.pending_decisions() == []
-    # Resolve the spell — should push the resolve-time decision
-    # (Cycle-2 widening will remove this).
-    state.resolve_top_of_stack_pause()
-    pds = state.pending_decisions()
-    assert len(pds) == 1
-    assert pds[0]["kind"] == "ChooseModeChoice"
-    # Same source.
-    assert pds[0]["source_obj_id"] == spell_id
+    # The cast-time bind is durable across an SBA tick.
+    state.apply_sbas()
+    assert state.stack_top_chosen_mode_idx() == 0
 
 
 # ---------------------------------------------------------------------------

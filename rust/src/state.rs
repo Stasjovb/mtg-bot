@@ -2444,6 +2444,37 @@ pub struct GameState {
     /// state pre- and post-resolve produces the same digest
     /// regardless of intermediate controller swaps.
     pub current_resolve_source_controller: Option<u8>,
+    /// **ModalChooseOne envelope — Cycle 2 (per-mode resolve
+    /// dispatch, 2026-05-21).** Transient resolve-time mirror of
+    /// the resolving spell's `StackItem.chosen_mode_idx`. Set by
+    /// the stack resolver (`resolve_top_of_stack` /
+    /// `resolve_top_of_stack_pause`) BEFORE the per-effect
+    /// `apply_effect` fan-out for a `StackItemKind::Spell` whose
+    /// pushed item carries a cast-time-bound mode pick; restored
+    /// to its prior value after. The `Effect::ChooseOneMode`
+    /// resolve arm reads this field — if `Some(idx)`, it dispatches
+    /// directly to `modes[idx]` via `apply_effect` (mirroring
+    /// Python's `state.resolving_modes` replay at
+    /// `combinators.py:1213-1215`). If `None` (no cast-time bind —
+    /// every nested-as-trigger ChooseOneMode + pre-Cycle-1 push),
+    /// the arm falls back to the existing
+    /// `PendingDecision::ChooseModeChoice` push (Cycle 1
+    /// resolve-time-callback substrate stays intact for non-spell-
+    /// cast invocations).
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect.** Same rationale as
+    /// `current_resolve_payload_target_id` / `_2` /
+    /// `current_resolve_source_controller`: apply_effect has ~90
+    /// arms, threading an `Option<u8>` through every signature is
+    /// invasive for surfaces that don't care. Mirror the existing
+    /// payload-target swap pattern.
+    ///
+    /// **Not serialized into the fingerprint.** Transient like its
+    /// payload-target / source-controller siblings — same observable
+    /// game state pre- and post-resolve produces the same digest
+    /// regardless of intermediate mode-index swaps.
+    pub current_resolve_chosen_mode_idx: Option<u8>,
 }
 
 impl Clone for GameState {
@@ -2510,6 +2541,12 @@ impl Clone for GameState {
             pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
             current_resolve_payload_target_id_2: self.current_resolve_payload_target_id_2,
+            // ModalChooseOne envelope — Cycle 2. Transient mode-
+            // index slot; cloned as `Option<u8>` (Copy). Bracketed
+            // by the resolver — `None` outside the resolve window
+            // by construction, so any clone taken mid-resolve still
+            // sees a deterministic snapshot.
+            current_resolve_chosen_mode_idx: self.current_resolve_chosen_mode_idx,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -3286,5 +3323,11 @@ pub fn make_synthetic_state(
         // until the resolver swaps in `top.controller` for the
         // duration of an apply_effect call.
         current_resolve_source_controller: None,
+        // ModalChooseOne envelope — Cycle 2: transient mode-index
+        // slot. `None` until the resolver swaps in
+        // `top.chosen_mode_idx` for the duration of an apply_effect
+        // call (the resolve arm reads it; the swap is save → set →
+        // restore-bracketed like its payload-target sibling).
+        current_resolve_chosen_mode_idx: None,
     }
 }
