@@ -715,6 +715,22 @@ PROBE_MODULES: tuple[Path, ...] = (
     # vanilla creatures + lands + activated-ability-only cards.  See
     # module docstring for the full honest-exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_jjjj.py",
+    # Wrath-admit-widening lane (round-87, 2026-05-21) — the Phase-3
+    # (0, 0)-shape wrath admit arm + three wrath-shape serializer
+    # leaves (DealNDamageToEachCreature [Pyroclasm-shape] / bare
+    # DestroyAllCreatures / ManifestDread) on
+    # `_printing_is_bridge_simple_spell` + `_python_spell_effect_to_dict`.
+    # Two ManifestDread carriers (Break Down the Door — Instant
+    # {2}{G}; Under the Skin — Sorcery {2}{G}) flip COVERED -> PROBED
+    # via the empty-library no-op probe idiom established by the
+    # SSS-batch Manifest Dread probe. Pyroclasm AUTO-JOINS the admit
+    # set but was already PROBED via the batch-G Pyroclasm probe.
+    # Beyond the Quiet stays BLOCKED (substrate work — its
+    # ExileAllCreaturesAndSpacecraft Effect is uncovered in Rust;
+    # out of lane scope). See the module docstring for the full
+    # honest-stop drop list (Singularity Rupture, Mutinous Massacre,
+    # Zero Point Ballad, Zealous Display, etc.).
+    REPO_ROOT / "tests" / "test_probe_wrath_admit_widening.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -21287,25 +21287,32 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # Plunge; the trajectory reverse-serializer leaf + the
     # ``_SPELL_TOKEN_PID_KINDS`` tuple entry flipped the round-trip
     # teeth) AUTO-JOINED (+1 → 11) — all AUTO-JOINED via the §2 auto-
-    # grow teeth.
+    # grow teeth. **wrath-admit-widening (round-87, 2026-05-21):** the
+    # ``(0, 0)``-shape Phase-3 wrath admit arm + DealNDamageToEach
+    # Creature / DestroyAllCreatures / ManifestDread serializer leaves
+    # AUTO-JOINED 4 new wrath-shape spells (Pyroclasm + Manifest Dread
+    # + Break Down the Door + Under the Skin; the latter 3 are duskmourn
+    # .json pool members loaded into the active source; Pyroclasm is a
+    # genuine EoE-pool member already PROBED by its dedicated effect-
+    # close probe). 11 → 15 — all AUTO-JOINED via the §2 auto-grow teeth.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Cut Propulsion", "Depressurize",
-        "Diplomatic Relations", "Emergency Eject", "Focus Fire",
-        "Invasive Maneuvers", "Orbital Plunge", "Radiant Strike",
-        "Seedship Impact", "Shattered Wings",
+        "Biosynthic Burst", "Break Down the Door", "Cut Propulsion",
+        "Depressurize", "Diplomatic Relations", "Emergency Eject",
+        "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
+        "Orbital Plunge", "Pyroclasm", "Radiant Strike", "Seedship Impact",
+        "Shattered Wings", "Under the Skin",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 11 covered+bridged Tier-A spells: the 10 "
-        f"single-target Phase-1 cards + Diplomatic Relations, the "
-        f"Phase-2 2-slot card the round-76 grammar widening admitted "
-        f"— the set grew 7→8→9→10→11 as Cut Propulsion, Invasive "
-        f"Maneuvers, Shattered Wings, and Emergency Eject each "
-        f"closed; it auto-grows further as the remaining Tier-A "
-        f"spells close)")
+        f"exactly the 15 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 4 Phase-3 wrath admits — the set "
+        f"grew 11→15 via the wrath-admit-widening's ``(0, 0)``-shape "
+        f"admit arm + DealNDamageToEachCreature / DestroyAllCreatures /"
+        f" ManifestDread serializer leaves; auto-grows further as the "
+        f"remaining Tier-A spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **357 / 475 EoE cards (75.2%) are byte-equal at the Effect+bridge level**; of those, **269 (56.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 88 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **357 / 475 EoE cards (75.2%) are byte-equal at the Effect+bridge level**; of those, **271 (57.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 86 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **118 (24.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 269 | 56.6% |
-| Effect+bridge covered (not individually probed) | 88 | 18.5% |
+| PROBED byte-equal | 271 | 57.1% |
+| Effect+bridge covered (not individually probed) | 86 | 18.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -65,6 +65,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Blooming Stinger
 - Bombard
 - Bonders' Enclave
+- Break Down the Door
 - Breeding Pool
 - Brightspear Zealot
 - Broodguard Elite
@@ -290,6 +291,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Turn Inside Out
 - Twist Reality
 - Umbral Collar Zealot
+- Under the Skin
 - Unravel
 - Unsettling Twins
 - Untimely Malfunction
