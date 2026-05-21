@@ -9167,6 +9167,247 @@ that no taxonomy gate fires honestly here); see
 `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §5 for the substrate
 cost summary.
 
+## Next-wrath-substrate triad characterization — all 3 candidates require new subsystem work, not a single per-card slice (HONEST-STOP, 2026-05-21)
+
+**Lane**: `feature/next-wrath-substrate` (verify-first walk after
+Beyond the Quiet closed on `feature/beyond-the-quiet-slice`,
+merge `fdfa54fd`).
+
+**Scope of this lane**: pick ONE of three remaining
+BLOCKED-subsystem-gated wraths — **Mutinous Massacre** (4,671
+17lands decks), **Zero Point Ballad** (6,041 decks), **Singularity
+Rupture** (5,046 decks) — and mirror the Beyond the Quiet
+precedent (single per-card Effect variant + bridge + auto-join via
+Lane Y's Phase-3 `(0, 0)` wrath admit arm).
+
+**Finding (honest-stop, all 3 candidates declined)**: each card's
+gap is a NEW subsystem on the Rust side, not a per-card Effect
+variant in the Beyond-the-Quiet shape. Per-card breakdown:
+
+### 1. Mutinous Massacre — control-change-UEOT subsystem missing on Rust
+
+Oracle: `{3}{B}{B}{R}{R}` Sorcery — "Choose odd or even. Destroy
+each creature with mana value of the chosen quality. Then gain
+control of all creatures until end of turn. Untap them. They gain
+haste until end of turn. (Zero is even.)"
+
+Shape: `target_count_range == (0, 0)`, no `slot_kinds`, no
+`x_pips`, no kicker / impending / warp / room — the Phase-3
+`(0, 0)`-shape wrath admit arm at
+`trajectory.py::_printing_is_bridge_simple_spell` WOULD admit it
+auto-grow-style IF the substrate were present.
+
+Python resolve (`effects/bespoke.py:1296-1356`) calls into THREE
+distinct subsystems, two of which Rust does not yet implement:
+
+1. **Resolve-time `choose_mode` dispatch** (`p.agent.choose_mode(
+   state, controller_id, ["odd", "even"])` at line 1305) — Rust
+   does have resolve-time mode-choice machinery via
+   `PendingDecision::ChooseModeChoice` (round-28 substrate at
+   `rust/src/state.rs:1451`), but the existing arm dispatches into
+   one of `modes[idx]` (per-mode Effect resolution). The "odd /
+   even" pick here is NOT a per-mode dispatch — it's a parameter
+   to ONE resolve body that filters battlefield by mana-value
+   parity. A first-slice deterministic-pick (mode 0 = "odd",
+   no agent prompt) would mirror Python's no-agent fallback at
+   `bespoke.py:1303-1304` but requires a new variant-internal
+   parameter (e.g. `Effect::MutinousMassacre { pick: u8 }` with
+   parse-time default 0).
+2. **`state.grant_control_change_ueot` ledger** (line 1335) —
+   Python's `GameState` carries a control-change layer-2 registry
+   (per-object current-controller override that expires at the
+   next cleanup step) used by Threaten / Act of Treason /
+   Mutinous Massacre's second clause. Rust has **NO equivalent**:
+   `grep -r "control_change\|grant_control_change\|gain_control"
+   rust/src/` returns no matches outside `move_off_battlefield`
+   ledger-drop comments referring to Python's. The full subsystem
+   needs:
+   - Per-object `controller_override_until_cleanup: Option<u8>`
+     field on `GameObject` (or a sidecar map in `GameState`).
+   - Layer-2 controller resolution helper (`effective_controller_id(
+     state, obj_id) -> u8`) — Rust today reads
+     `o.controller_id` directly across `state_ops_legal.rs`,
+     `state_ops_combat.rs`, `state_ops_decisions.rs`,
+     `state_ops_actions.rs`. Every one of those call sites needs
+     to be re-routed through the helper.
+   - Cleanup-step hook that clears the override entries (mirrors
+     Python's `state.clear_temporary_effects_at_cleanup` ledger
+     drain at `turn.py`'s end_of_turn cleanup).
+   - LTB / SBA interaction: when a permanent leaves the
+     battlefield WHILE under a control override, the override
+     entry must be dropped at the same SBA pass Python's does
+     (`turn.move_off_battlefield` already references the
+     control_change drop in its docstring at
+     `state_ops_sba.rs:334`).
+3. **UEOT keyword grant** (line 1349-1352 — `ApplyEffect(
+   inner=GrantKeywords(keywords=frozenset({"haste"})),
+   ends_at=EndOfTurn()).resolve(...)`) — Rust DOES have the
+   `UeotModifier::GrantKeyword` push pattern (round-15
+   `GrantKeywordsToTargetCreatureUntilEOT` at
+   `state_ops_resolve.rs`). This piece is the only Mutinous-
+   Massacre-resolve subroutine already covered.
+
+**Estimated substrate cost**: a multi-cycle subsystem lane (3-5
+cycles, comparable to ModalChooseOne envelope), not a single
+per-card slice. Cycle list:
+- **C1** — `controller_override_until_cleanup` field + per-object
+  reset on bf entry + cleanup-step drain (~100 LoC across
+  `state.rs` / `state_ops_cleanup.rs`).
+- **C2** — `effective_controller_id` helper + re-route every
+  raw `o.controller_id` read site across `state_ops_legal.rs` /
+  `state_ops_combat.rs` / `state_ops_decisions.rs` /
+  `state_ops_actions.rs` (~200 LoC across 5+ files; high
+  cross-cutting risk).
+- **C3** — `Effect::GrantControlOfTargetUntilEOT { ... }` + parse
+  + to_pydict + resolve arms; bridge round-trip; per-card slice
+  for Systems Override (`{2}{R}` single-target sibling, in the
+  same BLOCKED-subsystem-gated list) closes alongside; ~150 LoC
+  + 4 cross-engine probes.
+- **C4** — `Effect::MutinousMassacre { pick: u8 }` (variant-
+  parameter shape — different from per-mode dispatch shape;
+  composes destroy-by-parity + grant-control-all + untap +
+  haste-grant); bridge round-trip; admit auto-join; ~200 LoC + 5
+  cross-engine probes. Could also expose a resolve-time agent
+  prompt via a new `PendingDecision::ChooseOddOrEven` (deferred to
+  C5 for a deterministic-first first slice).
+- **C5** — Threaten / Act-of-Treason / Sothera’s Requiem are
+  cross-set siblings (not in EoE; deferred but the substrate
+  carries the same shape) + agent-prompt extension.
+
+Pool-flip per the cycle list: 1-2 cards per cycle (Mutinous
+Massacre, Systems Override) at ~5k-10k decks each.
+
+### 2. Zero Point Ballad — X-cost subsystem missing on Rust
+
+Oracle: `{X}{B}` Sorcery — "Destroy all creatures with toughness X
+or less. You lose X life. If X is 6 or more, return a creature
+card put into a graveyard this way to the battlefield under your
+control."
+
+Shape: `target_count_range == (0, 0)`, no `slot_kinds`, BUT
+`mc.x_pips == 1` — the admit predicate at
+`trajectory.py::_printing_is_bridge_simple_spell:4621`
+**positively rejects every X-cost spell** (`if mc.x_pips: return
+False`). The Phase-3 `(0, 0)` wrath arm cannot admit Zero Point
+Ballad until X-cost is lifted.
+
+Python resolve (`effects/bespoke.py:1692-1741`) reads
+`state.resolving_x_value` (line 1700) and uses it for two
+sub-clauses:
+1. Destroy filter: `effective_toughness(state, o) <= x`.
+2. Caster pays X life.
+3. Conditional reanimation (if X ≥ 6): `p.agent.choose_target(...)`
+   from caster-owned-and-destroyed-this-resolve set, optional
+   `put_into_battlefield` — single-target choose with the
+   "no-target" auto-decline path.
+
+Rust gap: **NO X-tracking on the engine.** A `grep -r
+"resolving_x_value" rust/src/` returns ONE match — a doc-only
+note at `rust/src/cards.rs:3220` explaining that the
+`PutChargeCountersOnSelf { amount_from_x: bool }` flag is
+ROUND-TRIPPED but `amount_from_x=true` resolves to **0 (silent
+no-op)** today. No subsystem actually reads or writes any X
+value.
+
+Required substrate:
+- **C1** — `StackItem.x_value: Option<u32>` (cast-time bound) +
+  `current_resolve_x_value: Option<u32>` slot bracketed
+  save/set/restore in `resolve_top_of_stack` (mirrors the
+  ModalChooseOne `current_resolve_chosen_mode_idx` pattern from
+  Cycle 2). Auto-pick deterministic-X policy = pay-all-floating
+  (mirrors Python's no-agent fallback at
+  `actions._pick_x_cost_at_cast`); ~100 LoC.
+- **C2** — Admit-predicate widen: remove the
+  `mc.x_pips: return False` reject, replace with a positive
+  X-shape admit gate keyed on the bound X value being
+  round-trip-clean through the reverse serializer; ~30 LoC.
+- **C3** — `Effect::ZeroPointBallad` resolve arm (destroy-with-
+  toughness-≤-X filter + life-loss + optional reanimation single-
+  target). Reanimation arm needs a NEW resolve-time
+  `PendingDecision::ChooseFromOwnedDestroyedThisResolve` (the
+  candidate set is built mid-resolve, so it cannot be cast-time
+  bound). ~200 LoC + 6 probes.
+- **C4** — Real-EoE byte-equal probe with X=0/X=5/X=6/X=8
+  scenarios (the 4 X-tier branches: empty-filter, no-reanim,
+  reanim-trigger, reanim-with-no-candidate).
+
+Pool-flip per cycle: 1 card (Zero Point Ballad alone); other
+EoE X-cost spells (Devastating Onslaught — Sorcery, "Create X
+tokens that are copies of...") are independent slices that share
+the X-tracking C1 substrate.
+
+### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
+
+Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any
+number of target players each mill half their library, rounded
+down."
+
+Shape: `target_count_range == (0, 8)`, `slot_kinds == ()` — the
+"any number of target players" shape. The admit predicate at
+`trajectory.py:4708` only admits `_PHASE3_WRATH_SHAPE = (min_t,
+max_t) == (0, 0) and not slot_kinds and not getattr(printing,
+"targets", ())`. Singularity Rupture's `(0, 8)` shape stays
+positively declined.
+
+The brief explicitly flagged this card with: "Skip Singularity
+Rupture initially if its (0, 8) shape needs separate admit-
+predicate widening (8 targets is unusual)." Confirmed: the shape
+requires:
+- **C1** — Phase-4 admit-arm widening for `(0, N)` shapes where
+  `N` is `state.player_count` (or any constant bounding "any
+  number of target X") AND `slot_kinds == ()` AND the resolve
+  body has a known multi-target enumeration. Cross-engine
+  per-target binding policy needs to be defined: Python's
+  `_select_spell_targets` picks first-legal-per-slot, but for
+  "any number" there are NO per-slot bindings — the agent picks
+  a SUBSET. Deterministic-first policy candidates: pick all
+  legal targets (most aggressive); pick none (most conservative
+  byte-equal — empty subset is always legal). The picked-policy
+  affects both engines symmetrically.
+- **C2** — `Effect::DestroyAllCreaturesThenMillHalfTargetPlayers`
+  (or compose `Sequence(DestroyAllCreatures, MillHalfTargetPlayers
+  Each)`); the mill arm needs a new `MillHalfTargetPlayersEach`
+  variant that walks the cast-time-bound subset of players. Mill
+  is itself partially covered (`Effect::Mill` exists for self-mill
+  only — `cards.rs:5400ish`); target-player mill is new. ~150 LoC.
+- **C3** — Round-trip + admit-set widen + probes (~50 LoC).
+
+Pool-flip per cycle: 1 card (no other "any number of target
+players each mill half" sibling in EoE). The `(0, N)` admit
+widen could enable other "any number of target X" cards down
+the line, but their identification needs a separate inventory
+walk.
+
+### Lane decision
+
+All 3 candidates require multi-cycle subsystem work — none is a
+mirror-Beyond-the-Quiet single per-card slice. The Beyond the
+Quiet precedent worked because its only gap was the field-free
+unit Effect variant + bridge + serializer leaf; the wrath shape
+was already covered by Lane Y's Phase-3 admit arm AND the
+resolve body composed entirely from already-shipped primitives
+(`bf_iter_etb_sorted` + exile-not-destroy + LTB queue). None of
+the three candidates here has that property:
+- Mutinous Massacre needs a brand-new control-change subsystem.
+- Zero Point Ballad needs a brand-new X-value subsystem PLUS
+  admit-arm widening.
+- Singularity Rupture needs admit-arm widening for an `(0, N)`
+  multi-target shape that has no existing infrastructure.
+
+**Honest-stop, no PROBED flip in this lane.** The substrate work
+should be scheduled as named multi-cycle lever lanes when each
+clears the deck-cost/cycle bar; the cheapest-amortized path among
+the three is likely Zero Point Ballad's X-cost lane (the X-value
+subsystem unlocks multiple cards including Devastating Onslaught
+and any future X-cost EoE additions), but the cost/benefit
+analysis is a separate scoping exercise.
+
+**Location**: `src/mtg_bot/parity/trajectory.py:4621` (X-cost
+positive reject), `:4708-4712` (Phase-3 admit shape), the absence
+of any control-change subsystem in `rust/src/`, the absence of
+any X-value tracking in `rust/src/`, the absence of any
+`(0, N)` admit arm in `_printing_is_bridge_simple_spell`.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

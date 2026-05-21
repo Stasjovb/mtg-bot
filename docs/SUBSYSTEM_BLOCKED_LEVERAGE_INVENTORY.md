@@ -579,7 +579,33 @@ Scrap, Scout for Survivors, Singularity Rupture, Systems Override,
 Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
 Ballad.
 
-* **Per-card cost:** 1-3 cycles each.
+* **Per-card cost:** 1-3 cycles each — **caveat (2026-05-21)**:
+  the next-wrath-substrate triad walk
+  (`feature/next-wrath-substrate`) characterized Mutinous Massacre,
+  Zero Point Ballad, and Singularity Rupture as **NOT** per-card
+  Tier-A slices. Each requires NEW Rust subsystem work, not a
+  field-free unit Effect variant in the Beyond-the-Quiet shape:
+    * **Mutinous Massacre** — control-change-UEOT subsystem
+      (per-object controller override + cleanup-step drain +
+      every `o.controller_id` read site routed through an
+      effective-controller helper; would also close Systems
+      Override). Multi-cycle (3-5).
+    * **Zero Point Ballad** — X-value tracking subsystem
+      (`StackItem.x_value` + `current_resolve_x_value` bracket
+      around resolve) + admit-predicate widen for X-cost spells
+      + resolve-time `ChooseFromOwnedDestroyedThisResolve`
+      decision push. Multi-cycle (3-4); shares C1 with
+      Devastating Onslaught.
+    * **Singularity Rupture** — `(0, N)` admit-arm widening for
+      "any number of target X" + cross-engine deterministic
+      subset-pick policy + `MillHalfTargetPlayersEach` variant.
+      Multi-cycle (2-3).
+
+  Full characterization at
+  `docs/SEARCH_LIMITATIONS.md` "Next-wrath-substrate triad
+  characterization — all 3 candidates require new subsystem work,
+  not a single per-card slice (HONEST-STOP, 2026-05-21)".
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 
