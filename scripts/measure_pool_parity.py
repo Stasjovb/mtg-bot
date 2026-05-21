@@ -566,6 +566,90 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ability surface).  See module docstring for the full honest-
     # exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_hhhh.py",
+    # Probe batch IIII (round 35 covered-but-unprobed) -- ninth
+    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE, FFFF,
+    # GGGG, HHHH).  FOUR cards from the covered tier upgraded to
+    # PROBED via the same parse + bridge round-trip + Python-side
+    # resolve idiom DDD slice 17 / YYY / ZZZ / AAAA / CCCC / DDDD /
+    # EEEE / FFFF / GGGG / HHHH established (the substrate-shipped-
+    # but-no-_parity-probe measurement-attribution gap -- same shape
+    # as the warp_cost Phase 3 precedent at merge 33188239):
+    #   * Lightstall Inquisitor (Creature ENTERS ->
+    #     EachOpponentExilesCardFromHandWithCastPermission(); FIRST
+    #     credited _parity probe of the bespoke effect class shipped
+    #     in the 20th Rust slice (XXX Pin 3 closure).  The
+    #     test_probe_xxx_pin3_downstream.py test_xxx_pin3_* family
+    #     exercises the bridge round-trip + Rust-side empty-hand no-op
+    #     on a SYNTHETIC carrier; an existing _parity-suffixed
+    #     function (test_xxx_pin3_real_eoe_lightstall_inquisitor_
+    #     cast_from_exile_substrate_parity) does NOT match the slug
+    #     scanner regex (which anchors on the full
+    #     ``test_cross_engine_real_eoe_<slug>_parity`` prefix), so
+    #     Lightstall remained uncredited.  IIII binds the REAL parsed
+    #     Lightstall Inquisitor EoE printing and asserts the
+    #     per-opponent empty-hand skip at discard.py:196-197).
+    #   * The Seriema (Artifact (Spacecraft) ENTERS ->
+    #     SearchLibraryForCard(filter_name='legendary_creature',
+    #     max_mv=0, may_fail=False); FIRST credited _parity probe of
+    #     the bare SearchLibraryForCard shape with the
+    #     (legendary_creature, may_fail=False) parameterization on an
+    #     ENTERS carrier.  Sibling PROBED consumers pin different
+    #     parameterization quadruples: Spineseeker Centipede pins
+    #     (ENTERS, bare, basic_land, may_fail=True); Starfield
+    #     Shepherd pins (ENTERS, ModalChooseOne wrapper, basic_plains
+    #     + creature_small); Demonic Counsel pins (SPELL, bare, demon,
+    #     may_fail=False).  HHHH dropped The Seriema citing
+    #     "SearchLibrary already PROBED via siblings" but the
+    #     (legendary_creature, may_fail=False) bare-ENTERS quadruple
+    #     was not covered by any of the three siblings -- the
+    #     attribution-gap closure here is the credited delta).
+    #   * Optimistic Scavenger (Creature ENTERS ->
+    #     PutPlusOneCounterOnTargetCreature(amount=1); FIRST credited
+    #     _parity probe binding the Optimistic Scavenger slug to the
+    #     Effect+bridge round-trip on the REAL parsed EoE printing.
+    #     The PROBED-tier classifier credits per-slug; sibling PROBED
+    #     consumers (Drix Fatemaker / Mm'menon Uthros Exile / Honor /
+    #     Selfcraft Mechan / Shrewd Storyteller) cover other (event,
+    #     predicate) combos but no slug-keyed probe pinned Optimistic
+    #     Scavenger.  HHHH dropped Optimistic Scavenger citing "bit-
+    #     identical to PROBED Drix Fatemaker" but the predicate
+    #     distinction (Subject(IsEnchantment) & Controlled(YOU) vs
+    #     IsSelf) + the ROOM_FULLY_UNLOCKED second trigger DO produce
+    #     a different per-slug attribution -- the classifier credits
+    #     per-slug, not per-effect-class).
+    #   * Command Bridge (Land ENTERS ->
+    #     SacrificeSelfUnlessTapPermanent(); FIRST credited _parity
+    #     probe of the bespoke effect class shipped in the 20th Rust
+    #     slice (VVV Pin 2 closure).  Command Bridge is the ONLY EoE
+    #     consumer of this effect class -- the HIGHEST-deck-count
+    #     BLOCKED-genuinely_missing closure on the
+    #     ``docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`` list at the
+    #     time of the VVV Pin 2 substrate landing (24,522 17lands
+    #     decks).  HHHH's drop list cited "Lands (activated-ability
+    #     surface)" generically as a skip reason for ALL lands, but
+    #     Command Bridge is a LAND with a TRIGGERED ability surface
+    #     distinct from its activated mana ability -- IIII pins the
+    #     triggered shape via the no-source short-circuit at
+    #     combinators.py:121-123).
+    # Honest-exhaustion drops include Dawnsire / Clammy Prowler /
+    # Temporal Intervention (no bridge arm), pump carriers with
+    # granted_keywords riders (Hand That Feeds / Flesh Burrower / Cult
+    # Healer / Give In to Violence / Dual-Sun Technique / Horrid Vigor
+    # / Rig for War / Violent Urge -- bridge drops the rider), token-
+    # registration cards (Sami / Station Monitor / Weapons
+    # Manufacturing / Grand Entryway), Sequence / Modal wrappers with
+    # substrate-deferred inner effects (Sunstar Lightsmith /
+    # Cosmogrand Zenith / Rust Harvester / Requiem Monolith / Let's
+    # Play a Game / Split Up / Lithobraking / Vanish from Sight /
+    # Unnerving Grasp), Equipment carriers / ManifestDread carriers
+    # (substrate deferral), bit-identical-to-PROBED-siblings (Trapped
+    # in the Screen / Unwanted Remake / Come Back Wrong / Innocuous
+    # Rat / Break Down the Door / Under the Skin / Fear of Failed
+    # Tests / Irreverent Gremlin), Room subsystem cards, vanilla
+    # creatures, lands (separate activated-ability surface), Lane K's
+    # Tannuk + Frenzied Baloth (deferred per concurrent-agent note).
+    # See module docstring for the full honest-exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_iiii.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

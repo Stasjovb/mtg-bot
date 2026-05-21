@@ -51,7 +51,7 @@ shapes; no genuine-printing cross-engine byte-equal pin yet).
 | (2) Dynamic-P/T formula — Harmonious Grovestrider | **CLOSED** — substrate LANDED round-78; Grovestrider PROBED end-to-end (ward-rider on real printing kept it loader-gated, but the formula-substrate single-gate it cited is closed). Round-84 (`feature/dynamic-pt-cosmogoyf`) extended the SAME dispatch table with the `"cosmogoyf"` arm, flipping Cosmogoyf → PROBED. Single-gated Dynamic-P/T tier now 0. | `6a8b6402` (Grovestrider) + this lane (Cosmogoyf) |
 | (3) Aura Phase 2 (S2 control-changing) | **SHIPPED** — Duskmourn admit + Tractor Beam reduce | `643163c6`, plus S2 extension `d4ceecc5` (Tractor Beam) |
 | (4) Aura Phase 3 (S4 triggered) | **SHIPPED** — Pain for All admit substrate end-to-end | `35ede8b0` |
-| (5) Effect-uncovered per-card drain | continuing (probe batches AAAA-GGGG landed in parallel; +11 PROBED) | `5063e8e3`, `93ea4057`, `1a06d714`, … `7c66225e` |
+| (5) Effect-uncovered per-card drain | continuing (probe batches AAAA-IIII landed in parallel; +18 PROBED) | `5063e8e3`, `93ea4057`, `1a06d714`, … `7c66225e`, … `feature/probe-batch-hhhh`, `feature/probe-batch-iiii` |
 
 ### Other major closures this session
 
