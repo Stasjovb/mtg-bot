@@ -4525,7 +4525,25 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     # Triggered / static / activated / spell-effect riders — other
     # Aura sub-shapes (S4 = triggered, S2 = static control-swap).
-    if printing.triggered_abilities:
+    #
+    # **Phase 2 S2 extension follow-up (Tractor Beam cast-time
+    # auto-resolve seat alignment, 2026-05-20).** Triggered-ability
+    # gate now ADMITS the narrow Tractor-Beam-shape allowlist
+    # (``Event.ENTERS + IsSelf + TapEnchantedPermanent``) per
+    # :func:`_aura_triggers_are_phase2_s2_safe`. The substrate is
+    # plumbed end-to-end (round-trip dict shape via
+    # :func:`_python_ta_to_safe_dict_aura_extension`, Rust untap-step
+    # skip, ``TapEnchantedPermanent`` Aura ETB bridge) AND the
+    # cast-time auto-resolve seat is aligned at
+    # ``state_ops_actions.rs`` (the EnchantTargetChoice auto-resolve
+    # drains synchronously after `cast_aura` returns true, binding
+    # `candidates[0]` to the StackItem before resolve reads it). Any
+    # OTHER trigger shape (DrawCards on ETB, GainLife on attached
+    # creature, etc.) is still positively declined here — keep the
+    # surface narrow per the no-fallback-hybrid discipline.
+    if printing.triggered_abilities and not _aura_triggers_are_phase2_s2_safe(
+        printing.triggered_abilities
+    ):
         return False
     if printing.activated_abilities:
         return False
@@ -4569,25 +4587,16 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     # S3 replacement riders — Phase 4; positively declined here.
     if printing.attached_grants_control and (
         not printing.attached_grants_lose_all_abilities
+    ) and (
+        not printing.attached_prevents_untap
     ):
-        # Lone control-grant without the lose-abilities wipe (no live
-        # EoE carrier matches this shape today, but stay defensive —
+        # Lone control-grant without the lose-abilities wipe AND
+        # without the don't-untap clause — no live EoE carrier matches
+        # this shape today (Tractor Beam pairs control-grant WITH the
+        # don't-untap rider, admitted below). Stay defensive —
         # admitting a control-only Aura would silently mistranslate
         # against a host that still has functional abilities the
-        # bench may rely on).
-        #
-        # **Phase 2 S2 extension (Tractor Beam closure, 2026-05-20).**
-        # The bench-loader admit for Tractor Beam (control-grant +
-        # prevents-untap + ETB-tap-self) is honest-stopped pending a
-        # cross-engine play-parity follow-up — the substrate IS
-        # plumbed through (``aura_prevents_host_untap`` field +
-        # Rust untap-step skip + ``TapEnchantedPermanent`` Aura ETB
-        # bridge), and the byte-equal round-trip + untap-step probe
-        # pass at substrate level. Full cross-engine play parity
-        # (the production-deck shadow bake-in) requires aligning
-        # Python's cast-time auto-resolve-target seat with Rust's
-        # for the Tractor-Beam shape under an opponent-creature host
-        # — a separate slice. SL-documented.
+        # bench may rely on.
         return False
     if printing.attached_grants_lose_all_abilities and (
         not printing.attached_grants_control
@@ -4601,7 +4610,14 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
         return False
     if printing.attached_grants_subtype is not None:
         return False
-    if printing.attached_prevents_untap:
+    if printing.attached_prevents_untap and (
+        not printing.attached_grants_control
+    ):
+        # Lone don't-untap rider without the control-grant. Tractor
+        # Beam is the live EoE carrier pairing the two — admitted via
+        # the joint-shape gate above. Any future carrier with the
+        # bare don't-untap rider (Tilling Treefolk-shape) stays
+        # declined here pending a separate slice.
         return False
     if printing.replaces_first_tokens_with_copies:
         return False
