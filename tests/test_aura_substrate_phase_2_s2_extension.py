@@ -283,17 +283,26 @@ def test_carddef_rust_round_trip_byte_equal_for_tractor_beam_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_predicate_declines_live_tractor_beam_printing_at_bench_loader():
-    """The §2 positive-allowlist predicate KEEPS Tractor Beam
-    bench-loader-declined post-Phase-2-S2-extension. The substrate
-    is plumbed end-to-end (CardDef + Rust + bridge + untap-step
-    skip + trigger admit helpers), and the byte-equal probe +
-    untap-step probe BOTH pass at substrate level (see other tests
-    in this file). But the bench-loader admit is honest-stopped
-    pending a cross-engine play-parity follow-up — the substrate
-    landing is the closure milestone for the
-    BLOCKED-genuinely_missing tier shrink (2 → 1, only Pain for All
-    remains)."""
+def test_predicate_admits_live_tractor_beam_printing_at_bench_loader():
+    """The §2 positive-allowlist predicate ADMITS Tractor Beam at
+    the bench loader after the cast-time auto-resolve seat alignment
+    slice (2026-05-20).
+
+    The decline arms that previously gated Tractor Beam out — the
+    triggered-abilities catch-all (now gated through
+    :func:`_aura_triggers_are_phase2_s2_safe`), the lone-control-grant
+    decline (now requires `not attached_prevents_untap` to fire), and
+    the bare `attached_prevents_untap` decline (now requires
+    `not attached_grants_control` to fire) — collectively recognize
+    the Tractor-Beam shape as the joint control-grant + prevents-untap
+    + ENTERS-IsSelf-TapEnchantedPermanent ETB combo and pass it
+    through. The cast-time auto-resolve substrate at
+    ``state_ops_actions.rs`` (drains the EnchantTargetChoice
+    synchronously after `cast_aura`) closes the cross-engine play-
+    parity gap.
+
+    Substrate landing closure for the BLOCKED-genuinely_missing tier
+    shrink (2 → 1, only Pain for All remains)."""
     from mtg_bot.cards.source import get_active_source
 
     pool = get_active_source().get_printings()
@@ -301,27 +310,25 @@ def test_predicate_declines_live_tractor_beam_printing_at_bench_loader():
     assert tb.is_aura is True
     assert tb.attached_grants_control is True
     assert tb.attached_prevents_untap is True
-    # The narrow trigger admit STILL fires at substrate level — the
+    assert tb.attached_grants_lose_all_abilities is False
+    # The narrow trigger admit fires at substrate level — the
     # ``_aura_triggers_are_phase2_s2_safe`` helper recognizes the
     # ENTERS-IsSelf-TapEnchantedPermanent shape and the round-trip
     # dict via ``_python_ta_to_safe_dict_aura_extension`` round-trips
     # through the Rust bridge byte-equal.
     assert _aura_triggers_are_phase2_s2_safe(tb.triggered_abilities) is True
-    # The predicate stays declined at the bench-loader level — the
-    # lone-control-grant decline in the predicate covers Tractor
-    # Beam's shape (control + prevents_untap, no lose-abilities),
-    # per the SL-documented honest-stop. Substrate landing is
-    # validated by the round-trip + untap-step probes below.
-    assert _printing_is_bridge_simple_aura(tb) is False
+    # Predicate ADMITS at the bench-loader level: every decline arm
+    # in :func:`_printing_is_bridge_simple_aura` lets the Tractor-Beam
+    # shape through.
+    assert _printing_is_bridge_simple_aura(tb) is True
 
 
-def test_loader_declines_tractor_beam_from_live_pool():
-    """A deck listing the real Tractor Beam printing routes Tractor
-    Beam into the not-bridged sink at the bench loader — the
-    Phase-2-S2-extension substrate is plumbed but the bench-loader
-    admit is honest-stopped pending cross-engine play-parity (see
-    the SL entry on the Tractor-Beam decline in
-    :func:`_printing_is_bridge_simple_aura`)."""
+def test_loader_admits_tractor_beam_from_live_pool():
+    """A deck listing the real Tractor Beam printing flows through
+    the bench-loader admit chokepoint and produces a CardDef in the
+    filtered output (no longer routed into the not-bridged sink).
+    Closes the bench-loader admit honest-stop from the
+    Phase-2-S2-extension slice."""
     from mtg_bot.cards.source import get_active_source
 
     printings = get_active_source().get_printings()
@@ -332,8 +339,15 @@ def test_loader_declines_tractor_beam_from_live_pool():
         printings,
         not_bridged_sink=not_bridged_sink,
     )
-    assert "Tractor Beam" not in filtered
-    assert "Tractor Beam" in not_bridged_sink
+    assert "Tractor Beam" in filtered
+    assert "Tractor Beam" not in not_bridged_sink
+    # The admitted Aura's CardDef carries the Tractor-Beam shape's
+    # full S2 + prevents-untap + ETB-trigger payload through the
+    # bridge.
+    tb_card_def = next(cd for cd in card_defs if cd.name == "Tractor Beam")
+    assert tb_card_def.is_aura is True
+    assert tb_card_def.aura_grants_control is True
+    assert tb_card_def.aura_prevents_host_untap is True
 
 
 def test_real_tractor_beam_round_trips_through_rust_byte_equal():

@@ -483,20 +483,34 @@ def test_dispatcher_routes_aura_cast_through_cast_aura_arm():
     hand MUST be dispatched through ``cast_aura``. End-to-end pin
     that search-loop callers can drive an Aura cast through the
     same ``CastSpell`` dict shape Python emits.
+
+    **Cast-time auto-resolve seat alignment (Tractor Beam closure
+    follow-up, 2026-05-20).** The dispatcher now drains the
+    pending ``EnchantTargetChoice`` synchronously after `cast_aura`
+    returns true (mirroring Python's `_select_spell_targets` which
+    binds the chosen target inline at cast time via
+    `p.agent.choose_target`). The post-dispatch observable is the
+    StackItem's ``target_obj_id`` bound to ``candidates[0]`` (the
+    deterministic-first legal host) and an empty pending-decisions
+    queue.
     """
     _require_engine()
     state = _fresh_state()
     aura_id = state.register_and_inject_object(
         _aura_printing_dict(), 0, ZONE_HAND,
     )
-    state.register_and_inject_object(
+    bears_id = state.register_and_inject_object(
         _creature_dict("Bears"), 0, ZONE_BATTLEFIELD,
     )
     state.add_mana(0, "R", 1)
     state.apply_action({"kind": "cast_spell", "card_id": aura_id})
-    pds = state.pending_decisions()
-    assert len(pds) == 1
-    assert pds[0]["kind"] == "EnchantTargetChoice"
+    # Pending decision was synchronously auto-resolved at cast time.
+    assert state.pending_decisions() == []
+    # Spell sits on the stack with candidates[0] (Bears) bound to its
+    # target slot. The auto-resolve binding flow mirrors what
+    # `submit_enchant_target_decision(bears_id)` would have done.
+    assert state.stack_size() == 1
+    assert state.stack_top_target_id() == bears_id
 
 
 def test_dispatcher_falls_through_to_cast_creature_for_non_aura():
