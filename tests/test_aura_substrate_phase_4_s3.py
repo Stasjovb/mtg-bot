@@ -584,3 +584,391 @@ def test_python_parity_create_token_records_player_in_set():
         "Python parity: P1's id must NOT be in the set — only P0 "
         "received tokens."
     )
+
+
+# ---------------------------------------------------------------------
+# Phase 4 S3 closure (2026-05-21) — Moonlit Meditation real-EoE byte-
+# equal probes. These mirror the
+# test_real_eoe_pain_for_all_admits_via_filter_with_real_deck_shape /
+# test_real_eoe_pain_for_all_deck_setup_byte_equal_cross_engine
+# patterns in tests/test_aura_substrate_phase_3_s4.py for the new
+# admit.
+# ---------------------------------------------------------------------
+
+
+def test_moonlit_meditation_admits_via_filter_with_real_deck_shape():
+    """End-to-end: a real-EoE-deck-shape with 4 Moonlit Meditation
+    copies flows through ``_filter_deck_to_bridge_supported`` without
+    any Moonlit Meditation copies in the not-bridged sink. Verifies
+    the Phase 4 S3 closure admit doesn't accidentally re-decline in
+    the deck-side filter chokepoint.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    printings = get_active_source().get_printings()
+    deck = ["Forest"] * 20 + ["Moonlit Meditation"] * 4
+    not_bridged_sink: list[str] = []
+    filtered, card_defs = _filter_deck_to_bridge_supported(
+        deck, printings, not_bridged_sink=not_bridged_sink,
+    )
+    assert filtered.count("Moonlit Meditation") == 4, (
+        "Phase 4 S3 closure end-to-end: 4 Moonlit Meditation copies "
+        "must flow through the loader admit without any deck-side "
+        "re-decline. Got filtered count="
+        f"{filtered.count('Moonlit Meditation')!r}; "
+        f"not_bridged_sink={not_bridged_sink!r}."
+    )
+    assert "Moonlit Meditation" not in not_bridged_sink, (
+        "Phase 4 S3 closure end-to-end: Moonlit Meditation must NOT "
+        "appear in the not-bridged sink — the loader admit predicate "
+        f"now passes. Sink: {not_bridged_sink!r}."
+    )
+    assert any(c.name == "Moonlit Meditation" for c in card_defs), (
+        "Phase 4 S3 closure end-to-end: the deck-side filter must "
+        "materialize a CardDef for Moonlit Meditation."
+    )
+    moonlit_cd = next(c for c in card_defs if c.name == "Moonlit Meditation")
+    assert moonlit_cd.aura_replaces_first_tokens_with_copies is True, (
+        "Phase 4 S3 closure end-to-end: the materialized CardDef "
+        "must carry aura_replaces_first_tokens_with_copies=True so "
+        "the Rust registry parse-arm picks up the rider."
+    )
+
+
+def test_moonlit_meditation_real_eoe_deck_setup_byte_equal_cross_engine():
+    """A real-EoE-deck-shape with Moonlit Meditation in both players'
+    decks sets up identical Python + Rust states at game start.
+    Verifies the loader admit + bridge round-trip + Rust registry
+    parse all succeed end-to-end on the canonical Moonlit Meditation
+    printing — the pre-condition for any future cross-engine
+    trajectory probe that exercises the token-substitution path.
+
+    Mirrors the
+    ``test_real_eoe_pain_for_all_deck_setup_byte_equal_cross_engine``
+    sister probe in tests/test_aura_substrate_phase_3_s4.py.
+    """
+    from mtg_bot.parity import trajectory
+
+    deck = ["Forest"] * 20 + ["Moonlit Meditation"] * 4
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        deck, deck, shared_rng_seed=0, mulligans=False,
+    )
+    # Moonlit Meditation landed in the bridge-filtered deck on BOTH
+    # engines — the loader admit + bridge round-trip both succeeded.
+    # The two libraries reach the same total count (after pad-to-size
+    # 60) on both engines; if the loader silently dropped Moonlit
+    # Meditation the Python deck would still have 4 copies but the
+    # Rust registry build would have raised a missing-printing error.
+    py_libs = [len(p.library) for p in py_state.players]
+    assert py_libs[0] == py_libs[1]
+    rust_libs = list(rust_state.library_sizes)
+    assert rust_libs[0] == py_libs[0]
+    assert rust_libs[1] == py_libs[1]
+
+    def _py_count_total(p):
+        return sum(
+            1 for o in (*p.library, *p.hand)
+            if o.printing.name == "Moonlit Meditation"
+        )
+
+    # 4 Moonlit Meditation copies in library + hand across both
+    # players — the loader admit landed cleanly without any silent
+    # drop. The Python view's `o.printing.name` reads through to the
+    # registered CardDef's name (same as the printing's parser name),
+    # so the count is conservative.
+    py_moonlit_p0 = _py_count_total(py_state.players[0])
+    py_moonlit_p1 = _py_count_total(py_state.players[1])
+    assert py_moonlit_p0 == 4, (
+        "Phase 4 S3 closure end-to-end: P0 must hold 4 Moonlit "
+        "Meditation copies after deck setup; got "
+        f"{py_moonlit_p0!r}."
+    )
+    assert py_moonlit_p1 == 4, (
+        "Phase 4 S3 closure end-to-end: P1 must hold 4 Moonlit "
+        "Meditation copies after deck setup; got "
+        f"{py_moonlit_p1!r}."
+    )
+
+
+def test_moonlit_meditation_substituted_token_carries_supertype_override():
+    """**Phase 4 S3 closure consumer probe (2026-05-21).** Drive the
+    Rust CreateToken arm end-to-end on a synthetic state where:
+
+      * P0 controls a synthetic Moonlit-shape Aura attached to a
+        host creature (the host's printing carries Creature card_type
+        but NOT the Token supertype).
+      * P0's per-player ``created_tokens_this_turn`` slot starts
+        cleared.
+      * A carrier permanent on P0's bf has an ETB that creates a
+        synthetic 1/1 Robot token.
+
+    After draining the ETB trigger, the newly-minted GameObject on
+    P0's bf MUST:
+
+      1. Carry the host's ``printing_id`` (not the Robot token's
+         registered pid).
+      2. Carry ``token_supertype_override = true`` (the per-object
+         injection that mirrors Python's ``_dc.replace(base,
+         supertypes=(*base, "Token"))`` shim).
+      3. Cease to exist after leaving the battlefield (the
+         drain_pending_token_cease scrub honors the per-object
+         override — the substituted token IS a token even though its
+         printing_id points at a non-Token printing).
+    """
+    import mtg_bot_engine  # noqa: F401
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+
+    # 1. Register the host's printing — a Grizzly-Bears-shape
+    #    creature (2/2 Bear, no Token supertype, no abilities).
+    host_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bear Host",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 1, "G": 1},
+            "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    # The host's printing_id is the first appended printing on a
+    # fresh state's empty registry. Mirrors the helper at line ~245.
+    host_pid = 0
+
+    # 2. Register the Moonlit-shape Aura under P0's control, with
+    #    ``attached_to = host_obj_id``. The CardPrinting carries
+    #    ``aura_replaces_first_tokens_with_copies=True``.
+    aura_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Moonlit Probe",
+            "card_types": ["Enchantment"],
+            "subtypes": ["Aura"],
+            "mana_cost": {"generic": 2, "U": 1},
+            "effects": [],
+            "is_aura": True,
+            "aura_enchant_type": "creature",
+            "aura_yours_only": True,
+            "aura_replaces_first_tokens_with_copies": True,
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.attach(aura_obj_id, host_obj_id) is True, (
+        "Pre-condition: the Aura must attach to the host."
+    )
+
+    # 3. Register the Robot token printing.
+    robot_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": "Robot Token",
+            "card_types": ["Artifact", "Creature"],
+            "subtypes": ["Robot"],
+            "supertypes": ["Token"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 0},
+            "effects": [],
+        },
+        0, ZONE_LIBRARY,
+    )
+    # Robot Token is the third printing registered (host=0, aura=1,
+    # robot=2). Verify by reading the printing's snapshot field;
+    # robust against future printing-id-derivation refactors.
+    assert rust_state.find_object_zone(robot_obj_id) == ZONE_LIBRARY
+    robot_pid = 2
+
+    # 4. Inject a carrier permanent whose ETB creates one of the
+    #    robot tokens.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Token-Maker Probe Carrier",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": robot_pid,
+                },
+            }],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+
+    # 5. Drain the ETB stack — the CreateToken arm should consult
+    #    the Moonlit Aura, swap the token's printing_id to the host
+    #    (host_pid), and stamp the per-object override.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    # 6. The newly-minted token MUST carry the host's printing_id +
+    #    the per-object Token-supertype override flag.
+    bf_snapshot = rust_state.battlefield_snapshot()
+    moonlit_substituted = [
+        obj for obj in bf_snapshot
+        if obj.get("token_supertype_override") is True
+    ]
+    assert len(moonlit_substituted) == 1, (
+        "Phase 4 S3 closure consumer probe: exactly ONE bf object "
+        "must carry token_supertype_override=True after the ETB "
+        f"resolution. bf_snapshot={bf_snapshot!r}."
+    )
+    substituted = moonlit_substituted[0]
+    assert substituted["printing_id"] == host_pid, (
+        "Phase 4 S3 closure consumer probe: the substituted token's "
+        "printing_id must point at the Moonlit-attached host (Bear "
+        f"Host, pid={host_pid}); got {substituted['printing_id']!r}."
+    )
+    # Per-player flag flipped — the controller is now barred from
+    # any additional Moonlit substitution this turn.
+    assert rust_state.created_tokens_this_turn(0) is True
+
+
+def test_moonlit_meditation_only_first_batch_each_turn_substitutes():
+    """**Phase 4 S3 closure honest-stop probe.** The substitution MUST
+    fire only on the FIRST token-creation batch each turn. A second
+    batch on the same turn — even with the Moonlit Aura still attached
+    — mints vanilla Robot tokens. Mirrors Python's
+    ``recipient not in state.players_who_created_tokens_this_turn``
+    membership check at ``effects/generic/tokens.py:225``.
+
+    Drives the natural flag-flip mechanism: inject TWO Token-Maker
+    Probe carriers back-to-back; the first carrier's ETB substitutes,
+    the second carrier's ETB does not (the first one flipped the flag).
+    """
+    import mtg_bot_engine  # noqa: F401
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+
+    # Host (Bear) + Aura + Robot — pid=0/1/2 in that order.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Bear Host",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "power": 2, "toughness": 2,
+            "mana_cost": {"generic": 1, "G": 1},
+            "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    host_pid = 0
+    aura_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Moonlit Probe",
+            "card_types": ["Enchantment"],
+            "subtypes": ["Aura"],
+            "mana_cost": {"generic": 2, "U": 1},
+            "effects": [],
+            "is_aura": True,
+            "aura_enchant_type": "creature",
+            "aura_yours_only": True,
+            "aura_replaces_first_tokens_with_copies": True,
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.attach(aura_obj_id, 0) is True
+    rust_state.register_and_inject_object(
+        {
+            "name": "Robot Token",
+            "card_types": ["Artifact", "Creature"],
+            "subtypes": ["Robot"],
+            "supertypes": ["Token"],
+            "power": 2, "toughness": 2,
+            "mana_cost": {"generic": 0},
+            "effects": [],
+        },
+        0, ZONE_LIBRARY,
+    )
+    robot_pid = 2
+
+    # First carrier — its ETB substitutes (Bear copy, override=true,
+    # flag flips on resolution).
+    rust_state.register_and_inject_object(
+        {
+            "name": "Token-Maker Probe Carrier (first batch)",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": robot_pid,
+                },
+            }],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    assert rust_state.created_tokens_this_turn(0) is True, (
+        "Pre-condition: the first-batch ETB must flip the controller's "
+        "per-player created-tokens-this-turn flag."
+    )
+
+    # Second carrier — its ETB must NOT substitute (the flag is now
+    # True, gating the substitution off).
+    rust_state.register_and_inject_object(
+        {
+            "name": "Token-Maker Probe Carrier (second batch)",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [{
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": robot_pid,
+                },
+            }],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    bf_snapshot = rust_state.battlefield_snapshot()
+    # Exactly ONE bf object carries the override (the first batch's
+    # Moonlit-substituted Bear copy). The second batch produced a
+    # vanilla Robot token (override=false, robot_pid).
+    moonlit_substituted = [
+        obj for obj in bf_snapshot
+        if obj.get("token_supertype_override") is True
+    ]
+    assert len(moonlit_substituted) == 1, (
+        "Phase 4 S3 closure honest-stop: exactly ONE bf object must "
+        "carry the override (the first batch). The second batch "
+        f"must mint a vanilla token. bf_snapshot={bf_snapshot!r}."
+    )
+    assert moonlit_substituted[0]["printing_id"] == host_pid, (
+        "Phase 4 S3 closure honest-stop: the substituted token "
+        "(first batch) must carry the host's pid; got "
+        f"{moonlit_substituted[0]['printing_id']!r}."
+    )
+    # The second batch's Robot token IS on the bf, with the Robot
+    # printing's pid (vanilla mint, no substitution).
+    vanilla_robots = [
+        obj for obj in bf_snapshot
+        if obj.get("printing_id") == robot_pid
+        and obj.get("token_supertype_override") is False
+    ]
+    assert len(vanilla_robots) == 1, (
+        "Phase 4 S3 closure honest-stop: the second batch must mint "
+        "exactly one vanilla Robot token with override=false. "
+        f"bf_snapshot={bf_snapshot!r}."
+    )
