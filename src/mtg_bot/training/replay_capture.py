@@ -364,12 +364,32 @@ def nn_eval_annotator(
     with_policy: bool = False,
     architecture: Optional[str] = None,
     policy_hidden_sizes: Optional[tuple[int, ...]] = None,
+    metadata_path: Optional[Path] = None,
 ) -> SnapshotAnnotator:
     """Returns an annotator that adds ``nn_eval``: ``{p0, p1,
     version}`` to each snapshot. ``version`` is the registry version
     id (or the raw weights path) so consumers can tell which network
     produced the scores when comparing replays across training
     iterations.
+
+    Two construction modes:
+
+    - ``metadata_path`` provided (preferred): the evaluator is built
+      via :meth:`NNEvaluator.from_metadata`, so all architecture
+      dispatch — including the structured-trunk dims that the flat
+      ``hidden_sizes``/``architecture``/``policy_hidden_sizes`` kwargs
+      can't express — is read from the sidecar metadata file. This is
+      the only path that can load weights for a structured trunk
+      trained at anything other than ``StructuredModelConfig``'s
+      defaults; the legacy explicit-kwargs path defaults the
+      structured ``emb_dim``/``n_layers``/``hidden_dim``/... fields and
+      will mis-load non-default-trunk checkpoints (iter_019 BUG #3).
+    - ``metadata_path`` absent (legacy): the explicit
+      ``hidden_sizes`` / ``with_policy`` / ``architecture`` /
+      ``policy_hidden_sizes`` kwargs are forwarded to
+      ``NNEvaluator(...)``. Sufficient for flat MLP architectures
+      (``shared`` / ``separate``) and for default-config structured
+      weights; not sufficient for non-default structured trunks.
 
     ``hidden_sizes`` and ``with_policy`` must match the saved weights'
     architecture (trunk shape and presence of a policy head). Without
@@ -381,16 +401,26 @@ def nn_eval_annotator(
     (bypasses the protocol's terminal short-circuit; uses engine
     fields directly)."""
     from mtg_bot.search.nn_evaluator import NNEvaluator
-    nn_kwargs: dict[str, Any] = {"weights_path": weights_path}
-    if hidden_sizes is not None:
-        nn_kwargs["hidden_sizes"] = hidden_sizes
-    if with_policy:
-        nn_kwargs["with_policy"] = True
-    if architecture is not None:
-        nn_kwargs["architecture"] = architecture
-    if policy_hidden_sizes is not None:
-        nn_kwargs["policy_hidden_sizes"] = policy_hidden_sizes
-    evaluator = NNEvaluator(**nn_kwargs)
+    if metadata_path is not None:
+        # Single-source: read every architecture knob (incl. structured
+        # trunk dims) from the sidecar metadata file. Picks up the
+        # iter_019 BUG #2 dual-read fix in ``from_metadata`` for free.
+        import json
+        from mtg_bot.training.registry import ModelMetadata
+        with Path(metadata_path).open("r", encoding="utf-8") as f:
+            metadata = ModelMetadata.from_dict(json.load(f))
+        evaluator = NNEvaluator.from_metadata(weights_path, metadata)
+    else:
+        nn_kwargs: dict[str, Any] = {"weights_path": weights_path}
+        if hidden_sizes is not None:
+            nn_kwargs["hidden_sizes"] = hidden_sizes
+        if with_policy:
+            nn_kwargs["with_policy"] = True
+        if architecture is not None:
+            nn_kwargs["architecture"] = architecture
+        if policy_hidden_sizes is not None:
+            nn_kwargs["policy_hidden_sizes"] = policy_hidden_sizes
+        evaluator = NNEvaluator(**nn_kwargs)
     label = version_label if version_label is not None else str(weights_path)
 
     def annotate(state: EngineGameState) -> dict[str, Any]:

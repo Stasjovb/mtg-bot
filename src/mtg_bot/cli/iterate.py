@@ -2047,6 +2047,13 @@ def main(argv=None) -> None:  # pragma: no cover
                 nn_with_policy=True,
                 nn_architecture=best_architecture,
                 nn_policy_hidden_sizes=best_policy_hidden_sizes,
+                # Sidecar metadata.json sits next to weights.pt in the
+                # registry; threading it lets the per-game annotator
+                # construct via NNEvaluator.from_metadata so non-default
+                # structured-trunk dims load (iter_019 BUG #3).
+                nn_metadata_path=str(
+                    best_weights.parent / "metadata.json"
+                ),
             )
         sp_hang_dir = (
             str(args.hang_dump_dir / self_play_run_id)
@@ -2307,6 +2314,14 @@ def main(argv=None) -> None:  # pragma: no cover
                     nn_with_policy=True,
                     nn_architecture=iter_architecture,
                     nn_policy_hidden_sizes=iter_policy_hidden_sizes,
+                    # Sidecar metadata.json sits next to weights.pt in
+                    # the registry; threading it lets the per-game
+                    # annotator construct via NNEvaluator.from_metadata
+                    # so non-default structured-trunk dims load
+                    # (iter_019 BUG #3).
+                    nn_metadata_path=str(
+                        new_weights.parent / "metadata.json"
+                    ),
                 )
             eval_hang_dir = (
                 str(args.hang_dump_dir / eval_run_id)
