@@ -73036,6 +73036,591 @@ def test_cross_engine_real_eoe_emergency_eject_destroy_then_unconditional_lander
     ), "Rust: destroyed creature in p1's graveyard (byte-equal)"
 
 
+# ============================================================
+# Beyond the Quiet — Effect-uncovered (BLOCKED honest-stop closed
+# by the beyond-the-quiet-slice; 4,698 17lands decks). ``{3}{W}{W}``
+# Sorcery: "Exile all creatures and Spacecraft." Rust
+# ``Effect::ExileAllCreaturesAndSpacecraft`` (cards.rs field-free
+# UNIT variant beside ``DestroyAllCreatures``; resolve in
+# state_ops_resolve.rs beside the ``DestroyAllCreatures`` arm),
+# bridged via cross_engine.py
+# ``exile_all_creatures_and_spacecraft`` ↔ Python
+# ``ExileAllCreaturesAndSpacecraft``
+# (effects/generic/exile.py:687). Adding the Effect + bridge + the
+# trajectory.py reverse-serializer leaf — together with Lane Y's
+# existing Phase-3 ``(0, 0)`` wrath admit arm — flips the printing
+# into the spell-card-bridge admit set (the guardrail queries the
+# LIVE covered set + round-trips the reverse serializer —
+# auto-grow, no hardcoded list).
+# ============================================================
+
+
+def _build_rust_beyond_the_quiet_state(
+    *,
+    p0_creatures: tuple[tuple[str, int, int, bool], ...] = (),
+    p1_creatures: tuple[tuple[str, int, int, bool], ...] = (),
+    p0_spacecraft: tuple[tuple[str, int, int, bool], ...] = (),
+    p1_spacecraft: tuple[tuple[str, int, int, bool], ...] = (),
+    p0_other: tuple[tuple[str, str], ...] = (),
+    p1_other: tuple[tuple[str, str], ...] = (),
+):
+    """Build a Rust state with a Beyond the Quiet spell on p0's stack.
+
+    Each tuple in ``pN_creatures`` is ``(name, power, toughness,
+    indestructible)``. Each tuple in ``pN_spacecraft`` is
+    ``(name, power, toughness, stationed)`` — Spacecraft printings
+    carry the ``Artifact`` card type AND the ``Spacecraft`` subtype
+    (mirrors the EoE card pool); ``stationed=True`` adds the
+    ``Creature`` card type too (the bridge filter is the OR — so the
+    pin proves both pre-stationed and stationed Spacecraft are
+    exiled). Each tuple in ``pN_other`` is ``(name, card_type)`` for
+    non-creature non-Spacecraft permanents (must NOT be exiled —
+    negative-control).
+
+    Returns ``(rs, ids)`` where ``ids`` is a dict mapping the names
+    to their assigned obj-ids on bf. The Beyond the Quiet spell is
+    pushed to p0's stack via ``push_to_stack`` (low-level — no target
+    needed since the effect is no-target).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    ids: dict[str, int] = {}
+    for name, p, t, indestructible in p0_creatures:
+        printing = {
+            "name": name, "card_types": ["Creature"],
+            "power": p, "toughness": t,
+        }
+        if indestructible:
+            printing["keywords"] = ["indestructible"]
+        ids[name] = rs.register_and_inject_object(printing, 0, ZB)
+    for name, p, t, indestructible in p1_creatures:
+        printing = {
+            "name": name, "card_types": ["Creature"],
+            "power": p, "toughness": t,
+        }
+        if indestructible:
+            printing["keywords"] = ["indestructible"]
+        ids[name] = rs.register_and_inject_object(printing, 1, ZB)
+    for name, p, t, stationed in p0_spacecraft:
+        card_types = ["Artifact"]
+        if stationed:
+            card_types.append("Creature")
+        printing = {
+            "name": name, "card_types": card_types,
+            "subtypes": ["Spacecraft"],
+            "power": p, "toughness": t,
+        }
+        ids[name] = rs.register_and_inject_object(printing, 0, ZB)
+    for name, p, t, stationed in p1_spacecraft:
+        card_types = ["Artifact"]
+        if stationed:
+            card_types.append("Creature")
+        printing = {
+            "name": name, "card_types": card_types,
+            "subtypes": ["Spacecraft"],
+            "power": p, "toughness": t,
+        }
+        ids[name] = rs.register_and_inject_object(printing, 1, ZB)
+    for name, ctype in p0_other:
+        ids[name] = rs.register_and_inject_object(
+            {"name": name, "card_types": [ctype]}, 0, ZB,
+        )
+    for name, ctype in p1_other:
+        ids[name] = rs.register_and_inject_object(
+            {"name": name, "card_types": [ctype]}, 1, ZB,
+        )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Beyond the Quiet", "card_types": ["Sorcery"],
+         "effects": [{"kind": "exile_all_creatures_and_spacecraft"}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    return rs, ids
+
+
+def test_rust_beyond_the_quiet_exiles_creatures_on_both_bfs():
+    """Rust pin (a): two vanilla creatures (one per side) → both
+    exiled to their respective owners' exile zones. Mirrors Python's
+    `ExileAllCreaturesAndSpacecraft.resolve` walk across the full
+    bf snapshot."""
+    rs, ids = _build_rust_beyond_the_quiet_state(
+        p0_creatures=(("BTQ p0 Wolf", 2, 2, False),),
+        p1_creatures=(("BTQ p1 Bear", 3, 3, False),),
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    # Neither creature on any bf.
+    bf_names = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    assert "BTQ p0 Wolf" not in bf_names, (
+        "p0's creature must be exiled (no longer on any bf)"
+    )
+    assert "BTQ p1 Bear" not in bf_names, (
+        "p1's creature must be exiled (no longer on any bf)"
+    )
+    # Each victim in its OWN owner's exile.
+    p0_exile = [e["printing_name"] for e in rs.exile_snapshot(0)]
+    p1_exile = [e["printing_name"] for e in rs.exile_snapshot(1)]
+    assert "BTQ p0 Wolf" in p0_exile, (
+        f"p0's creature must land in p0's exile; p0_exile={p0_exile}"
+    )
+    assert "BTQ p1 Bear" in p1_exile, (
+        f"p1's creature must land in p1's exile; p1_exile={p1_exile}"
+    )
+
+
+def test_rust_beyond_the_quiet_exiles_pre_stationed_spacecraft():
+    """Rust pin (b): an UN-stationed Spacecraft (Artifact + Spacecraft
+    subtype, no Creature card type) must STILL be exiled — the
+    Creature-OR-Spacecraft filter teeth (the whole point of the
+    spell's "whether or not the Spacecraft has been stationed into
+    creature mode" wording). Mirrors Python's
+    `o.printing.is_creature or o.printing.is_spacecraft` filter."""
+    rs, ids = _build_rust_beyond_the_quiet_state(
+        p0_spacecraft=(("BTQ Unstationed", 3, 3, False),),
+    )
+    rs.resolve_top_of_stack()
+    bf_names = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    assert "BTQ Unstationed" not in bf_names, (
+        "un-stationed Spacecraft (Spacecraft subtype, no Creature "
+        "card type) must be exiled (the multi-type predicate)"
+    )
+    p0_exile = [e["printing_name"] for e in rs.exile_snapshot(0)]
+    assert "BTQ Unstationed" in p0_exile, (
+        f"un-stationed Spacecraft must land in owner's exile; "
+        f"p0_exile={p0_exile}"
+    )
+
+
+def test_rust_beyond_the_quiet_exiles_indestructible_creature():
+    """Rust pin (c): exile BYPASSES indestructible (CR 702.12). An
+    indestructible creature is exiled just like any other — unlike
+    DestroyAllCreatures which honors indestructible inline. Mirrors
+    Python's `move_off_battlefield(destination="exile")` which has
+    NO indestructible gate (the gate lives in the destroy path, not
+    the exile path)."""
+    rs, ids = _build_rust_beyond_the_quiet_state(
+        p1_creatures=(("BTQ Avatar", 5, 5, True),),
+    )
+    rs.resolve_top_of_stack()
+    bf_names = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    assert "BTQ Avatar" not in bf_names, (
+        "indestructible creature must be exiled (exile bypasses "
+        "indestructible per CR 702.12)"
+    )
+    p1_exile = [e["printing_name"] for e in rs.exile_snapshot(1)]
+    assert "BTQ Avatar" in p1_exile, (
+        f"indestructible creature must land in owner's exile; "
+        f"p1_exile={p1_exile}"
+    )
+
+
+def test_rust_beyond_the_quiet_leaves_artifacts_and_lands_untouched():
+    """Rust pin (d): the negative-control. Non-creature
+    non-Spacecraft permanents (Artifact, Enchantment, Land) MUST NOT
+    be exiled. Mirrors Python's filter rejecting anything that is
+    neither `is_creature` nor `is_spacecraft`."""
+    rs, ids = _build_rust_beyond_the_quiet_state(
+        p0_other=(
+            ("BTQ Plain Artifact", "Artifact"),
+            ("BTQ Plain Enchantment", "Enchantment"),
+            ("BTQ Plain Land", "Land"),
+        ),
+    )
+    rs.resolve_top_of_stack()
+    bf_names = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    for nm in ("BTQ Plain Artifact", "BTQ Plain Enchantment",
+               "BTQ Plain Land"):
+        assert nm in bf_names, (
+            f"{nm} (non-creature non-Spacecraft permanent) must NOT "
+            f"be exiled — the filter teeth"
+        )
+    # And nothing landed in exile.
+    p0_exile = [e["printing_name"] for e in rs.exile_snapshot(0)]
+    assert not p0_exile, (
+        f"no victims expected — non-creature non-Spacecraft permanents "
+        f"are filtered out; p0_exile={p0_exile}"
+    )
+
+
+def test_rust_beyond_the_quiet_empty_battlefield_silent_noop():
+    """Rust pin (e): empty bfs → silent fizzle, spell still resolves.
+    Mirrors Python's resolve where the comprehension yields an empty
+    `victims` list and the loop is a no-op."""
+    rs, _ids = _build_rust_beyond_the_quiet_state()
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0, "spell must resolve (fizzling)"
+    assert rs.battlefield_snapshot() == [], "no bf state expected"
+    assert rs.exile_snapshot(0) == [], "no p0 exile expected"
+    assert rs.exile_snapshot(1) == [], "no p1 exile expected"
+
+
+def test_rust_beyond_the_quiet_mixed_composition_full_sweep():
+    """Rust pin (f): the comprehensive mixed-composition sweep.
+    Creatures + stationed Spacecraft + UN-stationed Spacecraft +
+    indestructible creature ALL go to exile in bf-ETB-timestamp
+    order; Artifact / Enchantment / Land STAY. The full filter +
+    walk teeth in one pin."""
+    rs, ids = _build_rust_beyond_the_quiet_state(
+        p0_creatures=(
+            ("BTQ Sweep p0 Bear", 2, 2, False),
+            ("BTQ Sweep p0 Avatar", 4, 4, True),
+        ),
+        p1_creatures=(("BTQ Sweep p1 Wolf", 3, 3, False),),
+        p0_spacecraft=(("BTQ Sweep p0 Ship Pre", 3, 4, False),),
+        p1_spacecraft=(("BTQ Sweep p1 Ship Stationed", 5, 5, True),),
+        p0_other=(("BTQ Sweep p0 Land", "Land"),),
+        p1_other=(("BTQ Sweep p1 Enchantment", "Enchantment"),),
+    )
+    rs.resolve_top_of_stack()
+    bf_names = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    # Victims: every Creature OR Spacecraft permanent.
+    for victim in (
+        "BTQ Sweep p0 Bear", "BTQ Sweep p0 Avatar",
+        "BTQ Sweep p1 Wolf", "BTQ Sweep p0 Ship Pre",
+        "BTQ Sweep p1 Ship Stationed",
+    ):
+        assert victim not in bf_names, (
+            f"{victim} must be exiled (creature or Spacecraft)"
+        )
+    # Non-victims: Land + Enchantment STAY.
+    for survivor in ("BTQ Sweep p0 Land", "BTQ Sweep p1 Enchantment"):
+        assert survivor in bf_names, (
+            f"{survivor} must NOT be exiled (neither creature nor "
+            f"Spacecraft)"
+        )
+    # Per-owner exile distribution.
+    p0_exile = {e["printing_name"] for e in rs.exile_snapshot(0)}
+    p1_exile = {e["printing_name"] for e in rs.exile_snapshot(1)}
+    assert p0_exile == {
+        "BTQ Sweep p0 Bear", "BTQ Sweep p0 Avatar",
+        "BTQ Sweep p0 Ship Pre",
+    }, (
+        f"p0's exile must contain exactly p0's victims; "
+        f"got p0_exile={p0_exile}"
+    )
+    assert p1_exile == {
+        "BTQ Sweep p1 Wolf", "BTQ Sweep p1 Ship Stationed",
+    }, (
+        f"p1's exile must contain exactly p1's victims; "
+        f"got p1_exile={p1_exile}"
+    )
+
+
+def test_beyond_the_quiet_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the
+    ``Effect::ExileAllCreaturesAndSpacecraft`` Rust variant + bridge
+    arm + the ``trajectory._python_spell_effect_to_dict``
+    reverse-serializer leaf landed, the genuine ``{3}{W}{W}`` Beyond
+    the Quiet Sorcery is now covered+bridged AND round-trips the
+    reverse serializer, so the existing Lane Y Phase-3 ``(0, 0)``
+    wrath admit arm in ``_printing_is_bridge_simple_spell`` admits it
+    into the spell-card-bridge bench-admit set (the guardrail queries
+    the LIVE covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the Effect substrate having LANDED,
+    the admit set grows 15 → 16)."""
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.generic.exile import (
+        ExileAllCreaturesAndSpacecraft,
+    )
+
+    real = get_active_source().get_printings().get("Beyond the Quiet")
+    if real is None:
+        pytest.skip("Beyond the Quiet absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, ExileAllCreaturesAndSpacecraft), (
+        f"genuine Beyond the Quiet spell_effect must be "
+        f"ExileAllCreaturesAndSpacecraft; got {type(se).__name__}"
+    )
+    assert "ExileAllCreaturesAndSpacecraft" in covered_python_class_set(), (
+        "the Rust Effect::ExileAllCreaturesAndSpacecraft variant "
+        "makes the Python class covered"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {"kind": "exile_all_creatures_and_spacecraft"}, (
+        f"reverse serializer must emit the kind-only dict; got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, ExileAllCreaturesAndSpacecraft), (
+        f"dict→Python bridge must round-trip to "
+        f"ExileAllCreaturesAndSpacecraft; got {type(back).__name__}"
+    )
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Beyond the Quiet must auto-join the spell-card-bridge admit "
+        "set now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_beyond_the_quiet_exile_all_creatures_and_spacecraft_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Beyond the Quiet
+    (4,698 17lands decks). Effect-uncovered queue closure.**
+
+    Drives the **ACTUAL parsed Beyond the Quiet printing** on the
+    Python side: ``get_active_source().get_printings()["Beyond the
+    Quiet"]`` — which the live parser maps to a ``spell_effect`` of
+    ``ExileAllCreaturesAndSpacecraft()`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Sorcery] {3}{W}{W} — Exile all creatures and Spacecraft."
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Sorcery auto-joins the spell-card-bridge admit set).** The new
+    Effect arm under test — ``Effect::ExileAllCreaturesAndSpacecraft``
+    — is shipped this slice (Rust field-free UNIT variant + parse +
+    to_dict + resolve walking both bfs in ETB-timestamp order with
+    the Creature-OR-Spacecraft filter; exile bypasses indestructible
+    per CR 702.12; per-victim LEAVES + token-cease queued; NO DIES
+    dispatch per CR 700.4), bridged via ``cross_engine.py``
+    ``exile_all_creatures_and_spacecraft`` to the pre-existing Python
+    ``ExileAllCreaturesAndSpacecraft`` (effects/generic/exile.py:687).
+    The full Beyond the Quiet **Sorcery** auto-joins the
+    spell-card-bridge bench-admit set via Lane Y's existing Phase-3
+    ``(0, 0)`` wrath admit arm (pinned in
+    ``test_beyond_the_quiet_auto_joins_spell_card_bridge_admit_set``).
+
+    **Deterministic, no RNG.** Mixed composition on both bfs: p0 has
+    a 2/2 Wolf + an UN-stationed 3/4 Spacecraft + a Plains (Land,
+    negative-control survivor); p1 has a 3/3 Wolf + a stationed 5/5
+    Spacecraft (Artifact + Creature card types + Spacecraft subtype)
+    + a plain Enchantment (negative-control survivor). The Spacecraft
+    survivors prove the OR-filter teeth; the Land + Enchantment
+    survivors prove the non-Spacecraft-non-Creature filter teeth. The
+    WHOLE field view is asserted byte-equal post-resolve.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.generic.exile import (
+        ExileAllCreaturesAndSpacecraft,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Beyond the Quiet")
+    if real is None:
+        pytest.skip("Beyond the Quiet absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, ExileAllCreaturesAndSpacecraft), (
+        f"genuine Beyond the Quiet spell_effect must be "
+        f"ExileAllCreaturesAndSpacecraft; got {type(se).__name__}"
+    )
+
+    def _btq_creature(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+            keywords=(),
+        )
+
+    def _btq_spacecraft(name, power, toughness, stationed):
+        card_types = ("Artifact",)
+        type_line = "Artifact — Spacecraft"
+        if stationed:
+            card_types = ("Artifact", "Creature")
+            type_line = "Artifact Creature — Spacecraft"
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line=type_line, supertypes=(),
+            card_types=card_types, subtypes=("Spacecraft",),
+            power=power, toughness=toughness, produces=frozenset(),
+            keywords=(),
+        )
+
+    def _btq_other(name, ctype):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line=ctype, supertypes=(),
+            card_types=(ctype,), subtypes=(),
+            power=None, toughness=None, produces=frozenset(),
+            keywords=(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # ---- Seed mixed composition on both bfs (Python + Rust). ----
+    # p0: 2/2 Wolf (creature; victim), 3/4 un-stationed Spacecraft
+    # (Artifact + Spacecraft subtype, NOT a creature card type;
+    # victim via the OR-filter teeth), Plains (Land, survivor).
+    py_p0_wolf = py.new_object(
+        _btq_creature("BTQ Real p0 Wolf", 2, 2), owner_id=0,
+        zone=Zone.BATTLEFIELD)
+    py_p0_wolf.summoning_sick = False
+    py.battlefield.append(py_p0_wolf)
+    rs_p0_wolf = rs.register_and_inject_object(
+        {"name": "BTQ Real p0 Wolf", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB,
+    )
+
+    py_p0_ship = py.new_object(
+        _btq_spacecraft("BTQ Real p0 Ship Pre", 3, 4, False),
+        owner_id=0, zone=Zone.BATTLEFIELD)
+    py_p0_ship.summoning_sick = False
+    py.battlefield.append(py_p0_ship)
+    rs_p0_ship = rs.register_and_inject_object(
+        {"name": "BTQ Real p0 Ship Pre", "card_types": ["Artifact"],
+         "subtypes": ["Spacecraft"], "power": 3, "toughness": 4},
+        0, ZB,
+    )
+
+    py_p0_land = py.new_object(
+        _btq_other("BTQ Real p0 Plains", "Land"), owner_id=0,
+        zone=Zone.BATTLEFIELD)
+    py_p0_land.summoning_sick = False
+    py.battlefield.append(py_p0_land)
+    rs_p0_land = rs.register_and_inject_object(
+        {"name": "BTQ Real p0 Plains", "card_types": ["Land"]},
+        0, ZB,
+    )
+
+    # p1: 3/3 Wolf (creature; victim), stationed 5/5 Spacecraft
+    # (Artifact + Creature card types + Spacecraft subtype; victim
+    # via either leg of the OR filter), plain Enchantment (survivor).
+    py_p1_wolf = py.new_object(
+        _btq_creature("BTQ Real p1 Wolf", 3, 3), owner_id=1,
+        zone=Zone.BATTLEFIELD)
+    py_p1_wolf.summoning_sick = False
+    py.battlefield.append(py_p1_wolf)
+    rs_p1_wolf = rs.register_and_inject_object(
+        {"name": "BTQ Real p1 Wolf", "card_types": ["Creature"],
+         "power": 3, "toughness": 3}, 1, ZB,
+    )
+
+    py_p1_ship = py.new_object(
+        _btq_spacecraft("BTQ Real p1 Ship Stationed", 5, 5, True),
+        owner_id=1, zone=Zone.BATTLEFIELD)
+    py_p1_ship.summoning_sick = False
+    py.battlefield.append(py_p1_ship)
+    rs_p1_ship = rs.register_and_inject_object(
+        {"name": "BTQ Real p1 Ship Stationed",
+         "card_types": ["Artifact", "Creature"],
+         "subtypes": ["Spacecraft"], "power": 5, "toughness": 5},
+        1, ZB,
+    )
+
+    py_p1_ench = py.new_object(
+        _btq_other("BTQ Real p1 Aura", "Enchantment"), owner_id=1,
+        zone=Zone.BATTLEFIELD)
+    py_p1_ench.summoning_sick = False
+    py.battlefield.append(py_p1_ench)
+    rs_p1_ench = rs.register_and_inject_object(
+        {"name": "BTQ Real p1 Aura", "card_types": ["Enchantment"]},
+        1, ZB,
+    )
+
+    # ---- Cast Beyond the Quiet (p0 controller). No targets. ----
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0, targets=())
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Beyond the Quiet", "card_types": ["Sorcery"],
+         "effects": [{"kind": "exile_all_creatures_and_spacecraft"}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # ---- FULL byte-equal field-view compare. ----
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Beyond the Quiet post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines (full bf walk + Creature/"
+        f"Spacecraft OR filter + per-victim exile move-off + "
+        f"per-owner exile zone push); diffs={diffs}"
+    )
+
+    # ---- Observable cross-checks (defense-in-depth). ----
+    # Victims gone from bf, present in their owner's exile.
+    bf_py = {o.printing.name for o in py.battlefield}
+    bf_rs = {e["printing_name"] for e in rs.battlefield_snapshot()}
+    for victim in (
+        "BTQ Real p0 Wolf", "BTQ Real p0 Ship Pre",
+        "BTQ Real p1 Wolf", "BTQ Real p1 Ship Stationed",
+    ):
+        assert victim not in bf_py, (
+            f"Python: {victim} must be exiled"
+        )
+        assert victim not in bf_rs, (
+            f"Rust: {victim} must be exiled (byte-equal)"
+        )
+    # Survivors stay on bf.
+    for survivor in ("BTQ Real p0 Plains", "BTQ Real p1 Aura"):
+        assert survivor in bf_py, (
+            f"Python: {survivor} must survive (filter teeth)"
+        )
+        assert survivor in bf_rs, (
+            f"Rust: {survivor} must survive (byte-equal)"
+        )
+    # Per-owner exile distribution.
+    py_p0_exile_names = {o.printing.name for o in py.players[0].exile}
+    py_p1_exile_names = {o.printing.name for o in py.players[1].exile}
+    rs_p0_exile_names = {
+        e["printing_name"] for e in rs.exile_snapshot(0)
+    }
+    rs_p1_exile_names = {
+        e["printing_name"] for e in rs.exile_snapshot(1)
+    }
+    assert py_p0_exile_names == {
+        "BTQ Real p0 Wolf", "BTQ Real p0 Ship Pre",
+    }, (
+        f"Python: p0's exile must contain exactly p0's victims; "
+        f"got {py_p0_exile_names}"
+    )
+    assert rs_p0_exile_names == py_p0_exile_names, (
+        f"Rust: p0's exile must match Python byte-equal; "
+        f"got rust={rs_p0_exile_names}, py={py_p0_exile_names}"
+    )
+    assert py_p1_exile_names == {
+        "BTQ Real p1 Wolf", "BTQ Real p1 Ship Stationed",
+    }, (
+        f"Python: p1's exile must contain exactly p1's victims; "
+        f"got {py_p1_exile_names}"
+    )
+    assert rs_p1_exile_names == py_p1_exile_names, (
+        f"Rust: p1's exile must match Python byte-equal; "
+        f"got rust={rs_p1_exile_names}, py={py_p1_exile_names}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

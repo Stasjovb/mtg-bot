@@ -6674,6 +6674,100 @@ fn apply_effect(
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
+        // **Beyond-the-Quiet slice (2026-05-21).** Exile every creature
+        // AND every Spacecraft on either bf (the multi-type predicate;
+        // Lane T Spacecraft-subtype finding). Mirrors Python's
+        // `ExileAllCreaturesAndSpacecraft.resolve` at
+        // `effects/generic/exile.py:697`: walks every bf permanent,
+        // filters by `card_types ∋ "Creature" || subtypes ∋ "Spacecraft"`,
+        // routes each victim through `move_off_battlefield(destination=
+        // "exile")`. NO indestructible skip (exile bypasses
+        // indestructible per CR 702.12); NO DIES dispatch (CR 700.4 —
+        // dies = put into graveyard from bf, not exile). The bf-ETB
+        // iteration uses `crate::bf_iter::bf_iter_etb_sorted` to match
+        // Python's centralized ETB-monotone walk. Per-victim LEAVES +
+        // token-cease are queued; the drain runs in
+        // `resolve_top_of_stack` AFTER the resolving spell's stack pop
+        // (Slice-11 defer-past-pop pattern, mirrored from
+        // `DestroyAllCreatures`).
+        Effect::ExileAllCreaturesAndSpacecraft => {
+            let _ = source_obj_id; // implicit-target AOE; source not relevant
+            // Collect (controller_idx, obj_id) for every bf permanent
+            // that is a Creature OR a Spacecraft, in bf-ETB-timestamp
+            // order. No indestructible skip — exile bypasses
+            // indestructible (CR 702.12).
+            let victims: Vec<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    let is_creature =
+                        printing.card_types.iter().any(|t| t == "Creature");
+                    // Spacecraft is a SUBTYPE per Python's
+                    // `is_spacecraft = "Spacecraft" in subtypes`
+                    // (cards/base.py:1056-1057). NOT a card type —
+                    // Spacecraft printings carry "Artifact" today, but
+                    // the filter mirrors Python's pure-subtype check
+                    // (so a hypothetical non-Artifact Spacecraft still
+                    // matches). Lane T finding.
+                    let is_spacecraft =
+                        printing.subtypes.iter().any(|s| s == "Spacecraft");
+                    if !(is_creature || is_spacecraft) {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                })
+                .collect();
+            for (pidx, target_id) in victims {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = match bf_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip — should never miss
+                };
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                // CE13: `summoning_sick` is NOT reset (Python's
+                // `move_off_battlefield` deliberately omits the clear;
+                // sickness is battlefield-only state per CR 302.1).
+                obj.damage = 0;
+                // Mirrors the `ExileTarget` per-object reset (counters
+                // cleared on the way to exile — distinct from the
+                // `DestroyAllCreatures` graveyard path where counters
+                // are retained for the SBA-destroy observable). Exile
+                // is a zone change; the receiving zone is a NEW object
+                // per CR 400.7.
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let leaving_printing_id = obj.printing_id;
+                let leaving_obj_id = obj.id;
+                // Push onto owner's exile zone. First-slice convention
+                // (mirrors `DestroyAllCreatures` / `ExileTarget`):
+                // owner == controller, so "owner's exile" is the
+                // current controller's exile.
+                Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+                // Mirror the `DestroyAllCreatures` Slice-11 LTB +
+                // token-cease deferred-drain pattern. Each victim
+                // queues LEAVES + token-cease unconditionally; the
+                // per-victim drain is deferred to
+                // `resolve_top_of_stack`'s
+                // `drain_pending_leaves_dispatches` /
+                // `drain_pending_token_cease` calls AFTER the
+                // resolving spell's stack pop (draining inline here
+                // would push LTB triggers ABOVE the still-present
+                // resolving spell and the subsequent stack.pop() would
+                // pop the wrong slot).
+                mark_left_battlefield_if_nonland(state, leaving_printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+                // NO DIES dispatch — exile is a zone change to exile,
+                // NOT to graveyard (CR 700.4). Python's
+                // `move_off_battlefield` gates dies triggers on
+                // `destination == "graveyard"` (`turn.py:253`); this
+                // arm matches that gate by omitting the dies push.
+            }
+        }
         // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
         // — Drag to the Roots / Drill Too Deep pattern. Walks BOTH
         // players' battlefield in ETB-timestamp order via the shared

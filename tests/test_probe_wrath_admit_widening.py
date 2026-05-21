@@ -34,15 +34,19 @@ Pyroclasm probe is needed here — the wrath-admit-widening lane's
 Pyroclasm AUTO-JOIN the spell-card-bridge admit set, no PROBED-tier
 change (Pyroclasm was already PROBED at HEAD).
 
-Honest-stop drops (out of lane scope):
+Honest-stop drops (out of lane scope at the wrath-admit-widening
+landing; one resolved by the follow-on beyond-the-quiet-slice):
 ---------------------------------------
 
 * **Beyond the Quiet** (4,698 17lands decks) — wrath shape ``(0, 0)``
-  but its ``spell_effect = ExileAllCreaturesAndSpacecraft`` is NOT
-  covered in Rust today (no ``exile_all_creatures_and_spacecraft``
-  Effect variant; the BLOCKED — Effect-uncovered subsystem-gated
-  tier owns it per ``docs/POOL_PARITY.md``:325+). Substrate work
-  outside this lane's scope — file as follow-up.
+  whose ``spell_effect = ExileAllCreaturesAndSpacecraft`` was NOT
+  covered in Rust at the wrath-admit-widening landing. **RESOLVED by
+  the follow-on beyond-the-quiet-slice (2026-05-21):** the
+  ``Effect::ExileAllCreaturesAndSpacecraft`` Rust variant + bridge arm
+  + reverse-serializer leaf shipped, Beyond the Quiet AUTO-JOINED the
+  admit set (15 → 16; the §2 auto-grow teeth). The pre-substrate
+  NEGATIVE pin here was renamed and flipped positive — see
+  ``test_phase3_wrath_admit_arm_admits_beyond_the_quiet_post_substrate``.
 
 * **Singularity Rupture** (5,046 decks) — wrath-flavored but its
   ``target_count_range = (0, 8)`` is the "destroy any number of target
@@ -403,27 +407,31 @@ def test_manifest_dread_negative_count_serializer_declines():
 # ---------------------------------------------------------------------------
 
 
-def test_phase3_wrath_admit_arm_rejects_uncovered_wrath_beyond_the_quiet():
-    """**Negative pin (wrath-admit-widening Phase-3 admit arm + §2
-    teeth).** Beyond the Quiet (the lane brief's named honest-stop
-    candidate; 4,698 17lands decks) is a ``(0, 0)``-shape Sorcery
-    whose ``spell_effect = ExileAllCreaturesAndSpacecraft`` is NOT
-    bridged in Rust (no ``exile_all_creatures_and_spacecraft`` Effect
-    variant) — the §2 covered+bridged gate MUST decline it even
-    though the Phase-3 ``(0, 0)`` shape arm WOULD admit it
-    structurally.
+def test_phase3_wrath_admit_arm_admits_beyond_the_quiet_post_substrate():
+    """**Positive pin re-anchored at the beyond-the-quiet-slice landing
+    (2026-05-21).** Beyond the Quiet (4,698 17lands decks; the
+    wrath-admit-widening lane's named honest-stop candidate) is a
+    ``(0, 0)``-shape Sorcery whose
+    ``spell_effect = ExileAllCreaturesAndSpacecraft`` is now bridged in
+    Rust (the beyond-the-quiet-slice shipped
+    ``Effect::ExileAllCreaturesAndSpacecraft`` + parse / to_dict /
+    resolve + cross_engine.py bridge arm + the trajectory.py
+    reverse-serializer leaf). The §2 auto-grow teeth fire: the printing
+    is covered+bridged AND round-trips, so
+    ``_printing_is_bridge_simple_spell`` admits it via the existing
+    Phase-3 ``(0, 0)`` wrath admit arm — no further widening of the
+    guardrail needed.
 
-    Honest-stop: the substrate work (adding the Rust Effect variant +
-    bridge arm + serializer leaf for ExileAllCreaturesAndSpacecraft)
-    is OUT of this lane's scope (the lane brief: "If Beyond the
-    Quiet's Effect IS missing from Rust, that's substrate work
-    outside this lane's scope — file as follow-up"). When that work
-    lands separately, Beyond the Quiet will AUTO-JOIN the admit set
-    via the same §2 auto-grow teeth that admitted Pyroclasm / Manifest
-    Dread / Break Down the Door / Under the Skin once their
-    serializer leaves shipped — no further widening needed here.
+    Pre-substrate this same predicate was the wrath-admit-widening
+    lane's NEGATIVE pin (the §2 teeth correctly DECLINED while the
+    Effect was uncovered). The beyond-the-quiet-slice flips the three
+    assertions positive — the prove-the-substrate-closed-the-gap
+    invariant. The admit set grows 15 → 16 (auto-grow, no hardcoded
+    list).
     """
     from mtg_bot.parity import trajectory
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.generic.exile import (
         ExileAllCreaturesAndSpacecraft,
@@ -434,35 +442,43 @@ def test_phase3_wrath_admit_arm_rejects_uncovered_wrath_beyond_the_quiet():
     if btq is None:
         pytest.skip("Beyond the Quiet absent from active CardSource")
     # Sorcery, wrath shape (0, 0), no slot_kinds — the structural
-    # shape the Phase-3 admit arm covers.
+    # shape the Phase-3 admit arm covers (unchanged from pre-substrate).
     assert "Sorcery" in btq.card_types
     assert btq.spell_effect.target_count_range() == (0, 0)
     assert btq.spell_effect.target_slot_kinds() == ()
     assert isinstance(btq.spell_effect, ExileAllCreaturesAndSpacecraft)
-    # The §2 covered+bridged gate STILL declines: the Effect class is
-    # NOT in the live covered set (no Rust variant).
+    # **Flipped POSITIVE post-substrate**: the §2 covered+bridged gate
+    # now resolves positively (the Rust
+    # ``Effect::ExileAllCreaturesAndSpacecraft`` variant makes the
+    # Python class covered).
+    assert "ExileAllCreaturesAndSpacecraft" in covered_python_class_set(), (
+        "the Rust Effect::ExileAllCreaturesAndSpacecraft variant makes "
+        "the Python class covered"
+    )
     assert (
-        trajectory._spell_effect_is_covered_and_bridged(btq) is False
+        trajectory._spell_effect_is_covered_and_bridged(btq) is True
     ), (
         "Beyond the Quiet's ExileAllCreaturesAndSpacecraft must be "
-        "uncovered in Rust (the lane brief's honest-stop case)"
+        "covered+bridged post-substrate"
     )
-    # And the full guardrail bails for the same reason — the §2
-    # covered+bridged check is upstream of the Phase-3 admit shape.
-    assert (
-        trajectory._printing_is_bridge_simple_spell(btq) is False
-    ), (
-        "Beyond the Quiet must NOT be admitted (Effect uncovered — "
-        "substrate work out of this lane's scope)"
+    # **Flipped POSITIVE post-substrate**: the serializer round-trips.
+    rt = trajectory._python_spell_effect_to_dict(btq.spell_effect)
+    assert rt == {"kind": "exile_all_creatures_and_spacecraft"}, (
+        f"reverse serializer must emit the kind-only dict; got {rt}"
     )
-    # And the serializer also bails (no leaf for the uncovered effect
-    # — the second §2 tooth).
+    # Bridge round-trip back to Python (dict→Python direction).
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, ExileAllCreaturesAndSpacecraft), (
+        f"dict→Python bridge must round-trip to "
+        f"ExileAllCreaturesAndSpacecraft; got {type(back).__name__}"
+    )
+    # **Flipped POSITIVE post-substrate**: the full guardrail admits.
     assert (
-        trajectory._python_spell_effect_to_dict(btq.spell_effect)
-        is None
+        trajectory._printing_is_bridge_simple_spell(btq) is True
     ), (
-        "Beyond the Quiet's spell_effect must NOT serialize "
-        "(no ExileAllCreaturesAndSpacecraft serializer leaf)"
+        "Beyond the Quiet must AUTO-JOIN the spell-card-bridge admit "
+        "set now that ExileAllCreaturesAndSpacecraft is covered+bridged "
+        "+ round-trips (§2 auto-grow teeth)"
     )
 
 
