@@ -4427,6 +4427,195 @@ def _aura_triggers_are_phase2_s2_safe(triggered_abilities) -> bool:
     return True
 
 
+def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
+    """**Aura-attachment substrate — Phase 3 / S4 (Pain for All
+    closure; round-80, 2026-05-20).** True iff every
+    ``TriggeredAbility`` in ``triggered_abilities`` matches one of
+    the narrow Phase-3 admit shapes:
+
+      1. The Phase-2-S2-extension Aura-ETB shape (Tractor Beam):
+         ``Event.ENTERS + IsSelf(subject=None) + TapEnchantedPermanent``.
+      2. The Phase-3 Pain-for-All ETB shape:
+         ``Event.ENTERS + IsSelf(subject=None) + PainForAllETBEffect``.
+      3. The Phase-3 Pain-for-All damage-echo shape:
+         ``Event.DEALT_DAMAGE + IsHost(subject=None) +
+         PainForAllDamageEchoEffect``.
+
+    ``once_per_turn=False`` on every shape — Aura triggers fire each
+    occurrence by construction, not once-per-turn.
+
+    The two Pain for All bespoke effect classes
+    (:class:`mtg_bot.effects.bespoke.PainForAllETBEffect` +
+    :class:`mtg_bot.effects.bespoke.PainForAllDamageEchoEffect`) are
+    unit variants with full Rust ``Effect`` parity (landed in the
+    Pain for All closure slice — ``rust/src/cards.rs::Effect::
+    PainForAllETBEffect`` / ``::PainForAllDamageEchoEffect``) and
+    matching ``_ta_dict_to_python_effect`` bridge arms
+    (``cross_engine.py:8351`` / ``cross_engine.py:8388``). The
+    :class:`mtg_bot.effects.predicates.IsHost` predicate is also
+    fully Rust-bridged
+    (``rust/src/cards.rs::Predicate::IsHost { subject }`` +
+    ``cross_engine.py:9785``).
+
+    Returns ``False`` for an empty tuple — callers should gate on
+    ``if printing.triggered_abilities:`` first; this helper is only
+    relevant when there IS at least one trigger to validate.
+
+    Returns ``False`` on the first non-matching trigger — the
+    safe-trigger predicate's all-or-nothing convention.
+
+    Lives separate from :func:`_aura_triggers_are_phase2_s2_safe`
+    because the Phase-3 admit set covers a wider event surface
+    (DEALT_DAMAGE in addition to ENTERS) and a different predicate
+    family (IsHost in addition to IsSelf). Phase-3 admits a strict
+    superset of Phase-2-S2-extension; Tractor Beam's
+    ``ENTERS+IsSelf+TapEnchantedPermanent`` shape passes both
+    helpers (only one needs to ship the admit decision in
+    ``_printing_is_bridge_simple_aura`` — Phase-3 is the canonical
+    gate, Phase-2-S2 stays for back-compat with its existing
+    tests).
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsHost, IsSelf
+    from mtg_bot.effects.bespoke import (
+        PainForAllDamageEchoEffect,
+        PainForAllETBEffect,
+    )
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+
+    if not triggered_abilities:
+        return False
+    for ta in triggered_abilities:
+        if not isinstance(ta, TriggeredAbility):
+            return False
+        if ta.once_per_turn:
+            return False
+        # Phase-3 admit shape 1: Tractor-Beam Aura-ETB tap.
+        if (
+            ta.event is Event.ENTERS
+            and isinstance(ta.predicate, IsSelf)
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, TapEnchantedPermanent)
+        ):
+            continue
+        # Phase-3 admit shape 2: Pain for All ETB damage to any
+        # other target (the bespoke ETB effect).
+        if (
+            ta.event is Event.ENTERS
+            and isinstance(ta.predicate, IsSelf)
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, PainForAllETBEffect)
+        ):
+            continue
+        # Phase-3 admit shape 3: Pain for All damage echo.
+        if (
+            ta.event is Event.DEALT_DAMAGE
+            and isinstance(ta.predicate, IsHost)
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, PainForAllDamageEchoEffect)
+        ):
+            continue
+        return False
+    return True
+
+
+def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
+    """**Aura-attachment substrate — Phase 3 / S4 (Pain for All
+    closure; round-80, 2026-05-20).** Convert a Phase-3-admitted
+    Aura ``TriggeredAbility`` into its Rust-shape round-trip dict.
+
+    Pre-condition: ``ta`` has been validated by
+    :func:`_aura_triggers_are_phase3_safe` — i.e. it is one of:
+
+      * ``ENTERS+IsSelf+TapEnchantedPermanent`` (Tractor-Beam shape;
+        emits the same dict as
+        :func:`_python_ta_to_safe_dict_aura_extension` for
+        cross-substrate continuity).
+      * ``ENTERS+IsSelf+PainForAllETBEffect`` (Pain for All ETB).
+      * ``DEALT_DAMAGE+IsHost+PainForAllDamageEchoEffect`` (Pain
+        for All damage echo).
+
+    Rust spellings (cross-engine bridge arms):
+
+      * ``Event.ENTERS`` → ``"enters"``;
+        ``Event.DEALT_DAMAGE`` → ``"dealt_damage"``
+        (``cards.rs::parse_triggered_ability`` event arm at line ~10252).
+      * ``IsSelf(subject=None)`` → ``{"kind": "source_is_self"}``
+        (``cards.rs::parse_predicate``).
+      * ``IsHost(subject=None)`` → ``{"kind": "is_host"}``
+        (``cards.rs::Predicate::IsHost`` + bridge arm at
+        ``cross_engine.py:9785``).
+      * ``PainForAllETBEffect`` → ``{"kind": "pain_for_all_etb"}``
+        (``cards.rs:8069`` + bridge arm at ``cross_engine.py:8351``).
+      * ``PainForAllDamageEchoEffect`` →
+        ``{"kind": "pain_for_all_damage_echo"}``
+        (``cards.rs:8082`` + bridge arm at ``cross_engine.py:8388``).
+      * ``TapEnchantedPermanent`` →
+        ``{"kind": "tap_enchanted_permanent"}``
+        (cross_engine.py:5317 — shared with the Phase-2-S2-extension
+        emitter).
+
+    All admitted shapes have ``once_per_turn=False`` per the helper
+    gate — Aura triggers fire each occurrence by construction.
+
+    Lives separate from :func:`_python_ta_to_safe_dict` (the
+    creature safe-trigger family) because the Aura-specific effects
+    only make sense on an Aura source — sharing the family's
+    effect-kind allowlist would force the creature gate to admit
+    Aura-only effects per the "no fallback hybrid" discipline.
+    """
+    from mtg_bot.effects.predicates import IsHost, IsSelf, Event
+    from mtg_bot.effects.bespoke import (
+        PainForAllDamageEchoEffect,
+        PainForAllETBEffect,
+    )
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+
+    if isinstance(ta.effect, PainForAllETBEffect):
+        # Shape 2: Pain for All ETB.
+        return {
+            "event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "pain_for_all_etb"},
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, PainForAllDamageEchoEffect):
+        # Shape 3: Pain for All damage echo (DEALT_DAMAGE + IsHost).
+        # IsHost subject is None for the Pain for All shape
+        # (single-subject DEALT_DAMAGE event — the receiving creature).
+        pred_dict: dict = {"kind": "is_host"}
+        # If the predicate carries a subject slot (defensive; live
+        # parser emits IsHost(subject=None) for Pain for All), thread
+        # it through — the Rust IsHost variant carries the same
+        # Optional<String> slot.
+        if isinstance(ta.predicate, IsHost) and ta.predicate.subject is not None:
+            pred_dict["subject"] = ta.predicate.subject
+        return {
+            "event": "dealt_damage",
+            "predicate": pred_dict,
+            "effect": {"kind": "pain_for_all_damage_echo"},
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, TapEnchantedPermanent):
+        # Shape 1: Tractor-Beam Aura-ETB tap (same shape as the
+        # Phase-2-S2-extension emitter ships).
+        return {
+            "event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "tap_enchanted_permanent"},
+            "once_per_turn": False,
+        }
+    # Should be unreachable when pre-gated by
+    # :func:`_aura_triggers_are_phase3_safe`. Raise loudly so a
+    # future widen of the helper without a matching emitter widen
+    # surfaces immediately rather than silently mistranslating.
+    raise ValueError(
+        f"_python_ta_to_safe_dict_aura_phase3: unsupported trigger "
+        f"effect type {type(ta.effect).__name__!r} — gate must be "
+        "_aura_triggers_are_phase3_safe-clean before calling this helper."
+    )
+
+
 def _printing_is_bridge_simple_aura(printing) -> bool:
     """True iff a CardPrinting is a Phase-1/2 bridge-supported Aura
     (sub-shape S1 in ``docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`` §1):
@@ -4524,9 +4713,37 @@ def _printing_is_bridge_simple_aura(printing) -> bool:
     if not getattr(printing, "is_aura", False):
         return False
     # Triggered / static / activated / spell-effect riders — other
-    # Aura sub-shapes (S4 = triggered, S2 = static control-swap).
+    # Aura sub-shapes.
+    #
+    # **Phase 3 / S4 (Pain for All closure; round-80, 2026-05-20).**
+    # Auras with one or more triggered abilities are admitted iff
+    # every trigger matches a Phase-3-safe shape per
+    # :func:`_aura_triggers_are_phase3_safe`:
+    #
+    #   * ``ENTERS+IsSelf+TapEnchantedPermanent`` (Tractor-Beam
+    #     ETB-tap shape — Phase-2-S2-extension substrate). The
+    #     Tractor-Beam carrier itself is still declined below on
+    #     its lone-control + prevents_untap rider.
+    #   * ``ENTERS+IsSelf+PainForAllETBEffect`` (Pain for All ETB
+    #     damage-to-any-target — the Aura Phase 3 first deliverable;
+    #     Rust ``Effect::PainForAllETBEffect`` parity landed in the
+    #     Pain for All closure slice).
+    #   * ``DEALT_DAMAGE+IsHost+PainForAllDamageEchoEffect`` (Pain
+    #     for All damage echo — Rust ``Effect::
+    #     PainForAllDamageEchoEffect`` + ``Predicate::IsHost``
+    #     parity also landed in the Pain for All closure slice).
+    #
+    # Every other triggered-Aura shape (S4 sub-shape per the plan
+    # §1 — Chorale of the Void / Cracked Skull / Sporogenic
+    # Infection) stays declined here: those carry uncovered Rust
+    # Effect variants AND/OR unbridged trigger predicates, so the
+    # Phase-3 safe-trigger gate refuses them. The §2 teeth keep
+    # the predicate honest — admitting an unsafe trigger surface
+    # would silently mistranslate to an effectless permanent on
+    # one engine while the other applies the effect.
     if printing.triggered_abilities:
-        return False
+        if not _aura_triggers_are_phase3_safe(printing.triggered_abilities):
+            return False
     if printing.activated_abilities:
         return False
     if printing.static_abilities:
@@ -5247,18 +5464,22 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_set_base_power = None
             aura_set_base_toughness = None
         # Aura-attachment substrate — Phase 2 S2 extension (Tractor
-        # Beam closure, 2026-05-20). Thread the don't-untap rider AND
-        # the bridge-safe Aura ETB triggers (Tractor Beam's
-        # ``TapEnchantedPermanent`` ETB) through to the CardDef. The
-        # predicate's §2 teeth gate every trigger through
-        # :func:`_aura_triggers_are_phase2_s2_safe` so an admitted
+        # Beam closure, 2026-05-20) + Phase 3 / S4 (Pain for All
+        # closure, round-80, 2026-05-20). Thread the don't-untap
+        # rider AND the bridge-safe Aura triggers through to the
+        # CardDef. The predicate's §2 teeth gate every trigger
+        # through :func:`_aura_triggers_are_phase3_safe` (a strict
+        # superset of the Phase-2-S2-extension gate), so an admitted
         # printing's triggers are guaranteed to round-trip via
-        # :func:`_python_ta_to_safe_dict_aura_extension`. Empty tuple
-        # is the back-compat baseline — every pre-extension S1/S2
+        # :func:`_python_ta_to_safe_dict_aura_phase3`. Empty tuple
+        # is the back-compat baseline — every pre-substrate S1/S2
         # carrier (Frantic Strength, Duskmourn's Domination) carries
-        # no triggers and threads None through unchanged.
+        # no triggers and threads through unchanged. Pain for All's
+        # two triggers (ENTERS+IsSelf+PainForAllETBEffect +
+        # DEALT_DAMAGE+IsHost+PainForAllDamageEchoEffect) thread
+        # through here.
         triggered_abilities = tuple(
-            _python_ta_to_safe_dict_aura_extension(ta)
+            _python_ta_to_safe_dict_aura_phase3(ta)
             for ta in printing.triggered_abilities
         )
         return CardDef(
