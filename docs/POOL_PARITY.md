@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **238 (50.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 109 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **347 / 475 EoE cards (73.1%) are byte-equal at the Effect+bridge level**; of those, **247 (52.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 100 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **128 (26.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 238 | 50.1% |
-| Effect+bridge covered (not individually probed) | 109 | 22.9% |
+| PROBED byte-equal | 247 | 52.0% |
+| Effect+bridge covered (not individually probed) | 100 | 21.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -64,11 +64,14 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Blooming Stinger
 - Bombard
 - Bonders' Enclave
+- Breeding Pool
+- Brightspear Zealot
 - Broodguard Elite
 - Bygone Colossus
 - Cautious Survivor
 - Cerebral Download
 - Chrome Companion
+- Cloudsculpt Technician
 - Come Back Wrong
 - Commune with Evil
 - Cosmogoyf
@@ -126,7 +129,9 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Glassworks // Shattered Yard
 - Glimmerburst
 - Glimmerlight
+- Godless Shrine
 - Grasping Longneck
+- Gravblade Heavy
 - Gravkill
 - Gravpack Monoist
 - Gremlin Tamer
@@ -167,6 +172,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Manifest Dread
 - Mechan Assembler
 - Mechan Navigator
+- Mechan Shieldmate
 - Mechanozoa
 - Melded Moxite
 - Meltstrider Eulogist
@@ -211,6 +217,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Rescue Skiff
 - Roaring Furnace // Steaming Sauna
 - Roving Actuator
+- Sacred Foundry
 - Sami's Curiosity
 - Savior of the Small
 - Scorching Dragonfire
@@ -239,6 +246,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Starport Security
 - Starwinder
 - Stay Hidden, Stay Silent
+- Stomping Ground
 - Strip Mine
 - Sunset Saboteur
 - Sunstar Chaplain
@@ -273,6 +281,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Vote Out
 - Warmaker Gunship
 - Wary Watchdog
+- Watery Grave
 - Wedgelight Rammer
 - Weftblade Enhancer
 - Weftstalker Ardent

@@ -24,11 +24,24 @@ historical itemization (genuinely_missing 2→0 via Pain for All + cast-
 from-exile substrate; blocked_non_effect 2→0 via Tractor Beam + Dauntless
 Scrapbot).
 
-## 0. This session's progress summary (2026-05-19/20)
+## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
 shipped ~22 substrate / closure merges. The original inventory's top-5
-recommendations are now overwhelmingly **executed**, not pending.
+recommendations are now overwhelmingly **executed**, not pending. The
+2026-05-21 loader_admits-attribution-sweep then closed a residual
+measurement gap: the metric helper at
+`scripts/measure_pool_parity.loader_admits` was only consulting 4 of
+the 9 disjuncts in the real production-deck loader's bridge admit
+gate. Folding the remaining 5 disjuncts in + 9 `_parity`-named
+delegator probes flipped 9 cards BLOCKED → PROBED (the 5 shocklands +
+Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate) with NO
+engine changes — a pure measurement-attribution close, same shape as
+the round-83 warp_cost Phase 3 close. Tannuk Steadfast Second +
+Frenzied Baloth honest-stop at COVERED pending real-EoE cross-engine
+byte-equal probes (the existing static-anthem / uncounterable probes
+exercise SYNTHETIC `CardDef("Tannuk")` / `CardDef("Frenzied Baloth")`
+shapes; no genuine-printing cross-engine byte-equal pin yet).
 
 ### Top-5-recommendations status (from `ce564786`)
 
@@ -70,38 +83,48 @@ recommendations are now overwhelmingly **executed**, not pending.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo
-PROBED                                                221         232          235            236
-covered-by-construction                                95          97           97             97
-BLOCKED — genuinely_missing                             3           0            0              0
-BLOCKED — blocked_non_effect                            2           0            0              0
-BLOCKED — subsystem-gated                             154         146          143            142
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep
+PROBED                                                221         232          235            236                 238                    247
+covered-by-construction                                95          97           97             97                  98                    100
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128
 ```
 
-Subsystem-gated dropped by 12 total; **both itemized BLOCKED tiers
-reached 0**. The 142 tail is now the *only* non-empty BLOCKED tier.
+Subsystem-gated dropped by 26 total; **both itemized BLOCKED tiers
+reached 0**. The 128 tail is now the *only* non-empty BLOCKED tier.
 Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
 Bygone Colossus, Timeline Culler → PROBED on the existing Phase 1/1.5/2
 substrate via two measurement-attribution fixes (loader_admits widen +
 `_parity`-named probe aliases). Round-84 (2026-05-20:
 dynamic-pt-cosmogoyf) flipped Cosmogoyf → PROBED via a one-arm
-extension to the existing round-78 dispatch table.
+extension to the existing round-78 dispatch table. Aura Phase 1
+flash widening attribution close (2026-05-21) flipped Frantic Strength
++ Shardmage's Rescue → PROBED via the same measurement-attribution
+shape. The 2026-05-21 loader_admits-attribution-sweep then folded the
+5 remaining disjuncts of the real loader into the metric helper +
+added 9 `_parity` aliases — 9 more cards flipped BLOCKED → PROBED
+(Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground /
+Watery Grave / Brightspear Zealot / Cloudsculpt Technician /
+Gravblade Heavy / Mechan Shieldmate; Tannuk Steadfast Second +
+Frenzied Baloth honest-stopped at COVERED).
 
 ## 1. Headline (current state)
 
-* **139 cards** are subsystem-gated; **64 single-gated**, **75 multi-gated**
-  (post Aura Phase 1 flash widening attribution close 2026-05-21:
-  Frantic Strength + Shardmage's Rescue → PROBED, Duskmourn's
-  Domination → COVERED — see lever (2) below). Post dynamic-pt-
-  cosmogoyf round-84: Cosmogoyf — the last single-gated Dynamic-P/T
-  card — flipped to PROBED. The 75 multi-gated total is unchanged.
+* **128 cards** are subsystem-gated; **53 single-gated**, **75 multi-gated**
+  (post loader_admits-attribution-sweep 2026-05-21: 9 cards flipped
+  BLOCKED → PROBED via measurement-attribution close — 5 shocklands +
+  Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate; Tannuk
+  Steadfast Second + Frenzied Baloth flipped BLOCKED → COVERED
+  pending real-EoE cross-engine byte-equal helpers — see lever (1)
+  below). The 75 multi-gated total is unchanged.
 * **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
   those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
   cards but **0 single-gated**; `Carrier activated abilities` and
   `Non-safe triggered ability` bind 30 / 43 cards but **0 single-gated**.
   These are co-blocker rows, not levers.
-* A card may trip multiple gates; `#cards` does NOT sum to 146. The
+* A card may trip multiple gates; `#cards` does NOT sum to 128. The
   honest leverage column remains `decks(1g)`.
 
 ## 2. Subsystems by closure leverage (refreshed)
@@ -112,8 +135,8 @@ to reflect what substrate already exists post-session.
 
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status (post-session) |
 |---|---:|---:|---:|---|---|---|
-| Static / layered abilities | 15 | 8 | 34,526 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 5 of 8 single-gated closed; 2 remain not in EoE snapshot (Soulrager / Wickerfolk) |
-| Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium for ~5 cards realizable; 18 deferred behind sibling substrates | DEFERRED (unchanged) |
+| Static / layered abilities | 9 | 2 | 0 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 2026-05-21 loader_admits-attribution-sweep flipped Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate → PROBED + Tannuk / Frenzied Baloth → COVERED; 2 single-gated remain (Soulrager / Wickerfolk — not in EoE snapshot) |
+| Non-basic land substrate | 18 | 18 | 16,510 | medium | small-medium for ~5 cards realizable; 13 deferred behind sibling substrates | **PARTIAL** — 2026-05-21 loader_admits-attribution-sweep flipped the 5 shocklands (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground / Watery Grave) → PROBED via the round-60 bench probe pin; 18 non-shockland non-basic lands remain DEFERRED |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
 | warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
 | Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
@@ -129,19 +152,22 @@ to reflect what substrate already exists post-session.
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 139 subsystem-gated = 64 single-gated + 75
-multi-gated; `1gate` column sums to 64 (post Aura Phase 1 flash
-widening attribution close 2026-05-21; the Aura row drops from 7/4/3416
-to 7/1/633 — Frantic Strength + Shardmage's Rescue + Duskmourn's
-Domination all dropped out of subsystem-gated because the measurement
-helpers now see the live trajectory predicate's Aura disjunct +
-``_parity``-named probes; only Moonlit Meditation remains
-single-gated, on the un-shipped Phase 4 S3 consumer wire-up). Post-
-dynamic-pt-cosmogoyf round-84; the Dynamic-P/T row is now 0/0/0 — the
-substrate is fully closed end-to-end for the two formulas present in
-the EoE snapshot (Grovestrider + Cosmogoyf); the third sibling,
-Emissary Escort, is absent from the EoE snapshot AND is honest-stopped
-Rust-side on a different per-formula shape).
+**Reconciliation:** 128 subsystem-gated = 53 single-gated + 75
+multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
+attribution-sweep; the Static/layered-abilities row drops from 15/8/34526
+to 9/2/0 — Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate
+flipped to PROBED, Tannuk Steadfast Second + Frenzied Baloth flipped
+to COVERED. The Non-basic-land row drops from 23/23/34575 to
+18/18/16510 — the 5 shocklands flipped to PROBED via the round-60
+bench-probe pin. Post-Aura-Phase-1-flash-widening close 2026-05-21:
+the Aura row at 4/1/633 — Frantic Strength + Shardmage's Rescue +
+Duskmourn's Domination dropped out of subsystem-gated; only Moonlit
+Meditation remains single-gated, on the un-shipped Phase 4 S3
+consumer wire-up. Post-dynamic-pt-cosmogoyf round-84; the Dynamic-P/T
+row is 0/0/0 — the substrate is fully closed end-to-end for the two
+formulas present in the EoE snapshot (Grovestrider + Cosmogoyf); the
+third sibling, Emissary Escort, is absent from the EoE snapshot AND
+is honest-stopped Rust-side on a different per-formula shape.
 
 ## 3. The remaining highest-leverage levers (re-ranked)
 
@@ -154,12 +180,20 @@ introduced.
 
 **Status: high-leverage named lever, near-complete.** Phases 1+2+3
 SHIPPED (`3a7c483c` / `9ccefe08` / `ddd93684`); Phase 3.5 SHIPPED
-round-82 (Mechan Shieldmate, this lane). 5 of the 8 originally-
-single-gated cards are closed (Tannuk via Phase 1 anthem grant,
-Frenzied Baloth via Phase 2 uncounterable, Brightspear / Cloudsculpt
-/ Gravblade via Phase 3 SELF-scope conditional, Mechan Shieldmate
-via Phase 3.5 — see closure note below). The remaining single-gated
-cards under this gate row are:
+round-82 (Mechan Shieldmate). 6 of the 8 originally-single-gated
+cards are closed at metric-tier level: 4 PROBED (Brightspear /
+Cloudsculpt / Gravblade / Mechan Shieldmate — all flipped to PROBED
+by the 2026-05-21 loader_admits-attribution-sweep via thin `_parity`
+delegators that re-use the existing `tests/test_static_layered_
+abilities_phase3.py::test_real_eoe_byte_equal_*` cross-engine pins)
+and 2 COVERED (Tannuk Steadfast Second + Frenzied Baloth — admitted
+through the loader filter but lacking an existing real-EoE cross-
+engine byte-equal helper binding the genuine printing; the static-
+anthem Phase-1 / uncounterable Phase-2 modules exercise SYNTHETIC
+`CardDef` carriers, not the genuine parsed EoE printings. Promoting
+to PROBED is a follow-up lane that writes the matching real-EoE
+helper first). The remaining single-gated cards under this gate row
+are:
 
 * **Rampaging Soulrager** — `UnlockedDoorsAmongRoomsAtLeast(2)`
   Condition. Not in the current EoE data snapshot. Would need a
