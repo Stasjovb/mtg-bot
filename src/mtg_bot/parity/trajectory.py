@@ -4103,11 +4103,15 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.combinators import Sequence
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.destroy import (
+        DestroyAllCreatures,
         DestroyTargetArtifactEnchantmentOrFlyingCreature,
         DestroyTargetArtifactOrTappedCreature,
         DestroyTargetNonlandPermanentWithLanderForController,
     )
-    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.generic.library_lookat import (
+        ManifestDread,
+        Surveil,
+    )
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
         CutPropulsionEffect,
@@ -4119,6 +4123,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.damage import (
         DealDamageToTargetCreatureSpacecraftBoosted,
         DealDamageToTargetCreatureWithExcessLanderRider,
+        DealNDamageToEachCreature,
     )
 
     def _leaf(eff) -> Optional[dict]:
@@ -4326,6 +4331,74 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                     "creature"
                 ),
             }
+        # **Phase-3 wrath-admit-widening (2026-05-21).** Pyroclasm-shape
+        # mass-damage leaf — ``DealNDamageToEachCreature(amount)``. The
+        # bridge arm at ``cross_engine.py::damage_each_creature`` REQUIRES
+        # ``amount`` (no default; mirrors Rust's ``parse_effect`` REQUIRED-
+        # field contract at ``cards.rs:7435``+) and constructs the
+        # field-clean ``DealNDamageToEachCreature(amount=amount)`` — the
+        # bare 2-field round-trip is bit-equal. Wrath-shape ``(0, 0)``
+        # spell-effect with no at-cast target (acts on the full
+        # battlefield snapshot at resolve-time). EoE consumer:
+        # Pyroclasm — already PROBED by its dedicated effect-close probe;
+        # this leaf admits it through the spell-card-bridge wrath path
+        # as well (auto-grow; no hardcoded card-name list — the §2
+        # teeth). Mirrors the ``depressurize_effect`` / ``focus_fire_
+        # effect`` single-int-field idiom.
+        if isinstance(eff, DealNDamageToEachCreature):
+            return {
+                "kind": "damage_each_creature",
+                "amount": int(eff.amount),
+            }
+        # **Phase-3 wrath-admit-widening (2026-05-21).** Bare-shape
+        # ``DestroyAllCreatures()`` leaf — only the field-free shape
+        # round-trips. Python's class carries optional narrowing fields
+        # (``tapped_only``, ``untapped_only``, ``min_power``) that Rust's
+        # unit-variant ``Effect::DestroyAllCreatures`` (cards.rs:7818)
+        # does NOT represent; the bridge arm always rebuilds the bare
+        # ``DestroyAllCreatures()``. Serializing a narrowed variant
+        # would silently widen the destroy filter on Rust — the §2
+        # teeth bail here when any narrowing flag is set, mirroring the
+        # ``Surveil`` ``use_artifact_count`` decline-path. No EoE-pool
+        # ``(0, 0)`` non-modal consumer at this HEAD (Singularity
+        # Rupture is ``(0, 8)``; Split Up is modal; Zero Point Ballad
+        # uses the ``min_power`` narrowing). The leaf is load-bearing
+        # for the wrath-shape round-trip surface — keeps the serializer
+        # symmetric with the bridge arm's known-shape coverage.
+        if isinstance(eff, DestroyAllCreatures):
+            if (
+                eff.tapped_only
+                or eff.untapped_only
+                or eff.min_power
+            ):
+                return None
+            return {"kind": "destroy_all_creatures"}
+        # **Phase-3 wrath-admit-widening (2026-05-21).** ManifestDread
+        # spell-effect leaf — ``ManifestDread(count)``. The bridge arm
+        # at ``cross_engine.py::manifest_dread`` reads ``count`` (default
+        # 1 if omitted) and constructs ``ManifestDread(count=count)`` —
+        # the bare single-int round-trip is bit-equal. Wrath-shape
+        # ``(0, 0)`` spell-effect: the manifest-dread CR 701.55 mechanic
+        # operates on the caster's library (look 2, manifest 1 face-down,
+        # graveyard 1) at resolve-time with NO at-cast target binding —
+        # the canonical wrath-shape no-targets EoE spell. EoE consumers
+        # (loaded via the duskmourn.json card pool): Manifest Dread (the
+        # eponymous Sorcery), Break Down the Door (the Instant flash
+        # variant), Under the Skin (the {1}{B} Sorcery variant) —
+        # Manifest Dread is ALREADY PROBED by its dedicated empty-lib
+        # no-op probe (``test_probe_remaining_sss.py``); the two new
+        # ``Break Down the Door`` / ``Under the Skin`` probes added by
+        # this lane drive the SAME bridge arm through their respective
+        # parsed printings, flipping each from COVERED → PROBED. Mirrors
+        # the bridge arm's ``count``-defaulting-to-1 / non-negative
+        # contract.
+        if isinstance(eff, ManifestDread):
+            if eff.count < 0:
+                return None
+            return {
+                "kind": "manifest_dread",
+                "count": int(eff.count),
+            }
         # Bare-shape Surveil leaf (no ``use_artifact_count`` rider).
         # Mirrors the safe-trigger Surveil arm
         # (:func:`_python_ta_to_safe_dict` Surveil case): Python's
@@ -4444,7 +4517,8 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     if isinstance(se, ModalChooseOne):
         return False  # modal — later phase
     # Target-grammar gate — Phase 1 (single-target) OR Phase 2 (the
-    # exact 2-slot ('my_creature','creature') heterogeneous pair).
+    # exact 2-slot ('my_creature','creature') heterogeneous pair) OR
+    # the wrath-admit-widening Phase-3 ``(0, 0)``-shape wrath grammar.
     # Every OTHER target shape (any-number, opponent-zone, 3+ slots,
     # other 2-slot kind-tuples) STAYS positively declined — the §2
     # teeth. The Phase-2 widening is SURGICAL: it admits ONLY the
@@ -4467,7 +4541,27 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
         "my_creature",
         "creature",
     )
-    if not (_PHASE1_SHAPE or _PHASE2_SHAPE):
+    # **Phase 3 — wrath-admit-widening (2026-05-21).** ``(0, 0)``-shape
+    # spells with NO slot_kinds: wrath-style mass-effect spells whose
+    # ``spell_effect`` resolves over the full battlefield snapshot with
+    # NO at-cast target binding (Pyroclasm, Manifest Dread, Destroy-All-
+    # Creatures, etc.). The ``cast_spell_noncreature`` Rust path already
+    # threads a target-free StackItem byte-equal across both engines (no
+    # at-cast binding to mirror — the spell pushes onto the stack with an
+    # empty targets tuple on both sides; the at-resolve dispatch reads
+    # the Effect dict and walks the battlefield itself). The Phase-3
+    # widen is SURGICAL: it admits ONLY ``(0, 0)`` with no slot_kinds AND
+    # no ``targets`` attribute on the printing — every other target shape
+    # stays declined. The serializer round-trip teeth below carry the
+    # full no-fallback-hybrid load (an admitted card without a
+    # round-trip-clean Effect arm bails via
+    # :func:`_python_spell_effect_to_dict` returning ``None``).
+    _PHASE3_WRATH_SHAPE = (
+        (min_t, max_t) == (0, 0)
+        and not slot_kinds
+        and not getattr(printing, "targets", ())
+    )
+    if not (_PHASE1_SHAPE or _PHASE2_SHAPE or _PHASE3_WRATH_SHAPE):
         return False  # every other target grammar stays declined
     # The load-bearing §2 gate: the effect must be COVERED + BRIDGED
     # (its emitted Effect classes ⊆ the LIVE covered set AND each has

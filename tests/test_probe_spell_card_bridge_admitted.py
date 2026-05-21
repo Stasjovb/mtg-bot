@@ -99,28 +99,26 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-# Re-anchored at the `feature/next-effect-uncovered` landing (2026-05-21).
-# The session's per-card Tier-A closes auto-grew the live admit set
-# 7→11: Cut Propulsion (effect-uncovered-slice), Invasive Maneuvers
-# (invasive-maneuvers-slice), Shattered Wings (shattered-wings-slice),
-# and Emergency Eject (next-effect-uncovered slice — Lander-pid carrier
-# shape, same as Seedship Impact / Orbital Plunge) each shipped their
-# Effect + bridge + reverse-serializer leaf, and the
-# `_printing_is_bridge_simple_spell` guardrail's auto-grow §2 teeth
-# admitted each one in turn. Cut Propulsion + Invasive Maneuvers + Cut
-# are field-free pid-FREE single-target Tier-A; Shattered Wings is a
-# Sequence-wrapped (destroy + Surveil 1); Emergency Eject is a Lander-
-# pid carrier (same shape as Seedship Impact / Orbital Plunge — the
-# loader's _seat_token_printings walks ``spell_effect`` and resolves
-# the symbolic ``_token_card_def`` to the numeric ``token_printing_id``
-# Rust requires). The Phase 2 2-slot card (Diplomatic Relations)
-# remains the SOLE 2-slot admit — Phase 1 single-target carriers are
-# the bulk (10 cards). This stays an EXACT-set pin.
+# Re-anchored at the `feature/wrath-admit-widening` landing (2026-05-21).
+# The wrath-admit-widening lane added the Phase-3 ``(0, 0)``-shape wrath
+# admit arm to `_printing_is_bridge_simple_spell` (target_count_range ==
+# (0, 0), no slot_kinds, no printing-level ``targets``) PLUS three new
+# wrath-shape serializer leaves (DealNDamageToEachCreature [Pyroclasm-
+# shape], bare DestroyAllCreatures, ManifestDread). The auto-grow §2
+# teeth then admitted 4 new wraths: Pyroclasm (single DealNDamageTo
+# EachCreature; ~0 17lands decks — already PROBED via its dedicated
+# effect-close probe), Manifest Dread / Break Down the Door / Under the
+# Skin (each single ManifestDread(count=1); duskmourn.json pool
+# members loaded into the active source). The set grew 11→15. The
+# Phase 2 2-slot card (Diplomatic Relations) remains the SOLE 2-slot
+# admit; the Phase 3 wrath arm carries the 4 new ``(0, 0)`` admits.
+# This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
-    "Biosynthic Burst", "Cut Propulsion", "Depressurize",
-    "Diplomatic Relations", "Emergency Eject", "Focus Fire",
-    "Invasive Maneuvers", "Orbital Plunge", "Radiant Strike",
-    "Seedship Impact", "Shattered Wings",
+    "Biosynthic Burst", "Break Down the Door", "Cut Propulsion",
+    "Depressurize", "Diplomatic Relations", "Emergency Eject",
+    "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
+    "Orbital Plunge", "Pyroclasm", "Radiant Strike", "Seedship Impact",
+    "Shattered Wings", "Under the Skin",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus
