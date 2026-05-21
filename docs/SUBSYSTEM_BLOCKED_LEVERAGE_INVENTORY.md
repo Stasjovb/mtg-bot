@@ -622,6 +622,44 @@ Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
   characterization — all 3 candidates require new subsystem work,
   not a single per-card slice (HONEST-STOP, 2026-05-21)".
 
+  **Further caveat (2026-05-21,
+  `feature/next-tractable-substrate`)**: a verify-first walk of
+  six remaining single-gated candidates — Devastating Onslaught,
+  Close Encounter, Scout for Survivors, Systems Override,
+  Archenemy's Charm, Scour for Scrap — found every one of the six
+  requires multi-cycle subsystem work, not a per-card slice:
+    * **Devastating Onslaught** shares Cycle 1 with Zero Point
+      Ballad's X-value subsystem, plus needs token-copy substrate
+      + delayed-trigger end-step sac. Multi-cycle (3-4).
+    * **Close Encounter** needs a brand-new
+      `resolving_additional_cost_choice_id` runtime state channel
+      + cast-pipeline choice plumbing. Multi-cycle (2-3); 16,098
+      decks (highest count among the six).
+    * **Scout for Survivors** needs Phase 4 multi-target admit-gate
+      widen + multi-target cast-time binding + sum-MV-budget
+      resolve + +1/+1 counter rider. Multi-cycle (3-4); shared
+      with Pull Through the Weft and Archenemy's Charm mode 2.
+    * **Systems Override** shares the control-change-UEOT
+      subsystem with Mutinous Massacre (C1-C3 of the triad lane).
+      Multi-cycle (3-5); +1 cycle for Spacecraft-conditional
+      charge-counter rider.
+    * **Archenemy's Charm** is a 3-mode ModalChooseOne; mode 2
+      rides the multi-target return-to-hand substrate
+      (shared with Scout for Survivors), mode 3 is bespoke
+      composition. Multi-cycle (3-4).
+    * **Scour for Scrap** needs Cycle 1 `chosen_modes:
+      Option<u8>` → `Option<Vec<u8>>` widening + two new per-mode
+      Effect variants. Multi-cycle (2-3).
+
+  Full characterization at
+  `docs/SEARCH_LIMITATIONS.md` "Next-tractable-substrate hexad
+  characterization — all 6 candidates require multi-cycle
+  subsystem work, not a single per-card slice (HONEST-STOP,
+  2026-05-21)". Cross-candidate amortization summary in that
+  entry's tail: cheapest-amortized lane is the multi-target
+  admit-gate Phase 4 widen (3 candidates), followed by the
+  control-change-UEOT lane (2 candidates).
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 
