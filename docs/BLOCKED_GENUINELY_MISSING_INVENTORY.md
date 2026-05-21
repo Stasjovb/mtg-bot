@@ -1,21 +1,44 @@
 # BLOCKED-genuinely_missing inventory + closure-scope estimates
 
-Canonical focused inventory of the **4 EoE cards** currently in the
+Canonical focused inventory of the **EoE cards** historically in the
 `BLOCKED — genuinely_missing` tier (`docs/POOL_PARITY.md`) — the cards
-that need a brand-new Rust `Effect::` variant + parse + bridge before
-they can be byte-equal cross-engine. This is the **post-flip long-tail
-sequencing guide**: every other parity work is BLOCKED-non-effect (0
-cards — **tier closed 2026-05-20 by the Dauntless Scrapbot closure
-slice; see Round-80+ section below**), BLOCKED-subsystem-gated (146
-cards, see `docs/SUBSYSTEM_ROADMAP.md` for the full living roadmap and
-`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` for a short
-top-5-next-levers snapshot), or PROBED/covered (328 cards).
+that needed a brand-new Rust `Effect::` variant + parse + bridge before
+they can be byte-equal cross-engine. **Post-residue-reconciliation
+(2026-05-20): the tier is empty.** Lane sequencing through Pain for All
++ cast-from-exile substrate closed every entry; see "Reconciliation
+note" below. Additionally, the **BLOCKED-blocked_non_effect tier was
+driven from 2 to 0 across the same session** -- Tractor Beam closed via
+the Aura Phase 2 S2 extension substrate (round 80, merge `d4ceecc5`),
+then Dauntless Scrapbot closed via the dauntless-scrapbot-closure slice
+(2026-05-20, this lane) as the last carrier. Every other parity work
+is now BLOCKED-subsystem-gated (146 cards, see `docs/SUBSYSTEM_ROADMAP.md`
+for the full living roadmap and `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`
+for a short top-5-next-levers snapshot), or PROBED/covered (329 cards).
 
-**Snapshot HEAD:** post-slice-20-merge (2026-05-20).
+**Reconciliation note (2026-05-20, lightstall-residue-reconciliation
+lane).** This doc and `docs/residue_worklist.json` + `docs/POOL_PARITY.md`
+had disagreed since the cast-from-exile substrate slice (merge
+`9c41ad08`): the substrate landed end-to-end (GameObject field, legal-
+actions surface, +{1} surcharge, tapped-land-entry rider, 6/6 probes
+green, divergence pin _FIXED_parity) but the worklist + POOL_PARITY
+were not updated in the same merge, so they still pinned Lightstall to
+`genuinely_missing`. The Pain for All agent (merge `60fea01b`) reported
+Lightstall as a "separate large residue" off the un-updated docs; this
+lane re-verified the substrate via a real-EoE byte-equal probe (the
+real Lightstall printing parses to `EachOpponentExilesCardFromHandWith
+CastPermission` → Rust resolve stamps the flag → cast_creature from
+exile pays the surcharge + clears the flag → bear lands on bf), found
+the substrate genuinely closed, and reconciled the docs in this lane.
+
+**Snapshot HEAD:** post-lightstall-residue-reconciliation-merge (2026-05-20).
 **Source of truth:** `docs/residue_worklist.json` (the residue
 worklist's per-card re-walk is the AUTHORITY on genuine Effect absence
-— round-63 N5 verify-first re-walk at `e6f95002`). The 4 cards below
-are the entirety of the load-bearing "how far from parity" residue.
+— round-63 N5 verify-first re-walk at `e6f95002`; lightstall-residue-
+reconciliation lane re-walked Lightstall at HEAD `60fea01b` and flipped
+both worklist entries to `closed`). The historical 4 entries below are
+all CLOSED — `BLOCKED — genuinely_missing` tier is now empty (Tractor
+Beam remains in `blocked_non_effect`; the long tail lives under
+`BLOCKED — subsystem-gated`).
 
 **Slice 19 update (honest-stop substrate landing for Meltstrider's
 Resolve).** Meltstrider's Resolve's Effect-level scaffolding shipped
@@ -188,7 +211,7 @@ NOT in this tier; they're carried under the Aura subsystem in
 |---|---|---|---|
 | Roving Actuator | 18th (slice 18) | `Effect::RovingActuatorETBEffect { max_mv: u8 }` + parse + resolve + bridge — Effect closed AND full game byte-equal under the short-circuit-the-stack shortcut | n/a (the short-circuit-the-stack shortcut closes the full card) |
 | Meltstrider's Resolve | 19th (slice 19, honest-stop) | `Effect::EnchantedCreatureFightsTarget` unit variant + parse + to_pydict + bridge + honest-stop resolve arm (Effect-level closure) | Aura attach substrate Phases 1-2 per `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` — `attached_to` is never set on Rust Aura resolve today; the loader admits no Aura. Full byte-equal of the real card requires this substrate. |
-| Lightstall Inquisitor (partial) | 20th (slice 20, honest-stop) | `Effect::EachOpponentExilesCardFromHandWithCastPermission` unit variant + parse + to_pydict + bridge + resolve arm (each-opponent-exile portion) — Effect-level + exile-portion byte-equal cross-engine | Persistent `cast_from_exile_with_lightstall_surcharge` substrate (GameObject field + legal-actions emission + cast-from-exile cost machinery + +{1} surcharge + tapped-land-entry rider). Lightstall stays in BLOCKED tier on `docs/POOL_PARITY.md` because the sister `CastFromExileWithCostHike` residue entry remains genuinely_missing; closing it requires the full permission substrate (large 6+ cycles). |
+| Lightstall Inquisitor (FULL CLOSED) | 20th (slice 20 Effect half) + cast-from-exile-substrate slice (merge `9c41ad08`) | `Effect::EachOpponentExilesCardFromHandWithCastPermission` unit variant + parse + to_pydict + bridge + resolve arm (each-opponent-exile portion) AND persistent `cast_from_exile_with_lightstall_surcharge` substrate (GameObject field + legal-actions emission + cast-from-exile cost machinery + +{1} surcharge + tapped-land-entry rider). | n/a — Effect+substrate both shipped end-to-end; only the bench-loader bridge-admit gate (`_printing_is_bridge_simple_*` widening for triggered creatures with this Effect kind) stands between Lightstall and a real-EoE end-to-end PROBED probe. Reconciled in the 2026-05-20 `lightstall-residue-reconciliation` lane. |
 | Sothera, the Supervoid (partial) | 22nd (slice 22, honest-stop) | 3 new Rust Effect variants (`Effect::EachOpponentExilesOwnCreature { link_to_source }`, `Effect::ReanimateOneExiledWithSourceWithCounters { counter_amount }`, `Effect::SacrificeSelfPreservingExileLink`) + parse + to_pydict + bridge arms; resolve arms cover (a) each-opponent-exile move byte-equal on the no-link branch, (b) sac-self via the existing `sacrifice_source_inline` helper, (c) honest-stop fizzle on the recall arm (empty-candidate path mirrors Python's `if not candidates: return`). | Persistent `GameObject.exiled_by_source` source-link field on every Rust object + on-leave auto-return hook (`_release_exiled_until_leaves` equivalent) + one-shot `suppress_exiled_by_source_on_leave_for` flag. Full byte-equality on the DIES+end-step Sequence requires this substrate. Sothera stays in BLOCKED tier on `docs/POOL_PARITY.md` because the substrate has no other in-tier consumer (large 6+ cycles). |
 | Requiem Monolith (partial) | 22nd (slice 22, honest-stop) | 3 new Rust Effect variants (`Effect::GrantTriggeredAbilityUEOTRequiem`, `Effect::MayHaveSourceDealDamageToTarget { amount }`, `Effect::DrawCardsAndLoseLifeEqualToResolvingDamage`) + parse + to_pydict + bridge arms; resolve arms cover (a) grant-trigger no-op honest-stop, (b) optional-ping no-op honest-stop matching Python's no-agent fallback, (c) direct-resolve byte-equal for the draw+life body (reads `state.resolving_combat_damage_amount`, draws N + life -= N). | General layer-6 grant-triggered-ability registry (Python's `continuous_effects` + `game.effective_triggered_abilities`) + Rust-side `choose_yes_no` agent callback at the optional-ping resolve site. The Python pathway already decomposes Requiem's activation into a `Sequence` of generic primitives; the substrate gap is the grant-trigger registry that lets the granted body fire when the source deals damage. |
 | Pain for All (honest-stop substrate landing; this slice) | Pain for All closure slice (2026-05-20) | 2 new Rust Effect variants (`Effect::PainForAllETBEffect`, `Effect::PainForAllDamageEchoEffect`) + parse + to_pydict + bridge arms; 1 new `Predicate::IsHost { subject: Option<String> }` variant + parse + bridge; `find_object_attached_to` helper. Resolve arms: (a) ETB reads source.attached_to → byte-equal fizzle on None (Python parity bespoke.py:389-391); hot-path branch applies host-power as life-loss to the first-legal player. (b) Echo applies as life-loss (NOT damage-pipeline) per Python's bespoke.py:447-457 simplification — inherent damage-feedback loop-guard. IsHost predicate match: source.attached_to == subject_id, false on None (byte-equal predicates.py:464-466). Probe: 10 tests in tests/test_probe_pain_for_all_downstream.py (bridge round-trip + honest-stop fizzle + hot-path via state.attach + damage-echo life-loss + IsHost Python parity). | Aura attach substrate's Phase 1 (Rust setting `attached_to` on Aura resolve) + loader admit-gate widening to accept triggered Auras (S4 carriers). Full byte-equality for the real card requires this substrate. Until then, the honest-stop fizzle keeps cross-engine state byte-equal in the no-host case. |
@@ -534,13 +557,23 @@ Aura subsystem tier of `docs/POOL_PARITY.md`):
      `untapped_permanent` decision contract it requires is reusable
      by any future "sac unless tap" land (a common shape).
 
-3. **Cast-from-exile-with-rider (large substrate, single consumer
-   post-slice-18):**
-   - **Lightstall Inquisitor (#2)** — persistent permission +
-     cost-hike + tapped-land entry. Post-slice-18 there is no
-     in-tier sibling (Roving Actuator closed via the short-circuit-
-     the-stack shortcut, NOT a real free-cast pipeline). The
-     substrate has no other consumer in the EoE pool today.
+3. **Cast-from-exile-with-rider (large substrate, CLOSED post-merge
+   `9c41ad08`):**
+   - **Lightstall Inquisitor (#2 — CLOSED)** — persistent permission +
+     cost-hike + tapped-land entry all landed end-to-end in a single
+     slice (~250 LOC across 4 Rust files + bridge + tests). The 6+
+     cycle estimate was conservative; each substrate piece plugged
+     cleanly into existing precedent (the warp exile-recast path in
+     `cast_creature`, the warp `seen_castspell` HashSet pattern in
+     `legal_decisions`, the existing `move_from_hand_to_battlefield`
+     shape for the play-land arm). No new subsystem was needed; the
+     cost-hike rider is local to the cast-pay primitive rather than a
+     generic cost-modification layer. Re-confirmed by the
+     `lightstall-residue-reconciliation` lane (2026-05-20): real-EoE
+     byte-equal probe drives ETB → exile + flag → cast-from-exile cast
+     + surcharge + flag clear all green; the only remaining gap is the
+     bench loader's `_printing_is_bridge_simple_*` admit-gate (a
+     bench-side widening, not an Effect ask).
 
 4. **Exile-source-link bookkeeping (large substrate, single consumer):**
    - **Sothera, the Supervoid (#4)** — solitary; substrate has no
@@ -565,10 +598,10 @@ Ranked by **marginal-value-per-cycle (decks ÷ scope)**:
    Phase 1 of the substrate plan ships). 4,367 decks. Consider
    bundling with a future Aura attach Phase 1+ slice.
 
-3. **Lightstall Inquisitor (#2)** — large scope + 4,371 decks. The
-   cast-from-exile permission substrate is heavy and currently has
-   only this consumer. Defer until/unless a second card needing it
-   surfaces.
+3. **Lightstall Inquisitor (#2 — CLOSED)** — large scope + 4,371
+   decks. Closed by the cast-from-exile-with-cost-hike substrate
+   slice (merge `9c41ad08`) — see §3 above. No longer a recommended
+   closure target.
 
 4. **Sothera, the Supervoid (#4)** — large scope + 2,108 decks + no
    substrate reuse. **Pure tail.** Carry forward; close only when
@@ -586,9 +619,10 @@ Ranked by **marginal-value-per-cycle (decks ÷ scope)**:
   full-card byte-equality still needs the substrate). Landing
   Phase 1 unlocks both; the substrate is multi-round (5-7 Rust-
   agent rounds end-to-end).
-- **Bottom-2 closure (Lightstall + Sothera) is 6,479 decks** for the
-  most expensive work — defer indefinitely unless a substrate sibling
-  appears.
+- **Bottom-2 closure (Lightstall + Sothera) is 6,479 decks** — Lightstall
+  CLOSED via the cast-from-exile substrate slice (single slice, not
+  the 6+ cycle estimate); only Sothera remains in this bucket and
+  remains deferred (substrate has no other consumer).
 - The 4-card tier represents **0.8% of the pool by count**; closing
   it shifts the headline `PROBED + covered` headline from 320/475
   (67.4%) toward 324/475 (68.2%) at the Effect+bridge level

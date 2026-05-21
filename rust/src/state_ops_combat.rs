@@ -517,10 +517,23 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // applied wins; the Python arm has the same shape — see
     // `_compute_effective_pt`'s 7b branch: registry SetBasePT, then
     // dynamic, then printed).
+    //
+    // Round-79+ S2.5 layer-7b reader fold (Lignify-shape Auras): an
+    // Aura attached to this host with `aura_set_base_pt =
+    // Some((p, t))` (e.g. Lignify — "Enchanted creature is a 0/4
+    // Treefolk") replaces the host's printed base. Slotted BETWEEN
+    // the UEOT/manland overrides (which still win as last-applied)
+    // and the dynamic base / printed base. UEOT pump bonuses
+    // (`ueot_power_bonus`) and layer-7c aura ±P/±T grants stack on
+    // top of the set base, matching CR 613.3b → 613.3c ordering.
+    // Multi-Aura set-base interleaving is honest-stopped per the
+    // helper's docstring (first attached set-base-PT Aura wins; no
+    // live admit set exercises the interleave).
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(p, _)| p)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(p, _)| p))
+        .or_else(|| aura_set_base_pt_on(state, obj_id).map(|(p, _)| p))
         .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(p, _)| p))
         .unwrap_or(printed_base);
     let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
@@ -655,6 +668,58 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword)
 }
 
+/// **Aura-attachment substrate — Phase 2 S2.5 (round-79+,
+/// 2026-05-20, layer-7b reader fold lit).** Returns
+/// `Some((power, toughness))` when at least one Aura attached to
+/// `host_id` carries `aura_set_base_pt` (Lignify-shape — "Enchanted
+/// creature is a 0/4 Treefolk"). `None` when no such Aura is
+/// attached. CR 613.3b layer 7b: set-base-PT replaces the printed
+/// base (UEOT additive +/- bonuses and aura ±P/±T grants from layer
+/// 7c apply on TOP of the set base).
+///
+/// **Multi-Aura timestamp interleaving (HONEST-STOP).** Per CR
+/// 613.3b the latest set-base wins by timestamp when multiple
+/// set-base-PT Auras are on the same host. The bench has no
+/// `timestamp` ordering on Rust GameObjects today (`attached_to` is
+/// the only attachment field surfaced), so this helper returns the
+/// FIRST set-base-PT Aura it encounters in the deterministic bf
+/// walk (player 0 then player 1, in registration order). For the
+/// admit set today there is no S2 carrier that puts two
+/// set-base-PT Auras on the same host, so the simplification is
+/// parity-clean for the live pool. A future Phase 3 slice can
+/// promote this to a per-Aura timestamp walk when a real
+/// multi-set-base interleave hits the bench.
+///
+/// Mirrors Python's `_registry_set_base_pt` (the
+/// `attached_sets_base_pt` writer at `actions.py:2856-2869` adds a
+/// layer-7 sublayer-1 `set_base_pt` continuous-effects-registry
+/// entry on attach; the host's effective P/T reader at
+/// `game._compute_effective_pt` consumes that entry in its 7b
+/// branch).
+pub(crate) fn aura_set_base_pt_on(
+    state: &GameState,
+    host_id: u32,
+) -> Option<(i32, i32)> {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.attached_to != Some(host_id) {
+                continue;
+            }
+            let Some(printing) = state.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            if !printing.is_aura {
+                continue;
+            }
+            if let Some((p, t)) = printing.aura_set_base_pt {
+                return Some((p as i32, t as i32));
+            }
+        }
+    }
+    None
+}
+
 /// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
 /// True iff any Aura whose `attached_to == Some(host_id)` carries
 /// `aura_grants_lose_abilities`. Single-pass over both bfs. Used by
@@ -723,10 +788,16 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // base after UEOT overrides, before printed base. Mirrors the
     // `battlefield_creature_power` shape; see that function's comment
     // for the layer-7b CDA semantics.
+    //
+    // Round-79+ S2.5 layer-7b reader fold (Lignify-shape Auras):
+    // slotted between UEOT/manland overrides and the dynamic-base /
+    // printed base. See sibling `battlefield_creature_power` above
+    // for the precedence rationale + multi-Aura honest-stop.
     let base = obj
         .and_then(|o| o.ueot_base_pt_override())
         .map(|(_, t)| t)
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(_, t)| t))
+        .or_else(|| aura_set_base_pt_on(state, obj_id).map(|(_, t)| t))
         .or_else(|| dynamic_base_pt_pub(state, obj_id).map(|(_, t)| t))
         .unwrap_or(printed_base);
     let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);

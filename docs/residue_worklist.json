@@ -87,11 +87,16 @@
       "card": "Lightstall Inquisitor",
       "claimed_missing_effect": "CastFromExileWithCostHike",
       "aliases": [
-        "CastFromExileWithCostHike"
+        "CastFromExileWithCostHike",
+        "EachOpponentExilesCardFromHandWithCastPermission"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "e17802c9",
-      "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to a single Event.ENTERS TriggeredAbility whose effect is the bespoke composite EachOpponentExilesCardFromHandWithCastPermission (a Python class with NO matching name in the live 112-variant Rust Effect:: enum — cross-checked against the full enum, not just the alias list; no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO wired bridge arm). TRUE new-Rust-Effect ask. Prior re-verifies: 31ef47ff (round-56 N2)."
+      "status": "closed",
+      "resolved_variant": "EachOpponentExilesCardFromHandWithCastPermission + cast_from_exile_with_lightstall_surcharge substrate",
+      "reclassified_to": "FULLY CLOSED — Effect+bridge variant shipped in slice 20 (each-opponent-exile half) AND persistent cast-from-exile-with-cost-hike substrate shipped end-to-end (merge 9c41ad08): GameObject.cast_from_exile_with_lightstall_surcharge field + state_ops_legal.rs exile-as-cast-source surface + state_ops_cast.rs +{1} surcharge + tapped-land-entry rider. Pinned by tests/test_divergence_pins_xxx.py XXX Pin 3 _FIXED_parity + tests/test_probe_xxx_pin3_downstream.py (6 probes covering ETB exile, empty-hand no-op, deterministic pick, flag stamping, legal-actions surfacing, and surcharge application + flag clear at cast time).",
+      "closed_round": "cast-from-exile-substrate-2026-05-20",
+      "_orig_status": "genuinely_missing",
+      "_orig_verified_absent_at_commit": "e17802c9",
+      "note": "CLOSED by the cast-from-exile-with-cost-hike substrate slice (merge 9c41ad08). The CastFromExileWithCostHike + EachOpponentExilesFromHand entries were the two halves of the SAME bespoke composite (EachOpponentExilesCardFromHandWithCastPermission); slice 20 shipped the each-opponent-exile half and the cast-from-exile substrate slice shipped the persistent permission half. The 6+ cycle estimate was conservative — actual closure landed in a single slice (~250 LOC across 4 Rust files + bridge + tests) via existing precedent (warp exile-recast path in cast_creature, warp seen_castspell skip in legal_decisions, move_from_hand_to_battlefield shape for play-land). Reconciled 2026-05-20 (lightstall-residue-reconciliation lane) after the cast-from-exile substrate landed but the worklist + POOL_PARITY were not updated in the same merge; the docs/residue_worklist.json + docs/POOL_PARITY.md + docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md all reflected the pre-substrate state and triggered the POOL_PARITY heuristic-vs-worklist WARNING. Real-EoE verify-first byte-equal probe drove ETB → exile + flag stamping → cast-from-exile cast + surcharge + flag clear all green; the residue is empty. Prior re-verifies (now-stale): 31ef47ff (round-56 N2), e6f95002 (round-63 N5)."
     },
     {
       "entry": "EachOpponentExilesFromHand",
@@ -103,11 +108,11 @@
       ],
       "status": "closed",
       "resolved_variant": "EachOpponentExilesCardFromHandWithCastPermission",
-      "reclassified_to": "PROBED-PARTIAL (real-EoE each-opponent-exile-portion byte-equal probe shipped slice-20; persistent cast-from-exile permission substrate remains genuinely_missing as the sister CastFromExileWithCostHike entry)",
-      "closed_round": "slice-20 (20th Rust slice; XXX Pin 3 honest-stop closure)",
+      "reclassified_to": "FULLY CLOSED (Effect-half slice 20 + persistent cast-from-exile permission substrate via merge 9c41ad08). Sister CastFromExileWithCostHike entry above also flipped to closed in the same reconciliation lane.",
+      "closed_round": "slice-20 + cast-from-exile-substrate-2026-05-20",
       "_orig_status": "genuinely_missing",
       "verified_absent_at_commit": "e17802c9",
-      "note": "CLOSED by slice 20: Effect::EachOpponentExilesCardFromHandWithCastPermission unit variant shipped (parse + to_pydict + bridge + resolve arm) covering the each-opponent-exile portion of the fused bespoke effect. Post-resolve zone counts (card moves from each opponent's hand to that opponent's exile) are byte-equal across engines under deterministic hand[0]-first-legal pick. The persistent cast_from_exile_with_lightstall_surcharge permission substrate (legal-actions emission + cast-machinery + +{1} surcharge + tapped-land-entry riders) is HONEST-STOPPED in slice 20 -- tracked separately as the sister 'CastFromExileWithCostHike' entry above which remains genuinely_missing. Probes: tests/test_probe_xxx_pin3_downstream.py (3 probes; each-opponent-exile portion only). Pre-closure history: verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first); 31ef47ff (round-56 N2)."
+      "note": "CLOSED by slice 20: Effect::EachOpponentExilesCardFromHandWithCastPermission unit variant shipped (parse + to_pydict + bridge + resolve arm) covering the each-opponent-exile portion of the fused bespoke effect. Post-resolve zone counts (card moves from each opponent's hand to that opponent's exile) are byte-equal across engines under deterministic hand[0]-first-legal pick. The persistent cast_from_exile_with_lightstall_surcharge permission substrate (legal-actions emission + cast-machinery + +{1} surcharge + tapped-land-entry riders) was honest-stopped in slice 20 and then CLOSED in the cast-from-exile-with-cost-hike substrate slice (merge 9c41ad08) — see the sister CastFromExileWithCostHike entry. Probes: tests/test_probe_xxx_pin3_downstream.py (6 probes total: 3 each-opponent-exile + 3 substrate flag/legal/surcharge). Pre-closure history: verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first); 31ef47ff (round-56 N2)."
     },
     {
       "entry": "SacUnlessYouTap",

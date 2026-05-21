@@ -429,18 +429,17 @@ def test_parse_residue_worklist_real_file_is_valid():
     entries = mod.parse_residue_worklist()
     assert len(entries) >= 15
     statuses = {e["status"] for e in entries}
-    # Round-56 added the third `blocked_non_effect` status; the
-    # dauntless-scrapbot-closure slice (2026-05-20) drove the
-    # blocked_non_effect bucket to ZERO (Dauntless Scrapbot was the
-    # last carrier — Sequence + ExileEachOpponentsGraveyard +
-    # CreateToken[Lander] substrate end-to-end shipped + Effect-half
-    # real-EoE byte-equal probe; reclassified to BLOCKED-SUBSYSTEM
-    # honest-stopped on the production-deck loader's
-    # Sequence-in-safe-trigger admit). The committed file now carries
-    # only two of the three statuses — the third (blocked_non_effect)
-    # is legitimately empty.
+    # Round-56 added the third `blocked_non_effect` status; both the
+    # `genuinely_missing` bucket (Lightstall reconciliation merge
+    # `00d01937` on 2026-05-20) AND the `blocked_non_effect` bucket
+    # (Tractor Beam closure merge `d4ceecc5` + Dauntless Scrapbot
+    # closure slice 2026-05-20 -- last carrier) have been driven to
+    # ZERO across this session. The committed worklist now carries
+    # only `closed` entries -- both of the previously-live status
+    # buckets are legitimately empty post-fold. Future entries added
+    # back into either bucket will re-populate the status set
+    # automatically.
     assert statuses == {
-        "genuinely_missing",
         "closed",
     }
     # The round-51/53 confirmed-stale trio + the round-54 pair must
@@ -1186,12 +1185,15 @@ def test_real_worklist_has_round56_reclassification():
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     statuses = {e["status"] for e in entries}
-    # Post dauntless-scrapbot-closure: ``blocked_non_effect`` is now
-    # the empty bucket (last carrier closed). The status SET drops
-    # from {genuinely_missing, blocked_non_effect, closed} to
-    # {genuinely_missing, closed} — a legitimate post-fold shrink.
+    # Post dauntless-scrapbot-closure (2026-05-20, this session):
+    # BOTH the ``blocked_non_effect`` bucket (Dauntless Scrapbot was
+    # the last carrier) AND the ``genuinely_missing`` bucket
+    # (Lightstall reconciliation merge `00d01937` closed the last
+    # carrier in that bucket) are legitimately empty. The status SET
+    # collapses to ``{closed}`` — every committed entry is a
+    # historical reclassification. A future entry added back into
+    # either bucket will re-populate the status set automatically.
     assert statuses == {
-        "genuinely_missing",
         "closed",
     }
     by_card_all = {e["card"]: e for e in entries}

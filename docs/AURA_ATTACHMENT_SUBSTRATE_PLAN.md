@@ -611,6 +611,43 @@ Implementation summary (round-79+, branch
   is the **first end-to-end live admit of an S2 carrier**, not deck
   count.
 
+**Phase 2 S2.5 first deliverable (round-79+, 2026-05-20, layer-7b
+reader fold lit).** The Lignify-shape ``attached_sets_base_pt``
+override is now read by the Rust effective-P/T computation. The
+plumbing landed in Phase 2 S2 (CardDef + bridge + Rust storage +
+bidir round-trip); this slice wires the reader fold:
+
+- **Rust helper.** ``state_ops_combat::aura_set_base_pt_on(state,
+  host_id)`` scans both players' battlefields for an Aura
+  attached with ``aura_set_base_pt = Some((p, t))`` and returns
+  the first hit. CR 613.3b layer 7b semantics: set-base replaces
+  the printed base; UEOT ±P/±T (layer 7c) and aura ±P/±T grants
+  (layer 7c) stack on top; counters (layer 7d) fold last.
+- **Reader fold (combat side).** ``battlefield_creature_power`` /
+  ``battlefield_creature_toughness`` slot the set-base override
+  BETWEEN UEOT overrides (``ueot_base_pt_override`` /
+  ``ueot_becomes_land_creature_pt`` — last-applied wins, kept
+  above set-base by precedent) and the dynamic-base /
+  printed-base fallbacks. Visible through ``state.effective_power
+  (id)`` / ``state.effective_toughness(id)``.
+- **Reader fold (SBA side).** ``state_ops_sba::collect_sba_victims``
+  + ``is_lethal`` apply the same precedence to the base-toughness
+  recipe — load-bearing for the SBA lock-step (a Lignified 4/4 →
+  0/4 must NOT be 704.5f-destroyed; a 5/5 → 0/2 IS 704.5g-destroyed
+  by 2 damage even though printed 5 would have spared it).
+- **12 tests** under ``tests/test_aura_substrate_phase_2_s2_5.py``
+  exercise the reader fold via synthetic registry-dict injection:
+  single set-base override, host-scoped (bystander unaffected),
+  composes-with-counters (1/5 from 0/4 + +1/+1 counter),
+  composes-with-own-Aura-rider (1/5 from set-base 0/4 +
+  same-Aura +1/+1 layer-7c), composes-with-second-Aura grant
+  (0/5 from 0/4 + +0/+1 second-Aura layer-7c), revert when the
+  Aura leaves play, SBA lock-step (lethal at set-base toughness,
+  not printed; 704.5f at 0/0; smaller-than-printed lethal
+  threshold), back-compat (no override when no Aura attached),
+  negative power supported. 152 total aura substrate tests across
+  ``tests/test_aura_substrate*.py`` green.
+
 **Phase 2 S2 remaining honest-stops + extensions:**
 
 - **Tractor Beam — substrate LANDED (2026-05-20), bench-loader
@@ -638,14 +675,29 @@ Implementation summary (round-79+, branch
   decision; Rust's auto-resolve fizzles with no selected target).
   A separate follow-up slice closes that gap and flips the
   bench-loader admit.
-- **Lignify-shape Auras.** Layer-7b set-base-PT reader fold (host's
-  effective power / toughness override) — not in EoE pool today; a
-  future S2.5 slice can light it up.
-- **Multi-grant timestamp walk.** Multiple control-changing Auras on
-  the same host: current revert path assumes single outstanding
-  grant. Phase 3+ would add a continuous-effect registry for the
-  CR 613 layer-2 timestamp walk; no live admit set exercises this
-  today.
+- **Multi-Aura set-base-PT timestamp interleaving.** CR 613.3b
+  requires the latest set-base wins by timestamp when two
+  set-base-PT Auras are on the same host. The Rust GameObject does
+  not carry an attach timestamp; ``aura_set_base_pt_on`` returns
+  the FIRST set-base-PT Aura it encounters in the bf walk. No live
+  admit set exercises the interleave today (Lignify isn't in the
+  EoE pool, and the bridge admit predicate still declines
+  ``attached_sets_base_pt is not None`` carriers). A future slice
+  can promote to per-Aura timestamps when a real interleave hits
+  the bench.
+- **Bridge admit for Lignify-shape Auras.** The reader fold is
+  lit (see Phase 2 S2.5 above), but
+  ``trajectory.py::_printing_is_bridge_simple_aura`` still declines
+  ``attached_sets_base_pt is not None`` because Lignify also
+  carries ``attached_grants_subtype`` (layer 4 add subtype —
+  separate substrate), and admitting partial-Lignify shapes would
+  silently mistranslate the subtype rider. A future slice can
+  widen the admit predicate once layer-4 add-subtype ships.
+- **Multi-grant timestamp walk (control).** Multiple
+  control-changing Auras on the same host: current revert path
+  assumes single outstanding grant. Phase 3+ would add a
+  continuous-effect registry for the CR 613 layer-2 timestamp
+  walk; no live admit set exercises this today.
 
 A full Rust-agent slice — depends on Phase 1's attach substrate.
 

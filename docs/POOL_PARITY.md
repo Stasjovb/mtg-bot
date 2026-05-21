@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **328 / 475 EoE cards (69.1%) are byte-equal at the Effect+bridge level**; of those, **232 (48.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 96 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **329 / 475 EoE cards (69.3%) are byte-equal at the Effect+bridge level**; of those, **232 (48.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 97 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **147 (30.9%)** are BLOCKED, broken out below.
+- **146 (30.7%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -17,9 +17,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | Tier | Count | % of pool |
 |---|---:|---:|
 | PROBED byte-equal | 232 | 48.8% |
-| Effect+bridge covered (not individually probed) | 96 | 20.2% |
+| Effect+bridge covered (not individually probed) | 97 | 20.4% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 1 | 0.2% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
 | BLOCKED — subsystem-gated / Effect-uncovered | 146 | 30.7% |
 | **Pool total** | **475** | **100.0%** |
@@ -40,9 +40,7 @@ Evaluated in this strict precedence (a card lands in the FIRST tier it qualifies
 
 The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absence (it sees Effect-shape riders the class-granularity coverage heuristic cannot). A `genuinely_missing` card is therefore hard-pinned to the BLOCKED tier regardless of what the class heuristic / probe name-match says — the metric never overstates parity.
 
-**WARNING: 1 `genuinely_missing` card(s) the class-granularity heuristic WOULD have counted as covered/probed.** They are pinned to BLOCKED (the worklist wins), but the heuristic's class-level blind spot for these is worth reconciling — either the worklist entry is stale (the Effect actually shipped → close it; the round-54/55 cron is the structural backstop) or the class heuristic is genuinely too coarse for that card's rider (expected — this is exactly why the per-card worklist exists):
-
-- `Lightstall Inquisitor` — residue `genuinely_missing`; class heuristic would have placed it in `covered_by_construction` (class-granularity false-positive — pinned BLOCKED).
+- **0 violations** — no `genuinely_missing` residue card was class-heuristic-counted as covered/probed. The headline does not overstate parity relative to the honest residue list.
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
 
@@ -279,9 +277,9 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Zealous Display
 - Zookeeper Mechan
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (1)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (0)
 
-- Lightstall Inquisitor
+- (none)
 
 ## BLOCKED — blocked_non_effect (non-Effect gate) (0)
 
