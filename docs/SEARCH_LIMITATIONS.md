@@ -5699,6 +5699,66 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
+**Update 2026-05-21 (Cycle 6 — Drill Too Deep closure; first per-
+mode-target ModalChooseOne flip; PROBED +1 → 274 via Drill Too Deep
+auto-join; spell-card-bridge admit set grew 17 → 19 — Drill Too
+Deep flipped via the slice + Untimely Malfunction co-admitted via
+the new `destroy_target_artifact` serializer leaf).** Cycle 6
+shipped on `feature/drill-too-deep-slice`:
+
+* New Rust variant
+  `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+  { amount: i32 }` (declaration + parse + to_pydict + resolve arm
+  in `rust/src/cards.rs` / `rust/src/state_ops_resolve.rs`).
+  Resolve arm reads `current_resolve_payload_target_id`, re-verifies
+  the Spacecraft-or-Planet subtype filter + source-controller match
+  per CR 608.2b, increments the target's `obj.charge_counters` by
+  `amount`. Negative `amount` raises at parse + resolve (the
+  ExileAllArtifactsWithManaValueAtMost / DamageEachOpponent
+  precedent).
+* Per-mode target binding detector table extension in
+  `rust/src/state_ops_cast.rs::cast_spell_noncreature` — Lane BB's
+  Cycle 5 substrate gets one new entry:
+  `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` → scan
+  for first `(IsSpacecraft() | IsPlanet()) & ControlledBy(caster)`
+  permanent in `bf_iter_etb_sorted` order. Mirrors Python's
+  `legal_targets` at `effects/generic/counters.py:508-516`.
+* `spell_targets_satisfiable` arm in
+  `rust/src/state_ops_legal.rs` — the legality predicate that
+  gates the auto-tap-from-lands prune (Slice 1) for this targeted-
+  spell shape. Source-controller-restricted scan matches the
+  resolve arm's filter.
+* Bridge round-trip arms:
+  - `cross_engine.py::_ta_dict_to_python_effect` arm reconstructs
+    `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+    (amount=N)`.
+  - `trajectory.py::_python_spell_effect_to_dict`'s `_leaf` table
+    serializes the new variant + the previously-missing
+    `DestroyTargetArtifact` leaf (the bridge arm + Rust variant had
+    shipped since round 23; the serializer leaf was the load-
+    bearing gap that kept the ModalChooseOne composer recursion
+    from completing).
+* The new `_leaf` table entry for `DestroyTargetArtifact` ALSO
+  auto-joined Untimely Malfunction (a `{1}{R}` Instant whose
+  top-level `spell_effect` IS `DestroyTargetArtifact`) — admit
+  set growth 17 → 19 across the two flips. The §2 auto-grow
+  teeth: covered+bridged AND round-trips ⇒ admitted, no fallback
+  hybrid.
+
+**Cycle 6 — remaining lanes.** 3 some-targeted ModalChooseOne
+cards still BLOCKED pending their own per-leaf closures:
+Reroute Systems (mode 0 needs `PumpTargetArtifactOrCreatureUntilEOT`
+extended with `granted_keywords`; mode 1 needs new
+`DealDamageToTargetTappedCreature` — Lane EE in flight),
+Scour for Scrap (`or_both=True` shape; needs the multi-pick
+chosen-mode lane), and Archenemy's Charm (`(1, 2)`-shape modal
+multi-target). Lane EE may collide with this lane on `cards.rs` /
+`state_ops_resolve.rs` / `state_ops_cast.rs` per-mode-detector;
+the append-only enum entries auto-resolve; the detector table is
+the 2-way merge contact point.
+
+---
+
 **Update 2026-05-21 (Cycle 5 landed — per-mode target binding API
 on `cast_spell_noncreature`; substrate-only, NO admit widening, NO
 card-flip).** Cycle 5 shipped on

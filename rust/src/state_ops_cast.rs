@@ -2092,6 +2092,43 @@ impl GameState {
                             Some(o.id)
                         })
                 }
+                // **Cycle 6 — Drill Too Deep mode 0
+                // (2026-05-21).** `PutChargeCountersOnTarget
+                // SpacecraftOrPlanetYouControl`: first permanent on
+                // EITHER bf in `bf_iter_etb_sorted` order whose
+                // printing has `subtypes ∋ "Spacecraft"` OR
+                // `subtypes ∋ "Planet"` AND whose controller is the
+                // caster. Filter mirrors the resolve arm at
+                // `state_ops_resolve.rs` `PutChargeCountersOnTarget
+                // SpacecraftOrPlanetYouControl` and Python's
+                // `effects/generic/counters.py:508-516`
+                // `legal_targets` exactly. The
+                // source-controller-restricted scan matches Python's
+                // `_select_spell_targets` per-mode first-legal
+                // convention (`actions.py:1337-1357`).
+                Some(crate::cards::Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { .. }) => {
+                    let caster = player_id as u8;
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            if o.controller != caster {
+                                return None;
+                            }
+                            let p = self.registry.lookup(o.printing_id)?;
+                            let is_spacecraft = p
+                                .subtypes
+                                .iter()
+                                .any(|s| s == "Spacecraft");
+                            let is_planet = p
+                                .subtypes
+                                .iter()
+                                .any(|s| s == "Planet");
+                            if !(is_spacecraft || is_planet) {
+                                return None;
+                            }
+                            Some(o.id)
+                        })
+                }
                 // Any other chosen mode (or no recognized leaf): keep
                 // the default `bound_target` from the ladder above.
                 // The admit predicate keeps modal spells declined

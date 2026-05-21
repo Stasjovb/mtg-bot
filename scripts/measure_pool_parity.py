@@ -731,6 +731,18 @@ PROBE_MODULES: tuple[Path, ...] = (
     # honest-stop drop list (Singularity Rupture, Mutinous Massacre,
     # Zero Point Ballad, Zealous Display, etc.).
     REPO_ROOT / "tests" / "test_probe_wrath_admit_widening.py",
+    # **drill-too-deep-slice (2026-05-21):** ModalChooseOne envelope
+    # Cycle 6 — first per-mode-target ModalChooseOne closure. The
+    # ``test_cross_engine_real_eoe_drill_too_deep_put_charge_counters
+    # _on_target_spacecraft_or_planet_you_control_parity`` probe drives
+    # the genuine Drill Too Deep printing through the new
+    # ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` Effect
+    # arm + the per-mode target binding detector table extension.
+    # Flips Drill Too Deep COVERED → PROBED (admit set 17 → 18, plus
+    # the Untimely Malfunction co-admit via the new
+    # ``destroy_target_artifact`` serializer leaf — see the slice's
+    # admit-set test note).
+    REPO_ROOT / "tests" / "test_drill_too_deep_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -16503,6 +16503,145 @@ fn apply_effect(
                 crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
+        // **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        // 2026-05-21).** Put `amount` charge counters on the
+        // cast-time-bound target IF the target is still a Spacecraft
+        // OR Planet permanent AND is still controlled by the source-
+        // controller at resolve time (CR 608.2b re-check). Mirrors
+        // Python's
+        // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+        // .resolve` at `effects/generic/counters.py:518-538`.
+        //
+        // **Source-controller lookup** (the "you control" filter
+        // target). Look up by `source_obj_id` across all zones; fall
+        // back to the active player on a synthetic-test path with no
+        // source. Mirrors the `CreateTokenCopyOfTargetCreatureYouControl`
+        // arm's source-controller scan (state_ops_resolve.rs:12188-
+        // 12217).
+        //
+        // **Re-targeting at resolve (CR 608.2b).** Read the bound
+        // target via `state.current_resolve_payload_target_id` (the
+        // proven `SeedshipImpactEffect` / `DestroyTargetArtifactOr
+        // TappedCreature` payload-target swap pattern). If the bound
+        // id is no longer on either battlefield (target left the bf
+        // between cast and resolve), silently fizzle — Python's
+        // `obj is None` early return at `counters.py:526-531`. If
+        // the target is on a battlefield but no longer qualifies
+        // (subtype changed / control changed), also fizzle.
+        //
+        // **None-payload synthetic-test fallback.** The cross-engine
+        // real-EoE probe + the spell-card-bridge use
+        // `cast_spell_noncreature` which binds the target at cast
+        // time (the per-mode detector table extension below). The
+        // low-level synthetic `push_to_stack` API does NOT seat a
+        // target. For that path — and ONLY that path — fall back to
+        // the deterministic-first Spacecraft-or-Planet permanent the
+        // source-controller controls (mirrors the
+        // DestroyTargetArtifactOrTappedCreature precedent's
+        // None-payload synthetic fallback).
+        Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutChargeCountersOnTargetSpacecraftOrPlanetYouControl amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(()); // legitimate no-op (mirrors PutChargeCountersOnSelf)
+            }
+            // Locate source controller across all zones (mirrors
+            // CreateTokenCopyOfTargetCreatureYouControl source scan).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let controller_id: u8 = match src_controller {
+                Some(c) => c,
+                None => state.active_player,
+            };
+            let payload_target_opt = state.current_resolve_payload_target_id;
+            // Helper: object is a qualifying Spacecraft-or-Planet
+            // permanent the source-controller controls.
+            let qualifies = |obj: &GameObject| -> bool {
+                if obj.controller != controller_id {
+                    return false;
+                }
+                let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                    return false;
+                };
+                let is_spacecraft = printing
+                    .subtypes
+                    .iter()
+                    .any(|s| s == "Spacecraft");
+                let is_planet = printing
+                    .subtypes
+                    .iter()
+                    .any(|s| s == "Planet");
+                is_spacecraft || is_planet
+            };
+            // Resolve-time re-legality: locate target. With a bound
+            // payload, require that exact id on a battlefield and that
+            // it still qualifies; otherwise fizzle (CR 608.2b). Without
+            // a payload, fall back to deterministic-first
+            // (synthetic-test path).
+            let target: Option<(usize, u32)> = if let Some(pt) = payload_target_opt {
+                let mut found: Option<(usize, u32)> = None;
+                for (pidx, player) in state.players.iter().enumerate() {
+                    if let Some(obj) = player.battlefield.iter().find(|o| o.id == pt) {
+                        if qualifies(obj) {
+                            found = Some((pidx, obj.id));
+                        }
+                        break;
+                    }
+                }
+                found
+            } else {
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        if !qualifies(obj) {
+                            return None;
+                        }
+                        // Locate the obj's player index for the mut path.
+                        for (pidx, player) in state.players.iter().enumerate() {
+                            if player.battlefield.iter().any(|o| o.id == obj.id) {
+                                return Some((pidx, obj.id));
+                            }
+                        }
+                        None
+                    })
+            };
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.charge_counters =
+                            obj.charge_counters.saturating_add(*amount);
+                        break;
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

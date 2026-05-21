@@ -204,14 +204,20 @@ def test_admit_predicate_admits_ruinous_rampage_post_cycle4():
 
 
 def test_admit_predicate_declines_some_targeted_modal_cards():
-    """The 7 some-targeted ModalChooseOne cards STAY DECLINED post-
-    Cycle-4. Per-mode target binding (Cycle 5) is the substrate that
-    admits them.
+    """The remaining some-targeted ModalChooseOne cards STAY DECLINED
+    post-Cycle-4. Per-mode target binding (Cycle 5) PLUS the matching
+    per-leaf Effect variants (Cycle 6+, one card at a time) are the
+    substrate that admits them.
 
     Tested cards: Reroute Systems (``(1, 1)``-shape), Scour for Scrap
     (``or_both=True``; bails at the modal composer too), Archenemy's
-    Charm (``(1, 2)``-shape), Drill Too Deep (``(1, 1)``-shape),
-    Warping Wail (``(0, 1)``-shape).
+    Charm (``(1, 2)``-shape), Warping Wail (``(0, 1)``-shape).
+    **Drill Too Deep WAS in this list pre-Cycle-6; the
+    drill-too-deep-slice (2026-05-21) closed it via the
+    ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` Effect
+    variant + matching leaf + the Cycle-5 detector table extension —
+    Drill Too Deep is now bridge-admitted (see
+    ``test_drill_too_deep_parity.py``).**
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
@@ -221,7 +227,6 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
         "Reroute Systems",
         "Scour for Scrap",
         "Archenemy's Charm",
-        "Drill Too Deep",
         "Warping Wail",
     ]
     for nm in declined_modals:
@@ -232,7 +237,8 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
         assert _printing_is_bridge_simple_spell(p) is False, (
             f"{nm} must STAY DECLINED post-Cycle-4 — some-targeted "
             f"ModalChooseOne shapes need Cycle-5 per-mode target "
-            f"binding before they can flip."
+            f"binding PLUS Cycle-6+ per-leaf Effect variants before "
+            f"they can flip."
         )
 
 

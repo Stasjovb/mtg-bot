@@ -819,6 +819,35 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return ExileAllArtifactsWithManaValueAtMost(
             max_mv=eff_dict["max_mv"],
         )
+    if kind == "put_charge_counters_on_target_spacecraft_or_planet_you_control":
+        # **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        # 2026-05-21).** "Put N charge counters on target Spacecraft
+        # or Planet you control" — Drill Too Deep mode 0.
+        # Rust's ``Effect::PutChargeCountersOnTargetSpacecraftOrPlanet
+        # YouControl { amount: i32 }`` (cards.rs) and Python's
+        # ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
+        # amount=N)`` at ``effects/generic/counters.py:489`` resolve
+        # byte-equal on the 2-player EoE harness: both engines read
+        # the cast-time-bound target id, re-verify the Spacecraft-OR-
+        # Planet subtype filter + the source-controller match at
+        # resolve time per CR 608.2b, and increment the target's
+        # ``charge_counters`` field by ``amount``.
+        #
+        # ``amount`` is REQUIRED in the round-trip dict shape (mirrors
+        # the Rust ``parse_effect`` ``require("amount")?`` contract —
+        # missing key raises). The reverse serializer at
+        # ``trajectory.py::_python_spell_effect_to_dict``'s ``_leaf``
+        # arm always emits the field. The single target rides on the
+        # spell StackItem (``current_resolve_payload_target_id``), NOT
+        # in this dict; the per-mode target binding override in
+        # Lane BB's detector table at ``state_ops_cast.rs::cast_spell_
+        # noncreature`` seats it at cast time.
+        from mtg_bot.effects.generic.counters import (
+            PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+        )
+        return PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
+            amount=eff_dict["amount"],
+        )
     if kind == "deal_damage":
         # "Deal N damage to target X." Rust's
         # ``Effect::DealDamage { amount: i32, target: TargetFilter }``

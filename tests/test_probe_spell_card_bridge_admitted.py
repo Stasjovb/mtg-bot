@@ -135,14 +135,35 @@ pytestmark = pytest.mark.skipif(
 # ADMITTED, 6→7. Round-73 Lander-spell-token-seating sub-substrate
 # admitted Seedship Impact / Orbital Plunge, 4→6. Round-70 Phase-1
 # landing: {Depressurize, Radiant Strike} (4 admits).
+# **drill-too-deep-slice (2026-05-21):** Cycle 6 closes the first
+# per-mode-target ModalChooseOne via the
+# ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` Effect
+# variant + bridge arm + reverse-serializer leaf + the Cycle-5
+# detector table extension in ``cast_spell_noncreature``. Both Drill
+# Too Deep modes are now covered+bridged (mode 0 via the new variant;
+# mode 1 = ``DestroyTargetArtifact`` was already shipped). The (1, 1)
+# Instant rides the Phase-1 admit shape.
+#
+# Adding mode 1's ``DestroyTargetArtifact`` to the reverse-serializer
+# ``_leaf`` table (required so the ModalChooseOne composer can recurse
+# into both modes for Drill Too Deep) ALSO auto-joins Untimely
+# Malfunction — a {1}{R} Instant whose top-level ``spell_effect`` IS
+# ``DestroyTargetArtifact``. It was previously declined ONLY because
+# the leaf table didn't have ``DestroyTargetArtifact`` (the bridge
+# dict→Python arm has shipped since round 23; the Rust variant since
+# round 25; only the trajectory serializer leaf was missing). The
+# §2 auto-grow teeth: an effect that's covered+bridged AND round-
+# trips MUST be admitted — no fallback hybrid. 17 → 19 admits across
+# the two flips (Drill Too Deep + Untimely Malfunction).
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-    "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
-    "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-    "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
-    "Under the Skin",
+    "Drill Too Deep", "Emergency Eject", "Focus Fire",
+    "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
+    "Pyroclasm", "Radiant Strike", "Ruinous Rampage",
+    "Seedship Impact", "Shattered Wings", "Under the Skin",
+    "Untimely Malfunction",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

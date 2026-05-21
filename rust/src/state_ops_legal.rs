@@ -1100,6 +1100,43 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // **ModalChooseOne envelope — Cycle 6 (Drill Too Deep
+            // closure, 2026-05-21).**
+            // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`:
+            // source-controller-restricted (Python's `legal_targets`
+            // at `effects/generic/counters.py:508-516` filters
+            // `o.controller_id == controller_id`). Walks BOTH bfs
+            // and filters on `o.controller == controller` (the same
+            // control-flip-aware shape `BiosynthicBurstEffect` uses,
+            // per the Tractor Beam follow-up). Satisfiable iff the
+            // source-controller controls AT LEAST one Spacecraft or
+            // Planet permanent.
+            Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        if o.controller != controller {
+                            return false;
+                        }
+                        let Some(p) =
+                            state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_spacecraft = p
+                            .subtypes
+                            .iter()
+                            .any(|s| s == "Spacecraft");
+                        let is_planet = p
+                            .subtypes
+                            .iter()
+                            .any(|s| s == "Planet");
+                        is_spacecraft || is_planet
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Diplomatic Relations: the only 2-slot grammar
             // (`target_slot_kinds() == ("my_creature", "creature")`,
             // `min_t == 2`). Python `_targets_are_satisfiable`

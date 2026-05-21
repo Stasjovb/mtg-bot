@@ -570,9 +570,20 @@ Cycle 4 — new `Effect::ExileAllArtifactsWithManaValueAtMost` Rust
 variant + per-leaf serializer arms for `DealDamageEachOpponent`
 and `ExileAllArtifactsWithManaValueAtMost` + admit-predicate widen
 on the `(0, 0)`-shape all-untargeted ModalChooseOne path; 305
-17lands decks). Remaining **20 single-gated** members:
+17lands decks). **Drill Too Deep closed 2026-05-21** via
+`feature/drill-too-deep-slice` (ModalChooseOne envelope Cycle 6 —
+first per-mode-target ModalChooseOne flip; new
+`Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+{ amount: i32 }` Rust variant + matching bridge arm +
+trajectory `_leaf` table entry + the per-mode target binding
+detector table extension in `cast_spell_noncreature` for the
+Spacecraft-or-Planet filter; mode 1 = `DestroyTargetArtifact` was
+already shipped on the Rust side, the slice added its missing
+`_leaf` serializer entry; Untimely Malfunction co-admitted via the
+new `destroy_target_artifact` leaf — admit set 17 → 19; PROBED
+273 → 274). Remaining **19 single-gated** members:
 Archenemy's Charm, Close Encounter, Coordinated
-Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
+Clobbering, Darkness, Devastating Onslaught,
 Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
 Pull Through the Weft, Reroute Systems, Scour for
 Scrap, Scout for Survivors, Singularity Rupture, Systems Override,

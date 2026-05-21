@@ -5187,6 +5187,50 @@ pub enum Effect {
     /// top of the parse-time reject; mirrors the
     /// `DamageEachOpponent` raise-on-negative discipline).
     ExileAllArtifactsWithManaValueAtMost { max_mv: i32 },
+    /// **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+    /// 2026-05-21).** Put `amount` charge counters on the cast-time-
+    /// bound target permanent IF the target is still a Spacecraft OR
+    /// Planet AND is still controlled by the source-controller at
+    /// resolve time (CR 608.2b re-check). Drill Too Deep mode 0.
+    ///
+    /// **Field shape.** Single `amount: i32` field — mirrors Python's
+    /// `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(amount:
+    /// int = 5)` dataclass at
+    /// `effects/generic/counters.py:489-544`. Default 5 (Drill Too
+    /// Deep's printed amount); parser always emits an explicit
+    /// `amount` (the regex digit/cardinal capture at
+    /// `parser/effects.py:3002-3005`). Negative `amount` rejected at
+    /// parse time (schema invariant; mirrors the
+    /// `ExileAllArtifactsWithManaValueAtMost` raise-on-negative
+    /// precedent).
+    ///
+    /// **Resolve semantics (CR 608.2b — re-target).** Read the cast-
+    /// time-bound target via
+    /// `state.current_resolve_payload_target_id` (the proven
+    /// `SeedshipImpactEffect` / `DestroyTargetArtifactOrTappedCreature`
+    /// payload-target swap pattern). Look up the object on either
+    /// battlefield; if the bound id is no longer on the battlefield,
+    /// silently fizzle (CR 608.2b — Python's `obj is None` early
+    /// return at `counters.py:526-531`). Re-verify the qualification
+    /// filter (`subtypes ∋ "Spacecraft"` OR `subtypes ∋ "Planet"`)
+    /// AND the controller match (`obj.controller == source_controller`);
+    /// fizzle on either mismatch. On success, increment the target's
+    /// `charge_counters` field by `amount`.
+    ///
+    /// **Distinct from `PutChargeCountersOnSelf`** — that arm
+    /// increments `obj.counters` on the SOURCE (Blast-Zone shape) and
+    /// uses the legacy single-counter-slot G8 simplification; this
+    /// arm increments `obj.charge_counters` on the TARGET (Drill Too
+    /// Deep mode 0 shape — verify-first checked the SoT class uses
+    /// `obj.charge_counters += self.amount`).
+    ///
+    /// **Modal cast-time binding (Cycle 5 detector table).** The
+    /// per-mode target binding override in
+    /// `state_ops_cast.rs::cast_spell_noncreature` includes a matching
+    /// arm that scans for the first Spacecraft-or-Planet permanent
+    /// the source-controller controls — mirroring Python's
+    /// `_select_spell_targets` per-mode first-legal convention.
+    PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { amount: i32 },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -9819,8 +9863,27 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::ExileAllArtifactsWithManaValueAtMost { max_mv })
         }
+        // **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        // 2026-05-21).** Parse arm for
+        // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { amount }`.
+        // `amount` is REQUIRED — mirrors Python's regex-driven parser
+        // at `parser/effects.py:3002-3005` which captures the digit
+        // (or spelled-out cardinal); the matching bridge arm in
+        // `cross_engine.py` also requires it. Negative `amount` is
+        // rejected at parse time (mirrors the
+        // `exile_all_artifacts_with_mana_value_at_most` /
+        // `damage_each_opponent` raise-on-negative shape).
+        "put_charge_counters_on_target_spacecraft_or_planet_you_control" => {
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_charge_counters_on_target_spacecraft_or_planet_you_control.amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { amount })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, put_charge_counters_on_target_spacecraft_or_planet_you_control"
         ))),
     }
 }
@@ -12503,6 +12566,19 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::ExileAllArtifactsWithManaValueAtMost { max_mv } => {
             d.set_item("kind", "exile_all_artifacts_with_mana_value_at_most")?;
             d.set_item("max_mv", *max_mv)?;
+        }
+        // **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        // 2026-05-21).** Round-trip dict-shape for
+        // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+        // { amount }`. Two-field schema (`kind` + `amount`) mirrors
+        // the `damage_each_opponent` / `exile_all_artifacts_with_mana
+        // _value_at_most` single-int idiom.
+        Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { amount } => {
+            d.set_item(
+                "kind",
+                "put_charge_counters_on_target_spacecraft_or_planet_you_control",
+            )?;
+            d.set_item("amount", *amount)?;
         }
     }
     Ok(d)
