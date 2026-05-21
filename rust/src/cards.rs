@@ -1157,6 +1157,72 @@ pub enum Effect {
     /// deferred along with the rest of the TargetFilter widening
     /// shape elsewhere in the bridge.
     DestroyAllCreatures,
+    /// **Beyond-the-Quiet slice (2026-05-21; 4,698 17lands decks).**
+    /// Exile every creature AND every Spacecraft on the battlefield
+    /// (CR 701.18 + 701.4 AOE wrath — exile, not destroy). NO targets,
+    /// acts on the full battlefield snapshot at resolution. Mirrors
+    /// Python's `ExileAllCreaturesAndSpacecraft`
+    /// (`effects/generic/exile.py:687`).
+    ///
+    /// **Symmetric AOE: applies to BOTH players' battlefields** —
+    /// implicit-target like `DestroyAllCreatures`. No target filter —
+    /// the variant doesn't carry a TargetFilter for that reason.
+    ///
+    /// **Creature OR Spacecraft filter** (the multi-type predicate;
+    /// the Lane T Spacecraft-subtype finding). A permanent is a victim
+    /// iff its printing's `card_types` contains "Creature" OR its
+    /// printing's `subtypes` contains "Spacecraft" (Spacecraft is a
+    /// SUBTYPE, not a card type — Python's `printing.is_spacecraft` at
+    /// `cards/base.py:1056-1057` reads `"Spacecraft" in subtypes`).
+    /// Spacecraft printings carry the "Artifact" card type today but
+    /// the filter mirrors Python's pure-subtype check exactly so a
+    /// non-creature non-stationed Spacecraft is still exiled (which is
+    /// the whole point of the spell's "whether or not the Spacecraft
+    /// has been stationed into creature mode" wording — see the
+    /// Python class docstring).
+    ///
+    /// **Exile bypasses indestructible (CR 702.12).** Unlike
+    /// `DestroyAllCreatures` which honors indestructible inline, this
+    /// arm does NOT skip indestructible permanents — exile is a zone
+    /// change, not a destroy. Mirrors Python's resolve which routes
+    /// every victim through `turn.move_off_battlefield(destination=
+    /// "exile")` unconditionally.
+    ///
+    /// **No DIES dispatch on exile.** CR 700.4: "dies" = put into
+    /// graveyard FROM the battlefield. Exiled creatures do NOT die;
+    /// only LEAVES dispatch fires. Python's `move_off_battlefield`
+    /// (`turn.py:253` `if destination == "graveyard" and was_creature`)
+    /// gates the dies trigger on the graveyard destination; this arm
+    /// mirrors that exact gate by NOT pushing a dies dispatch.
+    ///
+    /// **Per-object state reset on exile** (CR 400.7) — tapped /
+    /// damage / counters / attached_to / exiled_with_source all reset
+    /// on the way to exile, mirroring the `ExileTarget` reset
+    /// convention. `summoning_sick` is NOT cleared per the CE13
+    /// closure (Python's `move_off_battlefield` deliberately omits the
+    /// clear; sickness is battlefield-only state).
+    ///
+    /// **Visit order (bf-ETB-timestamp).** Walks both bfs via
+    /// `crate::bf_iter::bf_iter_etb_sorted` (Python's centralized
+    /// `state.battlefield` walk is also ETB-monotone). Outcome is
+    /// order-invariant: each victim ends up in its OWN owner's exile
+    /// regardless of visit order, and per-owner exile insertion order
+    /// is preserved.
+    ///
+    /// **LEAVES / token-cease queueing.** Each victim's id is pushed
+    /// onto `pending_leaves_dispatches` (LTB triggers) and queued for
+    /// token-cease (CR 111.7 / 704.5d). Both drains run in
+    /// `resolve_top_of_stack` AFTER the resolving spell's stack pop —
+    /// the Slice-11 `DestroyAllCreatures` defer-past-pop pattern.
+    /// Tokens cease to exist on exile per CR 704.5d (the bare wrath-
+    /// AOE token-cease site, NOT a stack-cleanup-time SBA — matches
+    /// Python's `if obj.printing.is_token: state.log.append(... token
+    /// ceases to exist)` short-circuit in `move_off_battlefield`).
+    ///
+    /// **Python schema simplification.** Python's class is field-free
+    /// (no narrowing rider). This Rust variant is also field-free —
+    /// the bare wrath shape, no variant payload.
+    ExileAllCreaturesAndSpacecraft,
     /// Destroy target non-land permanent on the defending player's
     /// battlefield (CR 701.7 + scoped target filter — Drag to the
     /// Roots / Drill Too Deep pattern). 2 cards in the EoE pool per
@@ -7825,6 +7891,15 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // keys elsewhere in the parser.
             Ok(Effect::DestroyAllCreatures)
         }
+        "exile_all_creatures_and_spacecraft" => {
+            // Beyond-the-Quiet slice (2026-05-21). Unit variant — no
+            // required fields. Python's `ExileAllCreaturesAndSpacecraft`
+            // is a frozen dataclass with no constructor parameters
+            // (mirrors `DestroyAllCreatures`'s parse-arm shape). Extra
+            // keys on the dict are silently ignored (the silent-drop
+            // convention for unrecognized keys elsewhere in the parser).
+            Ok(Effect::ExileAllCreaturesAndSpacecraft)
+        }
         "destroy_target_nonland_permanent" => {
             // Unit variant — no required fields. Filter is intrinsic
             // ("non-Land, non-indestructible"). Extra keys ignored.
@@ -11630,6 +11705,11 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::DestroyAllCreatures => {
             d.set_item("kind", "destroy_all_creatures")?;
+        }
+        Effect::ExileAllCreaturesAndSpacecraft => {
+            // Beyond-the-Quiet slice (2026-05-21). Bare wrath — kind
+            // only (mirrors `DestroyAllCreatures` to_dict shape).
+            d.set_item("kind", "exile_all_creatures_and_spacecraft")?;
         }
         Effect::DestroyTargetNonlandPermanent => {
             d.set_item("kind", "destroy_target_nonland_permanent")?;

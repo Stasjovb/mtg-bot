@@ -4917,6 +4917,53 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # this bridge arm closes the to_dict round-trip surface).
         from mtg_bot.effects.generic.destroy import DestroyAllCreatures
         return DestroyAllCreatures()
+    if kind == "exile_all_creatures_and_spacecraft":
+        # **Beyond-the-Quiet slice (2026-05-21; 4,698 17lands decks).**
+        # Rust substrate ``Effect::ExileAllCreaturesAndSpacecraft``
+        # (cards.rs unit variant beside ``DestroyAllCreatures``; parser
+        # ``"exile_all_creatures_and_spacecraft"``; resolve in
+        # state_ops_resolve.rs beside the ``DestroyAllCreatures`` arm).
+        # This bridge arm closes the dict→Python direction for the
+        # wrath-shape exile effect.
+        #
+        # **Field shape (unit variant).** Rust's parse_effect arm takes
+        # NO fields — bare ``{"kind":
+        # "exile_all_creatures_and_spacecraft"}``. Python's
+        # ``ExileAllCreaturesAndSpacecraft``
+        # (effects/generic/exile.py:687) is a frozen dataclass with no
+        # constructor parameters. Bridge constructs the bare class —
+        # adds NO Python.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines walk
+        # both bfs and exile every Creature OR Spacecraft permanent.
+        # Rust uses ``bf_iter::bf_iter_etb_sorted`` for ETB-monotone
+        # collection order (mirrors Python's centralized
+        # ``state.battlefield`` walk). Python's class
+        # (effects/generic/exile.py:697) filters by
+        # ``o.printing.is_creature or o.printing.is_spacecraft``;
+        # Rust mirrors via ``card_types ∋ "Creature" || subtypes ∋
+        # "Spacecraft"`` (the Lane T Spacecraft-subtype finding —
+        # Python's ``is_spacecraft`` at cards/base.py:1056-1057 reads
+        # ``"Spacecraft" in printing.subtypes``).
+        #
+        # **Exile vs destroy semantics.** Exile bypasses indestructible
+        # (CR 702.12) on BOTH engines — no indestructible skip. NO DIES
+        # trigger fires (CR 700.4 — dies = put into graveyard from bf,
+        # not exile); only LEAVES fires. Tokens cease to exist on exile
+        # per CR 704.5d (the per-victim ``queue_token_cease`` push
+        # mirrors Python's ``move_off_battlefield`` token-cease
+        # short-circuit).
+        #
+        # **Real EoE consumer**: Beyond the Quiet — Sorcery {3}{W}{W}
+        # "Exile all creatures and Spacecraft." (4,698 17lands decks).
+        # With this bridge arm + the trajectory.py reverse-serializer
+        # leaf, the printing flips into the spell-card-bridge admit set
+        # via Lane Y's Phase-3 ``(0, 0)`` wrath admit arm (auto-grow,
+        # no hardcoded card-name list — the §2 teeth).
+        from mtg_bot.effects.generic.exile import (
+            ExileAllCreaturesAndSpacecraft,
+        )
+        return ExileAllCreaturesAndSpacecraft()
     if kind == "damage_each_creature":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "[Source] deals N
         # damage to each creature" (DealNDamageToEachCreature family,

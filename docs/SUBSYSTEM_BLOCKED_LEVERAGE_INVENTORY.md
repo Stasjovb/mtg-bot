@@ -556,8 +556,16 @@ Shattered Wings CLOSED (round-87, 2026-05-21:
 target filter Artifact OR Enchantment OR (Creature AND flying),
 7,793 17lands decks; the outer `Sequence(destroy, Surveil 1)`
 runs through the pre-shipped Effect::Sequence + Effect::Surveil
-arms). Remaining **22 single-gated** members:
-Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
+arms) + **Beyond the Quiet CLOSED** (round-88, 2026-05-21:
+`feature/beyond-the-quiet-slice` — Effect-uncovered honest-stop
+follow-on from the wrath-admit-widening lane; 4,698 17lands decks;
+field-free wrath shape `Effect::ExileAllCreaturesAndSpacecraft`
+with the Creature-OR-Spacecraft multi-type predicate; exile
+bypasses indestructible, NO DIES dispatch per CR 700.4 — Beyond
+the Quiet AUTO-JOINED the spell-card-bridge admit set via Lane
+Y's existing Phase-3 `(0, 0)` wrath admit arm, no further
+guardrail widening needed). Remaining **21 single-gated** members:
+Archenemy's Charm, Close Encounter, Coordinated
 Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
 Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
 Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for

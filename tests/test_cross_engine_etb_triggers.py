@@ -21295,23 +21295,32 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # .json pool members loaded into the active source; Pyroclasm is a
     # genuine EoE-pool member already PROBED by its dedicated effect-
     # close probe). 11 → 15 — all AUTO-JOINED via the §2 auto-grow teeth.
+    # **beyond-the-quiet-slice (2026-05-21):** the
+    # ``ExileAllCreaturesAndSpacecraft`` substrate (Rust Effect variant
+    # + bridge arm + reverse-serializer leaf) AUTO-JOINED Beyond the
+    # Quiet (4,698 17lands decks; genuine EoE-pool wrath
+    # ``(0, 0)``-shape Sorcery) via Lane Y's existing Phase-3 wrath
+    # admit arm — no further guardrail widening needed; the new
+    # ``ExileAllCreaturesAndSpacecraft`` serializer leaf flipped the
+    # round-trip teeth and the §2 covered+bridged gate now resolves
+    # positively. 15 → 16 — AUTO-JOINED via the §2 auto-grow teeth.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Break Down the Door", "Cut Propulsion",
-        "Depressurize", "Diplomatic Relations", "Emergency Eject",
-        "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
-        "Orbital Plunge", "Pyroclasm", "Radiant Strike", "Seedship Impact",
-        "Shattered Wings", "Under the Skin",
+        "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
+        "Cut Propulsion", "Depressurize", "Diplomatic Relations",
+        "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
+        "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
+        "Seedship Impact", "Shattered Wings", "Under the Skin",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 15 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 4 Phase-3 wrath admits — the set "
-        f"grew 11→15 via the wrath-admit-widening's ``(0, 0)``-shape "
-        f"admit arm + DealNDamageToEachCreature / DestroyAllCreatures /"
-        f" ManifestDread serializer leaves; auto-grows further as the "
+        f"exactly the 16 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits — the set "
+        f"grew 15→16 via the beyond-the-quiet-slice's "
+        f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
+        f"arm + reverse-serializer leaf; auto-grows further as the "
         f"remaining Tier-A spells close)")
 
 

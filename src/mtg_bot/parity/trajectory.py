@@ -4108,6 +4108,9 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         DestroyTargetArtifactOrTappedCreature,
         DestroyTargetNonlandPermanentWithLanderForController,
     )
+    from mtg_bot.effects.generic.exile import (
+        ExileAllCreaturesAndSpacecraft,
+    )
     from mtg_bot.effects.generic.library_lookat import (
         ManifestDread,
         Surveil,
@@ -4373,6 +4376,26 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             ):
                 return None
             return {"kind": "destroy_all_creatures"}
+        # **Beyond-the-Quiet slice (2026-05-21).** Wrath-shape exile
+        # leaf — ``ExileAllCreaturesAndSpacecraft``. Pid-FREE covered
+        # unit variant — Rust's ``parse_effect``
+        # ``"exile_all_creatures_and_spacecraft"`` arm takes NO fields
+        # and the dict→Python bridge arm (cross_engine.py
+        # ``exile_all_creatures_and_spacecraft``) constructs the
+        # field-free ``ExileAllCreaturesAndSpacecraft()``. The
+        # Creature-OR-Spacecraft filter is intrinsic (resolves off the
+        # printing's ``card_types`` / ``subtypes``); no targets, acts
+        # on the full battlefield snapshot at resolve-time. Mirrors
+        # the ``destroy_all_creatures`` unit-leaf idiom. Adding this
+        # leaf is what flips Beyond the Quiet (4,698 17lands decks)
+        # into the spell-card-bridge admit set via Lane Y's Phase-3
+        # ``(0, 0)`` wrath admit arm: with the Rust variant + bridge
+        # arm landed it is now covered+bridged AND round-trips here,
+        # so :func:`_printing_is_bridge_simple_spell` admits the
+        # ``{3}{W}{W}`` no-target Sorcery (auto-grow, no hardcoded
+        # list — the §2 teeth; the admit set grows 15 → 16).
+        if isinstance(eff, ExileAllCreaturesAndSpacecraft):
+            return {"kind": "exile_all_creatures_and_spacecraft"}
         # **Phase-3 wrath-admit-widening (2026-05-21).** ManifestDread
         # spell-effect leaf — ``ManifestDread(count)``. The bridge arm
         # at ``cross_engine.py::manifest_dread`` reads ``count`` (default
