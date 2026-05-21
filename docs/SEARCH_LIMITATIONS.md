@@ -7885,11 +7885,9 @@ battlefield; `player.spells_cast_this_turn >= n`.
 
 **Remaining honest-stops in this row** (require future slices):
 
-* **Mechan Shieldmate** — `ControlledArtifactEnteredThisTurn`
-  Condition + a `RemoveKeyword(defender)` payload (not a P/T or
-  keyword grant — a keyword REMOVAL). Needs a third Condition tag
-  AND a Rust reader fold for layer-6 keyword removal. The current
-  Rust `battlefield_has_keyword` walk has no removal arm.
+* ~~**Mechan Shieldmate**~~ — **CLOSED round-82 (2026-05-20).**
+  See "Static / layered abilities substrate — Phase 3.5 (Mechan
+  Shieldmate closure, round-82)" below.
 * **Rampaging Soulrager** — `UnlockedDoorsAmongRoomsAtLeast(2)`
   Condition. Not in the current EoE data snapshot; would need a per-
   Condition Rust port.
@@ -7898,13 +7896,15 @@ battlefield; `player.spells_cast_this_turn >= n`.
   snapshot; would need a per-Condition Rust port (graveyard
   card-types-distinct walk).
 
-**Why it's OK in the live pool**: the 3 admitted carriers each pin
-a real-EoE byte-equal probe in
-`tests/test_static_layered_abilities_phase3.py::test_real_eoe_byte_equal_effective_pt_match`
-across the off / on gates of the condition; Python and Rust agree on
-`effective_power` and `effective_toughness` in both states. No CR
-613.7 lose-all-abilities effect in the live EoE pool wipes any of the
-3 sources, so the timestamp-order subtleties (which the layer-6 fold
+**Why it's OK in the live pool**: the 4 admitted carriers
+(Brightspear / Cloudsculpt / Gravblade pin via
+`test_real_eoe_byte_equal_effective_pt_match` for `effective_power`
+/ `effective_toughness` agreement; Mechan pins via
+`test_real_eoe_mechan_byte_equal_defender_removal` for
+`effective_keywords` / `has_keyword` agreement). Python and Rust
+agree across the condition's off / on gates. No CR 613.7
+lose-all-abilities effect in the live EoE pool wipes any of the 4
+sources, so the timestamp-order subtleties (which the layer-6 fold
 sidesteps) do not surface.
 
 **Failure mode**: a future card that combines one of these conditions
@@ -7912,21 +7912,80 @@ with a non-Phase-3 layer payload (e.g. a SELF-scope conditional
 SetBasePT, a layer-7b override, a replacement effect) would fall
 through this admit predicate cleanly — the predicate's positive
 allow-list rejects any payload outside layer-6 `GrantKeyword` /
-layer-7 `PowerToughnessBonus`. The honest-stop chain is preserved.
+`RemoveKeyword` and layer-7 `PowerToughnessBonus`. The honest-stop
+chain is preserved.
 
-**Fix scope estimate**: a third Condition tag (e.g.
-`controlled_artifact_entered_this_turn`) is one new arm in
-`static_self_bonus_condition_matches` + a Python rehydrator entry +
-a parser-side admit case. The Mechan Shieldmate
-`RemoveKeyword(defender)` payload is a larger slice — it needs a new
-layer-6 negative-grant arm in the Rust `battlefield_has_keyword`
-reader. ~3-5 cycles for each remaining card.
+**Fix scope estimate**: each remaining Condition tag (e.g.
+`unlocked_doors_among_rooms_at_least`, `delirium_active`) is one new
+arm in `static_self_bonus_condition_matches` + a Python rehydrator
+entry + a parser-side admit case. ~3-5 cycles for each remaining
+card.
 
-**Impact estimate**: Phase 3 unlocks 3 of 6 remaining single-gated
-cards from Phase 1's honest-stop list (Brightspear Zealot,
-Cloudsculpt Technician, Gravblade Heavy). Combined with Phase 1
-(Tannuk) and Phase 2 (Frenzied Baloth), 5 of the original 8 single-
-gated static-ability carriers are now bridge-admitted.
+**Impact estimate**: Phase 3 + Phase 3.5 unlock 4 of 6 remaining
+single-gated cards from Phase 1's honest-stop list (Brightspear
+Zealot, Cloudsculpt Technician, Gravblade Heavy, Mechan Shieldmate).
+Combined with Phase 1 (Tannuk) and Phase 2 (Frenzied Baloth), 6 of
+the original 8 single-gated static-ability carriers are now
+bridge-admitted.
+
+
+## Static / layered abilities substrate — Phase 3.5 (round-82; 2026-05-20) — Mechan Shieldmate closure (RemoveKeyword payload + ControlledArtifactEnteredThisTurn condition)
+
+**Where**: extends Phase 3's substrate.
+`src/mtg_bot/parity/cross_engine.py::CardDef.static_self_bonuses`
+grew a 6th tuple slot `removed_keywords: tuple[str, ...]`;
+`rust/src/cards.rs::StaticSelfBonus.removed_keywords: Vec<String>`
+mirrors. New per-Player counter
+`Player.artifacts_entered_under_your_control_this_turn` in
+`rust/src/state.rs`, bumped in
+`rust/src/state_ops_resolve.rs::drain_pending_etb_dispatches` (the
+centralized bf-entry chokepoint — every artifact ETB routes
+through it, mirroring Python's inline
+`actions.put_into_battlefield` bump at `actions.py:3142`), reset in
+`rust/src/state_ops_steps.rs::run_cleanup_step`. New Rust reader
+`state_ops_combat.rs::static_self_bonus_removes_keyword`; the
+`battlefield_has_keyword` reader now computes the positive (printed
++ UEOT + aura-grant + anthem-grant + self-grant) hit, then applies
+per-source REMOVE folds — mirroring Python's
+`game.battlefield_has_keyword` post-walk
+`kws.discard(payload.keyword)` at `game.py:1210-1213`.
+
+**What the shortcut is**: the layer-6 add-then-subtract pipeline
+collapses CR 613.7's strict timestamp ordering — within layer 6,
+the most-recent-timestamp continuous effect wins; today's pool has
+no overlap between a same-turn `GrantKeyword` of `defender` and the
+Mechan-shape `RemoveKeyword(defender)` on the same object, so the
+simple add-then-remove ordering is parity-clean. A future slice
+that ships a same-source `GrantKeyword(X)` overlapping a
+`RemoveKeyword(X)` would need the proper layer-6 timestamp walk.
+
+**Why it's OK in the live pool**: Mechan Shieldmate is the only
+EoE carrier of a `RemoveKeyword` SELF-scope conditional payload
+admitted by this slice. The probe
+`test_real_eoe_mechan_byte_equal_defender_removal` pins Python ↔
+Rust agreement on `defender` presence across the
+counter-off → counter-on transition; both engines drop `defender`
+when the gate fires and retain it otherwise.
+
+**Failure mode**: a future RemoveKeyword carrier whose target
+overlaps an active anthem `GrantKeyword` of the same keyword on the
+same object would be evaluated as "removed" under this slice
+(REMOVE wins over ADD) — correct iff REMOVE's effective timestamp
+is later. Not in the live admit set; will surface as a probe
+divergence if it lands.
+
+**Fix scope estimate**: the timestamp-correct extension is a
+per-(source, keyword) timestamp walk threaded through
+`battlefield_has_keyword` — same shape as the round-79+ Aura S2
+`aura_grants_lose_abilities` walk. ~1 medium slice when a carrier
+hits the pool.
+
+**Impact estimate**: closes the 5th of 8 single-gated
+static-ability carriers from Phase 1's honest-stop list (Mechan
+Shieldmate joins Brightspear / Cloudsculpt / Gravblade and Phase 1's
+Tannuk + Phase 2's Frenzied Baloth). 6/8 single-gated closed; 2/8
+remain (Rampaging Soulrager / Wildfire Wickerfolk — both absent
+from the current EoE data snapshot).
 
 ## Aura `flash` cast-timing rider dropped symmetrically (Aura-attachment Phase 2 first deliverable, round-79)
 

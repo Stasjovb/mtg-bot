@@ -6855,6 +6855,9 @@ pub struct StaticSelfBonus {
     ///     Heavy).
     ///   * `"at_least_n_spells_cast_this_turn"` — viewer's
     ///     `spells_cast_this_turn >= n` (Brightspear Zealot, n=2).
+    ///   * `"controlled_artifact_entered_this_turn"` — viewer's
+    ///     `artifacts_entered_under_your_control_this_turn > 0`
+    ///     (Mechan Shieldmate, round-82, 2026-05-20).
     pub condition_tag: String,
     /// Integer args for `condition_tag`. Empty for arg-less
     /// conditions; one i32 for the `n` arg of
@@ -6869,6 +6872,14 @@ pub struct StaticSelfBonus {
     /// matches. Lowercase underscore-form names from
     /// `trajectory._SAFE_KEYWORDS` (e.g. `"deathtouch"`).
     pub granted_keywords: Vec<String>,
+    /// **Round-82 (2026-05-20, Mechan Shieldmate closure).** Layer-6
+    /// keyword REMOVALS from the SOURCE while the condition matches
+    /// (Mechan Shieldmate's "this creature loses defender" rider).
+    /// Lowercase underscore-form names from
+    /// `trajectory._SAFE_KEYWORDS`. `Vec::new()` for every pre-
+    /// round-82 entry — every previously-shipped carrier
+    /// (Brightspear / Cloudsculpt / Gravblade) leaves this empty.
+    pub removed_keywords: Vec<String>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -10051,17 +10062,21 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                              key 'condition_tag'",
                         )),
                     };
-                    // Whitelist the tag to the two Phase-3 shapes. A
-                    // tag we don't recognize is a bridge-vs-Rust
-                    // disagreement — fail loudly so a future extension
-                    // can't silently mis-translate.
+                    // Whitelist the tag to the recognized Phase-3
+                    // shapes (round-82 adds the third entry). A tag
+                    // we don't recognize is a bridge-vs-Rust
+                    // disagreement — fail loudly so a future
+                    // extension can't silently mis-translate.
                     if condition_tag != "control_permanent_is_artifact"
                         && condition_tag != "at_least_n_spells_cast_this_turn"
+                        && condition_tag != "controlled_artifact_entered_this_turn"
                     {
                         return Err(PyValueError::new_err(format!(
                             "static_self_bonuses[].condition_tag must be \
-                             'control_permanent_is_artifact' or \
-                             'at_least_n_spells_cast_this_turn' (got: {})",
+                             'control_permanent_is_artifact', \
+                             'at_least_n_spells_cast_this_turn', or \
+                             'controlled_artifact_entered_this_turn' \
+                             (got: {})",
                             condition_tag
                         )));
                     }
@@ -10123,6 +10138,17 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                                 )));
                             }
                         }
+                        "controlled_artifact_entered_this_turn" => {
+                            if !condition_args.is_empty() {
+                                return Err(PyValueError::new_err(format!(
+                                    "static_self_bonuses[].condition_args \
+                                     must be empty for tag \
+                                     'controlled_artifact_entered_this_turn' \
+                                     (got: {:?})",
+                                    condition_args
+                                )));
+                            }
+                        }
                         _ => unreachable!(
                             "condition_tag whitelisted above",
                         ),
@@ -10168,12 +10194,45 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                         }
                         None => Vec::new(),
                     };
+                    // **Round-82 (2026-05-20, Mechan Shieldmate
+                    // closure).** Parse the optional
+                    // `removed_keywords` list — same shape as
+                    // `granted_keywords`, just on the layer-6
+                    // REMOVE side. Omitted key → empty Vec
+                    // (back-compat default; every pre-round-82
+                    // entry omits the key and parses to
+                    // `Vec::new()`, byte-identical to before this
+                    // slice).
+                    let removed_keywords = match entry.get_item("removed_keywords")? {
+                        Some(kw_any) => {
+                            let kw_iter = kw_any.try_iter().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_self_bonuses[].removed_keywords \
+                                     must be an iterable of strings",
+                                )
+                            })?;
+                            let mut kws = Vec::new();
+                            for k in kw_iter {
+                                let s: String = k?.extract().map_err(|_| {
+                                    PyValueError::new_err(
+                                        "static_self_bonuses[].\
+                                         removed_keywords entries must \
+                                         be strings",
+                                    )
+                                })?;
+                                kws.push(s);
+                            }
+                            kws
+                        }
+                        None => Vec::new(),
+                    };
                     out.push(StaticSelfBonus {
                         condition_tag,
                         condition_args,
                         power_bonus,
                         toughness_bonus,
                         granted_keywords,
+                        removed_keywords,
                     });
                 }
                 out
@@ -12117,12 +12176,20 @@ impl Registry {
     /// 2026-05-20).** Returns this printing's `static_self_bonuses`
     /// as a Python-friendly list of tuples
     /// `[(condition_tag, condition_args, power_bonus,
-    /// toughness_bonus, granted_keywords), ...]`. Empty when the
-    /// printing has no entries (every pre-Phase-3 printing).
+    /// toughness_bonus, granted_keywords, removed_keywords),
+    /// ...]`. Empty when the printing has no entries (every pre-
+    /// Phase-3 printing).
+    ///
+    /// **Round-82 (2026-05-20, Mechan Shieldmate closure).** The
+    /// tuple grew a 6th element — `removed_keywords` — for the
+    /// RemoveKeyword payload fan-out (Mechan Shieldmate's defender
+    /// removal). Every pre-round-82 printing serializes its
+    /// `removed_keywords` slot as an empty Vec (back-compat default
+    /// — the `removed_keywords` registry-dict key is optional).
     fn get_printing_static_self_bonuses(
         &self,
         id: u32,
-    ) -> PyResult<Vec<(String, Vec<i32>, i16, i16, Vec<String>)>> {
+    ) -> PyResult<Vec<(String, Vec<i32>, i16, i16, Vec<String>, Vec<String>)>> {
         let p = self.lookup(id)?;
         Ok(p.static_self_bonuses
             .iter()
@@ -12133,6 +12200,7 @@ impl Registry {
                     b.power_bonus,
                     b.toughness_bonus,
                     b.granted_keywords.clone(),
+                    b.removed_keywords.clone(),
                 )
             })
             .collect())

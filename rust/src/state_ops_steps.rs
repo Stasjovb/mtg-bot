@@ -374,6 +374,17 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     for p in state.players.iter_mut() {
         p.spells_cast_this_turn = 0;
     }
+    // **Round-82 (2026-05-20, Mechan Shieldmate closure).** Reset
+    // per-player artifacts-entered-under-your-control-this-turn
+    // counters. Mirrors Python's `turn.py:1110`:
+    // `p.artifacts_entered_under_your_control_this_turn = 0` in
+    // `run_cleanup_step`. Read by
+    // `static_self_bonus_condition_matches` for the
+    // `"controlled_artifact_entered_this_turn"` tag — Mechan
+    // Shieldmate's defender-removal gate.
+    for p in state.players.iter_mut() {
+        p.artifacts_entered_under_your_control_this_turn = 0;
+    }
 }
 
 /// CR 106.4 — "When a phase or step ends, each player's mana pool

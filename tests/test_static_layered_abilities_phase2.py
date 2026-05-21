@@ -468,24 +468,28 @@ def test_filter_deck_admits_frenzied_baloth():
     assert cd.grants_creature_spells_uncounterable is True
 
 
-def test_filter_still_rejects_phase1_honest_stops():
-    """The remaining Phase-1 honest-stops stay honest-stopped after
-    Phase 3 closes 3 of the 6 (Brightspear Zealot, Cloudsculpt
-    Technician, Gravblade Heavy admit via the SELF-scope conditional
-    bonus arm). Mechan Shieldmate stays honest-stopped — its
-    ``ControlledArtifactEnteredThisTurn`` Condition + ``RemoveKeyword``
-    payload is outside the Phase-3 two-tag dispatch table.
-    (Rampaging Soulrager / Wildfire Wickerfolk are not in the current
-    EoE data snapshot.)"""
+def test_filter_admits_round82_mechan_shieldmate():
+    """Round-82 (2026-05-20, Mechan Shieldmate closure): Mechan
+    Shieldmate now admits through the SELF-scope conditional bonus
+    arm. The new dispatch tag
+    ``"controlled_artifact_entered_this_turn"`` covers its
+    Condition; the Rust reader's layer-6 REMOVE fold honors its
+    ``RemoveKeyword("defender")`` payload. (Rampaging Soulrager /
+    Wildfire Wickerfolk remain not in the current EoE data
+    snapshot.)"""
     src_mod = importlib.import_module("mtg_bot.cards.parser_source")
     src = src_mod.OracleParserCardSource()
     printings = src.get_printings()
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
-    for name in ["Mechan Shieldmate"]:
-        filtered_names, _ = _filter_deck_to_bridge_supported(
-            [name], printings,
-        )
-        assert filtered_names == [], (
-            f"{name} should be honest-stopped (Condition not in "
-            "Phase-3 dispatch table)"
-        )
+    filtered_names, card_defs = _filter_deck_to_bridge_supported(
+        ["Mechan Shieldmate"], printings,
+    )
+    assert filtered_names == ["Mechan Shieldmate"]
+    assert len(card_defs) == 1
+    assert card_defs[0].extra_card_types == ("Artifact",)
+    assert card_defs[0].static_self_bonuses == (
+        (
+            "controlled_artifact_entered_this_turn", (), 0, 0,
+            (), ("defender",),
+        ),
+    )

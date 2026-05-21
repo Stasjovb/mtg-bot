@@ -388,6 +388,12 @@ pub(crate) fn aura_grants_keyword_to(
 ///   * `"at_least_n_spells_cast_this_turn"` (args=`(n,)`) —
 ///     true iff `viewer.spells_cast_this_turn >= n`. Mirrors
 ///     Python's `AtLeastNSpellsCastThisTurn(n).matches`.
+///   * `"controlled_artifact_entered_this_turn"` (no args) —
+///     true iff `viewer.artifacts_entered_under_your_control_
+///     this_turn > 0`. Mirrors Python's
+///     `ControlledArtifactEnteredThisTurn().matches`. Added
+///     round-82 (2026-05-20) for Mechan Shieldmate's defender-
+///     removal rider.
 pub(crate) fn static_self_bonus_condition_matches(
     state: &GameState,
     viewer_idx: usize,
@@ -420,6 +426,9 @@ pub(crate) fn static_self_bonus_condition_matches(
                 None => return false,
             };
             viewer.spells_cast_this_turn >= n
+        }
+        "controlled_artifact_entered_this_turn" => {
+            viewer.artifacts_entered_under_your_control_this_turn > 0
         }
         _ => false,
     }
@@ -500,6 +509,58 @@ pub(crate) fn static_self_bonus_grants_keyword(
             continue;
         }
         if bonus.granted_keywords.iter().any(|k| k == keyword) {
+            return true;
+        }
+    }
+    false
+}
+
+
+/// **Static / layered abilities substrate — round-82 (Mechan
+/// Shieldmate closure, 2026-05-20).** Returns true iff the obj's
+/// own `static_self_bonuses` REMOVES the queried keyword under
+/// the current condition gates. Mirrors the layer-6 RemoveKeyword
+/// branch in Python's `game.battlefield_has_keyword` post-walk
+/// (`game.py:1210-1213`) which discards every RemoveKeyword
+/// payload from the effective-keyword set.
+///
+/// **CR 613 layer-6 model.** Per CR 613.7, within layer 6 the
+/// most-recent-timestamp continuous effect wins. The Phase-1
+/// anthem grant + Phase-3 self-grant adds keywords positively;
+/// this remover SUBTRACTS the queried keyword from the
+/// post-add set. Today's pool has no overlap between a grant
+/// and a remove on the same source/keyword (Mechan Shieldmate's
+/// printed `defender` is removed; no anthem grants `defender`
+/// on top), so the simple add-then-remove ordering is parity-
+/// clean. A future slice that ships a `RemoveKeyword` on top of
+/// a same-turn `GrantKeyword` of the same keyword on the same
+/// object would need the proper layer-6 timestamp walk; that
+/// shape is not in the live admit set and is honest-stopped via
+/// the same Phase-1 simplification documented at
+/// `static_anthem_grants_keyword_to`.
+pub(crate) fn static_self_bonus_removes_keyword(
+    state: &GameState,
+    obj_id: u32,
+    keyword: &str,
+) -> bool {
+    let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
+        return false;
+    };
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        return false;
+    };
+    if printing.static_self_bonuses.is_empty() {
+        return false;
+    }
+    let viewer_idx = player_idx;
+    for bonus in printing.static_self_bonuses.iter() {
+        if bonus.removed_keywords.is_empty() {
+            continue;
+        }
+        if !static_self_bonus_condition_matches(state, viewer_idx, bonus) {
+            continue;
+        }
+        if bonus.removed_keywords.iter().any(|k| k == keyword) {
             return true;
         }
     }
@@ -790,46 +851,41 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     if aura_grants_lose_abilities_to(state, obj_id) {
         return false;
     }
-    if printing.keywords.iter().any(|k| k == keyword) {
-        return true;
+    // **Round-82 (2026-05-20, Mechan Shieldmate closure).** Compute
+    // the positive (printed + granted) hit and the layer-6 REMOVE
+    // fold separately, then subtract. A printed `defender` that's
+    // removed by the source's own active RemoveKeyword payload
+    // yields `false`; an anthem grant of `flying` that overlaps a
+    // remove of `flying` also yields `false`. The REMOVE fold runs
+    // ONLY when the positive set hit AND the source carries a
+    // remove entry for this keyword whose condition matches —
+    // mirrors Python's post-walk `kws.discard(payload.keyword)` at
+    // `game.py:1210-1213`.
+    let positive_hit = printing.keywords.iter().any(|k| k == keyword)
+        || state.players[player_idx]
+            .battlefield
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.ueot_has_keyword(keyword))
+            .unwrap_or(false)
+        || aura_grants_keyword_to(state, obj_id, keyword)
+        || static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword)
+        || static_self_bonus_grants_keyword(state, obj_id, keyword);
+    if !positive_hit {
+        return false;
     }
-    // UEOT-granted keywords (CR 613 layer 6).
-    let ueot_hit = state.players[player_idx]
-        .battlefield
-        .iter()
-        .find(|o| o.id == obj_id)
-        .map(|o| o.ueot_has_keyword(keyword))
-        .unwrap_or(false);
-    if ueot_hit {
-        return true;
+    // Static / layered abilities substrate — round-82 (2026-05-20,
+    // Mechan Shieldmate closure): layer-6 RemoveKeyword fold from
+    // the obj's OWN `static_self_bonuses` whose condition matches
+    // this turn (Mechan Shieldmate's "as long as an artifact entered
+    // ..., this creature loses defender"). Subtracts the queried
+    // keyword from the positive set. Mirrors Python's
+    // `game.battlefield_has_keyword` post-grant
+    // `kws.discard(payload.keyword)` walk.
+    if static_self_bonus_removes_keyword(state, obj_id, keyword) {
+        return false;
     }
-    // Aura-attachment substrate STEP 4 (round-78): layer-6 keyword
-    // grants from any Aura attached to this object. Mirrors Python's
-    // game.py:1120-1145 scan of `equipment_bonuses`-rider keywords on
-    // attached_to-matching auras / equipment. Equipment riders are
-    // not yet folded in on the Rust side; this branch covers Auras
-    // only (S1 sub-shape: granted_keywords like trample / hexproof).
-    if aura_grants_keyword_to(state, obj_id, keyword) {
-        return true;
-    }
-    // Static / layered abilities substrate — Phase 1 first-deliverable
-    // (round-79): layer-6 keyword grants from any battlefield
-    // permanent's `static_anthems` whose scope + controller filter
-    // admit this target. The reader walks per-controller (only the
-    // target's controller's battlefield contributes — see the
-    // helper's docstring for the CR 613 layer-2 simplification),
-    // mirroring Python's `_static_bonuses` per-source `applies_to`
-    // walk.
-    if static_anthem_grants_keyword_to(state, player_idx, obj_id, keyword) {
-        return true;
-    }
-    // Static / layered abilities substrate — Phase 3 (round-81,
-    // 2026-05-20): layer-6 keyword grants from the obj's OWN
-    // `static_self_bonuses` whose condition matches this turn
-    // (Gravblade Heavy's "has deathtouch as long as you control an
-    // artifact"). Mirrors the SELF-scope branch of Python's
-    // `_static_bonuses` walk applied to keyword grants.
-    static_self_bonus_grants_keyword(state, obj_id, keyword)
+    true
 }
 
 /// **Aura-attachment substrate — Phase 2 S2.5 (round-79+,

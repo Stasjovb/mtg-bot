@@ -1457,9 +1457,57 @@ pub(crate) fn drain_pending_etb_dispatches(state: &mut GameState) -> PyResult<()
             return Ok(());
         }
         for entered_id in drained {
+            // **Round-82 (2026-05-20, Mechan Shieldmate closure).**
+            // Bump the per-controller artifact-bf-entry counter
+            // BEFORE the ENTERS dispatch, mirroring Python's
+            // `actions.put_into_battlefield` inline increment
+            // (`actions.py:3140`) which runs before
+            // `_trigger_etb_abilities`. The drainer is the
+            // centralized chokepoint every bf-entry route hits, so
+            // one bump here catches play_land / cast_creature /
+            // token-creation arms / resolve_top_of_stack / etc.
+            // without per-site duplication. Counts artifact
+            // creatures and artifact tokens too (the printing's
+            // `card_types` Vec already carries both `"Artifact"`
+            // and `"Creature"` for Mechan-shape printings).
+            if let Some((controller_idx, printing_id)) =
+                find_bf_controller_and_printing(state, entered_id)
+            {
+                if let Some(printing) = state.registry.lookup(printing_id) {
+                    if printing.card_types.iter().any(|t| t == "Artifact") {
+                        state.players[controller_idx]
+                            .artifacts_entered_under_your_control_this_turn += 1;
+                    }
+                }
+            }
             dispatch_event(state, Event::Enters, entered_id)?;
         }
     }
+}
+
+/// **Round-82 (2026-05-20, Mechan Shieldmate closure).** Locate a
+/// just-entered battlefield permanent by id and return its
+/// `(controller_player_idx, printing_id)`. Mirrors
+/// `state_ops_combat::locate_battlefield_obj` (a sibling
+/// `(player_idx, printing_id)` reader) but reads `obj.controller`
+/// instead of the player slot index — when control of a permanent
+/// differs from its owner (Aura under enchanted creature, control-
+/// magic), the controller drives the per-player "entered under your
+/// control this turn" counter. Returns `None` if the id isn't on a
+/// battlefield (defensive — the drainer's queue only carries
+/// just-pushed bf ids, so the lookup hits in the live path).
+fn find_bf_controller_and_printing(
+    state: &GameState,
+    obj_id: u32,
+) -> Option<(usize, u32)> {
+    for player in state.players.iter() {
+        for obj in player.battlefield.iter() {
+            if obj.id == obj_id {
+                return Some((obj.controller as usize, obj.printing_id));
+            }
+        }
+    }
+    None
 }
 
 /// **Slice 5 — DIES sibling of `drain_pending_etb_dispatches`.**
@@ -15930,5 +15978,45 @@ impl GameState {
         }
         self.players[player_idx].spells_cast_this_turn = value;
         Ok(())
+    }
+
+    /// **Round-82 (2026-05-20, Mechan Shieldmate closure) — test
+    /// helper.** Directly set
+    /// `Player.artifacts_entered_under_your_control_this_turn` for
+    /// a player index. Used by the Mechan-shape test harness to
+    /// drive the ``controlled_artifact_entered_this_turn``
+    /// condition tag without going through a full bf-entry
+    /// pipeline (which would require crafting a real artifact ETB
+    /// for every probe). Mirrors `set_spells_cast_this_turn`'s
+    /// shape one-for-one.
+    fn set_artifacts_entered_under_your_control_this_turn(
+        &mut self,
+        player_idx: usize,
+        value: i32,
+    ) -> PyResult<()> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        self.players[player_idx]
+            .artifacts_entered_under_your_control_this_turn = value;
+        Ok(())
+    }
+
+    /// **Round-82 (2026-05-20, Mechan Shieldmate closure) — test
+    /// helper.** Read
+    /// `Player.artifacts_entered_under_your_control_this_turn`.
+    fn get_artifacts_entered_under_your_control_this_turn(
+        &self,
+        player_idx: usize,
+    ) -> PyResult<i32> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        Ok(self.players[player_idx]
+            .artifacts_entered_under_your_control_this_turn)
     }
 }

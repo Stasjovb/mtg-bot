@@ -107,7 +107,7 @@ to reflect what substrate already exists post-session.
 
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status (post-session) |
 |---|---:|---:|---:|---|---|---|
-| Static / layered abilities | 15 | 8 | 34,526 | sprawling | small-medium per remaining card (Phases 1+2+3 substrate built) | **PARTIAL** — 4 of 8 single-gated closed; 4 remain (Mechan Shieldmate + 3 not in EoE snapshot) |
+| Static / layered abilities | 15 | 8 | 34,526 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 5 of 8 single-gated closed; 2 remain not in EoE snapshot (Soulrager / Wickerfolk) |
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium for ~5 cards realizable; 18 deferred behind sibling substrates | DEFERRED (unchanged) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
 | warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
@@ -135,38 +135,36 @@ already fully closed**. Re-ranked by **decks(1g) ÷ remaining-closure-
 scope** with the substrate already-paid-for discounts the session
 introduced.
 
-### (1) Static / layered abilities — Phase 3.5 (Mechan Shieldmate) + EoE-refresh cards
+### (1) Static / layered abilities — Phase 3.5 SHIPPED (round 82, Mechan Shieldmate closure)
 
-**Status: highest-leverage remaining named lever.** Phases 1+2+3 SHIPPED
-(`3a7c483c` / `9ccefe08` / `ddd93684`); 4 of the 8 originally-single-gated
-cards are closed. The remaining single-gated cards under this gate row are:
+**Status: high-leverage named lever, near-complete.** Phases 1+2+3
+SHIPPED (`3a7c483c` / `9ccefe08` / `ddd93684`); Phase 3.5 SHIPPED
+round-82 (Mechan Shieldmate, this lane). 5 of the 8 originally-
+single-gated cards are closed (Tannuk via Phase 1 anthem grant,
+Frenzied Baloth via Phase 2 uncounterable, Brightspear / Cloudsculpt
+/ Gravblade via Phase 3 SELF-scope conditional, Mechan Shieldmate
+via Phase 3.5 — see closure note below). The remaining single-gated
+cards under this gate row are:
 
-* **Mechan Shieldmate** — `ControlledArtifactEnteredThisTurn` Condition
-  + `RemoveKeyword(defender)` layer-6 payload. Sibling lane 1
-  (`feature/mechan-shieldmate-closure`) is in flight; will add the
-  Condition tag to the Phase-3 dispatch and the keyword-remove fold to
-  the Rust layer-6 reader. **~1 cycle of slice work** on top of the
-  shipped Phase-3 substrate.
-* **Rampaging Soulrager** / **Wildfire Wickerfolk** / **Tannuk Steadfast
-  Second** (NB: the 8th name in the original list — Tannuk is *already*
-  bridge-admitted by Phase 1 anthem-grant; the remaining 3 either are
-  not in the current EoE snapshot or carry condition tags
-  (`UnlockedDoorsAmongRoomsAtLeast` / `DeliriumActive`) outside the
-  Phase-3 two-tag table. Each is a ~1 cycle slice that adds its tag.
+* **Rampaging Soulrager** — `UnlockedDoorsAmongRoomsAtLeast(2)`
+  Condition. Not in the current EoE data snapshot. Would need a
+  per-Condition Rust port riding the now-shipped Phase 3 + 3.5
+  substrate. **~1 cycle of slice work**.
+* **Wildfire Wickerfolk** — `DeliriumActive` Condition + a layer-6
+  trample grant + a layer-7 +1/+1. Not in the current EoE data
+  snapshot. ~1 cycle of slice work.
 
 **Multi-gated 7 (unchanged):** Exalted Sunborn, Loading Zone, Memorial
 Team Leader, Starfield Vocalist (warp+static); Lumen-Class Frigate
 (Station+static); Nexus of Fate (effect-uncovered+nonsafe-trig+static);
 Green Sun's Zenith (effect-uncovered+static).
 
-* **Why it's still high leverage:** the substrate's been built; each
-  remaining card is now small-medium scope, not the original
-  medium-large.
-* **Closure scope per remaining card:** small-medium (existing layer
+* **Why it's still on the list:** the substrate's been built; each
+  remaining card is now small scope, not the original medium-large.
+* **Closure scope per remaining card:** small (existing layer
   machinery + 1 new Condition tag).
-* **Sequencing:** Mechan Shieldmate (lane 1 in flight) first; per-
-  Condition slices for Rampaging Soulrager / Wildfire Wickerfolk are
-  blocked on an EoE snapshot refresh.
+* **Sequencing:** the 2 remaining single-gated are blocked on an EoE
+  snapshot refresh.
 
 ### (2) Aura-attachment substrate — Phase 4 only
 
@@ -193,6 +191,31 @@ Sibling lane 3 (`feature/aura-phase-4`) is in flight on Phase 4 S3
 * **Closure scope:** small-medium (Phase 4 S3) + per-card S4 closures
   for the multi-gated residue (medium each, gated by Effect-uncovered
   lane progress).
+
+#### Phase 3.5 closure note — Mechan Shieldmate (round-82, 2026-05-20)
+
+Extended the Phase-3 substrate with:
+
+* A third condition tag `controlled_artifact_entered_this_turn`
+  in the dispatch table (Python + Rust + parse whitelist),
+  reading a new per-Player counter
+  `artifacts_entered_under_your_control_this_turn` bumped in
+  `drain_pending_etb_dispatches` (the centralized bf-entry
+  chokepoint) and reset at cleanup, mirroring Python.
+* A layer-6 `RemoveKeyword` payload arm in
+  `_static_ability_to_self_conditional_bonus` and the
+  `removed_keywords` 6th tuple slot in `static_self_bonuses` /
+  `StaticSelfBonus`. The Rust `battlefield_has_keyword` reader
+  applies REMOVE folds AFTER the positive (printed + UEOT +
+  aura-grant + anthem-grant + self-grant) hit — additive ADDs
+  minus per-source REMOVEs — mirroring Python's post-walk
+  `kws.discard(payload.keyword)`. Closes Mechan Shieldmate.
+
+Section (1) remaining honest-stops post-Phase-3.5: Rampaging
+Soulrager / Wildfire Wickerfolk — both absent from the current
+EoE snapshot; would need an EoE refresh + per-Condition slice
+(`UnlockedDoorsAmongRoomsAtLeast` / `DeliriumActive`
+respectively).
 
 ### (3) Effect-uncovered diffuse tail — per-card lane
 
