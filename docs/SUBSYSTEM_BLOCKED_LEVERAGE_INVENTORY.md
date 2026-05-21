@@ -1,18 +1,19 @@
 # Subsystem-blocked tier — leverage inventory + closure sequence
 
 A focused, current-snapshot **synthesis** of the BLOCKED-subsystem-gated
-tier (143 cards post-warp_cost-Phase-3, the **only** non-empty BLOCKED
-tier on `docs/POOL_PARITY.md` after the 2026-05-19/20 massive-closure
-session). This doc is **not the authoritative living roadmap** —
-`docs/SUBSYSTEM_ROADMAP.md` is that, with its full cycle-by-cycle
-orchestrator history. This doc is the short "what should I grind next,
-why, in what order" reference.
+tier (142 cards post-dynamic-pt-cosmogoyf-closure, the **only**
+non-empty BLOCKED tier on `docs/POOL_PARITY.md` after the
+2026-05-19/20 massive-closure session). This doc is **not the
+authoritative living roadmap** — `docs/SUBSYSTEM_ROADMAP.md` is
+that, with its full cycle-by-cycle orchestrator history. This doc
+is the short "what should I grind next, why, in what order"
+reference.
 
-**Snapshot HEAD:** post-`feature/warp-cost-phase-3` merge (round-83,
-2026-05-20: 3 warp single-gated cards flipped PROBED, blocked tier
-146→143). Predecessor was `62222ffe` (post-tractor-beam cast-time
-auto-resolve, post-static-abilities Phase 3, post-Aura Phase 3/S4,
-post-dauntless-scrapbot closure).
+**Snapshot HEAD:** post-`feature/dynamic-pt-cosmogoyf` merge (round-84,
+2026-05-20: Cosmogoyf flipped PROBED on the SAME dispatch table
+substrate as round-78 Grovestrider; blocked tier 143→142).
+Predecessor was `7a3a0fc9` (post-Mechan Shieldmate closure / Phase
+3.5 static abilities — round-82).
 **Source data:** `scripts/scout_r58_subsystem_attribution.py` (re-runnable;
 the same attribution helper `measure_pool_parity` imports, so this doc
 and `POOL_PARITY.md` cannot disagree on the count).
@@ -34,7 +35,7 @@ recommendations are now overwhelmingly **executed**, not pending.
 | Original rec | Status | Closure commit(s) |
 |---|---|---|
 | (1) Static / layered abilities — close 8 single-gated | **PARTIAL** — Phases 1+2+3 SHIPPED; 4 of 8 single-gated cards closed (Tannuk Steadfast Second, Frenzied Baloth, Brightspear Zealot, Cloudsculpt Technician, Gravblade Heavy) | `3a7c483c` Phase 1 / `9ccefe08` Phase 2 / `ddd93684` Phase 3 |
-| (2) Dynamic-P/T formula — Harmonious Grovestrider | **PARTIAL** — substrate LANDED; Grovestrider PROBED end-to-end; ward-rider on real printing kept it loader-gated, but the formula-substrate single-gate it cited is closed | `6a8b6402` |
+| (2) Dynamic-P/T formula — Harmonious Grovestrider | **CLOSED** — substrate LANDED round-78; Grovestrider PROBED end-to-end (ward-rider on real printing kept it loader-gated, but the formula-substrate single-gate it cited is closed). Round-84 (`feature/dynamic-pt-cosmogoyf`) extended the SAME dispatch table with the `"cosmogoyf"` arm, flipping Cosmogoyf → PROBED. Single-gated Dynamic-P/T tier now 0. | `6a8b6402` (Grovestrider) + this lane (Cosmogoyf) |
 | (3) Aura Phase 2 (S2 control-changing) | **SHIPPED** — Duskmourn admit + Tractor Beam reduce | `643163c6`, plus S2 extension `d4ceecc5` (Tractor Beam) |
 | (4) Aura Phase 3 (S4 triggered) | **SHIPPED** — Pain for All admit substrate end-to-end | `35ede8b0` |
 | (5) Effect-uncovered per-card drain | continuing (probe batches AAAA-GGGG landed in parallel; +11 PROBED) | `5063e8e3`, `93ea4057`, `1a06d714`, … `7c66225e` |
@@ -69,27 +70,29 @@ recommendations are now overwhelmingly **executed**, not pending.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3
-PROBED                                                221         232          235
-covered-by-construction                                95          97           97
-BLOCKED — genuinely_missing                             3           0            0
-BLOCKED — blocked_non_effect                            2           0            0
-BLOCKED — subsystem-gated                             154         146          143
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo
+PROBED                                                221         232          235            236
+covered-by-construction                                95          97           97             97
+BLOCKED — genuinely_missing                             3           0            0              0
+BLOCKED — blocked_non_effect                            2           0            0              0
+BLOCKED — subsystem-gated                             154         146          143            142
 ```
 
-Subsystem-gated dropped by 11 total; **both itemized BLOCKED tiers
-reached 0**. The 143 tail is now the *only* non-empty BLOCKED tier.
+Subsystem-gated dropped by 12 total; **both itemized BLOCKED tiers
+reached 0**. The 142 tail is now the *only* non-empty BLOCKED tier.
 Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
 Bygone Colossus, Timeline Culler → PROBED on the existing Phase 1/1.5/2
 substrate via two measurement-attribution fixes (loader_admits widen +
-`_parity`-named probe aliases).
+`_parity`-named probe aliases). Round-84 (2026-05-20:
+dynamic-pt-cosmogoyf) flipped Cosmogoyf → PROBED via a one-arm
+extension to the existing round-78 dispatch table.
 
 ## 1. Headline (current state)
 
-* **143 cards** are subsystem-gated; **68 single-gated**, **75 multi-gated**
-  (post warp_cost Phase 3 round-83: the 3 single-gated warp cards — Red
-  Tiger Mechan, Bygone Colossus, Timeline Culler — flipped to PROBED).
-  The 75 multi-gated total is unchanged.
+* **142 cards** are subsystem-gated; **67 single-gated**, **75 multi-gated**
+  (post dynamic-pt-cosmogoyf round-84: Cosmogoyf — the last single-
+  gated Dynamic-P/T card — flipped to PROBED). The 75 multi-gated
+  total is unchanged.
 * **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
   those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
@@ -111,7 +114,7 @@ to reflect what substrate already exists post-session.
 | Non-basic land substrate | 23 | 23 | 34,575 | medium | small-medium for ~5 cards realizable; 18 deferred behind sibling substrates | DEFERRED (unchanged) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
 | warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
-| Dynamic-P/T formula | 1 | 1 | unknown | medium | small-medium per formula (substrate landed `6a8b6402`) | **PARTIAL** — Grovestrider closed; Cosmogoyf remains (different formula shape) |
+| Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (§2-declined) | DEFERRED (unchanged) |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; 0 single-gated) | DEFERRED (unchanged) |
 | Aura-attachment substrate | 7 | 4 | 633 | sprawling | Phase 1/2/2.5/3 LANDED; **Phase 4 only** (S3 token-replacement Moonlit Meditation 633 decks) | **PARTIAL** — sub-shape coverage near-complete; lane 3 in flight |
@@ -124,9 +127,13 @@ to reflect what substrate already exists post-session.
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 143 subsystem-gated = 68 single-gated + 75
-multi-gated; `1gate` column sums to 68 (post-warp_cost Phase 3 round-83;
-the warp_cost row is now 7/0/0 — only the multi-gated tail survives).
+**Reconciliation:** 142 subsystem-gated = 67 single-gated + 75
+multi-gated; `1gate` column sums to 67 (post-dynamic-pt-cosmogoyf
+round-84; the Dynamic-P/T row is now 0/0/0 — the substrate is fully
+closed end-to-end for the two formulas present in the EoE snapshot
+(Grovestrider + Cosmogoyf); the third sibling, Emissary Escort, is
+absent from the EoE snapshot AND is honest-stopped Rust-side on a
+different per-formula shape).
 
 ## 3. The remaining highest-leverage levers (re-ranked)
 
@@ -234,13 +241,37 @@ Zero Point Ballad.
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 
-### (4) Dynamic-P/T formula — Cosmogoyf only
+### (4) Dynamic-P/T formula — **CLOSED** (round-84, 2026-05-20)
 
-Substrate landed `6a8b6402`; Harmonious Grovestrider closed end-to-end
-(now PROBED at `tests/test_parity_smoke.py::*_harmonious_grovestrider_*`).
-Remaining single-gated: **Cosmogoyf** (different formula shape — card
-type counting in graveyards). ~1-2 cycle slice on the same dispatch
-table substrate (extend the Rust formula-key arm + bridge admit).
+Substrate landed `6a8b6402` (round-78); Harmonious Grovestrider
+closed end-to-end (now PROBED at
+`tests/test_parity_smoke.py::*_harmonious_grovestrider_*`).
+**Cosmogoyf closed round-84** (this lane: `feature/dynamic-pt-cosmogoyf`)
+via the SAME dispatch table — added the `"cosmogoyf"` arm to
+`state_ops_combat::dynamic_base_pt_pub` (P=N, T=N+1 where
+N = controller's-exile-zone count; mirrors Python's
+`game._dynamic_base_pt` arm verbatim) + widened the bridge admit
+predicate (`trajectory._printing_is_bridge_simple_creature`) from a
+single-key match to a module-level admit set
+`_DYNAMIC_PT_FORMULA_ADMIT_SET = {"harmonious_grovestrider",
+"cosmogoyf"}` so future formula slices land here with a one-key
+addition. PROBED at
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_cosmogoyf_dynamic_pt_parity`
+(drives the GENUINE parsed EoE Cosmogoyf printing — round-46
+real-EoE-signal discipline; Cosmogoyf has no ward / triggered /
+activated / static abilities, so unlike Grovestrider the live
+printing admits directly through the bridge without needing a
+synthetic CardDef).
+
+**Honest-stop:** `"emissary_escort"` formula key remains drop-at-
+filter on the bridge AND honest-stopped in the Rust dispatch table.
+Its shape is different from the two admitted CDA-only formulas —
+Escort reads `printing.power` / `printing.toughness` and ADDS X
+(greatest mana value among OTHER artifacts the controller controls);
+the CDA-only `dynamic_pt_formula` arm this dispatch table covers
+today sets the BASE from scratch. Emissary Escort's slice extends
+the dispatch table when it lands; not in the current EoE snapshot,
+so no immediate leverage.
 
 ### (5) warp_cost remaining-3 — Phase 3 — **SHIPPED** (round-83, 2026-05-20)
 
@@ -278,19 +309,24 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
 
 | # | Lever | Decks(1g) | Cycles | Decks/cycle | Notes |
 |---|---|---:|---:|---:|---|
-| 1 | **Static / layered abilities — Mechan Shieldmate (Phase 3.5)** | (single card in the 8) | 1 | — | Sibling lane 1 in flight; substrate is paid for |
+| 1 | **Static / layered abilities — Mechan Shieldmate (Phase 3.5)** | (single card in the 8) | 1 | — | **CLOSED round-82 (2026-05-20)** — `feature/mechan-shieldmate-closure` |
 | ~~2~~ | ~~**warp_cost Phase 3**~~ | ~~15,436~~ | — | — | **CLOSED round-83 (2026-05-20)** — `feature/warp-cost-phase-3`; +3 PROBED |
-| 2 | **Dynamic-P/T formula — Cosmogoyf** | small | 1-2 | — | Same dispatch table substrate; cheapest after Static |
-| 3 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Sibling lane 3 in flight |
+| ~~2~~ | ~~**Dynamic-P/T formula — Cosmogoyf**~~ | ~~small~~ | ~~1-2~~ | — | **CLOSED round-84 (2026-05-20)** — `feature/dynamic-pt-cosmogoyf`; +1 PROBED; one-arm extension to the round-78 dispatch table |
+| 3 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Sibling lane in flight |
 | 4 | **Effect-uncovered per-card drain — next 3-5 cheap single-gated** | varies (~5-15k cumulative) | 3-5 | ~3,000 | Cheaper Tier-A lane exhausted; remainder is Tier-C |
 
 **Sequencing rationale:**
 
 * The original #1 (Static abilities) is **now small-cost-per-card** —
   the substrate cost was paid in the session. Mechan Shieldmate
-  closes the last EoE single-gated card on the layer table.
-* **warp_cost moved up** to #2 because its substrate is similarly paid
-  for and the deck count is the largest among 1-2-cycle slices.
+  closed the last EoE single-gated card on the layer table (round-82).
+* **warp_cost** moved up to #2 because its substrate was similarly paid
+  for and the deck count was the largest among 1-2-cycle slices;
+  closed round-83.
+* **Dynamic-P/T formula** (Cosmogoyf) was the cheapest 1-cycle slice
+  after Static + warp_cost both closed — the round-78 dispatch table
+  was already paid for and Cosmogoyf added a single match arm +
+  bridge admit-set widen. Closed round-84.
 * **Aura Phase 4 dropped to #4** because attach substrate is paid but
   S3 token-replacement is its own small substrate.
 * **Effect-uncovered lane** continues in parallel; pace is bounded by
