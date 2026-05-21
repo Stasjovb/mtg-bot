@@ -5699,6 +5699,84 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
+**Update 2026-05-21 (Cycle 5 landed — per-mode target binding API
+on `cast_spell_noncreature`; substrate-only, NO admit widening, NO
+card-flip).** Cycle 5 shipped on
+`feature/modal-chooseone-cycle-5`:
+
+* `cast_spell_noncreature` extension at
+  `rust/src/state_ops_cast.rs:2011-2099` — when the spell is modal
+  (`bound_mode_idx == Some(idx)`) AND the chosen mode's leaf is in
+  the first-slice detector table, OVERRIDE the non-modal ladder's
+  `bound_target` with the per-mode filter's first-legal scan.
+  Mirrors Python's `_select_spell_targets` per-mode walk at
+  `actions.py:1337-1357` for the modal-target-binding shape.
+* First-slice detector table (one entry):
+  `DestroyTargetArtifact` → `bf_iter_etb_sorted` first
+  non-indestructible artifact (filter byte-mirrored from the
+  resolve arm at `state_ops_resolve.rs:6919-6931`).
+* Unrecognized chosen-mode leaves fall through to the non-modal
+  default ladder's binding (back-compat preserved — same behavior
+  as pre-Cycle-5 for any leaf not in the detector table).
+* Pin tests at `tests/test_modal_chooseone_envelope_cycle5.py`: 7
+  tests covering DestroyTargetArtifact bind, indestructible skip,
+  no-legal-target → None, unrecognized-leaf fallthrough, non-modal
+  back-compat, some-targeted-modal-still-declined regression
+  guard, Ruinous Rampage still-admitted regression guard.
+
+**No card-flip.** The admit predicate
+`_printing_is_bridge_simple_spell` is UNCHANGED — the 4 EoE some-
+targeted modal cards (Reroute Systems, Scour for Scrap,
+Archenemy's Charm, Drill Too Deep) STAY DECLINED via the target-
+grammar gate. Cycle 5 is substrate-only by honest-stop discipline:
+the per-mode-binding API is wired but unused on the live admit
+surface. PROBED count unchanged at 272; BLOCKED-subsystem
+unchanged at 117.
+
+**Cycle 6 follow-on (deferred).** Two parallel growth axes:
+
+1. **Detector-table widening (rust/src/state_ops_cast.rs).** Add
+   per-leaf scan arms for the candidate cards' modes:
+   - `DealDamageToTargetTappedCreature` (Reroute Systems mode 1
+     — Lane CC may collide here): scan first
+     `IsCreature() & IsTapped()`. NEW Effect variant needed (see
+     §2 below).
+   - `PumpTargetArtifactOrCreatureUntilEOT` with
+     `granted_keywords` (Reroute Systems mode 0): scan first
+     `IsArtifact() | IsCreature()`. Variant EXTENSION needed
+     (add `granted_keywords: Vec<String>` to existing
+     `Effect::PumpTargetArtifactOrCreatureUntilEOT`).
+   - `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`
+     (Drill Too Deep mode 0): scan first
+     `(IsSpacecraft() | IsPlanet()) & ControlledBy(caster)`.
+     NEW Effect variant needed.
+   - `ExileTargetCreature` (Archenemy's Charm mode 0): scan first
+     `IsCreature()`. Variant EXISTS? Check `cards.rs`.
+2. **Per-leaf Rust Effect variant landings** (per Lane AA's
+   pattern in Cycle 4). For each new variant: declaration in
+   `cards.rs::Effect`, parse arm, to_pydict arm, resolve arm
+   (using `current_resolve_payload_target_id` for the bound
+   target), bridge arm in `cross_engine.py`. Plus the per-leaf
+   reverse-serializer arm at
+   `trajectory.py::_python_spell_effect_to_dict::_leaf` so the
+   modal composer round-trips through.
+3. **Admit predicate widen.** Once a card's modes are ALL leaf-
+   recognized + variants shipped + detector-table entries
+   added, `_printing_is_bridge_simple_spell` admits its
+   `(1, 1)` / `(2, 2)` / etc. modal target-grammar shape via a
+   new Phase-4-modal admit arm. The round-trip-or-bail teeth at
+   `_python_spell_effect_to_dict` continue to carry the
+   no-fallback-hybrid invariant.
+
+**`or_both` STAYS deferred.** Cycle 5 doesn't address Scour for
+Scrap's `or_both=True` shape — the serializer at
+`_python_spell_effect_to_dict` still bails on it (Cycle 3
+preserved), and the cast-time mode-bind is single-pick only. A
+future Cycle (post-Cycle-6) would widen `chosen_mode_idx` to
+`Option<Vec<u8>>` for the `or_both` multi-pick lane.
+
+---
+
 **Update 2026-05-21 (Cycle 4 landed — per-leaf Effect arms for
 all-untargeted modals + admit-predicate widen; +1 PROBED via
 Ruinous Rampage auto-join).** Cycle 4 shipped on

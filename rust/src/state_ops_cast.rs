@@ -2009,6 +2009,102 @@ impl GameState {
                 Some(crate::cards::Effect::ChooseOneMode { .. }) => Some(0u8),
                 _ => None,
             });
+        // **ModalChooseOne envelope — Cycle 5 (per-mode target
+        // binding, 2026-05-21).** When the cast spell is modal AND
+        // the chosen mode is a recognized single-target leaf, bind
+        // the deterministic-first legal target for THAT mode's
+        // filter onto `bound_target`. Mirrors Python's
+        // `_select_spell_targets` which, after `_choose_modes_at_cast`,
+        // walks the chosen mode's `target_slot_kinds()` /
+        // `legal_targets` and picks first-legal per slot
+        // (`actions.py:1337-1357`).
+        //
+        // **Why this lives AFTER the non-modal `bound_target`
+        // computation.** The non-modal cast-time-bind block above
+        // (the `is_two_slot` / `is_radiant_strike_destroy` /
+        // `is_focus_fire` / `is_seedship_impact` / `is_emergency_eject`
+        // / default-first-creature ladder) detects whether the
+        // TOP-LEVEL `effects[0]` matches a known targeted shape. For
+        // a modal spell, `effects[0]` is `Effect::ChooseOneMode { .. }`
+        // — NONE of those is_* arms match, so the ladder falls
+        // through to the default-first-creature scan, which binds
+        // the FIRST creature regardless of whether the chosen
+        // mode actually targets a creature. That binding is
+        // load-bearing-WRONG for modal arms whose chosen leaf has a
+        // non-creature filter (e.g. mode=DestroyTargetArtifact would
+        // need a non-indestructible artifact, not the first
+        // creature). The Cycle 5 widen OVERRIDES `bound_target` to
+        // the per-mode filter's first-legal scan when modal AND the
+        // mode's leaf is in the recognized set.
+        //
+        // **First-slice detector table (per-leaf shape).** Mirrors
+        // the existing `is_*` cast-time-bind detectors at the top of
+        // this function: pattern-match the chosen mode's Effect
+        // variant, run the matching scan, return its first-legal id.
+        // The table starts narrow — one entry for
+        // `DestroyTargetArtifact` (Drill Too Deep mode 1) — and
+        // grows per-mode-leaf as the per-leaf Effect arms ship in
+        // Cycle 6+. An unrecognized chosen mode falls through to
+        // the default-first-creature bound from the ladder above;
+        // that's safe for the substrate-only landing because the
+        // admit predicate `_printing_is_bridge_simple_spell` STILL
+        // REJECTS every some-targeted modal at line 4713 (the
+        // target-grammar gate accepts only PHASE1/PHASE2/PHASE3
+        // shapes, not modal `(1, 1)` / `(2, 2)` / `(0, 1)` shapes).
+        // Cycle 6 widens the admit predicate AS the matching
+        // per-leaf entries get added to this table — keeping the
+        // "byte-equal-or-don't-admit" no-fallback-hybrid discipline.
+        let bound_target: Option<u32> = if let Some(idx_u8) = bound_mode_idx {
+            // Modal: peek into `modes[idx]` and try to bind via
+            // per-mode filter. Falls back to whatever the non-modal
+            // ladder bound if the chosen mode is not in the
+            // recognized leaf table (back-compat: non-overriding
+            // default).
+            let chosen_mode: Option<crate::cards::Effect> = self
+                .registry
+                .lookup(printing_id)
+                .and_then(|p| match p.effects.first() {
+                    Some(crate::cards::Effect::ChooseOneMode { modes }) => {
+                        let idx = (idx_u8 as usize).min(
+                            modes.len().saturating_sub(1),
+                        );
+                        modes.get(idx).cloned()
+                    }
+                    _ => None,
+                });
+            match chosen_mode.as_ref() {
+                // `DestroyTargetArtifact`: first non-indestructible
+                // artifact on EITHER bf in `bf_iter_etb_sorted` order.
+                // Filter mirrors the resolve arm at
+                // `state_ops_resolve.rs:6919-6931` exactly
+                // (Artifact + not Indestructible).
+                Some(crate::cards::Effect::DestroyTargetArtifact) => {
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            let p = self.registry.lookup(o.printing_id)?;
+                            if !p.card_types.iter().any(|t| t == "Artifact") {
+                                return None;
+                            }
+                            if p.keywords.iter().any(|k| k == "indestructible") {
+                                return None;
+                            }
+                            Some(o.id)
+                        })
+                }
+                // Any other chosen mode (or no recognized leaf): keep
+                // the default `bound_target` from the ladder above.
+                // The admit predicate keeps modal spells declined
+                // until Cycle 6 adds the matching per-leaf entry +
+                // the admit-set widen.
+                _ => bound_target,
+            }
+        } else {
+            // Non-modal spell: keep the non-modal ladder's binding
+            // (back-compat byte-identical — this branch is the
+            // pre-Cycle-5 behavior).
+            bound_target
+        };
         // Delta 4: push the spell StackItem (card stays in hand —
         // Rust's pre-existing spell-stack model). The existing
         // `resolve_top_of_stack` drains it: applies `printing.effects`
