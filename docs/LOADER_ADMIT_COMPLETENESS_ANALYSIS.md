@@ -144,7 +144,7 @@ disjunct (measured live):
 | Instant/Sorcery (non-simple-spell) | 89 | spell-card-bridge Phase 2 (Diplomatic Relations 2-slot) + the Effect-uncovered Tier-A/Tier-C per-card lane + modal/X-cost/additional-cost-choice declines (`_printing_is_bridge_simple_spell` §2.2 teeth, `trajectory.py:3759-3793`) |
 | Land (non-mana-simple) | 68 | non-basic-land substrate residual 18 (Station/AA/clone-gated; `SUBSYSTEM_ROADMAP` non-basic-land §2) + utility/fetch/man-lands not modeled as a tapland/dual mana profile |
 | Artifact | 52 | Effect-uncovered + activated-ability (campaign-wide §2 decline — CardDef carries no AA field) + Spacecraft/Station |
-| Enchantment | 42 | Aura-attachment substrate (struck, 0 real-bench) + static-rule-text (the `SUBSYSTEM_ROADMAP` unclassified bucket: Deafening Silence / Leyline of Mutation) + the Sothera-class exile-link composites |
+| Enchantment | 42 | Aura-attachment substrate (struck, 0 real-bench) + static-rule-text (`SUBSYSTEM_ROADMAP` `static_rule_text` row, post 2026-05-21 unclassified-residual lane: Deafening Silence; Leyline of Mutation alone remains in the residual `unclassified` bucket — parser surfaces NEITHER of its two mechanics) + the Sothera-class exile-link composites |
 | Planeswalker | 1 | planeswalker loyalty substrate (sprawling, 0 single-gate yield) |
 
 This is consistent with — and a card-type-axis re-projection of —

@@ -328,6 +328,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | BECOMES_TAPPED event (unbridged) | 2 | 0 | 2 | 19,021 | 0 | contained |
 | Non-basic land substrate | 13 | 13 | 0 | 8,893 | 8,893 | medium |
 | Cost-reduction substrate | 5 | 5 | 0 | 53,648 | 53,648 | medium |
+| Static rule-text (printing-level bool field, no Rust mirror) | 1 | 1 | 0 | 12 | 12 | medium |
 | warp_cost (declined cost-mechanic) | 7 | 0 | 7 | 46,209 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
 | Static / layered abilities | 9 | 2 | 7 | 21,051 | 0 | sprawling |
@@ -337,12 +338,12 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 30 | 0 | 30 | 34,470 | 0 | sprawling |
 | Effect-uncovered (no covered Rust counterpart) | 93 | 23 | 70 | 280,038 | 91,359 | diffuse |
-| Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
+| Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 43 | 0 | 43 | 147,471 | 0 | diffuse |
 
 **Reconciliation:** 121 subsystem-gated = 46 single-gated + 75 multi-gated; the per-subsystem `1gate` column sums to 46 (== single-gated total). The breakout partitions exactly the same 121 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
-**Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
+**Honest unclassified bucket (1):** `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
 Full card list (first 60 shown for auditability; the full set + per-card gate attribution is regenerable from `scripts/scout_r58_subsystem_attribution.py`):
 
