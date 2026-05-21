@@ -21269,22 +21269,26 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # (the lever queries the LIVE covered set, NOT a hardcoded list —
     # new-code-is-right per ``feedback_parity_new_code_is_right.md``;
     # this guard's purpose is to be updated when a Tier-A close lands,
-    # NOT to forbid the growth it explicitly anticipates).
+    # NOT to forbid the growth it explicitly anticipates). The
+    # effect-uncovered-slice round closed Cut Propulsion (+1 → 8) and
+    # the invasive-maneuvers-slice round closed Invasive Maneuvers
+    # (+1 → 9) — both AUTO-JOINED via the §2 auto-grow teeth.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Depressurize", "Diplomatic Relations",
-        "Focus Fire", "Orbital Plunge", "Radiant Strike",
-        "Seedship Impact",
+        "Biosynthic Burst", "Cut Propulsion", "Depressurize",
+        "Diplomatic Relations", "Focus Fire", "Invasive Maneuvers",
+        "Orbital Plunge", "Radiant Strike", "Seedship Impact",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 7 covered+bridged Tier-A spells: the 6 "
+        f"exactly the 9 covered+bridged Tier-A spells: the 8 "
         f"single-target Phase-1 cards + Diplomatic Relations, the "
         f"Phase-2 2-slot card the round-76 grammar widening admitted "
-        f"— the set grew 6→7; it auto-grows further as the remaining "
-        f"Tier-A spells close)")
+        f"— the set grew 7→8→9 as Cut Propulsion and then Invasive "
+        f"Maneuvers each closed; it auto-grows further as the "
+        f"remaining Tier-A spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

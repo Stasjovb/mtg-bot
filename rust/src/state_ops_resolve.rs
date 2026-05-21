@@ -8564,6 +8564,189 @@ fn apply_effect(
                 target_id,
             )?;
         }
+        // **Effect-uncovered Tier-A — Invasive Maneuvers.** "Invasive
+        // Maneuvers deals 3 damage to target creature. It deals 5
+        // damage instead if you control a Spacecraft." Mirrors
+        // Python's `DealDamageToTargetCreatureSpacecraftBoosted`
+        // (`effects/generic/damage.py:850-905`) BIT-FOR-BIT against
+        // the Python source of truth.
+        //
+        // **Target binding.** Single target, ANY creature on either
+        // battlefield (Python's `IsCreature()` slot filter walks
+        // `state.battlefield` — NOT controller-restricted). Read the
+        // cast-time-bound target id from
+        // `state.current_resolve_payload_target_id` (the established
+        // `FocusFireEffect` / `CutPropulsionEffect` payload-target
+        // swap pattern). When `None` (synthetic-test `push_to_stack`
+        // path), fall back to the deterministic-first creature in
+        // ETB-timestamp order across BOTH bfs.
+        //
+        // **Resolve-time validation (CR 608.2b).** The target must
+        // still be on a battlefield AND its printing must satisfy
+        // `card_types ∋ "Creature"`. Illegal at resolve → silent
+        // fizzle (Python's `_slot_target_still_legal` at
+        // `damage.py:891-893` returns early).
+        //
+        // **Source-controller resolution (5-zone walk + stack scan).**
+        // Mirrors the `FocusFireEffect` sister shape. The Python
+        // `_amount(state, controller_id)` receives `controller_id`
+        // passed in from the resolve caller; on the Rust side we
+        // derive it from `source_obj_id`.
+        //
+        // **Spacecraft predicate.** Walk the source-controller's bf
+        // ONCE; +Spacecraft check via `printing.subtypes` (NOT
+        // `card_types` — Spacecraft is a SUBTYPE per
+        // `cards/base.py:1056-1057`: `is_spacecraft = "Spacecraft" in
+        // subtypes`). Mirrors Python's `o.printing.is_spacecraft`
+        // predicate at `damage.py:876-879`. Amount = `boosted` if any
+        // controlled Spacecraft present (5 on the printed card), else
+        // `base` (3).
+        //
+        // **Damage application.** Apply via the proven
+        // `obj.damage.saturating_add(amount_i16)` shape. After
+        // applying, dispatch the DEALT_DAMAGE receiver-side event
+        // (Python's `_fire_enchanted_dealt_damage_triggers` call at
+        // the tail of `_apply_damage`, `effects/base.py:303-305`)
+        // so aura-attached "when enchanted creature is dealt damage"
+        // triggers (Cryoshatter, Pain for All) fire byte-equal.
+        Effect::InvasiveManeuversEffect { base, boosted } => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // the established `FocusFireEffect` / `BiosynthicBurst
+            // Effect` sister shape).
+            let mut src_controller: Option<u8> = None;
+            'im_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'im_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Target resolution (the established
+            // `CutPropulsionEffect` / `FocusFireEffect` payload-
+            // target swap pattern; None-payload synthetic-test
+            // fallback to deterministic-first creature in ETB-
+            // timestamp order across BOTH bfs).
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if !printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback: deterministic-first
+                    // creature in ETB-timestamp order across BOTH bfs
+                    // (mirrors `bf_iter_etb_sorted` — Python's
+                    // centralized `state.battlefield` walk = the SoT).
+                    let registry = &state.registry;
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            let printing =
+                                registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some((obj.controller as usize, obj.id))
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            let Some((pidx, target_id)) = target else {
+                return Ok(()); // no eligible target → silent fizzle
+            };
+            // Spacecraft predicate on the source-controller's bf.
+            // Reads `printing.subtypes` (NOT `card_types`) — mirrors
+            // Python's `is_spacecraft = "Spacecraft" in subtypes`
+            // (`cards/base.py:1056-1057`). One bf pass; the closure
+            // short-circuits on the first match.
+            let cidx = controller as usize;
+            let has_spacecraft: bool = state.players[cidx]
+                .battlefield
+                .iter()
+                .any(|obj| {
+                    state
+                        .registry
+                        .lookup(obj.printing_id)
+                        .map(|p| {
+                            p.subtypes
+                                .iter()
+                                .any(|s| s == "Spacecraft")
+                        })
+                        .unwrap_or(false)
+                });
+            let amount: i32 = if has_spacecraft { *boosted } else { *base };
+            let amount_i16 = amount.min(i16::MAX as i32) as i16;
+            // Apply damage marker. Mirrors the proven
+            // `apply_damage_marker` shape (no SBA inline, just the
+            // saturating_add on `obj.damage`; SBA fires post-resolve
+            // at the outer `apply_sbas` boundary).
+            let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[pidx].battlefield,
+            );
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.damage =
+                        obj.damage.saturating_add(amount_i16);
+                    break;
+                }
+            }
+            // DEALT_DAMAGE receiver-side dispatch (mirrors Python's
+            // `_fire_enchanted_dealt_damage_triggers` at
+            // `effects/base.py:303-305`). Fires after the damage
+            // marker is applied — auras like Cryoshatter / Pain for
+            // All attached to the receiver see the post-damage state,
+            // byte-equal with Python.
+            dispatch_event(
+                state,
+                crate::cards::Event::DealtDamage,
+                target_id,
+            )?;
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

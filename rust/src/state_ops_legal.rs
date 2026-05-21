@@ -998,6 +998,32 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // Invasive Maneuvers: ANY-creature scan (NOT controller-
+            // restricted). Mirrors Python
+            // `DealDamageToTargetCreatureSpacecraftBoosted`'s
+            // `IsCreature()` slot filter (`damage.py:867-873`) — the
+            // established `CutPropulsionEffect` ANY-creature shape.
+            // The Spacecraft-boosted amount is intrinsic to the
+            // resolve arm (read off the source-controller's bf), NOT
+            // a legality predicate.
+            Effect::InvasiveManeuversEffect { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Diplomatic Relations: the only 2-slot grammar
             // (`target_slot_kinds() == ("my_creature", "creature")`,
             // `min_t == 2`). Python `_targets_are_satisfiable`

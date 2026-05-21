@@ -262,6 +262,21 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     # / Perigee Beckoner overrides above (same-named class does not
     # exist; bridge round-trips through a real pool-walked class).
     "GrantTriggeredAbilityUEOTRequiem": "GrantTriggeredAbilityUEOT",
+    # --- Invasive Maneuvers slice (Effect-uncovered Tier-A; ~10,981
+    # 17lands decks). Rust ``Effect::InvasiveManeuversEffect { base,
+    # boosted }`` (cards.rs two-int variant) → Python class
+    # ``DealDamageToTargetCreatureSpacecraftBoosted``
+    # (``effects/generic/damage.py:850``). The variant name is the
+    # card-name-tagged variant (mirrors the Cut Propulsion /
+    # Diplomatic Relations / Biosynthic Burst card-name-tagged
+    # convention); the Python side uses the descriptive
+    # ``DealDamageToTargetCreatureSpacecraftBoosted`` class spelling.
+    # The bridge arm in ``cross_engine.py``
+    # ``invasive_maneuvers_effect`` constructs the Python class with
+    # ``base=base, boosted=boosted``. Same Famished-Worldsire-precedent
+    # override class (same-named class absent → map to the real
+    # pool-walked class; NOT a RUST_AHEAD_OF_POOL allowlist).
+    "InvasiveManeuversEffect": "DealDamageToTargetCreatureSpacecraftBoosted",
 }
 
 # Rust variants that have NO direct Python counterpart in the current
