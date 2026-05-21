@@ -732,8 +732,97 @@ A full Rust-agent slice — depends on Phase 1's attach substrate.
 
 ### Phase 3 (Rust + bridge) — the residue Aura-shape Effects
 
-**PHASE 3 PAIN FOR ALL ARM LANDED (2026-05-20, Pain for All closure
-slice).** Pain for All's Phase 3 Effect-level scaffolding shipped:
+**PHASE 3 / S4 PAIN FOR ALL FULL CLOSURE LANDED (2026-05-20,
+triggered Aura admit substrate).** Pain for All now flows end-to-end
+through the bench loader and round-trips byte-equal cross-engine.
+The substrate's three pieces all shipped before this slice:
+
+* Rust ``Effect::PainForAllETBEffect`` +
+  ``Effect::PainForAllDamageEchoEffect`` +
+  ``Predicate::IsHost { subject }`` parity landed in the prior
+  Pain for All closure slice (Effect-level scaffolding;
+  honest-stop fizzle).
+* Rust ``move_aura_post_resolve`` stamps ``attached_to =
+  Some(host_id)`` on Aura resolution (Phase 2 S2, ``643163c6``).
+* Python's parser materializes Pain for All as
+  ``is_aura=True`` with two triggered abilities
+  (``ENTERS+IsSelf+PainForAllETBEffect`` and
+  ``DEALT_DAMAGE+IsHost+PainForAllDamageEchoEffect``).
+
+This slice closed the long-standing **bench-loader admit gap**.
+New helpers in ``src/mtg_bot/parity/trajectory.py``:
+
+* :func:`_aura_triggers_are_phase3_safe` — the §2 positive-allowlist
+  trigger gate. Recognizes three shapes (the Phase-2-S2-extension
+  Tractor-Beam ``ENTERS+IsSelf+TapEnchantedPermanent``, the
+  Phase 3 Pain for All ETB, and the Phase 3 Pain for All damage
+  echo). Strict superset of the Phase-2-S2-extension gate; the
+  Phase-3 gate is the single canonical chokepoint going forward.
+* :func:`_python_ta_to_safe_dict_aura_phase3` — the matching
+  trigger-dict emitter. Maps each safe shape to the canonical Rust
+  trigger-dict spelling consumed by ``parse_triggered_ability``
+  (the ``pain_for_all_etb`` / ``pain_for_all_damage_echo`` /
+  ``is_host`` / ``tap_enchanted_permanent`` /
+  ``source_is_self`` registry-dict keys). Raises ``ValueError``
+  for any effect outside the safe set so a future widen of the
+  gate without a matching emitter widen surfaces immediately
+  rather than silently mistranslating.
+* :func:`_printing_is_bridge_simple_aura` predicate widened — the
+  ``if printing.triggered_abilities: return False`` decline
+  replaced with ``if not _aura_triggers_are_phase3_safe(...):
+  return False``. Auras whose entire trigger surface passes the
+  gate now admit.
+* The aura branch of :func:`_printing_to_card_def` switched from
+  ``_python_ta_to_safe_dict_aura_extension`` to
+  ``_python_ta_to_safe_dict_aura_phase3`` — same Phase-2-S2-
+  extension emit shape for the Tractor-Beam Aura-ETB-tap shape
+  (bit-equal for that admit path), strict-superset coverage for
+  the Phase 3 Pain for All shapes.
+
+**Live-EoE admit delta: +1 card / +4,367 17lands decks** (Pain
+for All — the first triggered-Aura admitted end-to-end). Every
+other S4 carrier stays declined:
+
+* **Chorale of the Void** — ATTACKS + Reanimate +
+  BEGINNING_OF_END_STEP + ``SacrificeSelfUnlessVoidActive``
+  (each effect outside the Phase-3 safe set).
+* **Cracked Skull** — ENTERS +
+  ``TargetOpponentLookHandMayDiscard`` + DEALT_DAMAGE +
+  ``DestroyEnchantedPermanent`` (each effect outside the safe
+  set).
+* **Sporogenic Infection** — ENTERS +
+  ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` +
+  DEALT_DAMAGE + ``DestroyEnchantedPermanent`` (each effect
+  outside the safe set).
+* **Meltstrider's Resolve** — ENTERS +
+  ``EnchantedCreatureFightsTargetEffect`` (the residue trigger
+  needs its own follow-up Rust slice).
+* **Tractor Beam** — declined separately on the lone-control +
+  prevents-untap rider (Phase-2-S2-extension honest-stop;
+  unchanged by Phase 3).
+* **Moonlit Meditation** — S3 replacement-rider decline (Phase 4
+  widens).
+
+**Pin set:** ``tests/test_aura_substrate_phase_3_s4.py`` (32
+tests, including the cross-engine byte-equal CardDef → Rust
+registry round-trip + the real-EoE-deck-shape setup probe + the
+six negative pins for the remaining declined Auras + the Pain
+for All ETB / damage echo direct effect resolve probes mirroring
+``test_coverage_catchup``'s shape).
+
+**Bench result:** ``scripts/bench_trajectory_parity.py
+--archetypes 0-9 --seeds 0,1,2,3,4 --driver rust_shadow
+--shadow-max-steps 20000`` → **50/50 PASS, 0 divergences**.
+
+**BLOCKED-genuinely_missing Aura tier delta:** the
+Pain-for-All-closure prior slice already flipped Pain for All's
+``residue_worklist.json`` status from ``blocked_genuinely_missing``
+to ``closed``; this slice makes the closure full (loader admit →
+byte-equal cross-engine end-to-end, not just honest-stop fizzle).
+
+#### Prior Effect-level scaffolding slice (kept for context)
+
+Pain for All's Phase 3 Effect-level scaffolding shipped:
 Rust `Effect::PainForAllETBEffect` + `Effect::PainForAllDamageEcho
 Effect` (unit variants), `Predicate::IsHost { subject: Option<String> }`
 (new — the canonical Aura/Equipment relational trigger predicate),
