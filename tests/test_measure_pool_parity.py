@@ -469,9 +469,12 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # Lightstall worklist entries to `closed`. `missing` is now empty —
     # `BLOCKED — genuinely_missing` tier is at 0.
     assert missing == set()
+    # Tractor Beam closure (merge d4ceecc5, 2026-05-20): Tractor Beam
+    # blocked_non_effect -> closed (Effect::TapEnchantedPermanent + the
+    # aura_prevents_host_untap rider landed, dropping the
+    # blocked_non_effect tier from 2 to 1).
     assert non_effect == {
         "Dauntless Scrapbot",
-        "Tractor Beam",
     }
     # Durable structural invariants (hold every round regardless of
     # which card is in which bucket):
