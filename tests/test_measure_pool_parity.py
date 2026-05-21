@@ -454,11 +454,21 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # + bridge + honest-stop resolve arms; full-card byte-equality
     # stays gated on the Aura attach substrate's Phase 1, but the
     # Effect-level closure flips the residue tier).
-    # `missing` is now 1 distinct genuine new-Rust-Effect ask
-    # (Lightstall Inquisitor).
-    assert missing == {
-        "Lightstall Inquisitor",
-    }
+    # Lightstall-residue-reconciliation fold (2026-05-20): Lightstall
+    # Inquisitor `CastFromExileWithCostHike` genuinely_missing -> closed
+    # — the cast-from-exile-with-cost-hike substrate landed end-to-end
+    # in merge `9c41ad08` (GameObject.cast_from_exile_with_lightstall_
+    # surcharge field + legal-actions exile-as-cast-source surface +
+    # cast-pay +{1} surcharge + tapped-land-entry rider), but the
+    # residue worklist + POOL_PARITY were not updated in the same merge
+    # and triggered the heuristic-vs-worklist WARNING. The reconciliation
+    # lane re-verified the substrate via a real-EoE byte-equal probe
+    # (the real Lightstall printing parses to EachOpponentExilesCard
+    # FromHandWithCastPermission → Rust stamps the flag → cast pays the
+    # surcharge → bear lands on bf with flag cleared) and flipped both
+    # Lightstall worklist entries to `closed`. `missing` is now empty —
+    # `BLOCKED — genuinely_missing` tier is at 0.
+    assert missing == set()
     assert non_effect == {
         "Dauntless Scrapbot",
         "Tractor Beam",
