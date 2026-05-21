@@ -2062,19 +2062,34 @@ second:
   No `blocked_non_effect` card is double-counted into the
   subsystem-gated breakout; the named subsystems are consistent with
   the residue worklist's `non_effect_blocker` vocabulary.
-- **Honest unclassified bucket.** **2 cards** could not be confidently
-  attributed to any gate and are surfaced as `unclassified` rather
-  than force-guessed:
-  - **Deafening Silence** — zero-Effect Enchantment
-    (`restricts_noncreature_spells_to_one_per_turn`); a global
-    rule-static permanent the loader has no admit path for and no
-    field in the taxonomy's gate list captures.
-  - **Leyline of Mutation** — zero-Effect Enchantment (a static
-    type-changing leyline); same shape.
-  Both are rule-static enchantments with no triggered/activated/spell
-  Effect and no cost-mechanic/subsystem field — a `static-rule-text`
-  substrate the taxonomy does not yet model. Flagged honestly for a
-  hand re-walk rather than mislabelled.
+- **Honest unclassified bucket (2026-05-21
+  unclassified-residual lane).** The hand re-walk this row asked for
+  has happened. The taxonomy gained a new
+  `static_rule_text` gate (printing-level bool fields the Python
+  parser already understands but Rust does not mirror) and
+  Deafening Silence moved there; Leyline of Mutation alone remains
+  in `unclassified`.
+  - **Deafening Silence** — `static_rule_text`: the printing carries
+    `restricts_noncreature_spells_to_one_per_turn=True` (a
+    parser-recognised bool slot at `src/mtg_bot/cards/base.py:843`);
+    Python fully models the mechanic
+    (`Player.noncreature_spells_cast_this_turn` counter +
+    `legal.py:880` post-filter + cleanup-step reset); Rust does
+    not mirror (`rust/src/state.rs:972` comment is explicit). The
+    `static_rule_text` row is the named substrate; see
+    `docs/SEARCH_LIMITATIONS.md` "Deafening Silence — Rust does not
+    mirror the noncreature-cast restriction" for the divergence pin
+    and the contained-medium fix scope.
+  - **Leyline of Mutation** — TRUE `unclassified`: the parser
+    surfaces NEITHER of its two oracle mechanics (opening-hand
+    leyline + 5-color alternative-cost — verified by the
+    `OracleParserCardSource().get_printings()` dump in the
+    unclassified-residual lane: every non-default attribute is a
+    bookkeep default). 0 17lands appearances. Closure requires two
+    new sprawling substrates (leyline + alt-cost); see
+    `docs/SEARCH_LIMITATIONS.md` "Leyline of Mutation — parser does
+    not surface leyline or alt-cost" for the divergence pin and the
+    sprawling fix scope.
 
 ## Regenerating
 

@@ -8519,6 +8519,179 @@ broader Phase-4 follow-ups are untouched.
 
 ---
 
+## Deafening Silence — Rust does not mirror the noncreature-cast restriction (HONEST-STOP, 2026-05-21)
+
+**Location:**
+
+* Python parser: `src/mtg_bot/cards/parser/enchantment_builder.py:867`
+  (sets the bool on the printing).
+* Python `CardPrinting` slot:
+  `src/mtg_bot/cards/base.py:843`
+  (``restricts_noncreature_spells_to_one_per_turn: bool = False``).
+* Python `Player` counter:
+  `src/mtg_bot/game.py:2401`
+  (``noncreature_spells_cast_this_turn: int = 0``).
+* Python increment: `src/mtg_bot/actions.py:1782`
+  (incremented in `_cast_spell` for every noncreature cast).
+* Python cleanup reset: `src/mtg_bot/turn.py:1106`.
+* Python legal-action gate: `src/mtg_bot/legal.py:880-893`
+  (post-filter — drops noncreature `CastSpell` actions when any
+  printing on the battlefield carries the bool and the controller's
+  counter is ≥1).
+* Rust acknowledgement (not implementation):
+  `rust/src/state.rs:972`
+  (explicit comment: "Rust does NOT mirror that yet").
+* Bridge: no carrier for the printing bool today
+  (`src/mtg_bot/parity/trajectory.py`'s `_printing_to_card_def` /
+  `_card_def_to_python_printing` / Rust `register_printing` chain
+  carries no field for it).
+* Loader: none of the 10 admit disjuncts in
+  `_filter_deck_to_bridge_supported`
+  (`src/mtg_bot/parity/trajectory.py:6970-7086`) recognise the
+  printing shape, so Deafening Silence never enters a cross-engine
+  parity run.
+
+**What we do today:** Python alone models "Each player can't cast more
+than one noncreature spell each turn." Rust has no mirroring counter,
+no per-cast increment, no cleanup-step reset, and no cast-time gate;
+the printing's parser-set bool round-trips ONLY within Python and is
+not in the bridge codec. Production cross-engine parity runs do not
+admit this printing (no loader disjunct matches), so the divergence
+never surfaces in a bench probe today — but if a future widen ever
+admitted the printing without Rust closing first, it would surface as
+a `legal_decisions` divergence the moment a controller's second
+noncreature cast appears in the cast set.
+
+**Why it's OK today:** The card has 12 17lands appearances (the only
+EoE printing carrying the bool), and the loader doesn't admit it, so
+the parity surface is empty. The Python-engine side is fully wired
+and pinned by `tests/test_deafening_silence.py` (the engine half is
+correct under CR for the in-Python game-loop path that the bot's
+self-play uses).
+
+**Failure mode:** if a future lane widens the loader to admit this
+printing without first closing the Rust side, ``legal_decisions``
+would diverge cross-engine the moment any controller has
+``noncreature_spells_cast_this_turn ≥ 1`` with this printing on the
+battlefield (Python drops the second noncreature `CastSpell`; Rust
+still emits it).
+
+**Fix scope when prioritised (contained-medium):**
+
+* Add `restricts_noncreature_spells_to_one_per_turn: bool` to Rust
+  `CardPrinting` and the bridge codec.
+* Add `noncreature_spells_cast_this_turn: i32` to Rust's `Player`,
+  mirror Python's `actions.py:1782` per-cast increment (only on
+  noncreature spells) in Rust's `cast_spell_noncreature` /
+  `cast_spell_modal` / spell-stack-completion primitives that fire
+  IS_CAST, mirror Python's cleanup-step reset
+  (`turn.py:1106`).
+* Add a Rust legal-action gate in `state_ops_legal.rs`'s emitter at
+  the priority-spell-cast site, mirroring Python's `legal.py:880`
+  post-filter — drop noncreature `CastSpell` legal decisions when
+  any battlefield printing carries the bool and the controller's
+  counter is ≥1.
+* Add the bridge round-trip + a new
+  `_printing_is_bridge_simple_cast_restriction_enchantment` admit
+  disjunct.
+* Add a real-EoE byte-equal probe driving the second-noncreature-
+  drop in `tests/test_parity_smoke.py`.
+
+**Impact estimate:** ~12 17lands decks of single-gated leverage
+(below the §4 sequencing thresholds). Engine strength delta is
+negligible — Deafening Silence is rare in EoE drafts and the
+Python side already plays it correctly.
+
+**Pinned by:** the metric attribution helper at
+`scripts/scout_r58_subsystem_attribution.py:_gates_for_loader_card`
+attributes Deafening Silence to the new `static_rule_text` row
+(2026-05-21 unclassified-residual lane); see
+`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §5 for the substrate
+cost summary.
+
+---
+
+## Leyline of Mutation — parser does not surface leyline or alt-cost (HONEST-STOP, 2026-05-21)
+
+**Location:**
+
+* Card data: `data/duskmourn.json` (oracle id 26193).
+* Oracle text: "If this card is in your opening hand, you may begin
+  the game with it on the battlefield.\nYou may pay
+  ``{W}{U}{B}{R}{G}`` rather than pay the mana cost for spells you
+  cast."
+* Python parser: no leyline / opening-hand-into-battlefield field on
+  `CardPrinting`; no alternative-cost field; the printing parses to a
+  vanilla Enchantment with no triggered/static/activated/spell-Effect
+  surface (verified 2026-05-21 unclassified-residual hand re-walk —
+  every non-default attribute on the parsed `CardPrinting` is bookkeep
+  defaults, no recognised mechanic carrier).
+* Rust: no support for either mechanic (no `leyline_in_opening_hand`,
+  no `alternative_costs` slot).
+* Bridge: no carrier for either mechanic.
+* Loader: none of the 10 admit disjuncts in
+  `_filter_deck_to_bridge_supported`
+  (`src/mtg_bot/parity/trajectory.py:6970-7086`) recognise the
+  printing shape; the card is not bench-admitted.
+
+**What we do today:** The parser silently drops both mechanics. The
+printing materialises as a 4-CMC green Enchantment with NO effect on
+either engine, so:
+
+* "Leyline" (open-with-it-on-the-battlefield-from-the-opening-hand)
+  never fires — both engines start with the card in hand at game
+  start, identical to a vanilla 4-CMC Enchantment.
+* "Alternative cost" ({WUBRG}-for-any-spell) is unparseable — the
+  cast-cost system on both engines only sees the printed mana cost.
+
+Both effects are SYMMETRICALLY DROPPED across Python and Rust at
+parse time (neither engine recognises the oracle text). Since 0
+17lands decks contain this card, the parity surface is empty in
+practice.
+
+**Why it's OK today:** Zero 17lands appearances (verified
+2026-05-21 — the gzip deck pool is searched explicitly), so no
+cross-engine run touches the printing. The symmetric parse-time
+drop keeps the bridge bit-equal on the vanilla shape; the in-Python
+self-play game-loop would also play a vanilla 4-CMC Enchantment if
+it ever drew the card. Adding either substrate would close zero
+in-pool leverage today.
+
+**Failure mode:** if the 17lands deck pool ever refreshes to admit
+this printing OR a future lane adds it to a synthetic decklist for
+mechanism testing, the bot's play would diverge from CR (both
+engines would miss the leyline open + the alternative cost) — but
+the cross-engine parity assertion would still hold (both engines
+diverge from CR symmetrically).
+
+**Fix scope when prioritised (each sprawling):**
+
+1. **Leyline mechanic** (opening-hand-into-battlefield): a new
+   ``CardPrinting.leyline=True`` field + parser arm + a new mulligan-
+   phase choice ``LeylineOpen { card_id }`` + Python engine handler +
+   Rust mirror + bridge round-trip + the search-side encoding for the
+   new decision shape.
+2. **Alternative cost** ({WUBRG} alt-cost): the full
+   ``alternative_costs`` / ``external_cost_reductions`` family the
+   `COST_REDUCTION_SUBSTRATE_PLAN.md` declines today — substrate-
+   level work, multi-round. Each new alternative-cost shape stacks
+   here.
+
+**Impact estimate:** 0 17lands decks of leverage. Engine-strength
+delta is irrelevant (the card cannot appear). The substrate cost is
+multi-round per mechanic and the EoE pool gains nothing from closing
+either alone.
+
+**Pinned by:** the metric attribution helper at
+`scripts/scout_r58_subsystem_attribution.py:_gates_for_loader_card`
+falls through to the `unclassified` sentinel for this printing
+(2026-05-21 unclassified-residual lane: the hand re-walk confirmed
+that no taxonomy gate fires honestly here); see
+`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §5 for the substrate
+cost summary.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

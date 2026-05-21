@@ -116,7 +116,17 @@ audit covered:
 **Conclusion: no stale claims found in the inventory body or the
 classifier.** The post-loader_admits-sweep+tannuk-baloth-probes state
 is honest and tight — every BLOCKED card is genuinely blocked, every
-classifier decision is internally consistent. The only updates the
+classifier decision is internally consistent. (Subsequent 2026-05-21
+unclassified-residual lane: the audit DID surface a doc-level
+attribution gap — the scout's `_gates_for_loader_card` enumeration
+only consulted structured `static_abilities` objects, not
+printing-level bool flags like
+``restricts_noncreature_spells_to_one_per_turn``, so Deafening
+Silence was attributed `unclassified` rather than the more honest
+`static_rule_text`. The unclassified-residual lane added the new
+gate row and moved Deafening Silence; Leyline of Mutation's
+`unclassified` attribution is confirmed-honest by the same hand
+re-walk.) The only updates the
 audit produced are doc-cosmetic refreshes: the §0 before→after
 table now carries the post-probe-batches-HHHH-JJJJ column (PROBED
 252 → 259), and the §3(2) Aura Phase 4 S3 row + §7 cross-ref are
@@ -199,6 +209,8 @@ The tannuk-frenzied-baloth-probes lane delta is strict **+2 PROBED / −2 COVERE
 
 The **post-probe-batches-HHHH-JJJJ** delta is strict **+7 PROBED / −7 COVERED** (probe batches HHHH `25d89e4c`, IIII `07718a2f`, JJJJ `a31b666c` landed `_parity` delegators that promoted covered cards to PROBED): Lightstall Inquisitor, Seriema, Optimistic Scavenger, Command Bridge (probe batch IIII), three Room cards (probe batch JJJJ via the triggered-ability surface delegators). No engine changes, no subsystem-gated movement. **The 128 subsystem-gated tail has been stable since the loader_admits sweep — this audit lane confirmed no further measurement-attribution gaps in the BLOCKED tier.**
 
+The **post-unclassified-residual-attribution** lane delta (2026-05-21, this lane) is strict **+0 PROBED / +0 COVERED / +0/−0 BLOCKED-subsystem-gated** — the 122 subsystem-gated count is preserved. The lane is a SCOUT-side measurement-attribution close on the Unclassified residual: Deafening Silence (the only EoE printing that carries the parser-recognised ``restricts_noncreature_spells_to_one_per_turn`` bool) moved from the ``unclassified`` gate to a new named row ``static_rule_text`` (printing-level bool fields the Python parser already models but Rust does not mirror). Leyline of Mutation remains in ``unclassified`` (its parser TRULY does not surface either of its two oracle mechanics — opening-hand leyline + 5-color alternative-cost). The hand re-walk this row asked for is complete; both cards now carry a named substrate-cost characterisation in §5 and a divergence pin in ``docs/SEARCH_LIMITATIONS.md``. No engine changes, no Rust changes, no bridge changes — same Lane H / Lane Q precedent (the metric helper and the actual engine never disagreed; only the scout's taxonomy gained a row).
+
 Subsystem-gated dropped by 26 total; **both itemized BLOCKED tiers
 reached 0**. The 128 tail is now the *only* non-empty BLOCKED tier.
 Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
@@ -227,8 +239,12 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
   Steadfast Second + Frenzied Baloth flipped BLOCKED → COVERED
   pending real-EoE cross-engine byte-equal helpers — see lever (1)
   below). The 75 multi-gated total is unchanged.
-* **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
-  those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
+* **16 taxonomy gates** in the scout's `_gates_for_loader_card` (post
+  2026-05-21 unclassified-residual attribution close — the new
+  `Static rule-text (printing-level bool field, no Rust mirror)` row
+  catches Deafening Silence's ``restricts_noncreature_spells_to_one_
+  per_turn``; the existing 15 gates are unchanged). Of those,
+  **14 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
   cards but **0 single-gated**; `Carrier activated abilities` and
   `Non-safe triggered ability` bind 30 / 43 cards but **0 single-gated**.
@@ -259,7 +275,8 @@ to reflect what substrate already exists post-session.
 | Planeswalker loyalty | 1 | 0 | 0 | sprawling | large — 0 single-gated | DEFERRED (unchanged) |
 | Effect-uncovered (diffuse tail) | 94 | 24 | 103,349 | diffuse | per-card | per-card lane continues |
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
-| Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
+| Static rule-text (printing-level bool) | 1 | 1 | 12 | medium | one-card slice (Rust bool + counter + filter mirror + bridge + new admit disjunct) | OPEN — Deafening Silence (2026-05-21 attribution split out of Unclassified; see §5 for rationale) |
+| Unclassified (honest residual) | 1 | 1 | 0 | diffuse | per-card hand re-walk | OPEN — Leyline of Mutation (parser does not recognise either of its mechanics; see §5) |
 
 **Reconciliation:** 128 subsystem-gated = 53 single-gated + 75
 multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
@@ -570,9 +587,45 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
   shape frontier; co-blocker row, not a lever.
 * **Rooms / doors, Planeswalker loyalty, Kicker, BECOMES_TAPPED.** All
   have 0 single-gated members; closing the gate alone flips zero cards.
-* **Unclassified (2 cards — Deafening Silence, Leyline of Mutation).**
-  Owe a hand re-walk per `SUBSYSTEM_ROADMAP.md`; flagged for the next
-  residue cadence, not a sequencing lever.
+* **Static rule-text — Deafening Silence (1 card, 12 decks).** **2026-
+  05-21 unclassified-residual hand re-walk** characterised this as a
+  contained-medium named substrate, NOT a generic unknown: the
+  printing carries
+  ``restricts_noncreature_spells_to_one_per_turn=True`` (a recognised
+  parser bool slot at ``src/mtg_bot/cards/base.py:843``), Python fully
+  models the mechanic (per-player ``noncreature_spells_cast_this_turn``
+  counter incremented in ``actions.py:1782``, reset at cleanup in
+  ``turn.py:1106``, post-filter in ``legal.py:880-893``), but Rust
+  carries NO mirror (the comment at ``rust/src/state.rs:972`` is
+  explicit), the bridge has no round-trip for the printing bool, and
+  no loader admit disjunct admits the printing shape. Closure scope is
+  contained-medium: one new Rust ``CardPrinting`` bool slot + one new
+  ``Player`` ``noncreature_spells_cast_this_turn: i32`` counter +
+  per-cast increment in Rust's noncreature-cast primitives +
+  cleanup-step reset + cast-time gate in Rust's legal-decisions
+  emitter + bidirectional bridge round-trip of the bool + one new
+  ``_printing_is_bridge_simple_cast_restriction_enchantment`` admit
+  disjunct + one real-EoE byte-equal probe. Deferred at 12 decks of
+  leverage — substantially below the §4 sequencing thresholds. The
+  hand re-walk renames the gate ``unclassified → static_rule_text``;
+  see `docs/SEARCH_LIMITATIONS.md` "Deafening Silence — Rust does not
+  mirror the noncreature-cast restriction" for the divergence pin.
+* **Unclassified — Leyline of Mutation (1 card, 0 decks).** **2026-
+  05-21 unclassified-residual hand re-walk** confirmed the genuine
+  residual: the printing has TWO mechanics oracle-side ("If this card
+  is in your opening hand, you may begin the game with it on the
+  battlefield." + "You may pay ``{W}{U}{B}{R}{G}`` rather than pay the
+  mana cost for spells you cast.") and the parser surfaces NEITHER —
+  the printing has no leyline / opening-hand-into-battlefield field,
+  no alternative-cost field, no triggered/static/activated/spell
+  Effects, no covered Rust counterpart, no bridge carrier. Closure
+  requires TWO new substrates (sprawling each): the opening-hand
+  leyline mechanic AND the alternative-cost system. Leverage is
+  0 decks (the card has 0 17lands appearances). Honest-stopped
+  here — the named substrates would each take multi-round campaigns
+  with zero in-pool leverage payoff today. See
+  `docs/SEARCH_LIMITATIONS.md` "Leyline of Mutation — leyline + alt-
+  cost mechanics unparseable" for the divergence pin.
 
 ## 6. New sub-gates revealed this session
 

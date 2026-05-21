@@ -900,8 +900,12 @@ def test_single_gate_counts_sum_to_single_gated_total(scout, attr):
 def test_known_card_subsystem_attribution(scout, attr):
     """A card maps to the expected gating subsystem. Non-basic lands
     are single-gated on the non-basic-land substrate; a warp creature
-    trips the warp gate; the honest unclassified residual is the two
-    documented rule-static enchantments."""
+    trips the warp gate; Deafening Silence is single-gated on the
+    static-rule-text bool-field row (2026-05-21 measurement-
+    attribution close — moved from Unclassified to ``SUB_STATIC_
+    RULE_TEXT`` so the inventory names the substrate honestly); the
+    only remaining ``unclassified`` residual is Leyline of Mutation
+    (the parser does not recognise either of its mechanics today)."""
     cards = attr["cards"]
     # Abandoned Campground: zero-Effect non-basic land — single-gated
     # on the non-basic-land substrate. (Previously Breeding Pool, which
@@ -928,10 +932,23 @@ def test_known_card_subsystem_attribution(scout, attr):
     # lever to close it; see SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
     # §3 lever (1)).
     assert scout.SUB_WARP in cards["Starfield Vocalist"]["gates"]
-    # The honest unclassified bucket is exactly the two documented
-    # rule-static enchantments (no force-guess).
+    # Deafening Silence: 2026-05-21 measurement-attribution close moved
+    # it from Unclassified to ``SUB_STATIC_RULE_TEXT`` — the printing
+    # carries ``restricts_noncreature_spells_to_one_per_turn=True``, a
+    # printing-level bool flag the Python parser + engine fully model
+    # but Rust does not mirror. The new gate row names the substrate
+    # honestly rather than leaving the card in the residue
+    # ``unclassified`` bucket.
+    ds = cards["Deafening Silence"]
+    assert ds["gates"] == [scout.SUB_STATIC_RULE_TEXT]
+    assert ds["last_mile"] == scout.SUB_STATIC_RULE_TEXT
+    assert ds["multi_gated"] is False
+    # The honest ``unclassified`` bucket is now exactly Leyline of
+    # Mutation — the parser does not recognise either of its
+    # mechanics (opening-hand leyline + 5-color alternative-cost) and
+    # the printing carries no field any taxonomy gate enumerates.
     unclass = set(attr["by_subsystem"].get(scout.SUB_UNCLASSIFIED, []))
-    assert unclass == {"Deafening Silence", "Leyline of Mutation"}
+    assert unclass == {"Leyline of Mutation"}
     for u in unclass:
         assert cards[u]["gates"] == [scout.SUB_UNCLASSIFIED]
 

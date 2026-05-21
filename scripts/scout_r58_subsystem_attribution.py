@@ -92,6 +92,21 @@ SUB_STATIC = "static_abilities_layered"
 SUB_NONSAFE_TRIGGER = "nonsafe_triggered_ability"
 SUB_NONBASIC_LAND = "nonbasic_land_substrate"
 SUB_EFFECT_UNCOVERED = "effect_uncovered"
+# Static rule-text substrate — printing-level bool/flag fields encoding
+# a permanent's static-rule-text mechanic (e.g. Deafening Silence's
+# ``restricts_noncreature_spells_to_one_per_turn``). The Python parser
+# already recognises these (it has a dedicated CardPrinting bool slot
+# plus full engine support — counter, legal-filter, cleanup-reset) but
+# Rust does not mirror the bool, no bridge round-trip carries it, and
+# no loader admit disjunct recognises the printing shape. Distinct from
+# ``static_abilities_layered`` (structured ``StaticAbility`` objects):
+# this row captures bool/flag-style printing fields the
+# ``_gates_for_loader_card`` enumeration did not previously surface.
+# Added 2026-05-21 as a measurement-attribution close for the
+# Unclassified residual — Deafening Silence moved here from the
+# Unclassified bucket on the same shape Lane H / Lane Q used (no
+# engine change, scout-side attribution fix only).
+SUB_STATIC_RULE_TEXT = "static_rule_text"
 SUB_UNCLASSIFIED = "unclassified"
 
 _SUB_LABEL = {
@@ -111,6 +126,7 @@ _SUB_LABEL = {
     SUB_NONSAFE_TRIGGER: "Non-safe triggered ability (unbridged event/shape)",
     SUB_NONBASIC_LAND: "Non-basic land substrate",
     SUB_EFFECT_UNCOVERED: "Effect-uncovered (no covered Rust counterpart)",
+    SUB_STATIC_RULE_TEXT: "Static rule-text (printing-level bool field, no Rust mirror)",
     SUB_UNCLASSIFIED: "Unclassified (honest residual — needs hand re-walk)",
 }
 
@@ -137,6 +153,7 @@ _SUB_TRACTABILITY = {
     SUB_STATIC: TRACT_SPRAWLING,
     SUB_NONSAFE_TRIGGER: TRACT_DIFFUSE,
     SUB_EFFECT_UNCOVERED: TRACT_DIFFUSE,
+    SUB_STATIC_RULE_TEXT: TRACT_MEDIUM,
     SUB_UNCLASSIFIED: TRACT_DIFFUSE,
 }
 
@@ -219,6 +236,18 @@ _TRACT_NOTE = {
         "long tail (the residue worklist itemises only the load-bearing "
         "few), NOT a single closure."
     ),
+    SUB_STATIC_RULE_TEXT: (
+        "medium — printing-level bool/flag fields the parser already "
+        "understands but Rust does not mirror (e.g. Deafening Silence's "
+        "``restricts_noncreature_spells_to_one_per_turn``). Closure for "
+        "each printing is a contained slice: add the bool to Rust's "
+        "``CardPrinting`` + any required per-player counter + cleanup "
+        "reset + legal/cast-filter site mirror + bridge round-trip + a "
+        "new ``_printing_is_bridge_simple_*`` admit disjunct. Distinct "
+        "from ``static_abilities_layered`` — those carry structured "
+        "``StaticAbility`` objects that the layered-abilities substrate "
+        "addresses."
+    ),
     SUB_UNCLASSIFIED: (
         "honest residual — no taxonomy gate fired; needs a hand "
         "re-walk before it can be sequenced."
@@ -263,6 +292,17 @@ def _gates_for_loader_card(printing) -> list[str]:
         gates.append(SUB_ACTIVATED)
     if printing.static_abilities:
         gates.append(SUB_STATIC)
+    # Static rule-text bool fields — printing-level booleans encoding a
+    # permanent's static-rule-text mechanic that the parser surfaces as
+    # a flag (NOT a structured ``StaticAbility`` object, so the
+    # ``printing.static_abilities`` check above misses it). Today only
+    # ``restricts_noncreature_spells_to_one_per_turn`` (Deafening
+    # Silence) populates this row; future bool-flag rule-text mechanics
+    # extend the OR-chain rather than re-defaulting to ``unclassified``.
+    if getattr(
+        printing, "restricts_noncreature_spells_to_one_per_turn", False
+    ):
+        gates.append(SUB_STATIC_RULE_TEXT)
     if printing.is_aura:
         gates.append(SUB_AURA)
     if printing.triggered_abilities:
@@ -388,6 +428,7 @@ def subsystem_attribution() -> dict:
         SUB_STATIC,
         SUB_NONSAFE_TRIGGER,
         SUB_EFFECT_UNCOVERED,
+        SUB_STATIC_RULE_TEXT,
         SUB_UNCLASSIFIED,
     ]
     order = [s for s in declared if s in by_subsystem]
