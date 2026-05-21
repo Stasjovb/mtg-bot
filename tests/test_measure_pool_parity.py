@@ -472,10 +472,19 @@ def test_residue_blocked_cards_split_and_normalised(mod):
     # Tractor Beam closure (merge d4ceecc5, 2026-05-20): Tractor Beam
     # blocked_non_effect -> closed (Effect::TapEnchantedPermanent + the
     # aura_prevents_host_untap rider landed, dropping the
-    # blocked_non_effect tier from 2 to 1).
-    assert non_effect == {
-        "Dauntless Scrapbot",
-    }
+    # blocked_non_effect tier from 2 to 1 -- Dauntless Scrapbot was
+    # still in non_effect at that point).
+    # Dauntless Scrapbot closure fold (2026-05-20, dauntless-scrapbot-
+    # closure slice): Dauntless Scrapbot blocked_non_effect -> closed
+    # (Sequence + ExileEachOpponentsGraveyard + CreateToken[Lander]
+    # substrate end-to-end shipped + Effect-half real-EoE byte-equal
+    # probe; reclassified to BLOCKED-SUBSYSTEM on the production-deck
+    # loader's Sequence-in-safe-trigger admit, matching the Tractor
+    # Beam r80 / Pain for All r80 honest-stop substrate-landing
+    # precedent). This drives the BLOCKED-blocked_non_effect tier to
+    # ZERO — the last carrier (Dauntless Scrapbot) is closed, so
+    # `non_effect` is now the empty set, joining `missing` at 0.
+    assert non_effect == set()
     # Durable structural invariants (hold every round regardless of
     # which card is in which bucket):
     # - a card cannot be both genuinely_missing and blocked_non_effect

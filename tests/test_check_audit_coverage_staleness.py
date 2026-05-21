@@ -422,18 +422,24 @@ def test_compute_residue_staleness_closed_entry_regression_guard():
 
 def test_parse_residue_worklist_real_file_is_valid():
     """The committed ``docs/residue_worklist.json`` parses + validates
-    + carries all three round-56 statuses (structural-regression
-    guard, like ``test_live_inventory_parses_real_tree``)."""
+    + carries the round-56 statuses still alive on the real worklist
+    (structural-regression guard, like
+    ``test_live_inventory_parses_real_tree``)."""
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     assert len(entries) >= 15
     statuses = {e["status"] for e in entries}
-    # Round-56 added the third `blocked_non_effect` status; the
-    # committed file now carries all three (Seedship Agrarian is the
-    # blocked_non_effect entry).
+    # Round-56 added the third `blocked_non_effect` status; both the
+    # `genuinely_missing` bucket (Lightstall reconciliation merge
+    # `00d01937` on 2026-05-20) AND the `blocked_non_effect` bucket
+    # (Tractor Beam closure merge `d4ceecc5` + Dauntless Scrapbot
+    # closure slice 2026-05-20 -- last carrier) have been driven to
+    # ZERO across this session. The committed worklist now carries
+    # only `closed` entries -- both of the previously-live status
+    # buckets are legitimately empty post-fold. Future entries added
+    # back into either bucket will re-populate the status set
+    # automatically.
     assert statuses == {
-        "genuinely_missing",
-        "blocked_non_effect",
         "closed",
     }
     # The round-51/53 confirmed-stale trio + the round-54 pair must
@@ -1163,8 +1169,15 @@ def test_real_worklist_has_round56_reclassification():
       triggers bridged). It must NOT be genuinely_missing and is now
       ``closed``.
     - Dauntless Scrapbot: folded to ``blocked_non_effect`` at the
-      round-56 post-N1 resync; still there (its CreateToken-Sequence
-      Lander leaf remains token-registration-gated).
+      round-56 post-N1 resync; PROGRESSED to ``closed`` at the
+      dauntless-scrapbot-closure slice 2026-05-20 (last
+      BLOCKED-blocked_non_effect carrier — Sequence +
+      ExileEachOpponentsGraveyard + CreateToken[Lander] substrate
+      shipped end-to-end + Effect-half real-EoE byte-equal probe;
+      reclassified to BLOCKED-SUBSYSTEM honest-stopped on the
+      production-deck loader's Sequence-in-safe-trigger admit). The
+      BLOCKED-blocked_non_effect tier is now ZERO; the worklist's
+      ``blocked_non_effect`` status set is legitimately empty.
     The guard asserts the generic structural invariant for EVERY bne
     entry rather than brittle per-card/bucket pins — naming exact
     card→bucket is the snapshot-pin anti-pattern this campaign exists
@@ -1172,26 +1185,36 @@ def test_real_worklist_has_round56_reclassification():
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     statuses = {e["status"] for e in entries}
+    # Post dauntless-scrapbot-closure (2026-05-20, this session):
+    # BOTH the ``blocked_non_effect`` bucket (Dauntless Scrapbot was
+    # the last carrier) AND the ``genuinely_missing`` bucket
+    # (Lightstall reconciliation merge `00d01937` closed the last
+    # carrier in that bucket) are legitimately empty. The status SET
+    # collapses to ``{closed}`` — every committed entry is a
+    # historical reclassification. A future entry added back into
+    # either bucket will re-populate the status set automatically.
     assert statuses == {
-        "genuinely_missing",
-        "blocked_non_effect",
         "closed",
     }
     by_card_all = {e["card"]: e for e in entries}
     bne = [
         e for e in entries if e["status"] == "blocked_non_effect"
     ]
-    by_card = {e["card"]: e for e in bne}
     # Seedship progressed past blocked_non_effect to closed (round-59);
     # it must never regress to genuinely_missing.
     assert by_card_all["Seedship Agrarian"]["status"] == "closed"
-    # Dauntless Scrapbot remains blocked_non_effect.
-    assert "Dauntless Scrapbot" in by_card
-    daunt = by_card["Dauntless Scrapbot"]
-    assert "ExileEachOpponentsGraveyard" in daunt["shipped_variants"]
+    # Dauntless Scrapbot progressed past blocked_non_effect to closed
+    # (dauntless-scrapbot-closure slice 2026-05-20); it must never
+    # regress to genuinely_missing.
+    assert by_card_all["Dauntless Scrapbot"]["status"] == "closed"
+    assert "ExileEachOpponentsGraveyard" in (
+        by_card_all["Dauntless Scrapbot"]["shipped_variants"]
+    )
     # Generic structural invariant for EVERY blocked_non_effect entry
     # (robust to future legitimate folds): non-empty shipped_variants
-    # + a blocker string + no meaningless absence stamp.
+    # + a blocker string + no meaningless absence stamp. With the bne
+    # bucket now empty, this loop is vacuously true — a future entry
+    # added back into the bucket must still satisfy the invariant.
     for e in bne:
         assert e["shipped_variants"], e["card"]
         assert e["non_effect_blocker"].strip(), e["card"]
