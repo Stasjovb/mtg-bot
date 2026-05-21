@@ -6,7 +6,6 @@ that drained stages return to subsequent ``/v2/claim`` calls.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from mtg_bot.cli import serve as serve_mod
@@ -24,6 +23,7 @@ def _make_app(tmp_path: Path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        report_executor=None,
     )
 
 
@@ -101,20 +101,19 @@ def test_close_transitions_to_complete_when_inflight_drains(tmp_path):
     body = res_get.get_json()
     assert body["status"] == "drained"
     assert body["n_games_in_flight"] == 1
-    # In-flight claim reports back.
+    # In-flight claim reports back. Phase 2B: JSON body, returns 202.
     res_rep = client.post(
         "/v2/report_result",
-        data={"meta": json.dumps({
+        json={"meta": {
             "claim_id": claim["claim_id"],
             "outcome": "completed",
             "winner": 0,
             "n_samples": 0,
             "duration_s": 1.0,
             "shard_label": "wA",
-        })},
-        content_type="multipart/form-data",
+        }},
     )
-    assert res_rep.status_code == 200
+    assert res_rep.status_code == 202
     # Now complete.
     res_get = client.get("/v2/stage/iter_009_self_play_v6")
     body = res_get.get_json()
