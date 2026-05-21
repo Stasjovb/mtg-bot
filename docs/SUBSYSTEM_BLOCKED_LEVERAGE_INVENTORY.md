@@ -181,16 +181,30 @@ Phases 1+2+2.5+3 SHIPPED. The 7-card subsystem-gated row's residue:
   half; per-card Effect-uncovered closures + nonsafe-trigger event
   bridges are the remaining halves.
 
-Sibling lane 3 (`feature/aura-phase-4`) is in flight on Phase 4 S3
-(Moonlit Meditation token-replacement).
+Sibling lane 3 (`feature/aura-phase-4`) shipped Phase 4 first
+deliverable at `6fa5ac9c` (Effect::SacrificeSelfUnlessVoidActive
+substrate for Chorale of the Void's end-step trigger).
+**`feature/aura-phase-4-s3` (2026-05-21) ships Phase 4 S3 substrate
+landing for Moonlit Meditation** — Rust CardPrinting
+``aura_replaces_first_tokens_with_copies`` field + per-player
+``created_tokens_this_turn: [bool; 2]`` state slot + turn-cleanup
+reset + bridge round-trip + per-token-arm flag flip. **Loader admit
+stays declined** (the host-as-token swap mechanism in the Rust
+CreateToken arm is the remaining honest-stop — needs a runtime-
+registry append primitive OR a per-object Token-supertype override
+mechanism, neither exists today). Live-EoE admit delta: +0 cards /
++0 decks; substrate-only landing in the slice-19 / Chorale-Effect
+tradition.
 
-* **Why it's still on the list:** the remaining Phase 4 phase is small-
-  medium (token-replacement-effect substrate on top of the already-paid
-  attach substrate), and 633 decks of single-gate leverage is real if
-  small.
-* **Closure scope:** small-medium (Phase 4 S3) + per-card S4 closures
-  for the multi-gated residue (medium each, gated by Effect-uncovered
-  lane progress).
+* **Why it's still on the list:** the remaining Phase 4 S3 close-out
+  is small (the substrate is now paid — the consumer wire-up is the
+  CreateToken-arm Aura-consulting + host-printing-as-token swap +
+  loader admit widen, ~6-10h estimate gated on the supertype-override
+  mechanism), and 633 decks of single-gate leverage is real if small.
+* **Closure scope:** small (Phase 4 S3 consumer wire-up on top of
+  the now-paid substrate) + per-card S4 closures for the
+  multi-gated residue (medium each, gated by Effect-uncovered lane
+  progress).
 
 #### Phase 3.5 closure note — Mechan Shieldmate (round-82, 2026-05-20)
 

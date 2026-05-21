@@ -935,6 +935,49 @@ truth), and the two Phase-4 honest-stop negative pins (Chorale
 1255/1255 ``parity_smoke + cross_engine_*`` green;
 223/223 ``tests/test_rust_*.py`` green.
 
+**Phase 4 S3 (Moonlit Meditation substrate landing, 2026-05-21).**
+The first half of Moonlit's closure is **LANDED**: the Rust
+``CardPrinting.aura_replaces_first_tokens_with_copies`` field +
+parse arm + ``get_printing_aura_replaces_first_tokens_with_copies``
+getter + per-player ``GameState.created_tokens_this_turn: [bool; 2]``
+slot (mirrors Python's
+``players_who_created_tokens_this_turn: set[int]``) + turn-cleanup
+reset (alongside the void flags) + bridge round-trip (``CardDef``
+field, registry-dict emitter, ``_card_def_to_python_printing`` read-
+back, ``read_rust_printing_aura_fields`` projection). Every
+non-zero-count ``Effect::CreateToken`` /
+``CreateTokenEachPlayer`` / ``CreateTokenTapped`` /
+``CreateTokenCopyOfTargetCreatureYouControl`` arm flips the
+controller's slot, and the cleanup-step sweep zeroes both slots —
+the per-player turn state is now byte-equal-trackable cross-engine.
+
+**HONEST-STOP in this slice (substrate-only).** The Rust
+``CreateToken`` arm does NOT yet swap the token's ``printing_id`` to
+the host's printing when the controller's Moonlit-shape Aura is
+attached and the per-player slot is unset. The "Token-supertype add
+on a host printing" is a runtime registry mutation that doesn't
+exist on the Rust side today (tokens use statically-registered
+``printing_id``s; Python's path uses an in-memory
+``_dc.replace(printing, supertypes=...)`` shim). Closing this needs
+either (a) a Rust runtime-registry append primitive that mints a
+fresh printing_id for the host-with-Token-supertype copy at
+replacement time, OR (b) a per-object override mechanism for the
+"Token" supertype check on a GameObject whose printing is borrowed
+from another bf object — neither exists today, both are their own
+substrate slices.
+
+The loader admit predicate (``_printing_is_bridge_simple_aura``)
+STAYS declined at the ``replaces_first_tokens_with_copies`` check.
+**Live-EoE admit delta this slice: +0 cards / +0 decks** —
+substrate-only landing in the slice-19 / Pain-for-All-Effect-
+scaffolding / Chorale-Effect-substrate (``b72ec35e``) tradition.
+
+**Test surface deltas (post-Phase-4-S3 substrate landing).**
+228/228 ``tests/test_aura_substrate*.py`` green (219 prior + 9 new
+Phase-4-S3 pins); 1258/1258 ``parity_smoke + cross_engine_*`` green
+(net +3 cross-engine ETB-trigger admit tests vs the Phase 4 first-
+deliverable baseline); 223/223 ``tests/test_rust_*.py`` green.
+
 #### Remaining Phase 4 follow-ups
 
 * **Chorale of the Void full admit** — ship Rust
@@ -949,9 +992,18 @@ truth), and the two Phase-4 honest-stop negative pins (Chorale
   0 17lands decks each) — DEALT_DAMAGE+IsHost+Destroy
   EnchantedPermanent + ENTERS+Look/Sacrifice shapes. Each
   needs its own Effect variant slice.
-* **Moonlit Meditation full admit** — ship the token-
-  replacement substrate listed above. Unlocks 633 17lands
-  decks.
+* **Moonlit Meditation full admit** — ship the Rust
+  CreateToken-arm Aura-consulting consumer: when the
+  controller's per-player ``created_tokens_this_turn`` slot is
+  unset AND they control a Moonlit-shape Aura with a live
+  ``attached_to`` host, substitute the token's ``printing_id``
+  with the host's. The blocker is the "Token-supertype add on
+  the host printing" runtime registry mutation (see the
+  honest-stop above) — needs either a runtime-registry-append
+  primitive or a per-object Token-supertype override
+  mechanism. Once one ships, the loader admit widens at the
+  ``replaces_first_tokens_with_copies`` predicate site. Unlocks
+  633 17lands decks.
 
 #### Original (pre-substrate-landing) plan
 
