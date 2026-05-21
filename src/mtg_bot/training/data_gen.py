@@ -87,6 +87,7 @@ from mtg_bot.search.engine_adapter_factory import make_game_state_adapter
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
+from mtg_bot.training._win32_job import JobObjectGuard
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
 from mtg_bot.training.config import StrategyFactory
 from mtg_bot.training.progress import DataGenProgress
@@ -598,7 +599,30 @@ def generate_training_data_parallel(
     if pool_initializer is not None:
         pool_kwargs["initializer"] = pool_initializer
         pool_kwargs["initargs"] = pool_initargs
-    with pool_ctx.Pool(**pool_kwargs) as pool:
+    # iter_019 BUG #4 — Windows job-object guard for kernel-level
+    # child cleanup if the master dies WITHOUT running Python-level
+    # cleanup (taskkill /F, segfault, OOM, etc.). The ``with Pool()
+    # as p:`` context manager already handles normal exit + Python
+    # exceptions via ``__exit__`` → ``terminate()``; this guard adds
+    # the safety net for harder master deaths. On POSIX, the guard
+    # is a no-op.
+    #
+    # The guard ONLY contains the worker children, NOT the master
+    # (see the module docstring on _win32_job for why — putting the
+    # master in the job would arm KILL_ON_JOB_CLOSE on the master
+    # too, killing it on guard close). We attach workers after Pool
+    # construction (which eagerly spawns them) and close the guard
+    # at function exit; close is safe because Pool's terminate()
+    # has already drained the workers.
+    # Context order matters: ``with A, B:`` exits B first, then A.
+    # We want Pool.__exit__ (terminate workers) to run BEFORE
+    # JobObjectGuard.__exit__ (close handle). If the guard closed
+    # first while workers were still alive in the job, the kernel's
+    # KILL_ON_JOB_CLOSE would race with Pool's orderly shutdown.
+    # Put the guard FIRST in the with statement so it exits LAST.
+    _job_guard = JobObjectGuard()
+    with _job_guard, pool_ctx.Pool(**pool_kwargs) as pool:
+        _job_guard.attach_pool_workers(pool)
         for game_idx, chunk in pool.imap_unordered(
             _play_one_parallel_game, args_list, chunksize=1,
         ):
