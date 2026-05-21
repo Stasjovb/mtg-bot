@@ -11,9 +11,13 @@ module for now; lifted from ``cli/shard.py``'s body) is exercised in
 the integration test only.
 
 HTTP transport: stdlib ``urllib.request``. The coordinator's v2
-endpoints accept plain JSON and a multipart form on /report_result;
-both are easy enough to hand-roll without pulling in ``requests`` or
-``urllib3``. See ``_post_multipart`` for the multipart encoder.
+endpoints accept plain JSON. Result reporting now uses the
+"drop-off + small JSON ping" protocol — the worker drops the npz /
+replay blobs into shared storage via :mod:`mtg_bot.worker_daemon_storage`
+and POSTs only the URIs + sizes back to ``/v2/report_result``. The
+old multipart-POST protocol saturated the coord's single-threaded
+WSGI handler under cluster scale (see ``project_mtg_bot_coord_wsgi``
+memory); this offloads the file I/O off the coord's request thread.
 
 Backoff schedule on 5xx: 1s / 3s / 10s, then ERROR. Constant
 ``RETRY_BACKOFF_S`` is exposed for tests.
@@ -37,11 +41,11 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-import uuid
 from dataclasses import dataclass, field
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from mtg_bot.worker_daemon_storage import ArtifactUploader, NullUploader
 
 
 log = logging.getLogger(__name__)
@@ -157,80 +161,6 @@ def _http_post_json(
         except Exception:
             pass
         return e.code, body, dict(e.headers or {})
-
-
-def _encode_multipart(
-    fields: dict[str, str],
-    files: dict[str, tuple[str, bytes, str]],
-) -> tuple[bytes, str]:
-    """Encode a multipart/form-data body by hand.
-
-    ``fields`` maps name -> string value.
-    ``files`` maps name -> (filename, body_bytes, content_type).
-
-    Returns (body_bytes, content_type_header).
-    """
-    boundary = f"----mtgBotWorkerDaemon{uuid.uuid4().hex}"
-    crlf = b"\r\n"
-    buf = BytesIO()
-    for name, value in fields.items():
-        buf.write(f"--{boundary}".encode("ascii"))
-        buf.write(crlf)
-        buf.write(
-            f'Content-Disposition: form-data; name="{name}"'.encode(
-                "ascii"
-            )
-        )
-        buf.write(crlf)
-        # JSON-ish text payloads: spell the content-type so the server
-        # ``request.form.get`` treats it as a string field correctly.
-        buf.write(b"Content-Type: text/plain; charset=utf-8")
-        buf.write(crlf)
-        buf.write(crlf)
-        buf.write(value.encode("utf-8"))
-        buf.write(crlf)
-    for name, (filename, content, content_type) in files.items():
-        buf.write(f"--{boundary}".encode("ascii"))
-        buf.write(crlf)
-        buf.write(
-            (
-                'Content-Disposition: form-data; '
-                f'name="{name}"; filename="{filename}"'
-            ).encode("ascii")
-        )
-        buf.write(crlf)
-        buf.write(f"Content-Type: {content_type}".encode("ascii"))
-        buf.write(crlf)
-        buf.write(crlf)
-        buf.write(content)
-        buf.write(crlf)
-    buf.write(f"--{boundary}--".encode("ascii"))
-    buf.write(crlf)
-    return buf.getvalue(), f"multipart/form-data; boundary={boundary}"
-
-
-def _http_post_multipart(
-    url: str,
-    fields: dict[str, str],
-    files: dict[str, tuple[str, bytes, str]],
-    *,
-    timeout: float = DEFAULT_HTTP_TIMEOUT_S,
-) -> tuple[int, bytes, dict[str, str]]:
-    body, content_type = _encode_multipart(fields, files)
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"Content-Type": content_type},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read(), dict(resp.headers)
-    except urllib.error.HTTPError as e:
-        body_bytes = b""
-        try:
-            body_bytes = e.read() or b""
-        except Exception:
-            pass
-        return e.code, body_bytes, dict(e.headers or {})
 
 
 # ---------------------------------------------------------------------------
@@ -748,8 +678,16 @@ class ClaimLoopConfig:
     http_post_json: Callable[..., tuple[int, bytes, dict[str, str]]] = field(
         default=_http_post_json
     )
-    http_post_multipart: Callable[..., tuple[int, bytes, dict[str, str]]] = field(
-        default=_http_post_multipart
+    # Drop-off-protocol artifact uploader. Workers no longer multipart-
+    # POST .npz bytes to the coord; they upload to shared storage via
+    # this uploader and POST only the URI back. Production wires
+    # ``uploader_from_uri(--artifact-storage-uri)`` (s3:// or file://);
+    # tests default to ``NullUploader`` so the wire shape works without
+    # standing up real storage. See
+    # :mod:`mtg_bot.worker_daemon_storage` + ``project_mtg_bot_coord_wsgi``
+    # memory for the why.
+    artifact_uploader: ArtifactUploader = field(
+        default_factory=NullUploader
     )
 
 
@@ -811,9 +749,14 @@ class ClaimLoopRunner:
         raise RuntimeError(last_err or "/v2/claim retries exhausted")
 
     def _report_one(self, claim: dict, result: GameResult) -> str:
-        """POST /v2/report_result (multipart). Returns one of
-        ``"accepted"`` / ``"conflict"`` / ``"unknown"``. 5xx triggers
-        backoff+retry.
+        """Drop the result's blobs into shared storage, then POST a
+        JSON meta + URI ping to ``/v2/report_result``.
+
+        Returns one of ``"accepted"`` / ``"conflict"`` / ``"unknown"``.
+        5xx triggers backoff+retry. Both 200 and 202 are treated as
+        success — Phase 2B will switch the coord to 202 (returns
+        immediately, rehydrates blobs from the URI off-thread); during
+        the rollout the old 200 path still works.
         """
         meta: dict[str, Any] = {
             "claim_id": claim["claim_id"],
@@ -832,35 +775,61 @@ class ClaimLoopRunner:
         if result.draws is not None:
             meta["draws"] = result.draws
 
-        files: dict[str, tuple[str, bytes, str]] = {}
+        # Upload artifacts FIRST so the URI is in hand by the time we
+        # POST the meta. Failed uploads surface as exceptions and
+        # propagate up to the claim-loop's crash handler (which then
+        # reports a "crashed" outcome) — same shape as a runner
+        # exception. The uploader is deterministic in the claim_id,
+        # so a retry produces the same URI; a partial-upload then
+        # full-upload cycle ends with the coord seeing one canonical
+        # URI either way.
+        npz_uri: Optional[str] = None
+        replay_uri: Optional[str] = None
         if result.npz_bytes:
-            files["npz"] = (
-                f"{claim.get('game_idx', 0)}.npz",
+            npz_uri = self.cfg.artifact_uploader.upload(
                 result.npz_bytes,
-                "application/octet-stream",
+                kind="npz",
+                stage_id=self.cfg.stage_id,
+                shard_label=self.cfg.shard_label,
+                claim_id=claim["claim_id"],
             )
         if result.replay_bytes:
-            files["replay"] = (
-                f"{claim.get('game_idx', 0)}.json.gz",
+            replay_uri = self.cfg.artifact_uploader.upload(
                 result.replay_bytes,
-                "application/gzip",
+                kind="replay",
+                stage_id=self.cfg.stage_id,
+                shard_label=self.cfg.shard_label,
+                claim_id=claim["claim_id"],
             )
 
+        body = {
+            "meta": meta,
+            "npz_uri": npz_uri,
+            "replay_uri": replay_uri,
+            "npz_size_bytes": (
+                len(result.npz_bytes) if result.npz_bytes else 0
+            ),
+            "replay_size_bytes": (
+                len(result.replay_bytes) if result.replay_bytes else 0
+            ),
+        }
+
         url = self._coord_url("/v2/report_result")
-        fields = {"meta": json.dumps(meta)}
         last_err: Optional[str] = None
         for attempt, delay in enumerate((0.0,) + tuple(self.cfg.retry_backoff_s)):
             if delay > 0:
                 time.sleep(delay)
             try:
-                status, resp_body, _ = self.cfg.http_post_multipart(
-                    url, fields, files,
-                )
+                status, resp_body, _ = self.cfg.http_post_json(url, body)
             except urllib.error.URLError as e:
                 last_err = f"URLError attempt {attempt}: {e}"
                 log.warning("[report_loop] %s", last_err)
                 continue
-            if status == 200:
+            # 200 = legacy synchronous coord path (Phase 1 + early 2A
+            # rollout). 202 = Phase 2B's async-write coord (rehydrates
+            # the blob off-thread; returns immediately). Accept both
+            # during the rollout window.
+            if status in (200, 202):
                 return "accepted"
             if status == 409:
                 # Late duplicate / re-delivered claim. Per-doc: drop
