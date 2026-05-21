@@ -439,6 +439,43 @@ class CardDef:
     # is the back-compat default — the bridge omits the key when
     # False.
     grants_creature_spells_uncounterable: bool = False
+    # Static / layered abilities substrate — Phase 3 (round-81,
+    # 2026-05-20). SELF-scope conditional P/T + keyword grants —
+    # the simplest static-ability shape after the unconditional
+    # anthem (Phase 1) and the SELF-scope uncounterable flag
+    # (Phase 2). Closes Brightspear Zealot, Cloudsculpt Technician,
+    # and Gravblade Heavy from Phase 1's honest-stop list.
+    #
+    # Each entry is a tuple ``(condition_tag, condition_args,
+    # power_bonus, toughness_bonus, granted_keywords)``:
+    #
+    # * ``condition_tag`` — a string identifier the Rust side
+    #   dispatches on. Two values today:
+    #     - ``"control_permanent_is_artifact"`` (no args; Cloudsculpt
+    #       Technician, Gravblade Heavy)
+    #     - ``"at_least_n_spells_cast_this_turn"`` (args=``(n,)``;
+    #       Brightspear Zealot uses ``n=2``).
+    # * ``condition_args`` — tuple of int args (empty for arg-less
+    #   conditions). The Rust side validates argument arity per tag.
+    # * ``power_bonus`` / ``toughness_bonus`` — layer-7c additive
+    #   contribution to the SOURCE's own P/T while the condition
+    #   matches (CR 613.3c).
+    # * ``granted_keywords`` — layer-6 GrantKeyword payloads granted
+    #   to the source itself while the condition matches. Keyword
+    #   strings are the underscore-form lowercase names from
+    #   ``trajectory._SAFE_KEYWORDS``.
+    #
+    # Empty tuple = no SELF-scope conditional statics — the back-
+    # compat default; every pre-Phase-3 CardDef leaves this field at
+    # its empty-tuple default and the bridge omits the registry-dict
+    # key. The Python side materializes each entry into one or two
+    # ``StaticAbility(scope=SELF, condition=<reified Condition>,
+    # continuous_effect=ContinuousModifier(...))`` instances mirroring
+    # the parser's fan-out at
+    # ``parser/statics.py:_parse_static_ability_line``.
+    static_self_bonuses: tuple[
+        tuple[str, tuple[int, ...], int, int, tuple[str, ...]], ...
+    ] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -10779,6 +10816,36 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
         printing_dict["spell_is_uncounterable"] = True
     if card.grants_creature_spells_uncounterable:
         printing_dict["grants_creature_spells_uncounterable"] = True
+    # Static / layered abilities substrate — Phase 3 (round-81,
+    # 2026-05-20). Emit the SELF-scope conditional bonus list as a
+    # list of dicts. The key is OMITTED when no entries are present
+    # (every pre-Phase-3 CardDef), keeping every pre-substrate
+    # registry dict byte-identical. Each entry is::
+    #
+    #   {"condition_tag": str,
+    #    "condition_args": [int, ...],
+    #    "power_bonus": int,
+    #    "toughness_bonus": int,
+    #    "granted_keywords": [str, ...]}
+    if card.static_self_bonuses:
+        printing_dict["static_self_bonuses"] = [
+            {
+                "condition_tag": cond_tag,
+                "condition_args": list(cond_args),
+                "power_bonus": int(p_bonus),
+                "toughness_bonus": int(t_bonus),
+                "granted_keywords": [
+                    kw.replace(" ", "_") for kw in granted_keywords
+                ],
+            }
+            for (
+                cond_tag,
+                cond_args,
+                p_bonus,
+                t_bonus,
+                granted_keywords,
+            ) in card.static_self_bonuses
+        ]
     return printing_dict
 
 
@@ -10996,6 +11063,59 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
         cost=cost,
         effect=effect,
         is_mana_ability=is_mana_ability,
+    )
+
+
+def _static_self_bonus_condition_from_tag(
+    cond_tag: str, cond_args: "tuple[int, ...]",
+):
+    """Rehydrate a :class:`mtg_bot.effects.conditions.Condition` from
+    the bridge's ``(condition_tag, condition_args)`` pair.
+
+    **Static / layered abilities substrate — Phase 3 (round-81,
+    2026-05-20).** The bridge carries SELF-scope conditional
+    statics as opaque ``(tag, args)`` tuples so the Rust side can
+    dispatch on the tag without porting the full Python
+    ``Condition`` class hierarchy. This Python-side helper inverts
+    the encoding to produce a real ``Condition`` instance that
+    Python's ``StaticAbility.applies_to`` can evaluate.
+
+    Recognized tags (in lockstep with the Rust dispatch table in
+    ``state_ops_combat::static_self_bonus_condition_matches``):
+
+    * ``"control_permanent_is_artifact"`` (no args) →
+      ``ControlPermanent(IsArtifact())``. Covers Cloudsculpt
+      Technician and Gravblade Heavy.
+    * ``"at_least_n_spells_cast_this_turn"`` (args=``(n,)``) →
+      ``AtLeastNSpellsCastThisTurn(n)``. Covers Brightspear
+      Zealot's ``n=2`` rider.
+
+    An unknown tag raises ``ValueError`` — the bridge's loader-side
+    predicate is the source of truth for which tags reach this
+    function, and a tag arriving here that isn't in the table is a
+    bridge-vs-materializer disagreement that must fail loudly.
+    """
+    from mtg_bot.effects.conditions import (
+        AtLeastNSpellsCastThisTurn, ControlPermanent,
+    )
+    from mtg_bot.effects.object_predicates import IsArtifact
+
+    if cond_tag == "control_permanent_is_artifact":
+        if cond_args:
+            raise ValueError(
+                f"control_permanent_is_artifact takes no args; got "
+                f"{cond_args!r}"
+            )
+        return ControlPermanent(IsArtifact())
+    if cond_tag == "at_least_n_spells_cast_this_turn":
+        if len(cond_args) != 1:
+            raise ValueError(
+                f"at_least_n_spells_cast_this_turn takes 1 arg (n); "
+                f"got {cond_args!r}"
+            )
+        return AtLeastNSpellsCastThisTurn(int(cond_args[0]))
+    raise ValueError(
+        f"unknown SELF-scope conditional static tag: {cond_tag!r}"
     )
 
 
@@ -11238,6 +11358,54 @@ def _card_def_to_python_printing(card: "CardDef"):
                 continuous_effect=None,
             ),
         )
+    # Static / layered abilities substrate — Phase 3 (round-81,
+    # 2026-05-20). Materialize each SELF-scope conditional bonus
+    # into one (P/T only) or two (P/T + per-keyword) StaticAbility
+    # instances, mirroring the parser fan-out at
+    # ``parser/statics.py:_parse_static_ability_line``. Each
+    # condition tag rehydrates the matching ``Condition`` subclass
+    # via :func:`_static_self_bonus_condition_from_tag`. Empty
+    # tuple is the back-compat default.
+    if card.static_self_bonuses:
+        from mtg_bot.cards.base import StaticAbility, StaticScope
+        from mtg_bot.effects.modifiers import (
+            ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+        )
+        ssb_list: list[StaticAbility] = []
+        for (
+            cond_tag,
+            cond_args,
+            p_bonus,
+            t_bonus,
+            granted_keywords,
+        ) in card.static_self_bonuses:
+            cond = _static_self_bonus_condition_from_tag(cond_tag, cond_args)
+            if p_bonus or t_bonus:
+                ssb_list.append(
+                    StaticAbility(
+                        scope=StaticScope.SELF,
+                        condition=cond,
+                        continuous_effect=ContinuousModifier(
+                            layer=7,
+                            payload=PowerToughnessBonus(
+                                power_bonus=int(p_bonus),
+                                toughness_bonus=int(t_bonus),
+                            ),
+                        ),
+                    )
+                )
+            for kw in granted_keywords:
+                ssb_list.append(
+                    StaticAbility(
+                        scope=StaticScope.SELF,
+                        condition=cond,
+                        continuous_effect=ContinuousModifier(
+                            layer=6,
+                            payload=GrantKeyword(kw.replace("_", " ")),
+                        ),
+                    )
+                )
+        static_abilities = (*static_abilities, *ssb_list)
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
