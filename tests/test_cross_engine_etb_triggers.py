@@ -21280,25 +21280,32 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # NOT to forbid the growth it explicitly anticipates). The
     # effect-uncovered-slice round closed Cut Propulsion (+1 → 8), the
     # invasive-maneuvers-slice round closed Invasive Maneuvers (+1 →
-    # 9), and the shattered-wings-slice round closed Shattered Wings
-    # (+1 → 10) — all AUTO-JOINED via the §2 auto-grow teeth.
+    # 9), the shattered-wings-slice round closed Shattered Wings
+    # (+1 → 10), and the next-effect-uncovered round closed Emergency
+    # Eject (Effect-uncovered single-gated tier; ~6,291 17lands decks
+    # — same Lander-pid carrier shape as Seedship Impact / Orbital
+    # Plunge; the trajectory reverse-serializer leaf + the
+    # ``_SPELL_TOKEN_PID_KINDS`` tuple entry flipped the round-trip
+    # teeth) AUTO-JOINED (+1 → 11) — all AUTO-JOINED via the §2 auto-
+    # grow teeth.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
         "Biosynthic Burst", "Cut Propulsion", "Depressurize",
-        "Diplomatic Relations", "Focus Fire", "Invasive Maneuvers",
-        "Orbital Plunge", "Radiant Strike", "Seedship Impact",
-        "Shattered Wings",
+        "Diplomatic Relations", "Emergency Eject", "Focus Fire",
+        "Invasive Maneuvers", "Orbital Plunge", "Radiant Strike",
+        "Seedship Impact", "Shattered Wings",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 10 covered+bridged Tier-A spells: the 9 "
+        f"exactly the 11 covered+bridged Tier-A spells: the 10 "
         f"single-target Phase-1 cards + Diplomatic Relations, the "
         f"Phase-2 2-slot card the round-76 grammar widening admitted "
-        f"— the set grew 7→8→9→10 as Cut Propulsion, Invasive "
-        f"Maneuvers, and Shattered Wings each closed; it auto-grows "
-        f"further as the remaining Tier-A spells close)")
+        f"— the set grew 7→8→9→10→11 as Cut Propulsion, Invasive "
+        f"Maneuvers, Shattered Wings, and Emergency Eject each "
+        f"closed; it auto-grows further as the remaining Tier-A "
+        f"spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

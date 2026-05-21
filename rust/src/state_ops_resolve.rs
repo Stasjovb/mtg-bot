@@ -7387,6 +7387,231 @@ fn apply_effect(
                 }
             }
         }
+        // EmergencyEjectEffect (Effect-uncovered single-gated tier —
+        // Emergency Eject, Lander-rider). CR 701.7 destroy with a
+        // non-land permanent filter + an UNCONDITIONAL Lander rider
+        // going to the **former controller** of the destroyed
+        // permanent. Mirrors Python's
+        // `DestroyTargetNonlandPermanentWithLanderForController
+        // .resolve` (`effects/generic/destroy.py:611`).
+        //
+        // **Three deviations from `SeedshipImpactEffect` (same
+        // Lander-pid carrier shape):**
+        // 1. Filter is non-land permanent (CR 205.2a) — every
+        //    battlefield object whose printing.card_types does NOT
+        //    contain `"Land"`. Indestructible permanents still
+        //    skipped at the scan (same Seedship precedent: Python's
+        //    `destroy()` returns False on indestructible → no Lander
+        //    consolation).
+        // 2. No printed-MV gate — the Lander rider fires whenever
+        //    the destroy succeeds (Python: `destroy(state, obj)`
+        //    returns True iff actually destroyed; no `if mv <= 2`
+        //    branch). MV read entirely omitted.
+        // 3. Lander recipient = the **former controller** of the
+        //    destroyed permanent (the target's `obj.controller`
+        //    field at scan time — captured BEFORE the destroy moves
+        //    the object to graveyard). Python:
+        //    `former_controller = obj.controller_id` BEFORE
+        //    `destroy(state, obj)` → `state.new_object(...,
+        //    owner_id=former_controller, ...)` →
+        //    `put_into_battlefield(..., former_controller)`. This is
+        //    the load-bearing distinguishing feature vs Seedship
+        //    Impact (which seats Lander under the SOURCE's
+        //    controller). Emergency Eject typically targets an
+        //    opponent's permanent, so the opponent gets the Lander
+        //    as consolation, NOT the caster.
+        //
+        // **§2 indestructible parity** (same Seedship precedent):
+        // the scan SKIPS indestructible permanents → no destroy →
+        // no Lander, byte-equal to Python's `destroy()`-returns-
+        // False → early-return.
+        Effect::EmergencyEjectEffect { token_printing_id } => {
+            let lander_pid: u32 = *token_printing_id;
+            // Registry-bounds check up front (mirrors Seedship arm).
+            if state.registry.lookup(lander_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "EmergencyEjectEffect token_printing_id \
+                     {lander_pid} not in registry"
+                )));
+            }
+            // Read cast-time-bound target via
+            // `current_resolve_payload_target_id` (the proven
+            // SeedshipImpactEffect / DestroyTargetArtifactOrTapped
+            // Creature payload-target swap pattern). When None
+            // (synthetic-test `push_to_stack` path without
+            // `push_to_stack_with_target`), fall back to the
+            // deterministic-first non-land permanent in ETB-timestamp
+            // order across BOTH battlefields, mirroring the
+            // pre-payload-target Seedship body's self-scan shape so
+            // the no-callback synthetic fallback works (same
+            // FocusFire / Depressurize / CutPropulsion convention).
+            let payload_target_opt =
+                state.current_resolve_payload_target_id;
+            // Resolve-time re-legality: find target + capture
+            // (controller, target_id) BEFORE any mutation. Mirrors
+            // Python's `obj = next((o for o in state.battlefield if
+            // o.id == target_id), None)` + the post-find filter
+            // check at `effects/generic/destroy.py:625-640`. The
+            // captured `controller` is the FORMER controller for
+            // the Lander recipient — read BEFORE the destroy moves
+            // the object to graveyard (where Python's owner-stamp
+            // semantics on leave would otherwise overwrite it).
+            let target: Option<(usize, u32, u8)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        // If we have a bound target, only the bound
+                        // id qualifies; otherwise the deterministic-
+                        // first non-land permanent wins.
+                        if let Some(pt) = payload_target_opt {
+                            if obj.id != pt {
+                                return None;
+                            }
+                        }
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        let is_land = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land");
+                        if is_land {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some((
+                            obj.controller as usize,
+                            obj.id,
+                            obj.controller,
+                        ))
+                    });
+            if let Some((pidx, target_id, former_controller)) = target {
+                // ---- Destroy half (clones the proven Seedship
+                // remove→graveyard + LTB + token-cease tail).
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.damage = 0;
+                // Aura-attachment substrate (Tractor Beam closure):
+                // snapshot attached_to BEFORE clearing so the
+                // aura-host-control revert helper sees the prior
+                // host. Mirrors the Seedship arm's prior_attached_to
+                // pattern.
+                let prior_attached_to = obj.attached_to;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) =
+                    (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[pidx].graveyard)
+                    .push(obj);
+                crate::state_ops_sba::revert_aura_host_control_on_leave(
+                    state,
+                    leaving_obj_id,
+                    printing_id,
+                    prior_attached_to,
+                );
+                // Round-29 Void LTB: target is non-land permanent;
+                // helper gates on the printing.
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // R76-2: DIES dispatch for a Creature victim
+                // (Python's generic `turn.destroy` fires DIES for a
+                // creature death — CR 603 / 700.4). Emergency
+                // Eject's filter is non-land permanent, which
+                // INCLUDES creatures (the most common target — most
+                // EoE creatures are non-land permanents); destroying
+                // them IS a creature death and MUST fire its DIES
+                // trigger byte-equal with Python. Creature-gated so
+                // a destroyed pure (non-creature) artifact /
+                // enchantment / planeswalker does NOT fire a
+                // spurious DIES. DIES pushed BEFORE LEAVES (the
+                // R74-2 push order; LIFO -> LEAVES resolves first).
+                let victim_is_creature = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| {
+                        p.card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false);
+                if victim_is_creature {
+                    state
+                        .pending_dies_dispatches
+                        .push(leaving_obj_id);
+                }
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+
+                // ---- Unconditional Lander rider — goes to FORMER
+                // controller of the destroyed permanent (NOT
+                // source-controller). The captured `former_controller`
+                // is the target's `obj.controller` field at scan
+                // time (CR 111.4 — token under the specified
+                // controller). Python:
+                // `former_controller = obj.controller_id` BEFORE
+                // destroy → `state.new_object(...,
+                // owner_id=former_controller, ...)` →
+                // `put_into_battlefield(state, lander,
+                // former_controller)`.
+                let recipient: u8 = former_controller;
+                let new_id: u32 =
+                    crate::state::reserve_object_id(state);
+                let tok_etb = state.next_etb_timestamp;
+                state.next_etb_timestamp =
+                    state.next_etb_timestamp.saturating_add(1);
+                let bf: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[recipient as usize]
+                        .battlefield,
+                );
+                bf.push(GameObject {
+                    id: new_id,
+                    printing_id: lander_pid,
+                    controller: recipient,
+                    zone: ZONE_BATTLEFIELD,
+                    tapped: false,
+                    // Lander is a non-creature (Token Artifact);
+                    // per CR 302.1 + 612.6 it enters with
+                    // summoning_sick=false.
+                    summoning_sick: false,
+                    damage: 0,
+                    counters: 0,
+                    charge_counters: 0,
+                    loyalty_counters: 0,
+                    attached_to: None,
+                    exiled_with_source: None,
+                    stun_counters: 0,
+                    etb_timestamp: tok_etb,
+                    ueot_modifiers: Vec::new(),
+                    warp_exile_pending: false,
+                    warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
+                    // Bespoke token-mint shape (same as Seedship /
+                    // Orbital Plunge): Python's bespoke token-mints
+                    // route through `state.new_object`, NOT through
+                    // `CreateToken.resolve` — so Python skips the
+                    // Moonlit replacement check entirely. Mirror
+                    // that: the override stays `false`.
+                    token_supertype_override: false,
+                });
+                // Queue ENTERS for the fresh token.
+                state.pending_etb_dispatches.push(new_id);
+            }
+        }
         // DealDamageToTargetCreatureWithExcessLanderRider
         // (Effect-uncovered Tier-A — Orbital Plunge, Lander-rider).
         // Mirrors Python's

@@ -4105,6 +4105,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.destroy import (
         DestroyTargetArtifactEnchantmentOrFlyingCreature,
         DestroyTargetArtifactOrTappedCreature,
+        DestroyTargetNonlandPermanentWithLanderForController,
     )
     from mtg_bot.effects.generic.library_lookat import Surveil
     from mtg_bot.effects.bespoke import (
@@ -4258,6 +4259,32 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 return None
             return {
                 "kind": "seedship_impact_effect",
+                "_token_card_def": lcd,
+            }
+        # Emergency Eject (Effect-uncovered single-gated tier;
+        # ~6,291 17lands decks). Same Lander-pid carrier shape as
+        # Seedship Impact: Rust's ``parse_effect``
+        # ``"emergency_eject_effect"`` arm
+        # ``require("token_printing_id")`` for the Lander; the
+        # matching dict→Python bridge arm (cross_engine.py
+        # ``emergency_eject_effect``) DROPS the pid and constructs
+        # the FIELD-FREE Python class
+        # ``DestroyTargetNonlandPermanentWithLanderForController``
+        # (which mints the Lander intrinsically via
+        # ``TOKEN_PRINTINGS["Lander"]``). The reverse serializer emits
+        # the SYMBOLIC ``_token_card_def`` Lander reference the same
+        # way Seedship / Orbital Plunge do; the loader's
+        # :func:`_seat_token_printings` pass (already walking
+        # ``spell_effect`` per the round-73 sub-substrate, extended
+        # below to recognize this new kind) rewrites it to the
+        # numeric ``token_printing_id`` Rust requires + registers
+        # the matching Python printing. Round-trip-or-bail preserved.
+        if isinstance(eff, DestroyTargetNonlandPermanentWithLanderForController):
+            lcd = _canonical_lander_token_card_def()
+            if lcd is None:
+                return None
+            return {
+                "kind": "emergency_eject_effect",
                 "_token_card_def": lcd,
             }
         if isinstance(eff, DealDamageToTargetCreatureWithExcessLanderRider):
@@ -6869,6 +6896,17 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     _SPELL_TOKEN_PID_KINDS = (
         "seedship_impact_effect",
         "deal_damage_to_target_creature_with_excess_lander_rider",
+        # Emergency Eject (Effect-uncovered single-gated tier;
+        # ~6,291 17lands decks). Same Lander-pid carrier shape as
+        # Seedship Impact / Orbital Plunge — the reverse
+        # serializer emits a symbolic ``_token_card_def`` Lander
+        # reference and the spell-axis seating pass below resolves
+        # it to the numeric ``token_printing_id`` Rust's
+        # ``Effect::EmergencyEjectEffect { token_printing_id }``
+        # parse arm requires. Adding the kind here is what auto-
+        # joins Emergency Eject into the spell-card-bridge admit
+        # set (the §2 auto-grow teeth).
+        "emergency_eject_effect",
     )
 
     def _carrier_token_refs(cd: CardDef):

@@ -9067,6 +9067,63 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # Effect-half-vs-full-card precedent.
         from mtg_bot.effects.bespoke import SeedshipImpactEffect
         return SeedshipImpactEffect()
+    if kind == "emergency_eject_effect":
+        # **Effect-uncovered single-gated tier — Emergency Eject
+        # (~6,291 17lands decks).** Rust substrate
+        # ``Effect::EmergencyEjectEffect { token_printing_id }``
+        # (cards.rs single-pid variant; parser
+        # ``"emergency_eject_effect"``; resolve in
+        # state_ops_resolve.rs beside the Seedship Impact arm).
+        #
+        # **Field shape (Rust-side pid carrier, dropped at the
+        # bridge — same shape as ``seedship_impact_effect``).** Rust's
+        # variant carries ``token_printing_id: u32`` for the Lander
+        # token (Rust has NO intrinsic Lander; a bespoke token-
+        # minting arm must carry the pid exactly like
+        # ``Effect::CreateToken`` / the Seedship Impact / Orbital
+        # Plunge precedent). Python's
+        # ``DestroyTargetNonlandPermanentWithLanderForController``
+        # (``effects/generic/destroy.py:589``) is field-free — it
+        # resolves the Lander intrinsically via
+        # ``TOKEN_PRINTINGS["Lander"]``. So the bridge **drops** the
+        # pid and constructs the bare Python class. Both engines
+        # seat the SAME "Lander" printing (Rust via the registered
+        # ``token_printing_id``, Python via TOKEN_PRINTINGS) → the
+        # created token is byte-equal in the name-keyed field view.
+        #
+        # **Three deviations from ``seedship_impact_effect`` resolve
+        # semantics (parity-relevant):**
+        # 1. Filter widens from artifact-OR-enchantment to **non-land
+        #    permanent** (CR 205.2a — any battlefield permanent
+        #    without the ``Land`` card type). Indestructible still
+        #    skipped at scan time (same Seedship precedent).
+        # 2. **No printed-MV gate** — the Lander rider fires whenever
+        #    the destroy succeeds (Python's ``destroy()`` returned
+        #    True). No ``if mv <= 2`` branch.
+        # 3. **Lander recipient = the FORMER controller of the
+        #    destroyed permanent** (NOT the spell's source-
+        #    controller). Python's resolve captures
+        #    ``former_controller = obj.controller_id`` BEFORE
+        #    calling ``destroy(state, obj)``, then mints the Lander
+        #    under ``former_controller``. This is the load-bearing
+        #    distinguishing feature vs Seedship Impact (which seats
+        #    the Lander under the SOURCE's controller). Emergency
+        #    Eject typically targets an opponent's permanent — the
+        #    opponent gets the Lander as consolation, NOT the caster.
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (destroy + the unconditional Lander byte-
+        # equal); the full Emergency Eject Instant auto-joins the
+        # spell-card-bridge admit set (the §2 auto-grow teeth — with
+        # the Effect + bridge arm + reverse-serializer leaf landed
+        # AND the seating-pass extended to recognize
+        # ``"emergency_eject_effect"`` as a Lander-pid spell kind,
+        # ``_printing_is_bridge_simple_spell`` admits the {2}{W}
+        # Instant).
+        from mtg_bot.effects.generic.destroy import (
+            DestroyTargetNonlandPermanentWithLanderForController,
+        )
+        return DestroyTargetNonlandPermanentWithLanderForController()
     if kind == "deal_damage_to_target_creature_with_excess_lander_rider":
         # **Effect-uncovered Tier-A — Orbital Plunge (Lander-rider).**
         # Rust substrate

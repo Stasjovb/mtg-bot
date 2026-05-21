@@ -67211,33 +67211,48 @@ def test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal():
             )
 
     # ---- Property 2: the new default recovers a timeout into a verdict.
-    # Archetype 9 seed 1 FAIL_TIMEOUTs at cap-25 (round-69 anatomy: a
-    # `no_board`-at-25 game that draws a creature and progresses with
-    # more turns). At cap-60 it must yield a real cross-engine verdict
-    # and NOT have been masking a divergence.
-    lo9 = drive_one_game(
-        archetype=9, seed=1, max_turns=25,
+    # Archetype 7 seed 0 FAIL_TIMEOUTs at cap-25 (a `no_board`-at-25
+    # game that draws a creature and progresses with more turns). At
+    # cap-60 it must yield a real cross-engine verdict and NOT have
+    # been masking a divergence.
+    #
+    # **Fixture re-derive (next-effect-uncovered slice, 2026-05-21).**
+    # Pre-Emergency-Eject the fixture was arch=9 seed=1. The
+    # ``feature/next-effect-uncovered`` close admits Emergency Eject
+    # into the spell-card-bridge bench-admit set — that archetype
+    # contains the card, so the legitimately-changed bench trajectory
+    # now extends past the cap-60 timeout (the Lander rider adds
+    # permanents that shift game progression). The new
+    # cap-60→PASS-recovery fixture is arch=7 seed=0 (also a
+    # ``no_board`` cap-25 timeout that recovers at cap-60),
+    # re-derived from a fresh stall-anatomy sweep per the fixture's
+    # own re-derivation contract. The TWO properties this pin asserts
+    # — parity-safety (Property 1) and timeout-recovery (Property 2) —
+    # remain unchanged; only the per-archetype carrier shifted.
+    lo7 = drive_one_game(
+        archetype=7, seed=0, max_turns=25,
         combat_strategy="attack_all", mulligans=0,
     )
-    hi9 = drive_one_game(
-        archetype=9, seed=1, max_turns=60,
+    hi7 = drive_one_game(
+        archetype=7, seed=0, max_turns=60,
         combat_strategy="attack_all", mulligans=0,
     )
-    assert lo9.status == "FAIL_TIMEOUT", (
-        "round-69 data fixture: arch=9 seed=1 is expected to "
-        f"FAIL_TIMEOUT at cap-25; got {lo9.status}. If the bench "
-        "trajectory legitimately changed, re-derive the fixture from a "
-        "fresh stall-anatomy run (do NOT just relax this assertion)."
+    assert lo7.status == "FAIL_TIMEOUT", (
+        "round-69 data fixture (re-derived post-Emergency-Eject): "
+        f"arch=7 seed=0 is expected to FAIL_TIMEOUT at cap-25; got "
+        f"{lo7.status}. If the bench trajectory legitimately changed, "
+        "re-derive the fixture from a fresh stall-anatomy run (do NOT "
+        "just relax this assertion)."
     )
-    assert hi9.status in ("PASS", "FAIL_DIVERGENCE"), (
+    assert hi7.status in ("PASS", "FAIL_DIVERGENCE"), (
         f"raising the cap must convert the timeout into a real parity "
-        f"verdict; arch=9 seed=1 got {hi9.status} at cap-60"
+        f"verdict; arch=7 seed=0 got {hi7.status} at cap-60"
     )
-    assert hi9.status != "FAIL_DIVERGENCE" or lo9.status != "PASS", (
+    assert hi7.status != "FAIL_DIVERGENCE" or lo7.status != "PASS", (
         "sanity: a cap-25 PASS cannot become a cap-60 DIVERGENCE "
         "(would mean the longer game found a real divergence the "
         "shorter one hid — that is itself signal, not a test failure, "
-        "but it cannot co-occur with lo9 being a timeout)"
+        "but it cannot co-occur with lo7 being a timeout)"
     )
 
 
@@ -72483,6 +72498,542 @@ def test_cross_engine_real_eoe_shattered_wings_destroy_target_artifact_enchantme
     assert any(
         e["id"] == rs_target for e in rs.graveyard_snapshot(1)
     ), "Rust: destroyed flyer in p1's graveyard (byte-equal)"
+
+
+# ============================================================
+# Emergency Eject — Effect-uncovered single-gated tier
+# (~6,291 17lands decks). ``{2}{W}`` Instant: "Destroy target
+# nonland permanent. Its controller creates a Lander token."
+# Rust ``Effect::EmergencyEjectEffect { token_printing_id }``
+# (cards.rs single-pid variant; resolve in state_ops_resolve.rs
+# beside the Seedship Impact arm), bridged via cross_engine.py
+# ``emergency_eject_effect`` ↔ Python
+# ``DestroyTargetNonlandPermanentWithLanderForController``
+# (effects/generic/destroy.py:589). Same Lander-pid carrier
+# shape as Seedship Impact / Orbital Plunge. Three deviations
+# from Seedship: (1) filter widens to any non-land permanent,
+# (2) no MV gate (unconditional Lander rider), (3) Lander goes
+# to the FORMER controller of the destroyed permanent, NOT the
+# source-controller. Adding the Effect + bridge + the
+# trajectory.py reverse-serializer leaf + the
+# ``_SPELL_TOKEN_PID_KINDS`` tuple entry flips the printing
+# into the spell-card-bridge admit set (the guardrail queries
+# the LIVE covered set + round-trips the reverse serializer —
+# auto-grow, no hardcoded list).
+# ============================================================
+
+
+_EMERGENCY_EJECT_LANDER_DICT = {
+    # Mirror TOKEN_PRINTINGS["Lander"] — same shape as
+    # _RS2_LANDER_DICT used by the Seedship Impact probes.
+    "name": "Lander",
+    "card_types": ["Artifact"],
+    "supertypes": ["Token"],
+    "mana_cost": {"generic": 0},
+}
+
+
+def _build_rust_emergency_eject_state(
+    *,
+    target_card_types,
+    target_indestructible: bool = False,
+    target_owner: int = 1,
+    seed_target: bool = True,
+):
+    """Build a Rust state with an Emergency Eject spell on p0's stack
+    targeting the seeded permanent (when present). Returns
+    ``(rs, lander_pid, target_id_or_None)``. The Lander token printing
+    is registered first so the bespoke arm has a valid
+    ``token_printing_id``."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    # Register the Lander printing (gets pid = current registry_size).
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_EMERGENCY_EJECT_LANDER_DICT, 0, 1)
+    target_id = None
+    if seed_target:
+        vd = {
+            "name": "EE Target",
+            "card_types": list(target_card_types),
+            "mana_cost": {"generic": 3},
+        }
+        if target_indestructible:
+            vd["keywords"] = ["indestructible"]
+        # Add power/toughness for Creature-typed targets so the
+        # printing is well-formed.
+        if "Creature" in target_card_types:
+            vd["power"] = 2
+            vd["toughness"] = 2
+        target_id = rs.register_and_inject_object(vd, target_owner, ZB)
+    spell_id = rs.register_and_inject_object(
+        {"name": "Emergency Eject", "card_types": ["Instant"],
+         "effects": [{"kind": "emergency_eject_effect",
+                      "token_printing_id": lander_pid}]},
+        0, 0,
+    )
+    # No target seated — resolve arm's None-payload fallback picks the
+    # deterministic-first non-land permanent in ETB-timestamp order
+    # across BOTH bfs. Same convention as Cut Propulsion probes.
+    rs.push_to_stack(spell_id, 0)
+    return rs, lander_pid, target_id
+
+
+def _rs_ee_lander_count(rust_state, controller):
+    return sum(
+        1
+        for e in rust_state.battlefield_snapshot()
+        if e["printing_name"] == "Lander"
+        and e["controller_id"] == controller
+    )
+
+
+def test_rust_emergency_eject_destroys_opp_artifact_creates_lander_for_opp():
+    """Rust pin (a): destroy an opponent (p1) artifact → destroyed
+    AND a Lander token created under p1 (the FORMER controller of the
+    destroyed permanent, NOT the source's controller p0). This is the
+    load-bearing distinguishing feature vs Seedship Impact."""
+    rs, _pid, tid = _build_rust_emergency_eject_state(
+        target_card_types=["Artifact"], target_owner=1,
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert tid not in bf_ids, f"opp artifact must be destroyed; {bf_ids}"
+    assert tid in [int(e["id"]) for e in rs.graveyard_snapshot(1)]
+    assert _rs_ee_lander_count(rs, 1) == 1, (
+        "Lander must be created under p1 (FORMER controller of the "
+        "destroyed permanent) — NOT p0 (the source's controller)"
+    )
+    assert _rs_ee_lander_count(rs, 0) == 0, (
+        "Lander must NOT enter under p0 — Emergency Eject's Lander "
+        "goes to the former controller, NOT the caster. This is the "
+        "load-bearing distinguishing feature vs SeedshipImpactEffect."
+    )
+
+
+def test_rust_emergency_eject_destroys_creature_unconditional_lander():
+    """Rust pin (b): destroy a creature (non-land permanent) → Lander
+    rider fires UNCONDITIONALLY (no MV gate, unlike Seedship's mv≤2).
+    The destroyed creature has mv=3 — would NOT trigger Seedship's
+    Lander rider, but DOES trigger Emergency Eject's because the rider
+    is unconditional."""
+    rs, _pid, tid = _build_rust_emergency_eject_state(
+        target_card_types=["Creature"], target_owner=1,
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert tid not in bf_ids, "opp creature must be destroyed"
+    assert tid in [int(e["id"]) for e in rs.graveyard_snapshot(1)]
+    assert _rs_ee_lander_count(rs, 1) == 1, (
+        "Lander fires unconditionally (mv=3 would not satisfy Seedship's "
+        "≤2 gate, but Emergency Eject has no MV gate)"
+    )
+
+
+def test_rust_emergency_eject_destroys_enchantment_creates_lander():
+    """Rust pin (c): destroy an enchantment (non-land permanent) →
+    destroyed + Lander rider fires. Proves the non-land filter accepts
+    enchantments (broader than Seedship's artifact-OR-enchantment
+    intersection — though enchantments happen to qualify for both)."""
+    rs, _pid, tid = _build_rust_emergency_eject_state(
+        target_card_types=["Enchantment"], target_owner=1,
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert tid not in bf_ids, "opp enchantment must be destroyed"
+    assert _rs_ee_lander_count(rs, 1) == 1, (
+        "Lander rider fires unconditionally for an enchantment victim"
+    )
+
+
+def test_rust_emergency_eject_indestructible_target_skipped_no_lander():
+    """Rust pin (d): an indestructible non-land permanent is skipped by
+    the scan → no destroy, NO Lander (byte-equal to Python's
+    `destroy()`-returns-False early-return: no Lander consolation)."""
+    rs, _pid, tid = _build_rust_emergency_eject_state(
+        target_card_types=["Artifact"], target_indestructible=True,
+        target_owner=1,
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert tid in bf_ids, (
+        "indestructible permanent must survive (skipped by scan)"
+    )
+    assert _rs_ee_lander_count(rs, 1) == 0, (
+        "indestructible target → no destroy → NO Lander consolation"
+    )
+    assert _rs_ee_lander_count(rs, 0) == 0
+
+
+def test_rust_emergency_eject_land_target_skipped_silent_fizzle():
+    """Rust pin (e): a Land permanent is excluded by the filter (the
+    "nonland" qualifier) — the scan walks past it; with no other
+    permanent on the bf, the spell silently fizzles. Land is the
+    SOLE excluded card type — non-land includes Artifact, Creature,
+    Enchantment, Planeswalker."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_EMERGENCY_EJECT_LANDER_DICT, 0, 1)
+    # Seed ONLY a Land on p1's bf — the filter must exclude it.
+    land_id = rs.register_and_inject_object(
+        {"name": "EE Inert Land", "card_types": ["Land"]},
+        1, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Emergency Eject", "card_types": ["Instant"],
+         "effects": [{"kind": "emergency_eject_effect",
+                      "token_printing_id": lander_pid}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0, "spell must resolve (fizzling)"
+    # Land survives — filter excluded it.
+    assert land_id in [
+        int(e["id"]) for e in rs.battlefield_snapshot()
+    ], "Land must survive — the non-land filter excludes it"
+    # No Lander minted.
+    assert _rs_ee_lander_count(rs, 0) == 0
+    assert _rs_ee_lander_count(rs, 1) == 0
+
+
+def test_rust_emergency_eject_picks_first_non_land_in_etb_order():
+    """Rust pin (f): the deterministic-first picker chooses the
+    permanent with the LOWEST ETB timestamp across BOTH bfs (mirrors
+    `bf_iter_etb_sorted`), AS LONG AS it satisfies the non-land
+    filter. A first-seated Land does NOT bind the pick — the scan
+    walks past it to the next non-land permanent."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_EMERGENCY_EJECT_LANDER_DICT, 0, 1)
+    # First-seated: a Land on p1 — must be SKIPPED by the filter.
+    land_id = rs.register_and_inject_object(
+        {"name": "EE First Land", "card_types": ["Land"]}, 1, ZB,
+    )
+    # Second-seated: p1's 3/3 creature — should be the deterministic
+    # first non-land hit.
+    creature_id = rs.register_and_inject_object(
+        {"name": "EE First Non-Land", "card_types": ["Creature"],
+         "power": 3, "toughness": 3}, 1, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Emergency Eject", "card_types": ["Instant"],
+         "effects": [{"kind": "emergency_eject_effect",
+                      "token_printing_id": lander_pid}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert land_id in bf_ids, (
+        "the Land was excluded by the filter — must survive"
+    )
+    assert creature_id not in bf_ids, (
+        "the deterministic-first non-land non-indestructible permanent "
+        "must be destroyed"
+    )
+    assert _rs_ee_lander_count(rs, 1) == 1, (
+        "Lander created under the destroyed creature's former "
+        "controller (p1)"
+    )
+
+
+def test_emergency_eject_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the Effect + bridge arm + the
+    ``trajectory._python_spell_effect_to_dict`` reverse-serializer
+    leaf + the ``_SPELL_TOKEN_PID_KINDS`` tuple entry landed, the
+    genuine ``{2}{W}`` Emergency Eject Instant is now covered+bridged
+    AND round-trips the reverse serializer (the symbolic
+    ``_token_card_def`` resolves to the numeric ``token_printing_id``
+    via the seating pass — the no-fallback-hybrid discipline: the
+    symbolic ref is emitted ONLY because the seating pass that
+    resolves it now exists), so ``_printing_is_bridge_simple_spell``
+    admits it into the spell-card-bridge bench-admit set (the
+    guardrail queries the LIVE covered set — no hardcoded card list;
+    this is the lever's auto-grow §2 teeth firing on the close having
+    LANDED)."""
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+    )
+
+    real = get_active_source().get_printings().get("Emergency Eject")
+    if real is None:
+        pytest.skip("Emergency Eject absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(
+        se, DestroyTargetNonlandPermanentWithLanderForController
+    ), (
+        f"genuine Emergency Eject spell_effect must be "
+        f"DestroyTargetNonlandPermanentWithLanderForController; got "
+        f"{type(se).__name__}"
+    )
+    assert (
+        "DestroyTargetNonlandPermanentWithLanderForController"
+        in covered_python_class_set()
+    ), (
+        "the Rust Effect::EmergencyEjectEffect variant makes the "
+        "Python class covered"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt is not None
+    assert rt["kind"] == "emergency_eject_effect", (
+        f"reverse serializer must emit the emergency_eject_effect "
+        f"kind; got {rt}"
+    )
+    assert "_token_card_def" in rt, (
+        "the symbolic Lander reference must be emitted (resolved by "
+        "the loader's _seat_token_printings spell-axis pass)"
+    )
+    # The bridge arm constructs the field-free Python class (the pid
+    # is dropped — same as Seedship Impact / Orbital Plunge); a manual
+    # round-trip via the bridge needs the numeric pid form (post-
+    # seating), not the symbolic form.
+    rt_numeric = dict(rt)
+    rt_numeric.pop("_token_card_def")
+    rt_numeric["token_printing_id"] = 0  # dropped at the bridge
+    back = _ta_dict_to_python_effect(rt_numeric)
+    assert isinstance(
+        back, DestroyTargetNonlandPermanentWithLanderForController
+    ), (
+        f"dict→Python bridge must round-trip to "
+        f"DestroyTargetNonlandPermanentWithLanderForController; got "
+        f"{type(back).__name__}"
+    )
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Emergency Eject must auto-join the spell-card-bridge admit "
+        "set now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_emergency_eject_destroy_then_unconditional_lander_for_former_controller_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Emergency Eject
+    (~6,291 17lands decks). Effect-uncovered single-gated tier.**
+
+    Drives the **ACTUAL parsed Emergency Eject printing** on the
+    Python side: ``get_active_source().get_printings()["Emergency
+    Eject"]`` — which the live parser maps to a ``spell_effect`` of
+    ``DestroyTargetNonlandPermanentWithLanderForController()``
+    (field-free; verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {2}{W} — Destroy target nonland permanent. Its
+         controller creates a Lander token."
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Instant auto-joins the spell-card-bridge admit set).** The new
+    Effect arm under test —
+    ``Effect::EmergencyEjectEffect { token_printing_id }`` — is
+    shipped this slice (Rust single-pid payload variant + parse +
+    to_dict + resolve; same Lander-pid carrier shape as Seedship
+    Impact / Orbital Plunge), bridged via ``cross_engine.py``
+    ``emergency_eject_effect`` to the pre-existing field-free Python
+    ``DestroyTargetNonlandPermanentWithLanderForController``
+    (effects/generic/destroy.py:589). The full Emergency Eject
+    **Instant** auto-joins the spell-card-bridge bench-admit set
+    (pinned in
+    ``test_emergency_eject_auto_joins_spell_card_bridge_admit_set``).
+
+    **Three deviations from Seedship Impact (load-bearing for parity):**
+    1. Filter widens from artifact-OR-enchantment to non-land
+       permanent.
+    2. No printed-MV gate — Lander rider is unconditional.
+    3. Lander recipient is the FORMER controller of the destroyed
+       permanent, NOT the source-controller.
+
+    **Deterministic, no RNG.** p0 has the genuine Emergency Eject; p1
+    (opponent) has a 3-power creature with mv 3 (would NOT trigger
+    Seedship's mv≤2 Lander rider — proves the no-MV-gate change).
+    The Effect resolves: the creature is destroyed → p1 graveyard; a
+    Lander enters under p1 (former controller) — NOT under p0. The
+    WHOLE field view is asserted byte-equal post-resolve.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetNonlandPermanentWithLanderForController,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Emergency Eject")
+    if real is None:
+        pytest.skip("Emergency Eject absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(
+        se, DestroyTargetNonlandPermanentWithLanderForController
+    ), (
+        f"genuine Emergency Eject spell_effect must be "
+        f"DestroyTargetNonlandPermanentWithLanderForController; got "
+        f"{type(se).__name__}"
+    )
+
+    def _vanilla_creature(name, power, toughness, mv_generic):
+        return CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=mv_generic),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # Register the Lander on Rust (pid = registry_size). Inert library
+    # seed mirrored on Python so the STARTING field view is symmetric;
+    # Emergency Eject mints a FRESH Lander on the bf.
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_EMERGENCY_EJECT_LANDER_DICT, 0, 1)
+    from mtg_bot.cards import TOKEN_PRINTINGS
+    py_seed_lander = py.new_object(
+        TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.LIBRARY
+    )
+    py_seed_lander.summoning_sick = False
+    py.players[0].library.append(py_seed_lander)
+
+    # p1 opponent 3/3 creature with mv 3 — NOT covered by Seedship's
+    # mv≤2 rider, but Emergency Eject creates a Lander
+    # unconditionally. Only creature on either bf → deterministic-
+    # first pick.
+    py_target = py.new_object(
+        _vanilla_creature("EE Real Target", 3, 3, 3), owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    py_target.summoning_sick = False
+    py.battlefield.append(py_target)
+    rs_target = rs.register_and_inject_object(
+        {"name": "EE Real Target", "card_types": ["Creature"],
+         "power": 3, "toughness": 3, "mana_cost": {"generic": 3}},
+        1, ZB,
+    )
+
+    # Cast the genuine Emergency Eject on the creature (Python: real
+    # spell_effect on a StackItem with the chosen ("permanent", id)
+    # target; Rust: the bridged synthetic Instant with the bound
+    # target seated via current_resolve_payload_target_id — set via
+    # push_to_stack_with_target).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("permanent", py_target.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell_id = rs.register_and_inject_object(
+        {"name": "Emergency Eject", "card_types": ["Instant"],
+         "effects": [{"kind": "emergency_eject_effect",
+                      "token_printing_id": lander_pid}]},
+        0, 0,
+    )
+    rs.push_to_stack_with_target(rs_spell_id, 0, rs_target)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # Sanity: the creature is destroyed on BOTH and a Lander is
+    # created under p1 (FORMER controller) on BOTH.
+    assert not any(o.id == py_target.id for o in py.battlefield)
+    assert not any(
+        e["id"] == rs_target for e in rs.battlefield_snapshot()
+    )
+
+    # FULL byte-equal compare on the WHOLE field view. The creature
+    # is destroyed → p1 graveyard; the Lander enters under p1
+    # (former controller) byte-equal on BOTH engines (Rust via the
+    # registered pid, Python via TOKEN_PRINTINGS["Lander"] — the
+    # name-keyed view sees the SAME printing). The Lander's
+    # controller stamp is the LOAD-BEARING distinguishing feature
+    # vs Seedship Impact (which would mint under p0 here, not p1).
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Emergency Eject post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines (non-land filter + "
+        f"unconditional Lander + former-controller seat); "
+        f"diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on top of the full
+    # field byte-equality).
+    py_lander_p1 = [
+        o for o in py.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 1
+    ]
+    assert len(py_lander_p1) == 1, (
+        "Python: exactly one Lander under p1 (former controller)"
+    )
+    rs_lander_p1 = [
+        e for e in rs.battlefield_snapshot()
+        if e["printing_name"] == "Lander" and e["controller_id"] == 1
+    ]
+    assert len(rs_lander_p1) == 1, (
+        "Rust: exactly one Lander under p1 (former controller; "
+        "byte-equal)"
+    )
+    py_lander_p0 = [
+        o for o in py.battlefield
+        if o.printing.name == "Lander" and o.controller_id == 0
+    ]
+    assert not py_lander_p0, (
+        "Python: NO Lander under p0 — Emergency Eject's Lander goes "
+        "to the FORMER controller, NOT the caster"
+    )
+    rs_lander_p0 = [
+        e for e in rs.battlefield_snapshot()
+        if e["printing_name"] == "Lander" and e["controller_id"] == 0
+    ]
+    assert not rs_lander_p0, (
+        "Rust: NO Lander under p0 — byte-equal with Python's "
+        "former-controller seat"
+    )
+    assert any(
+        o.id == py_target.id for o in py.players[1].graveyard
+    ), "Python: destroyed creature in p1's graveyard"
+    assert any(
+        e["id"] == rs_target for e in rs.graveyard_snapshot(1)
+    ), "Rust: destroyed creature in p1's graveyard (byte-equal)"
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===

@@ -277,6 +277,24 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     # override class (same-named class absent → map to the real
     # pool-walked class; NOT a RUST_AHEAD_OF_POOL allowlist).
     "InvasiveManeuversEffect": "DealDamageToTargetCreatureSpacecraftBoosted",
+    # --- Emergency Eject slice (Effect-uncovered single-gated tier;
+    # ~6,291 17lands decks). Rust ``Effect::EmergencyEjectEffect {
+    # token_printing_id }`` (cards.rs single-pid variant; same
+    # Lander-pid carrier shape as ``SeedshipImpactEffect`` and
+    # ``DealDamageToTargetCreatureWithExcessLanderRider``) → Python
+    # class ``DestroyTargetNonlandPermanentWithLanderForController``
+    # (``effects/generic/destroy.py:589``). The Rust variant name is
+    # the card-name-tagged convention (mirrors Cut Propulsion /
+    # Diplomatic Relations / Invasive Maneuvers / Biosynthic Burst);
+    # the Python class is the descriptive
+    # ``DestroyTargetNonlandPermanentWithLanderForController`` spelling.
+    # The bridge arm in ``cross_engine.py`` ``emergency_eject_effect``
+    # constructs the field-free Python class (the pid is dropped at
+    # the bridge — Python mints the Lander intrinsically via
+    # ``TOKEN_PRINTINGS["Lander"]``, same as Seedship Impact / Orbital
+    # Plunge). Same Famished-Worldsire-precedent override class.
+    "EmergencyEjectEffect":
+        "DestroyTargetNonlandPermanentWithLanderForController",
 }
 
 # Rust variants that have NO direct Python counterpart in the current

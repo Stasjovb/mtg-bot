@@ -99,22 +99,28 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-# Re-anchored at the round-76 spell-card-bridge **Phase 2** landing —
-# Phase 2 ships the 2-slot heterogeneous-target grammar (the
-# DiplomaticRelationsEffect Rust variant + bridge + reverse-leaf +
-# StackItem.target_obj_id_2 / current_resolve_payload_target_id_2
-# double-swap + the guardrail's surgical (2,2)/('my_creature',
-# 'creature') widening), auto-growing the live guardrail's admit set
-# from the cycle-8 6-card single-target set to this exact 7 (the +1 is
-# Diplomatic Relations — the SOLE 2-slot card admitted; the widening is
-# surgical, NOT a blanket multi-target widen). This stays an EXACT-set
-# pin: a future legitimate grow (or any regression that admits an
-# un-covered spell) must fail loudly here and be re-anchored honestly,
-# never weakened to a superset/subset check.
+# Re-anchored at the `feature/next-effect-uncovered` landing (2026-05-21).
+# The session's per-card Tier-A closes auto-grew the live admit set
+# 7→11: Cut Propulsion (effect-uncovered-slice), Invasive Maneuvers
+# (invasive-maneuvers-slice), Shattered Wings (shattered-wings-slice),
+# and Emergency Eject (next-effect-uncovered slice — Lander-pid carrier
+# shape, same as Seedship Impact / Orbital Plunge) each shipped their
+# Effect + bridge + reverse-serializer leaf, and the
+# `_printing_is_bridge_simple_spell` guardrail's auto-grow §2 teeth
+# admitted each one in turn. Cut Propulsion + Invasive Maneuvers + Cut
+# are field-free pid-FREE single-target Tier-A; Shattered Wings is a
+# Sequence-wrapped (destroy + Surveil 1); Emergency Eject is a Lander-
+# pid carrier (same shape as Seedship Impact / Orbital Plunge — the
+# loader's _seat_token_printings walks ``spell_effect`` and resolves
+# the symbolic ``_token_card_def`` to the numeric ``token_printing_id``
+# Rust requires). The Phase 2 2-slot card (Diplomatic Relations)
+# remains the SOLE 2-slot admit — Phase 1 single-target carriers are
+# the bulk (10 cards). This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
-    "Biosynthic Burst", "Depressurize", "Diplomatic Relations",
-    "Focus Fire", "Orbital Plunge", "Radiant Strike",
-    "Seedship Impact",
+    "Biosynthic Burst", "Cut Propulsion", "Depressurize",
+    "Diplomatic Relations", "Emergency Eject", "Focus Fire",
+    "Invasive Maneuvers", "Orbital Plunge", "Radiant Strike",
+    "Seedship Impact", "Shattered Wings",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

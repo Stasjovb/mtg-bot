@@ -742,7 +742,8 @@ fn eff(cost: &crate::cards::ManaCost) -> &crate::cards::ManaCost {
 /// `DealDamageToTargetCreatureWithExcessLanderRider`,
 /// `BiosynthicBurstEffect`, `DiplomaticRelationsEffect`,
 /// `CutPropulsionEffect`,
-/// `DestroyTargetArtifactEnchantmentOrFlyingCreature`). Any other
+/// `DestroyTargetArtifactEnchantmentOrFlyingCreature`,
+/// `EmergencyEjectEffect`). Any other
 /// `Effect` (untargeted, or a not-yet-admitted targeted shape) takes
 /// the conservative `true` (trivially-satisfiable) branch — NEVER
 /// pruned. Conservative = NEVER narrower than Python ⇒ parity-neutral
@@ -1062,6 +1063,40 @@ fn spell_targets_satisfiable(
                     break;
                 }
                 if !found {
+                    return false;
+                }
+            }
+            // Emergency Eject: any non-land permanent on either
+            // battlefield, non-indestructible (Python
+            // `DestroyTargetNonlandPermanentWithLanderForController
+            // .legal_targets` `effects/generic/destroy.py:602-609`:
+            // `[("permanent", o.id) for o in state.battlefield if
+            // not o.printing.is_land]`). The resolve arm SKIPS
+            // indestructible at scan time (same Seedship precedent);
+            // mirror that here so the legality gate agrees with the
+            // resolve filter. NOT controller-restricted (it's an
+            // opponent-targeting removal spell).
+            Effect::EmergencyEjectEffect { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        let Some(p) =
+                            state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_land = p
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land");
+                        if is_land {
+                            return false;
+                        }
+                        !p.keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                    });
+                if !any {
                     return false;
                 }
             }
