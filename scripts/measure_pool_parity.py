@@ -731,6 +731,17 @@ PROBE_MODULES: tuple[Path, ...] = (
     # honest-stop drop list (Singularity Rupture, Mutinous Massacre,
     # Zero Point Ballad, Zealous Display, etc.).
     REPO_ROOT / "tests" / "test_probe_wrath_admit_widening.py",
+    # Reroute Systems closure (2026-05-21, this slice). Adds two
+    # ``test_cross_engine_real_eoe_reroute_systems_<mode>_parity``
+    # functions — the mode-0 (PumpTargetArtifactOrCreatureUntilEOT
+    # widened with ``granted_keywords`` + at-cast per-mode detector
+    # entry) and mode-1 (DealDamageToTargetTappedCreature new variant
+    # + at-resolve filter recheck) probes for Reroute Systems
+    # (6,132 17lands decks). The card AUTO-JOINS the spell-card-bridge
+    # admit set via the same Cycle 4 widen + the new Cycle 5/6
+    # per-mode detector entries + the new per-leaf reverse serializer
+    # arms. PROBED tier count +1.
+    REPO_ROOT / "tests" / "test_reroute_systems.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

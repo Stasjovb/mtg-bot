@@ -4127,10 +4127,14 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         DealDamageEachOpponent,
         DealDamageToTargetCreatureSpacecraftBoosted,
         DealDamageToTargetCreatureWithExcessLanderRider,
+        DealDamageToTargetTappedCreature,
         DealNDamageToEachCreature,
     )
     from mtg_bot.effects.generic.exile import (
         ExileAllArtifactsWithManaValueAtMost,
+    )
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
     )
 
     def _leaf(eff) -> Optional[dict]:
@@ -4491,6 +4495,45 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             return {
                 "kind": "exile_all_artifacts_with_mana_value_at_most",
                 "max_mv": int(eff.max_mv),
+            }
+        # **Reroute Systems closure (2026-05-21).** ModalChooseOne
+        # envelope **Cycle 6** per-leaf serializer for Reroute Systems
+        # mode 0: ``PumpTargetArtifactOrCreatureUntilEOT``. The Rust
+        # variant carries ``power_bonus``, ``toughness_bonus``, AND
+        # the extended ``granted_keywords`` list-of-strings field (the
+        # ``granted_keywords`` extension lands in this same closure
+        # so the round-trip is bit-equal for Reroute Systems mode 0's
+        # ``(0, 0, {"indestructible"})`` shape). Per the to_pydict
+        # parity convention, ``granted_keywords`` is emitted ONLY
+        # when non-empty so back-compat with every pre-closure parse
+        # site that omits the field stays intact.
+        if isinstance(eff, PumpTargetArtifactOrCreatureUntilEOT):
+            out: dict = {
+                "kind": "pump_target_artifact_or_creature_until_eot",
+                "power_bonus": int(eff.power_bonus),
+                "toughness_bonus": int(eff.toughness_bonus),
+            }
+            if eff.granted_keywords:
+                # Sort for deterministic ordering — Python's
+                # ``frozenset`` has unstable iteration order, but the
+                # serialized list must round-trip byte-equal.
+                out["granted_keywords"] = sorted(eff.granted_keywords)
+            return out
+        # **Reroute Systems closure (2026-05-21).** ModalChooseOne
+        # envelope **Cycle 6** per-leaf serializer for Reroute Systems
+        # mode 1: ``DealDamageToTargetTappedCreature``. The new Rust
+        # variant carries the single ``amount: i32`` field (REQUIRED
+        # — mirrors the round-28 REQUIRED-amount precedent for
+        # ``damage_each_opponent`` / ``damage_each_creature``). Non-
+        # negative invariant (Rust raises on negative at parse +
+        # resolve; mirror that here so the round-trip surface stays
+        # symmetric).
+        if isinstance(eff, DealDamageToTargetTappedCreature):
+            if eff.amount < 0:
+                return None
+            return {
+                "kind": "deal_damage_to_target_tapped_creature",
+                "amount": int(eff.amount),
             }
         return None
 

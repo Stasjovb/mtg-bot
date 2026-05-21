@@ -21324,11 +21324,11 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
         "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
         "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-        "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
-        "Under the Skin",
+        "Reroute Systems", "Ruinous Rampage", "Seedship Impact",
+        "Shattered Wings", "Under the Skin",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 17 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 18 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet via the beyond-the-quiet-slice's "
         f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
@@ -21336,7 +21336,12 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"(Ruinous Rampage via the modal-chooseone-cycle-4 widen + "
         f"per-leaf ``DealDamageEachOpponent`` / "
         f"``ExileAllArtifactsWithManaValueAtMost`` Effect serializer "
-        f"leaves) — the set grew 15→17 across the two lanes; "
+        f"leaves) + 1 Cycle-6 some-targeted modal admit (Reroute "
+        f"Systems via the reroute-systems-slice-v2 closure — extended "
+        f"``PumpTargetArtifactOrCreatureUntilEOT`` with ``granted_"
+        f"keywords`` field + added ``DealDamageToTargetTappedCreature`` "
+        f"variant + per-mode detector table entries + reverse "
+        f"serializer leaves) — the set grew 15→18 across three lanes; "
         f"auto-grows further as the remaining Tier-A and "
         f"per-mode-target modal spells close)")
 

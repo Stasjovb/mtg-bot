@@ -5699,6 +5699,78 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
+**Update 2026-05-21 (Reroute Systems closure landed —
+`feature/reroute-systems-slice-v2`; per-mode detector-table widen +
+two new/extended Effect variants + per-leaf reverse serializers +
+admit-set flip; +1 PROBED via Reroute Systems auto-join).**
+
+* **Rust `Effect::PumpTargetArtifactOrCreatureUntilEOT` extended
+  with `granted_keywords: Vec<String>`** field (declaration +
+  parse arm reading optional list-of-strings + to_pydict arm
+  emitting only when non-empty for back-compat + resolve arm
+  pushing per-keyword `UeotModifier::GrantKeyword` entries
+  alongside the existing PowerToughnessBonus push). Resolve arm
+  widened to walk BOTH battlefields (the printed oracle "target
+  artifact or creature" carries no controller filter — Python
+  unified `Pump.resolve` does likewise) and to read the at-cast
+  bound target from the StackItem when present. (0, 0, []) still
+  short-circuits as a no-op; (0, 0, {kw}) now runs the target scan
+  and applies the keyword grant — the Reroute Systems mode 0
+  canonical 0/0/{"indestructible"} shape.
+* **New Rust `Effect::DealDamageToTargetTappedCreature { amount:
+  i32 }`** (declaration + REQUIRED-amount parse arm rejecting
+  missing + negative + to_pydict arm + resolve arm with at-resolve
+  filter recheck per CR 608.2b — untapped-between-cast-and-resolve
+  fizzles silently). Reroute Systems mode 1 is the canonical
+  `amount=2` consumer.
+* **Cycle 5 per-mode detector table widened (state_ops_cast.rs)**
+  with two new arms: `PumpTargetArtifactOrCreatureUntilEOT` →
+  first artifact-or-creature on either bf in
+  `bf_iter_etb_sorted` order; `DealDamageToTargetTappedCreature`
+  → first tapped creature on either bf in same order.
+* **`spell_targets_satisfiable` arms in
+  `state_ops_legal.rs`** for both new/extended variants (any-
+  artifact-or-creature; any-tapped-creature).
+* **Bridge arms in `cross_engine.py`** for both variants:
+  `pump_target_artifact_or_creature_until_eot` widened to accept
+  optional `granted_keywords` list → Python `frozenset`;
+  `deal_damage_to_target_tapped_creature` new arm with REQUIRED
+  `amount`.
+* **Reverse-serializer leaves in
+  `trajectory.py::_python_spell_effect_to_dict::_leaf`** for both
+  Python classes — `PumpTargetArtifactOrCreatureUntilEOT` emits
+  `granted_keywords` only when non-empty (sorted for stable
+  ordering across frozenset iteration);
+  `DealDamageToTargetTappedCreature` emits `{"kind", "amount"}`
+  and bails on negative.
+
+**Card flip + admit set growth.** Reroute Systems (6,132 17lands
+decks) AUTO-JOINS the spell-card-bridge admit set via the same
+covered-and-bridged + round-trip-or-bail teeth Cycle 4 set up for
+ModalChooseOne — its `(1, 1)` `_PHASE1_SHAPE` matches the existing
+admit arm; both modes' leaves are now leaf-recognized; the modal
+composer round-trips clean. **17 → 18** admits. PROBED **273 →
+274**. Two new probes at `tests/test_reroute_systems.py`:
+`test_cross_engine_real_eoe_reroute_systems_mode_0_parity`
+(mode-0 cast-time-bound pump-with-indestructible against a Wild
+Bear; checks the `has_keyword` UEOT readout cross-engine) and
+`test_cross_engine_real_eoe_reroute_systems_mode_1_parity`
+(mode-1 burn against a tapped Wild Bear; checks the damage marker
+before SBA + the SBA-driven eviction). The Rust side of the
+mode-1 probe drives the bare leaf (no public API today for non-
+default `chosen_mode_idx=1` cast-time bind on a modal — mirrors
+the round-73 Ruinous Rampage mode-1 probe pattern).
+
+**Drill Too Deep / Archenemy's Charm / Scour for Scrap / Warping
+Wail STAY DECLINED.** Their per-leaf closures (different
+candidate effects: `PutChargeCountersOnTargetSpacecraftOr
+PlanetYouControl`, `ExileTargetCreature`, etc.) are independent
+slice asks; the per-mode detector table grows additively as each
+lands. `or_both=True` (Scour for Scrap) stays deferred — the
+serializer still bails on `ModalChooseOne(or_both=True)`.
+
+---
+
 **Update 2026-05-21 (Cycle 5 landed — per-mode target binding API
 on `cast_spell_noncreature`; substrate-only, NO admit widening, NO
 card-flip).** Cycle 5 shipped on

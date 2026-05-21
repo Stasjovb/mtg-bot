@@ -1137,6 +1137,63 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // **Reroute Systems closure (2026-05-21) — mode 0 leaf
+            // `PumpTargetArtifactOrCreatureUntilEOT`.** Satisfiable
+            // iff SOME artifact-or-creature on EITHER bf. Mirrors
+            // the cast-time per-mode detector's filter at
+            // `state_ops_cast.rs::cast_spell_noncreature` exactly
+            // (ANY-permanent, no controller filter, no indestructible
+            // reject — pump grants additive keywords, not
+            // destructive). Python SoT: `Pump.legal_targets` walks
+            // any permanent matching the filter
+            // (`effects/generic/pump.py` unified `Pump`).
+            Effect::PumpTargetArtifactOrCreatureUntilEOT { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        let Some(p) = state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_artifact =
+                            p.card_types.iter().any(|t| t == "Artifact");
+                        let is_creature =
+                            p.card_types.iter().any(|t| t == "Creature");
+                        is_artifact || is_creature
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // **Reroute Systems closure (2026-05-21) — mode 1 leaf
+            // `DealDamageToTargetTappedCreature`.** Satisfiable iff
+            // SOME tapped creature on EITHER bf. Mirrors the cast-
+            // time per-mode detector's filter exactly (ANY-side,
+            // creature + tapped). Python SoT: the unified
+            // `DealDamage.legal_targets` walks any creature
+            // matching the TargetSpec filter `IsCreature() &
+            // IsTapped()`.
+            Effect::DealDamageToTargetTappedCreature { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        if !o.tapped {
+                            return false;
+                        }
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Every other Effect (untargeted bodies — the dominant
             // bridge-simple-creature axis whose `spell_effect is
             // None`; or a not-yet-admitted targeted shape): the

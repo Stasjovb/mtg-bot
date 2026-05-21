@@ -141,8 +141,8 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Cut Propulsion", "Depressurize", "Diplomatic Relations",
     "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
     "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-    "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
-    "Under the Skin",
+    "Reroute Systems", "Ruinous Rampage", "Seedship Impact",
+    "Shattered Wings", "Under the Skin",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

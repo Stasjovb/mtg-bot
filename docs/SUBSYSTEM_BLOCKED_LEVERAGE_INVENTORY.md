@@ -570,14 +570,20 @@ Cycle 4 — new `Effect::ExileAllArtifactsWithManaValueAtMost` Rust
 variant + per-leaf serializer arms for `DealDamageEachOpponent`
 and `ExileAllArtifactsWithManaValueAtMost` + admit-predicate widen
 on the `(0, 0)`-shape all-untargeted ModalChooseOne path; 305
-17lands decks). Remaining **20 single-gated** members:
-Archenemy's Charm, Close Encounter, Coordinated
-Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
-Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
-Pull Through the Weft, Reroute Systems, Scour for
-Scrap, Scout for Survivors, Singularity Rupture, Systems Override,
-Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
-Ballad.
+17lands decks). **Reroute Systems closure (2026-05-21,
+`feature/reroute-systems-slice-v2`)** flipped Reroute Systems
+(6,132 17lands decks) COVERED → PROBED via the per-mode detector
+table widen + new `Effect::DealDamageToTargetTappedCreature` +
+extended `Effect::PumpTargetArtifactOrCreatureUntilEOT` with
+`granted_keywords` (the FIRST some-targeted ModalChooseOne card to
+close — the per-mode target-binding lane the round-78 envelope
+characterization predicted; admit set 17 → 18). Remaining **19
+single-gated** members: Archenemy's Charm, Close Encounter,
+Coordinated Clobbering, Darkness, Devastating Onslaught, Drill Too
+Deep, Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous
+Massacre, Pull Through the Weft, Scour for Scrap, Scout for
+Survivors, Singularity Rupture, Systems Override, Terminal
+Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
 
 * **Per-card cost:** 1-3 cycles each — **caveat (2026-05-21)**:
   the next-wrath-substrate triad walk
