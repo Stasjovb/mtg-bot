@@ -341,17 +341,24 @@ def test_non_modal_spell_unaffected_by_cycle5():
 
 def test_admit_predicate_still_declines_some_targeted_modal_cards_post_cycle5():
     """Cycle 5 substrate ships the per-mode target binding API but
-    DOES NOT widen the admit predicate. The 4 EoE some-targeted
-    modal cards STAY DECLINED — they need per-leaf Effect variants
-    (Cycle 6) before they can flip. This pin guards against
+    DOES NOT widen the admit predicate. The remaining EoE some-
+    targeted modal cards STAY DECLINED — they need per-leaf Effect
+    variants (Cycle 6+) before they can flip. This pin guards against
     accidentally enabling admit + diverging trajectories.
+
+    **Reroute Systems closure (2026-05-21, this slice).** Reroute
+    Systems is REMOVED from the declined list — its per-leaf
+    Effect variants (``PumpTargetArtifactOrCreatureUntilEOT`` widened
+    with ``granted_keywords`` + new ``DealDamageToTargetTappedCreature``
+    variant) LANDED in this slice, flipping it from DECLINED → PROBED.
+    Drill Too Deep, Scour for Scrap, and Archenemy's Charm STAY
+    DECLINED pending their own Cycle 6+ per-leaf closures.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
     declined_modals = [
-        "Reroute Systems",
         "Scour for Scrap",
         "Archenemy's Charm",
         "Drill Too Deep",

@@ -5854,13 +5854,48 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # riders-cascade precedent (the Pump.resolve filter-recheck
         # path + the targeting Decision pipeline are their own
         # surfaces beyond the bare bridge-arm slice).
+        # **Reroute Systems closure (2026-05-21).** ``granted_keywords``
+        # extended optional field (``Vec<String>`` on Rust, defaults to
+        # missing/empty for back-compat with every pre-closure dict).
+        # Each entry becomes a per-keyword
+        # ``UeotModifier::GrantKeyword`` push on the Rust resolve arm
+        # (mirror of Python's ``Pump.resolve`` per-keyword
+        # ``ApplyEffect(GrantKeywords(...), EndOfTurn())`` fanout at
+        # ``effects/generic/pump.py:85-94``). Python's
+        # ``PumpTargetArtifactOrCreatureUntilEOT`` inherits ``Pump``'s
+        # ``granted_keywords: frozenset[str]`` field — we frozenset()
+        # the list here for the Python construction. Reroute Systems
+        # mode 0 is the canonical 0/0/{"indestructible"} consumer.
         from mtg_bot.effects.generic.pump import (
             PumpTargetArtifactOrCreatureUntilEOT,
         )
+        gk = eff_dict.get("granted_keywords") or ()
         return PumpTargetArtifactOrCreatureUntilEOT(
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
+            granted_keywords=frozenset(gk),
         )
+    if kind == "deal_damage_to_target_tapped_creature":
+        # **Reroute Systems closure (2026-05-21).** New Rust variant
+        # ``Effect::DealDamageToTargetTappedCreature { amount: i32 }``
+        # — mirrors Python's ``DealDamageToTargetTappedCreature``
+        # (constructor-sugar subclass of ``DealDamage`` with the
+        # ``IsCreature() & IsTapped()`` filter; ``effects/generic/
+        # damage.py:932-950``). ``amount`` is REQUIRED on the Rust
+        # side (mirrors the round-28 ``damage_each_opponent`` /
+        # ``damage_each_creature`` REQUIRED-amount convention).
+        # Reroute Systems mode 1 is the canonical ``amount=2``
+        # consumer. The Python side accepts ``amount`` as a keyword
+        # arg (inherits from ``DealDamage(amount=...)``).
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToTargetTappedCreature,
+        )
+        if "amount" not in eff_dict:
+            raise KeyError(
+                "deal_damage_to_target_tapped_creature bridge arm: "
+                "missing required 'amount' field"
+            )
+        return DealDamageToTargetTappedCreature(amount=int(eff_dict["amount"]))
     if kind == "put_charge_counters_on_self":
         # **Round-26 BLOCKED-BRIDGE-ARM slice -- "put N charge counters
         # on this permanent" (PutChargeCountersOnSelf family, Blast-

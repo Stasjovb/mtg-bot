@@ -204,21 +204,28 @@ def test_admit_predicate_admits_ruinous_rampage_post_cycle4():
 
 
 def test_admit_predicate_declines_some_targeted_modal_cards():
-    """The 7 some-targeted ModalChooseOne cards STAY DECLINED post-
+    """The some-targeted ModalChooseOne cards STAY DECLINED post-
     Cycle-4. Per-mode target binding (Cycle 5) is the substrate that
     admits them.
 
-    Tested cards: Reroute Systems (``(1, 1)``-shape), Scour for Scrap
-    (``or_both=True``; bails at the modal composer too), Archenemy's
-    Charm (``(1, 2)``-shape), Drill Too Deep (``(1, 1)``-shape),
-    Warping Wail (``(0, 1)``-shape).
+    Tested cards: Scour for Scrap (``or_both=True``; bails at the
+    modal composer too), Archenemy's Charm (``(1, 2)``-shape),
+    Drill Too Deep (``(1, 1)``-shape), Warping Wail
+    (``(0, 1)``-shape).
+
+    **Reroute Systems closure (2026-05-21).** Reroute Systems
+    (originally pinned in the Cycle 4 declined list) is REMOVED here
+    — its per-leaf Effect variants landed in the reroute-systems-
+    slice-v2 closure, flipping it DECLINED → ADMITTED via the same
+    target-grammar gate + round-trip-or-bail teeth Cycle 4 set up
+    for ``ModalChooseOne``. The remaining 4 some-targeted modals
+    stay declined.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
     declined_modals = [
-        "Reroute Systems",
         "Scour for Scrap",
         "Archenemy's Charm",
         "Drill Too Deep",

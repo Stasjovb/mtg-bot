@@ -173,17 +173,18 @@ def test_admit_predicate_post_cycle4_modal_admit():
         leaves to the ``_python_spell_effect_to_dict`` ``_leaf`` table;
         Ruinous Rampage's ``(0, 0)``-shape ModalChooseOne now
         round-trips clean → admit predicate FLIPS to True.
-      * Reroute Systems (the lane-V honest-stop card) — STAYS
-        DECLINED because its modes are ``(1, 1)``-shape targeted
-        (``PumpTargetArtifactOrCreatureUntilEOT`` +
-        ``DealDamageToTargetTappedCreature``) and the per-mode target-
-        binding slice has NOT shipped; the ``_leaf`` table has no arms
-        for the targeted modes so the serializer returns ``None`` and
-        the round-trip-or-bail tooth fires.
-
-    The pre-Cycle-4 unconditional-reject behavior is GONE — the admit
-    set auto-grows by exactly the modal cards whose leaves are all
-    serializable (today: Ruinous Rampage only, +1 admit).
+      * **Reroute Systems closure (2026-05-21).** Reroute Systems
+        FLIPPED DECLINED → ADMITTED via the reroute-systems-slice-v2
+        closure (extended ``PumpTargetArtifactOrCreatureUntilEOT``
+        with ``granted_keywords`` field + added
+        ``DealDamageToTargetTappedCreature`` variant + per-mode
+        detector table entries + reverse serializer leaves). Pre-
+        closure the ``_leaf`` table had no arms for the targeted
+        modes; post-closure both modes round-trip cleanly so the
+        admit predicate ADMITS the some-targeted ``(1, 1)``-shape
+        modal. The remaining some-targeted modals (Scour for Scrap,
+        Archenemy's Charm, Drill Too Deep, Warping Wail) stay
+        declined pending their own Cycle 6+ closures.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
@@ -192,8 +193,8 @@ def test_admit_predicate_post_cycle4_modal_admit():
     p = prs["Ruinous Rampage"]
     # Cycle 4 admits Ruinous Rampage via the all-untargeted modal path.
     assert _printing_is_bridge_simple_spell(p) is True
-    # Some-targeted modal STAYS DECLINED (Cycle 5 deferred — needs
-    # per-mode target-binding for the modal envelope to admit
-    # ``(1, 1)``-shape modal cards).
+    # Reroute Systems FLIPPED DECLINED → ADMITTED via the
+    # reroute-systems-slice-v2 closure (per-mode target-binding +
+    # per-leaf serializers for both modes).
     rr = prs["Reroute Systems"]
-    assert _printing_is_bridge_simple_spell(rr) is False
+    assert _printing_is_bridge_simple_spell(rr) is True

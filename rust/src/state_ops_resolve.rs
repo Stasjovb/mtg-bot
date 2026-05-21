@@ -15015,11 +15015,22 @@ fn apply_effect(
         // rather than just "Creature". UEOT-modifier mechanism is
         // identical — modifier auto-expires at the next cleanup step
         // via the r27 CR 514.3 UEOT-clear pass.
-        Effect::PumpTargetArtifactOrCreatureUntilEOT { power_bonus, toughness_bonus } => {
-            if *power_bonus == 0 && *toughness_bonus == 0 {
+        Effect::PumpTargetArtifactOrCreatureUntilEOT {
+            power_bonus,
+            toughness_bonus,
+            granted_keywords,
+        } => {
+            // Reroute Systems closure (2026-05-21): a bare-pump (no
+            // granted keywords) with (0, 0) bonus short-circuits as
+            // before; once granted_keywords is non-empty, the
+            // keyword-grant alone justifies running the target scan
+            // even if power+toughness are both 0 (Reroute Systems
+            // mode 0 IS the canonical 0/0/{"indestructible"} shape).
+            if *power_bonus == 0 && *toughness_bonus == 0 && granted_keywords.is_empty() {
                 return Ok(());
             }
             // Source-controller resolution (mirrors PumpTargetCreatureUntilEOT).
+            // 5-zone walk + stack fallback.
             let mut src_controller: Option<u8> = None;
             'outer: for player in &state.players {
                 for zone in [
@@ -15035,37 +15046,209 @@ fn apply_effect(
                     }
                 }
             }
-            let Some(controller) = src_controller else {
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            if src_controller.is_none() {
                 return Ok(()); // source untrackable → silent fizzle
-            };
-            let cidx = controller as usize;
-            let target_id: Option<u32> = {
-                let bf = &state.players[cidx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.printings.get(obj.printing_id as usize)?;
-                    let is_eligible = printing
-                        .card_types
-                        .iter()
-                        .any(|t| t == "Artifact" || t == "Creature");
-                    if is_eligible {
-                        Some(obj.id)
-                    } else {
-                        None
-                    }
-                })
+            }
+            // Reroute Systems closure (2026-05-21): widen the target
+            // scan from controller-only to BOTH battlefields. Python
+            // SoT (`PumpTargetArtifactOrCreatureUntilEOT` →
+            // unified `Pump.resolve` walking ANY-permanent filter)
+            // does NOT controller-restrict — the printed oracle
+            // "target artifact or creature" carries no controller
+            // filter. The pre-closure controller-only scan was a
+            // first-slice narrowing that was load-bearing-WRONG for
+            // Reroute Systems mode 0 ("gains indestructible UEOT"
+            // on an opponent's permanent is a legal target). Mirrors
+            // `DepressurizeEffect` / `CutPropulsionEffect` /
+            // `DealDamageToTargetCreatureSpacecraftBoosted` ANY-
+            // creature scan precedent.
+            //
+            // Prefer the at-cast bound target (via the per-mode
+            // detector table extended in this closure); fall back to
+            // the deterministic-first scan over both bfs if no
+            // bound target was threaded (defensive — the at-cast
+            // bind is the live path for the modal admit, the
+            // resolve-time scan stays the safety net for synthetic
+            // direct-effect tests).
+            let bound = state
+                .stack
+                .iter()
+                .find(|i| i.source_obj_id == source_obj_id)
+                .and_then(|i| i.target_obj_id);
+            let target_id: Option<u32> = if let Some(bid) = bound {
+                Some(bid)
+            } else {
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing = state.registry.lookup(obj.printing_id)?;
+                        let is_eligible = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact" || t == "Creature");
+                        if is_eligible {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
             };
             let Some(target_id) = target_id else {
                 return Ok(()); // no eligible artifact/creature → silent fizzle
             };
+            // Locate the target's home player (target may be on
+            // either bf).
+            let target_pidx_opt: Option<usize> = state
+                .players
+                .iter()
+                .position(|p| p.battlefield.iter().any(|o| o.id == target_id));
+            let Some(target_pidx) = target_pidx_opt else {
+                return Ok(()); // target left bf between bind + resolve
+            };
             let zone: &mut Vec<GameObject> =
-                Arc::make_mut(&mut state.players[cidx].battlefield);
+                Arc::make_mut(&mut state.players[target_pidx].battlefield);
             for obj in zone.iter_mut() {
                 if obj.id == target_id {
-                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
-                        power: *power_bonus,
-                        toughness: *toughness_bonus,
-                    });
+                    if *power_bonus != 0 || *toughness_bonus != 0 {
+                        obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                            power: *power_bonus,
+                            toughness: *toughness_bonus,
+                        });
+                    }
+                    // Reroute Systems closure (2026-05-21): grant
+                    // each keyword as its own `GrantKeyword` modifier
+                    // (mirrors the `GrantKeywordsToTargetCreature
+                    // UntilEOT` per-keyword fanout at
+                    // `state_ops_resolve.rs:15695-15700`). All
+                    // entries auto-expire at the next cleanup step
+                    // via the r27 CR 514.3 UEOT-clear pass.
+                    for kw in granted_keywords {
+                        obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                            keyword: kw.clone(),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+        Effect::DealDamageToTargetTappedCreature { amount } => {
+            // Reroute Systems closure (2026-05-21). Mirrors Python
+            // `DealDamageToTargetTappedCreature(amount=N)` (sugar on
+            // `DealDamage` with filter `IsCreature() & IsTapped()`;
+            // `effects/generic/damage.py:932-950`). The cast-time
+            // bind on `StackItem.target_id` locks a specific target;
+            // this arm re-verifies the target is STILL a tapped
+            // creature on the battlefield per CR 608.2b and applies
+            // the damage. A target that untapped or left the bf
+            // between cast and resolve is silently skipped (mirrors
+            // the unified Python `DealDamage.resolve` filter fizzle
+            // at `damage.py:78-79`).
+            if *amount <= 0 {
+                return Ok(()); // CR 119.5: 0-or-less damage is a no-op
+            }
+            // Source-controller resolution (5-zone walk + stack
+            // fallback). Mirrors the sibling pump arm above.
+            let mut src_controller: Option<u8> = None;
+            'outer_ddtt: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer_ddtt;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            if src_controller.is_none() {
+                return Ok(()); // source untrackable → silent fizzle
+            }
+            // Prefer the at-cast bound target; fall back to the
+            // deterministic-first tapped-creature scan over both
+            // bfs (defensive — synthetic direct-effect tests skip
+            // the cast path).
+            let bound = state
+                .stack
+                .iter()
+                .find(|i| i.source_obj_id == source_obj_id)
+                .and_then(|i| i.target_obj_id);
+            let target_id: Option<u32> = if let Some(bid) = bound {
+                Some(bid)
+            } else {
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        if !obj.tapped {
+                            return None;
+                        }
+                        let printing = state.registry.lookup(obj.printing_id)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible tapped creature → silent fizzle
+            };
+            // At-resolve filter recheck per CR 608.2b: the target
+            // must STILL be a tapped creature on the battlefield.
+            let target_pidx_opt: Option<usize> = state
+                .players
+                .iter()
+                .position(|p| p.battlefield.iter().any(|o| o.id == target_id));
+            let Some(target_pidx) = target_pidx_opt else {
+                return Ok(()); // target left bf between bind + resolve
+            };
+            {
+                let bf = &state.players[target_pidx].battlefield;
+                let Some(obj) = bf.iter().find(|o| o.id == target_id) else {
+                    return Ok(());
+                };
+                if !obj.tapped {
+                    return Ok(()); // untapped between cast + resolve
+                }
+                let is_creature = state
+                    .registry
+                    .lookup(obj.printing_id)
+                    .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                    .unwrap_or(false);
+                if !is_creature {
+                    return Ok(()); // no longer a creature
+                }
+            }
+            // Apply damage to the target (CR 119.3: damage marked
+            // on creature; SBAs handle the lethal check later). Use
+            // saturating add into i16 mirror to match the
+            // `deal_damage` PyMethod convention.
+            let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[target_pidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.damage = obj.damage.saturating_add(amount_i16);
                     break;
                 }
             }

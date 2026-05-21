@@ -2092,6 +2092,60 @@ impl GameState {
                             Some(o.id)
                         })
                 }
+                // **Reroute Systems closure (2026-05-21) — mode 0:
+                // `PumpTargetArtifactOrCreatureUntilEOT`.** First
+                // artifact-or-creature on EITHER bf in
+                // `bf_iter_etb_sorted` order. NO controller filter
+                // — the printed oracle "target artifact or creature"
+                // is ANY-permanent (Python SoT `Pump.resolve` /
+                // `PumpTargetArtifactOrCreatureUntilEOT.__post_init__`
+                // walks any permanent, no controller narrowing). The
+                // filter is BROADER than `DestroyTargetArtifact` (no
+                // indestructible reject — pump targets DO include
+                // indestructible permanents; the granted keyword is
+                // additive, not destructive).
+                Some(crate::cards::Effect::PumpTargetArtifactOrCreatureUntilEOT { .. }) => {
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            let p = self.registry.lookup(o.printing_id)?;
+                            let is_artifact = p.card_types.iter().any(|t| t == "Artifact");
+                            let is_creature = p.card_types.iter().any(|t| t == "Creature");
+                            if is_artifact || is_creature {
+                                Some(o.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                // **Reroute Systems closure (2026-05-21) — mode 1:
+                // `DealDamageToTargetTappedCreature`.** First TAPPED
+                // creature on EITHER bf in `bf_iter_etb_sorted`
+                // order. NO controller filter — the printed oracle
+                // "target tapped creature" is ANY-side. Filter
+                // mirrors Python's
+                // `DealDamageToTargetTappedCreature.__post_init__`
+                // TargetSpec(`IsCreature() & IsTapped()`) exactly.
+                // The at-resolve recheck (per CR 608.2b) is enforced
+                // in the resolve arm (`state_ops_resolve.rs`); the
+                // cast-time bind picks a target that IS tapped right
+                // now, the resolve recheck handles "untapped between
+                // cast and resolve".
+                Some(crate::cards::Effect::DealDamageToTargetTappedCreature { .. }) => {
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            if !o.tapped {
+                                return None;
+                            }
+                            let p = self.registry.lookup(o.printing_id)?;
+                            if p.card_types.iter().any(|t| t == "Creature") {
+                                Some(o.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
                 // Any other chosen mode (or no recognized leaf): keep
                 // the default `bound_target` from the ladder above.
                 // The admit predicate keeps modal spells declined
