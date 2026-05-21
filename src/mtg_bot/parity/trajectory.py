@@ -4114,6 +4114,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         SeedshipImpactEffect,
     )
     from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureSpacecraftBoosted,
         DealDamageToTargetCreatureWithExcessLanderRider,
     )
 
@@ -4205,6 +4206,32 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # §2 teeth).
         if isinstance(eff, CutPropulsionEffect):
             return {"kind": "cut_propulsion_effect"}
+        # Invasive Maneuvers (Effect-uncovered Tier-A; ~10,981 17lands
+        # decks). Two-int covered variant — Rust's ``parse_effect``
+        # ``"invasive_maneuvers_effect"`` arm carries ``base`` +
+        # ``boosted`` ints and the dict→Python bridge arm
+        # (cross_engine.py ``invasive_maneuvers_effect``) constructs
+        # ``DealDamageToTargetCreatureSpacecraftBoosted(base=base,
+        # boosted=boosted)``. The single creature target rides on the
+        # spell StackItem, NOT in this dict; the Spacecraft check is
+        # intrinsic (resolves off the source-controller's bf via the
+        # printing's ``subtypes`` — Spacecraft is a SUBTYPE per
+        # ``cards/base.py:1056-1057``). No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is
+        # the clean ``focus_fire_effect`` single-int-field idiom
+        # widened to two ints. Adding this leaf is what flips Invasive
+        # Maneuvers into the spell-card-bridge admit set: with the
+        # Rust variant + bridge arm landed it is now covered+bridged
+        # AND round-trips here, so
+        # :func:`_printing_is_bridge_simple_spell` admits the ``{1}{R}``
+        # single-target Instant (auto-grow, no hardcoded list — the
+        # §2 teeth).
+        if isinstance(eff, DealDamageToTargetCreatureSpacecraftBoosted):
+            return {
+                "kind": "invasive_maneuvers_effect",
+                "base": int(eff.base),
+                "boosted": int(eff.boosted),
+            }
         # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
         # the Lander-spell-token-seating sub-substrate (round-73; the
         # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their

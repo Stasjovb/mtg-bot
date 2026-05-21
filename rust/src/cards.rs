@@ -1563,6 +1563,77 @@ pub enum Effect {
     /// `BiosynthicBurstEffect` / `DiplomaticRelationsEffect` Tier-A
     /// unit-variant convention.
     CutPropulsionEffect,
+    /// **Effect-uncovered Tier-A — Invasive Maneuvers (~10,981
+    /// 17lands decks).** "Invasive Maneuvers deals 3 damage to target
+    /// creature. It deals 5 damage instead if you control a Spacecraft."
+    ///
+    /// Mirrors Python's `DealDamageToTargetCreatureSpacecraftBoosted`
+    /// (`effects/generic/damage.py:850-905`) — the ONLY EoE card with
+    /// this exact "deals N damage / M instead if you control a
+    /// Spacecraft" shape. Single-target damage with a Spacecraft-on-
+    /// caster's-bf conditional amount. The Phase-1 single-target
+    /// spell-card-bridge shape (`target_count_range == (1, 1)`,
+    /// `target_slot_kinds == ()`, any-creature filter — Python's
+    /// `IsCreature()` slot filter is NOT controller-restricted).
+    ///
+    /// **Two-int field variant** (the `pump_target_creature_until_eot`
+    /// idiom; NOT the field-free `CutPropulsionEffect` /
+    /// `DiplomaticRelationsEffect` unit-variant idiom — Invasive
+    /// Maneuvers carries the printed `3`/`5` integers parameterized
+    /// off the printed oracle text by the per-clause
+    /// `_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT` recognizer at
+    /// `parser/effects.py:4668-4673`). Mirrors Python's
+    /// `DealDamageToTargetCreatureSpacecraftBoosted(base=3, boosted=5)`
+    /// `@dataclass(frozen=True)` instance. Default `(3, 5)` on both
+    /// sides for a key-elided clean round-trip; the dataclass field
+    /// defaults match (`base: int = 3`, `boosted: int = 5`).
+    ///
+    /// **Resolve semantics (mirrors `damage.py:875-897` byte-equal to
+    /// the SoT):**
+    /// 1. Read the cast-time-bound target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    `FocusFireEffect` / `CutPropulsionEffect` payload-target swap
+    ///    pattern). When `None` (synthetic-test `push_to_stack` path
+    ///    that doesn't seat a target), fall back to the deterministic-
+    ///    first creature in ETB-timestamp order across BOTH bfs
+    ///    (mirrors `bf_iter_etb_sorted` — Python's `state.battlefield`
+    ///    centralized walk = the SoT).
+    /// 2. Re-validate the bound target at resolve (CR 608.2b): the
+    ///    target must still be on a battlefield AND its printing must
+    ///    still satisfy `card_types ∋ "Creature"`. Illegal target →
+    ///    silent fizzle (Python's `_slot_target_still_legal` returns
+    ///    early at `damage.py:891-893`).
+    /// 3. Source-controller resolution (5-zone walk + stack scan; the
+    ///    established sister shape — `FocusFireEffect`,
+    ///    `BiosynthicBurstEffect`). Mirrors Python's `controller_id`
+    ///    parameter passed into `_amount(state, controller_id)`.
+    /// 4. Scan the source-controller's battlefield for any object
+    ///    whose printing's `subtypes` contains "Spacecraft" (NOT
+    ///    `card_types` — Spacecraft is a SUBTYPE per `cards/base.py:
+    ///    1056-1057` `is_spacecraft = "Spacecraft" in subtypes`).
+    ///    Mirrors Python's `o.printing.is_spacecraft` predicate at
+    ///    `damage.py:876-879`. Amount = `boosted` if any controlled
+    ///    Spacecraft present, else `base`.
+    /// 5. Apply damage via `obj.damage.saturating_add(amount_i16)` —
+    ///    the established `DealDamageAnyTarget` / `CutPropulsionEffect`
+    ///    damage-application shape. Set `damaged_this_turn = true`
+    ///    on the receiver (mirrors Python's `_apply_damage` at
+    ///    `effects/base.py:299-300`). Dispatch the DEALT_DAMAGE
+    ///    receiver-side event for any aura-attached "when enchanted
+    ///    creature dealt damage" triggers (Cryoshatter, Pain for All)
+    ///    — mirrors Python's `_fire_enchanted_dealt_damage_triggers`
+    ///    call at the tail of `_apply_damage`,
+    ///    `effects/base.py:303-305`. The damage marker is set BEFORE
+    ///    the event so aura readers see the post-damage state,
+    ///    matching Python (which sets `obj.damage += amount` before
+    ///    invoking the fire-triggers helper).
+    ///
+    /// **Schema parity with Python.** Two-int variant on both sides:
+    /// `{ base: i32, boosted: i32 }` ↔ Python's `base: int`,
+    /// `boosted: int` dataclass fields. The bridge translates this
+    /// Rust variant to `DealDamageToTargetCreatureSpacecraftBoosted(
+    /// base=base, boosted=boosted)`.
+    InvasiveManeuversEffect { base: i32, boosted: i32 },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -7734,6 +7805,31 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (`current_resolve_payload_target_id`), NOT in this dict.
             Ok(Effect::CutPropulsionEffect)
         }
+        "invasive_maneuvers_effect" => {
+            // Effect-uncovered Tier-A — Invasive Maneuvers. Two-int
+            // variant: `base` (printed `3`) + `boosted` (printed `5`)
+            // — the per-clause `_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_
+            // SPACECRAFT` parser at `parser/effects.py:4668-4673`
+            // captures the two integers off the printed oracle text.
+            // Mirrors Python's
+            // `DealDamageToTargetCreatureSpacecraftBoosted(base=3,
+            // boosted=5)` `@dataclass(frozen=True)` instance. Default
+            // `(3, 5)` on both sides (Python dataclass field defaults
+            // `base: int = 3`, `boosted: int = 5`) so a key-elided
+            // round-trip is clean. The single target rides on the
+            // StackItem (`current_resolve_payload_target_id`), NOT in
+            // this dict; the Spacecraft check is intrinsic (resolves
+            // off the source-controller's battlefield, NOT in dict).
+            let base: i32 = match dict.get_item("base")? {
+                Some(v) => v.extract()?,
+                None => 3,
+            };
+            let boosted: i32 = match dict.get_item("boosted")? {
+                Some(v) => v.extract()?,
+                None => 5,
+            };
+            Ok(Effect::InvasiveManeuversEffect { base, boosted })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -11430,6 +11526,20 @@ pub(crate) fn effect_to_pydict<'py>(
             // reverse-serializer leaf. The single target is NOT
             // serialized here — it rides on the StackItem.
             d.set_item("kind", "cut_propulsion_effect")?;
+        }
+        Effect::InvasiveManeuversEffect { base, boosted } => {
+            // Effect-uncovered Tier-A — Invasive Maneuvers. Two-int
+            // variant — `kind` + `base` + `boosted` (the
+            // `focus_fire_effect` single-int-field to_dict shape,
+            // widened to two ints to mirror Python's
+            // `base`/`boosted` dataclass fields). Bidirectional with
+            // the `invasive_maneuvers_effect` parse arm + the
+            // cross_engine.py bridge arm + the trajectory.py
+            // reverse-serializer leaf. The single target is NOT
+            // serialized here — it rides on the StackItem.
+            d.set_item("kind", "invasive_maneuvers_effect")?;
+            d.set_item("base", *base)?;
+            d.set_item("boosted", *boosted)?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

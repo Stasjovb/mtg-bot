@@ -116,17 +116,7 @@ audit covered:
 **Conclusion: no stale claims found in the inventory body or the
 classifier.** The post-loader_admits-sweep+tannuk-baloth-probes state
 is honest and tight — every BLOCKED card is genuinely blocked, every
-classifier decision is internally consistent. (Subsequent 2026-05-21
-unclassified-residual lane: the audit DID surface a doc-level
-attribution gap — the scout's `_gates_for_loader_card` enumeration
-only consulted structured `static_abilities` objects, not
-printing-level bool flags like
-``restricts_noncreature_spells_to_one_per_turn``, so Deafening
-Silence was attributed `unclassified` rather than the more honest
-`static_rule_text`. The unclassified-residual lane added the new
-gate row and moved Deafening Silence; Leyline of Mutation's
-`unclassified` attribution is confirmed-honest by the same hand
-re-walk.) The only updates the
+classifier decision is internally consistent. The only updates the
 audit produced are doc-cosmetic refreshes: the §0 before→after
 table now carries the post-probe-batches-HHHH-JJJJ column (PROBED
 252 → 259), and the §3(2) Aura Phase 4 S3 row + §7 cross-ref are
@@ -174,13 +164,75 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-invasive-maneuvers
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                      267
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                       88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                        0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                        0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                      120
 ```
+
+**post-invasive-maneuvers delta (this lane):** strict **+1 PROBED /
+−1 BLOCKED-subsystem-gated** (Invasive Maneuvers, 10,981 17lands
+single-gated decks — the highest-leverage simple-shape card on the
+23-card Effect-uncovered single-gated tail post-Cut-Propulsion).
+Genuine substrate close: new `Effect::InvasiveManeuversEffect { base,
+boosted }` two-int variant (Rust enum + parse + to_pydict + resolve
+arm), `state_ops_legal.rs` `spell_targets_satisfiable` any-creature
+arm (mirrors Cut Propulsion's `IsCreature()` ANY-creature shape),
+`cross_engine.py` `invasive_maneuvers_effect` dict→Python bridge
+(constructs `DealDamageToTargetCreatureSpacecraftBoosted(base=base,
+boosted=boosted)`), `trajectory.py` `_python_spell_effect_to_dict`
+two-int reverse-serializer leaf, `effect_coverage.py`
+`RUST_TO_PYTHON_OVERRIDES` mapping `InvasiveManeuversEffect` →
+`DealDamageToTargetCreatureSpacecraftBoosted`, plus 7 new probes in
+`tests/test_parity_smoke.py` (5 Rust pins: no-Spacecraft base damage,
+caster's-Spacecraft boost, opponent-Spacecraft-does-NOT-boost,
+no-creature fizzle, deterministic-first ETB-order pick; 1 auto-join
+admit-set pin; 1 GENUINE real-EoE cross-engine byte-equal probe
+driving the parsed Invasive Maneuvers printing against a 2/6
+creature with a caster-controlled Spacecraft → 5 damage / no SBA
+fire → full field-view byte-equal). The Spacecraft predicate reads
+`printing.subtypes` (NOT `card_types` — Spacecraft is a SUBTYPE per
+`cards/base.py:1056-1057`: `is_spacecraft = "Spacecraft" in
+subtypes`). Source-controller resolution mirrors the proven
+5-zone-walk + stack-scan from `FocusFireEffect` / `BiosynthicBurst
+Effect`. DEALT_DAMAGE receiver-side event dispatched after damage
+apply for aura-attached `enchanted_creature_dealt_damage` triggers
+byte-equal with Python's `_fire_enchanted_dealt_damage_triggers`.
+Auto-grow: the lever's §2 teeth fire on the Tier-A close having
+LANDED — Invasive Maneuvers's `{1}{R}` Instant flips into the spell-
+card-bridge admit set via the covered+bridged + reverse-serializer-
+round-trips gate (admit set 8→9). The `1gate` column on the Effect-
+uncovered row drops 23 → 22 (`decks(1g)` 91,359 → 80,378).
+
+**post-cut-propulsion delta (prior lane):** strict **+1 PROBED / −1
+BLOCKED-subsystem-gated** (Cut Propulsion, 11,990 17lands single-
+gated decks — the highest-leverage simple-shape card on the 24-card
+Effect-uncovered single-gated tail). Genuine substrate close: new
+`Effect::CutPropulsionEffect` field-free unit variant (Rust enum +
+parse + to_pydict + resolve arm), `state_ops_legal.rs`
+`spell_targets_satisfiable` any-creature arm, `cross_engine.py`
+`cut_propulsion_effect` dict→Python bridge, `trajectory.py`
+`_python_spell_effect_to_dict` reverse-serializer leaf for
+`CutPropulsionEffect`, plus 7 new probes in `tests/test_parity_smoke.py`
+(5 Rust pins: non-flyer, flyer-doubler, 0-power silent-noop, no-
+creature fizzle, deterministic-first ETB-order pick; 1 auto-join
+admit-set pin; 1 GENUINE real-EoE cross-engine byte-equal probe
+driving the parsed Cut Propulsion printing against a 2/2 flyer →
+4 self-damage → SBA-destroy → full field-view byte-equal). The
+flying-doubler reads `battlefield_has_keyword` (printed + UEOT +
+aura-granted + anthem-granted keywords folded). The effective-power
+read mirrors the proven counters-inclusive `DiplomaticRelationsEffect`
+formula. DEALT_DAMAGE receiver-side event dispatched after damage
+apply for aura-attached `enchanted_creature_dealt_damage` triggers
+(Cryoshatter / Pain for All) byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`. Auto-grow: the lever's §2
+teeth fire on the Tier-A close having LANDED — Cut Propulsion's
+`{2}{R}` Instant flips into the spell-card-bridge admit set via the
+covered+bridged + reverse-serializer-round-trips gate. The `1gate`
+column on the Effect-uncovered row drops 24 → 23 (`decks(1g)` 103,349
+→ 91,359).
 
 **post-non-basic-land-P2 delta (this lane):** strict **+5 PROBED /
 −5 BLOCKED-subsystem-gated** (the 5 EoE Planet lands: Adagia,
@@ -209,8 +261,6 @@ The tannuk-frenzied-baloth-probes lane delta is strict **+2 PROBED / −2 COVERE
 
 The **post-probe-batches-HHHH-JJJJ** delta is strict **+7 PROBED / −7 COVERED** (probe batches HHHH `25d89e4c`, IIII `07718a2f`, JJJJ `a31b666c` landed `_parity` delegators that promoted covered cards to PROBED): Lightstall Inquisitor, Seriema, Optimistic Scavenger, Command Bridge (probe batch IIII), three Room cards (probe batch JJJJ via the triggered-ability surface delegators). No engine changes, no subsystem-gated movement. **The 128 subsystem-gated tail has been stable since the loader_admits sweep — this audit lane confirmed no further measurement-attribution gaps in the BLOCKED tier.**
 
-The **post-unclassified-residual-attribution** lane delta (2026-05-21, this lane) is strict **+0 PROBED / +0 COVERED / +0/−0 BLOCKED-subsystem-gated** — the 122 subsystem-gated count is preserved. The lane is a SCOUT-side measurement-attribution close on the Unclassified residual: Deafening Silence (the only EoE printing that carries the parser-recognised ``restricts_noncreature_spells_to_one_per_turn`` bool) moved from the ``unclassified`` gate to a new named row ``static_rule_text`` (printing-level bool fields the Python parser already models but Rust does not mirror). Leyline of Mutation remains in ``unclassified`` (its parser TRULY does not surface either of its two oracle mechanics — opening-hand leyline + 5-color alternative-cost). The hand re-walk this row asked for is complete; both cards now carry a named substrate-cost characterisation in §5 and a divergence pin in ``docs/SEARCH_LIMITATIONS.md``. No engine changes, no Rust changes, no bridge changes — same Lane H / Lane Q precedent (the metric helper and the actual engine never disagreed; only the scout's taxonomy gained a row).
-
 Subsystem-gated dropped by 26 total; **both itemized BLOCKED tiers
 reached 0**. The 128 tail is now the *only* non-empty BLOCKED tier.
 Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
@@ -232,19 +282,24 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
 
 ## 1. Headline (current state)
 
-* **128 cards** are subsystem-gated; **53 single-gated**, **75 multi-gated**
-  (post loader_admits-attribution-sweep 2026-05-21: 9 cards flipped
-  BLOCKED → PROBED via measurement-attribution close — 5 shocklands +
-  Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate; Tannuk
-  Steadfast Second + Frenzied Baloth flipped BLOCKED → COVERED
-  pending real-EoE cross-engine byte-equal helpers — see lever (1)
-  below). The 75 multi-gated total is unchanged.
-* **16 taxonomy gates** in the scout's `_gates_for_loader_card` (post
-  2026-05-21 unclassified-residual attribution close — the new
-  `Static rule-text (printing-level bool field, no Rust mirror)` row
-  catches Deafening Silence's ``restricts_noncreature_spells_to_one_
-  per_turn``; the existing 15 gates are unchanged). Of those,
-  **14 currently bind ≥1 card** — `BECOMES_TAPPED event` /
+* **120 cards** are subsystem-gated; **45 single-gated**, **75 multi-gated**
+  (post-invasive-maneuvers 2026-05-21: Invasive Maneuvers flipped
+  BLOCKED → PROBED via genuine Tier-A Rust substrate close — the
+  highest-leverage simple-shape card on the 23-card Effect-uncovered
+  single-gated tail post-Cut-Propulsion;
+  post-cut-propulsion 2026-05-21: Cut Propulsion flipped BLOCKED →
+  PROBED via genuine Tier-A Rust substrate close; post-non-basic-
+  land-P2 2026-05-21: 5 EoE Planet lands flipped via the new
+  `_printing_is_bridge_simple_tapped_mana_land` admit predicate +
+  delegator probes; post loader_admits-attribution-sweep 2026-05-21:
+  9 cards flipped BLOCKED → PROBED via measurement-attribution
+  close — 5 shocklands + Brightspear / Cloudsculpt / Gravblade /
+  Mechan Shieldmate; Tannuk Steadfast Second + Frenzied Baloth
+  flipped BLOCKED → COVERED pending real-EoE cross-engine byte-equal
+  helpers — see lever (1) below). The 75 multi-gated total is
+  unchanged.
+* **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
+  those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
   cards but **0 single-gated**; `Carrier activated abilities` and
   `Non-safe triggered ability` bind 30 / 43 cards but **0 single-gated**.
@@ -273,15 +328,23 @@ to reflect what substrate already exists post-session.
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
 | Rooms / doors | 3 | 0 | 0 | sprawling | large — 0 single-gated, 0 decks | DEFERRED (unchanged) |
 | Planeswalker loyalty | 1 | 0 | 0 | sprawling | large — 0 single-gated | DEFERRED (unchanged) |
-| Effect-uncovered (diffuse tail) | 94 | 24 | 103,349 | diffuse | per-card | per-card lane continues |
+| Effect-uncovered (diffuse tail) | 92 | 22 | 80,378 | diffuse | per-card | per-card lane continues (Invasive Maneuvers closed 2026-05-21; Cut Propulsion closed 2026-05-21) |
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
-| Static rule-text (printing-level bool) | 1 | 1 | 12 | medium | one-card slice (Rust bool + counter + filter mirror + bridge + new admit disjunct) | OPEN — Deafening Silence (2026-05-21 attribution split out of Unclassified; see §5 for rationale) |
-| Unclassified (honest residual) | 1 | 1 | 0 | diffuse | per-card hand re-walk | OPEN — Leyline of Mutation (parser does not recognise either of its mechanics; see §5) |
+| Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 128 subsystem-gated = 53 single-gated + 75
-multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
-attribution-sweep; the Static/layered-abilities row drops from 15/8/34526
-to 9/2/0 — Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate
+**Reconciliation:** 120 subsystem-gated = 45 single-gated + 75
+multi-gated; `1gate` column sums to 45 (post-invasive-maneuvers
+2026-05-21: the Effect-uncovered row drops from 93/23/91359 to
+92/22/80378 — Invasive Maneuvers flipped to PROBED via a genuine
+Tier-A Rust substrate close; post-cut-propulsion 2026-05-21:
+the Effect-uncovered row drops from 94/24/103349 to 93/23/91359 — Cut
+Propulsion flipped to PROBED via a genuine Tier-A Rust substrate
+close; post-non-basic-land-P2 2026-05-21: the Non-basic-land row
+drops 18/18/16510 → 13/13/8893 — the 5 Planet lands admitted via the
+new `_printing_is_bridge_simple_tapped_mana_land` predicate; post
+2026-05-21 loader_admits-attribution-sweep; the Static/layered-
+abilities row drops from 15/8/34526 to 9/2/0 — Brightspear /
+Cloudsculpt / Gravblade / Mechan Shieldmate
 flipped to PROBED, Tannuk Steadfast Second + Frenzied Baloth flipped
 to COVERED then PROBED via the same-day follow-up writing genuine-
 printing cross-engine byte-equal helpers. The Non-basic-land row drops
@@ -457,15 +520,63 @@ respectively).
 ### (3) Effect-uncovered diffuse tail — per-card lane
 
 Not a substrate; per-card closures land 1 card at a time. The cheap
-Tier-A single-card lane is **EXHAUSTED**. Remaining **24 single-gated**
-members are Tier-C-ish (combat-shape divergence, larger Rust per card):
+Tier-A single-card lane is **EXHAUSTED**. Remaining **22 single-gated**
+members (post-invasive-maneuvers 2026-05-21 close, was 23) are
+Tier-C-ish (combat-shape divergence, larger Rust per card):
 Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
-Clobbering, Cut Propulsion, Darkness, Devastating Onslaught, Drill Too
-Deep, Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
-Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for
-Scrap, Scout for Survivors, Shattered Wings, Singularity Rupture,
-Systems Override, Terminal Velocity, Vengeful Possession, Warping Wail,
-Zero Point Ballad.
+Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
+Emergency Eject, Exorcise, Mutinous Massacre, Pull Through the Weft,
+Reroute Systems, Ruinous Rampage, Scour for Scrap, Scout for
+Survivors, Shattered Wings, Singularity Rupture, Systems Override,
+Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
+Ballad.
+
+**Invasive Maneuvers CLOSED (2026-05-21,
+`feature/invasive-maneuvers-slice`, +1 PROBED / 10,981 17lands
+decks).** A genuine substrate close following the Tier-A precedent
+(Biosynthic Burst, Focus Fire, Diplomatic Relations, Cut Propulsion):
+new `Effect::InvasiveManeuversEffect { base, boosted }` Rust two-int
+variant + parse + to_dict + resolve arm (reads source-controller via
+the proven 5-zone-walk + stack-scan, then walks the source-
+controller's bf for any object whose `printing.subtypes` contains
+`"Spacecraft"` — Spacecraft is a SUBTYPE per `cards/base.py:1056-1057`:
+`is_spacecraft = "Spacecraft" in subtypes` — and picks `boosted` (5)
+vs `base` (3) accordingly; dispatches DEALT_DAMAGE receiver-side
+event byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`), `cross_engine.py`
+dict→Python bridge (constructs
+`DealDamageToTargetCreatureSpacecraftBoosted(base=base,
+boosted=boosted)`), `trajectory.py` two-int reverse-serializer leaf,
+`effect_coverage.py` `RUST_TO_PYTHON_OVERRIDES` mapping
+`InvasiveManeuversEffect → DealDamageToTargetCreatureSpacecraftBoosted`
+— the auto-grow §2 teeth fired and Invasive Maneuvers's `{1}{R}`
+Instant flipped into the spell-card-bridge admit set with no
+hardcoded list (admit set 8→9). 7 new probes (5 Rust pins: no-
+Spacecraft base damage, caster's-Spacecraft boost, opponent-
+Spacecraft-does-NOT-boost, no-creature fizzle, deterministic-first
+ETB-order pick; 1 auto-join admit-set pin; 1 GENUINE real-EoE
+byte-equal driving the parsed printing against a 2/6 creature with a
+caster-controlled Spacecraft → 5 damage / no SBA fire, byte-equal
+full field-view on BOTH engines).
+
+**Cut Propulsion CLOSED (2026-05-21, `feature/effect-uncovered-slice`,
++1 PROBED / 11,990 17lands decks).** A genuine substrate close
+following the Tier-A precedent (Biosynthic Burst, Focus Fire,
+Diplomatic Relations): new `Effect::CutPropulsionEffect` Rust unit
+variant + parse + to_dict + resolve arm (reads effective power on
+the bound target via the proven counters-inclusive
+`DiplomaticRelationsEffect` formula, doubles if `battlefield_has_
+keyword(target, "flying")`, silent no-op on `power <= 0`, dispatches
+DEALT_DAMAGE receiver-side event for aura-attached
+`enchanted_creature_dealt_damage` triggers byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`), `cross_engine.py`
+dict→Python bridge, `trajectory.py` reverse-serializer leaf — the
+auto-grow §2 teeth fired and Cut Propulsion's `{2}{R}` Instant
+flipped into the spell-card-bridge admit set with no hardcoded list.
+7 new probes (5 Rust pins + 1 auto-join + 1 GENUINE real-EoE
+byte-equal driving the parsed printing against a 2/2 flyer →
+4 self-damage → lethal → SBA → in graveyard, byte-equal full
+field-view on BOTH engines).
 
 * **Per-card cost:** 1-3 cycles each.
 * **Pool-flip per cycle:** 1 card + its deck count.
@@ -587,45 +698,9 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
   shape frontier; co-blocker row, not a lever.
 * **Rooms / doors, Planeswalker loyalty, Kicker, BECOMES_TAPPED.** All
   have 0 single-gated members; closing the gate alone flips zero cards.
-* **Static rule-text — Deafening Silence (1 card, 12 decks).** **2026-
-  05-21 unclassified-residual hand re-walk** characterised this as a
-  contained-medium named substrate, NOT a generic unknown: the
-  printing carries
-  ``restricts_noncreature_spells_to_one_per_turn=True`` (a recognised
-  parser bool slot at ``src/mtg_bot/cards/base.py:843``), Python fully
-  models the mechanic (per-player ``noncreature_spells_cast_this_turn``
-  counter incremented in ``actions.py:1782``, reset at cleanup in
-  ``turn.py:1106``, post-filter in ``legal.py:880-893``), but Rust
-  carries NO mirror (the comment at ``rust/src/state.rs:972`` is
-  explicit), the bridge has no round-trip for the printing bool, and
-  no loader admit disjunct admits the printing shape. Closure scope is
-  contained-medium: one new Rust ``CardPrinting`` bool slot + one new
-  ``Player`` ``noncreature_spells_cast_this_turn: i32`` counter +
-  per-cast increment in Rust's noncreature-cast primitives +
-  cleanup-step reset + cast-time gate in Rust's legal-decisions
-  emitter + bidirectional bridge round-trip of the bool + one new
-  ``_printing_is_bridge_simple_cast_restriction_enchantment`` admit
-  disjunct + one real-EoE byte-equal probe. Deferred at 12 decks of
-  leverage — substantially below the §4 sequencing thresholds. The
-  hand re-walk renames the gate ``unclassified → static_rule_text``;
-  see `docs/SEARCH_LIMITATIONS.md` "Deafening Silence — Rust does not
-  mirror the noncreature-cast restriction" for the divergence pin.
-* **Unclassified — Leyline of Mutation (1 card, 0 decks).** **2026-
-  05-21 unclassified-residual hand re-walk** confirmed the genuine
-  residual: the printing has TWO mechanics oracle-side ("If this card
-  is in your opening hand, you may begin the game with it on the
-  battlefield." + "You may pay ``{W}{U}{B}{R}{G}`` rather than pay the
-  mana cost for spells you cast.") and the parser surfaces NEITHER —
-  the printing has no leyline / opening-hand-into-battlefield field,
-  no alternative-cost field, no triggered/static/activated/spell
-  Effects, no covered Rust counterpart, no bridge carrier. Closure
-  requires TWO new substrates (sprawling each): the opening-hand
-  leyline mechanic AND the alternative-cost system. Leverage is
-  0 decks (the card has 0 17lands appearances). Honest-stopped
-  here — the named substrates would each take multi-round campaigns
-  with zero in-pool leverage payoff today. See
-  `docs/SEARCH_LIMITATIONS.md` "Leyline of Mutation — leyline + alt-
-  cost mechanics unparseable" for the divergence pin.
+* **Unclassified (2 cards — Deafening Silence, Leyline of Mutation).**
+  Owe a hand re-walk per `SUBSYSTEM_ROADMAP.md`; flagged for the next
+  residue cadence, not a sequencing lever.
 
 ## 6. New sub-gates revealed this session
 

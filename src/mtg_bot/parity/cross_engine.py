@@ -9284,6 +9284,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # grow, no hardcoded list).
         from mtg_bot.effects.bespoke import CutPropulsionEffect
         return CutPropulsionEffect()
+    if kind == "invasive_maneuvers_effect":
+        # **Effect-uncovered Tier-A — Invasive Maneuvers (~10,981
+        # 17lands decks).** Rust substrate
+        # ``Effect::InvasiveManeuversEffect { base: i32, boosted: i32 }``
+        # (cards.rs two-int variant; parser
+        # ``"invasive_maneuvers_effect"`` — the ``focus_fire_effect``
+        # single-int-field idiom widened to two ints; resolve in
+        # state_ops_resolve.rs beside the Tier-A Cut Propulsion /
+        # Diplomatic Relations / Focus Fire / Biosynthic Burst arms).
+        #
+        # **Field shape.** Two ints: ``base`` (printed ``3``) +
+        # ``boosted`` (printed ``5``) — the per-clause parser at
+        # ``parser/effects.py:4668-4673``'s
+        # ``_DEAL_DAMAGE_N_TARGET_CREATURE_M_IF_SPACECRAFT`` regex
+        # captures both integers off the printed oracle text. Python's
+        # ``DealDamageToTargetCreatureSpacecraftBoosted(base=3,
+        # boosted=5)`` (effects/generic/damage.py:850) — the dataclass
+        # field defaults match (``base: int = 3``, ``boosted: int =
+        # 5``) on both sides for a key-elided clean round-trip.
+        #
+        # **Resolve semantics (parity-relevant).** Rust reads the
+        # cast-time-bound target id from
+        # ``state.current_resolve_payload_target_id`` (the established
+        # ``FocusFireEffect`` / ``CutPropulsionEffect`` payload-target
+        # swap pattern). The cast-time bind picks the deterministic-
+        # first creature on EITHER bf via the existing single-target
+        # default ``bf_iter_etb_sorted`` scan (matches Python's
+        # ``IsCreature()`` slot filter + the
+        # ``_PickFirstLegalTargetAgent`` deterministic-first
+        # convention). Resolve-time validates the bound target is
+        # still on a bf AND still a Creature (CR 608.2b — Python's
+        # ``_slot_target_still_legal`` returns early at
+        # ``damage.py:891-893``). Source-controller resolution walks
+        # the 5 zones + stack scan (the proven ``FocusFireEffect`` /
+        # ``BiosynthicBurstEffect`` sister shape). Then walks the
+        # source-controller's bf for any object whose
+        # ``printing.subtypes`` contains "Spacecraft" (NOT
+        # ``card_types`` — Spacecraft is a SUBTYPE per
+        # ``cards/base.py:1056-1057``: ``is_spacecraft = "Spacecraft"
+        # in subtypes``). Amount = ``boosted`` if any controlled
+        # Spacecraft present, else ``base``. Applies via
+        # ``obj.damage.saturating_add`` (the ``DealDamageAnyTarget`` /
+        # ``CutPropulsionEffect`` damage-application shape) AND
+        # dispatches the DEALT_DAMAGE receiver-side event (Python's
+        # ``_fire_enchanted_dealt_damage_triggers`` at
+        # ``effects/base.py:303-305``) so aura-attached "when
+        # enchanted creature dealt damage" triggers (Cryoshatter, Pain
+        # for All) fire byte-equal.
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (the real EoE printing is parsed by the
+        # production parser, round-tripped through the reverse
+        # serializer, and driven byte-equal on the genuine target).
+        # The full Invasive Maneuvers **Instant** auto-joins the
+        # spell-card-bridge admit set (the lever's guardrail queries
+        # the LIVE covered set — adding this Effect + bridge + the
+        # Python→dict reverse serializer leaf flips
+        # ``_printing_is_bridge_simple_spell`` to bench-admit; auto-
+        # grow, no hardcoded list).
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToTargetCreatureSpacecraftBoosted,
+        )
+        return DealDamageToTargetCreatureSpacecraftBoosted(
+            base=int(eff_dict.get("base", 3)),
+            boosted=int(eff_dict.get("boosted", 5)),
+        )
     if kind == "put_plus_one_counter_on_opponents_creature":
         # **Tier-C target-seating sub-substrate, lever-a — Sunset
         # Saboteur.** Single-target +1/+1 counter add restricted to

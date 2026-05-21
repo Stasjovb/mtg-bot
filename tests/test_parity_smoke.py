@@ -68777,6 +68777,478 @@ def test_cross_engine_real_eoe_cut_propulsion_flying_doubler_parity(
     ), "Rust: flyer in p1's graveyard (byte-equal)"
 
 
+# ============================================================
+# Invasive Maneuvers — Effect-uncovered Tier-A (~10,981 17lands
+# decks). ``{1}{R}`` Instant: "Invasive Maneuvers deals 3 damage
+# to target creature. It deals 5 damage instead if you control a
+# Spacecraft." Rust ``Effect::InvasiveManeuversEffect { base,
+# boosted }`` (cards.rs two-int variant; resolve in
+# state_ops_resolve.rs beside the Tier-A Cut Propulsion /
+# Diplomatic Relations / Focus Fire / Biosynthic Burst arms),
+# bridged via cross_engine.py ``invasive_maneuvers_effect`` ↔
+# Python ``DealDamageToTargetCreatureSpacecraftBoosted``
+# (effects/generic/damage.py:850). Adding the Effect + bridge +
+# the trajectory.py reverse-serializer leaf flips the printing
+# into the spell-card-bridge admit set (the guardrail queries the
+# LIVE covered set + round-trips the reverse serializer — auto-
+# grow, no hardcoded list).
+# ============================================================
+
+
+def _build_rust_invasive_maneuvers_state(
+    *,
+    target_toughness: int = 4,
+    target_owner: int = 1,
+    caster_controls_spacecraft: bool = False,
+    seed_target: bool = True,
+    base: int = 3,
+    boosted: int = 5,
+):
+    """Build a Rust state with an Invasive Maneuvers spell on p0's
+    stack targeting the seeded creature (when present). Returns
+    ``(rs, target_id_or_None, spacecraft_id_or_None)``.
+
+    The synthetic ``push_to_stack`` low-level API does NOT seat a
+    target, so the resolve arm's None-payload fallback picks the
+    deterministic-first creature in ETB-timestamp order — the
+    seeded creature is the only creature on either bf.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    spacecraft_id = None
+    if caster_controls_spacecraft:
+        # Inject a Spacecraft on p0's (the caster's) battlefield.
+        # Spacecraft is a SUBTYPE (Artifact - Spacecraft format) —
+        # the resolve arm's predicate walks ``printing.subtypes``,
+        # NOT ``card_types``.
+        spacecraft_id = rs.register_and_inject_object(
+            {"name": "IM Spacecraft", "card_types": ["Artifact"],
+             "subtypes": ["Spacecraft"]},
+            0, ZB,
+        )
+    target_id = None
+    if seed_target:
+        target_id = rs.register_and_inject_object(
+            {"name": "IM Target", "card_types": ["Creature"],
+             "power": 2, "toughness": target_toughness},
+            target_owner, ZB,
+        )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Invasive Maneuvers", "card_types": ["Instant"],
+         "effects": [{"kind": "invasive_maneuvers_effect",
+                      "base": base, "boosted": boosted}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    return rs, target_id, spacecraft_id
+
+
+def test_rust_invasive_maneuvers_base_damage_no_spacecraft():
+    """Rust pin (a): no Spacecraft on caster's bf → ``base`` damage
+    (3 on the printed card). Mirrors Python
+    ``test_invasive_maneuvers_base_damage``."""
+    rs, target, _sc = _build_rust_invasive_maneuvers_state(
+        target_toughness=4, caster_controls_spacecraft=False,
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 3, (
+        f"no Spacecraft → 3 damage (base); got damage={e['damage']}"
+    )
+
+
+def test_rust_invasive_maneuvers_boosted_by_spacecraft():
+    """Rust pin (b): caster controls a Spacecraft → ``boosted``
+    damage (5 on the printed card). Mirrors Python
+    ``test_invasive_maneuvers_boosted_by_spacecraft``. The
+    Spacecraft predicate walks ``printing.subtypes`` (NOT
+    ``card_types``) — Spacecraft is a SUBTYPE per
+    ``cards/base.py:1056-1057``."""
+    rs, target, sc = _build_rust_invasive_maneuvers_state(
+        target_toughness=6, caster_controls_spacecraft=True,
+    )
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 5, (
+        f"Spacecraft present → 5 damage (boosted); got "
+        f"damage={e['damage']}"
+    )
+    # The Spacecraft itself must not take damage (it's NOT the
+    # target — it's the predicate-trigger source on the caster's bf).
+    e_sc = next(x for x in rs.battlefield_snapshot() if x["id"] == sc)
+    assert e_sc["damage"] == 0, (
+        f"Spacecraft must not take damage; got damage={e_sc['damage']}"
+    )
+
+
+def test_rust_invasive_maneuvers_opponent_spacecraft_does_not_boost():
+    """Rust pin (c): an opponent-controlled Spacecraft must NOT
+    trigger the boost (only the CASTER's controlled Spacecraft
+    counts — mirrors Python's ``o.controller_id == controller_id``
+    filter at ``damage.py:876-879``)."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    # Spacecraft on the OPPONENT (p1) — must not boost p0's spell.
+    opp_sc = rs.register_and_inject_object(
+        {"name": "IM Opp Spacecraft", "card_types": ["Artifact"],
+         "subtypes": ["Spacecraft"]},
+        1, ZB,
+    )
+    target = rs.register_and_inject_object(
+        {"name": "IM Target", "card_types": ["Creature"],
+         "power": 2, "toughness": 4},
+        1, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Invasive Maneuvers", "card_types": ["Instant"],
+         "effects": [{"kind": "invasive_maneuvers_effect",
+                      "base": 3, "boosted": 5}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == target)
+    assert e["damage"] == 3, (
+        f"opponent's Spacecraft must NOT boost; expected 3 damage, "
+        f"got {e['damage']}"
+    )
+    # Defense-in-depth: the opponent's Spacecraft still on bf untouched.
+    e_sc = next(x for x in rs.battlefield_snapshot() if x["id"] == opp_sc)
+    assert e_sc["damage"] == 0
+
+
+def test_rust_invasive_maneuvers_no_creature_silent_fizzle():
+    """Rust pin (d): no creature on either bf → silent fizzle.
+    Mirrors Python ``test_invasive_maneuvers_noop_paths`` for the
+    no-legal-target path."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    # Inert artifact on p1's bf — NOT a Creature, must not be picked.
+    rs.register_and_inject_object(
+        {"name": "IM Inert Artifact", "card_types": ["Artifact"]},
+        1, 2,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Invasive Maneuvers", "card_types": ["Instant"],
+         "effects": [{"kind": "invasive_maneuvers_effect",
+                      "base": 3, "boosted": 5}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0, "spell must resolve (fizzling)"
+    assert any(
+        e["printing_name"] == "IM Inert Artifact"
+        and e["damage"] == 0
+        for e in rs.battlefield_snapshot()
+    ), "no creature anywhere → silent no-op, artifact untouched"
+
+
+def test_rust_invasive_maneuvers_picks_first_creature_in_etb_order():
+    """Rust pin (e): the deterministic-first picker chooses the
+    creature with the LOWEST ETB timestamp across BOTH bfs (mirrors
+    ``bf_iter_etb_sorted``). p1's creature seated BEFORE p0's must
+    take the damage."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    # First-seated creature: p1's 3/4. This MUST be the damage
+    # target (lowest ETB timestamp).
+    p1_first = rs.register_and_inject_object(
+        {"name": "IM First", "card_types": ["Creature"],
+         "power": 3, "toughness": 4}, 1, ZB,
+    )
+    # Second-seated creature: p0's 2/2. Should NOT be picked.
+    p0_second = rs.register_and_inject_object(
+        {"name": "IM Second", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Invasive Maneuvers", "card_types": ["Instant"],
+         "effects": [{"kind": "invasive_maneuvers_effect",
+                      "base": 3, "boosted": 5}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    e_first = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == p1_first)
+    e_second = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == p0_second)
+    assert e_first["damage"] == 3, (
+        f"deterministic-first must pick the lowest-ETB-timestamp "
+        f"creature (p1's 3/4 → 3 damage, no Spacecraft); got "
+        f"damage={e_first['damage']}"
+    )
+    assert e_second["damage"] == 0, (
+        f"second-seated creature must NOT take damage; got "
+        f"damage={e_second['damage']}"
+    )
+
+
+def test_invasive_maneuvers_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the Effect + bridge arm + the
+    ``trajectory._python_spell_effect_to_dict`` reverse-serializer
+    leaf landed, the genuine ``{1}{R}`` Invasive Maneuvers Instant
+    is now covered+bridged AND round-trips the reverse serializer,
+    so ``_printing_is_bridge_simple_spell`` admits it into the
+    spell-card-bridge bench-admit set (the guardrail queries the
+    LIVE covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the Tier-A close having LANDED).
+    """
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureSpacecraftBoosted,
+    )
+
+    real = (
+        get_active_source().get_printings().get("Invasive Maneuvers")
+    )
+    if real is None:
+        pytest.skip("Invasive Maneuvers absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, DealDamageToTargetCreatureSpacecraftBoosted), (
+        f"genuine Invasive Maneuvers spell_effect must be "
+        f"DealDamageToTargetCreatureSpacecraftBoosted; got "
+        f"{type(se).__name__}"
+    )
+    assert se.base == 3 and se.boosted == 5
+    assert (
+        "DealDamageToTargetCreatureSpacecraftBoosted"
+        in covered_python_class_set()
+    ), (
+        "the Rust Effect::InvasiveManeuversEffect variant + "
+        "RUST_TO_PYTHON_OVERRIDES mapping makes the Python class "
+        "covered"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {
+        "kind": "invasive_maneuvers_effect",
+        "base": 3,
+        "boosted": 5,
+    }, (
+        f"reverse serializer must emit the two-int dict; got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(
+        back, DealDamageToTargetCreatureSpacecraftBoosted
+    ), (
+        f"dict→Python bridge must round-trip to "
+        f"DealDamageToTargetCreatureSpacecraftBoosted; got "
+        f"{type(back).__name__}"
+    )
+    assert back.base == 3 and back.boosted == 5
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Invasive Maneuvers must auto-join the spell-card-bridge "
+        "admit set now that its Effect is covered+bridged + "
+        "round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_invasive_maneuvers_spacecraft_boosted_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Invasive Maneuvers
+    (~10,981 17lands decks). Effect-uncovered Tier-A queue.**
+
+    Drives the **ACTUAL parsed Invasive Maneuvers printing** on the
+    Python side: ``get_active_source().get_printings()["Invasive
+    Maneuvers"]`` — which the live parser maps to a ``spell_effect``
+    of ``DealDamageToTargetCreatureSpacecraftBoosted(base=3,
+    boosted=5)`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {1}{R} — Invasive Maneuvers deals 3 damage to
+         target creature. It deals 5 damage instead if you control
+         a Spacecraft."
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Instant auto-joins the spell-card-bridge admit set).** The new
+    Effect arm under test — ``Effect::InvasiveManeuversEffect`` — is
+    shipped this slice (Rust two-int variant + parse + to_dict +
+    resolve; the Spacecraft predicate walks
+    ``printing.subtypes`` — Spacecraft is a SUBTYPE per
+    ``cards/base.py:1056-1057``; the damage application is the
+    ``DealDamageAnyTarget`` / ``CutPropulsionEffect``
+    ``obj.damage.saturating_add`` shape), bridged via
+    ``cross_engine.py`` ``invasive_maneuvers_effect`` to the
+    pre-existing Python
+    ``DealDamageToTargetCreatureSpacecraftBoosted``
+    (effects/generic/damage.py:850). The full Invasive Maneuvers
+    **Instant** auto-joins the spell-card-bridge bench-admit set
+    (pinned in
+    ``test_invasive_maneuvers_auto_joins_spell_card_bridge_admit_set``).
+
+    **Deterministic, no RNG.** p0 has the genuine Invasive Maneuvers
+    + a Spacecraft on their battlefield (the boost predicate is
+    active); p1 has a 2/6 creature (the target — soaks 5 damage and
+    survives). The WHOLE field view is asserted byte-equal
+    post-resolve.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureSpacecraftBoosted,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = (
+        get_active_source().get_printings().get("Invasive Maneuvers")
+    )
+    if real is None:
+        pytest.skip("Invasive Maneuvers absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, DealDamageToTargetCreatureSpacecraftBoosted), (
+        f"genuine Invasive Maneuvers spell_effect must be "
+        f"DealDamageToTargetCreatureSpacecraftBoosted; got "
+        f"{type(se).__name__}"
+    )
+    assert se.base == 3 and se.boosted == 5
+
+    def _bare(name, *, ctypes, subtypes=(), power=None, toughness=None):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line=" ".join(ctypes), supertypes=(),
+            card_types=tuple(ctypes), subtypes=tuple(subtypes),
+            power=power, toughness=toughness, produces=frozenset(),
+            keywords=(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # p0 (the caster) controls a Spacecraft — the boost-active path.
+    py_sc = py.new_object(
+        _bare("IM Real Spacecraft", ctypes=("Artifact",),
+              subtypes=("Spacecraft",)),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_sc.summoning_sick = False
+    py.battlefield.append(py_sc)
+    rs_sc = rs.register_and_inject_object(
+        {"name": "IM Real Spacecraft", "card_types": ["Artifact"],
+         "subtypes": ["Spacecraft"]},
+        0, ZB,
+    )
+
+    # p1 opponent 2/6 — soaks 5 damage and survives (no SBA fire).
+    py_target = py.new_object(
+        _bare("IM Real Target", ctypes=("Creature",),
+              power=2, toughness=6),
+        owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_target.summoning_sick = False
+    py.battlefield.append(py_target)
+    rs_target = rs.register_and_inject_object(
+        {"name": "IM Real Target", "card_types": ["Creature"],
+         "power": 2, "toughness": 6},
+        1, ZB,
+    )
+
+    # Cast the genuine Invasive Maneuvers on the target (Python:
+    # real spell_effect on a StackItem targeting the creature;
+    # Rust: the bridged synthetic Instant with the bound target
+    # seated via current_resolve_payload_target_id — set via
+    # push_to_stack + set_resolve_payload_target).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_target.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Invasive Maneuvers", "card_types": ["Instant"],
+         "effects": [{"kind": "invasive_maneuvers_effect",
+                      "base": 3, "boosted": 5}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # FULL byte-equal compare. The 2/6 target takes 5 damage (the
+    # caster controls a Spacecraft → boosted), survives SBA (2
+    # toughness vs 5 damage would die — but 6 toughness vs 5 damage
+    # lives), so the field shows the creature still on bf with
+    # damage=5 byte-equal on BOTH engines.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Invasive Maneuvers post-resolve must be byte-equal across "
+        f"the WHOLE field view on BOTH engines (Spacecraft-boost "
+        f"predicate + damage-apply); diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on top of the full
+    # field byte-equality).
+    py_t_post = next(
+        o for o in py.battlefield if o.id == py_target.id
+    )
+    assert py_t_post.damage == 5, (
+        f"Python: 2/6 took 5 damage (Spacecraft-boosted); got "
+        f"damage={py_t_post.damage}"
+    )
+    rs_t_post = next(
+        e for e in rs.battlefield_snapshot() if e["id"] == rs_target
+    )
+    assert rs_t_post["damage"] == 5, (
+        f"Rust: 2/6 took 5 damage byte-equal; got "
+        f"damage={rs_t_post['damage']}"
+    )
+    # The Spacecraft must still be untouched on the caster's bf
+    # (it's the predicate trigger, not the damage target).
+    assert any(
+        o.id == py_sc.id and o.damage == 0 for o in py.battlefield
+    )
+    assert any(
+        e["id"] == rs_sc and e["damage"] == 0
+        for e in rs.battlefield_snapshot()
+    )
+
+
 import pytest as _pytest_r72_warp_p2  # noqa: E402
 
 
