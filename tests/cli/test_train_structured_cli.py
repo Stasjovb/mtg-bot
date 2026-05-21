@@ -129,6 +129,67 @@ def test_train_structured_cli_smoke(tmp_path: Path, monkeypatch) -> None:
     assert any("printing_embed" in k for k in state)
 
 
+def test_train_structured_cli_writes_both_metadata_layouts(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """iter_019 BUG #2 trainer-side regression: the structured trainer's
+    metadata writer emits BOTH the nested ``structured_config`` dict
+    AND the flat ``structured_*`` keys for the six tunable dims.
+    Belt-and-braces companion to the loader-side compat shim — a
+    metadata file from this trainer round-trips through any historical
+    loader version (including pre-iter_019 loaders that only read the
+    flat keys)."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(
+        data_dir / "shard_001.npz", n_rows=16, seq_len=4, seed=1,
+    )
+
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    registry_root = tmp_path / "weights"
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(registry_root),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+        # Non-default dims so the test would fail loud if the writer
+        # silently used StructuredModelConfig defaults instead of the
+        # CLI-supplied values.
+        "--emb-dim", "16",
+        "--n-heads", "2",
+        "--n-layers", "2",
+        "--hidden-dim", "32",
+        "--action-history-n", "4",
+    ])
+
+    meta = json.loads((registry_root / "v1" / "metadata.json").read_text())
+    training = meta["training"]
+    # Nested layout (preserved — the loader's primary path before the
+    # compat shim and still acceptable post-fix).
+    assert training["structured_config"]["emb_dim"] == 16
+    assert training["structured_config"]["n_heads"] == 2
+    assert training["structured_config"]["n_layers"] == 2
+    assert training["structured_config"]["hidden_dim"] == 32
+    assert training["structured_config"]["action_history_n"] == 4
+    # Flat layout (new — added so pre-iter_019 loaders still work).
+    assert training["structured_emb_dim"] == 16
+    assert training["structured_n_heads"] == 2
+    assert training["structured_n_layers"] == 2
+    assert training["structured_hidden_dim"] == 32
+    assert training["structured_action_history_n"] == 4
+    # n_printings isn't a CLI knob — verify both layouts carry the same
+    # value (whatever StructuredModelConfig defaulted to).
+    assert (
+        training["structured_n_printings"]
+        == training["structured_config"]["n_printings"]
+    )
+
+
 def test_train_structured_cli_passes_compile_flag(
     tmp_path: Path, monkeypatch,
 ) -> None:

@@ -417,6 +417,40 @@ def _build_structured_model(
     return sm.StructuredModel(config)
 
 
+def _resolve_structured_dim(
+    training: dict,
+    flat_key: str,
+    nested_key: str,
+) -> Any:
+    """Read a structured-trunk dim from either of the two on-disk
+    metadata layouts.
+
+    Returns ``training[flat_key]`` if present (forward-compat with
+    hand-patched / older metadata that promoted nested values to flat
+    keys, including v13's iter_019 workaround). Otherwise returns
+    ``training["structured_config"][nested_key]`` if the trainer's
+    nested-dict layout is present. Falls through to ``None`` when
+    neither layout carries the dim — the caller forwards ``None`` to
+    ``NNEvaluator.__init__``, which in turn lets
+    ``StructuredModelConfig`` apply its own field default.
+
+    This is the iter_019 BUG #2 compat shim: ``mtg_bot.cli.train``
+    writes the nested layout (``training["structured_config"] =
+    {emb_dim, n_heads, ...}``) but the loader historically only read
+    the flat keys, so any non-default-trunk bootstrap silently fell
+    back to ``StructuredModelConfig`` defaults and produced a
+    weight-shape mismatch at load time. v5 worked as a bootstrap only
+    because its dims happened to match the defaults; v13 was the first
+    non-default-trunk bootstrap and surfaced the bug. Reading both
+    layouts (flat wins) keeps existing flat-key metadata loading
+    unchanged while fixing the nested-only case.
+    """
+    if flat_key in training:
+        return training[flat_key]
+    nested = training.get("structured_config") or {}
+    return nested.get(nested_key)
+
+
 class NNEvaluator(Evaluator):
     """Wraps a ``_ValueMLP`` in the ``Evaluator`` interface.
 
@@ -1124,22 +1158,29 @@ class NNEvaluator(Evaluator):
         For the structured architecture, the additional hyperparams
         live under ``metadata.training`` (which is a free-form dict
         the trainer fills in) — same convention the existing dual-
-        head architectures use for ``policy_hidden_sizes``. The keys
-        recognized here are:
+        head architectures use for ``policy_hidden_sizes``. Two
+        on-disk layouts exist in the wild and both are accepted (see
+        ``_resolve_structured_dim``):
 
-        - ``structured_emb_dim``
-        - ``structured_n_heads``
-        - ``structured_n_layers``
-        - ``structured_hidden_dim``
-        - ``structured_action_history_n``
-        - ``structured_n_printings``
-        - ``structured_action_vocab_size``
-        - ``structured_enable_hand_belief_head``
-        - ``structured_dropout``
+        - Flat keys: ``structured_emb_dim`` / ``structured_n_heads``
+          / ``structured_n_layers`` / ``structured_hidden_dim`` /
+          ``structured_action_history_n`` / ``structured_n_printings``
+          / ``structured_action_vocab_size`` /
+          ``structured_enable_hand_belief_head`` /
+          ``structured_dropout``.
+        - Nested under ``training.structured_config = {emb_dim,
+          n_heads, n_layers, hidden_dim, action_history_n,
+          n_printings}`` — this is what ``mtg_bot.cli.train``'s
+          structured branch writes today (see the trainer's
+          ``train_config["structured_config"]``).
 
-        Any missing key falls through to ``StructuredModelConfig``'s
-        default. Slice C's training run is expected to write the
-        values its training used.
+        The resolver prefers the flat key when present and falls back
+        to the nested-dict key otherwise; missing-from-both falls
+        through to ``StructuredModelConfig``'s default. The dual-read
+        is the iter_019 BUG #2 fix — the trainer was writing nested
+        while the loader read flat, so any non-default-trunk bootstrap
+        silently fell back to the defaults until the v13 attempt
+        surfaced the resulting weight-shape mismatch.
         """
         architecture = getattr(metadata, "architecture", "shared")
         action_encoding_version = getattr(
@@ -1147,30 +1188,45 @@ class NNEvaluator(Evaluator):
         )
         if architecture == ARCHITECTURE_STRUCTURED:
             training = getattr(metadata, "training", {}) or {}
+            _resolve = _resolve_structured_dim
             return cls(
                 weights_path=weights_path,
                 device=device,
                 architecture=architecture,
                 action_encoding_version=action_encoding_version,
-                structured_emb_dim=training.get("structured_emb_dim"),
-                structured_n_heads=training.get("structured_n_heads"),
-                structured_n_layers=training.get("structured_n_layers"),
-                structured_hidden_dim=training.get(
-                    "structured_hidden_dim",
+                structured_emb_dim=_resolve(
+                    training, "structured_emb_dim", "emb_dim",
                 ),
-                structured_action_history_n=training.get(
+                structured_n_heads=_resolve(
+                    training, "structured_n_heads", "n_heads",
+                ),
+                structured_n_layers=_resolve(
+                    training, "structured_n_layers", "n_layers",
+                ),
+                structured_hidden_dim=_resolve(
+                    training, "structured_hidden_dim", "hidden_dim",
+                ),
+                structured_action_history_n=_resolve(
+                    training,
                     "structured_action_history_n",
+                    "action_history_n",
                 ),
-                structured_n_printings=training.get(
-                    "structured_n_printings",
+                structured_n_printings=_resolve(
+                    training, "structured_n_printings", "n_printings",
                 ),
-                structured_action_vocab_size=training.get(
+                structured_action_vocab_size=_resolve(
+                    training,
                     "structured_action_vocab_size",
+                    "action_vocab_size",
                 ),
-                structured_enable_hand_belief_head=training.get(
+                structured_enable_hand_belief_head=_resolve(
+                    training,
                     "structured_enable_hand_belief_head",
+                    "enable_hand_belief_head",
                 ),
-                structured_dropout=training.get("structured_dropout"),
+                structured_dropout=_resolve(
+                    training, "structured_dropout", "dropout",
+                ),
             )
         # MLP architectures (shared / separate). Hidden sizes default
         # to HIDDEN_SIZES when metadata's hidden_sizes is empty or

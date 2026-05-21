@@ -727,6 +727,208 @@ def test_from_metadata_dispatches_value_only_for_legacy_metadata(
 
 
 # ---------------------------------------------------------------------
+# from_metadata: nested ``structured_config`` layout compat
+# ---------------------------------------------------------------------
+#
+# Background (iter_019 BUG #2): the trainer in ``mtg_bot.cli.train``
+# writes a nested ``training.structured_config = {emb_dim, n_heads,
+# n_layers, hidden_dim, action_history_n, n_printings}`` dict alongside
+# the rest of the training-config knobs. The loader (this module's
+# ``from_metadata``) historically only read flat ``structured_emb_dim``
+# / ``structured_n_heads`` / ... keys. The mismatch went unnoticed
+# until a non-default-trunk bootstrap (v13) tried to load and silently
+# fell back to ``StructuredModelConfig`` defaults (128/4/2/256), at
+# which point the weight-shape mismatch surfaced loudly. v5 worked as
+# bootstrap only because its dims happened to match the defaults.
+#
+# Fix: ``from_metadata`` resolves each structured dim via
+# ``_resolve_structured_dim`` which prefers the flat key (forward-
+# compat with existing flat-key metadata, including v13's hand-patched
+# variant) and falls back to the nested ``structured_config[key]`` from
+# the trainer's writer when the flat key is absent.
+
+
+def _nested_meta_stub(
+    weights_path: Path,
+    nested: dict[str, Any],
+) -> Any:
+    """Minimal stand-in for ``ModelMetadata`` with ONLY the nested
+    ``structured_config`` layout — no flat ``structured_*`` keys."""
+    class _NestedMeta:
+        architecture = ARCHITECTURE_STRUCTURED
+        action_encoding_version = "positional_v1"
+        hidden_sizes: list[int] = []
+        with_policy = True
+        training = {"structured_config": dict(nested)}
+
+    return _NestedMeta()
+
+
+def test_from_metadata_reads_nested_structured_config(tmp_path: Path):
+    """Regression for iter_019 BUG #2: the trainer's nested
+    ``training.structured_config`` dict must drive the loaded
+    evaluator's structured config when the flat ``structured_*`` keys
+    are absent. Without the loader-side compat shim the loader silently
+    falls back to ``StructuredModelConfig`` defaults and the weight
+    shapes don't match the trained network."""
+    ev = NNEvaluator(**SMALL_KWARGS)
+    weights_path = tmp_path / "structured_nested.pt"
+    ev.save(weights_path)
+
+    meta = _nested_meta_stub(
+        weights_path,
+        nested={
+            "emb_dim": SMALL_KWARGS["structured_emb_dim"],
+            "n_heads": SMALL_KWARGS["structured_n_heads"],
+            "n_layers": SMALL_KWARGS["structured_n_layers"],
+            "hidden_dim": SMALL_KWARGS["structured_hidden_dim"],
+            "action_history_n": SMALL_KWARGS["structured_action_history_n"],
+            "n_printings": SMALL_KWARGS["structured_n_printings"],
+        },
+    )
+
+    loaded = NNEvaluator.from_metadata(weights_path, meta)
+    assert loaded.is_structured is True
+    # Each dim resolved from the nested dict, not from the defaults.
+    assert loaded.model.config.emb_dim == SMALL_KWARGS["structured_emb_dim"]
+    assert loaded.model.config.n_heads == SMALL_KWARGS["structured_n_heads"]
+    assert loaded.model.config.n_layers == SMALL_KWARGS["structured_n_layers"]
+    assert (
+        loaded.model.config.hidden_dim == SMALL_KWARGS["structured_hidden_dim"]
+    )
+    assert (
+        loaded.model.config.action_history_n
+        == SMALL_KWARGS["structured_action_history_n"]
+    )
+    assert (
+        loaded.model.config.n_printings
+        == SMALL_KWARGS["structured_n_printings"]
+    )
+
+
+def test_from_metadata_flat_keys_still_win_over_nested(tmp_path: Path):
+    """Forward-compat: a metadata file with BOTH layouts present (e.g.
+    v13's hand-patched workaround, where flat keys were promoted on
+    top of the trainer's nested dict) must still resolve to the flat
+    values. Flat wins."""
+    ev = NNEvaluator(**SMALL_KWARGS)
+    weights_path = tmp_path / "structured_both.pt"
+    ev.save(weights_path)
+
+    class _BothLayoutsMeta:
+        architecture = ARCHITECTURE_STRUCTURED
+        action_encoding_version = "positional_v1"
+        hidden_sizes: list[int] = []
+        with_policy = True
+        # Flat keys carry the real dims; nested carries deliberately
+        # wrong values so we can detect if the loader prefers nested.
+        training = {
+            "structured_emb_dim": SMALL_KWARGS["structured_emb_dim"],
+            "structured_n_heads": SMALL_KWARGS["structured_n_heads"],
+            "structured_n_layers": SMALL_KWARGS["structured_n_layers"],
+            "structured_hidden_dim": SMALL_KWARGS["structured_hidden_dim"],
+            "structured_action_history_n": (
+                SMALL_KWARGS["structured_action_history_n"]
+            ),
+            "structured_n_printings": SMALL_KWARGS["structured_n_printings"],
+            "structured_config": {
+                "emb_dim": 999,
+                "n_heads": 999,
+                "n_layers": 999,
+                "hidden_dim": 999,
+                "action_history_n": 999,
+                "n_printings": 999,
+            },
+        }
+
+    loaded = NNEvaluator.from_metadata(weights_path, _BothLayoutsMeta())
+    assert loaded.model.config.emb_dim == SMALL_KWARGS["structured_emb_dim"]
+    assert loaded.model.config.n_heads == SMALL_KWARGS["structured_n_heads"]
+
+
+def test_from_metadata_no_dim_metadata_falls_back_to_defaults(
+    tmp_path: Path,
+):
+    """When neither layout is present, the loader still falls back to
+    ``StructuredModelConfig`` defaults — back-compat with v1/v2-era
+    structured metadata (pre-iter_007 retrofitted writers, mostly
+    historical at this point)."""
+    # Build a default-config structured evaluator so the weights load.
+    ev = NNEvaluator(architecture=ARCHITECTURE_STRUCTURED)
+    weights_path = tmp_path / "structured_defaults.pt"
+    ev.save(weights_path)
+
+    class _EmptyMeta:
+        architecture = ARCHITECTURE_STRUCTURED
+        action_encoding_version = "positional_v1"
+        hidden_sizes: list[int] = []
+        with_policy = True
+        training: dict[str, Any] = {}
+
+    loaded = NNEvaluator.from_metadata(weights_path, _EmptyMeta())
+    assert loaded.is_structured is True
+    # Default dims (128/4/2/256/32/320 per StructuredModelConfig).
+    assert loaded.model.config.emb_dim == 128
+    assert loaded.model.config.n_heads == 4
+    assert loaded.model.config.n_layers == 2
+    assert loaded.model.config.hidden_dim == 256
+
+
+def test_from_metadata_trainer_writer_to_loader_reader_roundtrip(
+    tmp_path: Path,
+):
+    """Pin test for the structural fix: a metadata payload constructed
+    using EXACTLY the trainer's ``training`` dict shape (see
+    ``mtg_bot.cli.train`` lines ~1095-1120 — the structured-architecture
+    branch) round-trips through ``from_metadata`` with the trained
+    non-default dims preserved. The v13-shape values (emb_dim=256,
+    n_heads=8, n_layers=4, hidden_dim=512) are the canonical
+    non-default-trunk bootstrap the original bug surfaced on; we use
+    the test-tiny dims here so the test doesn't pay for a 40M-param
+    forward pass, but the layout is byte-identical to the trainer
+    writer's."""
+    ev = NNEvaluator(**SMALL_KWARGS)
+    weights_path = tmp_path / "structured_roundtrip.pt"
+    ev.save(weights_path)
+
+    # Mirror ``train_config['structured_config']`` exactly (cli/train.py).
+    trainer_structured_config = {
+        "emb_dim": SMALL_KWARGS["structured_emb_dim"],
+        "n_heads": SMALL_KWARGS["structured_n_heads"],
+        "n_layers": SMALL_KWARGS["structured_n_layers"],
+        "hidden_dim": SMALL_KWARGS["structured_hidden_dim"],
+        "action_history_n": SMALL_KWARGS["structured_action_history_n"],
+        "n_printings": SMALL_KWARGS["structured_n_printings"],
+    }
+
+    # Mirror ``ModelMetadata.training`` exactly (cli/train.py: the
+    # structured branch writes ``"structured_config":
+    # train_config['structured_config']`` inside ``training``).
+    class _TrainerWriterMeta:
+        architecture = ARCHITECTURE_STRUCTURED
+        action_encoding_version = "canonical_v2"
+        hidden_sizes: list[int] = []
+        with_policy = True
+        training = {
+            "data_dir": "iterate_data",
+            "epochs": 1,
+            "batch_size": 256,
+            "learning_rate": 1e-3,
+            "structured_config": trainer_structured_config,
+        }
+
+    loaded = NNEvaluator.from_metadata(weights_path, _TrainerWriterMeta())
+    assert loaded.is_structured is True
+    cfg = loaded.model.config
+    assert cfg.emb_dim == SMALL_KWARGS["structured_emb_dim"]
+    assert cfg.n_heads == SMALL_KWARGS["structured_n_heads"]
+    assert cfg.n_layers == SMALL_KWARGS["structured_n_layers"]
+    assert cfg.hidden_dim == SMALL_KWARGS["structured_hidden_dim"]
+    assert cfg.action_history_n == SMALL_KWARGS["structured_action_history_n"]
+    assert cfg.n_printings == SMALL_KWARGS["structured_n_printings"]
+
+
+# ---------------------------------------------------------------------
 # Determinism / multi-call consistency
 # ---------------------------------------------------------------------
 
