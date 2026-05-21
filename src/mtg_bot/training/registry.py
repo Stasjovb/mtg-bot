@@ -35,6 +35,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from mtg_bot.training.weights_io import (
+    ensure_inheritance_enabled,
+    preflight_readable_dir,
+    preflight_writable_dir,
+)
+
 # Filename convention. The version-id regex matches ``v1``, ``v23``,
 # etc. — sequential integers. Anything that doesn't match gets
 # ignored (so manual notes / scratch files in the registry don't
@@ -169,6 +175,10 @@ class Registry:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        # Belt-and-suspenders: if a previous elevated process broke
+        # inheritance on the root, re-enable it so new version
+        # subdirectories pick up the user's ACL. No-op off Windows.
+        ensure_inheritance_enabled(self.root)
 
     # ---- enumeration -------------------------------------------------------
 
@@ -211,6 +221,12 @@ class Registry:
     # ---- access ------------------------------------------------------------
 
     def weights_path(self, version: str) -> Path:
+        # Preflight the version dir is listable BEFORE the is_file()
+        # probe below. Without this, a Windows ACL-locked version dir
+        # makes ``is_file()`` silently return False, which would raise a
+        # misleading FileNotFoundError ("weights not found") when the
+        # file is actually present but unreadable.
+        preflight_readable_dir(self.root / version)
         path = self.root / version / _WEIGHTS_FILENAME
         if not path.is_file():
             raise FileNotFoundError(
@@ -219,6 +235,12 @@ class Registry:
         return path
 
     def load_metadata(self, version: str) -> ModelMetadata:
+        # Fail loud + with a fix command if the version dir is ACL-locked
+        # (e.g. created by a prior elevated process and now unreadable
+        # from the regular user token). Without this preflight the
+        # caller sees a bare ``PermissionError: [WinError 5]`` with no
+        # context on what dir is broken or how to repair it.
+        preflight_readable_dir(self.root / version)
         path = self.root / version / _METADATA_FILENAME
         if not path.is_file():
             raise FileNotFoundError(
@@ -263,8 +285,20 @@ class Registry:
             raise ValueError(
                 f"version must match v\\d+ pattern, got {version!r}"
             )
+        # Preflight: confirm the registry root is writable BEFORE we
+        # do the mkdir + write. Without this, a broken ACL on the root
+        # surfaces as a generic WinError 5 several lines down, with no
+        # hint about where the problem is or how to fix it.
+        preflight_writable_dir(self.root)
         target_dir = self.root / version
         target_dir.mkdir(parents=True, exist_ok=True)
+        # Defensively re-enable inheritance on the freshly-created
+        # version dir. If the calling process happened to be elevated
+        # (UAC token), the mkdir above can land with inheritance
+        # disabled and only Administrators in the ACL — locking the
+        # unelevated user out of subsequent reads/writes. No-op off
+        # Windows / if icacls is unavailable.
+        ensure_inheritance_enabled(target_dir)
         weights_target = target_dir / _WEIGHTS_FILENAME
         # Copy weights bytes (not move — the caller may still want
         # the source file).
