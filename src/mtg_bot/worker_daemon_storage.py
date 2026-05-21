@@ -18,13 +18,42 @@ in. The matching coord-side fetcher lives at
 """
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 
+log = logging.getLogger(__name__)
+
+
 ArtifactKind = Literal["npz", "replay"]
+
+
+# Retry/backoff for S3 uploads on transient ClientError (throttling /
+# 5xx). Three retries at 1s/3s/10s mirrors the worker daemon's
+# ``RETRY_BACKOFF_S`` schedule so a flaky AWS endpoint behaves like a
+# flaky coordinator endpoint from the worker's POV. Permission /
+# bucket-not-found errors are fail-loud — they're operator bugs, not
+# transient.
+S3_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0, 10.0)
+
+# AWS error codes we consider transient. Anything else (e.g.
+# ``AccessDenied``, ``NoSuchBucket``, ``InvalidAccessKeyId``) is an
+# operator-config problem; retrying just delays the diagnostic.
+_TRANSIENT_S3_ERROR_CODES: frozenset[str] = frozenset({
+    "Throttling",
+    "ThrottlingException",
+    "RequestLimitExceeded",
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "SlowDown",
+    "InternalError",
+    "ServiceUnavailable",
+    "InternalServerError",
+})
 
 
 def build_artifact_key(
@@ -135,28 +164,100 @@ class LocalFileUploader(ArtifactUploader):
         return "file:///" + target.resolve().as_posix().lstrip("/")
 
 
-class S3ArtifactUploader(ArtifactUploader):  # pragma: no cover - Phase 2
+class S3ArtifactUploader(ArtifactUploader):
     """Uploads artifacts to an S3 bucket via boto3.
 
-    Phase 1 stub: raises ``NotImplementedError``. Phase 2 will
-    implement the boto3 client + multipart upload + retry/backoff
-    + size verification header. The class shape is locked in here
-    so the worker-side factory + the coord-side fetcher can refer
-    to a stable import path while Phase 2 lands.
+    Determinism + idempotency: the object key is
+    ``build_artifact_key(...)`` prefixed with ``self.prefix`` (if non-
+    empty). A retried upload writes byte-identical content to the same
+    key — the second ``PutObject`` overwrites the first, the returned
+    URI is unchanged. So upload retries are safe (the URI we hand back
+    to the coord is the same one a peer worker would derive from the
+    same claim_id).
+
+    Retry policy: transient errors (throttling, S3 ``InternalError`` /
+    ``ServiceUnavailable``, request timeouts) retry on the
+    ``S3_RETRY_BACKOFF_S`` schedule (1s / 3s / 10s, 3 retries). Anything
+    else — ``AccessDenied`` from a misconfigured IAM role, ``NoSuchBucket``
+    from a wrong bucket name, an invalid signature — fails LOUDLY on the
+    first attempt. Those are operator-config bugs; retrying just delays
+    the diagnostic.
     """
 
-    def __init__(self, bucket: str, prefix: str = "") -> None:
+    def __init__(
+        self,
+        bucket: str,
+        prefix: str = "",
+        *,
+        client: Optional[Any] = None,
+    ) -> None:
         self.bucket = bucket
         self.prefix = prefix.strip("/")
+        if client is not None:
+            self._client = client
+        else:  # pragma: no cover - real boto3 client init exercised only via integration
+            import boto3  # noqa: PLC0415 — defer import so file:// users skip boto3
+            self._client = boto3.client("s3")
+
+    def _full_key(
+        self,
+        *,
+        kind: ArtifactKind,
+        stage_id: str,
+        shard_label: str,
+        claim_id: str,
+    ) -> str:
+        key = build_artifact_key(
+            kind=kind, stage_id=stage_id,
+            shard_label=shard_label, claim_id=claim_id,
+        )
+        if self.prefix:
+            return f"{self.prefix}/{key}"
+        return key
 
     def upload(
         self, payload, *, kind, stage_id, shard_label, claim_id,
     ) -> str:
-        raise NotImplementedError(
-            "S3ArtifactUploader is a Phase-1 stub; Phase 2 wires "
-            "the boto3 PutObject path. Use LocalFileUploader for "
-            "now."
+        # Import inside the call so the module is importable on hosts
+        # that don't install the ``[s3]`` extra (those hosts only need
+        # ``file://`` / ``null://``, never instantiate this class, and
+        # so never trigger the boto3 import).
+        from botocore.exceptions import ClientError  # noqa: PLC0415
+
+        full_key = self._full_key(
+            kind=kind, stage_id=stage_id,
+            shard_label=shard_label, claim_id=claim_id,
         )
+        last_err: Optional[Exception] = None
+        for attempt, delay in enumerate((0.0,) + tuple(S3_RETRY_BACKOFF_S)):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                self._client.put_object(
+                    Bucket=self.bucket, Key=full_key, Body=payload,
+                )
+                return f"s3://{self.bucket}/{full_key}"
+            except ClientError as e:
+                code = (
+                    e.response.get("Error", {}).get("Code", "")
+                    if hasattr(e, "response") and isinstance(e.response, dict)
+                    else ""
+                )
+                if code not in _TRANSIENT_S3_ERROR_CODES:
+                    # Permission / bucket-not-found / etc — fail loud,
+                    # no retries. Re-raise with the original exception
+                    # so the operator sees the AWS-side diagnostic.
+                    raise
+                last_err = e
+                log.warning(
+                    "[s3_uploader] transient %s on PutObject "
+                    "s3://%s/%s attempt %d: %s",
+                    code, self.bucket, full_key, attempt, e,
+                )
+        # Exhausted the retry budget on transient errors. Re-raise
+        # the last one so the claim-loop's error handling sees it.
+        assert last_err is not None
+        raise last_err
 
 
 def uploader_from_uri(uri: str) -> ArtifactUploader:
@@ -175,7 +276,7 @@ def uploader_from_uri(uri: str) -> ArtifactUploader:
     scheme = parsed.scheme
     if scheme == "file":
         return LocalFileUploader(_file_uri_to_path(uri))
-    if scheme == "s3":  # pragma: no cover - Phase 2
+    if scheme == "s3":
         prefix = parsed.path.lstrip("/")
         return S3ArtifactUploader(bucket=parsed.netloc, prefix=prefix)
     if scheme == "null":
