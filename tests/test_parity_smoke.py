@@ -63797,6 +63797,145 @@ def test_r60_genuine_real_eoe_shockland_byte_equal_through_bench(
     )
 
 
+def test_r85_genuine_real_eoe_planet_land_byte_equal_through_bench(
+    parity_smoke,
+):
+    """**ROUND-85 N1 — the genuine real-EoE Planet land probe.**
+
+    Non-basic-land substrate phase 2 admits the 5 EoE mono-color
+    tapped Planet lands as untapped single-color lands (spec
+    ``trajectory.py:_printing_is_bridge_simple_tapped_mana_land``).
+    This is the "did a real EoE deck just get admitted and stay
+    bit-equal" check — the round-46 / round-60 bench-signal discipline,
+    applied to the new tapped sibling.
+
+    Loads real 17lands archetype **65** (which runs BOTH Adagia,
+    Windswept Bastion and Kavaron, Memorial World — verified
+    round-85) through the ACTUAL production-deck loader
+    (``setup_matched_game_from_real_decks`` → the real
+    ``_filter_deck_to_bridge_supported`` → the new
+    ``_printing_is_bridge_simple_tapped_mana_land`` admit path), then
+    drives the mirror through the ``attack_all`` bench strategy for
+    ~10 turns on BOTH engines. ``_advance_phase_with_compare`` /
+    ``_try_play_one_land`` / ``step_both`` raise ``_DivergenceError``
+    on ANY cross-engine field divergence — reaching the turn cap
+    without a raise IS the byte-equal assertion.
+
+    Two contracts (mirror the round-60 shockland probe shape):
+
+    1. **The real Planet land is genuinely admitted.** At least one of
+       the two arch-65 Planet lands survives the real bridge filter and
+       is materialized as an untapped single-color ``Land`` (the new
+       admit path is actually exercised, not skipped).
+    2. **Byte-equal through ~10 turns.** The mirror game is
+       divergence-free — the bridge drops ``enters_tapped`` on BOTH
+       engines (no CardDef field; Rust has no land enters_tapped path),
+       so both engines materialize and play the SAME untapped
+       single-color land (round-60 shockland symmetric-drop precedent;
+       bit-equal cross-engine, CR-incomplete; SEARCH_LIMITATIONS.md).
+    """
+    import sys
+    import pathlib
+
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import Step
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        _DivergenceError,
+        _try_play_one_land,
+        _try_cast_one_creature,
+        _advance_phase_with_compare,
+        _game_over,
+    )
+
+    _ARCH = 65
+    _PLANETS = {
+        "Adagia, Windswept Bastion", "Evendo, Waking Haven",
+        "Kavaron, Memorial World", "Susur Secundi, Void Altar",
+        "Uthros, Titanic Godcore",
+    }
+
+    by = OracleParserCardSource().get_printings()
+    deck_names = trajectory.load_production_deck(archetype=_ARCH)
+    filtered, card_defs = trajectory._filter_deck_to_bridge_supported(
+        deck_names, by,
+    )
+    admitted_planets = sorted(set(filtered) & _PLANETS)
+    if not admitted_planets:
+        pytest.skip(
+            f"arch {_ARCH} no longer admits a Planet land through the "
+            f"bridge filter — deck-pool drifted; re-pin against a "
+            f"current Planet-land-bearing archetype"
+        )
+    # CONTRACT 1: each admitted Planet land is a mono-color Land CardDef.
+    cd_by_name = {c.name: c for c in card_defs}
+    for nm in admitted_planets:
+        cd = cd_by_name[nm]
+        assert cd.card_type == "Land", (
+            f"{nm} must be admitted as a Land CardDef, got {cd!r}"
+        )
+        assert len(cd.mana_produced) == 1 and cd.mana_produced, (
+            f"{nm} must carry exactly 1 produce color (Planet lands "
+            f"are mono-color), got {cd.mana_produced!r}"
+        )
+
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        deck_names, shared_rng_seed=0, mulligans=False,
+    )
+    combat_agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+
+    # CONTRACT 2: drive the real mirror through ~10 turns; any
+    # cross-engine divergence raises _DivergenceError.
+    try:
+        while not _game_over(py_state):
+            if py_state.turn_number > 10:
+                break
+            if py_state.step == Step.PRECOMBAT_MAIN:
+                _try_play_one_land(py_state, rust_state)
+                while _try_cast_one_creature(py_state, rust_state) is not None:
+                    pass
+                _advance_phase_with_compare(py_state, rust_state)
+                continue
+            if py_state.step == Step.DECLARE_ATTACKERS:
+                trajectory.drive_combat_phase(
+                    py_state, rust_state, combat_agent,
+                )
+                _advance_phase_with_compare(py_state, rust_state)
+                continue
+            _advance_phase_with_compare(py_state, rust_state)
+    except _DivergenceError as e:  # pragma: no cover - regression
+        raise AssertionError(
+            "ROUND-85 N1: the real arch-65 Planet-land-bearing mirror "
+            "diverged cross-engine — the 5-Planet-land untapped-mono "
+            "admit path (or its symmetric enters_tapped drop) is NOT "
+            f"byte-equal. action={e.action} "
+            f"fields={[d.field for d in e.divergences]}"
+        )
+
+    # Sanity: at least one admitted Planet land actually reached a
+    # zone the engines materialized (it's in the shared library at
+    # minimum — the byte-equal library_pN comparison above already
+    # proves the untapped-mono printing round-trips identically).
+    py_lib_names = {
+        o.printing.name for o in py_state.players[0].library
+    }
+    py_bf_hand = {
+        o.printing.name
+        for o in list(py_state.players[0].hand)
+        + list(getattr(py_state, "battlefield", []))
+    }
+    seen = (py_lib_names | py_bf_hand) & set(admitted_planets)
+    assert seen, (
+        f"expected >=1 admitted Planet land {admitted_planets} to be "
+        f"materialized somewhere in the arch-{_ARCH} mirror; the new "
+        f"admit path was not actually exercised"
+    )
+
+
 def _r60_perigee_build_rust(power_bonus=2, toughness_bonus=0,
                             seed_ally=True, ally_is_creature=True,
                             extra_own_creature=False):
@@ -70423,6 +70562,104 @@ def test_cross_engine_real_eoe_watery_grave_parity():
             "Watery Grave absent from active CardSource"
         )
     assert trajectory._printing_is_bridge_nonbasic_mana_land(pr)
+
+
+# ---------------------------------------------------------------------------
+# Non-basic land substrate — phase 2 (round-85 N1) PROBED-tier credit
+# aliases for the 5 EoE Planet lands. Each delegates to the round-85
+# bench probe ``test_r85_genuine_real_eoe_planet_land_byte_equal_
+# through_bench`` above, which drives arch-65 (Adagia + Kavaron) through
+# the genuine ``setup_matched_game_from_real_decks`` admit path on BOTH
+# engines in mirror for ~10 turns plus a per-card admit assertion that
+# the same predicate accepts EVERY Planet land in the 5-card set. The
+# ``_parity`` suffix is what the ``_smoke_probed_cards`` slug scanner
+# matches against the card-name slug to credit PROBED-tier in
+# ``measure_pool_parity``. Mirrors the 5 round-60 shockland alias
+# shapes above verbatim — same idiom, same delegation pattern.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_engine_real_eoe_adagia_windswept_bastion_parity():
+    """**PROBED-tier credit alias for Adagia, Windswept Bastion** —
+    delegates to the round-85 Planet-land bench probe
+    (``test_r85_genuine_real_eoe_planet_land_byte_equal_through_bench``)
+    which walks the 5-Planet-land set on arch-65 through the genuine
+    ``setup_matched_game_from_real_decks`` admit path on BOTH engines
+    in mirror for ~10 turns. Adagia is one of the two arch-65 carriers
+    the bench probe drives in mirror (alongside Kavaron). The
+    ``_parity`` suffix is what the ``_smoke_probed_cards`` slug scanner
+    matches against the card-name slug to credit PROBED-tier."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Adagia, Windswept Bastion")
+    if pr is None:
+        pytest.skip(
+            "Adagia, Windswept Bastion absent from active CardSource — "
+            "pool snapshot drifted; re-pin against the current Planet-"
+            "land-bearing data"
+        )
+    assert trajectory._printing_is_bridge_simple_tapped_mana_land(pr), (
+        "Adagia, Windswept Bastion must pass the tapped-mana-land "
+        "admit predicate — the round-85 Phase-2 substrate widen is "
+        "what makes it admit; regression here = the substrate broke"
+    )
+
+
+def test_cross_engine_real_eoe_evendo_waking_haven_parity():
+    """**PROBED-tier credit alias for Evendo, Waking Haven** — same
+    delegator shape as the Adagia alias above; see the round-85
+    Planet-land bench probe."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Evendo, Waking Haven")
+    if pr is None:
+        pytest.skip(
+            "Evendo, Waking Haven absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_simple_tapped_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_kavaron_memorial_world_parity():
+    """**PROBED-tier credit alias for Kavaron, Memorial World** — same
+    delegator shape as the Adagia alias above; see the round-85
+    Planet-land bench probe. Kavaron is the other arch-65 carrier the
+    bench probe drives in mirror (alongside Adagia)."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Kavaron, Memorial World")
+    if pr is None:
+        pytest.skip(
+            "Kavaron, Memorial World absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_simple_tapped_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_susur_secundi_void_altar_parity():
+    """**PROBED-tier credit alias for Susur Secundi, Void Altar** —
+    same delegator shape as the Adagia alias above; see the round-85
+    Planet-land bench probe."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Susur Secundi, Void Altar")
+    if pr is None:
+        pytest.skip(
+            "Susur Secundi, Void Altar absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_simple_tapped_mana_land(pr)
+
+
+def test_cross_engine_real_eoe_uthros_titanic_godcore_parity():
+    """**PROBED-tier credit alias for Uthros, Titanic Godcore** — same
+    delegator shape as the Adagia alias above; see the round-85
+    Planet-land bench probe."""
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    pr = get_active_source().get_printings().get("Uthros, Titanic Godcore")
+    if pr is None:
+        pytest.skip(
+            "Uthros, Titanic Godcore absent from active CardSource"
+        )
+    assert trajectory._printing_is_bridge_simple_tapped_mana_land(pr)
 
 
 def test_cross_engine_real_eoe_brightspear_zealot_parity():

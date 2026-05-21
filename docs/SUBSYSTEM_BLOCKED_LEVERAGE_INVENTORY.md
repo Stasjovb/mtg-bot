@@ -57,13 +57,18 @@ flash widening, +2 PROBED) and Lane H (loader_admits disjunct sweep,
 +9 PROBED + 2 COVERED honest-stops) had previously surfaced. The
 audit covered:
 
-1. **Loader admit predicate completeness** — all 9 disjuncts of the
-   real `trajectory._filter_deck_to_bridge_supported` admit gate
-   (basic land, nonbasic mana land, pure warp creature, simple
-   creature, simple spell, simple aura, simple static-anthem
-   creature, simple uncounterable creature, simple static
-   self-conditional creature) are mirrored in
-   `measure_pool_parity.loader_admits`. No missing disjuncts.
+1. **Loader admit predicate completeness** — all disjuncts of the
+   real `trajectory._filter_deck_to_bridge_supported` admit gate are
+   mirrored in `measure_pool_parity.loader_admits`. At the time of
+   the audit there were 9 disjuncts (basic land, nonbasic mana land,
+   pure warp creature, simple creature, simple spell, simple aura,
+   simple static-anthem creature, simple uncounterable creature,
+   simple static self-conditional creature); round-85's Phase-2
+   non-basic-land closure (`feature/non-basic-land-slice`) added a
+   10th disjunct (`_printing_is_bridge_simple_tapped_mana_land`,
+   admitting the 5 EoE Planet lands) and wired it into
+   `loader_admits` in the same commit, preserving the audit's
+   "no missing disjuncts" invariant.
 
 2. **`classify_pool` internal consistency** — no card is flagged
    BLOCKED-subsystem while simultaneously being (a) loader-admitted
@@ -87,11 +92,17 @@ audit covered:
      `created_tokens_this_turn` substrate landed `4dae568e`, but the
      supertype-override mechanism that gates the loader widen is
      still in flight on `feature/aura-supertype-override`.
-   - Non-basic land row (18 single-gated) — `_printing_is_bridge_
-     nonbasic_mana_land` admits only the 5 shocklands (already
-     flipped to PROBED last round); the other 18 carry painland /
-     planet / clone / Cathedral-style riders that are genuinely
-     unbridged.
+   - Non-basic land row (18 → 13 single-gated, post round-85) —
+     `_printing_is_bridge_nonbasic_mana_land` admits the 5 shocklands
+     and the new sibling `_printing_is_bridge_simple_tapped_mana_land`
+     (round-85) admits the 5 Planet lands (the parser-flattened
+     `enters_tapped=True` mono-color shape; the bridge drops
+     `enters_tapped` on both engines — round-39 Ward / round-60
+     shockland symmetric-drop precedent). The remaining 13 carry
+     painland (parser-structured conditional-tapped — a real
+     cross-engine divergence) / clone (Echoing Deeps) / Exalted-static
+     (Cathedral of War) / activated-abilities (Secluded Starforge)
+     riders that are genuinely unbridged and stay DEFERRED.
    - Cost-reduction row (5 single-gated) — verified each printing
      carries a `cost_reductions` / `external_cost_reductions` tuple
      with no Rust counterpart (substrate documented DEFERRED).
@@ -153,13 +164,36 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ
-PROBED                                                221         232          235            236                 238                    250                              252                               259
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122
 ```
+
+**post-non-basic-land-P2 delta (this lane):** strict **+5 PROBED /
+−5 BLOCKED-subsystem-gated** (the 5 EoE Planet lands: Adagia,
+Windswept Bastion / Evendo, Waking Haven / Kavaron, Memorial World /
+Susur Secundi, Void Altar / Uthros, Titanic Godcore; total 7,617
+17lands single-gated decks per the round-58 attribution scout). One
+new admit disjunct (`_printing_is_bridge_simple_tapped_mana_land`)
+plus 5 `_parity`-named PROBED-tier delegator probes. The 5 Planet
+lands are 0-Effect cards admitted by the new disjunct; the
+`_parity`-named delegators credit them PROBED-tier directly in the
+same commit, so COVERED is unchanged. No engine changes; round-39
+Ward / round-60 shockland symmetric-drop precedent (the bridge
+drops `enters_tapped` on both engines so the bridged shape is
+bit-equal; the parser dropped Station + the tier-gated activated
+ability before either engine saw the printing — also symmetric).
+Note: the prior `post-probe-batches-HHHH-JJJJ` snapshot column
+recorded `COVERED=88 / BLOCKED=128` but the live POOL_PARITY at
+the start of this lane was `COVERED=89 / BLOCKED=127` (off-by-one
+COVERED↔BLOCKED drift in the historical column, undetected by the
+round-tail audit lane). The post-this-lane snapshot is the
+authoritative `264 / 89 / 122` row of the regenerated
+`docs/POOL_PARITY.md`. Spec: `SEARCH_LIMITATIONS.md` "5 EoE Planet
+lands admitted as plain untapped mono-color lands".
 
 The tannuk-frenzied-baloth-probes lane delta is strict **+2 PROBED / −2 COVERED**: Tannuk Steadfast Second and Frenzied Baloth flipped COVERED → PROBED via the two new genuine-printing cross-engine byte-equal `_parity` probes. No engine changes, no subsystem-gated movement, no Effect-class movement.
 
@@ -211,7 +245,7 @@ to reflect what substrate already exists post-session.
 | Subsystem | #cards | 1gate | decks(1g) | Tractability | Closure scope | Status (post-session) |
 |---|---:|---:|---:|---|---|---|
 | Static / layered abilities | 9 | 2 | 0 | sprawling | small per remaining card (Phases 1+2+3+3.5 substrate built) | **PARTIAL** — round-82: Mechan Shieldmate CLOSED (Phase 3.5); 2026-05-21 loader_admits-attribution-sweep flipped Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate → PROBED + Tannuk / Frenzied Baloth → COVERED; 2026-05-21 tannuk-frenzied-baloth-probes follow-up flipped Tannuk + Frenzied Baloth COVERED → PROBED via genuine-printing cross-engine byte-equal helpers; 2 single-gated remain (Soulrager / Wickerfolk — not in EoE snapshot) |
-| Non-basic land substrate | 18 | 18 | 16,510 | medium | small-medium for ~5 cards realizable; 13 deferred behind sibling substrates | **PARTIAL** — 2026-05-21 loader_admits-attribution-sweep flipped the 5 shocklands (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground / Watery Grave) → PROBED via the round-60 bench probe pin; 18 non-shockland non-basic lands remain DEFERRED |
+| Non-basic land substrate | 13 | 13 | 8,893 | medium | 13 deferred behind sibling substrates (conditional-tapped / clone / Exalted / activated-abilities) | **PARTIAL** — 2026-05-21 loader_admits-attribution-sweep flipped the 5 shocklands → PROBED (round-60); 2026-05-21 non-basic-land Phase-2 (`feature/non-basic-land-slice`) flipped the 5 Planet lands (Adagia / Evendo / Kavaron / Susur Secundi / Uthros, 7,617 decks) → PROBED via the new `_printing_is_bridge_simple_tapped_mana_land` predicate + round-85 arch-65 bench probe + 5 `_parity`-named PROBED-tier delegators; 13 non-shockland non-Planet lands remain DEFERRED (10 Duskmourn painlands' parser-structured `enters_tapped_unless_any_player_life_at_most` is a real cross-engine divergence; Secluded Starforge / Cathedral of War / Echoing Deeps each behind activated-abilities / Exalted-static / clone substrates) |
 | Cost-reduction substrate | 5 | 5 | 53,648 | medium | large (true Rust multi-round; Condition-grammar port) | DEFERRED (unchanged; `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`) |
 | warp_cost | 7 | 0 | 0 | medium | Phase 1/1.5/2/3 **SHIPPED** — 3 single-gated Phase-3 cards flipped to PROBED (round-83, 2026-05-20: `feature/warp-cost-phase-3`) | **CLOSED for single-gated** — 7 multi-gated tail remains (static/effect-uncovered co-gates) |
 | Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
@@ -519,8 +553,15 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
   realizable yield is **0 in any near-term clean slice** — admitting
   any of the 5 ships a guaranteed inter-engine divergence. Large
   multi-round Rust substrate. Keep deferred.
-* **Non-basic land substrate remainder (18 cards).** Behind sibling
-  substrates (Station / activated / clone); not a clean slice.
+* **Non-basic land substrate remainder (13 cards, post round-85).**
+  Behind sibling substrates (conditional-tapped — Duskmourn painlands;
+  Station / activated — Secluded Starforge; clone — Echoing Deeps;
+  Exalted-static — Cathedral of War). Not a clean slice. The 5
+  Planet lands closed in round-85 (`feature/non-basic-land-slice`,
+  `_printing_is_bridge_simple_tapped_mana_land`); the 5 shocklands
+  closed in round-60. The remaining 13 are 8,893 cumulative decks
+  (Secluded Starforge 7,570 + Cathedral of War 1,205 + Echoing Deeps
+  118 + 10 zero-deck Duskmourn painlands).
 * **Station / Spacecraft (8 cards, 5,938 decks).** Documented
   §2-decline; large substrate.
 * **Carrier activated abilities (30 cards, 0 single-gated).** All

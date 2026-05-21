@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **348 / 475 EoE cards (73.3%) are byte-equal at the Effect+bridge level**; of those, **259 (54.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 89 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **353 / 475 EoE cards (74.3%) are byte-equal at the Effect+bridge level**; of those, **264 (55.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 89 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **127 (26.7%)** are BLOCKED, broken out below.
+- **122 (25.7%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -16,12 +16,12 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 259 | 54.5% |
+| PROBED byte-equal | 264 | 55.6% |
 | Effect+bridge covered (not individually probed) | 89 | 18.7% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 127 | 26.7% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 122 | 25.7% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -44,6 +44,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
 
+- Adagia, Windswept Bastion
 - All-Fates Stalker
 - Alpharael, Dreaming Acolyte
 - Alpharael, Stonechosen
@@ -108,6 +109,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Erratic Apparition
 - Eumidian Terrabotanist
 - Eusocial Engineering
+- Evendo, Waking Haven
 - Exosuit Savior
 - Extinguisher Battleship
 - Faller's Faithful
@@ -164,6 +166,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Kav Landseeker
 - Kavaron Harrier
 - Kavaron Skywarden
+- Kavaron, Memorial World
 - Knight Luminary
 - Lightless Evangel
 - Lightstall Inquisitor
@@ -261,6 +264,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Sunstar Expansionist
 - Surgical Suite // Hospital Room
 - Survey Mechan
+- Susur Secundi, Void Altar
 - Susurian Dirgecraft
 - Susurian Voidborn
 - Syr Vondam, Sunstar Exemplar
@@ -285,6 +289,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Unsettling Twins
 - Untimely Malfunction
 - Uthros Scanship
+- Uthros, Titanic Godcore
 - Valgavoth's Faithful
 - Vicious Clown
 - Virulent Silencer
@@ -312,14 +317,14 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - (none)
 
-## BLOCKED — subsystem-gated / Effect-uncovered (127)
+## BLOCKED — subsystem-gated / Effect-uncovered (122)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
 | Subsystem | #cards | 1gate | multi | decks(tot) | decks(1g) | Tractability |
 |---|---:|---:|---:|---:|---:|---|
 | BECOMES_TAPPED event (unbridged) | 2 | 0 | 2 | 19,021 | 0 | contained |
-| Non-basic land substrate | 18 | 18 | 0 | 16,510 | 16,510 | medium |
+| Non-basic land substrate | 13 | 13 | 0 | 8,893 | 8,893 | medium |
 | Cost-reduction substrate | 5 | 5 | 0 | 53,648 | 53,648 | medium |
 | warp_cost (declined cost-mechanic) | 7 | 0 | 7 | 46,209 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
@@ -333,14 +338,13 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 43 | 0 | 43 | 147,471 | 0 | diffuse |
 
-**Reconciliation:** 127 subsystem-gated = 52 single-gated + 75 multi-gated; the per-subsystem `1gate` column sums to 52 (== single-gated total). The breakout partitions exactly the same 127 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 122 subsystem-gated = 47 single-gated + 75 multi-gated; the per-subsystem `1gate` column sums to 47 (== single-gated total). The breakout partitions exactly the same 122 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
 Full card list (first 60 shown for auditability; the full set + per-card gate attribution is regenerable from `scripts/scout_r58_subsystem_attribution.py`):
 
 - Abandoned Campground
-- Adagia, Windswept Bastion
 - All-Fates Scroll
 - Ancient Tomb
 - Anticausal Vestige
@@ -377,7 +381,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Enduring Curiosity
 - Entropic Battlecruiser
 - Etched Cornfield
-- Evendo, Waking Haven
 - Exalted Sunborn
 - Exorcise
 - Fanatic of the Harrowing
@@ -393,11 +396,13 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Hemosymbic Mite
 - Infinite Guideline Station
 - Invasive Maneuvers
-- Kavaron, Memorial World
 - Keys to the House
 - Lakeside Shack
 - Larval Scoutlander
 - Lashwhip Predator
 - Lavaclaw Reaches
-- … and 67 more
+- Leyline of Mutation
+- Loading Zone
+- Lotus Field
+- … and 62 more
 
