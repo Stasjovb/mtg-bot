@@ -89,10 +89,12 @@ extension to the existing round-78 dispatch table.
 
 ## 1. Headline (current state)
 
-* **142 cards** are subsystem-gated; **67 single-gated**, **75 multi-gated**
-  (post dynamic-pt-cosmogoyf round-84: Cosmogoyf — the last single-
-  gated Dynamic-P/T card — flipped to PROBED). The 75 multi-gated
-  total is unchanged.
+* **139 cards** are subsystem-gated; **64 single-gated**, **75 multi-gated**
+  (post Aura Phase 1 flash widening attribution close 2026-05-21:
+  Frantic Strength + Shardmage's Rescue → PROBED, Duskmourn's
+  Domination → COVERED — see lever (2) below). Post dynamic-pt-
+  cosmogoyf round-84: Cosmogoyf — the last single-gated Dynamic-P/T
+  card — flipped to PROBED. The 75 multi-gated total is unchanged.
 * **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
   those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
@@ -117,7 +119,7 @@ to reflect what substrate already exists post-session.
 | Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (§2-declined) | DEFERRED (unchanged) |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; 0 single-gated) | DEFERRED (unchanged) |
-| Aura-attachment substrate | 7 | 4 | 633 | sprawling | Phase 1/2/2.5/3 LANDED; **Phase 4 only** (S3 token-replacement Moonlit Meditation 633 decks) | **PARTIAL** — sub-shape coverage near-complete; lane 3 in flight |
+| Aura-attachment substrate | 7 | 1 | 633 | sprawling | Phase 1/2/2.5/3 LANDED; **Phase 4 only** (S3 token-replacement Moonlit Meditation 633 decks) | **PARTIAL** — Phase 1 flash widening attribution close (2026-05-21) flipped Frantic Strength + Shardmage's Rescue → PROBED + Duskmourn's Domination → COVERED; only Moonlit Meditation single-gated remains |
 | BECOMES_TAPPED event | 2 | 0 | 0 | contained | small (event bridge) — 0 single-gated | DEFERRED (unchanged) |
 | Ward (declined) | dropped | — | — | medium | — | row gone from scout (0-binding) |
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
@@ -127,13 +129,19 @@ to reflect what substrate already exists post-session.
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 142 subsystem-gated = 67 single-gated + 75
-multi-gated; `1gate` column sums to 67 (post-dynamic-pt-cosmogoyf
-round-84; the Dynamic-P/T row is now 0/0/0 — the substrate is fully
-closed end-to-end for the two formulas present in the EoE snapshot
-(Grovestrider + Cosmogoyf); the third sibling, Emissary Escort, is
-absent from the EoE snapshot AND is honest-stopped Rust-side on a
-different per-formula shape).
+**Reconciliation:** 139 subsystem-gated = 64 single-gated + 75
+multi-gated; `1gate` column sums to 64 (post Aura Phase 1 flash
+widening attribution close 2026-05-21; the Aura row drops from 7/4/3416
+to 7/1/633 — Frantic Strength + Shardmage's Rescue + Duskmourn's
+Domination all dropped out of subsystem-gated because the measurement
+helpers now see the live trajectory predicate's Aura disjunct +
+``_parity``-named probes; only Moonlit Meditation remains
+single-gated, on the un-shipped Phase 4 S3 consumer wire-up). Post-
+dynamic-pt-cosmogoyf round-84; the Dynamic-P/T row is now 0/0/0 — the
+substrate is fully closed end-to-end for the two formulas present in
+the EoE snapshot (Grovestrider + Cosmogoyf); the third sibling,
+Emissary Escort, is absent from the EoE snapshot AND is honest-stopped
+Rust-side on a different per-formula shape).
 
 ## 3. The remaining highest-leverage levers (re-ranked)
 
@@ -175,13 +183,53 @@ Green Sun's Zenith (effect-uncovered+static).
 
 ### (2) Aura-attachment substrate — Phase 4 only
 
-Phases 1+2+2.5+3 SHIPPED. The 7-card subsystem-gated row's residue:
+Phases 1+2+2.5+3 SHIPPED. The Phase 1 flash widening
+(``_AURA_SAFE_EXTRA_KEYWORDS = {"flash"}``) landed at round-79; the
+**measurement-attribution close** landed at 2026-05-21
+(`feature/aura-phase-1-flash-widening`, this lane). The lane verified-
+first that the trajectory bridge predicate already admits Frantic
+Strength + Shardmage's Rescue cleanly (the round-79 widen has been live
+since the Aura-substrate Phase 2 first deliverable; both cards parse
+clean: pure ``equipment_bonuses`` + a static ``flash`` keyword
+symmetrically dropped on both bridge sides), then closed the two
+attribution gaps:
 
-* **Single-gated 4:** Duskmourn's Domination, Frantic Strength, Moonlit
-  Meditation, Shardmage's Rescue. Phase 2 S2 (`643163c6`) admits
-  Duskmourn; Phase 1 admits Frantic Strength + Shardmage's Rescue if
-  flash widening lands. **Moonlit Meditation (633 decks) needs Phase 4
-  S3 replacement-effect substrate — the only un-shipped Aura phase.**
+  1. ``scripts/measure_pool_parity.loader_admits`` was missing the
+     ``_printing_is_bridge_simple_aura`` disjunct — the trajectory
+     predicate has 9 disjuncts but the metric helper only consulted 3
+     (basic land + simple creature + warp). Adding the Aura disjunct
+     flips a 0-Effect keyword-only Aura into the COVERED tier via the
+     ``not eff_classes and admitted`` arm. Cross-cutting result:
+     Duskmourn's Domination (Phase 2 S2 admit) ALSO flipped from
+     BLOCKED → COVERED in the same fix (it was admitted by the real
+     loader since round-79's sibling S2 widen but invisible to the
+     metric for the identical reason).
+  2. Added ``test_cross_engine_real_eoe_frantic_strength_parity`` +
+     ``test_cross_engine_real_eoe_shardmage_s_rescue_parity`` to
+     ``tests/test_parity_smoke.py`` mirroring the round-84 Cosmogoyf
+     dynamic-PT idiom: round-trip the genuine parsed printing through
+     ``_printing_to_card_def``, build matched ``DeckSpec`` states
+     carrying the Aura + a vanilla bear filler, inject onto the
+     battlefield via ``register_and_inject_object`` (Rust) /
+     ``state.new_object`` (Python), attach via ``state.attach``
+     (Rust) / ``obj.attached_to = host.id`` (Python), then assert
+     ``effective_power(host) / effective_toughness(host)`` byte-equal
+     cross-engine AND ``compare_fields == []`` over the WHOLE field
+     view at the post-attach state. Both probes drive the genuine
+     EoE printings end-to-end.
+
+**+2 PROBED-tier cards (Frantic Strength + Shardmage's Rescue);
++1 COVERED-tier card (Duskmourn's Domination); -3 BLOCKED single-
+gated.** Headline before → after: PROBED 236→238, byte-equal 333→336,
+single-gated 67→64.
+
+The 7-card subsystem-gated row's residue:
+
+* **Single-gated 1 (post-flash-widening attribution close):** Moonlit
+  Meditation. **Moonlit Meditation (633 decks) needs Phase 4 S3
+  replacement-effect substrate consumer wire-up — substrate landed at
+  `7b2f62f0`; the host-as-token swap mechanism is the remaining
+  honest-stop and gates the loader admit widen.**
 * **Multi-gated 3:** Chorale of the Void, Cracked Skull, Sporogenic
   Infection — all S4-shape, all multi-gated with effect-uncovered +
   nonsafe-trig + Aura. Phase 3 S4 substrate (`35ede8b0`) is the Aura

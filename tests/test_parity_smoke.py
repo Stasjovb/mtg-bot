@@ -69891,6 +69891,371 @@ def test_cross_engine_real_eoe_cosmogoyf_dynamic_pt_parity(
     ) == effective_toughness(py_state, py_cosmo)
 
 
+def test_cross_engine_real_eoe_frantic_strength_parity(
+    parity_smoke,
+):
+    """**Probe: Frantic Strength Aura attach + effective-P/T byte-equal
+    across engines (Aura Phase 1 flash widening attribution close,
+    2026-05-21; spec
+    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (2)).**
+
+    Oracle text in ``data/duskmourn.json``::
+
+        Flash
+        Enchant creature
+        Enchanted creature gets +2/+2 and has trample.
+
+    Frantic Strength is the canonical S1 Aura carrier — a pure static-
+    bonus Aura with ``equipment_bonuses=(2, 2, frozenset({"trample"}))``
+    plus a cast-timing ``flash`` rider on the printing's static
+    ``keywords``. The Aura-substrate Phase 2 first deliverable
+    (round-79) added ``flash`` to ``_AURA_SAFE_EXTRA_KEYWORDS`` so the
+    real loader's ``_printing_is_bridge_simple_aura`` predicate admits
+    this printing; this probe pins the cross-engine byte-equality
+    contract THAT widen was supposed to expose, completing the
+    PROBED-tier attribution.
+
+    Test surface (host's effective P/T sweep, mirroring the round-84
+    Cosmogoyf ``_parity`` template):
+
+      * Bear (2/2) alone on p0's bf → effective P = 2, T = 2 on both
+        engines (negative-control for the attach path).
+      * Same bear with Frantic Strength attached → effective P = 4,
+        T = 4 on both engines (the ``equipment_bonuses`` rider lands
+        bit-equal cross-engine after attach).
+      * Detach (``attached_to = None``, Rust ``attach(aura, 0)`` is
+        not exposed for detach so we mirror by setting the slot
+        directly on the field view) — out of scope for this probe;
+        the attach byte-equality already pins the substrate.
+
+    Byte-equal field-view assertion: ``compare_fields`` over the WHOLE
+    cross-engine field view at the post-attach state (battlefield zone
+    carries the (host, aura) pair with ``attached_to`` linked, no
+    residual hand / library / graveyard divergence). The Bear and the
+    Aura are flagged ``summoning_sick=False`` on the Python side to
+    mirror Rust's ``register_and_inject_object`` default — without that
+    normalisation the field view would surface a benign-but-real
+    summoning-sick divergence (Python ``new_object`` defaults summon-
+    sick to True; Rust's inject defaults to False, and the substrate's
+    contract on this slice is the cast-and-resolve path NOT the
+    test-rig default).
+
+    The driving idiom matches ``test_cross_engine_real_eoe_cosmogoyf_
+    dynamic_pt_parity`` above: round-trip the genuine parsed printing
+    through ``trajectory._printing_to_card_def``, build matched states
+    from a ``DeckSpec`` carrying both the Aura CardDef and a vanilla
+    bear filler, inject onto the battlefield via the standard
+    ``register_and_inject_object`` (Rust) /
+    ``state.new_object`` (Python) pair, attach via the matching
+    primitives, then assert cross-engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict, _card_def_to_python_printing,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.parity import trajectory
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    # ----- Resolve the GENUINE Frantic Strength printing from the live
+    # CardSource and verify the parsed shape matches the round-79 admit
+    # predicate (the flash-widen S1 carrier shape). -----
+    real = get_active_source().get_printings().get("Frantic Strength")
+    if real is None:
+        pytest.skip(
+            "Frantic Strength absent from active CardSource — the "
+            "EoE pool snapshot expected to carry this Duskmourn-set "
+            "Aura at data/duskmourn.json"
+        )
+    assert real.is_aura is True
+    assert real.equipment_bonuses == (2, 2, frozenset({"trample"}))
+    # The static `flash` keyword IS on the printing — the round-79
+    # widen of `_AURA_SAFE_EXTRA_KEYWORDS` is what lets the predicate
+    # admit despite this rider (the symmetric-drop precedent).
+    assert "flash" in real.keywords
+    assert trajectory._printing_is_bridge_simple_aura(real), (
+        "Frantic Strength must pass the round-79 Aura admit predicate "
+        "(flash widening) — if this fails, the substrate regressed."
+    )
+
+    # Round-trip the real printing through the production CardDef
+    # bridge (the same path `setup_matched_game_from_real_decks` uses).
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.is_aura is True
+    assert cd.aura_power_bonus == 2
+    assert cd.aura_toughness_bonus == 2
+    assert cd.aura_granted_keywords == ("trample",)
+
+    # Synthetic bear filler — the static enchant host. Vanilla 2/2 keeps
+    # the negative-control delta clean (effective P/T of an unattached
+    # bear must read 2/2 on both engines; attaching Frantic Strength
+    # adds +2/+2).
+    bear_cd = CardDef(
+        name="Frantic Smoke Bear",
+        card_type="Creature",
+        mana_cost_generic=0,
+        mana_cost_colored=(),
+        power=2,
+        toughness=2,
+    )
+
+    spec = DeckSpec(
+        card_defs=(cd, bear_cd),
+        p0_library=("Frantic Strength", "Frantic Smoke Bear"),
+        p1_library=("Frantic Smoke Bear", "Frantic Strength"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    aura_dict = _spec_card_to_printing_dict(cd)
+    bear_dict = _spec_card_to_printing_dict(bear_cd)
+    ZONE_BATTLEFIELD = 2
+
+    # ----- Inject the host bear + Frantic Strength onto p0's bf on
+    # both engines. Order matters for stable id assignment: bear FIRST
+    # (so the aura's `attached_to` points at the bear's id), then aura.
+    # ----------------------------------------------------------------
+    rust_bear_id = rust_state.register_and_inject_object(
+        bear_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_aura_id = rust_state.register_and_inject_object(
+        aura_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    py_bear_pr = _card_def_to_python_printing(bear_cd)
+    py_aura_pr = _card_def_to_python_printing(cd)
+    py_bear = py_state.new_object(
+        py_bear_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_aura = py_state.new_object(
+        py_aura_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Rust's register_and_inject_object defaults summoning_sick=False;
+    # Python's new_object defaults to True. Normalise the Python side
+    # so the cross-engine compare_fields surfaces ONLY the attach state,
+    # not the test-rig summon-sick default.
+    py_bear.summoning_sick = False
+    py_aura.summoning_sick = False
+    py_state.battlefield.append(py_bear)
+    py_state.battlefield.append(py_aura)
+
+    # ----- Pre-attach: bear reads its printed 2/2 on both engines. -----
+    assert rust_state.effective_power(rust_bear_id) == 2
+    assert rust_state.effective_toughness(rust_bear_id) == 2
+    assert effective_power(py_state, py_bear) == 2
+    assert effective_toughness(py_state, py_bear) == 2
+    # Cross-engine pre-attach: same numbers.
+    assert rust_state.effective_power(rust_bear_id) == effective_power(
+        py_state, py_bear
+    )
+    assert rust_state.effective_toughness(
+        rust_bear_id
+    ) == effective_toughness(py_state, py_bear)
+
+    # ----- Attach Frantic Strength to the bear on both engines. -----
+    # Rust API: `state.attach(aura_id, target_id)` (round-28 attach
+    # foundation; sets the aura's `attached_to` slot directly).
+    # Python: set `obj.attached_to` on the Aura object — the same
+    # `actions.py:2746` stamp the resolve-Aura arm performs.
+    assert rust_state.attach(rust_aura_id, rust_bear_id) is True
+    py_aura.attached_to = py_bear.id
+
+    # ----- Post-attach: bear reads 4/4 on both engines (the
+    # +2/+2/trample rider applies). -----
+    assert rust_state.effective_power(rust_bear_id) == 4, (
+        f"Rust bear P should be 4 (2 base + 2 Frantic Strength bonus); "
+        f"got {rust_state.effective_power(rust_bear_id)}"
+    )
+    assert rust_state.effective_toughness(rust_bear_id) == 4
+    assert effective_power(py_state, py_bear) == 4
+    assert effective_toughness(py_state, py_bear) == 4
+    # Cross-engine post-attach: same numbers.
+    assert rust_state.effective_power(rust_bear_id) == effective_power(
+        py_state, py_bear
+    )
+    assert rust_state.effective_toughness(
+        rust_bear_id
+    ) == effective_toughness(py_state, py_bear)
+
+    # ----- Full-field-view byte-equality (the strongest binding). -----
+    # The whole field view (battlefield zone signature carrying the
+    # (host, aura) pair with `attached_to` linked, plus every other
+    # zone empty on both engines) must be byte-equal.
+    diffs = compare_fields(
+        build_python_field_view(py_state),
+        ce_parity_smoke()._build_field_view(rust_state),
+    )
+    assert diffs == [], (
+        f"Frantic Strength post-attach must be byte-equal across the "
+        f"WHOLE field view on both engines; diffs={diffs}"
+    )
+
+
+def test_cross_engine_real_eoe_shardmage_s_rescue_parity(
+    parity_smoke,
+):
+    """**Probe: Shardmage's Rescue Aura attach + effective-P/T byte-
+    equal across engines (Aura Phase 1 flash widening attribution
+    close, 2026-05-21; spec
+    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (2)).**
+
+    Oracle text in ``data/duskmourn.json``::
+
+        Flash
+        Enchant creature you control
+        As long as this Aura entered this turn, enchanted creature has
+        hexproof.
+        Enchanted creature gets +1/+1.
+
+    Shardmage's Rescue is the second live S1 Aura carrier — pure
+    ``+1/+1`` static bonus, ``aura_yours_only=True`` (the printed
+    "Enchant creature you control"), plus a cast-timing ``flash``
+    rider and a conditional ``entered_this_turn``-hexproof grant.
+    Per the round-79 admit comment at
+    ``src/mtg_bot/parity/trajectory.py:4884-4890``, the live parser
+    does **NOT** parse the conditional hexproof grant at all on EITHER
+    engine — it is a shared CR-incompleteness, symmetrically dropped
+    bit-equal across the bridge. The ``aura_yours_only`` flag is
+    independently bridge-correct (``actions.py:1337-1357`` /
+    ``state_ops_cast.rs:2000-2055``). This probe pins the
+    ``+1/+1`` static bonus + ``aura_yours_only`` byte-equal contract
+    that the flash widen was supposed to expose, completing the
+    PROBED-tier attribution.
+
+    Test surface (host's effective P/T sweep, same template as the
+    Frantic Strength probe above):
+
+      * Bear (2/2) alone on p0's bf → effective P = 2, T = 2 on both
+        engines (negative-control for the attach path).
+      * Same bear with Shardmage's Rescue attached →
+        effective P = 3, T = 3 on both engines.
+
+    The ``aura_yours_only`` flag is exercised implicitly: the attach is
+    to a p0-controlled bear (the caster's own bf), so the
+    you-control restriction never fires a decline. A separate probe
+    (or an existing aura-yours-only test in ``test_aura_substrate_
+    phase1.py``) covers the negative case where an opponent-controlled
+    host would refuse the attach.
+
+    Byte-equal field-view assertion: ``compare_fields`` over the WHOLE
+    cross-engine field view at the post-attach state. Same
+    summoning-sick normalisation as Frantic Strength (Python side
+    seats summon-sick=False to mirror Rust's inject default).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict, _card_def_to_python_printing,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.parity import trajectory
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    # ----- Resolve the GENUINE Shardmage's Rescue printing. -----
+    real = get_active_source().get_printings().get("Shardmage's Rescue")
+    if real is None:
+        pytest.skip(
+            "Shardmage's Rescue absent from active CardSource — the "
+            "EoE pool snapshot expected to carry this Duskmourn-set "
+            "Aura at data/duskmourn.json"
+        )
+    assert real.is_aura is True
+    assert real.equipment_bonuses == (1, 1, frozenset())
+    assert real.aura_yours_only is True
+    # The static `flash` keyword IS on the printing — same round-79
+    # admit precedent as Frantic Strength.
+    assert "flash" in real.keywords
+    assert trajectory._printing_is_bridge_simple_aura(real), (
+        "Shardmage's Rescue must pass the round-79 Aura admit "
+        "predicate (flash widening)."
+    )
+
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.is_aura is True
+    assert cd.aura_power_bonus == 1
+    assert cd.aura_toughness_bonus == 1
+    assert cd.aura_yours_only is True
+
+    bear_cd = CardDef(
+        name="Shardmage Smoke Bear",
+        card_type="Creature",
+        mana_cost_generic=0,
+        mana_cost_colored=(),
+        power=2,
+        toughness=2,
+    )
+
+    spec = DeckSpec(
+        card_defs=(cd, bear_cd),
+        p0_library=("Shardmage's Rescue", "Shardmage Smoke Bear"),
+        p1_library=("Shardmage Smoke Bear", "Shardmage's Rescue"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    aura_dict = _spec_card_to_printing_dict(cd)
+    bear_dict = _spec_card_to_printing_dict(bear_cd)
+    ZONE_BATTLEFIELD = 2
+
+    rust_bear_id = rust_state.register_and_inject_object(
+        bear_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_aura_id = rust_state.register_and_inject_object(
+        aura_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    py_bear_pr = _card_def_to_python_printing(bear_cd)
+    py_aura_pr = _card_def_to_python_printing(cd)
+    py_bear = py_state.new_object(
+        py_bear_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_aura = py_state.new_object(
+        py_aura_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bear.summoning_sick = False
+    py_aura.summoning_sick = False
+    py_state.battlefield.append(py_bear)
+    py_state.battlefield.append(py_aura)
+
+    # ----- Pre-attach: bear reads its printed 2/2 on both engines. -----
+    assert rust_state.effective_power(rust_bear_id) == 2
+    assert rust_state.effective_toughness(rust_bear_id) == 2
+    assert effective_power(py_state, py_bear) == 2
+    assert effective_toughness(py_state, py_bear) == 2
+
+    # ----- Attach Shardmage's Rescue to the bear on both engines. ----
+    assert rust_state.attach(rust_aura_id, rust_bear_id) is True
+    py_aura.attached_to = py_bear.id
+
+    # ----- Post-attach: bear reads 3/3 on both engines. -----
+    assert rust_state.effective_power(rust_bear_id) == 3, (
+        f"Rust bear P should be 3 (2 base + 1 Shardmage's Rescue "
+        f"bonus); got {rust_state.effective_power(rust_bear_id)}"
+    )
+    assert rust_state.effective_toughness(rust_bear_id) == 3
+    assert effective_power(py_state, py_bear) == 3
+    assert effective_toughness(py_state, py_bear) == 3
+    assert rust_state.effective_power(rust_bear_id) == effective_power(
+        py_state, py_bear
+    )
+    assert rust_state.effective_toughness(
+        rust_bear_id
+    ) == effective_toughness(py_state, py_bear)
+
+    # ----- Full-field-view byte-equality. -----
+    diffs = compare_fields(
+        build_python_field_view(py_state),
+        ce_parity_smoke()._build_field_view(rust_state),
+    )
+    assert diffs == [], (
+        f"Shardmage's Rescue post-attach must be byte-equal across the "
+        f"WHOLE field view on both engines; diffs={diffs}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

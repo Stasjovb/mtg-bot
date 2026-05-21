@@ -781,9 +781,10 @@ def loader_admits(printing) -> bool:
     EXACT gate the bench corpus runs through
     (``trajectory._printing_is_bridge_basic_land`` OR
     ``_printing_is_bridge_simple_creature`` OR
-    ``_printing_is_bridge_pure_warp_creature``). Reused, not
-    reimplemented, so the bench tier and the real bench can never
-    disagree on what "admitted" means.
+    ``_printing_is_bridge_pure_warp_creature`` OR
+    ``_printing_is_bridge_simple_aura``). Reused, not reimplemented, so
+    the bench tier and the real bench can never disagree on what
+    "admitted" means.
 
     **warp_cost Phase 3 (round-83, 2026-05-20):** the
     ``_printing_is_bridge_pure_warp_creature`` predicate is the third
@@ -801,7 +802,37 @@ def loader_admits(printing) -> bool:
     measurement-attribution gap (the 3 single-gated warp cards — Red
     Tiger Mechan, Bygone Colossus, Timeline Culler — accounting for
     15,436 17lands single-gate decks per the round-58 attribution
-    scout)."""
+    scout).
+
+    **Aura Phase 1 flash widening attribution close (2026-05-21):**
+    the ``_printing_is_bridge_simple_aura`` predicate is the fourth
+    admit arm. The trajectory-side Phase 2 round-79 widen
+    (``_AURA_SAFE_EXTRA_KEYWORDS = {"flash"}``) already lets the real
+    loader admit Frantic Strength + Shardmage's Rescue end-to-end (the
+    two live S1 carriers in EoE — both carry static ``flash`` plus a
+    P/T-bonus rider), and the Phase 2 S2 / Phase 3 / Phase 4 follow-ups
+    extended the predicate further (Duskmourn's Domination, Pain for
+    All, Tractor Beam, Moonlit Meditation substrate). Including the
+    Aura disjunct in ``loader_admits`` makes the metric tier-classifier
+    see those admitted Aura printings as bridge-admitted, so a 0-Effect
+    keyword-only Aura (every S1 carrier today — ``equipment_bonuses``
+    carries the rider, never an :class:`Effect`) tiers as TIER_COVERED
+    via the ``not eff_classes and admitted`` arm of the COVERED rule
+    (and as TIER_PROBED whenever a ``_parity`` probe in the smoke file
+    pins it). Without this widen, both cards stayed BLOCKED in the
+    metric even though the real loader admits them — a pure
+    measurement-attribution gap, not a substrate gap.
+
+    The other admit disjuncts the real loader carries
+    (``_printing_is_bridge_nonbasic_mana_land``,
+    ``_printing_is_bridge_simple_spell``,
+    ``_printing_is_bridge_simple_static_anthem_creature``,
+    ``_printing_is_bridge_simple_uncounterable_creature`` and the
+    Phase 3+ static-layered creature variants) remain OUT of this
+    helper for now — same attribution-gap shape, but closing them is
+    each carrier-class's own lane (this lane is narrowly scoped to
+    the Aura Phase 1 flash carriers per
+    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (2))."""
     from mtg_bot.parity import trajectory as traj
 
     try:
@@ -809,6 +840,7 @@ def loader_admits(printing) -> bool:
             traj._printing_is_bridge_basic_land(printing)
             or traj._printing_is_bridge_simple_creature(printing)
             or traj._printing_is_bridge_pure_warp_creature(printing)
+            or traj._printing_is_bridge_simple_aura(printing)
         )
     except Exception:
         return False
