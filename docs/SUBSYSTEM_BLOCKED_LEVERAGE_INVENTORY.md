@@ -164,13 +164,41 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121
 ```
+
+**post-cut-propulsion delta (this lane):** strict **+1 PROBED / −1
+BLOCKED-subsystem-gated** (Cut Propulsion, 11,990 17lands single-
+gated decks — the highest-leverage simple-shape card on the 24-card
+Effect-uncovered single-gated tail). Genuine substrate close: new
+`Effect::CutPropulsionEffect` field-free unit variant (Rust enum +
+parse + to_pydict + resolve arm), `state_ops_legal.rs`
+`spell_targets_satisfiable` any-creature arm, `cross_engine.py`
+`cut_propulsion_effect` dict→Python bridge, `trajectory.py`
+`_python_spell_effect_to_dict` reverse-serializer leaf for
+`CutPropulsionEffect`, plus 7 new probes in `tests/test_parity_smoke.py`
+(5 Rust pins: non-flyer, flyer-doubler, 0-power silent-noop, no-
+creature fizzle, deterministic-first ETB-order pick; 1 auto-join
+admit-set pin; 1 GENUINE real-EoE cross-engine byte-equal probe
+driving the parsed Cut Propulsion printing against a 2/2 flyer →
+4 self-damage → SBA-destroy → full field-view byte-equal). The
+flying-doubler reads `battlefield_has_keyword` (printed + UEOT +
+aura-granted + anthem-granted keywords folded). The effective-power
+read mirrors the proven counters-inclusive `DiplomaticRelationsEffect`
+formula. DEALT_DAMAGE receiver-side event dispatched after damage
+apply for aura-attached `enchanted_creature_dealt_damage` triggers
+(Cryoshatter / Pain for All) byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`. Auto-grow: the lever's §2
+teeth fire on the Tier-A close having LANDED — Cut Propulsion's
+`{2}{R}` Instant flips into the spell-card-bridge admit set via the
+covered+bridged + reverse-serializer-round-trips gate. The `1gate`
+column on the Effect-uncovered row drops 24 → 23 (`decks(1g)` 103,349
+→ 91,359).
 
 **post-non-basic-land-P2 delta (this lane):** strict **+5 PROBED /
 −5 BLOCKED-subsystem-gated** (the 5 EoE Planet lands: Adagia,
@@ -220,13 +248,18 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
 
 ## 1. Headline (current state)
 
-* **128 cards** are subsystem-gated; **53 single-gated**, **75 multi-gated**
-  (post loader_admits-attribution-sweep 2026-05-21: 9 cards flipped
-  BLOCKED → PROBED via measurement-attribution close — 5 shocklands +
-  Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate; Tannuk
-  Steadfast Second + Frenzied Baloth flipped BLOCKED → COVERED
-  pending real-EoE cross-engine byte-equal helpers — see lever (1)
-  below). The 75 multi-gated total is unchanged.
+* **121 cards** are subsystem-gated; **46 single-gated**, **75 multi-gated**
+  (post-cut-propulsion 2026-05-21: Cut Propulsion flipped BLOCKED →
+  PROBED via genuine Tier-A Rust substrate close; post-non-basic-
+  land-P2 2026-05-21: 5 EoE Planet lands flipped via the new
+  `_printing_is_bridge_simple_tapped_mana_land` admit predicate +
+  delegator probes; post loader_admits-attribution-sweep 2026-05-21:
+  9 cards flipped BLOCKED → PROBED via measurement-attribution
+  close — 5 shocklands + Brightspear / Cloudsculpt / Gravblade /
+  Mechan Shieldmate; Tannuk Steadfast Second + Frenzied Baloth
+  flipped BLOCKED → COVERED pending real-EoE cross-engine byte-equal
+  helpers — see lever (1) below). The 75 multi-gated total is
+  unchanged.
 * **15 taxonomy gates** in the scout's `_gates_for_loader_card`. Of
   those, **13 currently bind ≥1 card** — `BECOMES_TAPPED event` /
   `Planeswalker loyalty` / `Rooms / doors` / `Kicker / Impending` bind
@@ -257,14 +290,20 @@ to reflect what substrate already exists post-session.
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
 | Rooms / doors | 3 | 0 | 0 | sprawling | large — 0 single-gated, 0 decks | DEFERRED (unchanged) |
 | Planeswalker loyalty | 1 | 0 | 0 | sprawling | large — 0 single-gated | DEFERRED (unchanged) |
-| Effect-uncovered (diffuse tail) | 94 | 24 | 103,349 | diffuse | per-card | per-card lane continues |
+| Effect-uncovered (diffuse tail) | 93 | 23 | 91,359 | diffuse | per-card | per-card lane continues (Cut Propulsion closed 2026-05-21) |
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 128 subsystem-gated = 53 single-gated + 75
-multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
-attribution-sweep; the Static/layered-abilities row drops from 15/8/34526
-to 9/2/0 — Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate
+**Reconciliation:** 121 subsystem-gated = 46 single-gated + 75
+multi-gated; `1gate` column sums to 46 (post-cut-propulsion 2026-05-21:
+the Effect-uncovered row drops from 94/24/103349 to 93/23/91359 — Cut
+Propulsion flipped to PROBED via a genuine Tier-A Rust substrate
+close; post-non-basic-land-P2 2026-05-21: the Non-basic-land row
+drops 18/18/16510 → 13/13/8893 — the 5 Planet lands admitted via the
+new `_printing_is_bridge_simple_tapped_mana_land` predicate; post
+2026-05-21 loader_admits-attribution-sweep; the Static/layered-
+abilities row drops from 15/8/34526 to 9/2/0 — Brightspear /
+Cloudsculpt / Gravblade / Mechan Shieldmate
 flipped to PROBED, Tannuk Steadfast Second + Frenzied Baloth flipped
 to COVERED then PROBED via the same-day follow-up writing genuine-
 printing cross-engine byte-equal helpers. The Non-basic-land row drops
@@ -440,15 +479,34 @@ respectively).
 ### (3) Effect-uncovered diffuse tail — per-card lane
 
 Not a substrate; per-card closures land 1 card at a time. The cheap
-Tier-A single-card lane is **EXHAUSTED**. Remaining **24 single-gated**
-members are Tier-C-ish (combat-shape divergence, larger Rust per card):
-Archenemy's Charm, Beyond the Quiet, Close Encounter, Coordinated
-Clobbering, Cut Propulsion, Darkness, Devastating Onslaught, Drill Too
-Deep, Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
-Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for
-Scrap, Scout for Survivors, Shattered Wings, Singularity Rupture,
-Systems Override, Terminal Velocity, Vengeful Possession, Warping Wail,
-Zero Point Ballad.
+Tier-A single-card lane is **EXHAUSTED**. Remaining **23 single-gated**
+members (post-cut-propulsion 2026-05-21 close, was 24) are Tier-C-ish
+(combat-shape divergence, larger Rust per card): Archenemy's Charm,
+Beyond the Quiet, Close Encounter, Coordinated Clobbering, Darkness,
+Devastating Onslaught, Drill Too Deep, Emergency Eject, Exorcise,
+Invasive Maneuvers, Mutinous Massacre, Pull Through the Weft, Reroute
+Systems, Ruinous Rampage, Scour for Scrap, Scout for Survivors,
+Shattered Wings, Singularity Rupture, Systems Override, Terminal
+Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
+
+**Cut Propulsion CLOSED (2026-05-21, `feature/effect-uncovered-slice`,
++1 PROBED / 11,990 17lands decks).** A genuine substrate close
+following the Tier-A precedent (Biosynthic Burst, Focus Fire,
+Diplomatic Relations): new `Effect::CutPropulsionEffect` Rust unit
+variant + parse + to_dict + resolve arm (reads effective power on
+the bound target via the proven counters-inclusive
+`DiplomaticRelationsEffect` formula, doubles if `battlefield_has_
+keyword(target, "flying")`, silent no-op on `power <= 0`, dispatches
+DEALT_DAMAGE receiver-side event for aura-attached
+`enchanted_creature_dealt_damage` triggers byte-equal with Python's
+`_fire_enchanted_dealt_damage_triggers`), `cross_engine.py`
+dict→Python bridge, `trajectory.py` reverse-serializer leaf — the
+auto-grow §2 teeth fired and Cut Propulsion's `{2}{R}` Instant
+flipped into the spell-card-bridge admit set with no hardcoded list.
+7 new probes (5 Rust pins + 1 auto-join + 1 GENUINE real-EoE
+byte-equal driving the parsed printing against a 2/2 flyer →
+4 self-damage → lethal → SBA → in graveyard, byte-equal full
+field-view on BOTH engines).
 
 * **Per-card cost:** 1-3 cycles each.
 * **Pool-flip per cycle:** 1 card + its deck count.
