@@ -650,6 +650,71 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Tannuk + Frenzied Baloth (deferred per concurrent-agent note).
     # See module docstring for the full honest-exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_iiii.py",
+    # Probe batch JJJJ (round 36 covered-but-unprobed) -- tenth
+    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE, FFFF,
+    # GGGG, HHHH, IIII).  THREE Room ENTERS / YOU_ATTACK triggered-
+    # ability cards from the covered tier upgraded to PROBED via the
+    # same parse + bridge round-trip + Python-side resolve idiom DDD
+    # slice 17 / YYY / ZZZ / AAAA / CCCC / DDDD / EEEE / FFFF / GGGG /
+    # HHHH / IIII established (the substrate-shipped-but-no-_parity-
+    # probe measurement-attribution gap -- same shape as the warp_cost
+    # Phase 3 precedent at merge 33188239, and IIII's Command Bridge
+    # precedent that pinned a LAND triggered-ability surface distinct
+    # from the activated mana ability surface):
+    #   * Funeral Room // Awakening Hall (Enchantment (Room) ENTERS ->
+    #     ReturnAllCreaturesFromYourGraveyardToBattlefield(); FIRST
+    #     credited _parity probe of the bare untargeted-mass-
+    #     reanimation effect class on the REAL parsed printing.
+    #     The bridge docstring at cross_engine.py:6545-6546 stated
+    #     "No EoE oracle hits today (Awakening Hall, the canonical
+    #     consumer, is not in EoE)" incorrectly -- Awakening Hall IS
+    #     in EoE as the back-half of the split card; JJJJ closes the
+    #     corrective gap).
+    #   * Moldering Gym // Weight Room (Enchantment (Room) ENTERS ->
+    #     SearchLibraryForBasicLandTapped(count=1); FIRST credited
+    #     _parity probe of the bare unwrapped shape on a triggered-
+    #     ability carrier.  Larval Scoutlander is the known consumer
+    #     of the OptionalSac-WRAPPED shape with count=2 -- a different
+    #     carrier shape and parameterization.  Moldering Gym is the
+    #     front-half door body; the Weight Room back-half emits
+    #     ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3)
+    #     which stays the dropped surface per the ManifestDread
+    #     harness substrate deferral).
+    #   * Surgical Suite // Hospital Room (Enchantment (Room)
+    #     YOU_ATTACK -> PutPlusOneCounterOnTargetCreature(amount=1,
+    #     attacking_only=True); FIRST credited _parity probe of the
+    #     attacking_only=True parameterization.  IIII's Optimistic
+    #     Scavenger probe explicitly named the attacking_only=True
+    #     parameterization as a distinct axis ("the Hospital Room
+    #     half shape" at tests/test_probe_remaining_iiii.py:972) and
+    #     used Hospital Room as the contrast carrier for that
+    #     distinctness assertion -- JJJJ now pins Hospital Room
+    #     directly).
+    # Honest-exhaustion drops include Bottomless Pool // Locker Room
+    # (DEALS_COMBAT_DAMAGE -> DrawCards(amount=1) bit-identical to
+    # PROBED Haliya / Illvoi Infiltrator), Innocuous Rat (DIES ->
+    # ManifestDread(count=1) bit-identical to PROBED Bashful Beastie),
+    # Ticket Booth // Tunnel of Hate (ENTERS -> ManifestDread bit-
+    # identical to PROBED Unsettling Twins), Trapped in the Screen
+    # (bit-identical to PROBED Banishing Light), Underwater Tunnel //
+    # Slimy Aquarium / Break Down the Door / Under the Skin (Manifest
+    # Dread substrate deferral), Grand Entryway (token-registration
+    # substrate), Dawnsire / Clammy Prowler / Temporal Intervention
+    # (no bridge arm), pump carriers with granted_keywords riders
+    # (Hand That Feeds / Flesh Burrower / Cult Healer / Give In to
+    # Violence / Dual-Sun Technique / Horrid Vigor / Rig for War /
+    # Violent Urge / Derelict Attic // Widow's Walk YOU_ATTACK half),
+    # Equipment ETB cards (Conductive Machete / Cursed Windbreaker /
+    # Killer's Mask / Squire's Lightblade / Illvoi Light Jammer / The
+    # Dominion Bracelet), Sequence / Modal wrappers with substrate-
+    # deferred inner effects (Sunstar Lightsmith / Cosmogrand Zenith
+    # / Rust Harvester / Requiem Monolith / Let's Play a Game / Split
+    # Up / Lithobraking / Vanish from Sight / Unnerving Grasp /
+    # Restricted Office // Lecture Hall / Mirror Room // Fractured
+    # Realm), Fear of Failed Tests (bit-identical to PROBED Starwinder),
+    # vanilla creatures + lands + activated-ability-only cards.  See
+    # module docstring for the full honest-exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_jjjj.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
