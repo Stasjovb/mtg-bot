@@ -15592,6 +15592,96 @@ impl GameState {
         Ok(next_id)
     }
 
+    /// **Static / layered abilities substrate — Phase 2 (round-80,
+    /// 2026-05-20).** Test-injection primitive: register a printing
+    /// AND inject a fresh GameObject directly into `stack_objects`
+    /// AND push a matching `StackItem` onto the stack. Used by
+    /// counter-spell-gate tests to exercise the CR 101.2 uncounterable
+    /// fizzle without driving a full `cast_creature` path (mana pool /
+    /// land setup / etc.). Mirrors `register_and_inject_object`'s
+    /// id-allocation + registry-extend pattern; the GameObject is
+    /// placed in `state.stack_objects` (the G7 S5a home of spells
+    /// on the stack) and the StackItem carries the same `source_obj_id`.
+    /// Returns the new object id (= stack source id).
+    ///
+    /// **Phase-2 scope.** Spell-shape only — `kind == StackItemKind::
+    /// Spell`, `target_obj_id == None`, `trigger_payload == None`.
+    /// Sufficient for the counter-spell uncounterable-gate tests; a
+    /// future slice can widen to triggered abilities + targeted
+    /// spells.
+    fn register_and_inject_stack_spell(
+        &mut self,
+        printing_dict: &Bound<'_, PyDict>,
+        controller: u8,
+    ) -> PyResult<u32> {
+        if (controller as usize) >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "controller {controller} out of range (must be 0 or 1)"
+            )));
+        }
+        let printing = parse_printing(printing_dict)?;
+        let reg: &mut RegistryData = Arc::make_mut(&mut self.registry);
+        let printing_id = reg.printings.len() as u32;
+        reg.printings.push(printing);
+
+        // Pick a fresh obj_id across all zones AND stack_objects (the
+        // counter-spell gate needs to look the source up in
+        // stack_objects).
+        let mut next_id: u32 = self.next_object_id;
+        for player in &self.players {
+            for zone in [
+                &player.hand,
+                &player.library,
+                &player.battlefield,
+                &player.graveyard,
+            ] {
+                for obj in zone.iter() {
+                    if obj.id >= next_id {
+                        next_id = obj.id + 1;
+                    }
+                }
+            }
+        }
+        for obj in self.stack_objects.iter() {
+            if obj.id >= next_id {
+                next_id = obj.id + 1;
+            }
+        }
+        self.next_object_id = next_id.saturating_add(1);
+
+        let obj = GameObject {
+            id: next_id,
+            printing_id,
+            controller,
+            zone: ZONE_STACK,
+            tapped: false,
+            summoning_sick: false,
+            damage: 0,
+            counters: 0,
+            charge_counters: 0,
+            loyalty_counters: 0,
+            attached_to: None,
+            exiled_with_source: None,
+            stun_counters: 0,
+            etb_timestamp: 0,
+            ueot_modifiers: Vec::new(),
+            warp_exile_pending: false,
+            warped: false,
+            cast_from_exile_with_lightstall_surcharge: false,
+            controller_baseline: None,
+        };
+        self.stack_objects.push(obj);
+        self.stack.push(StackItem {
+            source_obj_id: next_id,
+            controller,
+            kind: StackItemKind::Spell,
+            trigger_payload: None,
+            target_obj_id: None,
+            target_obj_id_2: None,
+        });
+        Ok(next_id)
+    }
+
     // -------------------------------------------------------------
     // Round-11 exile read helpers.
     //
