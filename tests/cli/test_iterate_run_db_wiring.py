@@ -124,6 +124,10 @@ def _baseline_argv(
         "--capture-every-eval", "0",
         "--hang-dump-dir", "",
         "--replays-dir", str(tmp_path / "replays"),
+        # Opt out of shards_config.json auto-detection — these tests
+        # stub local Pool downstream and don't want a real repo-root
+        # shards_config.json to flip dispatch into distributed mode.
+        "--shards-config", "",
     ]
 
 

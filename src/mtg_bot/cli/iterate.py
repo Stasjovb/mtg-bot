@@ -69,6 +69,38 @@ from typing import Callable, Optional
 # and to root the orphan-sweep matcher.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPTS_DIR = _REPO_ROOT / "scripts"
+# Default location for shards_config.json (auto-detected when
+# ``--shards-config`` is not passed). Matches the convention
+# ``mtg_bot serve`` already uses for its own default. Auto-detection
+# is anchored at the repo root specifically (NOT cwd) so test
+# isolation holds — a test running from an arbitrary tmpdir or a
+# user running ``mtg_bot iterate`` from a sibling directory both
+# see the same canonical file.
+_DEFAULT_SHARDS_CONFIG_PATH = _REPO_ROOT / "shards_config.json"
+# Sentinel ``Path`` returned by ``_shards_config_type`` when the
+# operator explicitly passed ``--shards-config ""`` to force local
+# Pool mode (i.e. opt out of auto-detection). This is preferable to
+# a magic string because it round-trips cleanly through
+# ``argparse.Namespace`` and keeps the rest of the dispatch a
+# ``Path`` vs ``Path`` comparison.
+_LOCAL_POOL_SENTINEL = Path("__iterate_local_pool__")
+
+
+def _shards_config_type(s: str) -> Path:
+    """Argparse type for ``--shards-config``.
+
+    * Non-empty string → ``Path(s)`` (normal path).
+    * Empty string (``--shards-config ""``) → ``_LOCAL_POOL_SENTINEL``,
+      explicit opt-out of auto-detection so the loop runs local Pool.
+
+    Mapping the empty string to a sentinel Path instance (rather than
+    letting ``Path("")`` resolve to ``WindowsPath(".")``) keeps the
+    explicit-opt-out signal distinguishable from any real on-disk
+    path.
+    """
+    if s == "":
+        return _LOCAL_POOL_SENTINEL
+    return Path(s)
 
 import os
 
@@ -1395,7 +1427,7 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--shards-config", type=Path, default=None,
+        "--shards-config", type=_shards_config_type, default=None,
         help=(
             "Path to ``shards_config.json``. Post-cutover shape is "
             "``{'worker_urls': ['http://host:5198', ...]}`` — a URL "
@@ -1404,9 +1436,17 @@ def main(argv=None) -> None:  # pragma: no cover
             "runs via the v2 REST contract: the orchestrator POSTs "
             "/v2/stage/create on the coordinator (--queue-url), POSTs "
             "/v2/start_<kind> to each worker, then polls "
-            "/v2/stage/<id> until complete. See "
-            "docs/DISTRIBUTED_API_v2.md for the contract and "
-            "deploy/README.md for the per-machine setup."
+            "/v2/stage/<id> until complete. "
+            "When the flag is omitted, iterate auto-detects "
+            f"``{_DEFAULT_SHARDS_CONFIG_PATH}`` and dispatches "
+            "distributed if that file is present, otherwise falls "
+            "back to local Pool. Pass ``--shards-config \"\"`` to "
+            "explicitly opt out of auto-detection and force local "
+            "Pool. Pass ``--shards-config /path/to/file`` to point "
+            "at a non-default file (it must exist; missing files "
+            "fail loudly rather than silently dropping to local). "
+            "See docs/DISTRIBUTED_API_v2.md for the wire contract "
+            "and deploy/README.md for the per-machine setup."
         ),
     )
     parser.add_argument(
@@ -1606,10 +1646,59 @@ def main(argv=None) -> None:  # pragma: no cover
     # the coordinator (master's `mtg_bot serve` on :5099) is the
     # entity the orchestrator and workers all talk to. --queue-url
     # is treated as the coordinator URL after the cutover.
+    #
+    # Dispatch resolution (three branches):
+    #
+    # 1. ``--shards-config`` omitted → auto-detect
+    #    ``_DEFAULT_SHARDS_CONFIG_PATH`` (repo-root anchored). If the
+    #    file exists, dispatch distributed. Otherwise fall through to
+    #    local Pool with a clear log line so the operator can see the
+    #    chosen mode in the iterate header. This is the UX fix for
+    #    the iter_019 BUG #4 trap: previously a present
+    #    ``shards_config.json`` was silently ignored unless the flag
+    #    was passed explicitly.
+    #
+    # 2. ``--shards-config ""`` → explicit local Pool opt-out (the
+    #    ``_LOCAL_POOL_SENTINEL`` returned by ``_shards_config_type``).
+    #    Skips auto-detection entirely; used by tests that want to
+    #    pin local mode regardless of what's on disk.
+    #
+    # 3. ``--shards-config /path/to/file`` → use that path. Missing
+    #    file fails loudly (sys.exit) — never silently drops to local.
     worker_urls: list[str] | None = None
-    if args.shards_config is not None:
-        if not args.shards_config.is_file():
-            sys.exit(f"--shards-config {args.shards_config} not found")
+    shards_config_path: Path | None = None
+    if args.shards_config is None:
+        # Branch 1: auto-detect.
+        if _DEFAULT_SHARDS_CONFIG_PATH.is_file():
+            shards_config_path = _DEFAULT_SHARDS_CONFIG_PATH
+            print(
+                f"[iterate] dispatch mode: distributed "
+                f"(auto-detected {shards_config_path})"
+            )
+        else:
+            print(
+                f"[iterate] dispatch mode: local Pool "
+                f"(no shards_config.json found at "
+                f"{_DEFAULT_SHARDS_CONFIG_PATH}; pass "
+                f"--shards-config /path to override)"
+            )
+    elif args.shards_config == _LOCAL_POOL_SENTINEL:
+        # Branch 2: explicit local-Pool opt-out.
+        print(
+            "[iterate] dispatch mode: local Pool "
+            "(explicit --shards-config \"\" opt-out)"
+        )
+    else:
+        # Branch 3: explicit path.
+        shards_config_path = args.shards_config
+        print(
+            f"[iterate] dispatch mode: distributed "
+            f"(explicit --shards-config {shards_config_path})"
+        )
+
+    if shards_config_path is not None:
+        if not shards_config_path.is_file():
+            sys.exit(f"--shards-config {shards_config_path} not found")
         if not args.queue_url:
             sys.exit(
                 "--shards-config requires --queue-url (the master's "
@@ -1617,12 +1706,12 @@ def main(argv=None) -> None:  # pragma: no cover
                 "http://<master-tailnet>:5099)"
             )
         try:
-            worker_urls = _rest_orch.load_worker_urls(args.shards_config)
+            worker_urls = _rest_orch.load_worker_urls(shards_config_path)
         except Exception as e:  # noqa: BLE001
             sys.exit(f"--shards-config: {e}")
         if not worker_urls:
             sys.exit(
-                f"--shards-config {args.shards_config} parsed but "
+                f"--shards-config {shards_config_path} parsed but "
                 "contains no worker_urls entries"
             )
         print(
