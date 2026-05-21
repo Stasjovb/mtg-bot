@@ -511,6 +511,61 @@ PROBE_MODULES: tuple[Path, ...] = (
     # probe surface).  See module docstring for the full honest-
     # exhaustion drop list.
     REPO_ROOT / "tests" / "test_probe_remaining_gggg.py",
+    # Probe batch HHHH (round 34 covered-but-unprobed) -- eighth
+    # 4-letter probe batch (after AAAA, BBBB, CCCC, DDDD, EEEE, FFFF,
+    # GGGG).  THREE Aura ENTERS bespoke-Effect cards from the covered
+    # tier upgraded to PROBED via the same parse + bridge round-trip
+    # + Python-side resolve idiom DDD slice 17 / YYY / ZZZ / AAAA /
+    # CCCC / DDDD / EEEE / FFFF / GGGG established (the substrate-
+    # shipped-but-no-_parity-probe measurement-attribution gap --
+    # same shape as the warp_cost Phase 3 precedent at merge
+    # 33188239):
+    #   * Pain for All (Aura ENTERS -> PainForAllETBEffect();
+    #     FIRST credited _parity probe of the Aura Phase 3 / S4
+    #     triggered-shape bespoke effect class.  The
+    #     test_probe_pain_for_all_downstream.py
+    #     test_pain_for_all_etb_* family covers the bridge round-trip
+    #     + Rust-side fizzle but predates the _parity naming
+    #     convention; HHHH binds the REAL parsed Pain for All EoE
+    #     printing and asserts the no-attached_to silent-fizzle at
+    #     bespoke.py:389-391).
+    #   * Tractor Beam (Aura ENTERS -> TapEnchantedPermanent();
+    #     FIRST credited _parity probe of the Aura Phase 2 S2 /
+    #     cast-time auto-resolve bespoke effect class.  The
+    #     test_tractor_beam.py / test_tractor_beam_control.py /
+    #     test_aura_substrate_phase_2_s2_extension.py test functions
+    #     cover the resolve mechanics on synthetic carriers but
+    #     predate the _parity naming convention; HHHH binds the REAL
+    #     parsed Tractor Beam EoE printing and asserts the no-
+    #     attached_to silent-fizzle at tap.py:516-517).
+    #   * Meltstrider's Resolve (Aura ENTERS ->
+    #     EnchantedCreatureFightsTargetEffect(); FIRST credited
+    #     _parity probe of the slice-19 bespoke effect class.  The
+    #     test_meltstriders_resolve.py /
+    #     test_aura_substrate_phase_4.py test functions cover the
+    #     resolve mechanics on synthetic carriers but predate the
+    #     _parity naming convention; HHHH binds the REAL parsed
+    #     Meltstrider's Resolve EoE printing and asserts the empty-
+    #     target silent-fizzle at bespoke.py:544-545).
+    # Honest-exhaustion drops include The Seriema (SearchLibrary
+    # already PROBED via siblings), Lightstall Inquisitor (cast-
+    # permission flag round-trip pending verification), Dawnsire /
+    # Clammy Prowler / Temporal Intervention (no bridge arm), pump
+    # carriers with granted_keywords riders (Hand That Feeds / Flesh
+    # Burrower / Cult Healer / Give In to Violence / Dual-Sun
+    # Technique / Horrid Vigor / Rig for War / Violent Urge -- bridge
+    # drops the rider), token-registration cards (Sami / Station
+    # Monitor / Weapons Manufacturing / Grand Entryway), Sequence /
+    # Modal wrappers (Sunstar Lightsmith / Cosmogrand Zenith / Rust
+    # Harvester / Requiem Monolith / Let's Play a Game / Split Up /
+    # Lithobraking / Vanish from Sight / Unnerving Grasp), Equipment
+    # carriers / ManifestDread carriers (substrate deferral), bit-
+    # identical-to-PROBED-siblings (Trapped in the Screen / Unwanted
+    # Remake / Come Back Wrong / Optimistic Scavenger), Room
+    # subsystem cards, vanilla creatures, lands (separate activated-
+    # ability surface).  See module docstring for the full honest-
+    # exhaustion drop list.
+    REPO_ROOT / "tests" / "test_probe_remaining_hhhh.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

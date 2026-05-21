@@ -38,7 +38,7 @@ recommendations are now overwhelmingly **executed**, not pending.
 | (2) Dynamic-P/T formula — Harmonious Grovestrider | **CLOSED** — substrate LANDED round-78; Grovestrider PROBED end-to-end (ward-rider on real printing kept it loader-gated, but the formula-substrate single-gate it cited is closed). Round-84 (`feature/dynamic-pt-cosmogoyf`) extended the SAME dispatch table with the `"cosmogoyf"` arm, flipping Cosmogoyf → PROBED. Single-gated Dynamic-P/T tier now 0. | `6a8b6402` (Grovestrider) + this lane (Cosmogoyf) |
 | (3) Aura Phase 2 (S2 control-changing) | **SHIPPED** — Duskmourn admit + Tractor Beam reduce | `643163c6`, plus S2 extension `d4ceecc5` (Tractor Beam) |
 | (4) Aura Phase 3 (S4 triggered) | **SHIPPED** — Pain for All admit substrate end-to-end | `35ede8b0` |
-| (5) Effect-uncovered per-card drain | continuing (probe batches AAAA-GGGG landed in parallel; +11 PROBED) | `5063e8e3`, `93ea4057`, `1a06d714`, … `7c66225e` |
+| (5) Effect-uncovered per-card drain | continuing (probe batches AAAA-HHHH landed in parallel; +14 PROBED; HHHH closed the substrate-shipped-but-no-_parity-probe measurement-attribution gap for Pain for All / Tractor Beam / Meltstrider's Resolve via the warp_cost Phase 3 precedent) | `5063e8e3`, `93ea4057`, `1a06d714`, … `7c66225e`, this lane (HHHH) |
 
 ### Other major closures this session
 
@@ -70,12 +70,12 @@ recommendations are now overwhelmingly **executed**, not pending.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo
-PROBED                                                221         232          235            236
-covered-by-construction                                95          97           97             97
-BLOCKED — genuinely_missing                             3           0            0              0
-BLOCKED — blocked_non_effect                            2           0            0              0
-BLOCKED — subsystem-gated                             154         146          143            142
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-HHHH
+PROBED                                                221         232          235            236                  239
+covered-by-construction                                95          97           97             97                   94
+BLOCKED — genuinely_missing                             3           0            0              0                    0
+BLOCKED — blocked_non_effect                            2           0            0              0                    0
+BLOCKED — subsystem-gated                             154         146          143            142                  142
 ```
 
 Subsystem-gated dropped by 12 total; **both itemized BLOCKED tiers
@@ -85,7 +85,13 @@ Bygone Colossus, Timeline Culler → PROBED on the existing Phase 1/1.5/2
 substrate via two measurement-attribution fixes (loader_admits widen +
 `_parity`-named probe aliases). Round-84 (2026-05-20:
 dynamic-pt-cosmogoyf) flipped Cosmogoyf → PROBED via a one-arm
-extension to the existing round-78 dispatch table.
+extension to the existing round-78 dispatch table.  Round-85 (2026-05-21:
+probe batch HHHH) flipped Pain for All + Tractor Beam + Meltstrider's
+Resolve → PROBED via thin `_parity`-named delegators that bind the
+real EoE printings + assert byte-equality with the bridge round-trip +
+exercise the documented no-attached_to / empty-target silent-fizzle
+short-circuits (same measurement-attribution-gap-closure shape as the
+warp_cost Phase 3 precedent at merge `33188239`).
 
 ## 1. Headline (current state)
 

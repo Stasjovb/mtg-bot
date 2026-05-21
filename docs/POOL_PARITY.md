@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **336 / 475 EoE cards (70.7%) are byte-equal at the Effect+bridge level**; of those, **238 (50.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 98 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **336 / 475 EoE cards (70.7%) are byte-equal at the Effect+bridge level**; of those, **241 (50.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 95 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **139 (29.3%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 238 | 50.1% |
-| Effect+bridge covered (not individually probed) | 98 | 20.6% |
+| PROBED byte-equal | 241 | 50.7% |
+| Effect+bridge covered (not individually probed) | 95 | 20.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -171,6 +171,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Melded Moxite
 - Meltstrider Eulogist
 - Meltstrider's Gear
+- Meltstrider's Resolve
 - Memorial Vault
 - Mental Modulation
 - Midnight Mayhem
@@ -192,6 +193,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Overlord of the Boilerbilges
 - Overlord of the Floodpits
 - Overlord of the Mistmoors
+- Pain for All
 - Perigee Beckoner
 - Piggy Bank
 - Pinnacle Emissary
@@ -255,6 +257,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Thawbringer
 - Thrumming Hivepool
 - Timeline Culler
+- Tractor Beam
 - Tragic Trajectory
 - Trial of Agony
 - Tunnel Surveyor
