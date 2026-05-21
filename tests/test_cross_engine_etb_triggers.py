@@ -21304,6 +21304,17 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # ``ExileAllCreaturesAndSpacecraft`` serializer leaf flipped the
     # round-trip teeth and the §2 covered+bridged gate now resolves
     # positively. 15 → 16 — AUTO-JOINED via the §2 auto-grow teeth.
+    # **modal-chooseone-cycle-4 (2026-05-21):** the ModalChooseOne
+    # envelope's Cycle 4 widened the admit predicate (the unconditional
+    # ModalChooseOne reject is removed; round-trip-or-bail + the
+    # ``(0, 0)``-shape arm now carry the modal admit load) AND added
+    # the per-leaf ``DealDamageEachOpponent`` +
+    # ``ExileAllArtifactsWithManaValueAtMost`` serializer leaves +
+    # the Rust ``Effect::ExileAllArtifactsWithManaValueAtMost``
+    # variant. AUTO-JOINED 1 new modal: Ruinous Rampage (the only
+    # all-untargeted ModalChooseOne in the EoE pool today; some-
+    # targeted modals stay declined via the target-grammar gate
+    # pending Cycle 5's per-mode target binding). 16 → 17.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
@@ -21313,15 +21324,21 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
         "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
         "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-        "Seedship Impact", "Shattered Wings", "Under the Skin",
+        "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
+        "Under the Skin",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 16 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits — the set "
-        f"grew 15→16 via the beyond-the-quiet-slice's "
+        f"exactly the 17 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
+        f"(incl. Beyond the Quiet via the beyond-the-quiet-slice's "
         f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
-        f"arm + reverse-serializer leaf; auto-grows further as the "
-        f"remaining Tier-A spells close)")
+        f"arm + reverse-serializer leaf) + 1 Cycle-4 modal admit "
+        f"(Ruinous Rampage via the modal-chooseone-cycle-4 widen + "
+        f"per-leaf ``DealDamageEachOpponent`` / "
+        f"``ExileAllArtifactsWithManaValueAtMost`` Effect serializer "
+        f"leaves) — the set grew 15→17 across the two lanes; "
+        f"auto-grows further as the remaining Tier-A and "
+        f"per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

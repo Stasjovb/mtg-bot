@@ -5699,9 +5699,70 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
-**Update 2026-05-21 (Cycles 1-3 landed — substrate-only, admit
-predicate still rejects).** Cycles 1+2+3 of the 6-slice plan below
-landed on `feature/modal-chooseone-envelope`:
+**Update 2026-05-21 (Cycle 4 landed — per-leaf Effect arms for
+all-untargeted modals + admit-predicate widen; +1 PROBED via
+Ruinous Rampage auto-join).** Cycle 4 shipped on
+`feature/modal-chooseone-cycle-4`:
+
+* New Rust variant
+  `Effect::ExileAllArtifactsWithManaValueAtMost { max_mv: i32 }`
+  (declaration + parse arm + to_pydict arm in `rust/src/cards.rs`;
+  resolve arm in `rust/src/state_ops_resolve.rs` that snapshots all
+  artifact bf objects whose printing total MV `<= max_mv` and exiles
+  them inline — the same off-bf pattern as
+  `Effect::DestroyAllCreatures` but routing to `ZONE_EXILE` with
+  per-victim `mark_left_battlefield_if_nonland` + LEAVES queue +
+  token-cease queue). Negative `max_mv` rejected at parse + resolve.
+* Python bridge arm at
+  `cross_engine.py::exile_all_artifacts_with_mana_value_at_most` ↔
+  `ExileAllArtifactsWithManaValueAtMost(max_mv=N)`.
+* Two new `_python_spell_effect_to_dict` `_leaf` arms:
+  `DealDamageEachOpponent(amount)` →
+  `{"kind": "damage_each_opponent", "amount": N}` and
+  `ExileAllArtifactsWithManaValueAtMost(max_mv)` →
+  `{"kind": "exile_all_artifacts_with_mana_value_at_most",
+  "max_mv": N}`.
+* Admit-predicate widen at
+  `trajectory.py::_printing_is_bridge_simple_spell` — the
+  unconditional `ModalChooseOne` reject removed; the round-trip-or-
+  bail teeth + the existing Phase-3 `(0, 0)`-shape wrath admit arm
+  now carry the modal admit load.
+
+**Auto-grow flip.** Ruinous Rampage (~305 17lands decks; the only
+all-untargeted `ModalChooseOne` in the EoE pool whose modes are
+both leaf-recognized today) flipped COVERED → PROBED via the
+auto-grow admit set + two byte-equal real-EoE cross-engine probes
+(mode 0 = `DealDamageEachOpponent(3)` via the ChooseOneMode-wrapped
+cast-time bind path; mode 1 = `ExileAllArtifactsWithManaValueAtMost
+(max_mv=3)` via the direct-leaf cast — Rust has no public API for
+non-default cast-time mode binding today; see "Cycle 5 follow-on"
+below). The spell-card-bridge admit set grew 15 → 16. PROBED
+271 → 272. BLOCKED-subsystem 118 → 117.
+
+**Some-targeted modal cards STAY DECLINED.** The 7 some-targeted
+modal candidates (Reroute Systems, Scour for Scrap, Archenemy's
+Charm, Drill Too Deep, Warping Wail, Twist Reality, Live or Die)
+keep their target-grammar gate rejection at line 4611 (their
+`target_count_range` is `(1, 1)` / `(2, 2)` / `(0, 1)` and the
+Phase-3 wrath arm admits only `(0, 0)`; per-mode target binding
+is the Cycle 5 substrate that admits them).
+
+**Cycle 5 follow-on.** Rust's resolve-time `auto_resolve_pending`
+fires `modes[0]` unconditionally for the `keep_all_on_top` /
+`default` strategies (`state_ops_decisions.rs:236`), AND
+`cast_spell_noncreature` auto-binds `Some(0)` only — there is no
+public Python API to push a `ChooseOneMode`-wrapped spell with
+`chosen_mode_idx == 1` or to submit a non-default
+`submit_choose_mode_decision` after the spell pops (the resolve
+arm drains the queue before returning). The mode-1 byte-equal
+probe in this lane drives the bare leaf effect on Rust as a
+workaround; closing the cast-time-mode-N binding API + the per-mode
+target binding for some-targeted modals is Cycle 5.
+
+---
+
+**Pre-Cycle-4 history (Cycles 1+2+3, substrate-only, no admit-set
+growth — landed on `feature/modal-chooseone-envelope`):**
 
 * **Cycle 1 (cast-time mode binding)** — `StackItem.chosen_mode_idx:
   Option<u8>` field + `cast_spell_noncreature` detection that binds

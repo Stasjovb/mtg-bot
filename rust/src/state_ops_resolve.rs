@@ -16400,6 +16400,109 @@ fn apply_effect(
             }
             // Else: no target seated (synthetic path) — silent no-op.
         }
+        // **ModalChooseOne envelope — Cycle 4 (per-leaf Effect for
+        // all-untargeted modal cards, 2026-05-21).** Mirrors Python's
+        // `ExileAllArtifactsWithManaValueAtMost.resolve` at
+        // `effects/generic/exile.py:482-494`. Snapshot every
+        // battlefield object whose printing has Artifact in
+        // `card_types` AND whose total mana cost is `<= max_mv`, then
+        // exile each via `move_off_battlefield_to_zone(... "exile")`
+        // (the same off-battlefield helper sister `DestroyAllCreatures`
+        // uses). Tokens cease to exist on exile per CR 704.5d
+        // (handled by the move-off helper). Snapshot semantics avoid
+        // mid-pass mutation (Python's `victims = [...]` then iterate).
+        //
+        // **Negative `max_mv` raises** (defense-in-depth — parse arm
+        // already rejects but resolve also enforces; mirrors the
+        // sibling `DamageEachOpponent` / `DamageEachCreature`
+        // raise-on-negative shape). `max_mv=0` is a legitimate
+        // restrictive value (only MV-0 artifacts hit — Lander tokens
+        // hit; mana-cost-bearing artifacts safe).
+        //
+        // **Mana-cost computation.** The total mana cost is sum of
+        // generic + colored + hybrid (the same metric Python's
+        // `mana_cost.total` exposes — `costs.py:ManaCost.total`).
+        // Walks each player's bf to collect candidates in seat-order
+        // then bf-Vec order (the canonical iteration order; aligns
+        // with Python's `state.battlefield` order via the cross-engine
+        // harness's lockstep registry).
+        Effect::ExileAllArtifactsWithManaValueAtMost { max_mv } => {
+            if *max_mv < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ExileAllArtifactsWithManaValueAtMost max_mv must be non-negative, got {max_mv}"
+                )));
+            }
+            let max_mv_local = *max_mv;
+            let _ = source_obj_id; // implicit-target AOE; source not relevant
+            // Snapshot (controller_idx, obj_id) for every artifact on
+            // either battlefield in bf-ETB-timestamp order whose total
+            // mana cost is `<= max_mv`. Mirrors the
+            // `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` MV
+            // computation at line 13149 (sum of generic + W + U + B
+            // + R + G — the static printing cost; X is 0 in zones
+            // outside the stack per CR 202.3b).
+            let victims: Vec<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    let is_artifact = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact");
+                    if !is_artifact {
+                        return None;
+                    }
+                    let mc = &printing.mana_cost;
+                    let total = mc.generic as i32
+                        + mc.white as i32
+                        + mc.blue as i32
+                        + mc.black as i32
+                        + mc.red as i32
+                        + mc.green as i32;
+                    if total > max_mv_local {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                })
+                .collect();
+            // Move each victim off-battlefield to its owner's exile
+            // zone. Mirrors the inline exile pattern at
+            // `Effect::ExileTarget { AnyCreature }` (line 2755-2776):
+            // pop from owner's bf, stamp ZONE_EXILE + reset
+            // per-object state (tapped, damage, counters,
+            // attached_to, exiled_with_source), push onto owner's
+            // exile, mark left-bf if nonland, queue
+            // pending_leaves_dispatches for LTB fan-out, queue
+            // token-cease for CR 704.5d. The mass-shape mirrors
+            // `Effect::DestroyAllCreatures` (line 6594) but routes
+            // to ZONE_EXILE instead of ZONE_GRAVEYARD.
+            for (pidx, victim_id) in victims {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = match bf_mut.iter().position(|o| o.id == victim_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip — should never miss
+                };
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                // Per the `ExileTarget` arm: summoning_sick is NOT
+                // reset (CR 302.1 — sickness is battlefield-only
+                // state; see I35).
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let leaving_printing_id = obj.printing_id;
+                let leaving_obj_id = obj.id;
+                Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+                // Void / LTB fan-out (CE13 / I29 / Slice-10).
+                mark_left_battlefield_if_nonland(state, leaving_printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Token-cease queue (CR 704.5d / 111.7).
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            }
+        }
     }
     Ok(())
 }

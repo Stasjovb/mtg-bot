@@ -564,11 +564,17 @@ with the Creature-OR-Spacecraft multi-type predicate; exile
 bypasses indestructible, NO DIES dispatch per CR 700.4 — Beyond
 the Quiet AUTO-JOINED the spell-card-bridge admit set via Lane
 Y's existing Phase-3 `(0, 0)` wrath admit arm, no further
-guardrail widening needed). Remaining **21 single-gated** members:
+guardrail widening needed). **Ruinous Rampage closed 2026-05-21**
+via `feature/modal-chooseone-cycle-4` (ModalChooseOne envelope
+Cycle 4 — new `Effect::ExileAllArtifactsWithManaValueAtMost` Rust
+variant + per-leaf serializer arms for `DealDamageEachOpponent`
+and `ExileAllArtifactsWithManaValueAtMost` + admit-predicate widen
+on the `(0, 0)`-shape all-untargeted ModalChooseOne path; 305
+17lands decks). Remaining **20 single-gated** members:
 Archenemy's Charm, Close Encounter, Coordinated
 Clobbering, Darkness, Devastating Onslaught, Drill Too Deep,
 Emergency Eject, Exorcise, Invasive Maneuvers, Mutinous Massacre,
-Pull Through the Weft, Reroute Systems, Ruinous Rampage, Scour for
+Pull Through the Weft, Reroute Systems, Scour for
 Scrap, Scout for Survivors, Singularity Rupture, Systems Override,
 Terminal Velocity, Vengeful Possession, Warping Wail, Zero Point
 Ballad.

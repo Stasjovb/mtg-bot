@@ -4124,9 +4124,13 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         SeedshipImpactEffect,
     )
     from mtg_bot.effects.generic.damage import (
+        DealDamageEachOpponent,
         DealDamageToTargetCreatureSpacecraftBoosted,
         DealDamageToTargetCreatureWithExcessLanderRider,
         DealNDamageToEachCreature,
+    )
+    from mtg_bot.effects.generic.exile import (
+        ExileAllArtifactsWithManaValueAtMost,
     )
 
     def _leaf(eff) -> Optional[dict]:
@@ -4442,6 +4446,52 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             if eff.use_artifact_count:
                 return None
             return {"kind": "surveil", "count": int(eff.amount)}
+        # **ModalChooseOne envelope — Cycle 4 (per-leaf Effect for
+        # all-untargeted modal cards, 2026-05-21).** Per-leaf
+        # ``DealDamageEachOpponent(amount)`` arm — Ruinous Rampage's
+        # mass-burn mode (the all-untargeted half of the
+        # ``ModalChooseOne([DealDamageEachOpponent,
+        # ExileAllArtifactsWithManaValueAtMost])`` shape, the only
+        # all-untargeted ModalChooseOne candidate in the EoE pool).
+        # Rust variant `Effect::DamageEachOpponent { amount: i32 }`
+        # (`cards.rs:246`) is shipped + bridged via
+        # `cross_engine.py::damage_each_opponent` ↔
+        # `DealDamageEachOpponent`. The bare 2-field round-trip
+        # (`kind` + `amount`) is bit-equal — mirrors the
+        # `damage_each_creature` and `depressurize_effect` single-int
+        # idioms. Non-negative invariant (Rust raises on negative at
+        # resolve; Python's class has no validation — bail at the
+        # serializer if the field is negative to keep the round-trip
+        # symmetric).
+        if isinstance(eff, DealDamageEachOpponent):
+            if eff.amount < 0:
+                return None
+            return {
+                "kind": "damage_each_opponent",
+                "amount": int(eff.amount),
+            }
+        # **ModalChooseOne envelope — Cycle 4 (per-leaf Effect for
+        # all-untargeted modal cards, 2026-05-21).** Per-leaf
+        # ``ExileAllArtifactsWithManaValueAtMost(max_mv)`` arm —
+        # Ruinous Rampage's anti-artifact mode (paired with
+        # ``DealDamageEachOpponent`` above; the two together carry the
+        # all-untargeted ModalChooseOne admit shape for the Sorcery).
+        # Rust variant
+        # ``Effect::ExileAllArtifactsWithManaValueAtMost { max_mv: i32 }``
+        # ships in the SAME cycle (declaration + parse + to_pydict +
+        # resolve arms). Two-field round-trip (`kind` + `max_mv`) is
+        # bit-equal. Non-negative invariant per CR 202.3 (MV is
+        # non-negative; Python class default is 3, parser only emits
+        # explicit values via the regex digit capture — but bail
+        # defensively on a negative if a future hand-built call
+        # constructs one).
+        if isinstance(eff, ExileAllArtifactsWithManaValueAtMost):
+            if eff.max_mv < 0:
+                return None
+            return {
+                "kind": "exile_all_artifacts_with_mana_value_at_most",
+                "max_mv": int(eff.max_mv),
+            }
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child
@@ -4583,9 +4633,38 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     # coverage if a future parser starts structuring the marker.
     if getattr(printing, "additional_cost_choice", None) is not None:
         return False
-    from mtg_bot.effects.combinators import ModalChooseOne
-    if isinstance(se, ModalChooseOne):
-        return False  # modal — later phase
+    # **ModalChooseOne envelope — Cycle 4 (admit-predicate widen,
+    # 2026-05-21).** ``ModalChooseOne`` was previously REJECTED here
+    # unconditionally (the Cycle 1-3 substrate-only landing kept the
+    # admit set closed while the cast-time mode binding + per-mode
+    # resolve dispatch + reverse serializer cycles shipped). With
+    # Cycle 4 landing the per-leaf Effect variants
+    # (``DealDamageEachOpponent`` already shipped; the new
+    # ``ExileAllArtifactsWithManaValueAtMost`` lands in this cycle)
+    # the round-trip-or-bail teeth at ``_python_spell_effect_to_dict``
+    # below carry the load: a modal whose modes are NOT all leaf-
+    # recognized bails at the serializer (returns ``None``), and the
+    # admit gate's ``_python_spell_effect_to_dict(se) is None`` clause
+    # rejects it.
+    #
+    # The Phase-3 ``(0, 0)``-shape wrath admit arm below ALSO covers
+    # all-untargeted ModalChooseOne cards: Ruinous Rampage's
+    # ``target_count_range() == (0, 0)`` and ``target_slot_kinds()
+    # == ()`` because both of its modes (``DealDamageEachOpponent``,
+    # ``ExileAllArtifactsWithManaValueAtMost``) are untargeted. The
+    # some-targeted ModalChooseOne cards (Reroute Systems / Scour for
+    # Scrap / Archenemy's Charm / Drill Too Deep / Warping Wail /
+    # Twist Reality / Live or Die — 7 cards) report non-``(0, 0)``
+    # shapes and STAY DECLINED via the target-grammar gate below;
+    # they need a per-mode target-binding Slice (Cycle 5) before
+    # they can flip.
+    #
+    # **``or_both`` deferral preserved.** The serializer at
+    # ``_python_spell_effect_to_dict`` explicitly bails on
+    # ``ModalChooseOne(or_both=True)`` (Cycle 3); the admit gate's
+    # round-trip clause picks that up too. Scour for Scrap (the only
+    # ``or_both`` EoE modal) STAYS DECLINED via the round-trip-or-bail
+    # path even if its modes were leaf-recognized.
     # Target-grammar gate — Phase 1 (single-target) OR Phase 2 (the
     # exact 2-slot ('my_creature','creature') heterogeneous pair) OR
     # the wrath-admit-widening Phase-3 ``(0, 0)``-shape wrath grammar.

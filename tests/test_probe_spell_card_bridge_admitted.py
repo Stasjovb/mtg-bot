@@ -99,30 +99,50 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-# Re-anchored at the `feature/beyond-the-quiet-slice` landing
-# (2026-05-21). The beyond-the-quiet-slice added the
+# Re-anchored at the `feature/modal-chooseone-cycle-4` landing
+# (2026-05-21), itself layered on the `feature/beyond-the-quiet-slice`
+# landing (2026-05-21).
+#
+# The beyond-the-quiet-slice added the
 # ``ExileAllCreaturesAndSpacecraft`` substrate (Rust Effect variant +
 # bridge arm + reverse-serializer leaf) which auto-joined Beyond the
 # Quiet (4,698 17lands decks) into the admit set via Lane Y's existing
-# Phase-3 ``(0, 0)`` wrath admit arm — no further guardrail widening
-# needed. The set grew 15 → 16 via the §2 auto-grow teeth (the
-# guardrail queries the LIVE covered set, NOT a hardcoded list — the
-# beyond-the-quiet-slice's new Effect arm makes the
-# ``ExileAllCreaturesAndSpacecraft`` Python class covered, the new
-# serializer leaf makes the spell_effect round-trip; the
-# wrath-admit-widening Phase-3 ``(0, 0)``-shape admit arm
-# (target_count_range == (0, 0), no slot_kinds, no printing-level
-# ``targets``) then admits it). The Phase 2 2-slot card (Diplomatic
-# Relations) remains the SOLE 2-slot admit; the Phase 3 wrath arm now
-# carries 5 ``(0, 0)`` admits (Pyroclasm + Manifest Dread + Break Down
-# the Door + Under the Skin + Beyond the Quiet).
+# Phase-3 ``(0, 0)`` wrath admit arm — 15 → 16.
+#
+# Then modal-chooseone-cycle-4 added the per-leaf Effect variants for
+# the all-untargeted modal cards (DealDamageEachOpponent already
+# shipped; the new ExileAllArtifactsWithManaValueAtMost lands in this
+# cycle) AND widened the admit predicate at trajectory.py:4564 (the
+# previous unconditional ModalChooseOne reject is removed; the
+# round-trip-or-bail teeth + the existing (0, 0)-shape Phase-3 wrath
+# admit arm now carry the modal admit load). Ruinous Rampage (the
+# only all-untargeted modal whose leaves are all serializable today)
+# AUTO-JOINED — 16 → 17. The some-targeted modal cards (Reroute
+# Systems / Scour for Scrap / Archenemy's Charm / Drill Too Deep /
+# Warping Wail / Twist Reality / Live or Die — 7 cards) STAY DECLINED
+# via the target-grammar gate (they report (1, 1) / (2, 2) / (0, 1)
+# shapes; the (0, 0)-only admit arm rejects them; the per-mode target
+# binding slice = Cycle 5).
+#
+# The Phase 2 2-slot card (Diplomatic Relations) remains the SOLE
+# 2-slot admit; the Phase 3 wrath arm now carries 5 ``(0, 0)`` admits
+# (Pyroclasm + Manifest Dread + Break Down the Door + Under the Skin
+# + Beyond the Quiet) plus the Cycle-4 modal admit (Ruinous Rampage).
+#
+# Pre-2026-05-21 history: wrath-admit-widening (2026-05-21) grew 11→15
+# (Pyroclasm + Manifest Dread + Break Down the Door + Under the
+# Skin). Phase 2 (round-76) flipped Diplomatic Relations DECLINE→
+# ADMITTED, 6→7. Round-73 Lander-spell-token-seating sub-substrate
+# admitted Seedship Impact / Orbital Plunge, 4→6. Round-70 Phase-1
+# landing: {Depressurize, Radiant Strike} (4 admits).
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Cut Propulsion", "Depressurize", "Diplomatic Relations",
     "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
     "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-    "Seedship Impact", "Shattered Wings", "Under the Skin",
+    "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
+    "Under the Skin",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

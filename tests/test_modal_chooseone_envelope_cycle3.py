@@ -161,26 +161,39 @@ def test_serializer_round_trips_through_bridge():
 # ---------------------------------------------------------------------------
 
 
-def test_admit_predicate_still_rejects_modal_spells():
-    """**Substrate-only landing pin.** Cycle 3 ships only the
-    reverse serializer — the admit predicate at
-    ``trajectory.py:4444`` still positively rejects every
-    ``ModalChooseOne`` spell. Cycle 5 will widen the predicate
-    once enough per-leaf modes land to make the auto-grow viable.
+def test_admit_predicate_post_cycle4_modal_admit():
+    """**Post-Cycle-4 admit-predicate pin.** Cycle 4 widened the
+    admit predicate at ``trajectory.py:4564`` (was: positively reject
+    every ``ModalChooseOne``; now: defer to the round-trip-or-bail
+    teeth + the existing ``(0, 0)``-shape ``_PHASE3_WRATH_SHAPE``).
 
-    Driver: use Ruinous Rampage (a real EoE ``ModalChooseOne`` whose
-    modes are all untargeted — the natural Cycle-5 admit candidate
-    once its per-leaf effects land). The predicate's modal reject
-    runs at line 4444 and refuses regardless of any other condition.
+    Driver:
+      * Ruinous Rampage — Cycle 4 per-leaf landing added the
+        ``DealDamageEachOpponent`` + ``ExileAllArtifactsWithManaValueAtMost``
+        leaves to the ``_python_spell_effect_to_dict`` ``_leaf`` table;
+        Ruinous Rampage's ``(0, 0)``-shape ModalChooseOne now
+        round-trips clean → admit predicate FLIPS to True.
+      * Reroute Systems (the lane-V honest-stop card) — STAYS
+        DECLINED because its modes are ``(1, 1)``-shape targeted
+        (``PumpTargetArtifactOrCreatureUntilEOT`` +
+        ``DealDamageToTargetTappedCreature``) and the per-mode target-
+        binding slice has NOT shipped; the ``_leaf`` table has no arms
+        for the targeted modes so the serializer returns ``None`` and
+        the round-trip-or-bail tooth fires.
+
+    The pre-Cycle-4 unconditional-reject behavior is GONE — the admit
+    set auto-grows by exactly the modal cards whose leaves are all
+    serializable (today: Ruinous Rampage only, +1 admit).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     prs = get_active_source().get_printings()
     p = prs["Ruinous Rampage"]
-    # The admit predicate still rejects it (Cycle 5 deferred —
-    # substrate-only landing).
-    assert _printing_is_bridge_simple_spell(p) is False
-    # Sanity: Reroute Systems too (the lane-V honest-stop card).
+    # Cycle 4 admits Ruinous Rampage via the all-untargeted modal path.
+    assert _printing_is_bridge_simple_spell(p) is True
+    # Some-targeted modal STAYS DECLINED (Cycle 5 deferred — needs
+    # per-mode target-binding for the modal envelope to admit
+    # ``(1, 1)``-shape modal cards).
     rr = prs["Reroute Systems"]
     assert _printing_is_bridge_simple_spell(rr) is False

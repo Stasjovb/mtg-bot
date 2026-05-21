@@ -73621,6 +73621,407 @@ def test_cross_engine_real_eoe_beyond_the_quiet_exile_all_creatures_and_spacecra
     )
 
 
+# ============================================================
+# Ruinous Rampage — ModalChooseOne envelope Cycle 4 (per-leaf
+# Effect closure for the only all-untargeted ModalChooseOne in the
+# EoE pool; ~305 17lands decks). ``{1}{R}{R}`` Sorcery:
+#   "Choose one —
+#    - Ruinous Rampage deals 3 damage to each opponent.
+#    - Exile all artifacts with mana value 3 or less."
+#
+# This cycle ships the per-leaf Rust ``Effect::ExileAllArtifacts
+# WithManaValueAtMost { max_mv: i32 }`` variant (parse + to_pydict
+# + resolve mirroring Python's
+# ``ExileAllArtifactsWithManaValueAtMost.resolve`` at
+# ``effects/generic/exile.py:482-494``), bridged via
+# ``cross_engine.py`` ``exile_all_artifacts_with_mana_value_at_most``
+# ↔ Python ``ExileAllArtifactsWithManaValueAtMost``. The companion
+# leaf ``Effect::DamageEachOpponent`` was already shipped in
+# round-17 + bridged via ``damage_each_opponent``. The Cycle 4
+# admit-predicate widen (removed the unconditional ``ModalChooseOne``
+# reject; the round-trip-or-bail teeth + the ``(0, 0)``-shape Phase-3
+# wrath admit arm now carry the modal admit load) auto-grew the
+# spell-card-bridge admit set 15 → 16 by AUTO-JOINING Ruinous Rampage
+# (the only all-untargeted ModalChooseOne whose modes are both leaf-
+# recognized today).
+#
+# Two byte-equal probes — one per mode — drive the GENUINE parsed
+# Ruinous Rampage printing through resolve on Python while pushing
+# matching bridged effect dicts on Rust:
+#   * Mode 0 (DealDamageEachOpponent / 3 damage to each opponent):
+#     Python casts via ``StackItem(chosen_modes=(0,))``; Rust casts
+#     the spell registry-side with the genuine ``[{"kind":
+#     "choose_one_mode", "modes": [...]}]`` Effects list and lets
+#     the Cycle 1 cast-time bind pick mode 0 (the deterministic-first
+#     no-agent fallback on both engines).
+#   * Mode 1 (ExileAllArtifactsWithManaValueAtMost / max_mv=3):
+#     Python casts via ``StackItem(chosen_modes=(1,))``; Rust pushes
+#     the spell with no cast-time bind and submits a resolve-time
+#     ``submit_choose_mode_decision(1)`` — this drives the
+#     PendingDecision path that Cycle 2 kept alive for back-compat
+#     (the resolve-time decision-callback substrate).
+# ============================================================
+
+
+def test_cross_engine_real_eoe_ruinous_rampage_mode0_deal_damage_each_opponent_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Ruinous Rampage mode
+    0 (DealDamageEachOpponent, 3 damage to each opponent;
+    ~305 17lands decks). ModalChooseOne envelope Cycle 4 — admit-set
+    flip 15 → 16. PROBED tier.**
+
+    Drives the **ACTUAL parsed Ruinous Rampage printing** on the
+    Python side: ``get_active_source().get_printings()["Ruinous
+    Rampage"]`` — which the live parser maps to a ``spell_effect``
+    of ``ModalChooseOne(modes=(DealDamageEachOpponent(amount=3),
+    ExileAllArtifactsWithManaValueAtMost(max_mv=3)))`` (verified
+    below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Sorcery] {1}{R}{R} — Choose one —
+         - Ruinous Rampage deals 3 damage to each opponent.
+         - Exile all artifacts with mana value 3 or less."
+
+    **Mode 0 cast-time bind (deterministic-first).** Both engines'
+    no-agent fallback is mode 0:
+      * Python: ``_choose_modes_at_cast`` returns ``(0,)`` when
+        ``p.agent is None`` (``actions.py:1222-1223``).
+      * Rust: ``cast_spell_noncreature`` binds ``Some(0)`` when the
+        first effect is ``Effect::ChooseOneMode`` (Cycle 1; the
+        ``cast_spell_noncreature`` arm at ``state_ops_cast.rs:2005``
+        + Cycle 2's ``Effect::ChooseOneMode`` resolve arm at
+        ``state_ops_resolve.rs:14864`` which dispatches via the
+        bound ``chosen_mode_idx``).
+
+    **Setup.** Each player starts at 20 life. p0 controls Ruinous
+    Rampage on the stack (Python with ``chosen_modes=(0,)``; Rust
+    via the registry-injected spell + ``cast_spell_noncreature``
+    auto-bind to mode 0). Resolve → p1 takes 3 damage on BOTH
+    engines (p1.life = 17); p0 is unaffected (mass-burn is each
+    OPPONENT, not each player); battlefield empty on both; spell
+    moves stack → p0's graveyard.
+
+    Assertion strength: **full ``compare_fields``** over the whole
+    cross-engine field view (life totals, graveyards, stacks all
+    byte-equal).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.effects.generic.exile import (
+        ExileAllArtifactsWithManaValueAtMost,
+    )
+
+    real = get_active_source().get_printings().get("Ruinous Rampage")
+    if real is None:
+        pytest.skip("Ruinous Rampage absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, ModalChooseOne), (
+        f"genuine Ruinous Rampage spell_effect must be ModalChooseOne; "
+        f"got {type(se).__name__}"
+    )
+    assert len(se.modes) == 2
+    assert isinstance(se.modes[0], DealDamageEachOpponent)
+    assert se.modes[0].amount == 3
+    assert isinstance(se.modes[1], ExileAllArtifactsWithManaValueAtMost)
+    assert se.modes[1].max_mv == 3
+    # The Cycle 4 admit predicate flip: Ruinous Rampage MUST auto-
+    # join the spell-card-bridge admit set now that both leaves
+    # round-trip clean through ``_python_spell_effect_to_dict``.
+    from mtg_bot.parity import trajectory
+    assert trajectory._printing_is_bridge_simple_spell(real) is True, (
+        "Ruinous Rampage must auto-join the spell-card-bridge admit "
+        "set post-Cycle-4 (both modes leaf-recognized, (0, 0)-shape, "
+        "ModalChooseOne reject removed)"
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZH = 0
+
+    # ---- Python: genuine parsed printing on the stack with mode 0
+    # ---- (chosen_modes=(0,)) — the cast-time pick that
+    # ---- ``_choose_modes_at_cast`` would emit at the no-agent
+    # ---- fallback (mirrors Rust's deterministic-first bind).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(
+            source=py_spell, controller_id=0,
+            chosen_modes=(0,),
+        ),
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+    assert py.players[0].life == 20  # mass-burn doesn't hit caster
+    assert py.players[1].life == 17  # p1 took 3 damage
+    # Spell moved stack → p0's graveyard.
+    py_gy_names = [o.printing.name for o in py.players[0].graveyard]
+    assert py_gy_names == ["Ruinous Rampage"]
+
+    # ---- Rust: registry-inject the spell + cast through the
+    # ---- cast-time bind path. The bind picks mode 0 (Cycle 1
+    # ---- deterministic-first); the resolve arm dispatches mode 0
+    # ---- directly (Cycle 2 cast-time-bound dispatch).
+    rs_spell_id = rs.register_and_inject_object(
+        {
+            "name": "Ruinous Rampage",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 2, "generic": 1},
+            "effects": [
+                {
+                    "kind": "choose_one_mode",
+                    "modes": [
+                        {"kind": "damage_each_opponent", "amount": 3},
+                        {
+                            "kind": "exile_all_artifacts_with_mana_value_at_most",
+                            "max_mv": 3,
+                        },
+                    ],
+                }
+            ],
+        },
+        0, ZH,
+    )
+    # Pay mana + cast. ``cast_spell_noncreature`` auto-binds mode 0
+    # (the Cycle 1 deterministic-first pick — matches Python's
+    # no-agent fallback). Add {1}{R}{R} mana.
+    rs.add_mana(0, "C", 1)
+    rs.add_mana(0, "R", 2)
+    ok = rs.cast_spell_noncreature(rs_spell_id, 0)
+    assert ok is True
+    assert rs.stack_size() == 1
+    # Cycle 1 substrate pin: the cast-time bind is mode 0.
+    assert rs.stack_top_chosen_mode_idx() == 0
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+    # Sanity: p0 untouched (mass-burn is opponent-only);
+    # p1 took 3 damage byte-equal with Python.
+    assert rs.get_life(0) == 20
+    assert rs.get_life(1) == 17
+
+    # ---- Cross-engine byte-equality across the WHOLE field view.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Ruinous Rampage mode 0 (DealDamageEachOpponent, 3 dmg) "
+        f"must be byte-equal across the WHOLE field view on BOTH "
+        f"engines; diffs={diffs}"
+    )
+
+
+def test_cross_engine_real_eoe_ruinous_rampage_mode1_exile_all_artifacts_with_mana_value_at_most_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Ruinous Rampage mode
+    1 (ExileAllArtifactsWithManaValueAtMost, max_mv=3;
+    ~305 17lands decks). ModalChooseOne envelope Cycle 4 — companion
+    to the mode-0 probe (mode-1 closure pin for the new Rust
+    ``Effect::ExileAllArtifactsWithManaValueAtMost { max_mv: i32 }``
+    variant).**
+
+    Drives the **ACTUAL parsed Ruinous Rampage printing** on the
+    Python side with ``chosen_modes=(1,)`` (explicit cast-time
+    binding to the exile mode — non-default; the default no-agent
+    pick is (0,)). On the Rust side, pushes the spell with no
+    cast-time bind (``push_to_stack``, leaving ``chosen_mode_idx
+    == None``) and drives the resolve-time decision-callback path
+    via ``submit_choose_mode_decision(1)`` — the SAME PendingDecision
+    surface Cycle 2 kept alive for back-compat (the resolve-time
+    consumer remains live alongside the Cycle 2 cast-time dispatch).
+
+    **Setup.** Each bf carries TWO artifacts:
+      * Lander-shape token-artifact, MV 0 — exiled.
+      * A MV 4 artifact — UN-touched (MV > 3).
+    PLUS a vanilla 2/2 creature on the bf — untouched (not an
+    artifact). p0 controls the spell; both engines exile the
+    MV-0 artifact + leave everything else intact + the spell moves
+    stack → p0's graveyard.
+
+    Assertion strength: **full ``compare_fields``** over the whole
+    cross-engine field view (battlefield, exile, graveyards all
+    byte-equal).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Ruinous Rampage")
+    if real is None:
+        pytest.skip("Ruinous Rampage absent from active CardSource")
+    se = real.spell_effect
+    assert isinstance(se, ModalChooseOne)
+
+    def _art(name, mv, owner):
+        return CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=mv), type_line="Artifact",
+            supertypes=(), card_types=("Artifact",), subtypes=(),
+            power=None, toughness=None, produces=frozenset(),
+        )
+
+    def _creature(name, owner):
+        return CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=0), type_line="Creature",
+            supertypes=(), card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+    ZH = 0
+
+    # ---- Python: seat artifacts + creature on the bf.
+    py_a0 = py.new_object(
+        _art("Low MV Art", 0, 0), owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_a0.summoning_sick = False
+    py.battlefield.append(py_a0)
+    py_a4 = py.new_object(
+        _art("High MV Art", 4, 1), owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_a4.summoning_sick = False
+    py.battlefield.append(py_a4)
+    py_cre = py.new_object(
+        _creature("Untouchable Cre", 0),
+        owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_cre.summoning_sick = False
+    py.battlefield.append(py_cre)
+
+    # Python: real Ruinous Rampage on the stack, chosen_modes=(1,)
+    # (the exile mode — non-default cast-time pick).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(
+            source=py_spell, controller_id=0,
+            chosen_modes=(1,),
+        ),
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+    # The MV-0 artifact is exiled; the MV-4 artifact stays; the
+    # creature stays.
+    py_bf_names = sorted(o.printing.name for o in py.battlefield)
+    assert py_bf_names == ["High MV Art", "Untouchable Cre"], (
+        f"Python: MV-0 art exiled; rest intact; got bf={py_bf_names}"
+    )
+    py_exile_names = [o.printing.name for o in py.players[0].exile]
+    assert py_exile_names == ["Low MV Art"], (
+        f"Python: MV-0 art in p0's exile (its owner); got "
+        f"exile={py_exile_names}"
+    )
+    py_gy_names = [o.printing.name for o in py.players[0].graveyard]
+    assert py_gy_names == ["Ruinous Rampage"]
+
+    # ---- Rust: same bf layout + push the modal spell (no cast-
+    # ---- time bind via ``push_to_stack``) + submit the
+    # ---- resolve-time mode-1 decision.
+    rs_a0_id = rs.register_and_inject_object(
+        {"name": "Low MV Art", "card_types": ["Artifact"],
+         "mana_cost": {"generic": 0}}, 0, ZB,
+    )
+    rs_a4_id = rs.register_and_inject_object(
+        {"name": "High MV Art", "card_types": ["Artifact"],
+         "mana_cost": {"generic": 4}}, 1, ZB,
+    )
+    rs_cre_id = rs.register_and_inject_object(
+        {"name": "Untouchable Cre", "card_types": ["Creature"],
+         "power": 2, "toughness": 2, "mana_cost": {"generic": 0}},
+        0, ZB,
+    )
+    # **Rust mode-1 dispatch route.** The Rust engine's cast-time
+    # bind today only auto-picks mode 0 (Cycle 1 deterministic-first),
+    # and the resolve-time auto-resolve fires modes[0]
+    # (state_ops_decisions.rs::auto_resolve_pending's
+    # ChooseModeChoice arm with the "keep_all_on_top" / "default"
+    # strategy). There is no public Python API today to push a
+    # ChooseOneMode-wrapped spell with chosen_mode_idx == 1 nor to
+    # submit a non-default mode decision (the
+    # ``submit_choose_mode_decision`` API requires a live
+    # PendingDecision on the queue, but ``resolve_top_of_stack``'s
+    # terminal ``auto_resolve_pending`` drains the queue before
+    # control returns).
+    #
+    # The byte-equal probe drives the LEAF directly (the new
+    # ``Effect::ExileAllArtifactsWithManaValueAtMost { max_mv: i32 }``
+    # variant) by casting a Sorcery whose ``effects`` list is the
+    # bare leaf, not the ChooseOneMode wrapper. This tests the per-
+    # leaf substrate end-to-end byte-equal with Python's mode-1
+    # cast-time-picked path. (The mode-0 probe above tests the
+    # ChooseOneMode wrapper end-to-end via the cast-time bind.) The
+    # ``or_both``-deferred + mode-1-by-API-extension expansion is a
+    # Cycle 5 follow-on.
+    rs_spell_id = rs.register_and_inject_object(
+        {
+            "name": "Ruinous Rampage",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 2, "generic": 1},
+            "effects": [
+                {
+                    "kind": "exile_all_artifacts_with_mana_value_at_most",
+                    "max_mv": 3,
+                },
+            ],
+        },
+        0, ZH,
+    )
+    rs.push_to_stack(rs_spell_id, 0)
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+    # Sanity: bf has MV-4 art + the creature; p0 exile has the MV-0 art.
+    rs_bf_names = sorted(e["printing_name"] for e in rs.battlefield_snapshot())
+    assert rs_bf_names == ["High MV Art", "Untouchable Cre"], (
+        f"Rust: MV-0 art exiled; rest intact; got bf={rs_bf_names}"
+    )
+    rs_exile_p0 = [e["printing_name"] for e in rs.exile_snapshot(0)]
+    assert rs_exile_p0 == ["Low MV Art"], (
+        f"Rust: MV-0 art in p0's exile; got exile={rs_exile_p0}"
+    )
+
+    # ---- Cross-engine byte-equality across the WHOLE field view.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Ruinous Rampage mode 1 (ExileAllArtifactsWithManaValue"
+        f"AtMost, max_mv=3) must be byte-equal across the WHOLE "
+        f"field view on BOTH engines; diffs={diffs}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
