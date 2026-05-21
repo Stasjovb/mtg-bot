@@ -595,9 +595,26 @@ impl GameState {
             // Load-bearing for SBA: without this branch a
             // Grovestrider with ≥1 land would be destroyed by the
             // 704.5f zero-toughness rule (printed base is 0).
+            // Round-79+ S2.5 layer-7b reader fold (Lignify-shape
+            // Auras): an Aura attached with `aura_set_base_pt`
+            // overrides the host's printed base. Slotted between
+            // UEOT overrides and the dynamic-base / printed base —
+            // same precedence as the combat-side reader sites; see
+            // `battlefield_creature_power` for the rationale +
+            // multi-Aura honest-stop. Load-bearing for the SBA: a
+            // Lignified 4/4 (printed) becomes a 0/4 (set-base 0/4)
+            // and must NOT be 704.5f-destroyed if alive at 0
+            // damage — the override leaves effective toughness 4.
+            // It IS load-bearing for the dual-Aura test where a
+            // Lignify-shape + a +0/+1 buff lands the host at
+            // effective toughness 5 vs 4 damage.
             let base_toughness = obj
                 .ueot_base_pt_override()
                 .map(|(_, t)| t)
+                .or_else(|| {
+                    crate::state_ops_combat::aura_set_base_pt_on(self, obj.id)
+                        .map(|(_, t)| t)
+                })
                 .or_else(|| {
                     crate::state_ops_combat::dynamic_base_pt_pub(self, obj.id)
                         .map(|(_, t)| t)
@@ -967,9 +984,20 @@ impl GameState {
                     // lockstep with collect_sba_victims above — defer
                     // to the dynamic base after UEOT overrides,
                     // before the printed base.
+                    // Round-79+ S2.5 layer-7b reader fold
+                    // (Lignify-shape Auras): mirror the
+                    // collect_sba_victims recipe — set-base-PT Aura
+                    // override slots between UEOT overrides and
+                    // dynamic / printed base.
                     let base_toughness = obj
                         .ueot_base_pt_override()
                         .map(|(_, t)| t)
+                        .or_else(|| {
+                            crate::state_ops_combat::aura_set_base_pt_on(
+                                self, obj.id,
+                            )
+                            .map(|(_, t)| t)
+                        })
                         .or_else(|| {
                             crate::state_ops_combat::dynamic_base_pt_pub(
                                 self, obj.id,
