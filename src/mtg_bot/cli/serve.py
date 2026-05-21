@@ -33,12 +33,19 @@ CLI flags if the master's setup is non-standard.
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+
+# Sentinel for ``create_app(report_executor=...)`` so the caller can
+# distinguish "default to a real ThreadPoolExecutor" (don't pass the
+# kwarg at all, or pass ``_UNSET``) from "explicit synchronous
+# dispatch for tests" (pass ``None``).
+_UNSET = object()
 from pathlib import Path
 from typing import Any, Optional
 
@@ -219,6 +226,8 @@ def create_app(
     shards_config_path: Optional[Path] = None,
     enable_heartbeat_poller: bool = True,
     heartbeat_poll_interval_s: float = 10.0,
+    artifact_fetcher: Optional[Any] = None,
+    report_executor: Any = _UNSET,
 ) -> Flask:
     """Build the master HTTP server. ``progress_dir`` (when set)
     enables Stop-button propagation to remotes: each ``/queue/take``
@@ -980,6 +989,11 @@ def create_app(
         queue_db_path = None
     if queue_db_path is not None:
         from mtg_bot.cli.runs import queue_db as _queue_db  # noqa: WPS433
+        from mtg_bot.cli.runs.coordinator_artifact_fetcher import (  # noqa: WPS433
+            LocalArtifactFetcher,
+            MultiSchemeFetcher,
+            S3ArtifactFetcher,
+        )
         from mtg_bot.cli.runs.heartbeat_poller import (  # noqa: WPS433
             HeartbeatPoller,
         )
@@ -1024,6 +1038,38 @@ def create_app(
             poller_holder["poller"] = poller
             app.extensions["v2_heartbeat_poller"] = poller
 
+        # Artifact fetcher: caller can inject one for tests; default
+        # builds a local-only fetcher, optionally adding the S3 arm
+        # when ``MTG_BOT_COORD_ARTIFACT_BACKEND`` is set. The s3
+        # branch imports boto3 at construction time (fail-loud if
+        # the [s3] extra isn't installed on this host).
+        if artifact_fetcher is None:
+            backend = os.environ.get("MTG_BOT_COORD_ARTIFACT_BACKEND", "")
+            s3_arm = (
+                S3ArtifactFetcher() if backend in {"s3", "auto"} else None
+            )
+            artifact_fetcher = MultiSchemeFetcher(
+                local=LocalArtifactFetcher(), s3=s3_arm,
+            )
+
+        # Background executor for the /v2/report_result fetch+write
+        # job. 16 workers comfortably overlaps the per-game disk write
+        # with the next request's fetch. Built once at app-creation
+        # and exposed via app.extensions so tests can shut it down
+        # cleanly and ops can inspect it. ``_UNSET`` (the default)
+        # triggers the real build; explicit ``None`` is the test
+        # opt-out -- v2_endpoints falls into a sync-dispatch path.
+        if report_executor is _UNSET:
+            from concurrent.futures import (  # noqa: WPS433
+                ThreadPoolExecutor as _TPE,
+            )
+            report_executor = _TPE(
+                max_workers=16,
+                thread_name_prefix="v2-report-result",
+            )
+        app.extensions["v2_report_executor"] = report_executor
+        app.extensions["v2_artifact_fetcher"] = artifact_fetcher
+
         bp = build_v2_blueprint(
             queue_db_path=queue_db_path,
             weights_root=_weights_root,
@@ -1031,6 +1077,8 @@ def create_app(
             replays_root=_replays_root,
             process_started_at_monotonic=time.monotonic(),
             heartbeat_poller_provider=lambda: poller_holder["poller"],
+            artifact_fetcher=artifact_fetcher,
+            report_executor=report_executor,
         )
         app.register_blueprint(bp)
         app.extensions["v2_queue_db_path"] = queue_db_path

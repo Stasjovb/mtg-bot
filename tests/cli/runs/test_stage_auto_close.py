@@ -22,6 +22,9 @@ from mtg_bot.cli.runs import queue_db
 
 
 def _make_app(tmp_path: Path):
+    # Sync dispatch (``report_executor=None``) so the auto-close
+    # transition is observable on the next GET without racing the
+    # background thread pool.
     return serve_mod.create_app(
         repo_url="https://example.test/mtg-bot.git",
         master_pubkey="ssh-ed25519 KEY",
@@ -33,6 +36,7 @@ def _make_app(tmp_path: Path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        report_executor=None,
     )
 
 
@@ -68,17 +72,19 @@ def _claim(client, stage_id: str, worker_id: str = "wA"):
 
 def _report(client, claim_id: str, *, outcome: str = "completed",
             winner: int | None = 0, shard_label: str = "wA"):
+    # Phase 2B: JSON-only body; no npz/replay URIs needed for
+    # auto-close tests (they only care about the results-row
+    # bookkeeping the handler does post-fetch).
     return client.post(
         "/v2/report_result",
-        data={"meta": json.dumps({
+        json={"meta": {
             "claim_id": claim_id,
             "outcome": outcome,
             "winner": winner,
             "n_samples": 0,
             "duration_s": 1.0,
             "shard_label": shard_label,
-        })},
-        content_type="multipart/form-data",
+        }},
     )
 
 
@@ -96,7 +102,7 @@ def test_stage_auto_closes_when_all_games_report(tmp_path):
     for _ in range(3):
         claim = _claim(client, stage_id)
         res = _report(client, claim["claim_id"])
-        assert res.status_code == 200
+        assert res.status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["complete_at"] is not None
@@ -118,15 +124,15 @@ def test_stage_does_not_auto_close_while_in_flight(tmp_path):
     claim_b = _claim(client, stage_id, worker_id="wB")
     claim_c = _claim(client, stage_id, worker_id="wC")
     # Two report; the third stays in-flight.
-    assert _report(client, claim_a["claim_id"], shard_label="wA").status_code == 200
-    assert _report(client, claim_b["claim_id"], shard_label="wB").status_code == 200
+    assert _report(client, claim_a["claim_id"], shard_label="wA").status_code == 202
+    assert _report(client, claim_b["claim_id"], shard_label="wB").status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "running"
     assert body["complete_at"] is None
     assert body["n_games_done"] == 2
     assert body["n_games_in_flight"] == 1
     # Land the last one — now it auto-closes.
-    assert _report(client, claim_c["claim_id"], shard_label="wC").status_code == 200
+    assert _report(client, claim_c["claim_id"], shard_label="wC").status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["complete_at"] is not None
@@ -144,7 +150,7 @@ def test_auto_close_handles_drained_stage(tmp_path):
     claim_a = _claim(client, stage_id, worker_id="wA")
     claim_b = _claim(client, stage_id, worker_id="wB")
     # Report only the first; the second is in-flight when /close fires.
-    assert _report(client, claim_a["claim_id"], shard_label="wA").status_code == 200
+    assert _report(client, claim_a["claim_id"], shard_label="wA").status_code == 202
     close_res = client.post(
         f"/v2/stage/{stage_id}/close",
         json={"reason": "early_stop_pass"},
@@ -155,7 +161,7 @@ def test_auto_close_handles_drained_stage(tmp_path):
     assert body["drained_at"] is not None
     assert body["complete_at"] is None
     # The last in-flight claim reports back; auto-close finishes the job.
-    assert _report(client, claim_b["claim_id"], shard_label="wB").status_code == 200
+    assert _report(client, claim_b["claim_id"], shard_label="wB").status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["drained_at"] is not None
@@ -164,26 +170,26 @@ def test_auto_close_handles_drained_stage(tmp_path):
 
 def test_auto_close_idempotent_under_late_duplicate_reports(tmp_path):
     """All N report, stage auto-closes. A late-duplicate report under
-    the same claim_id is silently accepted as a 200 duplicate; a
-    409-route (re-delivered claim case) doesn't reopen / re-trigger
-    auto-close. ``complete_at`` is unchanged after the duplicate."""
+    the same claim_id is rejected with ``409 Conflict`` (Phase 2B
+    cutover: the handler short-circuits before enqueueing the
+    background job when the claim is already reported) — it must
+    not reopen / re-trigger auto-close. ``complete_at`` is unchanged
+    after the duplicate."""
     app = _make_app(tmp_path)
     client = app.test_client()
     stage_id = "iter_auto_dup"
     client.post("/v2/stage/create", json=_spec(n_games=2, stage_id=stage_id))
     claim_a = _claim(client, stage_id, worker_id="wA")
     claim_b = _claim(client, stage_id, worker_id="wB")
-    assert _report(client, claim_a["claim_id"]).status_code == 200
-    assert _report(client, claim_b["claim_id"]).status_code == 200
+    assert _report(client, claim_a["claim_id"]).status_code == 202
+    assert _report(client, claim_b["claim_id"]).status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     first_complete_at = body["complete_at"]
     assert first_complete_at is not None
-    # On-time duplicate of an already-reported claim → 200 with
-    # ``duplicate: true``; must not retrigger / move complete_at.
+    # Duplicate of an already-reported claim → 409 (sync rejection).
     dup = _report(client, claim_a["claim_id"])
-    assert dup.status_code == 200
-    assert dup.get_json().get("duplicate") is True
+    assert dup.status_code == 409
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["complete_at"] == first_complete_at
@@ -200,13 +206,13 @@ def test_auto_close_with_crashed_and_timed_out_results(tmp_path):
     claim_a = _claim(client, stage_id, worker_id="wA")
     claim_b = _claim(client, stage_id, worker_id="wB")
     claim_c = _claim(client, stage_id, worker_id="wC")
-    assert _report(client, claim_a["claim_id"], outcome="completed").status_code == 200
+    assert _report(client, claim_a["claim_id"], outcome="completed").status_code == 202
     assert _report(
         client, claim_b["claim_id"], outcome="crashed", winner=None,
-    ).status_code == 200
+    ).status_code == 202
     assert _report(
         client, claim_c["claim_id"], outcome="timed_out", winner=None,
-    ).status_code == 200
+    ).status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["n_games_done"] == 3
@@ -245,7 +251,7 @@ def test_auto_close_does_not_count_abandoned_claim_tombstones(tmp_path):
         conn.close()
     # Reporting claim_a alone is not enough — game_idx 1 still has no
     # results row, even though claim_b is tombstoned with reported=1.
-    assert _report(client, claim_a["claim_id"]).status_code == 200
+    assert _report(client, claim_a["claim_id"]).status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "running", (
         "abandoned-tombstone claim must not count toward done"
@@ -254,7 +260,7 @@ def test_auto_close_does_not_count_abandoned_claim_tombstones(tmp_path):
     # Re-claim + report the re-queued game; now the stage closes.
     claim_b2 = _claim(client, stage_id, worker_id="wB")
     assert claim_b2["game_idx"] == 1
-    assert _report(client, claim_b2["claim_id"], shard_label="wB").status_code == 200
+    assert _report(client, claim_b2["claim_id"], shard_label="wB").status_code == 202
     body = client.get(f"/v2/stage/{stage_id}").get_json()
     assert body["status"] == "complete"
     assert body["n_games_done"] == 2

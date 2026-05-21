@@ -80,30 +80,79 @@ coordinator marks the claim re-claimable.
 
 ### `POST /v2/report_result`
 
-Worker submits a finished game. **Note:** if the result includes an
-`.npz` payload (self-play samples), the npz is streamed as multipart
-in the same request — no separate file-transfer endpoint.
+Worker submits a finished game. **Phase 2B cutover (2026-05-21):**
+the request body is now **JSON only** and carries **artifact URIs**,
+not bytes. Workers upload the `.npz` (and optional replay
+`.json.gz`) to shared storage (`file://` share or `s3://` bucket)
+**before** POSTing, then send only the URI + declared size. The
+coordinator responds **`202 Accepted`** in <10ms after a sync
+validate / claim-lookup; the fetch + disk-write + DB upsert happen
+on a background `ThreadPoolExecutor` (16 threads, single
+process-wide instance). This is the load-bearing fix for the
+cluster-scale POST bottleneck — see the
+`project_mtg_bot_coord_wsgi` memory entry for the diagnosis.
 
-```json
-// Request (multipart form)
-//   field "meta" (application/json):
+```jsonc
+// Request — application/json (multipart is gone; non-JSON bodies 400)
 {
-  "claim_id": "iter_008_self_play_v5:game_0042",
-  "outcome": "completed",  // "completed" | "timed_out" | "crashed"
-  "winner": 0,              // 0/1, or null on non-completed
-  "n_samples": 1142,
-  "duration_s": 31.4,
-  "shard_label": "greggs-macbook-pro"
+  "meta": {
+    "claim_id": "iter_009_self_play_v6:0042",   // required
+    "outcome": "completed",                      // "completed" | "timed_out" | "crashed"
+    "winner": 0,                                 // 0/1, or null on non-completed
+    "n_samples": 1142,
+    "duration_s": 31.4,
+    "shard_label": "greggs-macbook-pro"
+  },
+  "npz_uri": "s3://mtg-bot-artifacts-630589799985/iter_009/wA/0042.npz",  // optional
+  "replay_uri": "s3://mtg-bot-artifacts-630589799985/iter_009/wA/0042.json.gz",  // optional
+  "npz_size_bytes": 524288,        // optional; coord verifies post-fetch, rejects on mismatch
+  "replay_size_bytes": 87234       // optional
 }
-//   field "npz" (application/octet-stream): the chunk file
 
-// Response 200
-{ "accepted": true }
+// Response 202 — accepted; background fetch+write+upsert enqueued
+{ "accepted": true, "queued": true, "claim_id": "iter_009_self_play_v6:0042" }
+
+// Response 400 — non-JSON body, missing `meta`, missing `meta.claim_id`, etc.
+// Response 404 — unknown claim_id (no matching claim row).
+// Response 409 — claim already reported (idempotent duplicate, or a
+//                zombie-worker post against a claim that was re-queued
+//                and re-reported by a different worker).
+{ "accepted": false, "error": "claim already reported" }
 ```
 
-Eval results have the same shape minus the npz field. Replays (when
-captured) are streamed under the same multipart payload, field
-`replay` (`.json.gz`).
+Supported URI schemes:
+
+- `file://<path>` — read from the local filesystem (or any
+  SMB/NFS share mounted onto the coord's host).
+- `s3://<bucket>/<key>` — read via `boto3 GetObject` with retry on
+  transient 5xx / `429 Throttling` errors (1s / 3s / 10s backoff);
+  `403` / `404` fail-loud immediately. Requires the `[s3]`
+  pyproject extra (boto3) on the coord and the env var
+  `MTG_BOT_COORD_ARTIFACT_BACKEND` set to `s3` or `auto`
+  (see "Coord storage-backend selection" below).
+
+Eval results have the same shape, just with no URI fields.
+
+**Background-job failure semantics.** If the fetch fails (network
+error, S3 unreachable, size mismatch vs. declared bytes, broken
+URI), the background job retries 3× (1s / 3s / 10s) and then writes
+a results row with `outcome="upload_failed"`, `npz_path=NULL`, and
+`artifact_uri=<the broken URI>` so forensics can locate the broken
+upload. The worker has already moved on, so the failure is **not**
+surfaced via a 5xx HTTP status — the durable record is the
+`upload_failed` row.
+
+**Idempotency.** A duplicate POST for an already-reported `claim_id`
+is rejected synchronously with `409` before enqueueing; the
+background job itself is also idempotent (re-checks the claim's
+`reported` flag at execution time and skips with an INFO log if
+another job already landed).
+
+**Latency.** The sync portion of the handler does only JSON
+validation + a single `SELECT` on the claim row, so the worker's
+POST returns in well under 10ms even at cluster scale. The
+coordinator's serialization bottleneck (multipart parse + disk write
++ `WRITE_LOCK` upsert all on the request thread) is gone.
 
 ### `POST /v2/stage/create`
 
@@ -521,13 +570,69 @@ already-reported claim is a silent 200 (network retry).
 |---|---|---|---|
 | weights.pt | coord → worker | `GET /v2/weights/<v>` | worker caches by version |
 | metadata.json | coord → worker | `GET /v2/weights/<v>/metadata` | same |
-| npz samples | worker → coord | multipart in `/report_result` | per-game |
-| replay .json.gz | worker → coord | multipart in `/report_result` | per-game when captured |
+| npz samples | worker → shared storage | `file://` share or `s3://` bucket | uploaded **before** the `/report_result` POST; URI only is sent over REST (Phase 2B cutover) |
+| replay .json.gz | worker → shared storage | same | optional per-game; URI only in `/report_result` |
 | git bundle | coord → worker | `GET /repo.bundle` | unchanged endpoint; consumed by `/v2/self_update` (worker-initiated `git fetch` of the bundle, no GitHub creds) |
 
-No separate file-pull endpoints on workers — all worker→coord file
-traffic rides in the per-game `/report_result` POST. Avoids the
-"coordinator polls worker for finished files" loop the SSH path uses.
+`/report_result` no longer carries any binary payload — only the
+JSON envelope with the URIs. The coord rehydrates each URI on its
+background executor and writes the bytes to `iterate_data/` /
+`replays/` under the same deterministic filenames as before
+(`<stage_id>_<shard_label>_<safe_claim_id>.npz`,
+`<stage_id>_<shard_label>/<game_idx>.json.gz`), so the trainer (and
+every downstream consumer of those paths) keeps working unchanged.
+
+## Coord storage-backend selection
+
+Both ends share a URI scheme; the coord chooses **which fetcher
+backends to wire up** at boot via the env var
+`MTG_BOT_COORD_ARTIFACT_BACKEND`:
+
+| Value | Configured fetcher backends |
+|---|---|
+| _unset_ (default) | `file://` only. `s3://` URIs in a report POST raise; safe default for on-prem / local dev. |
+| `s3` | `file://` + `s3://`. Builds `boto3.client("s3", region_name="us-east-1")` lazily on first fetch. |
+| `auto` | Same as `s3` today (placeholder for future heuristic selection). |
+
+Set the env var on the coord process only — workers pick their own
+upload destination via the matching worker-side
+`MTG_BOT_WORKER_ARTIFACT_BACKEND` (covered in the worker daemon
+docs). The two ends are independent: a coord with the `s3` backend
+will still happily serve a worker that uploads `file://` URIs to a
+shared SMB mount, and vice versa.
+
+### S3 bucket provisioning
+
+For the production AWS-bursting flow the user already provisioned
+the bucket `mtg-bot-artifacts-630589799985` in `us-east-1`.
+Minimum requirements for a fresh bucket:
+
+1. **Bucket region** matches `S3ArtifactFetcher(region=...)` — the
+   default is `us-east-1`. Cross-region fetches still work but eat
+   inter-region bandwidth and add latency.
+2. **IAM** — the coord's instance / user needs
+   `s3:GetObject` on `arn:aws:s3:::<bucket>/*`. Workers need
+   `s3:PutObject` on the same prefix. Bucket policies live next to
+   the deploy templates.
+3. **Lifecycle policy** (recommended) — auto-expire artifacts
+   after N days. The coord persists the npz to local disk on
+   successful fetch, so the S3 copy is just the transport, not the
+   long-term record.
+4. **Public access** — disabled. The trust model is IAM + VPC, not
+   public URLs.
+
+To enable S3 on the coord:
+
+```bash
+export MTG_BOT_COORD_ARTIFACT_BACKEND=s3
+# fail-loud at first fetch if boto3 isn't installed:
+pip install -e ".[s3]"
+```
+
+The S3 fetcher retries transient errors (5xx, 429) at 1s / 3s / 10s
+and fails-loud on 403 / 404 (those are configuration errors that
+no retry will fix; the background job marks the row
+`upload_failed` and logs at ERROR).
 
 ## What replaces what
 
@@ -536,7 +641,7 @@ traffic rides in the per-game `/report_result` POST. Avoids the
 | Master SSH-launches `mtg_bot shard` on Mac/Win10 | Orchestrator POSTs `/start_self_play` to worker daemon |
 | Master SCP's `weights.pt` to remote `trained_weights/<v>/` | Worker `GET /v2/weights/<v>` (cached) |
 | Master SCP's `metadata.json` alongside | Worker `GET /v2/weights/<v>/metadata` |
-| Master SCP's npz / replay back from remote | Worker streams in `/report_result` multipart |
+| Master SCP's npz / replay back from remote | Worker uploads to shared storage (`file://` / `s3://`) and `/report_result` carries the URI only; coord rehydrates on a background executor |
 | Inline-Python orphan-sweep over SSH | Orchestrator POSTs `/stop` to the worker (or claim TTL expires) |
 | Coordinator polls remote shard heartbeats | Coordinator polls `/v2/heartbeat` every 10s; ALIVE/STALE/DEAD state + machine health (CPU/mem/active-games) drives UI sub-cards and early re-queue on death |
 | 90/360-min SSH wall-cap kills mid-stage | Long-lived daemon; no SSH session, no wall-cap |
