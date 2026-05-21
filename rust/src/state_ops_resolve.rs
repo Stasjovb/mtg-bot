@@ -15777,4 +15777,27 @@ impl GameState {
         }
         None
     }
+
+    /// **Static / layered abilities substrate — Phase 3 (round-81,
+    /// 2026-05-20) — test helper.** Directly set
+    /// `Player.spells_cast_this_turn` for a player index. Used by
+    /// the Phase-3 test harness to drive the
+    /// ``at_least_n_spells_cast_this_turn`` condition tag through
+    /// without going through the full cast pipeline (which would
+    /// require a stack-and-priority simulation for a stub spell).
+    /// Mirrors Python tests setting
+    /// `state.players[0].spells_cast_this_turn = n` directly.
+    fn set_spells_cast_this_turn(
+        &mut self,
+        player_idx: usize,
+        value: i32,
+    ) -> PyResult<()> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        self.players[player_idx].spells_cast_this_turn = value;
+        Ok(())
+    }
 }
