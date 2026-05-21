@@ -5699,6 +5699,66 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
+**Update 2026-05-21 (Cycles 1-3 landed — substrate-only, admit
+predicate still rejects).** Cycles 1+2+3 of the 6-slice plan below
+landed on `feature/modal-chooseone-envelope`:
+
+* **Cycle 1 (cast-time mode binding)** — `StackItem.chosen_mode_idx:
+  Option<u8>` field + `cast_spell_noncreature` detection that binds
+  `Some(0)` for spells whose first effect is `Effect::ChooseOneMode`
+  (deterministic-first pick mirroring Python's `_choose_modes_at_cast`
+  no-agent fallback at `actions.py:1222-1223`). New
+  `stack_top_chosen_mode_idx()` getter.
+* **Cycle 2 (per-mode resolve dispatch)** — new transient
+  `current_resolve_chosen_mode_idx: Option<u8>` slot bracketed
+  save/set/restore by both resolve_top_of_stack variants. The
+  `Effect::ChooseOneMode` arm reads the slot: `Some(idx)` →
+  dispatch directly to `modes[idx]` via
+  `apply_effect_pub_with_controller`; `None` → fall back to the
+  pre-cycle `PendingDecision::ChooseModeChoice` push (back-compat
+  for plain `push_to_stack` + future nested-as-trigger ChooseOneMode).
+* **Cycle 3 (reverse serializer)** — `_python_spell_effect_to_dict`
+  composer arm for `ModalChooseOne(modes=...)`: recurses into each
+  mode via the existing `_leaf` table, bails on any unrecognized
+  mode (round-trip-or-bail teeth) OR on `or_both=True` (Cycle 1
+  carries single pick only).
+
+**Substrate-only landing scope.** The admit predicate
+`_printing_is_bridge_simple_spell` STILL positively rejects every
+`ModalChooseOne` spell at line 4444 — Cycle 5 (admit-set widen)
+needs at least one EoE modal card with all-leaf-recognized modes;
+none today. EoE inventory walk (2026-05-21): the 3 all-untargeted
+candidates (Ruinous Rampage, Split Up, Let's Play a Game) need
+their per-leaf Effect arms (DealDamageToEachOpponent,
+DestroyAllTappedCreatures, etc.) on the `_leaf` table first —
+those are per-card slices outside this substrate. The 7 some-
+targeted modal cards (Reroute Systems, Scour for Scrap, Archenemy's
+Charm, Drill Too Deep, Warping Wail, Twist Reality, Live or Die)
+ALSO need Slice 4 (per-mode target binding) before they can flip.
+
+**What's left (Cycles 4-6, deferred per honest-stop discipline):**
+
+* **Cycle 4** — per-leaf Rust variant extensions (e.g. Reroute
+  Systems' `Effect::PumpTargetArtifactOrCreatureUntilEOT` extended
+  with `granted_keywords`, new `Effect::DealDamageToTargetTapped
+  Creature`) AND per-mode target-slot binding (the
+  `cast_spell_noncreature` modal-target arm that walks
+  `modes[chosen_mode_idx].legal_targets`-equivalent instead of the
+  union). Both half-cycles needed for Reroute Systems specifically.
+* **Cycle 5** — admit-predicate widening (`_printing_is_bridge_
+  simple_spell` removes the `ModalChooseOne` reject, adds a positive
+  admit for serializer-recognized modal shapes whose per-mode target
+  grammar is bound at cast time).
+* **Cycle 6** — real-EoE byte-equal probes (Reroute Systems'
+  mode_0 and mode_1, an auto-grow admit-set pin).
+
+**Reroute Systems is NOT yet PROBED.** The full close requires
+Cycles 4-6 PLUS the two per-leaf Effect arms. Today the substrate
+is "wired but unused" — meaningful only when the per-leaf and the
+per-mode target lanes ship.
+
+---
+
 **Location**: `src/mtg_bot/parity/trajectory.py:4368`
 (`_printing_is_bridge_simple_spell`'s `if isinstance(se,
 ModalChooseOne): return False  # modal — later phase`), the absence
