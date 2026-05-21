@@ -6700,6 +6700,29 @@ pub struct CardPrinting {
     /// (Brightspear / Cloudsculpt / Gravblade), and P/T anthems are
     /// honest-stopped to later slices.
     pub static_anthems: Vec<StaticAnthem>,
+    /// **Static / layered abilities substrate — Phase 2 (round-80,
+    /// 2026-05-20).** Frenzied Baloth's "This spell can't be
+    /// countered." rider — a per-printing flag the
+    /// `Effect::CounterTargetSpell` resolver consults to skip
+    /// targeting this spell. `false` is the back-compat default
+    /// — every pre-Phase-2 registry dict omits the
+    /// `spell_is_uncounterable` key. Mirrors Python's
+    /// `CardPrinting.spell_is_uncounterable` (`cards/base.py:930`).
+    pub spell_is_uncounterable: bool,
+    /// **Static / layered abilities substrate — Phase 2 (round-80,
+    /// 2026-05-20).** Frenzied Baloth's "Creature spells you control
+    /// can't be countered." rider — a battlefield-static cast-side
+    /// gate, encoded here as a per-printing bool (the simpler shape:
+    /// every battlefield permanent under a controller is scanned at
+    /// counter-resolve time, and if any one carries this flag the
+    /// controller's creature spells on the stack are immune to
+    /// counter effects). Mirrors Python's
+    /// `StaticAbility.grants_creature_spells_uncounterable` field
+    /// (`effects/base.py:577`) collapsed to a per-printing slot for
+    /// Phase 2 — only ONE static-ability shape today (Frenzied
+    /// Baloth's third line); the per-StaticAbility-tuple
+    /// generalization is honest-stopped to a later slice.
+    pub grants_creature_spells_uncounterable: bool,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -9768,6 +9791,24 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // Static / layered abilities substrate — Phase 2 (round-80,
+    // 2026-05-20). Frenzied Baloth's two uncounterable flags. Both
+    // default to false; the bridge emits the keys only when True.
+    let spell_is_uncounterable = match dict.get_item("spell_is_uncounterable")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err("spell_is_uncounterable must be a bool")
+        })?,
+        None => false,
+    };
+    let grants_creature_spells_uncounterable =
+        match dict.get_item("grants_creature_spells_uncounterable")? {
+            Some(v) => v.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "grants_creature_spells_uncounterable must be a bool",
+                )
+            })?,
+            None => false,
+        };
     let (aura_power_bonus, aura_toughness_bonus, aura_granted_keywords) =
         match dict.get_item("aura_equipment_bonuses")? {
             Some(bonuses_any) => {
@@ -9881,6 +9922,8 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_set_base_pt,
         aura_prevents_host_untap,
         static_anthems,
+        spell_is_uncounterable,
+        grants_creature_spells_uncounterable,
         dynamic_pt_formula,
     })
 }
@@ -11727,6 +11770,30 @@ impl Registry {
             .iter()
             .map(|a| (a.scope.clone(), a.granted_keywords.clone()))
             .collect())
+    }
+
+    /// **Static / layered abilities substrate — Phase 2 (round-80,
+    /// 2026-05-20).** `true` iff this printing's spell is
+    /// uncounterable (Frenzied Baloth's "This spell can't be
+    /// countered."). Defaults to `false` for every pre-Phase-2
+    /// printing.
+    fn get_printing_spell_is_uncounterable(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.spell_is_uncounterable)
+    }
+
+    /// **Static / layered abilities substrate — Phase 2 (round-80,
+    /// 2026-05-20).** `true` iff this printing grants creature
+    /// spells you control uncounterable status (Frenzied Baloth's
+    /// "Creature spells you control can't be countered."). Defaults
+    /// to `false` for every pre-Phase-2 printing.
+    fn get_printing_grants_creature_spells_uncounterable(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.grants_creature_spells_uncounterable)
     }
 
     /// Microbench helper: round-trip ``n`` copies of the same dict

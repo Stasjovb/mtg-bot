@@ -153,6 +153,64 @@ impl GameState {
             None => return false,
         };
         let controller = self.stack[pos].controller;
+        // Static / layered abilities substrate — Phase 2 (round-80,
+        // 2026-05-20). CR 101.2: an uncounterable spell can't be
+        // countered. Mirrors the `Effect::CounterTargetSpell` gate
+        // in `state_ops_resolve.rs`. Two sources:
+        //   1. source printing's `spell_is_uncounterable`.
+        //   2. source is a creature spell AND controller has a
+        //      permanent carrying `grants_creature_spells_
+        //      uncounterable`.
+        // Lookup the source via stack_objects first, then per-player
+        // zones; the gate fails closed when the source can't be
+        // located (matches the lost-track-of-source soft failure the
+        // rest of this primitive tolerates).
+        let src_printing_id: Option<u32> = self
+            .stack_objects
+            .iter()
+            .find(|o| o.id == target_obj_id)
+            .map(|o| o.printing_id)
+            .or_else(|| {
+                for player in self.players.iter() {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                    ] {
+                        if let Some(obj) =
+                            zone.iter().find(|o| o.id == target_obj_id)
+                        {
+                            return Some(obj.printing_id);
+                        }
+                    }
+                }
+                None
+            });
+        if let Some(pid) = src_printing_id {
+            if let Some(printing) = self.registry.lookup(pid) {
+                if printing.spell_is_uncounterable {
+                    return false;
+                }
+                let is_creature = printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Creature");
+                if is_creature {
+                    if let Some(player) = self.players.get(controller as usize) {
+                        for obj in player.battlefield.iter() {
+                            if let Some(p) =
+                                self.registry.lookup(obj.printing_id)
+                            {
+                                if p.grants_creature_spells_uncounterable {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Remove the stack item.
         self.stack.remove(pos);
         // Best-effort: move the source GameObject to the controller's

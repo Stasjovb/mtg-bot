@@ -4514,16 +4514,105 @@ fn apply_effect(
             // effect's own source. iter().rev() walks top-to-bottom;
             // capture both the Vec index (for stack removal) and the
             // controller (for graveyard routing).
-            let target: Option<(usize, u32, u8)> = state
-                .stack
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, item)| item.source_obj_id != source_obj_id)
-                .map(|(i, item)| (i, item.source_obj_id, item.controller));
+            //
+            // **Static / layered abilities substrate — Phase 2 (round-80,
+            // 2026-05-20).** Skip stack items that are uncounterable
+            // per CR 101.2. Two sources of uncounterability mirror
+            // Python's `CounterTargetSpell._is_uncounterable` walk
+            // (`effects/generic/stack_control.py:150`):
+            //
+            //   1. The stack item's source printing carries
+            //      `spell_is_uncounterable=true` (e.g. Frenzied Baloth's
+            //      "This spell can't be countered.").
+            //   2. The stack item is a creature spell AND the
+            //      controller has any battlefield permanent carrying
+            //      `grants_creature_spells_uncounterable=true` (e.g.
+            //      Frenzied Baloth on the battlefield granting the
+            //      same protection to your other creature spells).
+            //
+            // Both checks scan from top-of-stack down, skipping any
+            // item that hits either gate. If no admissible target
+            // remains, silent fizzle (matches Python's `if not legal_
+            // targets: return` short-circuit at resolve time).
+            let target: Option<(usize, u32, u8)> = (|| {
+                for (i, item) in state.stack.iter().enumerate().rev() {
+                    if item.source_obj_id == source_obj_id {
+                        continue;
+                    }
+                    // Look up the source's printing via the source
+                    // GameObject. Sweep stack_objects + 4 per-player
+                    // zones; identical search shape to the move-to-
+                    // graveyard step below (the source typically lives
+                    // in stack_objects for a spell on the stack).
+                    let src_printing_id: Option<u32> = state
+                        .stack_objects
+                        .iter()
+                        .find(|o| o.id == item.source_obj_id)
+                        .map(|o| o.printing_id)
+                        .or_else(|| {
+                            for player in state.players.iter() {
+                                for zone in [
+                                    &player.hand,
+                                    &player.library,
+                                    &player.battlefield,
+                                    &player.graveyard,
+                                ] {
+                                    if let Some(obj) =
+                                        zone.iter().find(|o| o.id == item.source_obj_id)
+                                    {
+                                        return Some(obj.printing_id);
+                                    }
+                                }
+                            }
+                            None
+                        });
+                    let Some(pid) = src_printing_id else {
+                        // Lost-track-of-source: skip this item per
+                        // the same "best-effort" convention the
+                        // graveyard-move step below uses.
+                        continue;
+                    };
+                    let Some(printing) = state.registry.lookup(pid) else {
+                        continue;
+                    };
+                    // Gate 1: spell_is_uncounterable on the source's
+                    // printing.
+                    if printing.spell_is_uncounterable {
+                        continue;
+                    }
+                    // Gate 2: creature spell + any permanent under
+                    // the controller carries
+                    // grants_creature_spells_uncounterable.
+                    let is_creature = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature");
+                    if is_creature {
+                        let controller_idx = item.controller as usize;
+                        if let Some(player) = state.players.get(controller_idx) {
+                            let mut granted = false;
+                            for obj in player.battlefield.iter() {
+                                if let Some(p) =
+                                    state.registry.lookup(obj.printing_id)
+                                {
+                                    if p.grants_creature_spells_uncounterable {
+                                        granted = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if granted {
+                                continue;
+                            }
+                        }
+                    }
+                    return Some((i, item.source_obj_id, item.controller));
+                }
+                None
+            })();
             let (stack_pos, target_obj_id, target_controller) = match target {
                 Some(t) => t,
-                None => return Ok(()), // empty / only-self: silent fizzle
+                None => return Ok(()), // empty / only-self / all-uncounterable: silent fizzle
             };
             // Remove the matched stack item (inlines round-7's
             // `counter_spell` stack-removal step).
