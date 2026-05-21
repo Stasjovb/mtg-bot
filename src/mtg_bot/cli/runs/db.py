@@ -264,6 +264,83 @@ def insert_run(conn: sqlite3.Connection, run: Run) -> None:
         )
 
 
+def insert_or_restart_run(
+    conn: sqlite3.Connection, run: Run,
+) -> str:
+    """Idempotent ``insert_run``: if ``run_id`` already exists in a
+    terminal failure state (``failed`` or ``killed``), overwrite the
+    row in place and bring it back to ``running`` so the relaunched
+    producer's UI / aggregation looks correct.
+
+    Returns one of:
+
+    - ``"inserted"``: fresh insert, no prior row for this run_id.
+    - ``"restarted"``: prior row existed with status in
+      {failed, killed}; overwritten in place with the new run's
+      config + cleared ``ended_at`` + status reset to ``running``.
+      A note prefix records the prior status + restart timestamp
+      so forensics can still see the relaunch happened.
+    - ``"conflict"``: prior row exists with status in
+      {running, completed}; NOT safe to overwrite. Caller's REST
+      handler should map this to HTTP 409.
+
+    The motivation: today's iter_020 launches all marked their
+    cycle row ``status=failed`` when the orchestrator died, then
+    the relaunch's ``insert_run`` raised ``IntegrityError`` and
+    the row stayed ``failed`` even though a new orchestrator was
+    actively driving the same cycle. The UI faithfully showed the
+    DB's truth -- which was wrong. This helper closes that gap.
+    """
+    if run.kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}; got {run.kind!r}")
+    if run.status not in STATUSES:
+        raise ValueError(
+            f"status must be one of {STATUSES}; got {run.status!r}"
+        )
+    # Direct minimal SELECT instead of get_run() -- that helper
+    # also fetches progress / events / artifacts which we don't
+    # need for the existence + status check, and it returns a
+    # dict (not a Run object) which trips attribute access if you
+    # forget.
+    existing_row = conn.execute(
+        "SELECT status, ended_at FROM runs WHERE run_id = ?",
+        (run.run_id,),
+    ).fetchone()
+    if existing_row is None:
+        insert_run(conn, run)
+        return "inserted"
+    prior_status = existing_row["status"]
+    prior_ended_at = existing_row["ended_at"]
+    if prior_status in {"running", "completed"}:
+        return "conflict"
+    # prior_status in {"failed", "killed"} -- safe to overwrite.
+    prefix = (
+        f"[restart] prior status={prior_status} at "
+        f"{prior_ended_at or '?'}; "
+    )
+    merged_notes = prefix + (run.notes or "")
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE runs SET
+                kind = ?, status = ?, started_at = ?, ended_at = NULL,
+                git_commit = ?, config_json = ?, parent_run_id = ?,
+                label = ?, notes = ?, pid = ?, host = ?,
+                training_history_json = ?, last_progress_at = ?,
+                stop_requested = 0
+            WHERE run_id = ?
+            """,
+            (
+                run.kind, run.status, run.started_at,
+                run.git_commit, run.config_json, run.parent_run_id,
+                run.label, merged_notes, run.pid, run.host,
+                run.training_history_json, run.last_progress_at,
+                run.run_id,
+            ),
+        )
+    return "restarted"
+
+
 def upsert_progress(
     conn: sqlite3.Connection, update: ProgressUpdate,
 ) -> None:

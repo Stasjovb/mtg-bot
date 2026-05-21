@@ -714,12 +714,30 @@ def create_app(
             with _runs_db.WRITE_LOCK:
                 conn = _runs_db.connect(runs_db_path)
                 try:
-                    _runs_db.insert_run(conn, run)
+                    outcome = _runs_db.insert_or_restart_run(conn, run)
                 finally:
                     conn.close()
         except (ValueError, sqlite3.IntegrityError) as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"ok": True, "run_id": run.run_id})
+        if outcome == "conflict":
+            # Existing run row is running/completed -- not safe to
+            # overwrite. The producer that hit this is either racing
+            # a live instance or trying to reuse a run_id that's
+            # already terminal-success. Either way the UI would lie
+            # if we silently overwrote.
+            return jsonify({
+                "ok": False,
+                "outcome": outcome,
+                "run_id": run.run_id,
+                "error": (
+                    "run_id already exists in a non-restartable "
+                    "state (running/completed); pick a fresh "
+                    "run_id or finish/kill the existing run first"
+                ),
+            }), 409
+        return jsonify({
+            "ok": True, "run_id": run.run_id, "outcome": outcome,
+        })
 
     @app.route("/run/<run_id>/progress", methods=["POST"])
     def run_progress(run_id: str):
