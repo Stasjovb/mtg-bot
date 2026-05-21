@@ -70313,23 +70313,30 @@ def test_cross_engine_real_eoe_shardmage_s_rescue_parity(
 #   condition is the ``controlled_artifact_entered_this_turn`` SBA
 #   counter (the round-82 Phase-3.5 admit closure). One alias below.
 #
-# **Honest-stops in this sweep.** Tannuk, Steadfast Second
-# (``_printing_is_bridge_simple_static_anthem_creature``) and
-# Frenzied Baloth
-# (``_printing_is_bridge_simple_uncounterable_creature``) admit
-# through the loader filter post-widen but do NOT yet have an
-# existing cross-engine byte-equal helper binding the GENUINE EoE
-# printing — the static-anthem Phase-1 module exercises cross-engine
-# byte-equality only against a SYNTHETIC ``CardDef(name="Tannuk")``
-# carrier (parameterised admit teeth, not the genuine printing), and
-# the uncounterable Phase-2 module's Rust counter-spell tests inject
-# a synthetic ``"Frenzied Baloth"`` dict rather than routing the
-# genuine printing through both engines in mirror. Per the
-# loader_admits-attribution-sweep rule that delegators must RE-USE
-# existing genuine-printing byte-equal helpers (no new probe logic),
-# both cards honest-stop at COVERED — closing them is a follow-up
-# lane that writes the matching cross-engine byte-equal helper
-# first, then adds a ``_parity`` alias here.
+# **COVERED→PROBED follow-up (2026-05-21):** Tannuk, Steadfast Second
+# (``_printing_is_bridge_simple_static_anthem_creature``) and Frenzied
+# Baloth (``_printing_is_bridge_simple_uncounterable_creature``) were
+# the two cards in the loader_admits attribution sweep that admitted
+# through the loader filter post-widen but lacked an existing cross-
+# engine byte-equal helper binding the GENUINE EoE printing — the
+# static-anthem Phase-1 module exercised byte-equality only against a
+# SYNTHETIC ``CardDef(name="Tannuk")`` carrier, and the uncounterable
+# Phase-2 module's Rust counter-spell tests injected a synthetic
+# ``"Frenzied Baloth"`` dict rather than routing the genuine parsed
+# printing through both engines in mirror. This lane closes both: the
+# two ``_parity`` probes immediately below
+# (``test_cross_engine_real_eoe_tannuk_steadfast_second_static_anthem_parity``
+# and
+# ``test_cross_engine_real_eoe_frenzied_baloth_static_uncounterable_parity``)
+# drive the genuine parsed printing through the production CardDef
+# bridge on BOTH engines and assert byte-equality at the relevant
+# substrate boundary (effective-keyword grant for Tannuk's anthem;
+# uncounterable predicate + counter-spell fizzle for Frenzied Baloth's
+# self-flag AND its battlefield-grant static). Mirrors the round-84
+# Cosmogoyf parity probe idiom — round-trip the live ``CardSource``
+# printing through ``trajectory._printing_to_card_def``, register on
+# both engines, exercise the substrate, then assert cross-engine
+# numerical byte-equality.
 
 
 def test_cross_engine_real_eoe_breeding_pool_parity():
@@ -70474,6 +70481,436 @@ def test_cross_engine_real_eoe_mechan_shieldmate_parity():
         test_real_eoe_mechan_byte_equal_defender_removal,
     )
     test_real_eoe_mechan_byte_equal_defender_removal()
+
+
+def test_cross_engine_real_eoe_tannuk_steadfast_second_static_anthem_parity(
+    parity_smoke,
+):
+    """**Probe: Tannuk, Steadfast Second static-anthem haste grant
+    byte-equal across engines (COVERED→PROBED follow-up to the
+    2026-05-21 loader_admits attribution sweep; spec
+    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (1)).**
+
+    Oracle text in ``data/edge_of_eternities.json``::
+
+        Other creatures you control have haste.
+        Artifact cards and red creature cards in your hand have warp
+        {2}{R}. (You may cast a card from your hand for its warp
+        cost. ...)
+
+    Tannuk is the canonical EoE single-gated carrier of the static
+    Phase-1 anthem keyword grant (closed end-to-end via
+    ``_printing_is_bridge_simple_static_anthem_creature`` in commit
+    ``3a7c483c``; see ``tests/test_static_layered_abilities_phase1.py``
+    for the per-arm teeth). The bridge admit predicate explicitly
+    tolerates the printing's parser-emitted hand-ability shape
+    (``hand_ability`` warp-grant rider): only the
+    ``other_creatures_you_control`` haste static is the substrate
+    contract this slice pins. This probe drives the GENUINE parsed
+    printing through the production CardDef bridge on BOTH engines and
+    asserts the haste grant lands byte-equal — closing Tannuk's
+    COVERED→PROBED slot.
+
+    Test surface (anthem reader on the controller's battlefield):
+
+      * Tannuk + a vanilla bear on p0's bf → bear has haste on both
+        engines; Tannuk itself does NOT (scope is
+        ``other_creatures_you_control``).
+      * Opponent-controlled bear on p1's bf → does NOT have haste from
+        p0's Tannuk (the anthem only fires for the source's
+        controller).
+
+    Mirrors the round-84 Cosmogoyf probe idiom: ``get_active_source()``
+    → ``trajectory._printing_to_card_def`` → DeckSpec → both engines.
+    Synthetic bear filler keeps the negative-control delta clean (a
+    bear has no static abilities; only the anthem grants it haste).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict, _card_def_to_python_printing,
+    )
+    from mtg_bot.game import Zone, effective_keywords
+
+    # ----- Resolve the GENUINE Tannuk printing from the live
+    # CardSource (round-46 real-EoE-signal discipline) and verify the
+    # parsed shape matches the Phase-1 admit predicate. -----
+    src = get_active_source().get_printings()
+    real = src.get("Tannuk, Steadfast Second")
+    assert real is not None, (
+        "Tannuk, Steadfast Second must be present in the active "
+        "CardSource (EoE pool)."
+    )
+    # Verify-against-live: the genuine printing carries the
+    # static-anthem haste grant in its parsed static_abilities.
+    assert any(
+        sa.continuous_effect is not None
+        and getattr(sa.continuous_effect.payload, "keyword", None) == "haste"
+        for sa in real.static_abilities
+    ), (
+        "Tannuk's parsed printing must carry a haste-grant static — "
+        "if absent, the parser regressed for the anthem line."
+    )
+    assert trajectory._printing_is_bridge_simple_static_anthem_creature(
+        real,
+    ), (
+        "Tannuk must pass the Phase-1 static-anthem admit predicate "
+        "— regression here = the substrate broke."
+    )
+
+    # Round-trip the real printing through the production CardDef
+    # bridge (the same path `setup_matched_game_from_real_decks` uses).
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.static_anthems == (
+        ("other_creatures_you_control", ("haste",)),
+    ), (
+        f"Tannuk's CardDef must carry the other-creatures haste anthem; "
+        f"got static_anthems={cd.static_anthems!r}"
+    )
+
+    # Synthetic bear filler — a vanilla 2/2 the anthem can grant haste
+    # to. The bear has no statics of its own, keeping the negative-
+    # control delta clean (a bare bear has no haste; only the anthem
+    # contributes).
+    bear_cd = CardDef(
+        name="Tannuk Smoke Bear",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+
+    spec = DeckSpec(
+        card_defs=(cd, bear_cd),
+        p0_library=("Tannuk, Steadfast Second", "Tannuk Smoke Bear"),
+        p1_library=("Tannuk Smoke Bear",),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    tannuk_dict = _spec_card_to_printing_dict(cd)
+    bear_dict = _spec_card_to_printing_dict(bear_cd)
+    ZONE_BATTLEFIELD = 2
+
+    # ----- Inject Tannuk + a p0 bear + a p1 bear onto the battlefield
+    # on both engines. -----
+    rust_tannuk_id = rust_state.register_and_inject_object(
+        tannuk_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_p0_bear_id = rust_state.register_and_inject_object(
+        bear_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_p1_bear_id = rust_state.register_and_inject_object(
+        bear_dict, 1, ZONE_BATTLEFIELD,
+    )
+
+    py_tannuk_pr = _card_def_to_python_printing(cd)
+    py_bear_pr = _card_def_to_python_printing(bear_cd)
+    py_tannuk = py_state.new_object(
+        py_tannuk_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_p0_bear = py_state.new_object(
+        py_bear_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_p1_bear = py_state.new_object(
+        py_bear_pr, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_state.battlefield.append(py_tannuk)
+    py_state.battlefield.append(py_p0_bear)
+    py_state.battlefield.append(py_p1_bear)
+
+    # ----- Anthem-grant reader: p0's bear gets haste, Tannuk itself
+    # does NOT (other_*), p1's bear does NOT (anthem doesn't cross
+    # controllers). Byte-equal cross-engine on every triple. -----
+    py_p0_bear_has_haste = "haste" in effective_keywords(
+        py_state, py_p0_bear,
+    )
+    py_tannuk_has_haste = "haste" in effective_keywords(
+        py_state, py_tannuk,
+    )
+    py_p1_bear_has_haste = "haste" in effective_keywords(
+        py_state, py_p1_bear,
+    )
+    rust_p0_bear_has_haste = rust_state.has_keyword(
+        rust_p0_bear_id, "haste",
+    )
+    rust_tannuk_has_haste = rust_state.has_keyword(
+        rust_tannuk_id, "haste",
+    )
+    rust_p1_bear_has_haste = rust_state.has_keyword(
+        rust_p1_bear_id, "haste",
+    )
+
+    # Substrate contract (Python side).
+    assert py_p0_bear_has_haste is True, (
+        "Python: p0 bear must have haste from Tannuk's anthem"
+    )
+    assert py_tannuk_has_haste is False, (
+        "Python: Tannuk itself must NOT have haste — scope is "
+        "other_creatures_you_control, not creatures_you_control"
+    )
+    assert py_p1_bear_has_haste is False, (
+        "Python: opp bear must NOT have haste — anthem doesn't cross "
+        "controllers"
+    )
+    # Substrate contract (Rust side).
+    assert rust_p0_bear_has_haste is True
+    assert rust_tannuk_has_haste is False
+    assert rust_p1_bear_has_haste is False
+
+    # ----- Cross-engine byte-equal: each triple agrees. This IS the
+    # PROBED-tier binding (the loader_admits widen alone moved Tannuk
+    # to COVERED; this byte-equal assert promotes to PROBED). -----
+    assert py_p0_bear_has_haste == rust_p0_bear_has_haste, (
+        f"p0 bear haste: Python={py_p0_bear_has_haste} "
+        f"Rust={rust_p0_bear_has_haste}"
+    )
+    assert py_tannuk_has_haste == rust_tannuk_has_haste, (
+        f"Tannuk self haste: Python={py_tannuk_has_haste} "
+        f"Rust={rust_tannuk_has_haste}"
+    )
+    assert py_p1_bear_has_haste == rust_p1_bear_has_haste, (
+        f"p1 bear haste: Python={py_p1_bear_has_haste} "
+        f"Rust={rust_p1_bear_has_haste}"
+    )
+
+
+def test_cross_engine_real_eoe_frenzied_baloth_static_uncounterable_parity(
+    parity_smoke,
+):
+    """**Probe: Frenzied Baloth uncounterable predicate byte-equal
+    across engines (COVERED→PROBED follow-up to the 2026-05-21
+    loader_admits attribution sweep; spec
+    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §3 lever (1)).**
+
+    Oracle text in ``data/edge_of_eternities.json``::
+
+        This spell can't be countered.
+        Trample, haste
+        Creature spells you control can't be countered.
+        Combat damage can't be prevented.
+
+    Frenzied Baloth is the canonical EoE single-gated carrier of BOTH
+    uncounterable flags (closed end-to-end via
+    ``_printing_is_bridge_simple_uncounterable_creature`` in commit
+    ``9ccefe08``; per-arm teeth in
+    ``tests/test_static_layered_abilities_phase2.py``). The Phase-2
+    substrate ships TWO independently-readable slots on the printing:
+
+      1. ``spell_is_uncounterable=True`` — the self-flag covering
+         "This spell can't be countered." (CR 101.2 applied to the
+         Baloth spell itself while on the stack).
+      2. ``grants_creature_spells_uncounterable=True`` static —
+         covering "Creature spells you control can't be countered."
+         (battlefield-grant fold).
+
+    This probe drives the GENUINE parsed printing through the
+    production CardDef bridge on BOTH engines and asserts the
+    counter-spell predicate is bit-equal across both substrates.
+    The Phase-2 module's pre-existing Rust counter-spell tests
+    inject a SYNTHETIC ``"Frenzied Baloth"`` dict; this probe binds
+    the genuine ``CardSource`` printing — the missing piece needed
+    to credit PROBED.
+
+    Test surface:
+
+      * Baloth on the stack alone → ``counter_spell`` returns False
+        on Rust; Python ``CounterTargetSpell._is_uncounterable``
+        returns True. (Self-flag fires.)
+      * Baloth on p0's bf + p0 bears on the stack → counter declined
+        on both engines. (Grant static fires.)
+      * Baloth on p0's bf + p1 bears on the stack → counter ALLOWED
+        on both engines. (Grant doesn't cross controllers — negative
+        control.)
+
+    Combat damage can't be prevented (the 4th oracle line) is a
+    separate substrate (combat_damage_cant_be_prevented flag) and not
+    in scope for this uncounterable-substrate probe; the
+    ``test_cant_be_countered.py`` module covers it Python-side and
+    the trampe/haste keywords are vanilla — both already at the
+    bridge's bridge-simple-creature level. The static-uncounterable
+    boundary is the ONE the loader_admits widen left COVERED-but-
+    unbound.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _spec_card_to_printing_dict, _card_def_to_python_printing,
+    )
+    from mtg_bot.effects import CounterTargetSpell
+    from mtg_bot.game import StackItem, Zone
+
+    # ----- Resolve the GENUINE Frenzied Baloth printing and verify
+    # the parsed shape matches the Phase-2 admit predicate. -----
+    src = get_active_source().get_printings()
+    real = src.get("Frenzied Baloth")
+    assert real is not None, (
+        "Frenzied Baloth must be present in the active CardSource."
+    )
+    assert real.spell_is_uncounterable is True, (
+        "Frenzied Baloth's parsed printing must carry "
+        "spell_is_uncounterable=True"
+    )
+    assert any(
+        sa.grants_creature_spells_uncounterable
+        for sa in real.static_abilities
+    ), (
+        "Frenzied Baloth's parsed printing must carry a static with "
+        "grants_creature_spells_uncounterable=True"
+    )
+    assert trajectory._printing_is_bridge_simple_uncounterable_creature(
+        real,
+    ), (
+        "Frenzied Baloth must pass the Phase-2 uncounterable admit "
+        "predicate — regression here = the substrate broke."
+    )
+
+    # Round-trip the real printing through the production CardDef
+    # bridge.
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.spell_is_uncounterable is True
+    assert cd.grants_creature_spells_uncounterable is True
+
+    # Synthetic bear filler — a vanilla 2/2 to play the role of the
+    # protected (or unprotected) creature spell on the stack. The bear
+    # has no uncounterable flag of its own; any uncounterability seen
+    # on this object must come from Frenzied Baloth's battlefield
+    # grant.
+    bear_cd = CardDef(
+        name="Baloth Smoke Bear",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+
+    spec = DeckSpec(
+        card_defs=(cd, bear_cd),
+        p0_library=("Frenzied Baloth", "Baloth Smoke Bear"),
+        p1_library=("Baloth Smoke Bear", "Frenzied Baloth"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    baloth_dict = _spec_card_to_printing_dict(cd)
+    bear_dict = _spec_card_to_printing_dict(bear_cd)
+    ZONE_BATTLEFIELD = 2
+
+    # ----- Test case 1: Baloth on the stack alone → self-flag fires
+    # on both engines. -----
+    rust_baloth_stack_id = rust_state.register_and_inject_stack_spell(
+        baloth_dict, 0,
+    )
+    py_baloth_pr = _card_def_to_python_printing(cd)
+    py_baloth_obj = py_state.new_object(
+        py_baloth_pr, owner_id=0, zone=Zone.HAND,
+    )
+    py_baloth_item = StackItem(source=py_baloth_obj, controller_id=0)
+    py_state.stack.append(py_baloth_item)
+
+    rust_baloth_counterable = rust_state.counter_spell(rust_baloth_stack_id)
+    py_baloth_uncounterable = CounterTargetSpell._is_uncounterable(
+        py_state, py_baloth_item,
+    )
+
+    # Rust ``counter_spell`` returns True iff the spell was countered;
+    # False iff the gate fired and the counter fizzled. Translate to
+    # an "uncounterable" boolean to byte-equal against Python.
+    rust_baloth_uncounterable = not rust_baloth_counterable
+    assert rust_baloth_uncounterable is True, (
+        "Rust: Frenzied Baloth on the stack must be uncounterable "
+        "(spell_is_uncounterable self-flag)"
+    )
+    assert py_baloth_uncounterable is True, (
+        "Python: Frenzied Baloth on the stack must be uncounterable"
+    )
+    assert py_baloth_uncounterable == rust_baloth_uncounterable, (
+        f"self-flag: Python={py_baloth_uncounterable} "
+        f"Rust={rust_baloth_uncounterable}"
+    )
+
+    # Clear both stacks for the next case (fresh stack-item id minted
+    # on Rust by reinjecting via the spell-stack helper). The
+    # Python-side stack is just a list; pop the resolved item.
+    py_state.stack.clear()
+
+    # ----- Test case 2: Baloth on p0's battlefield + a p0-controlled
+    # bear spell on the stack → grant static fires on both engines. ---
+    rust_state.register_and_inject_object(baloth_dict, 0, ZONE_BATTLEFIELD)
+    py_baloth_bf = py_state.new_object(
+        py_baloth_pr, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_state.battlefield.append(py_baloth_bf)
+
+    rust_p0_bear_stack_id = rust_state.register_and_inject_stack_spell(
+        bear_dict, 0,
+    )
+    py_bear_pr = _card_def_to_python_printing(bear_cd)
+    py_p0_bear_obj = py_state.new_object(
+        py_bear_pr, owner_id=0, zone=Zone.HAND,
+    )
+    py_p0_bear_item = StackItem(source=py_p0_bear_obj, controller_id=0)
+    py_state.stack.append(py_p0_bear_item)
+
+    rust_p0_bear_counterable = rust_state.counter_spell(
+        rust_p0_bear_stack_id,
+    )
+    py_p0_bear_uncounterable = CounterTargetSpell._is_uncounterable(
+        py_state, py_p0_bear_item,
+    )
+    rust_p0_bear_uncounterable = not rust_p0_bear_counterable
+
+    assert rust_p0_bear_uncounterable is True, (
+        "Rust: p0 bear is uncounterable while Baloth is on p0's bf "
+        "(grants_creature_spells_uncounterable battlefield grant)"
+    )
+    assert py_p0_bear_uncounterable is True, (
+        "Python: p0 bear is uncounterable while Baloth is on p0's bf"
+    )
+    assert py_p0_bear_uncounterable == rust_p0_bear_uncounterable, (
+        f"grant static (own): Python={py_p0_bear_uncounterable} "
+        f"Rust={rust_p0_bear_uncounterable}"
+    )
+
+    py_state.stack.clear()
+
+    # ----- Test case 3 (negative control): Baloth still on p0's bf,
+    # but a p1-controlled bear spell on the stack → grant does NOT
+    # cross controllers; the bear IS counterable on both engines. ---
+    rust_p1_bear_stack_id = rust_state.register_and_inject_stack_spell(
+        bear_dict, 1,
+    )
+    py_p1_bear_obj = py_state.new_object(
+        py_bear_pr, owner_id=1, zone=Zone.HAND,
+    )
+    py_p1_bear_item = StackItem(source=py_p1_bear_obj, controller_id=1)
+    py_state.stack.append(py_p1_bear_item)
+
+    rust_p1_bear_counterable = rust_state.counter_spell(
+        rust_p1_bear_stack_id,
+    )
+    py_p1_bear_uncounterable = CounterTargetSpell._is_uncounterable(
+        py_state, py_p1_bear_item,
+    )
+    rust_p1_bear_uncounterable = not rust_p1_bear_counterable
+
+    assert rust_p1_bear_uncounterable is False, (
+        "Rust: p1 bear must be counterable — p0's Baloth grant doesn't "
+        "cross controllers"
+    )
+    assert py_p1_bear_uncounterable is False, (
+        "Python: p1 bear must be counterable — grant doesn't cross "
+        "controllers"
+    )
+    assert py_p1_bear_uncounterable == rust_p1_bear_uncounterable, (
+        f"grant static (cross-controller negative): "
+        f"Python={py_p1_bear_uncounterable} "
+        f"Rust={rust_p1_bear_uncounterable}"
+    )
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
