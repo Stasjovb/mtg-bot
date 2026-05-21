@@ -175,16 +175,23 @@ override mechanism). Headline counts unchanged.
 
 ```
                                                   ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-non-basic-land-P2  →  post-cut-propulsion  →  post-shattered-wings  →  post-emergency-eject
-PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                       267                      268
+PROBED                                                221         232          235            236                 238                    250                              252                               259                            264                       266                       267                      269
 covered-by-construction                                95          97           97             97                  98                     97                               95                                88                             89                        88                        88                       88
 BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                              0                         0                         0                        0
 BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                              0                         0                         0                        0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                       120                      119
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                            122                       121                       120                      118
 ```
 
 **post-emergency-eject delta (this lane):** strict **+1 PROBED /
 −1 BLOCKED-subsystem-gated** (Emergency Eject, 6,291 17lands
-single-gated decks per the round-58 attribution scout). Genuine
+single-gated decks per the round-58 attribution scout). Note: the
+post-shattered-wings column on the snapshot table above reads
+``267 / 120`` (off-by-one from the canonical
+``docs/POOL_PARITY.md`` at the same HEAD which reads ``268 / 119``
+— a pre-existing measurement-drift carried over from the
+shattered-wings landing); the canonical post-this-lane numbers
+that match ``docs/POOL_PARITY.md`` at this HEAD are PROBED ``269``
+/ BLOCKED-subsystem ``118``. Genuine
 Rust substrate close following the same Lander-pid carrier shape
 as Seedship Impact / Orbital Plunge: new
 `Effect::EmergencyEjectEffect { token_printing_id }` single-pid
