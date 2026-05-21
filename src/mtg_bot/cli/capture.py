@@ -99,6 +99,11 @@ def main(argv=None) -> None:  # pragma: no cover
         nn_with_policy=True,
         nn_architecture=arch,
         nn_policy_hidden_sizes=policy_hidden,
+        # Sidecar metadata.json sits next to weights.pt in the registry;
+        # threading it lets the per-game annotator construct via
+        # NNEvaluator.from_metadata so non-default structured-trunk
+        # dims load (iter_019 BUG #3).
+        nn_metadata_path=str(weights_path.parent / "metadata.json"),
         filename_prefix=args.replay_prefix,
     )
 

@@ -282,6 +282,20 @@ class ReplayCaptureConfig:
     # version's metadata.architecture by iterate / evaluate scripts.
     nn_architecture: Optional[str] = None
     nn_policy_hidden_sizes: Optional[tuple[int, ...]] = None
+    # Sidecar metadata.json path for the NN annotator. When set, the
+    # annotator builds its NNEvaluator via
+    # ``NNEvaluator.from_metadata`` so every architecture knob — incl.
+    # the structured-trunk ``emb_dim`` / ``n_layers`` / ``hidden_dim``
+    # / ... that the flat ``nn_hidden_sizes`` / ``nn_architecture`` /
+    # ``nn_policy_hidden_sizes`` kwargs can't express — is single-
+    # sourced from the metadata file. The flat overrides above are
+    # ignored when this is set. iter_019 BUG #3: without this path,
+    # a structured-trunk run trained at non-default dims falls back
+    # to ``StructuredModelConfig`` defaults at annotator-construction
+    # time and the per-game capture loop crashes on a state_dict
+    # shape mismatch. Stored as a string for the same picklable-
+    # across-spawn reason ``nn_weights_path`` is.
+    nn_metadata_path: Optional[str] = None
     # Diagnostic deep-tree capture. Defaults reproduce production
     # root-only behavior (depth=1, top_k irrelevant). The diagnostic
     # script ``capture_annotated_replays.py`` flips these via the
@@ -311,6 +325,10 @@ class ReplayCaptureConfig:
                 with_policy=self.nn_with_policy,
                 architecture=self.nn_architecture,
                 policy_hidden_sizes=self.nn_policy_hidden_sizes,
+                metadata_path=(
+                    Path(self.nn_metadata_path)
+                    if self.nn_metadata_path else None
+                ),
             ))
         return ReplayRecorder(annotators=annotators)
 

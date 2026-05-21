@@ -350,6 +350,162 @@ def test_capture_config_build_recorder_routes_structured_arch(
     assert len(recorder.annotators) == 2
 
 
+def test_capture_config_build_recorder_threads_metadata_for_nondefault_structured(
+    tmp_path: Path,
+):
+    """ReplayCaptureConfig.build_recorder() with ``nn_metadata_path``
+    set must construct the NN annotator via
+    ``NNEvaluator.from_metadata`` so non-default structured-trunk dims
+    load cleanly. Without metadata-pathing, the annotator constructs
+    ``NNEvaluator(architecture="structured", ...)`` which falls back to
+    ``StructuredModelConfig`` defaults (emb_dim=128 / n_layers=2 /
+    hidden_dim=256) and ``load_state_dict`` blows up with size-mismatch
+    on any non-default trunk — which is exactly the iter_019 BUG #3
+    that broke game-0 of a fresh bootstrap when the trainer wrote a
+    small custom trunk and replay capture tried to load it.
+
+    Regression test: pins that ``nn_metadata_path`` overrides the flat
+    arch kwargs and routes through ``from_metadata``'s dual-read
+    structured-dim resolver.
+    """
+    import json
+
+    import torch
+
+    from mtg_bot.training.registry import ModelMetadata
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    # Build a structured trunk with dims that DIFFER from
+    # StructuredModelConfig's defaults along every axis the
+    # ``_resolve_structured_dim`` resolver knows about. If the
+    # annotator silently falls back to the defaults, load_state_dict
+    # raises on every embedding / encoder weight.
+    nondefault_cfg = StructuredModelConfig(
+        emb_dim=32,
+        n_heads=2,
+        n_layers=1,
+        hidden_dim=64,
+        action_history_n=4,
+        n_printings=16,
+    )
+    weights_path = tmp_path / "weights.pt"
+    torch.save(StructuredModel(nondefault_cfg).state_dict(), weights_path)
+
+    # Write the sidecar metadata in the nested-dict layout that
+    # ``mtg_bot.cli.train`` emits today (the BUG #2 fix made
+    # ``from_metadata`` dual-read both layouts; nested-only is the
+    # interesting case because it's what production writes).
+    metadata = ModelMetadata(
+        version="v_test",
+        created_at="2026-05-21T00:00:00Z",
+        feature_dim=0,  # unused on the structured branch
+        hidden_sizes=[],  # unused on the structured branch
+        with_policy=True,
+        architecture="structured",
+        training={
+            "structured_config": {
+                "emb_dim": nondefault_cfg.emb_dim,
+                "n_heads": nondefault_cfg.n_heads,
+                "n_layers": nondefault_cfg.n_layers,
+                "hidden_dim": nondefault_cfg.hidden_dim,
+                "action_history_n": nondefault_cfg.action_history_n,
+                "n_printings": nondefault_cfg.n_printings,
+            },
+        },
+    )
+    metadata_path = tmp_path / "metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata.to_dict(), f)
+
+    # Without ``nn_metadata_path`` the annotator goes through the flat-
+    # kwargs path which can't express any of the non-default
+    # structured dims; the structured trunk falls back to the defaults
+    # and load_state_dict raises. Sanity-pin that pre-fix failure mode
+    # so the regression test below isn't a false-positive.
+    cfg_no_meta = ReplayCaptureConfig(
+        save_dir=str(tmp_path),
+        nn_weights_path=str(weights_path),
+        nn_version_label="v_test",
+        nn_with_policy=True,
+        nn_architecture="structured",
+    )
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        cfg_no_meta.build_recorder()
+
+    # With ``nn_metadata_path``, the annotator constructs via
+    # ``NNEvaluator.from_metadata`` and the dual-read resolver pulls
+    # the non-default dims out of the nested structured_config dict.
+    cfg = ReplayCaptureConfig(
+        save_dir=str(tmp_path),
+        nn_weights_path=str(weights_path),
+        nn_version_label="v_test",
+        # The flat overrides below would still be present on a real
+        # iterate call site; we leave them off here to prove the
+        # metadata-path branch doesn't need them.
+        nn_metadata_path=str(metadata_path),
+    )
+    recorder = cfg.build_recorder()
+    assert len(recorder.annotators) == 2
+
+
+def test_nn_eval_annotator_loads_nondefault_structured_via_metadata_path(
+    tmp_path: Path,
+):
+    """Direct ``nn_eval_annotator(metadata_path=...)`` smoke: same
+    coverage as the ReplayCaptureConfig integration above but at the
+    bottom layer, so any future caller wiring the annotator outside
+    ReplayCaptureConfig also benefits."""
+    import json
+
+    import torch
+
+    from mtg_bot.training.registry import ModelMetadata
+    from mtg_bot.training.replay_capture import nn_eval_annotator
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    nondefault_cfg = StructuredModelConfig(
+        emb_dim=32, n_heads=2, n_layers=1, hidden_dim=64,
+        action_history_n=4, n_printings=16,
+    )
+    weights_path = tmp_path / "weights.pt"
+    torch.save(StructuredModel(nondefault_cfg).state_dict(), weights_path)
+    metadata = ModelMetadata(
+        version="v_test",
+        created_at="2026-05-21T00:00:00Z",
+        feature_dim=0,
+        hidden_sizes=[],
+        with_policy=True,
+        architecture="structured",
+        training={
+            "structured_config": {
+                "emb_dim": nondefault_cfg.emb_dim,
+                "n_heads": nondefault_cfg.n_heads,
+                "n_layers": nondefault_cfg.n_layers,
+                "hidden_dim": nondefault_cfg.hidden_dim,
+                "action_history_n": nondefault_cfg.action_history_n,
+                "n_printings": nondefault_cfg.n_printings,
+            },
+        },
+    )
+    metadata_path = tmp_path / "metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata.to_dict(), f)
+
+    # Just constructing the annotator forces NNEvaluator construction
+    # + state_dict load. Pre-fix this raised RuntimeError on the
+    # structured branch's size mismatch.
+    annotate = nn_eval_annotator(
+        weights_path,
+        version_label="v_test",
+        metadata_path=metadata_path,
+    )
+    assert callable(annotate)
+
+
 def test_nn_eval_annotator_annotates_running_and_terminal_states(
     tmp_path: Path,
 ):
