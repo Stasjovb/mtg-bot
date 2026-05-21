@@ -5697,6 +5697,132 @@ the dedicated entry below).
 
 ---
 
+## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
+
+**Location**: `src/mtg_bot/parity/trajectory.py:4368`
+(`_printing_is_bridge_simple_spell`'s `if isinstance(se,
+ModalChooseOne): return False  # modal — later phase`), the absence
+of a `ModalChooseOne` arm in `_python_spell_effect_to_dict`
+(`trajectory.py:4058`), and the Rust resolve-time-only `ChooseOneMode`
+substrate (`rust/src/cards.rs:4151`, `rust/src/state.rs:1357`
+`PendingDecision::ChooseModeChoice`, `rust/src/state_ops_resolve.rs:14382`
+resolve arm).
+
+**What the shortcut is**: the spell-card-bridge admit predicate
+positively rejects every `ModalChooseOne`-wrapped spell — modal spells
+never enter the bench, even if the wrapped per-mode Effects are
+covered+bridged. The Rust side has a `ChooseOneMode { modes:
+Vec<Effect> }` variant (round-28, the "13 EoE cards" first slice) that
+resolves via a resolve-time `PendingDecision::ChooseModeChoice`
+controller callback; Python's `ModalChooseOne` uses cast-time mode
+picking per CR 601.2e (`actions._choose_modes_at_cast`,
+`_effective_spell_effect_for_targets`, `_select_spell_targets` threading
+`mode_indices` for per-mode target selection). Even with both engines
+implementing the envelope, they pick at different times and the
+StackItem on Rust carries no cast-time `chosen_mode` binding.
+
+**Why it's OK (today)**: the modal lane is positively rejected, not
+silently mistranslated — modal spells never enter the bench and the
+"round-trip or bail" tooth on the reverse serializer would refuse to
+emit a `ModalChooseOne` dict shape even if the guardrail were lifted
+(no `_python_spell_effect_to_dict` arm exists for it). The
+no-fallback-hybrid discipline is preserved: the modal envelope is a
+named declined shape, not a swept-under-the-rug behavior.
+
+**Failure mode (if lifted naively)**: lifting the guardrail without
+landing the matching Rust cast-time-mode-binding substrate would make
+the deterministic-first agent pick mode_0 on Python at cast time but
+let Rust prompt at resolve time, breaking byte-equal trajectory parity
+in `cast_spell` (Python's StackItem already carries the bound mode
+index; Rust's would not). Lifting WITH only mode-binding but without
+the per-mode target-selection re-plumbing would diverge on the modes
+whose target slots differ (Reroute Systems' mode 0 takes
+`artifact_or_creature`, mode 1 takes `tapped_creature` — different
+`legal_targets` pools per mode).
+
+**Fix scope estimate**: **multi-round substrate effort**, not a
+single-lane closure. The slice list, derived 2026-05-21 from the
+Reroute Systems verify-first walk:
+
+1. **Cast-time mode binding on Rust** — new `StackItem.chosen_mode_idx:
+   Option<u32>` field, populated by a new
+   `cast_spell::pick_modal_mode` step before
+   `bf_iter_etb_sorted`-based target binding (the deterministic-first
+   pick = mode_0, mirroring Python's `p.agent is None` fallback at
+   `actions.py:1222`). Resolve-time arm reads the bound mode and
+   skips the `PendingDecision::ChooseModeChoice` push; resolves
+   `modes[chosen_mode_idx]` directly with the bound `target_obj_id`.
+   ~150 LoC across `state.rs` / `state_ops_cast.rs` /
+   `state_ops_resolve.rs`.
+2. **Per-mode target selection on Rust** — `cast_spell` extension
+   that walks `modes[chosen_mode_idx].legal_targets()`-equivalent
+   per-mode filter (NOT the union); for Reroute Systems mode 0 the
+   filter is `IsArtifact() | IsCreature()`, for mode 1
+   `IsCreature() & IsTapped()`. Rust currently has no per-Effect
+   `legal_targets` method on `Effect`; the predicate-per-variant
+   pattern in `spell_targets_satisfiable` (`state_ops_legal.rs:749`)
+   already encodes a per-variant target-filter table — the modal
+   path would dispatch through the SAME table, parameterized on the
+   bound mode_idx. ~100 LoC plus per-variant filter entries.
+3. **Reverse serializer for `ModalChooseOne`** —
+   `_python_spell_effect_to_dict` arm emitting `{"kind":
+   "choose_one_mode", "modes": [<per-mode leaf>, ...]}`, recursing
+   into each mode via the existing `_leaf` table. Bails if ANY mode
+   is unrecognized (round-trip-or-bail teeth — same shape as the
+   `Sequence` arm at `trajectory.py:4279`). ~30 LoC.
+4. **Per-leaf Rust variant extensions** — Reroute Systems
+   specifically needs TWO new/extended Effect variants:
+   - `Effect::PumpTargetArtifactOrCreatureUntilEOT` extended with a
+     `granted_keywords: Vec<String>` field (currently
+     `{ power_bonus, toughness_bonus }` only — `cards.rs:4238`).
+     Python's class carries `granted_keywords` as the primary
+     payload for the indestructible-UEOT shape; Reroute Systems mode
+     0 is `PumpTargetArtifactOrCreatureUntilEOT(power_bonus=0,
+     toughness_bonus=0, granted_keywords=frozenset({'indestructible'}))`.
+     Resolve arm pushes `UeotModifier::GrantKeyword { keyword }` per
+     keyword onto the target's `ueot_modifiers` Vec (the proven
+     round-15 `GrantKeywordsToTargetCreatureUntilEOT` push pattern at
+     `state_ops_resolve.rs:15056`). ~80 LoC including parse / to_dict
+     / resolve / bridge.
+   - `Effect::DealDamageToTargetTappedCreature { amount: i32 }` —
+     new unit-like variant. Resolve arm walks both bf's for a
+     creature whose `tapped == true` and deals damage via the
+     proven `DealDamage` substrate. `spell_targets_satisfiable` arm
+     checks at-least-one `IsCreature() & tapped` exists. ~80 LoC.
+5. **Admit-set widen** — `_printing_is_bridge_simple_spell` removes
+   the `ModalChooseOne` reject AND adds a positive admit predicate
+   for the modal shape: every mode covered+bridged, every mode
+   single-target (or shares the same target slot — exact per-mode
+   target-grammar policy TBD; conservative slice admits ONLY modes
+   each with `target_count_range==(1,1)`). +reverse-serializer
+   tooth keeps the round-trip-or-bail invariant. ~40 LoC plus
+   guardrail probes (negative + positive).
+6. **PROBED-tier probes** — a real-EoE byte-equal pin per mode for
+   Reroute Systems (deterministic-first agent picks mode_0 → grant
+   indestructible UEOT; flip-fixture forces mode_1 → 2 damage to
+   target tapped creature), plus an auto-grow admit-set pin
+   (Reroute Systems should appear in the admit set with no
+   hardcoded entry).
+
+**Estimated cost**: 3-5 cycles. The substrate cost — slices (1) +
+(2) — is the dominant share; once paid, future modal cards land via
+slice (3)+(4)-style per-leaf extensions only.
+
+**Impact estimate**: Reroute Systems (6,132 17lands decks) +
+the 11 other `ModalChooseOne` EoE cards (parser claims 13 of them
+per `cards.rs:4133`; net deck-share depends on per-card 17lands
+coverage but the substrate amortizes across all). The decks/cycle
+ratio is comparable to the Effect-uncovered diffuse-tail per-card
+lane (~2-3k decks/cycle when amortized), and BELOW the closed
+substrates (warp_cost ~15k/cycle, static/layered Phase 3.5 ~5k+
+decks/cycle). **Honest-stop: not worth force-closure as a single
+lane.** The next-best Effect-uncovered single-gated card off the
+2026-05-21 §3 lever (3) tail is a simpler shape (no `ModalChooseOne`
+envelope) — the per-card lane continues at the lower fixed cost
+until a modal-friendly substrate slice is independently scheduled.
+
+---
+
 ## Spell-card-bridge lever Phase 1 — Rust spell-target binding via deterministic-first on the spell StackItem
 
 **Round-76 update (Phase 2 — 2-slot deterministic-first binding).**
