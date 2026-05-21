@@ -1,24 +1,25 @@
 # Subsystem-blocked tier — leverage inventory + closure sequence
 
 A focused, current-snapshot **synthesis** of the BLOCKED-subsystem-gated
-tier (142 cards post-dynamic-pt-cosmogoyf-closure, the **only**
+tier (127 cards post-aura-S3-moonlit-closure, the **only**
 non-empty BLOCKED tier on `docs/POOL_PARITY.md` after the
-2026-05-19/20 massive-closure session). This doc is **not the
+2026-05-19/21 massive-closure session). This doc is **not the
 authoritative living roadmap** — `docs/SUBSYSTEM_ROADMAP.md` is
 that, with its full cycle-by-cycle orchestrator history. This doc
 is the short "what should I grind next, why, in what order"
 reference.
 
-**Snapshot HEAD:** post-`feature/dynamic-pt-cosmogoyf` merge (round-84,
-2026-05-20: Cosmogoyf flipped PROBED on the SAME dispatch table
-substrate as round-78 Grovestrider; blocked tier 143→142).
-Predecessor was `7a3a0fc9` (post-Mechan Shieldmate closure / Phase
-3.5 static abilities — round-82).
+**Snapshot HEAD:** post-`feature/aura-supertype-override` merge
+(`b226fbf4`, 2026-05-21: Moonlit Meditation flipped BLOCKED → COVERED
+via per-object Token-supertype override consumer wire-up) +
+moonlit-slug-credit lane (2026-05-21: COVERED → PROBED via thin
+`_parity`-named delegator). Predecessor was `7c00920c` (post-blocked-
+tier-stale-claim-audit / negative finding — no metric movement).
 **Source data:** `scripts/scout_r58_subsystem_attribution.py` (re-runnable;
 the same attribution helper `measure_pool_parity` imports, so this doc
 and `POOL_PARITY.md` cannot disagree on the count).
 **Tier under analysis:** `BLOCKED — subsystem-gated / Effect-uncovered`
-(146 cards). The other two BLOCKED tiers were both driven to **0** this
+(127 cards). The other two BLOCKED tiers were both driven to **0** this
 session — see `docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md` for the
 historical itemization (genuinely_missing 2→0 via Pain for All + cast-
 from-exile substrate; blocked_non_effect 2→0 via Tractor Beam + Dauntless
@@ -81,12 +82,19 @@ audit covered:
      `data/duskmourn.json`, not `data/edge_of_eternities.json`) but
      they ARE in the parity pool — closure requires a per-Condition
      Rust slice regardless.
-   - Aura row (1 single-gated: Moonlit Meditation) — genuinely
-     blocked at `trajectory.py:4855` on the
-     `replaces_first_tokens_with_copies` rider; the per-player
-     `created_tokens_this_turn` substrate landed `4dae568e`, but the
-     supertype-override mechanism that gates the loader widen is
-     still in flight on `feature/aura-supertype-override`.
+   - Aura row (0 single-gated post-Lane-M-merge `b226fbf4` —
+     Moonlit Meditation CLOSED): the audit-time snapshot saw 1
+     single-gated (Moonlit Meditation, genuinely blocked at
+     `trajectory.py:4855` on the `replaces_first_tokens_with_copies`
+     rider; the per-player `created_tokens_this_turn` substrate
+     landed `4dae568e` and the supertype-override mechanism was
+     in flight on `feature/aura-supertype-override`).
+     `feature/aura-supertype-override` then merged 2026-05-21 as
+     `b226fbf4`, flipping Moonlit Meditation BLOCKED → COVERED via
+     the per-object Token-supertype override consumer wire-up; the
+     same-day moonlit-slug-credit lane added a `_parity`-named
+     delegator for PROBED-tier credit. The Aura row's single-gated
+     tier is now empty.
    - Non-basic land row (18 single-gated) — `_printing_is_bridge_
      nonbasic_mana_land` admits only the 5 shocklands (already
      flipped to PROBED last round); the other 18 carry painland /
@@ -103,15 +111,20 @@ audit covered:
      `rust/src/cards.rs`). The diffuse tail is real.
 
 **Conclusion: no stale claims found in the inventory body or the
-classifier.** The post-loader_admits-sweep+tannuk-baloth-probes state
-is honest and tight — every BLOCKED card is genuinely blocked, every
-classifier decision is internally consistent. The only updates the
-audit produced are doc-cosmetic refreshes: the §0 before→after
-table now carries the post-probe-batches-HHHH-JJJJ column (PROBED
-252 → 259), and the §3(2) Aura Phase 4 S3 row + §7 cross-ref are
-updated to reflect that the `feature/aura-phase-4-s3` substrate
-merged `4dae568e` (consumer wire-up still gated on the supertype-
-override mechanism). Headline counts unchanged.
+classifier at audit time.** The post-loader_admits-sweep+tannuk-
+baloth-probes state was honest and tight — every BLOCKED card
+genuinely blocked, every classifier decision internally consistent.
+The audit's doc-cosmetic refreshes were: the §0 before→after table
+gained the post-probe-batches-HHHH-JJJJ column (PROBED 252 → 259)
+and a §3(2) Aura Phase 4 S3 row + §7 cross-ref refresh. Headline
+counts unchanged at audit time. **Subsequently 2026-05-21
+`feature/aura-supertype-override` merge `b226fbf4` closed the Aura
+Phase 4 S3 consumer wire-up end-to-end** (Moonlit Meditation BLOCKED →
+COVERED via per-object Token-supertype override; +1 byte-equal,
+single-gated tier −1), then the same-day moonlit-slug-credit lane
+added the `_parity`-named delegator credit (Moonlit Meditation
+COVERED → PROBED; +1 PROBED). Both flips are reflected in the §0
+post-aura-S3-moonlit-closure column.
 
 ### Top-5-recommendations status (from `ce564786`)
 
@@ -153,20 +166,22 @@ override mechanism). Headline counts unchanged.
 ### POOL_PARITY headline before → after this session
 
 ```
-                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ
-PROBED                                                221         232          235            236                 238                    250                              252                               259
-covered-by-construction                                95          97           97             97                  98                     97                               95                                88
-BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0
-BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0
-BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128
+                                                  ce564786  →  62222ffe  →  post-warp-P3  →  post-dyn-PT-cosmo  →  post-aura-P1-attr  →  post-loader-admits-sweep  →  post-tannuk-baloth-probes  →  post-probe-batches-HHHH-JJJJ  →  post-aura-S3-moonlit-closure
+PROBED                                                221         232          235            236                 238                    250                              252                               259                              260
+covered-by-construction                                95          97           97             97                  98                     97                               95                                88                               88
+BLOCKED — genuinely_missing                             3           0            0              0                   0                      0                                 0                                 0                                0
+BLOCKED — blocked_non_effect                            2           0            0              0                   0                      0                                 0                                 0                                0
+BLOCKED — subsystem-gated                             154         146          143            142                 139                    128                               128                               128                              127
 ```
 
 The tannuk-frenzied-baloth-probes lane delta is strict **+2 PROBED / −2 COVERED**: Tannuk Steadfast Second and Frenzied Baloth flipped COVERED → PROBED via the two new genuine-printing cross-engine byte-equal `_parity` probes. No engine changes, no subsystem-gated movement, no Effect-class movement.
 
-The **post-probe-batches-HHHH-JJJJ** delta is strict **+7 PROBED / −7 COVERED** (probe batches HHHH `25d89e4c`, IIII `07718a2f`, JJJJ `a31b666c` landed `_parity` delegators that promoted covered cards to PROBED): Lightstall Inquisitor, Seriema, Optimistic Scavenger, Command Bridge (probe batch IIII), three Room cards (probe batch JJJJ via the triggered-ability surface delegators). No engine changes, no subsystem-gated movement. **The 128 subsystem-gated tail has been stable since the loader_admits sweep — this audit lane confirmed no further measurement-attribution gaps in the BLOCKED tier.**
+The **post-probe-batches-HHHH-JJJJ** delta is strict **+7 PROBED / −7 COVERED** (probe batches HHHH `25d89e4c`, IIII `07718a2f`, JJJJ `a31b666c` landed `_parity` delegators that promoted covered cards to PROBED): Lightstall Inquisitor, Seriema, Optimistic Scavenger, Command Bridge (probe batch IIII), three Room cards (probe batch JJJJ via the triggered-ability surface delegators). No engine changes, no subsystem-gated movement.
 
-Subsystem-gated dropped by 26 total; **both itemized BLOCKED tiers
-reached 0**. The 128 tail is now the *only* non-empty BLOCKED tier.
+The **post-aura-S3-moonlit-closure** delta is **+1 PROBED / −1 COVERED / −1 BLOCKED-subsystem-gated relative to the post-probe-batches-HHHH-JJJJ column** (the merge `b226fbf4` of `feature/aura-supertype-override` flipped Moonlit Meditation BLOCKED → COVERED via the per-object Token-supertype override + CreateToken-arm Aura-consulting consumer wire-up; the 2026-05-21 moonlit-slug-credit lane then added a `_parity`-suffixed delegator (`tests/test_parity_smoke.py::test_cross_engine_real_eoe_moonlit_meditation_aura_phase_4_s3_parity`) that re-uses Lane M's `test_moonlit_meditation_substituted_token_carries_supertype_override` consumer probe, so the `_smoke_probed_cards` slug scanner now credits Moonlit Meditation as PROBED — same measurement-attribution idiom as the round-83 warp_cost Phase 3 `_parity` aliases and the Aura Phase 1 flash-widening `_parity` probes). Net relative to pre-Lane-M: +1 PROBED, 0 COVERED, −1 BLOCKED-subsystem.
+
+Subsystem-gated dropped by 27 total; **both itemized BLOCKED tiers
+reached 0**. The 127 tail is now the *only* non-empty BLOCKED tier.
 Round-83 (2026-05-20: warp_cost Phase 3) flipped Red Tiger Mechan,
 Bygone Colossus, Timeline Culler → PROBED on the existing Phase 1/1.5/2
 substrate via two measurement-attribution fixes (loader_admits widen +
@@ -186,8 +201,14 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
 
 ## 1. Headline (current state)
 
-* **128 cards** are subsystem-gated; **53 single-gated**, **75 multi-gated**
-  (post loader_admits-attribution-sweep 2026-05-21: 9 cards flipped
+* **127 cards** are subsystem-gated; **52 single-gated**, **75 multi-gated**
+  (post Aura Phase 4 S3 Moonlit Meditation closure 2026-05-21: the
+  Lane M `feature/aura-supertype-override` merge `b226fbf4` flipped
+  Moonlit Meditation BLOCKED → COVERED via the per-object Token-
+  supertype override + CreateToken-arm Aura-consulting consumer; the
+  same-day moonlit-slug-credit lane then flipped Moonlit COVERED →
+  PROBED via a thin `_parity`-named delegator. Prior closures: post
+  loader_admits-attribution-sweep 2026-05-21 — 9 cards flipped
   BLOCKED → PROBED via measurement-attribution close — 5 shocklands +
   Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate; Tannuk
   Steadfast Second + Frenzied Baloth flipped BLOCKED → COVERED
@@ -199,7 +220,7 @@ by the tannuk-frenzied-baloth-probes follow-up the same day).
   cards but **0 single-gated**; `Carrier activated abilities` and
   `Non-safe triggered ability` bind 30 / 43 cards but **0 single-gated**.
   These are co-blocker rows, not levers.
-* A card may trip multiple gates; `#cards` does NOT sum to 128. The
+* A card may trip multiple gates; `#cards` does NOT sum to 127. The
   honest leverage column remains `decks(1g)`.
 
 ## 2. Subsystems by closure leverage (refreshed)
@@ -217,7 +238,7 @@ to reflect what substrate already exists post-session.
 | Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (§2-declined) | DEFERRED (unchanged) |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; 0 single-gated) | DEFERRED (unchanged) |
-| Aura-attachment substrate | 7 | 1 | 633 | sprawling | Phase 1/2/2.5/3 LANDED; **Phase 4 only** (S3 token-replacement Moonlit Meditation 633 decks) | **PARTIAL** — Phase 1 flash widening attribution close (2026-05-21) flipped Frantic Strength + Shardmage's Rescue → PROBED + Duskmourn's Domination → COVERED; only Moonlit Meditation single-gated remains |
+| Aura-attachment substrate | 7 | 0 | 0 | sprawling | Phase 1/2/2.5/3/4-S3 LANDED end-to-end | **CLOSED for single-gated** — Phase 1 flash widening attribution close (2026-05-21) flipped Frantic Strength + Shardmage's Rescue → PROBED + Duskmourn's Domination → COVERED; Phase 4 S3 Moonlit Meditation closure (merge `b226fbf4` Lane M + same-day `_parity`-slug-credit lane) flipped Moonlit BLOCKED → COVERED → PROBED via per-object Token-supertype override + thin delegator probe |
 | BECOMES_TAPPED event | 2 | 0 | 0 | contained | small (event bridge) — 0 single-gated | DEFERRED (unchanged) |
 | Ward (declined) | dropped | — | — | medium | — | row gone from scout (0-binding) |
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
@@ -227,8 +248,8 @@ to reflect what substrate already exists post-session.
 | Non-safe triggered ability | 43 | 0 | 0 | diffuse | per-event-shape — 0 single-gated | DEFERRED (unchanged) |
 | Unclassified (honest residual) | 2 | 2 | 12 | diffuse | per-card hand re-walk | OPEN (unchanged — Deafening Silence + Leyline of Mutation) |
 
-**Reconciliation:** 128 subsystem-gated = 53 single-gated + 75
-multi-gated; `1gate` column sums to 53 (post 2026-05-21 loader_admits-
+**Reconciliation:** 127 subsystem-gated = 52 single-gated + 75
+multi-gated; `1gate` column sums to 52 (post 2026-05-21 loader_admits-
 attribution-sweep; the Static/layered-abilities row drops from 15/8/34526
 to 9/2/0 — Brightspear / Cloudsculpt / Gravblade / Mechan Shieldmate
 flipped to PROBED, Tannuk Steadfast Second + Frenzied Baloth flipped
@@ -238,13 +259,18 @@ from 23/23/34575 to
 18/18/16510 — the 5 shocklands flipped to PROBED via the round-60
 bench-probe pin. Post-Aura-Phase-1-flash-widening close 2026-05-21:
 the Aura row at 4/1/633 — Frantic Strength + Shardmage's Rescue +
-Duskmourn's Domination dropped out of subsystem-gated; only Moonlit
-Meditation remains single-gated, on the un-shipped Phase 4 S3
-consumer wire-up. Post-dynamic-pt-cosmogoyf round-84; the Dynamic-P/T
-row is 0/0/0 — the substrate is fully closed end-to-end for the two
-formulas present in the EoE snapshot (Grovestrider + Cosmogoyf); the
-third sibling, Emissary Escort, is absent from the EoE snapshot AND
-is honest-stopped Rust-side on a different per-formula shape.
+Duskmourn's Domination dropped out of subsystem-gated. Post-Aura-
+Phase-4-S3-Moonlit-closure 2026-05-21 (merge `b226fbf4` Lane M + the
+same-day `_parity`-slug-credit lane): the Aura row at 7/0/0 — Moonlit
+Meditation flipped BLOCKED → COVERED via the per-object Token-
+supertype override consumer wire-up, then COVERED → PROBED via the
+thin `_parity`-named delegator in `tests/test_parity_smoke.py`. Aura
+single-gated tier is now empty. Post-dynamic-pt-cosmogoyf round-84;
+the Dynamic-P/T row is 0/0/0 — the substrate is fully closed end-to-
+end for the two formulas present in the EoE snapshot (Grovestrider +
+Cosmogoyf); the third sibling, Emissary Escort, is absent from the
+EoE snapshot AND is honest-stopped Rust-side on a different per-
+formula shape.
 
 ## 3. The remaining highest-leverage levers (re-ranked)
 
@@ -298,18 +324,17 @@ Green Sun's Zenith (effect-uncovered+static).
 * **Sequencing:** the 2 remaining single-gated are blocked on an EoE
   snapshot refresh.
 
-### (2) Aura-attachment substrate — Phase 4 only
+### (2) Aura-attachment substrate — Phase 4 S3 CLOSED
 
-Phases 1+2+2.5+3 SHIPPED. The Phase 1 flash widening
+Phases 1+2+2.5+3+4-S3 SHIPPED end-to-end. The Phase 1 flash widening
 (``_AURA_SAFE_EXTRA_KEYWORDS = {"flash"}``) landed at round-79; the
 **measurement-attribution close** landed at 2026-05-21
-(`feature/aura-phase-1-flash-widening`, this lane). The lane verified-
-first that the trajectory bridge predicate already admits Frantic
-Strength + Shardmage's Rescue cleanly (the round-79 widen has been live
-since the Aura-substrate Phase 2 first deliverable; both cards parse
-clean: pure ``equipment_bonuses`` + a static ``flash`` keyword
-symmetrically dropped on both bridge sides), then closed the two
-attribution gaps:
+(`feature/aura-phase-1-flash-widening`). The lane verified-first that
+the trajectory bridge predicate already admits Frantic Strength +
+Shardmage's Rescue cleanly (the round-79 widen has been live since
+the Aura-substrate Phase 2 first deliverable; both cards parse clean:
+pure ``equipment_bonuses`` + a static ``flash`` keyword symmetrically
+dropped on both bridge sides), then closed the two attribution gaps:
 
   1. ``scripts/measure_pool_parity.loader_admits`` was missing the
      ``_printing_is_bridge_simple_aura`` disjunct — the trajectory
@@ -337,16 +362,14 @@ attribution gaps:
 
 **+2 PROBED-tier cards (Frantic Strength + Shardmage's Rescue);
 +1 COVERED-tier card (Duskmourn's Domination); -3 BLOCKED single-
-gated.** Headline before → after: PROBED 236→238, byte-equal 333→336,
-single-gated 67→64.
+gated.** Headline before → after the flash-widening attribution close:
+PROBED 236→238, byte-equal 333→336, single-gated 67→64.
 
 The 7-card subsystem-gated row's residue:
 
-* **Single-gated 1 (post-flash-widening attribution close):** Moonlit
-  Meditation. **Moonlit Meditation (633 decks) needs Phase 4 S3
-  replacement-effect substrate consumer wire-up — substrate landed at
-  `7b2f62f0`; the host-as-token swap mechanism is the remaining
-  honest-stop and gates the loader admit widen.**
+* **Single-gated 0** — Moonlit Meditation closed by the Phase 4 S3
+  consumer wire-up (Lane M merge `b226fbf4`) + the same-day
+  `_parity`-slug-credit lane.
 * **Multi-gated 3:** Chorale of the Void, Cracked Skull, Sporogenic
   Infection — all S4-shape, all multi-gated with effect-uncovered +
   nonsafe-trig + Aura. Phase 3 S4 substrate (`35ede8b0`) is the Aura
@@ -356,27 +379,36 @@ The 7-card subsystem-gated row's residue:
 Sibling lane 3 (`feature/aura-phase-4`) shipped Phase 4 first
 deliverable at `6fa5ac9c` (Effect::SacrificeSelfUnlessVoidActive
 substrate for Chorale of the Void's end-step trigger).
-**`feature/aura-phase-4-s3` (2026-05-21) ships Phase 4 S3 substrate
-landing for Moonlit Meditation** — Rust CardPrinting
+``feature/aura-phase-4-s3`` (2026-05-21, merge `4dae568e`) shipped
+Phase 4 S3 substrate — Rust CardPrinting
 ``aura_replaces_first_tokens_with_copies`` field + per-player
 ``created_tokens_this_turn: [bool; 2]`` state slot + turn-cleanup
-reset + bridge round-trip + per-token-arm flag flip. **Loader admit
-stays declined** (the host-as-token swap mechanism in the Rust
-CreateToken arm is the remaining honest-stop — needs a runtime-
-registry append primitive OR a per-object Token-supertype override
-mechanism, neither exists today). Live-EoE admit delta: +0 cards /
-+0 decks; substrate-only landing in the slice-19 / Chorale-Effect
-tradition.
+reset + bridge round-trip + per-token-arm flag flip.
+**``feature/aura-supertype-override`` (2026-05-21, merge `b226fbf4`)
+then closed the loader admit widen end-to-end** via a per-object
+Token-supertype override mechanism: the Rust CreateToken arms consult
+the controller's attached Moonlit-shape Aura via
+``moonlit_token_substitution`` (rust/src/state_ops_resolve.rs) and
+swap the token's printing_id to the host's printing with the per-
+object Token-supertype override stamped on the freshly-minted
+GameObject — byte-equal cross-engine against Python's
+``_find_moonlit_replacement_source`` + ``_dc.replace(base,
+supertypes=(*base, "Token"))`` shim. Live-EoE admit delta: +1 card /
++633 decks. Moonlit Meditation flipped BLOCKED → COVERED on Lane M
+merge, then COVERED → PROBED via the 2026-05-21 moonlit-slug-credit
+lane's thin `_parity`-named delegator in
+``tests/test_parity_smoke.py::test_cross_engine_real_eoe_moonlit_
+meditation_aura_phase_4_s3_parity`` (re-uses Lane M's
+``test_moonlit_meditation_substituted_token_carries_supertype_
+override`` consumer probe).
 
-* **Why it's still on the list:** the remaining Phase 4 S3 close-out
-  is small (the substrate is now paid — the consumer wire-up is the
-  CreateToken-arm Aura-consulting + host-printing-as-token swap +
-  loader admit widen, ~6-10h estimate gated on the supertype-override
-  mechanism), and 633 decks of single-gate leverage is real if small.
-* **Closure scope:** small (Phase 4 S3 consumer wire-up on top of
-  the now-paid substrate) + per-card S4 closures for the
-  multi-gated residue (medium each, gated by Effect-uncovered lane
-  progress).
+* **Why this lever is now closed:** Phase 4 S3 substrate + consumer
+  wire-up are both shipped end-to-end; the Aura single-gated tier is
+  empty.
+* **Remaining closure scope:** per-card S4 closures for the multi-
+  gated residue (medium each, gated by Effect-uncovered lane
+  progress) — Chorale of the Void, Cracked Skull, Sporogenic
+  Infection, all currently multi-gated, none Aura-only.
 
 #### Phase 3.5 closure note — Mechan Shieldmate (round-82, 2026-05-20)
 
@@ -491,7 +523,7 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
 | 1 | **Static / layered abilities — Mechan Shieldmate (Phase 3.5)** | (single card in the 8) | 1 | — | **CLOSED round-82 (2026-05-20)** — `feature/mechan-shieldmate-closure` |
 | ~~2~~ | ~~**warp_cost Phase 3**~~ | ~~15,436~~ | — | — | **CLOSED round-83 (2026-05-20)** — `feature/warp-cost-phase-3`; +3 PROBED |
 | ~~2~~ | ~~**Dynamic-P/T formula — Cosmogoyf**~~ | ~~small~~ | ~~1-2~~ | — | **CLOSED round-84 (2026-05-20)** — `feature/dynamic-pt-cosmogoyf`; +1 PROBED; one-arm extension to the round-78 dispatch table |
-| 3 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Substrate LANDED via `feature/aura-phase-4-s3` (`4dae568e`); consumer wire-up gated on the supertype-override mechanism (in flight on `feature/aura-supertype-override`) |
+| ~~3~~ | ~~**Aura Phase 4 S3 — Moonlit Meditation**~~ | ~~633~~ | — | — | **CLOSED 2026-05-21** — `feature/aura-supertype-override` merge `b226fbf4` (per-object Token-supertype override consumer wire-up) + the same-day moonlit-slug-credit lane (`_parity`-named delegator for PROBED-tier credit); +1 PROBED |
 | 4 | **Effect-uncovered per-card drain — next 3-5 cheap single-gated** | varies (~5-15k cumulative) | 3-5 | ~3,000 | Cheaper Tier-A lane exhausted; remainder is Tier-C |
 
 **Sequencing rationale:**
@@ -506,8 +538,10 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
   after Static + warp_cost both closed — the round-78 dispatch table
   was already paid for and Cosmogoyf added a single match arm +
   bridge admit-set widen. Closed round-84.
-* **Aura Phase 4 dropped to #4** because attach substrate is paid but
-  S3 token-replacement is its own small substrate.
+* **Aura Phase 4 S3** (was lever #3) closed 2026-05-21 via the per-
+  object Token-supertype override consumer wire-up + the same-day
+  `_parity`-slug-credit lane; Moonlit Meditation +1 PROBED, 633 decks
+  of single-gate leverage retired.
 * **Effect-uncovered lane** continues in parallel; pace is bounded by
   per-card Rust scope, not substrate availability.
 
@@ -570,8 +604,9 @@ existing substrates that the session's substrate-builds clarified.
 * **`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`** — 4-phase Aura plan;
   Phases 1+2+2.5+3 LANDED, Phase 4 first-deliverable (`6fa5ac9c`)
   + Phase 4 S3 substrate (`4dae568e`) LANDED; Phase 4 S3 consumer
-  wire-up (Moonlit Meditation loader admit widen) gated on
-  `feature/aura-supertype-override` in flight.
+  wire-up (Moonlit Meditation loader admit widen) CLOSED via
+  `feature/aura-supertype-override` merge `b226fbf4` (per-object
+  Token-supertype override).
 * **`docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`** — historical
   itemization of the now-empty genuinely_missing + blocked_non_effect
   tiers. Read together with this doc to understand how the residue

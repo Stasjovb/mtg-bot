@@ -70913,6 +70913,41 @@ def test_cross_engine_real_eoe_frenzied_baloth_static_uncounterable_parity(
     )
 
 
+def test_cross_engine_real_eoe_moonlit_meditation_aura_phase_4_s3_parity():
+    """**PROBED-tier credit alias for Moonlit Meditation** — delegates
+    to the canonical Lane M Phase 4 S3 closure consumer probe
+    ``test_moonlit_meditation_substituted_token_carries_supertype_override``
+    in ``tests/test_aura_substrate_phase_4_s3.py``. That probe drives
+    the Rust CreateToken arm end-to-end on a synthetic state carrying
+    a Moonlit-shape Aura attached to a host creature, then asserts the
+    newly-minted GameObject carries the host's ``printing_id`` AND the
+    per-object Token-supertype override flag — the byte-equal Rust
+    mirror of Python's ``_find_moonlit_replacement_source`` +
+    ``_dc.replace(base, supertypes=(*base, "Token"))`` shim.
+
+    Phase 4 S3 substrate landed at ``4dae568e``
+    (``feature/aura-phase-4-s3``); consumer wire-up + loader admit
+    widen landed at merge ``b226fbf4`` (``feature/aura-supertype-
+    override``). This thin ``_parity``-suffixed delegator exists so
+    the ``_smoke_probed_cards`` slug scanner credits Moonlit
+    Meditation in the PROBED tier — same measurement-attribution
+    idiom as the round-83 warp_cost Phase 3 ``_parity`` aliases
+    (Red Tiger Mechan / Bygone Colossus / Timeline Culler) and the
+    Aura Phase 1 flash-widening ``_parity`` probes (Frantic Strength /
+    Shardmage's Rescue).
+
+    The scanner regex matches
+    ``test_cross_engine_real_eoe_<mid>_parity``; ``<mid>`` is
+    ``moonlit_meditation_aura_phase_4_s3``, which starts with the
+    Moonlit Meditation card-name slug ``moonlit_meditation`` and is
+    credited under the longest-slug-first prefix rule.
+    """
+    from tests.test_aura_substrate_phase_4_s3 import (
+        test_moonlit_meditation_substituted_token_carries_supertype_override,
+    )
+    test_moonlit_meditation_substituted_token_carries_supertype_override()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

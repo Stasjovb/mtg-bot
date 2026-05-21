@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **348 / 475 EoE cards (73.3%) are byte-equal at the Effect+bridge level**; of those, **259 (54.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 89 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **348 / 475 EoE cards (73.3%) are byte-equal at the Effect+bridge level**; of those, **260 (54.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 88 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **127 (26.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 259 | 54.5% |
-| Effect+bridge covered (not individually probed) | 89 | 18.7% |
+| PROBED byte-equal | 260 | 54.7% |
+| Effect+bridge covered (not individually probed) | 88 | 18.5% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -192,6 +192,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Molecular Modifier
 - Monoist Circuit-Feeder
 - Monoist Sentry
+- Moonlit Meditation
 - Most Valuable Slayer
 - Mouth of the Storm
 - Murder
