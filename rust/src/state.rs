@@ -1121,6 +1121,38 @@ pub struct StackItem {
     /// single-target arms self-scan and IGNORE both fields, so the
     /// swap is a correct no-op for them).
     pub target_obj_id_2: Option<u32>,
+    /// **ModalChooseOne envelope — Cycle 1 (cast-time mode binding,
+    /// 2026-05-21).** The cast-time-picked mode index for a
+    /// `StackItemKind::Spell` whose `spell_effect` is an
+    /// `Effect::ChooseOneMode { modes }`. Mirrors Python's
+    /// `StackItem.chosen_modes: tuple[int, ...]` (`game.py:2342`)
+    /// in its single-pick first-slice shape — a 1-tuple's worth of
+    /// mode index, the no-`or_both` branch. Per CR 601.2e, modes
+    /// are picked at cast time BEFORE the total cost is determined
+    /// at 601.2f; storing the pick on the StackItem lets the
+    /// resolve arm replay the choice without re-prompting at
+    /// resolve time (parity with Python's
+    /// `state.resolving_modes = item.chosen_modes` swap at
+    /// `actions.py:2712`).
+    ///
+    /// **First-slice shape (Cycle 1).** `Option<u8>` (single pick),
+    /// not a `Vec<u8>` — the cast-time picker
+    /// (`cast_spell_noncreature`) populates `Some(0)` for the
+    /// deterministic-first no-agent fallback (Python's
+    /// `_choose_modes_at_cast` returns `(0,)` when the player's
+    /// agent is `None`, the harness convention). `None` for every
+    /// pre-cycle push (back-compat — the closed Phase-1 spell arms
+    /// + the `PendingDecision::ChooseModeChoice` resolve-time path
+    /// both ignore this field today).
+    ///
+    /// **`or_both` deferral.** Python's
+    /// `ModalChooseOne(or_both=True)` returns a 1- or 2-tuple of
+    /// mode indices in resolution order. The Cycle 1 substrate is
+    /// single-pick only — `or_both` cards stay declined by the
+    /// admit predicate. A future cycle can widen this field to
+    /// `Option<Vec<u8>>` (or a fixed-arity `[u8; 2]` sibling) when
+    /// the `or_both` lane lands.
+    pub chosen_mode_idx: Option<u8>,
 }
 
 impl StackItem {
@@ -1135,6 +1167,12 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id: None,
             target_obj_id_2: None,
+            // ModalChooseOne envelope — Cycle 1. The bare untargeted
+            // spell push doesn't go through the ChooseOneMode
+            // detector (it sees no first-effect `ChooseOneMode`
+            // variant); default `None` is back-compat-correct for
+            // every pre-cycle non-modal spell.
+            chosen_mode_idx: None,
         }
     }
 
@@ -1174,6 +1212,52 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id,
             target_obj_id_2,
+            // ModalChooseOne envelope — Cycle 1. Spells that bind
+            // a modal pick at cast time use the dedicated
+            // `new_spell_with_targets_and_mode` sibling below;
+            // every existing target-binding caller (the closed
+            // Tier-A single-target and Phase-2 2-slot arms) is
+            // non-modal, so the default `None` is back-compat.
+            chosen_mode_idx: None,
+        }
+    }
+
+    /// **ModalChooseOne envelope — Cycle 1 (cast-time mode binding,
+    /// 2026-05-21).** Spell-shape constructor that carries the
+    /// cast-time-picked mode index. Mirrors
+    /// `new_spell_with_targets` for the target-carrying superset;
+    /// extends with the mode-index slot for modal spells whose
+    /// printed `spell_effect` is an `Effect::ChooseOneMode { modes }`.
+    ///
+    /// Usage: `cast_spell_noncreature` detects the modal shape
+    /// (first effect is `Effect::ChooseOneMode`) and binds the
+    /// deterministic-first mode pick (`Some(0)`, matching Python's
+    /// `_choose_modes_at_cast` no-agent fallback at
+    /// `actions.py:1222-1223`). The bound mode is read at resolve
+    /// time by the `Effect::ChooseOneMode` arm (Cycle 2 — when the
+    /// resolve arm dispatches directly to `modes[idx]` instead of
+    /// pushing `PendingDecision::ChooseModeChoice`).
+    ///
+    /// Cycle-1-only constructor: today's resolve arm still pushes
+    /// the PendingDecision regardless of the bound mode (the
+    /// resolve-arm read happens in Cycle 2). Cycle 1 ships the
+    /// cast-time bind + round-trip serialization on the StackItem
+    /// only; Cycle 2 wires the consumer.
+    pub(crate) fn new_spell_with_targets_and_mode(
+        source_obj_id: u32,
+        controller: u8,
+        target_obj_id: Option<u32>,
+        target_obj_id_2: Option<u32>,
+        chosen_mode_idx: Option<u8>,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::Spell,
+            trigger_payload: None,
+            target_obj_id,
+            target_obj_id_2,
+            chosen_mode_idx,
         }
     }
 
@@ -1207,6 +1291,14 @@ impl StackItem {
             // Phase-2 (round-76): the 2-slot spell grammar is
             // Spell-kind-only.
             target_obj_id_2: None,
+            // ModalChooseOne envelope — Cycle 1. The cast-time
+            // mode-pick slot is Spell-kind-only. A trigger whose
+            // body is itself an `Effect::ChooseOneMode` would
+            // resolve via the resolve-time
+            // `PendingDecision::ChooseModeChoice` fallback today
+            // (the path that predates this slice); the cast-time
+            // bind only fires on the spell-cast path per CR 601.2e.
+            chosen_mode_idx: None,
         }
     }
 
@@ -1241,6 +1333,8 @@ impl StackItem {
             target_obj_id: None,
             // Phase-2 (round-76): Spell-kind-only 2-slot grammar.
             target_obj_id_2: None,
+            // ModalChooseOne envelope — Cycle 1: Spell-kind-only.
+            chosen_mode_idx: None,
         }
     }
 }
@@ -2350,6 +2444,37 @@ pub struct GameState {
     /// state pre- and post-resolve produces the same digest
     /// regardless of intermediate controller swaps.
     pub current_resolve_source_controller: Option<u8>,
+    /// **ModalChooseOne envelope — Cycle 2 (per-mode resolve
+    /// dispatch, 2026-05-21).** Transient resolve-time mirror of
+    /// the resolving spell's `StackItem.chosen_mode_idx`. Set by
+    /// the stack resolver (`resolve_top_of_stack` /
+    /// `resolve_top_of_stack_pause`) BEFORE the per-effect
+    /// `apply_effect` fan-out for a `StackItemKind::Spell` whose
+    /// pushed item carries a cast-time-bound mode pick; restored
+    /// to its prior value after. The `Effect::ChooseOneMode`
+    /// resolve arm reads this field — if `Some(idx)`, it dispatches
+    /// directly to `modes[idx]` via `apply_effect` (mirroring
+    /// Python's `state.resolving_modes` replay at
+    /// `combinators.py:1213-1215`). If `None` (no cast-time bind —
+    /// every nested-as-trigger ChooseOneMode + pre-Cycle-1 push),
+    /// the arm falls back to the existing
+    /// `PendingDecision::ChooseModeChoice` push (Cycle 1
+    /// resolve-time-callback substrate stays intact for non-spell-
+    /// cast invocations).
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect.** Same rationale as
+    /// `current_resolve_payload_target_id` / `_2` /
+    /// `current_resolve_source_controller`: apply_effect has ~90
+    /// arms, threading an `Option<u8>` through every signature is
+    /// invasive for surfaces that don't care. Mirror the existing
+    /// payload-target swap pattern.
+    ///
+    /// **Not serialized into the fingerprint.** Transient like its
+    /// payload-target / source-controller siblings — same observable
+    /// game state pre- and post-resolve produces the same digest
+    /// regardless of intermediate mode-index swaps.
+    pub current_resolve_chosen_mode_idx: Option<u8>,
 }
 
 impl Clone for GameState {
@@ -2416,6 +2541,12 @@ impl Clone for GameState {
             pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
             current_resolve_payload_target_id_2: self.current_resolve_payload_target_id_2,
+            // ModalChooseOne envelope — Cycle 2. Transient mode-
+            // index slot; cloned as `Option<u8>` (Copy). Bracketed
+            // by the resolver — `None` outside the resolve window
+            // by construction, so any clone taken mid-resolve still
+            // sees a deterministic snapshot.
+            current_resolve_chosen_mode_idx: self.current_resolve_chosen_mode_idx,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -3192,5 +3323,11 @@ pub fn make_synthetic_state(
         // until the resolver swaps in `top.controller` for the
         // duration of an apply_effect call.
         current_resolve_source_controller: None,
+        // ModalChooseOne envelope — Cycle 2: transient mode-index
+        // slot. `None` until the resolver swaps in
+        // `top.chosen_mode_idx` for the duration of an apply_effect
+        // call (the resolve arm reads it; the swap is save → set →
+        // restore-bracketed like its payload-target sibling).
+        current_resolve_chosen_mode_idx: None,
     }
 }

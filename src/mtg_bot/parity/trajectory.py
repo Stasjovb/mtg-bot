@@ -4360,6 +4360,53 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 return None
             children.append(cd)
         return {"kind": "sequence", "effects": children}
+    # ModalChooseOne composer (spell-card-bridge **ModalChooseOne
+    # envelope — Cycle 3**, 2026-05-21). Mirrors the Sequence
+    # composer's recurse-into-children-and-bail-on-any-unrecognized
+    # discipline. Emits the Rust-shape ``{"kind": "choose_one_mode",
+    # "modes": [<per-mode leaf>, ...]}`` dict that
+    # ``cards.rs::parse_effect``'s ``"choose_one_mode"`` arm at
+    # ``cards.rs:9084`` consumes (recursive parse over ``modes``) and
+    # that ``cross_engine.py``'s ``_ta_dict_to_python_effect``
+    # ``"choose_one_mode"`` arm at line 6264 round-trips into
+    # ``ModalChooseOne(modes=...)``.
+    #
+    # **Round-trip-or-bail teeth.** Recurses into each mode via the
+    # same ``_leaf`` table the Sequence composer uses; bails (returns
+    # ``None``) if ANY mode is unrecognized — the no-fallback-hybrid
+    # discipline a partially-serializable ModalChooseOne would
+    # silently drop a mode on Rust.
+    #
+    # **`or_both` deferral.** Python's
+    # ``ModalChooseOne(or_both=True)`` is a different cast-time
+    # decision shape (an ORDERED list of mode indices instead of a
+    # single pick); Cycle 1's `chosen_mode_idx: Option<u8>` only
+    # carries a SINGLE pick. Bail on the or_both variant explicitly
+    # so the admit predicate doesn't accidentally bench-admit a
+    # spell whose Cycle-1 cast-time bind would diverge from Python's
+    # multi-pick semantics.
+    #
+    # **Composer-not-leaf shape.** Lives outside ``_leaf`` because
+    # ``_leaf`` is intentionally the pid-free covered LEAVES (the
+    # Sequence composer also lives outside it). A `ModalChooseOne`
+    # nested as a Sequence child would NOT round-trip through this
+    # path today (`_leaf` doesn't recurse into ModalChooseOne); the
+    # Cycle 3 admit shape is `ModalChooseOne` AS the top-level
+    # `spell_effect`, not nested inside a Sequence. Real EoE modal
+    # cards (Reroute Systems, Archenemy's Charm, ...) print modal
+    # spells at the head of the effect, not nested — matches the
+    # admit shape.
+    from mtg_bot.effects.combinators import ModalChooseOne
+    if isinstance(spell_effect, ModalChooseOne):
+        if spell_effect.or_both:
+            return None
+        mode_dicts: list[dict] = []
+        for mode in spell_effect.modes:
+            md = _leaf(mode)
+            if md is None:
+                return None
+            mode_dicts.append(md)
+        return {"kind": "choose_one_mode", "modes": mode_dicts}
     return _leaf(spell_effect)
 
 

@@ -1970,20 +1970,61 @@ impl GameState {
                     });
                 (t, None)
             };
+        // **ModalChooseOne envelope — Cycle 1 (cast-time mode
+        // binding, 2026-05-21).** Detect whether the spell's first
+        // effect is an `Effect::ChooseOneMode { modes }` and, if so,
+        // bind the deterministic-first mode pick (`Some(0)`) onto
+        // the StackItem. Mirrors Python's
+        // `actions._choose_modes_at_cast` no-agent fallback at
+        // `actions.py:1222-1223` (returns `(0,)` when
+        // `p.agent is None`) — the harness convention used by every
+        // cross-engine probe and the bench's
+        // `_PickFirstLegalTargetAgent`. The bind is read at resolve
+        // time by the Cycle-2 widening of the
+        // `Effect::ChooseOneMode` arm; Cycle 1 ships only the
+        // cast-time pick + the round-trip-on-StackItem.
+        //
+        // **First-slice scope.** Single-pick only (Python's no-
+        // `or_both` branch). The detection looks at the top-level
+        // first effect — NO Sequence-peek today. Modal cards in
+        // EoE (per `cards.rs:4296` doc: 13 EoE cards) print their
+        // ChooseOneMode at the spell-effect head; a wrapped form
+        // (Sequence([ChooseOneMode(...), Other])) would not be
+        // detected and would fall through to the resolve-time
+        // PendingDecision path — fine, since no EoE card today has
+        // that wrapped shape.
+        //
+        // **Why `Some(0)` and not via the agent.** Rust's bench and
+        // cross-engine harness drive deterministic-first agents
+        // (the `_PickFirstLegalTargetAgent` campaign-wide
+        // convention); a real agent-driven mode pick would require
+        // a Decision-style callback (parallel to
+        // `submit_choose_mode_decision` for the resolve-time path)
+        // — explicitly out of Cycle-1 scope. The deterministic-
+        // first pick matches Python's no-agent fallback byte-equal.
+        let bound_mode_idx: Option<u8> = self
+            .registry
+            .lookup(printing_id)
+            .and_then(|p| match p.effects.first() {
+                Some(crate::cards::Effect::ChooseOneMode { .. }) => Some(0u8),
+                _ => None,
+            });
         // Delta 4: push the spell StackItem (card stays in hand —
         // Rust's pre-existing spell-stack model). The existing
         // `resolve_top_of_stack` drains it: applies `printing.effects`
         // with the target(s) swapped in, then
         // `move_source_post_resolve` sends the spell hand → graveyard
-        // (FREE — CR 608.2m). `new_spell_with_targets` carries both
-        // slots; `target_obj_id_2` is `None` for Phase-1 single-target
-        // pushes (back-compat — byte-identical to the prior
-        // single-slot push the Phase-2 unified constructor subsumed).
-        self.stack.push(crate::state::StackItem::new_spell_with_targets(
+        // (FREE — CR 608.2m). `new_spell_with_targets_and_mode`
+        // carries the cast-time-bound target(s) PLUS the cast-time-
+        // bound modal pick (`None` for every non-modal spell —
+        // back-compat byte-identical to the pre-cycle
+        // `new_spell_with_targets` push).
+        self.stack.push(crate::state::StackItem::new_spell_with_targets_and_mode(
             obj_id,
             player_id,
             bound_target,
             bound_target_2,
+            bound_mode_idx,
         ));
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.

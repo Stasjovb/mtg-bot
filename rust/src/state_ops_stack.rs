@@ -85,6 +85,30 @@ impl GameState {
         self.stack.last().and_then(|item| item.target_obj_id)
     }
 
+    /// **ModalChooseOne envelope — Cycle 1 (cast-time mode binding,
+    /// 2026-05-21).** Read the cast-time-bound mode index of the
+    /// top stack item. Returns `Some(idx)` if the top item carries a
+    /// bound mode pick (a modal spell whose first effect is
+    /// `Effect::ChooseOneMode { modes }` cast through
+    /// `cast_spell_noncreature`), `None` if the top item has no
+    /// mode bind OR the stack is empty.
+    ///
+    /// **Why a dedicated getter** — parallel to
+    /// [`Self::stack_top_target_id`]: the existing
+    /// `peek_top_of_stack()` / `stack_snapshot()` dict surfaces are
+    /// pinned by `tests_rust/test_stack.py` (the
+    /// `{"source_obj_id", "controller"}` 2-key shape); adding a key
+    /// would break every pin. A dedicated getter is additive —
+    /// existing readers ignore it; the Cycle 1 tests + the
+    /// cross-engine `cross_engine.py` modal-spell bridge opt in
+    /// explicitly. Mirrors Python's
+    /// `state.stack[-1].chosen_modes` access pattern (the bridge
+    /// translates Python's tuple to/from this scalar via the
+    /// first-element-or-None convention — single-pick Cycle 1).
+    fn stack_top_chosen_mode_idx(&self) -> Option<u8> {
+        self.stack.last().and_then(|item| item.chosen_mode_idx)
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the

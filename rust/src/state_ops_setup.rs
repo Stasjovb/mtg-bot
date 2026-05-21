@@ -472,5 +472,10 @@ pub fn make_state(
         // DrawCards controller-of-effect fix: transient slot, None
         // at construction; set by the resolver during apply_effect.
         current_resolve_source_controller: None,
+        // ModalChooseOne envelope — Cycle 2: transient mode-index
+        // slot; None at construction (no spell on the stack yet).
+        // Set by the resolver during apply_effect for a modal
+        // spell-cast resolution.
+        current_resolve_chosen_mode_idx: None,
     })
 }

@@ -14816,31 +14816,76 @@ fn apply_effect(
             state.current_resolve_source_controller = saved_controller;
             result?;
         }
-        // Round-28 ModalChooseOne first-slice. Pushes a
-        // ChooseModeChoice carrying every mode's Effect on the heap
-        // and short-circuits. Controller drains via
-        // submit_choose_mode_decision(chosen_idx) (manual) or
-        // auto-resolve "default" / "choose_mode_0" (picks modes[0]).
+        // Round-28 ModalChooseOne first-slice + Cycle-2 cast-time-
+        // bind widening.
         //
-        // Controller convention: state.active_player (first-slice
-        // shape consistent with Surveil / MayDo / LookTopN). Modes
-        // are cloned so the registry's printing keeps its original
-        // Vec and the PendingDecision owns its copy.
+        // **Cycle 2 (cast-time mode dispatch, 2026-05-21).** When the
+        // resolving spell carries a cast-time-bound mode pick via
+        // `state.current_resolve_chosen_mode_idx` (set by the stack
+        // resolver from the StackItem's `chosen_mode_idx`), dispatch
+        // directly to `modes[idx]` via `apply_effect_pub_with_
+        // controller` — bypassing the resolve-time decision callback
+        // entirely. Mirrors Python's `ModalChooseOne.resolve` at
+        // `combinators.py:1213-1215`:
+        //     cast_modes = state.resolving_modes
+        //     if cast_modes:
+        //         idx = cast_modes[0]
+        //         ...
+        //         chosen = self.modes[idx]
+        //         chosen.resolve(...)
+        // The cast-time-bound case is the spell-cast hot path (every
+        // EoE modal spell cast through `cast_spell_noncreature` with
+        // a deterministic-first agent — the bench's `_PickFirstLegal
+        // TargetAgent` convention or the no-agent Python fallback at
+        // `actions.py:1222-1223`).
         //
-        // Empty-modes case is rejected at parse time so the resolve
-        // arm always has at least one mode to fall through to.
+        // **Fallback to resolve-time PendingDecision.** When
+        // `current_resolve_chosen_mode_idx` is `None` (no cast-time
+        // bind — every nested-as-trigger ChooseOneMode + every
+        // ChooseOneMode applied via `apply_effect` directly outside
+        // the spell-cast pipeline, e.g. in synthetic tests), the
+        // pre-cycle resolve-time PendingDecision path stays intact.
+        // The honest no-fallback-hybrid discipline: the resolve arm
+        // routes by the EXPLICIT presence/absence of a cast-time
+        // bind, not by a printing scan.
+        //
+        // **Out-of-range clamp.** `idx >= modes.len()` is reachable
+        // only via a deliberately malformed StackItem (the cast-time
+        // bind sets `Some(0)` and modes is parse-rejected at empty).
+        // Mirror Python's `idx = max(0, min(idx, len(modes) - 1))`
+        // clamp at `combinators.py:1215` defensively.
+        //
+        // Controller convention (both paths): prefer the transient
+        // source-controller swap (I61). Modes are cloned for the
+        // PendingDecision shape (owns its copy); the cast-time-bind
+        // dispatch passes the registry-clone `mode` ref into
+        // apply_effect_pub_with_controller (already-cloned at the
+        // outer effect-snapshot in `resolve_top_of_stack`).
         Effect::ChooseOneMode { modes } => {
-            // I61: prefer the transient source-controller swap.
             let controller = state
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
-            state.pending_decisions.push(
-                PendingDecision::ChooseModeChoice {
-                    source_obj_id,
-                    controller,
-                    modes: modes.clone(),
-                },
-            );
+            match state.current_resolve_chosen_mode_idx {
+                Some(idx_u8) => {
+                    let idx = (idx_u8 as usize).min(modes.len().saturating_sub(1));
+                    let chosen = modes[idx].clone();
+                    apply_effect_pub_with_controller(
+                        state,
+                        &chosen,
+                        source_obj_id,
+                        controller,
+                    )?;
+                }
+                None => {
+                    state.pending_decisions.push(
+                        PendingDecision::ChooseModeChoice {
+                            source_obj_id,
+                            controller,
+                            modes: modes.clone(),
+                        },
+                    );
+                }
+            }
         }
         // Round-28 IfYouDo first-slice: push an IfYouDoChoice
         // carrying both nested Effects on the heap. Controller drains
@@ -16507,12 +16552,26 @@ impl GameState {
         // points (the §3.4 sibling-parity requirement; pin #4 / #6).
         let saved_target_2 = self.current_resolve_payload_target_id_2;
         self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
+        // ModalChooseOne envelope — Cycle 2 (cast-time-bound mode
+        // dispatch). Swap in the StackItem's cast-time-bound mode
+        // index so the `Effect::ChooseOneMode` arm reads the
+        // pre-picked choice instead of pushing a resolve-time
+        // `PendingDecision::ChooseModeChoice`. Mirrors Python's
+        // `state.resolving_modes = item.chosen_modes` swap at
+        // `actions.py:2712`. Save → set → restore bracketed exactly
+        // like its payload-target sibling. `None` for every non-
+        // modal push (back-compat — every closed Phase-1 / Phase-2
+        // single-target / 2-slot arm + every trigger / activation
+        // never sets it, so the swap is a correct no-op for them).
+        let saved_mode_idx = self.current_resolve_chosen_mode_idx;
+        self.current_resolve_chosen_mode_idx = top.chosen_mode_idx;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_chosen_mode_idx = saved_mode_idx;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
@@ -16728,12 +16787,26 @@ impl GameState {
         // points (the §3.4 sibling-parity requirement; pin #4 / #6).
         let saved_target_2 = self.current_resolve_payload_target_id_2;
         self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
+        // ModalChooseOne envelope — Cycle 2 (cast-time-bound mode
+        // dispatch). Swap in the StackItem's cast-time-bound mode
+        // index so the `Effect::ChooseOneMode` arm reads the
+        // pre-picked choice instead of pushing a resolve-time
+        // `PendingDecision::ChooseModeChoice`. Mirrors Python's
+        // `state.resolving_modes = item.chosen_modes` swap at
+        // `actions.py:2712`. Save → set → restore bracketed exactly
+        // like its payload-target sibling. `None` for every non-
+        // modal push (back-compat — every closed Phase-1 / Phase-2
+        // single-target / 2-slot arm + every trigger / activation
+        // never sets it, so the swap is a correct no-op for them).
+        let saved_mode_idx = self.current_resolve_chosen_mode_idx;
+        self.current_resolve_chosen_mode_idx = top.chosen_mode_idx;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_chosen_mode_idx = saved_mode_idx;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
@@ -17025,6 +17098,11 @@ impl GameState {
             trigger_payload: None,
             target_obj_id: None,
             target_obj_id_2: None,
+            // ModalChooseOne envelope — Cycle 1: this is the
+            // bespoke synthetic-spell push helper (no printing
+            // lookup); modal mode binding rides on the production
+            // `cast_spell_noncreature` path. Default `None`.
+            chosen_mode_idx: None,
         });
         Ok(next_id)
     }
