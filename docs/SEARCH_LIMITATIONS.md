@@ -5699,10 +5699,52 @@ the dedicated entry below).
 
 ## Spell-card-bridge — `ModalChooseOne` envelope is a multi-round substrate effort (Reroute Systems verify-first finding, 2026-05-21)
 
-**Update 2026-05-21 (Reroute Systems closure landed —
-`feature/reroute-systems-slice-v2`; per-mode detector-table widen +
-two new/extended Effect variants + per-leaf reverse serializers +
-admit-set flip; +1 PROBED via Reroute Systems auto-join).**
+**Update 2026-05-21 (Lane DD + Lane EE merged — Drill Too Deep
+closure (`feature/drill-too-deep-slice`) + Reroute Systems closure
+(`feature/reroute-systems-slice-v2`); admit set 17 → 20; PROBED
++2/+3 via Drill Too Deep + Reroute Systems + Untimely
+Malfunction auto-join).**
+
+Drill Too Deep closure (Lane DD — first per-mode-target
+ModalChooseOne flip):
+
+* New Rust variant
+  `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+  { amount: i32 }` (declaration + parse + to_pydict + resolve arm
+  in `rust/src/cards.rs` / `rust/src/state_ops_resolve.rs`).
+  Resolve arm reads `current_resolve_payload_target_id`, re-verifies
+  the Spacecraft-or-Planet subtype filter + source-controller match
+  per CR 608.2b, increments the target's `obj.charge_counters` by
+  `amount`. Negative `amount` raises at parse + resolve (the
+  ExileAllArtifactsWithManaValueAtMost / DamageEachOpponent
+  precedent).
+* Per-mode target binding detector table extension in
+  `rust/src/state_ops_cast.rs::cast_spell_noncreature` — Lane BB's
+  Cycle 5 substrate gets one new entry:
+  `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` → scan
+  for first `(IsSpacecraft() | IsPlanet()) & ControlledBy(caster)`
+  permanent in `bf_iter_etb_sorted` order. Mirrors Python's
+  `legal_targets` at `effects/generic/counters.py:508-516`.
+* `spell_targets_satisfiable` arm in
+  `rust/src/state_ops_legal.rs` — the legality predicate that
+  gates the auto-tap-from-lands prune (Slice 1) for this targeted-
+  spell shape. Source-controller-restricted scan matches the
+  resolve arm's filter.
+* Bridge round-trip arms:
+  - `cross_engine.py::_ta_dict_to_python_effect` arm reconstructs
+    `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+    (amount=N)`.
+  - `trajectory.py::_python_spell_effect_to_dict`'s `_leaf` table
+    serializes the new variant + the previously-missing
+    `DestroyTargetArtifact` leaf (the bridge arm + Rust variant had
+    shipped since round 23; the serializer leaf was the load-
+    bearing gap that kept the ModalChooseOne composer recursion
+    from completing).
+* The new `_leaf` table entry for `DestroyTargetArtifact` ALSO
+  auto-joined Untimely Malfunction (a `{1}{R}` Instant whose
+  top-level `spell_effect` IS `DestroyTargetArtifact`).
+
+Reroute Systems closure (Lane EE):
 
 * **Rust `Effect::PumpTargetArtifactOrCreatureUntilEOT` extended
   with `granted_keywords: Vec<String>`** field (declaration +
@@ -5744,30 +5786,20 @@ admit-set flip; +1 PROBED via Reroute Systems auto-join).**
   `DealDamageToTargetTappedCreature` emits `{"kind", "amount"}`
   and bails on negative.
 
-**Card flip + admit set growth.** Reroute Systems (6,132 17lands
-decks) AUTO-JOINS the spell-card-bridge admit set via the same
-covered-and-bridged + round-trip-or-bail teeth Cycle 4 set up for
-ModalChooseOne — its `(1, 1)` `_PHASE1_SHAPE` matches the existing
-admit arm; both modes' leaves are now leaf-recognized; the modal
-composer round-trips clean. **17 → 18** admits. PROBED **273 →
-274**. Two new probes at `tests/test_reroute_systems.py`:
-`test_cross_engine_real_eoe_reroute_systems_mode_0_parity`
-(mode-0 cast-time-bound pump-with-indestructible against a Wild
-Bear; checks the `has_keyword` UEOT readout cross-engine) and
-`test_cross_engine_real_eoe_reroute_systems_mode_1_parity`
-(mode-1 burn against a tapped Wild Bear; checks the damage marker
-before SBA + the SBA-driven eviction). The Rust side of the
-mode-1 probe drives the bare leaf (no public API today for non-
-default `chosen_mode_idx=1` cast-time bind on a modal — mirrors
-the round-73 Ruinous Rampage mode-1 probe pattern).
+**Combined admit-set growth (post-merge).** The §2 auto-grow
+teeth (covered+bridged AND round-trips ⇒ admitted, no fallback
+hybrid) drove **17 → 20** admits across the merge: Drill Too Deep
++ Reroute Systems flip via their respective slices; Untimely
+Malfunction co-admits via the new `destroy_target_artifact`
+serializer leaf shipped in Lane DD. Probes in
+`tests/test_drill_too_deep_parity.py` and
+`tests/test_reroute_systems.py`.
 
-**Drill Too Deep / Archenemy's Charm / Scour for Scrap / Warping
-Wail STAY DECLINED.** Their per-leaf closures (different
-candidate effects: `PutChargeCountersOnTargetSpacecraftOr
-PlanetYouControl`, `ExileTargetCreature`, etc.) are independent
-slice asks; the per-mode detector table grows additively as each
-lands. `or_both=True` (Scour for Scrap) stays deferred — the
-serializer still bails on `ModalChooseOne(or_both=True)`.
+**Archenemy's Charm / Scour for Scrap / Warping Wail STAY
+DECLINED.** Their per-leaf closures are independent slice asks;
+the per-mode detector table grows additively as each lands.
+`or_both=True` (Scour for Scrap) stays deferred — the serializer
+still bails on `ModalChooseOne(or_both=True)`.
 
 ---
 

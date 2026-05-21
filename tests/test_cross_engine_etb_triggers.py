@@ -21319,16 +21319,33 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
+    # **drill-too-deep-slice (2026-05-21):** Cycle 6 closes the
+    # first per-mode-target ModalChooseOne via the
+    # ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl``
+    # Effect variant + bridge arm + reverse-serializer leaf + the
+    # Cycle-5 detector table extension in
+    # ``cast_spell_noncreature``. Both Drill Too Deep modes are
+    # now covered+bridged, the ModalChooseOne composer recurses
+    # into both, and the {1}{R} (1, 1) Instant rides the Phase-1
+    # admit shape. Adding mode 1's ``DestroyTargetArtifact`` to
+    # the trajectory ``_leaf`` table (required for the
+    # ModalChooseOne composer recursion) ALSO auto-joins Untimely
+    # Malfunction — a {1}{R} Instant whose top-level
+    # ``spell_effect`` IS ``DestroyTargetArtifact``; previously
+    # declined only because the serializer leaf was missing. The
+    # §2 auto-grow teeth: covered+bridged AND round-trips ⇒
+    # admitted, no fallback hybrid. 17 → 19 — both AUTO-JOINED.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-        "Emergency Eject", "Focus Fire", "Invasive Maneuvers",
-        "Manifest Dread", "Orbital Plunge", "Pyroclasm", "Radiant Strike",
-        "Reroute Systems", "Ruinous Rampage", "Seedship Impact",
-        "Shattered Wings", "Under the Skin",
+        "Drill Too Deep", "Emergency Eject", "Focus Fire",
+        "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
+        "Pyroclasm", "Radiant Strike", "Reroute Systems",
+        "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
+        "Under the Skin", "Untimely Malfunction",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 18 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 20 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet via the beyond-the-quiet-slice's "
         f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
@@ -21336,12 +21353,21 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"(Ruinous Rampage via the modal-chooseone-cycle-4 widen + "
         f"per-leaf ``DealDamageEachOpponent`` / "
         f"``ExileAllArtifactsWithManaValueAtMost`` Effect serializer "
-        f"leaves) + 1 Cycle-6 some-targeted modal admit (Reroute "
-        f"Systems via the reroute-systems-slice-v2 closure — extended "
+        f"leaves) + 1 Cycle-6 per-mode-target modal admit "
+        f"(Drill Too Deep via the drill-too-deep-slice's "
+        f"``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` "
+        f"Effect variant + bridge arm + reverse-serializer leaf + "
+        f"per-mode target-binding detector table extension) + 1 "
+        f"Cycle-6 some-targeted modal admit (Reroute Systems via the "
+        f"reroute-systems-slice-v2 closure — extended "
         f"``PumpTargetArtifactOrCreatureUntilEOT`` with ``granted_"
         f"keywords`` field + added ``DealDamageToTargetTappedCreature`` "
         f"variant + per-mode detector table entries + reverse "
-        f"serializer leaves) — the set grew 15→18 across three lanes; "
+        f"serializer leaves) + 1 co-admit via the drill-too-deep-"
+        f"slice's ``DestroyTargetArtifact`` ``_leaf`` table addition "
+        f"(Untimely Malfunction; the bridge arm + Rust variant had "
+        f"shipped previously, only the serializer leaf was missing) "
+        f"— the set grew 15→20 across the five lanes; "
         f"auto-grows further as the remaining Tier-A and "
         f"per-mode-target modal spells close)")
 

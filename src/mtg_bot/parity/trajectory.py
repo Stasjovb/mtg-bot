@@ -4104,6 +4104,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.destroy import (
         DestroyAllCreatures,
+        DestroyTargetArtifact,
         DestroyTargetArtifactEnchantmentOrFlyingCreature,
         DestroyTargetArtifactOrTappedCreature,
         DestroyTargetNonlandPermanentWithLanderForController,
@@ -4136,6 +4137,9 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.pump import (
         PumpTargetArtifactOrCreatureUntilEOT,
     )
+    from mtg_bot.effects.generic.counters import (
+        PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -4144,6 +4148,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # field-free Python class). GainLife carries ``amount``.
         if isinstance(eff, DestroyTargetArtifactOrTappedCreature):
             return {"kind": "destroy_target_artifact_or_tapped_creature"}
+        # **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        # 2026-05-21).** Per-leaf ``DestroyTargetArtifact`` arm — Drill
+        # Too Deep mode 1. The Rust ``Effect::DestroyTargetArtifact``
+        # (cards.rs:1254 unit variant) and matching bridge arm in
+        # ``cross_engine.py`` (the round-23 `destroy_target_artifact`
+        # arm) have shipped since round 23 — the gap was just the
+        # composer-recurse leaf entry. Pid-FREE covered unit variant —
+        # field-free round-trip; mirrors the sibling
+        # ``destroy_target_artifact_or_tapped_creature`` unit-leaf
+        # idiom. Adding this leaf — TOGETHER with the matching
+        # ``put_charge_counters_on_target_spacecraft_or_planet_you_
+        # control`` leaf for mode 0 and the Cycle-5 per-mode target
+        # binding in ``cast_spell_noncreature`` — is what flips Drill
+        # Too Deep into the spell-card-bridge admit set: both modes
+        # are now serializable, the ModalChooseOne composer recurses
+        # cleanly, and the {1}{R} Instant rides the Phase-1 ``(1, 1)``
+        # admit shape.
+        if isinstance(eff, DestroyTargetArtifact):
+            return {"kind": "destroy_target_artifact"}
         if isinstance(eff, GainLife):
             return {"kind": "gain_life", "amount": int(eff.amount)}
         if isinstance(eff, DepressurizeEffect):
@@ -4533,6 +4556,40 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 return None
             return {
                 "kind": "deal_damage_to_target_tapped_creature",
+                "amount": int(eff.amount),
+            }
+        # **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
+        # 2026-05-21).** Per-leaf
+        # ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl
+        # (amount)`` arm — Drill Too Deep mode 0. The other mode
+        # (``DestroyTargetArtifact``) already has a leaf above. Rust
+        # variant ``Effect::PutChargeCountersOnTargetSpacecraftOrPlanet
+        # YouControl { amount: i32 }`` ships in the SAME cycle
+        # (declaration + parse + to_pydict + resolve arms +
+        # cast-time per-mode binding detector entry). Two-field
+        # round-trip (``kind`` + ``amount``) is bit-equal — mirrors
+        # the ``exile_all_artifacts_with_mana_value_at_most`` /
+        # ``damage_each_opponent`` single-int-field idiom. Non-
+        # negative invariant per CR 122 (charge counters are non-
+        # negative; parser emits explicit digits via
+        # ``parser/effects.py:3002-3005``; bail defensively on a
+        # negative if a hand-constructed instance ever leaks
+        # through). Adding this leaf — TOGETHER with the matching
+        # ``destroy_target_artifact`` leaf already present and the
+        # Cycle-5 per-mode target binding in
+        # ``cast_spell_noncreature`` — is what flips Drill Too Deep
+        # into the spell-card-bridge admit set: both modes are
+        # covered+bridged, the ModalChooseOne composer recurses into
+        # both, and the {1}{R} Instant rides the Phase-1 ``(1, 1)``
+        # admit shape.
+        if isinstance(eff, PutChargeCountersOnTargetSpacecraftOrPlanetYouControl):
+            if eff.amount < 0:
+                return None
+            return {
+                "kind": (
+                    "put_charge_counters_on_target_spacecraft_or_"
+                    "planet_you_control"
+                ),
                 "amount": int(eff.amount),
             }
         return None

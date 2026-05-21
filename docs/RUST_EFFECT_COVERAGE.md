@@ -201,5 +201,6 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 149 | `Effect::DyadrineAttackEffect` | `DyadrineAttackEffect` | 1 |
 | 150 | `Effect::PutPoisonCountersOnTargetPlayer` | `PutPoisonCountersOnTargetPlayer` | 1 |
 | 151 | `Effect::ExileAllArtifactsWithManaValueAtMost` | `ExileAllArtifactsWithManaValueAtMost` | 1 |
+| 152 | `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | 1 |
 
 
