@@ -650,9 +650,11 @@ bidir round-trip); this slice wires the reader fold:
 
 **Phase 2 S2 remaining honest-stops + extensions:**
 
-- **Tractor Beam — substrate LANDED (2026-05-20), bench-loader
-  admit honest-stopped.** The Phase-2-S2-extension slice shipped
-  the full substrate plumbing:
+- **Tractor Beam — CLOSED (2026-05-20).** Substrate landed
+  Phase-2-S2-extension slice; bench-loader admit + cast-time
+  auto-resolve seat alignment closed the follow-up slice
+  `feature/tractor-beam-cast-time-autoresolve`. The Phase-2-S2-
+  extension slice shipped:
   - New `aura_prevents_host_untap` field on CardDef + Rust
     `CardPrinting` + bidir bridge round-trip via the new
     `get_printing_aura_prevents_host_untap` getter.
@@ -665,16 +667,32 @@ bidir round-trip); this slice wires the reader fold:
     (`_aura_triggers_are_phase2_s2_safe` +
     `_python_ta_to_safe_dict_aura_extension`) for the
     `Event.ENTERS + IsSelf + TapEnchantedPermanent` shape.
-  The byte-equal round-trip + untap-step game-state probe both
-  pass at substrate level (`tests/test_aura_substrate_phase_2_s2_extension.py`).
-  **The bench-loader admit predicate stays DECLINED** for the
-  Tractor-Beam shape (paired control + prevents_untap) — the
-  cross-engine production-deck shadow bake-in surfaced a
-  cast-time auto-resolve seat-alignment divergence (Python casts
-  Tractor Beam → put on the stack with a pending enchant-target
-  decision; Rust's auto-resolve fizzles with no selected target).
-  A separate follow-up slice closes that gap and flips the
-  bench-loader admit.
+  The cast-time auto-resolve seat alignment slice closed the
+  cross-engine play-parity gap by:
+  - Draining `EnchantTargetChoice` synchronously after `cast_aura`
+    in `rust/src/state_ops_actions.rs`'s `Action::CastSpell` arm
+    (mirrors Python's inline `_select_spell_targets` agent pick).
+  - Clearing `obj.summoning_sick = false` for non-creatures in
+    `move_source_post_resolve` / `move_aura_post_resolve` (Python
+    parity at `actions.py:3003-3006`).
+  - Reverting host-controller-baseline on non-SBA destroy paths
+    via the new `state_ops_sba::revert_aura_host_control_on_leave`
+    helper (wired into SeedshipImpact's destroy half; other
+    destroy sites can call it).
+  - Walking both bfs filtered by `o.controller` in
+    `BiosynthicBurstEffect`'s legal-target + resolve scans (the
+    pre-fix owner-bf-only scan missed control-flipped creatures).
+  The bench-loader admit predicate
+  (`src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_aura`)
+  now ADMITS Tractor Beam: the lone-control-grant decline requires
+  `not attached_prevents_untap`, the bare prevents-untap decline
+  requires `not attached_grants_control`, and the triggered-
+  abilities decline routes through `_aura_triggers_are_phase2_s2_safe`.
+  Production-deck shadow bake-in: arch2/seed1 (the original
+  step-874 honest-stop boundary) runs CLEAN to terminal at step
+  948; arch14/seed4 (collateral Tractor-Beam carrier surfaced by
+  the admit widen) runs CLEAN to terminal at step 2867. SL entry
+  flipped to CLOSED.
 - **Multi-Aura set-base-PT timestamp interleaving — LANDED
   (round-80, 2026-05-20).** CR 613.3b requires the latest set-base
   wins by timestamp when two set-base-PT Auras are on the same
