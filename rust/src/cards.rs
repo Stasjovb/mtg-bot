@@ -6715,6 +6715,41 @@ pub struct CardPrinting {
     /// Mirrors Python's `CardPrinting.attached_prevents_untap`
     /// (`cards/base.py:604`). Ignored unless `is_aura == true`.
     pub aura_prevents_host_untap: bool,
+    /// **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    /// substrate landing, 2026-05-20).** CR 614 token-creation
+    /// replacement rider. `true` iff this Aura's printed text contains
+    /// the Moonlit Meditation literal "The first time you would create
+    /// one or more tokens each turn, you may instead create that many
+    /// tokens that are copies of enchanted permanent." When `true` AND
+    /// `is_aura`, the controlling player's first token-creation each
+    /// turn is intercepted: the requested tokens are instead created
+    /// as copies of the Aura's `attached_to` host (Token supertype
+    /// added). Mirrors Python's
+    /// `CardPrinting.replaces_first_tokens_with_copies`
+    /// (`cards/base.py:651`) and its consumer at
+    /// `effects/generic/tokens.py:217-247` (the moonlit-replacement
+    /// branch in `CreateToken.resolve`).
+    ///
+    /// **Substrate-landing scope (Phase 4 S3, 2026-05-20).** This
+    /// slice lands the CardPrinting field + parse arm + getter +
+    /// bridge round-trip + per-player `created_tokens_this_turn`
+    /// state slot. The Rust `CreateToken` arm does NOT yet swap the
+    /// token's `printing_id` to the host's printing — the Token-
+    /// supertype injection on a host printing is a runtime registry
+    /// mutation that doesn't exist on the Rust side today (tokens use
+    /// statically-registered `printing_id`s; Python uses an
+    /// in-memory `_dc.replace(printing, supertypes=...)` shim). The
+    /// loader admit predicate
+    /// (`_printing_is_bridge_simple_aura`) stays declined at the
+    /// `replaces_first_tokens_with_copies` check pending that
+    /// follow-up substrate. **Live-EoE admit delta this slice: +0
+    /// cards / +0 decks.**
+    ///
+    /// `false` is the back-compat default — every pre-S3 registry
+    /// dict omits the `aura_replaces_first_tokens_with_copies` key
+    /// and the parsed CardPrinting is bit-equal to before this slice
+    /// landed. Ignored unless `is_aura == true`.
+    pub aura_replaces_first_tokens_with_copies: bool,
     /// **Static / layered abilities substrate — Phase 1 first-deliverable
     /// (round-79, 2026-05-20).** Anthem-shape statics carried by this
     /// printing. Each `StaticAnthem` declares a layer-6 keyword grant
@@ -9861,6 +9896,21 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             })?,
             None => false,
         };
+    // Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    // substrate landing, 2026-05-20). One new optional key:
+    // `aura_replaces_first_tokens_with_copies` (bool). Missing key
+    // parses to `false` per the back-compat pattern every other
+    // optional aura flag uses — every pre-S3 registry dict omits the
+    // key and the parsed CardPrinting is bit-equal to before.
+    let aura_replaces_first_tokens_with_copies =
+        match dict.get_item("aura_replaces_first_tokens_with_copies")? {
+            Some(v) => v.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "aura_replaces_first_tokens_with_copies must be a bool",
+                )
+            })?,
+            None => false,
+        };
     // Static / layered abilities substrate — Phase 1 first-deliverable
     // (round-79). Parse the `static_anthems` list — each entry is a
     // dict `{"scope": str, "granted_keywords": [str, ...]}`. Missing
@@ -10287,6 +10337,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_grants_lose_abilities,
         aura_set_base_pt,
         aura_prevents_host_untap,
+        aura_replaces_first_tokens_with_copies,
         static_anthems,
         spell_is_uncounterable,
         grants_creature_spells_uncounterable,
@@ -12129,6 +12180,24 @@ impl Registry {
         id: u32,
     ) -> PyResult<bool> {
         Ok(self.lookup(id)?.aura_prevents_host_untap)
+    }
+
+    /// **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    /// substrate landing, 2026-05-20).** `true` iff this Aura's
+    /// printed text carries the Moonlit Meditation CR 614
+    /// "first time you would create one or more tokens each turn"
+    /// token-creation replacement rider. Defaults to `false` for
+    /// non-Auras and for every pre-S3 registry dict (the bridge omits
+    /// the `aura_replaces_first_tokens_with_copies` key when the
+    /// CardDef flag is `false`). Consumed by the cross-engine bridge
+    /// read-back (`read_rust_printing_aura_fields`); the
+    /// `CreateToken` arm does NOT yet wire the replacement semantic
+    /// (loader admit stays declined — see the field docstring above).
+    fn get_printing_aura_replaces_first_tokens_with_copies(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.aura_replaces_first_tokens_with_copies)
     }
 
     /// **Static / layered abilities substrate — Phase 1 first-

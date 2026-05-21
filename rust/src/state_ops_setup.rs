@@ -416,6 +416,10 @@ pub fn make_state(
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,
+        // Phase 4 S3 (Moonlit Meditation substrate landing,
+        // 2026-05-20): per-player created-tokens-this-turn flags
+        // start cleared at game start, same shape as the void flags.
+        created_tokens_this_turn: [false; 2],
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         // R76-1: seed the monotonic object-id counter past every

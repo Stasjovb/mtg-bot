@@ -5763,6 +5763,22 @@ def _printing_to_card_def(printing) -> CardDef:
             aura_set_base_power=aura_set_base_power,
             aura_set_base_toughness=aura_set_base_toughness,
             aura_prevents_host_untap=printing.attached_prevents_untap,
+            # Aura-attachment substrate — Phase 4 S3 (Moonlit
+            # Meditation substrate landing, 2026-05-20). Thread the
+            # ``replaces_first_tokens_with_copies`` rider through to
+            # the CardDef. The §2 predicate above gates on
+            # ``replaces_first_tokens_with_copies`` and declines any
+            # Aura that carries it (the substrate is round-trip-only
+            # this slice; the Rust CreateToken arm doesn't yet swap
+            # tokens to host-printing copies). For the live admit set
+            # (no Phase-4-S3 admit lands this slice) the value
+            # flowing through here is always ``False`` — the field is
+            # threaded here for shape symmetry with the other Phase-4
+            # rider fields and to keep the CardDef round-trip honest
+            # for any future positive-admit slice.
+            aura_replaces_first_tokens_with_copies=(
+                printing.replaces_first_tokens_with_copies
+            ),
             triggered_abilities=triggered_abilities,
         )
     if _printing_is_bridge_simple_spell(printing):

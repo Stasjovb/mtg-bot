@@ -353,6 +353,18 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     // GameState (not behind an Arc), so no CoW dance is needed.
     state.permanent_left_battlefield_this_turn = false;
     state.spell_warped_this_turn = false;
+    // **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    // substrate landing, 2026-05-20).** Reset the per-player
+    // created-tokens-this-turn flags. Mirrors Python's `turn.py:1092`:
+    // `state.players_who_created_tokens_this_turn.clear()` in
+    // `run_cleanup_step`. The Moonlit Meditation replacement
+    // (`effects/generic/tokens.py:217-247`) reads "controller has
+    // NOT yet created tokens this turn" off this set, so the
+    // cleanup-step clear gives every player a fresh "first token
+    // creation each turn" opportunity. Cheap unconditional reset —
+    // the slot is a `[bool; 2]` array directly on GameState (not
+    // behind an Arc), so no CoW dance is needed.
+    state.created_tokens_this_turn = [false; 2];
     // Reset per-player life-gained-this-turn counters. Mirrors Python's
     // `turn.py:1108`: `p.life_gained_this_turn = 0` in `run_cleanup_step`.
     // Required by `Effect::ConditionalIfYouGainedLifeAtLeast` (Haliya,

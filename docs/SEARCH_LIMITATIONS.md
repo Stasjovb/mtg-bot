@@ -8301,6 +8301,82 @@ collateral closures. `tests/test_aura_substrate*.py` +
 `BLOCKED-genuinely_missing` tier 1 → 0 (only Pain for All remains
 in the BLOCKED-RUST-EFFECT inventory).
 
+## Aura Phase 4 S3 (Moonlit Meditation substrate landing): CreateToken arm does not yet swap token printing to host's printing (2026-05-21)
+
+**Where**: `rust/src/state_ops_resolve.rs::Effect::CreateToken` /
+`CreateTokenTapped` / `CreateTokenEachPlayer` /
+`CreateTokenCopyOfTargetCreatureYouControl` — every Rust
+token-creation arm now flips the per-player
+`GameState.created_tokens_this_turn: [bool; 2]` slot on a non-zero-
+count batch (cleared at PHASE_CLEANUP entry alongside the void
+flags), but NONE of them yet consult attached Auras for the CR 614
+token-creation replacement Moonlit Meditation carries. Spec:
+`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md` §3 Phase 4 S3.
+
+**What the shortcut is**: when the controller's per-player
+`created_tokens_this_turn` slot is unset AND they control a
+Moonlit-shape Aura (`aura_replaces_first_tokens_with_copies=True`)
+with a live `attached_to` host, Python's `CreateToken.resolve`
+(`effects/generic/tokens.py:217-247`) substitutes the requested
+token's printing with the host's printing (Token supertype added
+via `_dc.replace(base, supertypes=...)`). Rust's CreateToken arm
+DOES NOT yet do this swap — it always creates tokens of the
+`token_printing_id` carried in the Effect dict.
+
+**Why it's OK (today)**: the bench loader's
+`_printing_is_bridge_simple_aura` predicate STAYS declined at the
+`replaces_first_tokens_with_copies` check (`src/mtg_bot/parity/
+trajectory.py:4827`), so no Moonlit Meditation printing reaches a
+cross-engine bench probe. The substrate-only landing ships the
+CardPrinting field + parse arm + getter + per-player state slot +
+turn-cleanup reset + bridge round-trip so the cross-engine bridge
+no longer has a "no Rust translation for the rider" hole, and any
+future positive-admit slice doesn't have to re-establish the
+CardDef shape from scratch. The per-player flag flip on every
+Rust token-creation arm is **byte-equal-trackable** cross-engine
+(Python's set-membership read == Rust's per-player flag read), so a
+future Moonlit-replacement consumer can flip the loader gate
+without needing to instrument the state-slot lifecycle separately.
+
+**Failure mode**: admitting Moonlit Meditation at the bench loader
+TODAY would diverge immediately on the first token-creation each
+turn — Python creates copies of the host with Token supertype;
+Rust creates the spell's printed token type (e.g. a vanilla 1/1
+Soldier). Every downstream parity check on the bf snapshot (host's
+printing's power/toughness/keywords) would fire the divergence
+immediately.
+
+**Fix-scope estimate**: needs either (a) a Rust runtime-registry
+append primitive that mints a fresh `printing_id` for the
+host-with-Token-supertype copy at replacement time (then routes
+the substituted token through that pid), OR (b) a per-object
+override mechanism for the "Token" supertype check on a
+GameObject whose `printing_id` is borrowed from another bf object
+(read-time supertype-set extension). (a) is a registry-mutation
+substrate slice — touches every clone path, the wire-serialized
+fingerprint shape, and the parse-validation discipline. (b) is a
+GameObject-field substrate — adds a per-object override Vec / set
+that interleaves with the printing's supertypes at every read
+site. Estimate either path at **~6-10h Rust slice** with the
+honest-stop discipline (single-card driver, no probe today).
+After the swap-mechanism lands: ~1-2h to wire the CreateToken-arm
+consumer (find Moonlit Aura under controller, read attached_to,
+swap printing_id) + widen
+`_printing_is_bridge_simple_aura` to accept
+`replaces_first_tokens_with_copies` Auras + the loader-admit gate
+flips +1 carrier / +633 17lands decks.
+
+**Impact estimate**: **0 admit delta today** (substrate-only
+landing; Moonlit stays declined at the loader, all other Aura
+admits unchanged). Forward-looking value: unlocks **Moonlit
+Meditation (+1 card / +633 17lands decks)** as a bridge-admitted
+Aura once the host-as-token swap mechanism lands. The per-player
+flag flip on every Rust token-creation arm is also a
+prerequisite for any future CR 614 replacement effect that gates
+on "this player has created tokens this turn" (no current EoE
+sibling, but a future-set inclusion comes for free with the
+state-slot infrastructure already in place).
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

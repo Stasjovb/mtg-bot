@@ -3715,6 +3715,22 @@ fn apply_effect(
             // stamp order. Drained by the surrounding resolver after
             // the resolving spell's stack item pops.
             state.pending_etb_dispatches.extend(token_ids);
+            // **Aura-attachment substrate — Phase 4 S3 (Moonlit
+            // Meditation substrate landing, 2026-05-20).** Flip the
+            // per-player created-tokens-this-turn flag once at least
+            // one token was created on the controller's bf. Mirrors
+            // Python's `state.players_who_created_tokens_this_turn.
+            // add(recipient)` at `tokens.py:294`, gated on
+            // `effective_count > 0`. Here `n > 0` (we early-returned
+            // on `n == 0` above) and every iteration of the bf push
+            // produces a token, so the flip is guaranteed-non-zero.
+            // The full Moonlit replacement consumer (swap the token's
+            // printing_id to the host's printing on the controller's
+            // first batch this turn) is NOT yet wired — substrate-
+            // only landing per the field docstring.
+            if (active as usize) < state.created_tokens_this_turn.len() {
+                state.created_tokens_this_turn[active as usize] = true;
+            }
         }
         // BLOCKED-RUST-EFFECT slice (round 43) -- each living player
         // creates `count` tokens of the given printing under their
@@ -3838,6 +3854,17 @@ fn apply_effect(
             // the pre-reserved `fresh_ids`).
             let mut global_token_idx: u32 = 0;
             let mut token_ids: Vec<u32> = Vec::with_capacity(total_tokens as usize);
+            // **Aura-attachment substrate — Phase 4 S3 (Moonlit
+            // Meditation substrate landing, 2026-05-20).** Snapshot
+            // the recipient indices BEFORE the per-recipient consume
+            // so we can flip the per-player created-tokens-this-turn
+            // flag after the fanout. Mirrors the sister
+            // `Effect::CreateToken` arm's flag flip, fanned out across
+            // every living recipient (Python's
+            // `recipients = [p.id for p in state.players if not
+            // p.has_lost]` / `state.players_who_created_tokens_this_
+            // turn.add(recipient)` at `tokens.py:212+294`).
+            let recipients_for_flag_flip: Vec<usize> = living.clone();
             for recipient_idx in living {
                 let recipient_u8 = recipient_idx as u8;
                 let bf: &mut Vec<GameObject> =
@@ -3878,6 +3905,19 @@ fn apply_effect(
             // (recipient0 first, then recipient1, ...). Mirrors the
             // sister `CreateToken` arm's pending dispatch shape.
             state.pending_etb_dispatches.extend(token_ids);
+            // **Aura-attachment substrate — Phase 4 S3 (Moonlit
+            // Meditation substrate landing, 2026-05-20).** Flip the
+            // per-player created-tokens-this-turn flag for every
+            // living recipient that just received tokens. Mirrors the
+            // sister `Effect::CreateToken` arm's flag flip — Python's
+            // each-player branch at `tokens.py:212+294` iterates the
+            // same recipient set and adds each to the
+            // `players_who_created_tokens_this_turn` set per recipient.
+            for recipient_idx in recipients_for_flag_flip {
+                if recipient_idx < state.created_tokens_this_turn.len() {
+                    state.created_tokens_this_turn[recipient_idx] = true;
+                }
+            }
         }
         // Phase 6 token-printing substrate -- Phase 4 (round 50): the
         // `tapped` create-token rider. Sister of the `Effect::
@@ -4008,6 +4048,16 @@ fn apply_effect(
             // token enters tapped but its ETB still fires (CR 603.6e
             // -- entering tapped does not suppress the enters trigger).
             state.pending_etb_dispatches.extend(token_ids);
+            // **Aura-attachment substrate — Phase 4 S3 (Moonlit
+            // Meditation substrate landing, 2026-05-20).** Same
+            // per-player created-tokens-this-turn flag flip as the
+            // sister `Effect::CreateToken` arm — the tapped variant
+            // is still a "you created one or more tokens" event for
+            // Python's `players_who_created_tokens_this_turn` set
+            // (`tokens.py:294`).
+            if (active as usize) < state.created_tokens_this_turn.len() {
+                state.created_tokens_this_turn[active as usize] = true;
+            }
         }
         // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
         // ability. The active player (= controller of the resolving
@@ -11072,6 +11122,17 @@ fn apply_effect(
             // drained by the surrounding resolver after the
             // resolving spell's stack item pops.
             state.pending_etb_dispatches.push(new_id);
+            // **Aura-attachment substrate — Phase 4 S3 (Moonlit
+            // Meditation substrate landing, 2026-05-20).** The
+            // copy-token primitive IS a token-creation event for
+            // the controller — flip the per-player created-tokens-
+            // this-turn flag, same shape as the sister `CreateToken`
+            // arm (Python's `tokens.py:294` records ANY non-zero
+            // batch, including the copy-token branch driven via
+            // `CreateToken`).
+            if cidx < state.created_tokens_this_turn.len() {
+                state.created_tokens_this_turn[cidx] = true;
+            }
         }
         // Round-28 "may sac for inner effect". First-slice
         // deterministic-yes: if controller controls an artifact,

@@ -398,6 +398,22 @@ class CardDef:
     # skips it, so the Rust parser maps the absent key to ``false``.
     # Ignored unless ``is_aura == true``.
     aura_prevents_host_untap: bool = False
+    # Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    # substrate landing, 2026-05-20). CR 614 token-creation
+    # replacement rider keyed on the Aura's ``attached_to`` host.
+    # Mirrors Python's ``CardPrinting.replaces_first_tokens_with_copies``
+    # (`cards/base.py:651`). ``False`` is the back-compat default —
+    # every pre-S3 CardDef omits it and the registry-dict emitter
+    # skips it, so the Rust parser maps the absent key to ``false``.
+    # **Substrate-only round-trip in this slice** — Rust's
+    # CreateToken arm does NOT yet consume the rider (the Token-
+    # supertype-add on the host's printing is a runtime registry
+    # mutation that Rust doesn't expose today); the field surfaces
+    # through the bridge so a future slice can light up the consumer
+    # without further CardDef changes. The loader admit predicate
+    # stays declined at the ``replaces_first_tokens_with_copies``
+    # check. Ignored unless ``is_aura == true``.
+    aura_replaces_first_tokens_with_copies: bool = False
     # Static / layered abilities substrate — Phase 1 first-deliverable
     # (round-79; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``
     # §3 lever (1)). The frozen, bridge-serializable representation of
@@ -10870,6 +10886,15 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # pattern every other optional field uses.
     if card.aura_prevents_host_untap:
         printing_dict["aura_prevents_host_untap"] = True
+    # Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    # substrate landing, 2026-05-20). Emit
+    # ``aura_replaces_first_tokens_with_copies`` only when set so
+    # every pre-S3 CardDef registry dict is byte-identical to before
+    # this slice landed. The Rust parser maps the absent key to its
+    # zero default (``false``) per the back-compat pattern every
+    # other optional aura flag uses.
+    if card.aura_replaces_first_tokens_with_copies:
+        printing_dict["aura_replaces_first_tokens_with_copies"] = True
     # Static / layered abilities substrate — Phase 2 (round-80,
     # 2026-05-20). Frenzied Baloth's two uncounterable flags. Emitted
     # only when True so every pre-Phase-2 CardDef registry dict is
@@ -11605,6 +11630,16 @@ def _card_def_to_python_printing(card: "CardDef"):
         # through to the Python CardPrinting. Default ``False`` keeps
         # every pre-extension CardDef bit-identical.
         attached_prevents_untap=card.aura_prevents_host_untap,
+        # Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+        # substrate landing, 2026-05-20). Threads the
+        # ``replaces_first_tokens_with_copies`` rider through to the
+        # Python CardPrinting. Default ``False`` keeps every pre-S3
+        # CardDef bit-identical to the pre-substrate baseline. Read
+        # by Python's ``_find_moonlit_replacement_source``
+        # (`effects/base.py:309`) at token-creation time.
+        replaces_first_tokens_with_copies=(
+            card.aura_replaces_first_tokens_with_copies
+        ),
         # Static / layered abilities substrate — Phase 1 first-
         # deliverable (round-79). Anthem-shape statics only — see the
         # materialization block above. Empty tuple = no anthem
@@ -11795,6 +11830,14 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
     aura_prevents_host_untap = (
         rust_registry.get_printing_aura_prevents_host_untap(printing_id)
     )
+    # Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    # substrate landing, 2026-05-20). Read back the
+    # ``replaces_first_tokens_with_copies`` rider via the new
+    # STEP-2-style getter.
+    aura_replaces_first_tokens_with_copies = (
+        rust_registry
+        .get_printing_aura_replaces_first_tokens_with_copies(printing_id)
+    )
     return {
         "is_aura": bool(is_aura),
         "aura_enchant_type": str(aura_enchant_type),
@@ -11819,6 +11862,18 @@ def read_rust_printing_aura_fields(rust_registry, printing_id: int) -> dict:
         # convention as the other S2 fields above.
         "aura_prevents_host_untap": bool(aura_prevents_host_untap),
         "attached_prevents_untap": bool(aura_prevents_host_untap),
+        # Phase 4 S3 (Moonlit Meditation substrate landing,
+        # 2026-05-20). Surfaced under both names — the bridge-wire
+        # name (``aura_replaces_first_tokens_with_copies``) matches
+        # the CardDef field; the Python CardPrinting name
+        # (``replaces_first_tokens_with_copies``) is the field name
+        # the parser populates and the consumers read.
+        "aura_replaces_first_tokens_with_copies": bool(
+            aura_replaces_first_tokens_with_copies
+        ),
+        "replaces_first_tokens_with_copies": bool(
+            aura_replaces_first_tokens_with_copies
+        ),
     }
 
 

@@ -109,9 +109,12 @@ def test_read_rust_printing_aura_fields_returns_non_aura_defaults_for_non_aura()
     # ``attached_grants_*`` / ``attached_sets_base_pt`` Python-side
     # projections). Phase 2 S2 extension (Tractor Beam closure,
     # 2026-05-20) added the ``aura_prevents_host_untap`` +
-    # ``attached_prevents_untap`` projections. For a non-aura
-    # printing they are all False / None — bit-identical to a
-    # pre-extension CardDef.
+    # ``attached_prevents_untap`` projections. Phase 4 S3 (Moonlit
+    # Meditation substrate landing, 2026-05-20) added the
+    # ``aura_replaces_first_tokens_with_copies`` +
+    # ``replaces_first_tokens_with_copies`` projections. For a
+    # non-aura printing they are all False / None — bit-identical to a
+    # pre-S3 CardDef.
     assert fields == {
         "is_aura": False,
         "aura_enchant_type": "creature",
@@ -129,6 +132,8 @@ def test_read_rust_printing_aura_fields_returns_non_aura_defaults_for_non_aura()
         "attached_sets_base_pt": None,
         "aura_prevents_host_untap": False,
         "attached_prevents_untap": False,
+        "aura_replaces_first_tokens_with_copies": False,
+        "replaces_first_tokens_with_copies": False,
     }
 
 

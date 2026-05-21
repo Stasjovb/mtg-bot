@@ -1770,6 +1770,36 @@ pub struct GameState {
     /// `GameState.spell_warped_this_turn`. Same substrate-only
     /// status as the LTB flag above.
     pub spell_warped_this_turn: bool,
+    /// **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    /// substrate landing, 2026-05-20).** Per-player "this player has
+    /// created one or more tokens this turn" flag, cleared at the
+    /// turn boundary alongside the other turn-scoped flags. Mirrors
+    /// Python's `GameState.players_who_created_tokens_this_turn`
+    /// (`game.py:2721`) — Python uses a `set[int]` of player ids
+    /// whose membership is the boolean read at the Moonlit
+    /// replacement check; Rust mirrors that as a 2-slot bool array
+    /// keyed by `player_idx` (CR 102.1 — exactly two players). The
+    /// `Effect::CreateToken` arm flips the controller's slot to
+    /// `true` after a non-zero-count token batch creates at least one
+    /// token (mirrors Python's `state.players_who_created_tokens_
+    /// this_turn.add(recipient)` at `tokens.py:294`); the turn-end
+    /// cleanup sweep zeroes both slots (mirrors Python's
+    /// `state.players_who_created_tokens_this_turn.clear()` at
+    /// `turn.py:1092`).
+    ///
+    /// **Substrate-only this slice.** The Moonlit-replacement
+    /// consumer (the `_find_moonlit_replacement_source` check inside
+    /// `CreateToken.resolve` at `tokens.py:217-247`) is NOT yet wired
+    /// on the Rust side — Rust's `CreateToken` arm sets the flag but
+    /// does NOT swap the token's `printing_id` to the host's printing.
+    /// The flag is byte-equal-trackable cross-engine so a future
+    /// slice can light up the consumer with the per-player turn
+    /// state already in place. Stays out of the fingerprint
+    /// (transient turn-scoped flag; same observable state pre- and
+    /// post-turn produces the same digest, mirroring the
+    /// `permanent_left_battlefield_this_turn` / `spell_warped_this_
+    /// turn` pattern).
+    pub created_tokens_this_turn: [bool; 2],
     /// Decisions the engine is waiting on. Round-27 G20 closure —
     /// effects whose resolution needs a controller-provided choice
     /// (Surveil, future London bottom-N, future scry-on-keep,
@@ -2291,6 +2321,13 @@ impl Clone for GameState {
             consecutive_passes: self.consecutive_passes,
             permanent_left_battlefield_this_turn: self.permanent_left_battlefield_this_turn,
             spell_warped_this_turn: self.spell_warped_this_turn,
+            // Phase 4 S3 (Moonlit Meditation substrate landing,
+            // 2026-05-20): per-player created-tokens-this-turn flags
+            // are gameplay-relevant turn-scoped state — every clone
+            // carries them forward (mirrors Python's
+            // `players_who_created_tokens_this_turn = set(self...)`
+            // copy at `game.py:3370-3372`).
+            created_tokens_this_turn: self.created_tokens_this_turn,
             pending_decisions: self.pending_decisions.clone(),
             next_etb_timestamp: self.next_etb_timestamp,
             // R76-1: CR 111.7 is a game-lifetime invariant — a
@@ -2519,6 +2556,28 @@ impl GameState {
     #[getter]
     fn spell_warped_this_turn(&self) -> bool {
         self.spell_warped_this_turn
+    }
+
+    /// **Aura-attachment substrate — Phase 4 S3 (Moonlit Meditation
+    /// substrate landing, 2026-05-20).** Read-only getter for the
+    /// per-player "this player has created one or more tokens this
+    /// turn" flag. Returns `True` iff `player_idx`'s slot is set;
+    /// `False` for any out-of-range index (defensive — only two
+    /// player slots are populated). Mirrors Python's
+    /// `(player_id in state.players_who_created_tokens_this_turn)`
+    /// read pattern used in the Moonlit Meditation replacement check
+    /// at `effects/generic/tokens.py:225`. Flipped by every
+    /// non-zero-count `Effect::CreateToken` / `CreateTokenTapped` /
+    /// `CreateTokenEachPlayer` / `CreateTokenCopyOfTargetCreature
+    /// YouControl` arm; reset to `[false; 2]` on entry to
+    /// PHASE_CLEANUP alongside the void flags.
+    fn created_tokens_this_turn(&self, player_idx: u8) -> bool {
+        let idx = player_idx as usize;
+        if idx < self.created_tokens_this_turn.len() {
+            self.created_tokens_this_turn[idx]
+        } else {
+            false
+        }
     }
 
     /// **Effect-rng-threading closure (G19 follow-up) — install a
@@ -2752,6 +2811,10 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Phase 4 S3 (Moonlit Meditation substrate landing,
+        // 2026-05-20): synthetic-state printings carry no
+        // token-creation replacement rider. Back-compat default.
+        aura_replaces_first_tokens_with_copies: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
@@ -2831,6 +2894,10 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Phase 4 S3 (Moonlit Meditation substrate landing,
+        // 2026-05-20): synthetic-state printings carry no
+        // token-creation replacement rider. Back-compat default.
+        aura_replaces_first_tokens_with_copies: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
@@ -2923,6 +2990,10 @@ pub fn make_synthetic_state(
         // Phase 2 S2 extension (Tractor Beam closure): synthetic-state
         // printings are not don't-untap Auras.
         aura_prevents_host_untap: false,
+        // Phase 4 S3 (Moonlit Meditation substrate landing,
+        // 2026-05-20): synthetic-state printings carry no
+        // token-creation replacement rider. Back-compat default.
+        aura_replaces_first_tokens_with_copies: false,
         // Static / layered abilities substrate — Phase 1 first-
         // deliverable (round-79): synthetic-state printings have no
         // anthem statics. Back-compat default (every pre-substrate
@@ -2983,6 +3054,12 @@ pub fn make_synthetic_state(
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,
+        // Phase 4 S3 (Moonlit Meditation substrate landing,
+        // 2026-05-20): per-player created-tokens-this-turn flags
+        // start cleared at game construction. Both slots default
+        // false; CreateToken flips the controller's slot on a
+        // non-zero-count batch, turn-cleanup resets both.
+        created_tokens_this_turn: [false; 2],
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         // R76-1: seed the monotonic id counter past every object
