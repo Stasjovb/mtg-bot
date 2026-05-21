@@ -677,29 +677,51 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
 /// base (UEOT additive +/- bonuses and aura ±P/±T grants from layer
 /// 7c apply on TOP of the set base).
 ///
-/// **Multi-Aura timestamp interleaving (HONEST-STOP).** Per CR
-/// 613.3b the latest set-base wins by timestamp when multiple
-/// set-base-PT Auras are on the same host. The bench has no
-/// `timestamp` ordering on Rust GameObjects today (`attached_to` is
-/// the only attachment field surfaced), so this helper returns the
-/// FIRST set-base-PT Aura it encounters in the deterministic bf
-/// walk (player 0 then player 1, in registration order). For the
-/// admit set today there is no S2 carrier that puts two
-/// set-base-PT Auras on the same host, so the simplification is
-/// parity-clean for the live pool. A future Phase 3 slice can
-/// promote this to a per-Aura timestamp walk when a real
-/// multi-set-base interleave hits the bench.
+/// **Multi-Aura set-base-PT timestamp interleaving (CR 613.3b).**
+/// Per CR 613.3b, when multiple set-base-PT continuous effects apply
+/// to the same object, the *most recent* by timestamp wins. For an
+/// Aura's set-base-PT grant, the relevant timestamp is when the
+/// Aura entered the battlefield (and attached to the host) — every
+/// Aura attach in Rust goes through `move_aura_post_resolve`
+/// (`state_ops_resolve.rs:414`) which stamps a fresh monotonic
+/// `etb_timestamp` via `reserve_etb_timestamp` (state.rs:359).
+///
+/// This walker scans every Aura attached to `host_id` on both
+/// players' battlefields, picks the one with the highest
+/// `etb_timestamp` (latest attach), and returns its
+/// `aura_set_base_pt` tuple. Auras without `aura_set_base_pt` are
+/// skipped (e.g. a `+0/+1` buff Aura attached alongside a Lignify
+/// Aura — only the Lignify entry's set-base counts).
+///
+/// **Honest-stop closed (round-80, 2026-05-20).** The prior
+/// "FIRST in deterministic bf walk" implementation pre-dated the
+/// `etb_timestamp` field's elevation to substrate; it picked
+/// arbitrarily (registration order) instead of by timestamp. The
+/// admit set today has no live multi-set-base interleave carrier
+/// (Lignify-shape Auras are not yet bridge-admitted), so the
+/// behavior change is observable only through synthetic test
+/// fixtures — bridge-admitted POOL_PARITY remains byte-equal.
+///
+/// **Auras-only timestamp.** Equipment carries an
+/// `aura_set_base_pt` of `None` by construction (Equipment uses the
+/// `aura_equipment_bonuses` layer-7c surface, not set-base), so the
+/// helper's printing-side filter naturally restricts the walk to
+/// the Aura subset. The Aura-re-attach path (no production caller
+/// today) would also need to re-stamp `etb_timestamp` for full
+/// CR 613.7d compliance; today's Aura lifecycle is attach-once-at-
+/// resolve so the ETB stamp is the attach stamp.
 ///
 /// Mirrors Python's `_registry_set_base_pt` (the
 /// `attached_sets_base_pt` writer at `actions.py:2856-2869` adds a
 /// layer-7 sublayer-1 `set_base_pt` continuous-effects-registry
 /// entry on attach; the host's effective P/T reader at
 /// `game._compute_effective_pt` consumes that entry in its 7b
-/// branch).
+/// branch — latest-by-timestamp on the Python side too).
 pub(crate) fn aura_set_base_pt_on(
     state: &GameState,
     host_id: u32,
 ) -> Option<(i32, i32)> {
+    let mut best: Option<(u32, (i32, i32))> = None;
     for player in state.players.iter() {
         for obj in player.battlefield.iter() {
             if obj.attached_to != Some(host_id) {
@@ -712,12 +734,19 @@ pub(crate) fn aura_set_base_pt_on(
             if !printing.is_aura {
                 continue;
             }
-            if let Some((p, t)) = printing.aura_set_base_pt {
-                return Some((p as i32, t as i32));
-            }
+            let Some((p, t)) = printing.aura_set_base_pt else {
+                continue;
+            };
+            let pt = (p as i32, t as i32);
+            let ts = obj.etb_timestamp;
+            best = match best {
+                None => Some((ts, pt)),
+                Some((cur_ts, _)) if ts > cur_ts => Some((ts, pt)),
+                Some(_) => best,
+            };
         }
     }
-    None
+    best.map(|(_, pt)| pt)
 }
 
 /// **Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).**
