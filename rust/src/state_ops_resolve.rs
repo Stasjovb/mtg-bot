@@ -233,6 +233,113 @@ fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
     None
 }
 
+/// **Aura-attachment Phase 4 S3 closure (2026-05-21) — Moonlit
+/// Meditation token-creation replacement.**
+///
+/// Returns the `(token_pid, supertype_override)` pair that a
+/// `CreateToken`-family arm should use to mint a token batch for
+/// `controller_idx`. The default return is `(requested_pid, false)`
+/// — no replacement, no override — and is hit on every state where
+/// no Moonlit-shape Aura is in play OR the controller has already
+/// created tokens this turn.
+///
+/// **Replacement teeth.** Substitution fires only when all of the
+/// following hold (mirrors Python's
+/// `_find_moonlit_replacement_source` + the surrounding membership
+/// check at `effects/generic/tokens.py:217-247`):
+///
+/// 1. `controller_idx` is within the per-player flag array bounds
+///    AND `state.created_tokens_this_turn[controller_idx] == false`
+///    (this is the FIRST token batch this turn for that player).
+/// 2. Some battlefield permanent under `controller_idx`'s control
+///    carries a printing with
+///    `aura_replaces_first_tokens_with_copies = true`.
+/// 3. That Aura's `attached_to` is `Some(host_id)` AND the host
+///    object is alive on either player's battlefield. Mirrors
+///    Python's `next(o for o in state.battlefield if o.id ==
+///    moonlit.attached_to)` — a host that has left the battlefield
+///    leaves the Aura with a stale `attached_to`, in which case the
+///    replacement is a no-op (the Aura would also be sacrificed via
+///    CR 704.5n SBA, but the per-call gate here is defensive).
+///
+/// **Override flag semantics.** When substitution fires, the
+/// returned `supertype_override` is `true` only when the host's
+/// printing does NOT already carry `"Token"` in its `supertypes`
+/// Vec. Mirrors Python's conditional `["Token"] if "Token" not in
+/// base.supertypes else []` at `tokens.py:240-242` — a Moonlit-on-
+/// a-Token-host case (e.g. a Robot token enchanted by Moonlit, a
+/// degenerate-but-CR-legal state) is a no-op for supertype
+/// injection because the host already has the supertype.
+///
+/// **Why a single helper.** All four token-mint arms
+/// (`Effect::CreateToken`, `CreateTokenTapped`,
+/// `CreateTokenEachPlayer`, `CreateTokenCopyOfTargetCreatureYouControl`)
+/// must consult the same replacement check to mirror Python's
+/// `CreateToken.resolve` semantics. The Moonlit replacement is a
+/// **per-recipient** check (`each_player` iterates the recipient
+/// set, calling the same gate per recipient), so the helper takes
+/// `controller_idx` rather than reading `active_player`.
+pub(crate) fn moonlit_token_substitution(
+    state: &GameState,
+    controller_idx: u8,
+    requested_pid: u32,
+) -> (u32, bool) {
+    let cidx = controller_idx as usize;
+    if cidx >= state.created_tokens_this_turn.len() {
+        return (requested_pid, false);
+    }
+    if state.created_tokens_this_turn[cidx] {
+        return (requested_pid, false);
+    }
+    // Locate a Moonlit-shape Aura under controller_idx's control
+    // whose host is alive on the battlefield. Iterates owner zones in
+    // p0-then-p1 order, then within each zone in insertion order —
+    // matching Python's `for o in state.battlefield` walk order (the
+    // centralized state.battlefield list is built p0 first per the
+    // existing CE4 ordering).
+    let mut host_pid: Option<u32> = None;
+    'outer: for owner in &state.players {
+        for aura in owner.battlefield.iter() {
+            if aura.controller != controller_idx {
+                continue;
+            }
+            let aura_printing = match state.registry.lookup(aura.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            if !aura_printing.aura_replaces_first_tokens_with_copies {
+                continue;
+            }
+            let host_id = match aura.attached_to {
+                Some(h) => h,
+                None => continue,
+            };
+            // Resolve the host's printing_id by scanning both bf
+            // zones for the host obj.
+            for host_owner in &state.players {
+                for host_obj in host_owner.battlefield.iter() {
+                    if host_obj.id == host_id {
+                        host_pid = Some(host_obj.printing_id);
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    let Some(pid) = host_pid else {
+        return (requested_pid, false);
+    };
+    // Conditional supertype injection — skip when the host's
+    // printing already carries "Token" (mirrors Python's list-append
+    // guard at tokens.py:240-242).
+    let override_flag = state
+        .registry
+        .lookup(pid)
+        .map(|p| !p.supertypes.iter().any(|s| s == "Token"))
+        .unwrap_or(false);
+    (pid, override_flag)
+}
+
 /// Take the GameObject with id `obj_id` out of whichever of the
 /// four tracked zones currently holds it. Returns the owned
 /// `GameObject` (and the player_idx + source_zone constant for
@@ -3632,6 +3739,77 @@ fn apply_effect(
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
 
+            // **Aura-attachment Phase 4 S3 closure (2026-05-21) —
+            // Moonlit Meditation replacement.** Per CR 614, if the
+            // controller has an attached Aura with the
+            // `aura_replaces_first_tokens_with_copies` rider AND this
+            // is the FIRST token-creation batch of this turn for that
+            // player, the tokens are created as copies of the Aura's
+            // `attached_to` host instead of the requested printing,
+            // with the Token supertype added. Mirrors Python's
+            // `_find_moonlit_replacement_source` + `_dc.replace(base,
+            // supertypes=(*base, "Token"))` shim at
+            // `effects/generic/tokens.py:217-247`.
+            //
+            // **Substitution semantics.**
+            //   * `token_pid` is swapped to the host's `printing_id`.
+            //     The freshly-minted GameObjects then carry the host's
+            //     printing — same name, P/T, keywords, abilities — but
+            //     with the per-object Token-supertype override flag
+            //     set so every `is_token` read site (token-cease
+            //     scrub, "is a token" predicates) treats them as
+            //     tokens. This avoids minting a fresh runtime
+            //     `printing_id` for the host-with-Token-supertype copy
+            //     and matches Python's in-memory `_dc.replace`
+            //     supertype-injection shim in spirit (Python returns a
+            //     fresh CardPrinting instance; Rust keeps the host's
+            //     pid + per-object override).
+            //   * `moonlit_override` records whether the Token
+            //     supertype must be injected on the substituted token.
+            //     `false` when no Moonlit-shape Aura is attached, or
+            //     when this player has already created tokens this
+            //     turn (the per-player `created_tokens_this_turn`
+            //     flag), or when the host's printing already carries
+            //     "Token" in its supertypes (a Token Aura host — the
+            //     supertype is already present so the override is a
+            //     no-op; the bridge-truthy shape mirrors Python's
+            //     `_dc.replace` which skips injection in the same
+            //     case).
+            //   * `summoning_sick` is recomputed off the (possibly
+            //     swapped) `token_pid` — a Moonlit substitution may
+            //     change a non-creature placeholder into a creature
+            //     token whose printing carries `Creature`, or vice
+            //     versa.
+            //
+            // **Pre-resolve flag-flip ordering.** The per-player
+            // `created_tokens_this_turn` flag is read here as a
+            // GATE on whether substitution applies, BEFORE the
+            // post-resolve flag flip at the tail of this arm. Python's
+            // ordering matches (the membership check at `tokens.py:225`
+            // precedes the `players_who_created_tokens_this_turn.add`
+            // at `:294`). This guarantees the substitution fires once
+            // per turn per controller as CR 614 prescribes.
+            //
+            // **Honest-stop teeth.** Substitution requires:
+            //   1. The active controller's slot in
+            //      `created_tokens_this_turn` is `false`.
+            //   2. Some bf object under the controller's control whose
+            //      printing carries `aura_replaces_first_tokens_with
+            //      _copies = true` AND whose `attached_to` is `Some`
+            //      and points at a live bf object on either player.
+            // Either failure → `replacement_pid = None` → no swap.
+            // See the `moonlit_token_substitution` helper for the
+            // full per-condition tooth list. Mirrors Python's
+            // `_find_moonlit_replacement_source` return-None
+            // semantics at `effects/base.py:316-324`.
+            let (token_pid, moonlit_override) =
+                moonlit_token_substitution(state, active, token_pid);
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+
             // R76-1: draw fresh ids from the monotonic
             // `next_object_id` counter (CR 111.7 — never reuse a
             // freed object's id). This REPLACES the old non-monotonic
@@ -3666,20 +3844,13 @@ fn apply_effect(
             let bf_etb_base = state.next_etb_timestamp;
             // Slice 14 (TTT Pin 2 alignment with the Python fix at
             // actions.py:2993): summoning sickness is a creature-only
-            // property per CR 302.1 + 612.6. Mirror `move_source_post_
-            // resolve`'s `&& creature` gate -- non-creature tokens
-            // (Lander artifact, Treasure, Food, Clue, etc.) enter with
-            // summoning_sick=false; creature tokens (Robot, Drone,
-            // Human Soldier, ...) still enter with summoning_sick=true.
-            // Read is_creature from the token printing's card_types
-            // (registry lookup; we already confirmed presence above).
-            let token_is_creature = state
-                .registry
-                .lookup(token_pid)
-                .map(|printing| {
-                    printing.card_types.iter().any(|t| t == "Creature")
-                })
-                .unwrap_or(false);
+            // property per CR 302.1 + 612.6. `token_is_creature` was
+            // computed above in the Moonlit-substitution tuple
+            // destructure off the (possibly swapped) `token_pid`, so
+            // a Moonlit-substituted token whose host printing is a
+            // Creature gets `summoning_sick=true` and a non-creature
+            // host gets `false`, matching Python's read off the
+            // post-`_dc.replace` printing.
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
@@ -3709,6 +3880,17 @@ fn apply_effect(
                     warped: false,
                     cast_from_exile_with_lightstall_surcharge: false,
                     controller_baseline: None,
+                    // **Aura-attachment Phase 4 S3 closure
+                    // (2026-05-21).** Per-object Token supertype
+                    // override — set `true` only when this token was
+                    // minted as a Moonlit-Meditation replacement
+                    // copy (`token_printing_id` was swapped to the
+                    // host's printing AND the host's printing does
+                    // NOT already carry the Token supertype). The
+                    // `moonlit_override` local below is computed BEFORE
+                    // the loop from the pre-mint replacement-source
+                    // lookup and threads through to every pushed token.
+                    token_supertype_override: moonlit_override,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -3835,16 +4017,44 @@ fn apply_effect(
             for _ in 0..total_tokens {
                 fresh_ids.push(crate::state::reserve_object_id(state));
             }
-            // Slice 14 (TTT Pin 2 alignment) -- read the token printing's
-            // is_creature flag for the summoning_sick gate; mirrors the
-            // sister `CreateToken` arm above.
-            let token_is_creature = state
-                .registry
-                .lookup(token_pid)
-                .map(|printing| {
-                    printing.card_types.iter().any(|t| t == "Creature")
+            // **Aura-attachment Phase 4 S3 closure (2026-05-21) —
+            // Moonlit Meditation replacement, each-player variant.**
+            // Each recipient's batch is independently checked against
+            // its OWN per-player `created_tokens_this_turn` slot AND
+            // its OWN attached Moonlit-shape Aura set — mirrors
+            // Python's `for recipient in recipients: ... moonlit =
+            // _find_moonlit_replacement_source(state, recipient)`
+            // loop at `effects/generic/tokens.py:216-247`. A recipient
+            // who already created tokens this turn or who controls no
+            // Moonlit-shape Aura gets the original `token_pid` and
+            // `override=false`; a Moonlit-eligible recipient gets the
+            // host's printing + `override=true` (modulo the supertype-
+            // injection guard inside the helper).
+            //
+            // Pre-pass computes per-recipient `(pid, override,
+            // is_creature)` BEFORE any battlefield mutation begins,
+            // so the per-recipient `Arc::make_mut` borrow below
+            // doesn't conflict with the immutable state walk inside
+            // `moonlit_token_substitution`.
+            let per_recipient: Vec<(u32, bool, bool)> = living
+                .iter()
+                .map(|&recipient_idx| {
+                    let (pid, override_flag) =
+                        moonlit_token_substitution(
+                            state,
+                            recipient_idx as u8,
+                            token_pid,
+                        );
+                    let is_creature = state
+                        .registry
+                        .lookup(pid)
+                        .map(|p| {
+                            p.card_types.iter().any(|t| t == "Creature")
+                        })
+                        .unwrap_or(false);
+                    (pid, override_flag, is_creature)
                 })
-                .unwrap_or(false);
+                .collect();
             // CE4 closure: stamp each token (across all recipients
             // combined) with a fresh strictly-monotonic etb_timestamp.
             let bf_etb_base = state.next_etb_timestamp;
@@ -3865,19 +4075,22 @@ fn apply_effect(
             // p.has_lost]` / `state.players_who_created_tokens_this_
             // turn.add(recipient)` at `tokens.py:212+294`).
             let recipients_for_flag_flip: Vec<usize> = living.clone();
-            for recipient_idx in living {
+            for (recipient_pos, recipient_idx) in living.iter().enumerate() {
+                let recipient_idx = *recipient_idx;
                 let recipient_u8 = recipient_idx as u8;
+                let (recipient_pid, recipient_override, recipient_is_creature) =
+                    per_recipient[recipient_pos];
                 let bf: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[recipient_idx].battlefield);
                 for _ in 0..n {
                     let tok_id = fresh_ids[global_token_idx as usize];
                     bf.push(GameObject {
                         id: tok_id,
-                        printing_id: token_pid,
+                        printing_id: recipient_pid,
                         controller: recipient_u8,
                         zone: ZONE_BATTLEFIELD,
                         tapped: false,
-                        summoning_sick: token_is_creature,
+                        summoning_sick: recipient_is_creature,
                         damage: 0,
                         counters: 0,
                         charge_counters: 0,
@@ -3896,6 +4109,12 @@ fn apply_effect(
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
                         controller_baseline: None,
+                        // Aura-attachment Phase 4 S3 closure
+                        // (2026-05-21): each-player variant Moonlit
+                        // substitution. Per-recipient override flag
+                        // was computed once above in the `per_recipient`
+                        // pre-pass.
+                        token_supertype_override: recipient_override,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -3983,6 +4202,23 @@ fn apply_effect(
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
 
+            // **Aura-attachment Phase 4 S3 closure (2026-05-21) —
+            // Moonlit Meditation replacement, tapped variant.**
+            // Mirrors the sister `Effect::CreateToken` arm's
+            // substitution: a Moonlit-shape Aura controlled by the
+            // recipient with a live `attached_to` host AND a clear
+            // `created_tokens_this_turn` slot causes the requested
+            // token printing to be swapped for the host's printing
+            // with the per-object Token-supertype override stamped.
+            // The tapped-on-entry rider survives the substitution —
+            // a Moonlit-replaced token still enters tapped per the
+            // requesting Effect variant's semantics (Python's
+            // `_dc.replace` only swaps the printing; the surrounding
+            // `obj.tapped = True` post-ETB stamp at
+            // `tokens.py:286-287` is unchanged).
+            let (token_pid, moonlit_override) =
+                moonlit_token_substitution(state, active, token_pid);
+
             // R76-1: draw fresh ids from the monotonic
             // `next_object_id` counter (CR 111.7), REPLACING the old
             // non-monotonic `max_id + 1` re-scan. Reserve all `n`
@@ -3998,7 +4234,10 @@ fn apply_effect(
 
             // Slice 14 (TTT Pin 2 alignment) -- mirror sister
             // `CreateToken` arm: non-creature tokens enter with
-            // summoning_sick=false per CR 302.1 + 612.6.
+            // summoning_sick=false per CR 302.1 + 612.6. Reads off
+            // the (possibly Moonlit-swapped) `token_pid` so a
+            // substituted creature host correctly stamps
+            // summoning_sick=true.
             let token_is_creature = state
                 .registry
                 .lookup(token_pid)
@@ -4041,6 +4280,11 @@ fn apply_effect(
                     warped: false,
                     cast_from_exile_with_lightstall_surcharge: false,
                     controller_baseline: None,
+                    // Aura-attachment Phase 4 S3 closure (2026-05-21):
+                    // tapped-token-variant Moonlit substitution.
+                    // `moonlit_override` was computed once above off
+                    // the pre-mint replacement-source lookup.
+                    token_supertype_override: moonlit_override,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -7127,6 +7371,14 @@ fn apply_effect(
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
                         controller_baseline: None,
+                        // Aura-attachment Phase 4 S3 closure
+                        // (2026-05-21): Seedship-Impact-shape bespoke
+                        // token-mints route through `state.new_object`
+                        // on Python, NOT through `CreateToken.resolve`
+                        // — so Python skips the Moonlit replacement
+                        // check entirely. Mirror that: the override
+                        // stays `false`.
+                        token_supertype_override: false,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -7292,6 +7544,13 @@ fn apply_effect(
                         warped: false,
                         cast_from_exile_with_lightstall_surcharge: false,
                         controller_baseline: None,
+                        // Aura-attachment Phase 4 S3 closure
+                        // (2026-05-21): Orbital-Plunge-Lander-shape
+                        // bespoke mints don't route through
+                        // `CreateToken.resolve` on Python (same
+                        // rationale as the sister Seedship Impact
+                        // arm above).
+                        token_supertype_override: false,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -11081,6 +11340,23 @@ fn apply_effect(
             let Some(printing_id) = target_printing_id else {
                 return Ok(()); // no eligible target
             };
+            // **Aura-attachment Phase 4 S3 closure (2026-05-21) —
+            // Moonlit Meditation replacement, copy-of-target variant.**
+            // Python's `CreateTokenCopyOfTargetCreatureYouControl`
+            // resolves by building a printing-with-Token-supertype
+            // from the target and calling
+            // `CreateToken(token_printing=..., count=1).resolve(...)`,
+            // which then consults `_find_moonlit_replacement_source`
+            // and substitutes the host's printing if Moonlit is in
+            // play (`effects/generic/tokens.py:350-389` → 216-247).
+            // The Rust arm mirrors that by applying the same
+            // substitution here BEFORE the GameObject is constructed —
+            // a Moonlit-eligible controller mints a copy of the
+            // attached Aura's host instead of the originally chosen
+            // creature target, with the per-object Token-supertype
+            // override stamped.
+            let (printing_id, moonlit_override) =
+                moonlit_token_substitution(state, cidx as u8, printing_id);
             // R76-1: draw a fresh id from the monotonic
             // `next_object_id` counter (CR 111.7), REPLACING the old
             // non-monotonic `max_id + 1` re-scan that recycled a
@@ -11115,6 +11391,22 @@ fn apply_effect(
                 warped: false,
                 cast_from_exile_with_lightstall_surcharge: false,
                 controller_baseline: None,
+                // Aura-attachment Phase 4 S3 closure (2026-05-21):
+                // copy-of-target variant Moonlit substitution. The
+                // copy mechanism's own "Token supertype injection"
+                // (via Python's `_dc.replace(base, supertypes=...)`
+                // for non-Moonlit copies) lands at the same per-
+                // object override site here. Pre-substrate Rust
+                // didn't carry the Token supertype on copied tokens
+                // because the registered printing didn't (the copy
+                // was implicit via `printing_id` reuse) — this
+                // closure makes the bridge round-trip honest for the
+                // Moonlit-eligible case. The non-Moonlit copy case
+                // stays at `false` here for back-compat; a future
+                // slice can widen this to also stamp the override
+                // when a copy is made unconditionally if that
+                // semantic gap surfaces.
+                token_supertype_override: moonlit_override,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -14532,8 +14824,16 @@ fn apply_effect(
                 let registry = &state.registry;
                 bf.iter().find_map(|obj| {
                     let printing = registry.printings.get(obj.printing_id as usize)?;
+                    // Aura-attachment Phase 4 S3 closure (2026-05-21):
+                    // consult the per-object override so a Moonlit-
+                    // Meditation-replacement token is excluded from
+                    // the "non-token creature" pool even though its
+                    // printing_id points at the host's (non-Token)
+                    // printing. Mirrors Python's
+                    // `not obj.printing.is_token` read against the
+                    // injected supertype tuple.
                     if printing.card_types.iter().any(|t| t == "Creature")
-                        && !registry.is_token(obj.printing_id)
+                        && !obj.effective_is_token(registry)
                     {
                         Some(obj.id)
                     } else {
@@ -14990,11 +15290,13 @@ fn apply_effect(
             // Python's `WarpExileSelf.resolve` sets `obj.warped = True`
             // only for non-tokens; Phase-1 warp cards are never tokens
             // but the gate keeps this forward-correct.
-            let is_token = state
-                .registry
-                .lookup(obj.printing_id)
-                .map(|p| p.supertypes.iter().any(|s| s == "Token"))
-                .unwrap_or(false);
+            // Aura-attachment Phase 4 S3 closure (2026-05-21): consult
+            // the per-object override so a Moonlit-Meditation-
+            // replacement token reaching a warp-exile path (a
+            // pathological case — warp-cast creatures don't sit
+            // attached to Moonlit Auras in EoE, but the gate stays
+            // forward-correct) is still treated as a token here.
+            let is_token = obj.effective_is_token(&state.registry);
             if !is_token {
                 obj.warped = true;
             }
@@ -15768,6 +16070,10 @@ impl GameState {
             warped: false,
             cast_from_exile_with_lightstall_surcharge: false,
             controller_baseline: None,
+            // Aura-attachment Phase 4 S3 closure (2026-05-21):
+            // caller-injected objects never start as Moonlit-
+            // substituted tokens. Back-compat default.
+            token_supertype_override: false,
         };
 
         // R76-1: advance the monotonic id counter past this injected
@@ -15909,6 +16215,10 @@ impl GameState {
             warped: false,
             cast_from_exile_with_lightstall_surcharge: false,
             controller_baseline: None,
+            // Aura-attachment Phase 4 S3 closure (2026-05-21):
+            // freshly-pushed stack objects (spell-as-source) are
+            // never Moonlit-substituted tokens. Back-compat default.
+            token_supertype_override: false,
         };
         self.stack_objects.push(obj);
         self.stack.push(StackItem {

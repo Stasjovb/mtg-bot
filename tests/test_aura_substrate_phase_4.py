@@ -379,16 +379,23 @@ def test_chorale_of_the_void_loader_still_declined():
     )
 
 
-def test_moonlit_meditation_loader_still_declined():
-    """**Moonlit Meditation stays declined at the bench loader.**
+def test_moonlit_meditation_loader_admits_post_phase_4_s3_closure():
+    """**Moonlit Meditation admits at the bench loader post-Phase-4-S3
+    closure (2026-05-21).**
 
-    Moonlit's ``replaces_first_tokens_with_copies=True`` rider is
-    a CR 614 token-creation replacement effect that requires a
-    Rust replacement-effect substrate (per-player
-    ``tokens_created_this_turn_count``, a token-creation primitive
-    that consults attached Auras, a new CardDef field, bridge
-    plumbing). None of that ships in this slice — Moonlit stays
-    positively declined at the S3 replacement-rider check.
+    Pre-closure context (kept for change-tracking): Moonlit's
+    ``replaces_first_tokens_with_copies=True`` rider is a CR 614
+    token-creation replacement effect — the Phase-4 first-deliverable
+    slice declined the rider at the loader because the Rust
+    CreateToken arm did not yet consult attached Auras to swap the
+    token's ``printing_id`` to the host's printing.
+
+    Post-closure: ``moonlit_token_substitution``
+    (``rust/src/state_ops_resolve.rs``) lights up the Rust consumer,
+    swapping the token's ``printing_id`` to the host's printing with
+    the per-object Token-supertype override stamped on the freshly-
+    minted GameObject. The loader now admits Moonlit as a bridge-
+    simple Aura.
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_aura
@@ -406,14 +413,15 @@ def test_moonlit_meditation_loader_still_declined():
         "Pre-condition: Moonlit Meditation must parse to "
         "replaces_first_tokens_with_copies=True (S3 sub-shape)."
     )
-    assert _printing_is_bridge_simple_aura(printing) is False, (
-        "Phase 4 honest-stop: Moonlit Meditation must STAY declined "
-        "at the bench loader — the token-creation replacement "
-        "substrate is not yet in Rust. Admitting Moonlit here would "
-        "silently mistranslate: Python would create copies of the "
-        "host instead of vanilla tokens while Rust would create "
-        "vanilla tokens, diverging immediately on the first "
-        "token-creation each turn."
+    assert _printing_is_bridge_simple_aura(printing) is True, (
+        "Phase 4 S3 closure: Moonlit Meditation must ADMIT at the "
+        "bench loader. The Rust CreateToken-family arms consult the "
+        "controller's attached Moonlit-shape Aura via "
+        "moonlit_token_substitution and substitute the token's "
+        "printing_id with the host's printing + per-object Token-"
+        "supertype override — byte-equal against Python's "
+        "_find_moonlit_replacement_source + _dc.replace(base, "
+        "supertypes=(*base, 'Token')) shim."
     )
 
 

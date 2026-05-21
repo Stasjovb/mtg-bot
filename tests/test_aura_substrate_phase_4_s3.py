@@ -411,11 +411,17 @@ def test_moonlit_meditation_real_eoe_card_def_carries_s3_flag():
     ``_printing_to_card_def`` (the aura arm) carrying the S3 flag.
     Sanity that the parser + bridge plumbing agree on the value.
 
-    The loader admit predicate stays declined at the
-    ``replaces_first_tokens_with_copies`` check (separate negative
-    pin below), but the CardDef arm itself MUST surface the field
-    when invoked directly — otherwise the bridge round-trip would
-    silently drop the rider once the loader admit lights up.
+    **Post-Phase-4-S3-closure flip (2026-05-21).** Pre-closure the
+    loader-side admit gate (``_printing_is_bridge_simple_aura``)
+    declined Moonlit at the ``replaces_first_tokens_with_copies``
+    check, so ``_printing_to_card_def`` raised
+    ``ValueError("not bridge-supported")``. Post-closure the Rust
+    CreateToken arms consult the controller's attached Moonlit-shape
+    Aura via ``moonlit_token_substitution`` and swap the token's
+    printing_id to the host's printing with the per-object Token-
+    supertype override stamped; the loader now ADMITS Moonlit, and
+    ``_printing_to_card_def`` materializes a CardDef whose
+    ``aura_replaces_first_tokens_with_copies`` field is True.
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_to_card_def
@@ -434,32 +440,58 @@ def test_moonlit_meditation_real_eoe_card_def_carries_s3_flag():
         "replaces_first_tokens_with_copies=True."
     )
 
-    # Drive the CardDef arm directly. The trajectory chokepoint
-    # raises ValueError when the printing matches none of the bridge-
-    # supported arms — and Moonlit Meditation is declined at the
-    # ``_printing_is_bridge_simple_aura`` predicate today (S3 rider
-    # check). Pin the negative path here so any future positive-admit
-    # slice's regression flips this assertion's expected behavior
-    # rather than passing silently. The symmetric-bridge invariant
-    # for the rider field is covered by the synthetic CardDef
-    # round-trip probe (see
-    # test_aura_replaces_first_tokens_bridge_round_trip).
-    with pytest.raises(ValueError) as excinfo:
-        _printing_to_card_def(printing)
-    assert "Moonlit Meditation" in str(excinfo.value) or (
-        "not bridge-supported" in str(excinfo.value)
-    ), (
-        "Phase 4 S3 negative pin: _printing_to_card_def must reject "
-        "Moonlit Meditation as 'not bridge-supported' while the §2 "
-        "admit-gate (_printing_is_bridge_simple_aura) declines the "
-        f"rider. Got error: {excinfo.value!r}."
+    # Phase 4 S3 closure (2026-05-21): _printing_to_card_def admits
+    # the Moonlit Meditation printing and materializes a CardDef
+    # whose Aura fields include aura_replaces_first_tokens_with_copies
+    # = True. The CardDef round-trip (separate
+    # test_aura_replaces_first_tokens_bridge_round_trip) already
+    # locks in the bridge wire for a synthetic CardDef carrying that
+    # flag; this real-EoE probe ensures the parser-to-CardDef arm
+    # threads the field through end-to-end.
+    cd = _printing_to_card_def(printing)
+    assert cd.name == "Moonlit Meditation", (
+        f"Phase 4 S3 closure: CardDef name must round-trip the "
+        f"printing's name; got cd.name={cd.name!r}."
+    )
+    assert cd.card_type == "Enchantment", (
+        f"Phase 4 S3 closure: Moonlit Meditation's CardDef must "
+        f"materialize as card_type=Enchantment (the Phase-1 Aura "
+        f"arm's shape); got cd.card_type={cd.card_type!r}."
+    )
+    assert cd.is_aura is True, (
+        "Phase 4 S3 closure: Moonlit Meditation's CardDef must set "
+        "is_aura=True."
+    )
+    assert cd.aura_replaces_first_tokens_with_copies is True, (
+        "Phase 4 S3 closure: Moonlit Meditation's CardDef must thread "
+        "aura_replaces_first_tokens_with_copies=True through to the "
+        "Rust bridge so the substituted token's printing_id swap "
+        "fires on cross-engine resolution."
+    )
+    assert cd.aura_yours_only is True, (
+        "Phase 4 S3 closure: Moonlit Meditation's CardDef must carry "
+        "aura_yours_only=True (the printing's 'Enchant creature you "
+        "control' restriction)."
+    )
+    assert cd.aura_enchant_type == "creature", (
+        "Phase 4 S3 closure: Moonlit Meditation's CardDef must carry "
+        "aura_enchant_type='creature'."
     )
 
 
-def test_moonlit_meditation_loader_still_declined_s3_pin():
-    """Moonlit Meditation stays declined at the bench loader. Mirror
-    of the Phase 4 first-deliverable pin, kept here so the S3
-    substrate slice has its own admit-still-declined assertion.
+def test_moonlit_meditation_loader_admits_post_closure():
+    """Moonlit Meditation admits at the bench loader post-Phase-4-S3
+    closure (2026-05-21). Pre-closure pin (kept for change-tracking):
+    ``_printing_is_bridge_simple_aura`` returned False at the
+    ``replaces_first_tokens_with_copies`` check; post-closure: the
+    rejection is replaced with a fallthrough comment, so the
+    predicate admits Moonlit. The Rust CreateToken arms now consult
+    the controller's Moonlit Aura via ``moonlit_token_substitution``
+    (rust/src/state_ops_resolve.rs) and swap the token's printing_id
+    to the host's printing with the per-object Token-supertype
+    override stamped — bridge-correct against Python's
+    ``_find_moonlit_replacement_source`` + ``_dc.replace(base,
+    supertypes=...)`` shim.
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_aura
@@ -469,16 +501,15 @@ def test_moonlit_meditation_loader_still_declined_s3_pin():
     assert printing is not None
     assert printing.is_aura is True
     assert printing.replaces_first_tokens_with_copies is True
-    assert _printing_is_bridge_simple_aura(printing) is False, (
-        "Phase 4 S3 honest-stop: Moonlit Meditation must STAY "
-        "declined at the bench loader. The S3 substrate landing "
-        "ships the CardDef field + bridge round-trip + per-player "
-        "state slot, but NOT the Rust CreateToken-arm consumer "
-        "(swap token printing_id to host's printing). Admitting "
-        "Moonlit here would silently mistranslate: Python's first-"
-        "token-this-turn batch becomes copies of the host while "
-        "Rust creates the spell's printed token type, diverging "
-        "immediately on the first token-creation each turn."
+    assert _printing_is_bridge_simple_aura(printing) is True, (
+        "Phase 4 S3 closure: Moonlit Meditation must ADMIT at the "
+        "bench loader. The Rust CreateToken-family arms consult the "
+        "controller's attached Moonlit-shape Aura via "
+        "moonlit_token_substitution and swap the token's printing_id "
+        "to the host's printing with the per-object Token-supertype "
+        "override stamped on the freshly-minted GameObject — "
+        "byte-equal cross-engine against Python's _dc.replace-injected "
+        "supertype tuple."
     )
 
 

@@ -104,6 +104,22 @@ fn object_to_pydict<'py>(
         "cast_from_exile_with_lightstall_surcharge",
         obj.cast_from_exile_with_lightstall_surcharge,
     )?;
+    // **Aura-attachment Phase 4 S3 closure (2026-05-21).** Surface
+    // the per-object Token-supertype override so cross-engine bench
+    // probes can observe a Moonlit-Meditation-replacement token's
+    // injected "Token" supertype. Pre-substrate snapshots observe
+    // `false` on every object (back-compat default — unchanged from
+    // the pre-substrate dict), so the new key is additive but the
+    // value is invariant on snapshots that don't exercise the
+    // Moonlit replacement path. The bridge-truthy comparator
+    // (cross_engine.assert_bf_snapshots_byte_equal) reads this
+    // key alongside the printing's supertypes to recover the same
+    // "is this a Token?" answer Python's `obj.printing.is_token`
+    // produces against the `_dc.replace`-injected supertype tuple.
+    d.set_item(
+        "token_supertype_override",
+        obj.token_supertype_override,
+    )?;
     Ok(d)
 }
 

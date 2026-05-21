@@ -616,14 +616,21 @@ def test_predicate_admits_tractor_beam_post_cast_time_seat_alignment():
     assert _printing_is_bridge_simple_aura(p) is True
 
 
-def test_predicate_declines_moonlit_meditation():
-    """Moonlit Meditation carries the ``replaces_first_tokens_with_copies``
-    replacement rider (S3) — declined regardless of Phase 3 widening."""
+def test_predicate_admits_moonlit_meditation_post_phase_4_s3_closure():
+    """Moonlit Meditation's ``replaces_first_tokens_with_copies``
+    rider (S3) admits at the loader post-Phase-4-S3 closure
+    (2026-05-21). Pre-closure pin (kept for change-tracking): the
+    predicate declined the rider regardless of Phase 3 widening
+    because the Rust CreateToken arm hadn't yet consulted the
+    controller's attached Moonlit Aura. Post-closure: ``moonlit_
+    token_substitution`` (rust/src/state_ops_resolve.rs) wires the
+    consumer end-to-end, the loader admits, and the rider round-
+    trips byte-equal cross-engine."""
     from mtg_bot.cards.source import get_active_source
 
     p = get_active_source().get_printings()["Moonlit Meditation"]
     assert p.is_aura is True
-    assert _printing_is_bridge_simple_aura(p) is False
+    assert _printing_is_bridge_simple_aura(p) is True
 
 
 # ---------------------------------------------------------------------------
