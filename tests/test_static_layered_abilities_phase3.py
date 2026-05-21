@@ -86,11 +86,20 @@ def _require_engine():
         "Brightspear Zealot",
         "Cloudsculpt Technician",
         "Gravblade Heavy",
+        # Round-82 (2026-05-20, Mechan Shieldmate closure): joins
+        # the admit set via the third condition tag
+        # `"controlled_artifact_entered_this_turn"` + a
+        # RemoveKeyword payload arm in
+        # `_static_ability_to_self_conditional_bonus`. Its
+        # Artifact-Creature dual-type is the first
+        # ``extra_card_types=("Artifact",)`` shape this predicate
+        # admits.
+        "Mechan Shieldmate",
     ],
 )
-def test_admit_predicate_accepts_three_phase3_carriers(name):
-    """All three EoE SELF-scope conditional carriers pass the new
-    predicate."""
+def test_admit_predicate_accepts_four_phase3_carriers(name):
+    """All four EoE SELF-scope conditional carriers pass the
+    predicate. Round-82: Mechan Shieldmate joined the set."""
     src_mod = importlib.import_module("mtg_bot.cards.parser_source")
     src = src_mod.OracleParserCardSource()
     printings = src.get_printings()
@@ -98,20 +107,6 @@ def test_admit_predicate_accepts_three_phase3_carriers(name):
     assert (
         _printing_is_bridge_simple_static_self_conditional_creature(p)
         is True
-    )
-
-
-def test_admit_predicate_rejects_mechan_shieldmate():
-    """Mechan Shieldmate's
-    ``ControlledArtifactEnteredThisTurn`` Condition is not in the
-    Phase-3 two-tag table — predicate rejects."""
-    src_mod = importlib.import_module("mtg_bot.cards.parser_source")
-    src = src_mod.OracleParserCardSource()
-    printings = src.get_printings()
-    p = printings["Mechan Shieldmate"]
-    assert (
-        _printing_is_bridge_simple_static_self_conditional_creature(p)
-        is False
     )
 
 
@@ -208,7 +203,7 @@ def test_ability_to_bonus_pt_brightspear_shape():
     )
     bonus = _static_ability_to_self_conditional_bonus(ability)
     assert bonus == (
-        "at_least_n_spells_cast_this_turn", (2,), 2, 0, (),
+        "at_least_n_spells_cast_this_turn", (2,), 2, 0, (), (),
     )
 
 
@@ -229,7 +224,7 @@ def test_ability_to_bonus_keyword_gravblade_shape():
     )
     bonus = _static_ability_to_self_conditional_bonus(ability)
     assert bonus == (
-        "control_permanent_is_artifact", (), 0, 0, ("deathtouch",),
+        "control_permanent_is_artifact", (), 0, 0, ("deathtouch",), (),
     )
 
 
@@ -295,7 +290,7 @@ def test_printing_to_card_def_brightspear():
     assert cd.power == 2
     assert cd.toughness == 4
     assert cd.static_self_bonuses == (
-        ("at_least_n_spells_cast_this_turn", (2,), 2, 0, ()),
+        ("at_least_n_spells_cast_this_turn", (2,), 2, 0, (), ()),
     )
     assert "vigilance" in cd.keywords
 
@@ -308,7 +303,7 @@ def test_printing_to_card_def_cloudsculpt():
     printings = src.get_printings()
     cd = _printing_to_card_def(printings["Cloudsculpt Technician"])
     assert cd.static_self_bonuses == (
-        ("control_permanent_is_artifact", (), 1, 0, ()),
+        ("control_permanent_is_artifact", (), 1, 0, (), ()),
     )
     assert "flying" in cd.keywords
 
@@ -323,7 +318,7 @@ def test_printing_to_card_def_gravblade_coalesces():
     printings = src.get_printings()
     cd = _printing_to_card_def(printings["Gravblade Heavy"])
     assert cd.static_self_bonuses == (
-        ("control_permanent_is_artifact", (), 1, 0, ("deathtouch",)),
+        ("control_permanent_is_artifact", (), 1, 0, ("deathtouch",), ()),
     )
 
 
@@ -345,7 +340,7 @@ def test_card_def_round_trip_python_printing_brightspear():
         toughness=4,
         keywords=("vigilance",),
         static_self_bonuses=(
-            ("at_least_n_spells_cast_this_turn", (2,), 2, 0, ()),
+            ("at_least_n_spells_cast_this_turn", (2,), 2, 0, (), ()),
         ),
     )
     printing = _card_def_to_python_printing(cd)
@@ -382,7 +377,7 @@ def test_card_def_round_trip_python_printing_gravblade_fanout():
         static_self_bonuses=(
             (
                 "control_permanent_is_artifact", (), 1, 0,
-                ("deathtouch",),
+                ("deathtouch",), (),
             ),
         ),
     )
@@ -421,7 +416,10 @@ def test_rust_registry_round_trip_static_self_bonuses():
                 toughness=4,
                 keywords=("vigilance",),
                 static_self_bonuses=(
-                    ("at_least_n_spells_cast_this_turn", (2,), 2, 0, ()),
+                    (
+                        "at_least_n_spells_cast_this_turn", (2,), 2, 0,
+                        (), (),
+                    ),
                 ),
             ),
         ),
@@ -433,7 +431,7 @@ def test_rust_registry_round_trip_static_self_bonuses():
         name_to_pid["Brightspear"],
     )
     assert bonuses == [
-        ("at_least_n_spells_cast_this_turn", [2], 2, 0, []),
+        ("at_least_n_spells_cast_this_turn", [2], 2, 0, [], []),
     ]
     forest_bonuses = reg.get_printing_static_self_bonuses(
         name_to_pid["Forest"],
@@ -462,6 +460,7 @@ def test_rust_registry_rejects_unknown_tag():
             },
         ],
     }
+    # Match the round-82 widened error message (now three valid tags).
     with pytest.raises(ValueError, match="condition_tag must be"):
         reg.register_printing(bad_dict)
 
@@ -702,18 +701,35 @@ def test_rust_condition_does_not_cross_controllers():
     [
         (
             "Brightspear Zealot",
-            (("at_least_n_spells_cast_this_turn", (2,), 2, 0, ()),),
+            (
+                (
+                    "at_least_n_spells_cast_this_turn", (2,), 2, 0,
+                    (), (),
+                ),
+            ),
         ),
         (
             "Cloudsculpt Technician",
-            (("control_permanent_is_artifact", (), 1, 0, ()),),
+            (("control_permanent_is_artifact", (), 1, 0, (), ()),),
         ),
         (
             "Gravblade Heavy",
             (
                 (
                     "control_permanent_is_artifact", (), 1, 0,
-                    ("deathtouch",),
+                    ("deathtouch",), (),
+                ),
+            ),
+        ),
+        # Round-82 (2026-05-20): Mechan Shieldmate joins the
+        # admit set with the round-82 third tag +
+        # removed_keywords payload.
+        (
+            "Mechan Shieldmate",
+            (
+                (
+                    "controlled_artifact_entered_this_turn", (),
+                    0, 0, (), ("defender",),
                 ),
             ),
         ),
@@ -843,3 +859,456 @@ def test_real_eoe_byte_equal_effective_pt_match(card_name):
     # And the condition-on P/T must be DIFFERENT from condition-off
     # (verifies the bonus actually fired).
     assert py_pt1 != py_pt0
+
+
+# ---------------------------------------------------------------------------
+# Round-82 (2026-05-20) — Mechan Shieldmate closure
+# ---------------------------------------------------------------------------
+
+
+def test_condition_from_tag_controlled_artifact_entered():
+    """Round-82: the third recognized tag rehydrates to the
+    ``ControlledArtifactEnteredThisTurn`` Condition."""
+    from mtg_bot.effects.conditions import ControlledArtifactEnteredThisTurn
+
+    cond = _static_self_bonus_condition_from_tag(
+        "controlled_artifact_entered_this_turn", (),
+    )
+    assert isinstance(cond, ControlledArtifactEnteredThisTurn)
+
+
+def test_condition_from_tag_controlled_artifact_extra_args_raises():
+    """Arg-less tag rejects non-empty args (mirrors the
+    ``control_permanent_is_artifact`` arity contract)."""
+    with pytest.raises(ValueError, match="takes no"):
+        _static_self_bonus_condition_from_tag(
+            "controlled_artifact_entered_this_turn", (1,),
+        )
+
+
+def test_ability_to_bonus_remove_keyword_mechan_shape():
+    """Round-82: the Mechan-shape (RemoveKeyword payload + new tag)
+    rehydrates to a removed_keywords-only tuple with zero P/T and no
+    granted_keywords."""
+    from mtg_bot.cards.base import StaticAbility, StaticScope
+    from mtg_bot.effects.conditions import ControlledArtifactEnteredThisTurn
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, RemoveKeyword,
+    )
+
+    ability = StaticAbility(
+        scope=StaticScope.SELF,
+        condition=ControlledArtifactEnteredThisTurn(),
+        continuous_effect=ContinuousModifier(
+            layer=6, payload=RemoveKeyword("defender"),
+        ),
+    )
+    bonus = _static_ability_to_self_conditional_bonus(ability)
+    assert bonus == (
+        "controlled_artifact_entered_this_turn", (), 0, 0,
+        (), ("defender",),
+    )
+
+
+def test_ability_to_bonus_remove_keyword_unsafe_keyword_rejected():
+    """A RemoveKeyword payload whose keyword is outside
+    ``_SAFE_KEYWORDS`` is rejected by the admit shape."""
+    from mtg_bot.cards.base import StaticAbility, StaticScope
+    from mtg_bot.effects.conditions import ControlledArtifactEnteredThisTurn
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, RemoveKeyword,
+    )
+
+    ability = StaticAbility(
+        scope=StaticScope.SELF,
+        condition=ControlledArtifactEnteredThisTurn(),
+        continuous_effect=ContinuousModifier(
+            layer=6, payload=RemoveKeyword("ward"),
+        ),
+    )
+    assert _static_ability_to_self_conditional_bonus(ability) is None
+
+
+def test_printing_to_card_def_mechan_shieldmate():
+    """Mechan Shieldmate's CardDef carries the controlled-artifact-
+    entered tag with a single ``("defender",)`` removed_keywords
+    entry AND its Artifact-Creature dual-type via
+    ``extra_card_types``."""
+    src_mod = importlib.import_module("mtg_bot.cards.parser_source")
+    src = src_mod.OracleParserCardSource()
+    printings = src.get_printings()
+    cd = _printing_to_card_def(printings["Mechan Shieldmate"])
+    assert cd.card_type == "Creature"
+    assert cd.extra_card_types == ("Artifact",)
+    assert cd.power == 3
+    assert cd.toughness == 2
+    assert "defender" in cd.keywords
+    assert cd.static_self_bonuses == (
+        (
+            "controlled_artifact_entered_this_turn", (),
+            0, 0, (), ("defender",),
+        ),
+    )
+
+
+def test_card_def_round_trip_python_printing_mechan():
+    """The Mechan-shape CardDef materializes BACK into a SELF-scope
+    StaticAbility whose payload is RemoveKeyword and whose Condition
+    is ControlledArtifactEnteredThisTurn."""
+    from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.conditions import ControlledArtifactEnteredThisTurn
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier, RemoveKeyword,
+    )
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+
+    cd = CardDef(
+        name="Mechan",
+        card_type="Creature",
+        extra_card_types=("Artifact",),
+        mana_cost_generic=1,
+        mana_cost_colored=(("U", 1),),
+        power=3,
+        toughness=2,
+        keywords=("defender",),
+        static_self_bonuses=(
+            (
+                "controlled_artifact_entered_this_turn", (),
+                0, 0, (), ("defender",),
+            ),
+        ),
+    )
+    printing = _card_def_to_python_printing(cd)
+    assert len(printing.static_abilities) == 1
+    sa = printing.static_abilities[0]
+    assert sa.scope == StaticScope.SELF
+    assert isinstance(sa.condition, ControlledArtifactEnteredThisTurn)
+    assert isinstance(sa.continuous_effect, ContinuousModifier)
+    assert sa.continuous_effect.layer == 6
+    assert isinstance(sa.continuous_effect.payload, RemoveKeyword)
+    assert sa.continuous_effect.payload.keyword == "defender"
+    # Mechan's Artifact-Creature dual-type round-trips on the Python
+    # printing's card_types tuple in (primary, *extras) order.
+    assert "Creature" in printing.card_types
+    assert "Artifact" in printing.card_types
+
+
+def test_rust_registry_round_trip_mechan_remove_keyword():
+    """Round-82: a registry dict carrying ``removed_keywords``
+    round-trips through Rust's parse + getter back to a 6-tuple
+    with the removed keyword present."""
+    _require_engine()
+    spec = DeckSpec(
+        card_defs=(
+            CardDef(name="Forest", card_type="Land", mana_produced=("G",)),
+            CardDef(
+                name="Mechan",
+                card_type="Creature",
+                extra_card_types=("Artifact",),
+                mana_cost_generic=1,
+                mana_cost_colored=(("U", 1),),
+                power=3,
+                toughness=2,
+                keywords=("defender",),
+                static_self_bonuses=(
+                    (
+                        "controlled_artifact_entered_this_turn", (),
+                        0, 0, (), ("defender",),
+                    ),
+                ),
+            ),
+        ),
+        p0_library=("Mechan", "Forest"),
+        p1_library=("Forest",),
+    )
+    reg, name_to_pid = build_rust_registry(spec)
+    bonuses = reg.get_printing_static_self_bonuses(
+        name_to_pid["Mechan"],
+    )
+    assert bonuses == [
+        (
+            "controlled_artifact_entered_this_turn", [], 0, 0, [],
+            ["defender"],
+        ),
+    ]
+
+
+def test_rust_registry_rejects_unknown_arity_for_controlled_artifact():
+    """The Rust parse arm rejects non-empty args for the new tag."""
+    _require_engine()
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    bad_dict = {
+        "name": "BadMechan",
+        "mana_cost": {"generic": 1},
+        "card_types": ["Creature", "Artifact"],
+        "power": 3,
+        "toughness": 2,
+        "static_self_bonuses": [
+            {
+                "condition_tag": "controlled_artifact_entered_this_turn",
+                "condition_args": [9],
+                "power_bonus": 0,
+                "toughness_bonus": 0,
+                "granted_keywords": [],
+                "removed_keywords": ["defender"],
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="must be empty"):
+        reg.register_printing(bad_dict)
+
+
+def test_rust_mechan_defender_active_when_no_artifact_entered():
+    """Mechan starts with `defender` as a printed keyword and the
+    REMOVE fold is inactive when the artifact-entered counter is 0
+    (`condition` is false). We reset the counter to 0 BEFORE the
+    keyword query — `register_and_inject_object` routes through
+    `drain_pending_etb_dispatches`, and Mechan IS an artifact, so
+    its own ETB bumps the counter; this probe scopes the assertion
+    to the gate semantics, not the ETB pipeline (covered separately
+    by ``test_rust_drain_pending_etb_bumps_artifact_counter``)."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    mechan_dict = {
+        "name": "Mechan Shieldmate",
+        "mana_cost": {"generic": 1, "U": 1},
+        "card_types": ["Creature", "Artifact"],
+        "power": 3,
+        "toughness": 2,
+        "keywords": ["defender"],
+        "static_self_bonuses": [
+            {
+                "condition_tag": "controlled_artifact_entered_this_turn",
+                "condition_args": [],
+                "power_bonus": 0,
+                "toughness_bonus": 0,
+                "granted_keywords": [],
+                "removed_keywords": ["defender"],
+            },
+        ],
+    }
+    mid = _inject_bf(state, mechan_dict, 0)
+    state.set_artifacts_entered_under_your_control_this_turn(0, 0)
+    # Counter explicitly 0 → defender stays printed (REMOVE fold
+    # condition fails).
+    assert state.has_keyword(mid, "defender") is True
+
+
+def test_rust_mechan_defender_removed_when_artifact_entered():
+    """Mechan loses `defender` once the per-controller artifact-
+    entered counter advances above 0."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    mechan_dict = {
+        "name": "Mechan Shieldmate",
+        "mana_cost": {"generic": 1, "U": 1},
+        "card_types": ["Creature", "Artifact"],
+        "power": 3,
+        "toughness": 2,
+        "keywords": ["defender"],
+        "static_self_bonuses": [
+            {
+                "condition_tag": "controlled_artifact_entered_this_turn",
+                "condition_args": [],
+                "power_bonus": 0,
+                "toughness_bonus": 0,
+                "granted_keywords": [],
+                "removed_keywords": ["defender"],
+            },
+        ],
+    }
+    mid = _inject_bf(state, mechan_dict, 0)
+    state.set_artifacts_entered_under_your_control_this_turn(0, 1)
+    assert state.has_keyword(mid, "defender") is False
+
+
+def test_rust_mechan_condition_does_not_cross_controllers():
+    """An artifact that entered under the OPPONENT's control does
+    not satisfy the gate for the SOURCE's controller — the counter
+    is per-Player, not shared."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    mechan_dict = {
+        "name": "Mechan Shieldmate",
+        "mana_cost": {"generic": 1, "U": 1},
+        "card_types": ["Creature", "Artifact"],
+        "power": 3,
+        "toughness": 2,
+        "keywords": ["defender"],
+        "static_self_bonuses": [
+            {
+                "condition_tag": "controlled_artifact_entered_this_turn",
+                "condition_args": [],
+                "power_bonus": 0,
+                "toughness_bonus": 0,
+                "granted_keywords": [],
+                "removed_keywords": ["defender"],
+            },
+        ],
+    }
+    mid = _inject_bf(state, mechan_dict, 0)
+    # Reset P0's counter (Mechan's own ETB bumped it via the
+    # drain hook; see the test above for the scoping rationale).
+    state.set_artifacts_entered_under_your_control_this_turn(0, 0)
+    # Bump P1's counter — should NOT remove defender from P0's Mechan.
+    state.set_artifacts_entered_under_your_control_this_turn(1, 5)
+    assert state.has_keyword(mid, "defender") is True
+    # Bump P0's counter — now defender drops.
+    state.set_artifacts_entered_under_your_control_this_turn(0, 1)
+    assert state.has_keyword(mid, "defender") is False
+
+
+def test_rust_drain_pending_etb_bumps_artifact_counter():
+    """Live integration: an artifact entering via the centralized
+    bf-entry path (`register_and_inject_object` → ENTERS drain)
+    bumps the per-controller counter. Verifies the
+    `drain_pending_etb_dispatches` hook routes correctly."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    artifact_dict = {
+        "name": "Stone",
+        "mana_cost": {"generic": 1},
+        "card_types": ["Artifact"],
+    }
+    # Pre-bf-entry: counter is 0.
+    assert (
+        state.get_artifacts_entered_under_your_control_this_turn(0) == 0
+    )
+    _inject_bf(state, artifact_dict, 0)
+    # After artifact ETB: counter advanced.
+    assert (
+        state.get_artifacts_entered_under_your_control_this_turn(0) == 1
+    )
+    # P1's counter stayed at 0 — per-controller scope.
+    assert (
+        state.get_artifacts_entered_under_your_control_this_turn(1) == 0
+    )
+
+
+def test_rust_non_artifact_etb_does_not_bump_counter():
+    """A non-artifact creature ETB does NOT bump the counter."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    creature_dict = {
+        "name": "Bears",
+        "mana_cost": {"generic": 1, "G": 1},
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+    }
+    _inject_bf(state, creature_dict, 0)
+    assert (
+        state.get_artifacts_entered_under_your_control_this_turn(0) == 0
+    )
+
+
+def test_rust_artifact_creature_etb_bumps_counter():
+    """An Artifact Creature ETB DOES bump the counter (CR 301 — an
+    artifact creature is an artifact)."""
+    _require_engine()
+    import mtg_bot_engine
+
+    state = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    art_creature_dict = {
+        "name": "Bronze Bear",
+        "mana_cost": {"generic": 2},
+        "card_types": ["Artifact", "Creature"],
+        "power": 2,
+        "toughness": 2,
+    }
+    _inject_bf(state, art_creature_dict, 0)
+    assert (
+        state.get_artifacts_entered_under_your_control_this_turn(0) == 1
+    )
+
+
+def test_real_eoe_mechan_byte_equal_defender_removal():
+    """End-to-end real-EoE probe: load the actual Mechan Shieldmate
+    printing, build matched states, inject Mechan onto P0's
+    battlefield, and verify Python's ``effective_keywords`` /
+    Rust's ``has_keyword`` agree byte-equal across the
+    counter-off / counter-on transition.
+
+    **Mechan-on-Mechan semantics.** When the parity-bridge ETB
+    pipeline routes Mechan through the bf-entry chokepoint, the
+    artifact-bf-entry counter advances to 1 — Mechan IS an artifact,
+    and an artifact entered under its controller this turn (it
+    just did). For this isolation probe we manipulate the counter
+    directly to drive the condition off → on without re-routing
+    through a synthesized ETB; the round-82 closure of the
+    drain-pending counter is independently covered by
+    :func:`test_rust_drain_pending_etb_bumps_artifact_counter` /
+    :func:`test_rust_artifact_creature_etb_bumps_counter`.
+    """
+    _require_engine()
+    from mtg_bot.game import Zone, effective_keywords
+    from mtg_bot.parity.cross_engine import (
+        _spec_card_to_printing_dict,
+    )
+    src_mod = importlib.import_module("mtg_bot.cards.parser_source")
+    src = src_mod.OracleParserCardSource()
+    printings = src.get_printings()
+    mechan = printings["Mechan Shieldmate"]
+    cd = _printing_to_card_def(mechan)
+    forest_cd = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(forest_cd, cd),
+        p0_library=(cd.name, "Forest"),
+        p1_library=("Forest",),
+    )
+    py_state, _rust_state = build_matched_states(spec)
+    # Move Mechan onto Python's P0 battlefield WITHOUT firing the
+    # bf-entry inline counter bump (mirroring the Rust-side
+    # register_and_inject_object path, which routes through the
+    # drain hook). The counter is driven explicitly below.
+    tgt_py = py_state.players[0].library[0]
+    py_state.players[0].library = []
+    tgt_py.zone = Zone.BATTLEFIELD
+    py_state.battlefield.append(tgt_py)
+    # Reset Python's counter in case the build_python_state path
+    # touched it (Forest pad shouldn't, but stay deterministic).
+    py_state.players[0].artifacts_entered_under_your_control_this_turn = 0
+    # Rust-side: build a fresh synthetic state for the readback.
+    import mtg_bot_engine
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    mechan_dict = _spec_card_to_printing_dict(cd)
+    rs_id = rs.register_and_inject_object(mechan_dict, 0, 2)
+    # The drainer-side bump fired on the Rust register_and_inject:
+    # reset to 0 to align with the Python-side reset above (this
+    # probe gates on the counter, not the ETB pipeline; the
+    # pipeline is covered separately).
+    rs.set_artifacts_entered_under_your_control_this_turn(0, 0)
+    # Counter at 0: defender ACTIVE on both engines (printed kw,
+    # remove fold inactive).
+    py_def0 = "defender" in effective_keywords(py_state, tgt_py)
+    rs_def0 = rs.has_keyword(rs_id, "defender")
+    assert py_def0 is True and rs_def0 is True, (
+        f"pre-condition defender state differs/wrong: "
+        f"py={py_def0} rs={rs_def0}"
+    )
+    # Drive the gate: bump P0's artifact-entered counter on both.
+    py_state.players[0].artifacts_entered_under_your_control_this_turn = 1
+    rs.set_artifacts_entered_under_your_control_this_turn(0, 1)
+    py_def1 = "defender" in effective_keywords(py_state, tgt_py)
+    rs_def1 = rs.has_keyword(rs_id, "defender")
+    assert py_def1 is False and rs_def1 is False, (
+        f"post-condition defender state differs/wrong: "
+        f"py={py_def1} rs={rs_def1}"
+    )
+    # And the keyword state actually flipped (catches a probe that
+    # silently asserted False/False on both gates).
+    assert py_def0 != py_def1

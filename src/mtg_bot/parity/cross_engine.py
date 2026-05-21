@@ -447,14 +447,19 @@ class CardDef:
     # and Gravblade Heavy from Phase 1's honest-stop list.
     #
     # Each entry is a tuple ``(condition_tag, condition_args,
-    # power_bonus, toughness_bonus, granted_keywords)``:
+    # power_bonus, toughness_bonus, granted_keywords,
+    # removed_keywords)``:
     #
     # * ``condition_tag`` — a string identifier the Rust side
-    #   dispatches on. Two values today:
+    #   dispatches on. Three values today:
     #     - ``"control_permanent_is_artifact"`` (no args; Cloudsculpt
     #       Technician, Gravblade Heavy)
     #     - ``"at_least_n_spells_cast_this_turn"`` (args=``(n,)``;
     #       Brightspear Zealot uses ``n=2``).
+    #     - ``"controlled_artifact_entered_this_turn"`` (no args;
+    #       Mechan Shieldmate's "as long as an artifact entered the
+    #       battlefield under your control this turn" gate — round-82,
+    #       2026-05-20).
     # * ``condition_args`` — tuple of int args (empty for arg-less
     #   conditions). The Rust side validates argument arity per tag.
     # * ``power_bonus`` / ``toughness_bonus`` — layer-7c additive
@@ -464,17 +469,31 @@ class CardDef:
     #   to the source itself while the condition matches. Keyword
     #   strings are the underscore-form lowercase names from
     #   ``trajectory._SAFE_KEYWORDS``.
+    # * ``removed_keywords`` — layer-6 RemoveKeyword payloads stripped
+    #   from the source itself while the condition matches (round-82,
+    #   2026-05-20). Mechan Shieldmate's "this creature loses
+    #   defender" rider rides here. Empty tuple is the back-compat
+    #   default for every pre-round-82 carrier (Brightspear /
+    #   Cloudsculpt / Gravblade have no remove payloads).
     #
     # Empty tuple = no SELF-scope conditional statics — the back-
     # compat default; every pre-Phase-3 CardDef leaves this field at
     # its empty-tuple default and the bridge omits the registry-dict
-    # key. The Python side materializes each entry into one or two
-    # ``StaticAbility(scope=SELF, condition=<reified Condition>,
-    # continuous_effect=ContinuousModifier(...))`` instances mirroring
-    # the parser's fan-out at
+    # key. The Python side materializes each entry into one, two, or
+    # three ``StaticAbility(scope=SELF, condition=<reified Condition>,
+    # continuous_effect=ContinuousModifier(...))`` instances
+    # mirroring the parser's fan-out at
     # ``parser/statics.py:_parse_static_ability_line``.
     static_self_bonuses: tuple[
-        tuple[str, tuple[int, ...], int, int, tuple[str, ...]], ...
+        tuple[
+            str,
+            tuple[int, ...],
+            int,
+            int,
+            tuple[str, ...],
+            tuple[str, ...],
+        ],
+        ...,
     ] = ()
 
 
@@ -10826,10 +10845,26 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     #    "condition_args": [int, ...],
     #    "power_bonus": int,
     #    "toughness_bonus": int,
-    #    "granted_keywords": [str, ...]}
+    #    "granted_keywords": [str, ...],
+    #    "removed_keywords": [str, ...]}
+    #
+    # ``removed_keywords`` (round-82, 2026-05-20) carries layer-6
+    # RemoveKeyword payloads — Mechan Shieldmate's "this creature
+    # loses defender" rider. The key is omitted from the per-entry
+    # dict when the tuple is empty (every pre-round-82 carrier:
+    # Brightspear / Cloudsculpt / Gravblade), keeping every pre-
+    # round-82 registry dict byte-identical.
     if card.static_self_bonuses:
-        printing_dict["static_self_bonuses"] = [
-            {
+        bonus_entries: list[dict] = []
+        for (
+            cond_tag,
+            cond_args,
+            p_bonus,
+            t_bonus,
+            granted_keywords,
+            removed_keywords,
+        ) in card.static_self_bonuses:
+            entry: dict = {
                 "condition_tag": cond_tag,
                 "condition_args": list(cond_args),
                 "power_bonus": int(p_bonus),
@@ -10838,14 +10873,12 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
                     kw.replace(" ", "_") for kw in granted_keywords
                 ],
             }
-            for (
-                cond_tag,
-                cond_args,
-                p_bonus,
-                t_bonus,
-                granted_keywords,
-            ) in card.static_self_bonuses
-        ]
+            if removed_keywords:
+                entry["removed_keywords"] = [
+                    kw.replace(" ", "_") for kw in removed_keywords
+                ]
+            bonus_entries.append(entry)
+        printing_dict["static_self_bonuses"] = bonus_entries
     return printing_dict
 
 
@@ -11089,6 +11122,10 @@ def _static_self_bonus_condition_from_tag(
     * ``"at_least_n_spells_cast_this_turn"`` (args=``(n,)``) →
       ``AtLeastNSpellsCastThisTurn(n)``. Covers Brightspear
       Zealot's ``n=2`` rider.
+    * ``"controlled_artifact_entered_this_turn"`` (no args) →
+      ``ControlledArtifactEnteredThisTurn()``. Covers Mechan
+      Shieldmate's "as long as an artifact entered the battlefield
+      under your control this turn" gate (round-82, 2026-05-20).
 
     An unknown tag raises ``ValueError`` — the bridge's loader-side
     predicate is the source of truth for which tags reach this
@@ -11096,7 +11133,9 @@ def _static_self_bonus_condition_from_tag(
     bridge-vs-materializer disagreement that must fail loudly.
     """
     from mtg_bot.effects.conditions import (
-        AtLeastNSpellsCastThisTurn, ControlPermanent,
+        AtLeastNSpellsCastThisTurn,
+        ControlledArtifactEnteredThisTurn,
+        ControlPermanent,
     )
     from mtg_bot.effects.object_predicates import IsArtifact
 
@@ -11114,6 +11153,13 @@ def _static_self_bonus_condition_from_tag(
                 f"got {cond_args!r}"
             )
         return AtLeastNSpellsCastThisTurn(int(cond_args[0]))
+    if cond_tag == "controlled_artifact_entered_this_turn":
+        if cond_args:
+            raise ValueError(
+                f"controlled_artifact_entered_this_turn takes no "
+                f"args; got {cond_args!r}"
+            )
+        return ControlledArtifactEnteredThisTurn()
     raise ValueError(
         f"unknown SELF-scope conditional static tag: {cond_tag!r}"
     )
@@ -11369,16 +11415,26 @@ def _card_def_to_python_printing(card: "CardDef"):
     if card.static_self_bonuses:
         from mtg_bot.cards.base import StaticAbility, StaticScope
         from mtg_bot.effects.modifiers import (
-            ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+            ContinuousModifier,
+            GrantKeyword,
+            PowerToughnessBonus,
+            RemoveKeyword,
         )
         ssb_list: list[StaticAbility] = []
-        for (
-            cond_tag,
-            cond_args,
-            p_bonus,
-            t_bonus,
-            granted_keywords,
-        ) in card.static_self_bonuses:
+        for entry in card.static_self_bonuses:
+            # Back-compat tuple shape: pre-round-82 5-tuple entries
+            # (no removed_keywords) deserialize as 6-tuple-with-empty
+            # via the unpacking with a default; tests that constructed
+            # 5-tuples manually still work because the CardDef field
+            # declaration carries the 6-tuple type.
+            (
+                cond_tag,
+                cond_args,
+                p_bonus,
+                t_bonus,
+                granted_keywords,
+                removed_keywords,
+            ) = entry if len(entry) == 6 else (*entry, ())
             cond = _static_self_bonus_condition_from_tag(cond_tag, cond_args)
             if p_bonus or t_bonus:
                 ssb_list.append(
@@ -11402,6 +11458,21 @@ def _card_def_to_python_printing(card: "CardDef"):
                         continuous_effect=ContinuousModifier(
                             layer=6,
                             payload=GrantKeyword(kw.replace("_", " ")),
+                        ),
+                    )
+                )
+            # Round-82 (2026-05-20): layer-6 RemoveKeyword payloads —
+            # one ``StaticAbility`` per removed keyword, sharing the
+            # entry's reified Condition. Mechan Shieldmate's defender-
+            # remove rider rides here.
+            for kw in removed_keywords:
+                ssb_list.append(
+                    StaticAbility(
+                        scope=StaticScope.SELF,
+                        condition=cond,
+                        continuous_effect=ContinuousModifier(
+                            layer=6,
+                            payload=RemoveKeyword(kw.replace("_", " ")),
                         ),
                     )
                 )

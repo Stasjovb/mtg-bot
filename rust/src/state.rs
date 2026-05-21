@@ -905,6 +905,33 @@ pub struct Player {
     /// that yet (no EoE card uses the noncreature variant in the
     /// triggered-ability path).
     pub spells_cast_this_turn: i32,
+    /// **Static / layered abilities substrate — round-82 (Mechan
+    /// Shieldmate closure, 2026-05-20).** Per-player cumulative
+    /// count of artifact permanents (including artifact creatures
+    /// and artifact tokens) that have entered the battlefield
+    /// under this player's control this turn. Reset to 0 at the
+    /// cleanup step (mirroring Python's
+    /// `Player.artifacts_entered_under_your_control_this_turn`
+    /// zeroed in `turn.py:1110`).
+    ///
+    /// **Increment site.** Bumped by `+1` in
+    /// `drain_pending_etb_dispatches` for every ENTERS dispatch
+    /// whose `entered_id`'s printing has `"Artifact"` in its
+    /// `card_types`. The drainer is the centralized chokepoint
+    /// every bf-entry path routes through (`play_land` /
+    /// `cast_creature` / token-creation arms / register-and-inject
+    /// / resolve_top_of_stack), so a one-place bump catches every
+    /// site Python's `actions.put_into_battlefield` increment
+    /// covers (`actions.py:3142`).
+    ///
+    /// **Gate consumer.** Read by
+    /// `state_ops_combat::static_self_bonus_condition_matches`
+    /// when the bonus's `condition_tag` is
+    /// `"controlled_artifact_entered_this_turn"` — Mechan
+    /// Shieldmate's "as long as an artifact entered the
+    /// battlefield under your control this turn, this creature
+    /// loses defender" rider.
+    pub artifacts_entered_under_your_control_this_turn: i32,
 }
 
 /// Discriminant for the two kinds of stack items the engine
@@ -2620,6 +2647,7 @@ fn make_player(
         life_gained_this_turn: 0,
         poison_counters: 0,
         spells_cast_this_turn: 0,
+        artifacts_entered_under_your_control_this_turn: 0,
     }
 }
 

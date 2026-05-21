@@ -5338,16 +5338,24 @@ def _static_ability_to_self_conditional_bonus(ability):
     2026-05-20).** Admit shape:
 
       * ``scope`` is ``StaticScope.SELF``.
-      * ``condition`` is one of the two recognized SELF-scope
+      * ``condition`` is one of the three recognized SELF-scope
         conditions:
           - ``ControlPermanent(IsArtifact())`` (Cloudsculpt
             Technician, Gravblade Heavy).
           - ``AtLeastNSpellsCastThisTurn(n)`` for some non-negative
             ``n`` (Brightspear Zealot uses ``n=2``).
-      * ``continuous_effect`` is EITHER a layer-7
-        ``PowerToughnessBonus`` (the P/T arm) OR a layer-6
-        ``GrantKeyword`` whose keyword is in
-        :data:`_SAFE_KEYWORDS` (the keyword-grant arm).
+          - ``ControlledArtifactEnteredThisTurn()`` (Mechan
+            Shieldmate's "as long as an artifact entered the
+            battlefield under your control this turn" gate —
+            round-82, 2026-05-20).
+      * ``continuous_effect`` is one of:
+          - a layer-7 ``PowerToughnessBonus`` (the P/T arm), OR
+          - a layer-6 ``GrantKeyword`` whose keyword is in
+            :data:`_SAFE_KEYWORDS` (the keyword-grant arm), OR
+          - a layer-6 ``RemoveKeyword`` whose keyword is in
+            :data:`_SAFE_KEYWORDS` (the keyword-remove arm —
+            round-82, 2026-05-20; Mechan Shieldmate's defender
+            removal).
       * Every other StaticAbility slot at its default — no
         replacement_effect, tier_threshold, room_half,
         grants_no_max_hand_size, grants_creature_spells_
@@ -5362,10 +5370,13 @@ def _static_ability_to_self_conditional_bonus(ability):
     """
     from mtg_bot.cards.base import StaticScope
     from mtg_bot.effects.conditions import (
-        AtLeastNSpellsCastThisTurn, ControlPermanent,
+        AtLeastNSpellsCastThisTurn,
+        ControlledArtifactEnteredThisTurn,
+        ControlPermanent,
     )
     from mtg_bot.effects.modifiers import (
         ContinuousModifier, GrantKeyword, PowerToughnessBonus,
+        RemoveKeyword,
     )
     from mtg_bot.effects.object_predicates import IsArtifact
 
@@ -5400,6 +5411,9 @@ def _static_ability_to_self_conditional_bonus(ability):
             return None
         cond_tag = "at_least_n_spells_cast_this_turn"
         cond_args = (int(cond.n),)
+    elif isinstance(cond, ControlledArtifactEnteredThisTurn):
+        cond_tag = "controlled_artifact_entered_this_turn"
+        cond_args = ()
     else:
         return None
     ce = ability.continuous_effect
@@ -5414,6 +5428,7 @@ def _static_ability_to_self_conditional_bonus(ability):
             int(ce.payload.power_bonus),
             int(ce.payload.toughness_bonus),
             (),
+            (),
         )
     if ce.layer == 6 and isinstance(ce.payload, GrantKeyword):
         kw = ce.payload.keyword
@@ -5424,6 +5439,19 @@ def _static_ability_to_self_conditional_bonus(ability):
             cond_args,
             0,
             0,
+            (kw,),
+            (),
+        )
+    if ce.layer == 6 and isinstance(ce.payload, RemoveKeyword):
+        kw = ce.payload.keyword
+        if kw not in _SAFE_KEYWORDS:
+            return None
+        return (
+            cond_tag,
+            cond_args,
+            0,
+            0,
+            (),
             (kw,),
         )
     return None
@@ -5452,25 +5480,41 @@ def _printing_is_bridge_simple_static_self_conditional_creature(
     **Phase 3 honest-stops (documented in
     ``docs/SEARCH_LIMITATIONS.md``):**
 
-    * The other two cards in Phase 1's honest-stop list (Mechan
-      Shieldmate, Rampaging Soulrager, Wildfire Wickerfolk) — each
-      needs a Condition variant not in this slice's two-tag
-      table (Mechan's ``ControlledArtifactEnteredThisTurn``,
-      Soulrager's ``UnlockedDoorsAmongRoomsAtLeast``, Wickerfolk's
-      ``DeliriumActive``). They stay drop-at-filter until a per-
-      Condition slice ports them; the predicate positively
-      rejects them via :func:`_static_ability_to_self_
-      conditional_bonus` returning ``None`` for an unrecognized
-      condition.
+    * Mechan Shieldmate's ``ControlledArtifactEnteredThisTurn`` +
+      ``RemoveKeyword(defender)`` shape — **closed round-82
+      (2026-05-20)**. The condition tag entered the two-tag table
+      (now three-tag); the RemoveKeyword payload is admitted by
+      :func:`_static_ability_to_self_conditional_bonus`'s third
+      payload arm; Rust folds the REMOVE into
+      :func:`battlefield_has_keyword`. The admit predicate now
+      accepts Artifact-Creature dual-typed printings whose extra
+      types are exactly ``("Artifact",)`` so the Mechan-shape
+      printing routes through this arm.
+    * Rampaging Soulrager — ``UnlockedDoorsAmongRoomsAtLeast(2)``
+      (no EoE data snapshot today). Wildfire Wickerfolk —
+      ``DeliriumActive`` (no EoE data snapshot today). They stay
+      drop-at-filter until a per-Condition slice ports them; the
+      predicate positively rejects them via
+      :func:`_static_ability_to_self_conditional_bonus` returning
+      ``None`` for an unrecognized condition.
     * The CR 613.7 layer-6 "lose all abilities" interaction
       against a SELF-scope conditional source — Phase 1's
       anthem-substrate already documents the simplification; the
       same applies here. No EoE / DSK card in the loader-admitted
       pool today carries a ``lose_all_abilities`` continuous
-      effect that would wipe one of the three Phase-3 sources, so
+      effect that would wipe one of the four Phase-3 sources, so
       the parity is clean for the live pool.
     """
     if "Creature" not in printing.card_types:
+        return False
+    # Round-82 (2026-05-20): accept the Artifact-Creature dual-type
+    # for Mechan Shieldmate. The admitted extra-type set is exactly
+    # ``{"Artifact"}`` — every other multi-type-creature shape
+    # (Enchantment Creature, Planeswalker, Land Creature, etc.)
+    # stays drop-at-filter until its own slice lands. ``card_types``
+    # is a tuple; the per-printing parser preserves order.
+    extra_types = tuple(t for t in printing.card_types if t != "Creature")
+    if extra_types and extra_types != ("Artifact",):
         return False
     if printing.power is None or printing.toughness is None:
         return False
@@ -5761,6 +5805,17 @@ def _printing_to_card_def(printing) -> CardDef:
         # one keyword — sharing ``control_permanent_is_artifact``;
         # the bridge collapses both into a single entry with the
         # P/T bonus AND the granted keyword).
+        #
+        # Round-82 (2026-05-20): the 6-tuple shape adds a
+        # ``removed_keywords`` slot for layer-6 RemoveKeyword
+        # payloads (Mechan Shieldmate's defender removal). The
+        # coalesce shape merges the per-condition grant + remove
+        # sets independently so the parser fan-out doesn't double-
+        # count either side. The Artifact-Creature dual-typed
+        # Mechan Shieldmate threads ``extra_card_types=("Artifact",)``
+        # so the Rust ``card_types`` Vec round-trips with both
+        # types (the artifact bf-entry counter on the controller
+        # side fires correctly when Mechan itself enters).
         from collections import defaultdict
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
         triggered_abilities = tuple(
@@ -5774,10 +5829,18 @@ def _printing_to_card_def(printing) -> CardDef:
         per_cond_kws: dict[
             tuple[str, tuple[int, ...]], list[str]
         ] = defaultdict(list)
+        per_cond_remove_kws: dict[
+            tuple[str, tuple[int, ...]], list[str]
+        ] = defaultdict(list)
         for ability in printing.static_abilities:
-            cond_tag, cond_args, p_bonus, t_bonus, granted_keywords = (
-                _static_ability_to_self_conditional_bonus(ability)
-            )
+            (
+                cond_tag,
+                cond_args,
+                p_bonus,
+                t_bonus,
+                granted_keywords,
+                removed_keywords,
+            ) = _static_ability_to_self_conditional_bonus(ability)
             key = (cond_tag, cond_args)
             if key not in per_cond:
                 per_cond[key] = [0, 0]
@@ -5785,9 +5848,19 @@ def _printing_to_card_def(printing) -> CardDef:
             per_cond[key][1] += t_bonus
             for kw in granted_keywords:
                 per_cond_kws[key].append(kw)
+            for kw in removed_keywords:
+                per_cond_remove_kws[key].append(kw)
         # Deterministic ordering: sort by (cond_tag, cond_args).
         static_self_bonuses: tuple[
-            tuple[str, tuple[int, ...], int, int, tuple[str, ...]], ...
+            tuple[
+                str,
+                tuple[int, ...],
+                int,
+                int,
+                tuple[str, ...],
+                tuple[str, ...],
+            ],
+            ...,
         ] = tuple(
             (
                 cond_tag,
@@ -5795,12 +5868,26 @@ def _printing_to_card_def(printing) -> CardDef:
                 per_cond[(cond_tag, cond_args)][0],
                 per_cond[(cond_tag, cond_args)][1],
                 tuple(sorted(per_cond_kws.get((cond_tag, cond_args), []))),
+                tuple(sorted(
+                    per_cond_remove_kws.get((cond_tag, cond_args), [])
+                )),
             )
             for (cond_tag, cond_args) in sorted(per_cond.keys())
+        )
+        # Round-82 (2026-05-20): emit Mechan-shape Artifact-Creature
+        # printings with ``extra_card_types=("Artifact",)`` so the
+        # registry-dict's ``card_types`` slot is ``["Creature",
+        # "Artifact"]`` and Rust's artifact-bf-entry counter fires
+        # on the source itself when it enters. Single-type creatures
+        # (Brightspear / Cloudsculpt / Gravblade) thread the empty
+        # tuple — bit-identical to the pre-round-82 emit.
+        extra_card_types = tuple(
+            t for t in printing.card_types if t != "Creature"
         )
         return CardDef(
             name=printing.name,
             card_type="Creature",
+            extra_card_types=extra_card_types,
             mana_cost_generic=generic,
             mana_cost_colored=colored,
             power=printing.power,
