@@ -4121,6 +4121,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         CutPropulsionEffect,
         DepressurizeEffect,
         DiplomaticRelationsEffect,
+        ExorciseEffect,
         FocusFireEffect,
         SeedshipImpactEffect,
     )
@@ -4368,6 +4369,24 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                     "creature"
                 ),
             }
+        # Exorcise (Effect-uncovered single-gated tier; Duskmourn).
+        # Pid-FREE covered unit variant — Rust's ``parse_effect``
+        # ``"exorcise_effect"`` arm takes NO fields and the dict→Python
+        # bridge arm (cross_engine.py ``exorcise_effect``) constructs
+        # the field-free ``ExorciseEffect()``. The 3-way OR filter
+        # (Artifact OR Enchantment OR (Creature AND effective_power
+        # >= 4)) is intrinsic. No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is
+        # the clean ``destroy_target_artifact_or_tapped_creature``
+        # unit-leaf idiom. Adding this leaf is what flips Exorcise
+        # into the spell-card-bridge admit set: with the Rust variant +
+        # bridge arm landed AND the printing's spell_effect
+        # serializable, the {1}{W} Sorcery is now covered+bridged AND
+        # round-trips through the reverse serializer, so
+        # :func:`_printing_is_bridge_simple_spell` admits it (auto-
+        # grow, no hardcoded list — the §2 teeth).
+        if isinstance(eff, ExorciseEffect):
+            return {"kind": "exorcise_effect"}
         # **Phase-3 wrath-admit-widening (2026-05-21).** Pyroclasm-shape
         # mass-damage leaf — ``DealNDamageToEachCreature(amount)``. The
         # bridge arm at ``cross_engine.py::damage_each_creature`` REQUIRES

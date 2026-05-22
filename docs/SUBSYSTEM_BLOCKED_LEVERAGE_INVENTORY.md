@@ -588,12 +588,25 @@ detector table widen + new
 `Effect::DealDamageToTargetTappedCreature` + extended
 `Effect::PumpTargetArtifactOrCreatureUntilEOT` with
 `granted_keywords`). Combined admit-set growth **17 → 20**.
-Remaining **17 single-gated** members: Archenemy's Charm, Close
-Encounter, Coordinated Clobbering, Darkness, Devastating
-Onslaught, Emergency Eject, Exorcise, Invasive Maneuvers,
-Mutinous Massacre, Pull Through the Weft, Scour for Scrap, Scout
-for Survivors, Singularity Rupture, Systems Override, Terminal
-Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
+Then `feature/non-state-rs-tractable` (Effect-uncovered single-gated
+tier — Exorcise close; Duskmourn {1}{W} Sorcery; Lane GG / state.rs
+conflict-avoidance lane) flipped Exorcise COVERED → PROBED via the
+new `Effect::ExorciseEffect` Rust unit variant + bridge arm +
+reverse-serializer leaf + the file-local `read_doubling_power`
+effective-power reader in the 3-way OR target filter (Artifact OR
+Enchantment OR Creature-with-effective-power-4+ — structural sibling
+of Shattered Wings's destroy-half filter, with two swaps: exile-not-
+destroy per CR 702.12 and power-4-not-flying with the effective-
+power read folding `obj.counters` + UEOT bonuses byte-equal with
+Python's `effective_power`). Admit set **20 → 21**.
+Remaining **16 single-gated** Effect-uncovered members:
+Archenemy's Charm, Close Encounter, Coordinated Clobbering,
+Darkness, Devastating Onslaught, Mutinous Massacre, Pull Through
+the Weft, Scour for Scrap, Scout for Survivors, Singularity
+Rupture, Systems Override, Terminal Velocity, Vengeful Possession,
+Warping Wail, Zero Point Ballad (15; the prior list's Emergency
+Eject + Invasive Maneuvers entries were stale — both shipped
+upstream of this dated paragraph).
 
 * **Per-card cost:** 1-3 cycles each — **caveat (2026-05-21)**:
   the next-wrath-substrate triad walk

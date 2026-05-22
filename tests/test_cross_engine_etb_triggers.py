@@ -21335,37 +21335,44 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # declined only because the serializer leaf was missing. The
     # §2 auto-grow teeth: covered+bridged AND round-trips ⇒
     # admitted, no fallback hybrid. 17 → 19 — both AUTO-JOINED.
-    # **multi-target-admit-phase4 (2026-05-21):** Phase 4 widens the
-    # admit predicate to accept ``(min, N)`` graveyard-source multi-
-    # target shapes with uniform slot_kinds. New Rust
+    # **multi-target-admit-phase4 + non-state-rs-tractable-Exorcise
+    # (2026-05-21):** Two sibling closures landed concurrently growing
+    # the admit set 19 → 22. Phase 4 widens the admit predicate to
+    # accept ``(min, N)`` graveyard-source multi-target shapes with
+    # uniform slot_kinds + adds the new Rust
     # ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters``
-    # variant + matching parse + to_pydict + bridge arm + resolve arm
-    # + reverse-serializer leaf. Scout for Survivors AUTO-JOINS via
-    # the §2 auto-grow teeth: 20 → 21. Pull Through the Weft + Archenemy's
-    # Charm stay declined (each needs its own substrate per the lane's
-    # honest-stop characterization).
+    # variant → Scout for Survivors AUTO-JOINS. The Exorcise lane
+    # adds ``Effect::ExorciseEffect`` (Duskmourn {1}{W} Sorcery,
+    # structural sibling of Shattered Wings's destroy-half filter with
+    # exile-not-destroy + power-4-not-flying swaps) → Exorcise
+    # AUTO-JOINS. Pull Through the Weft + Archenemy's Charm stay
+    # declined (each needs its own substrate per the multi-target
+    # lane's honest-stop). 19 → 22 — both AUTO-JOINED.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-        "Drill Too Deep", "Emergency Eject", "Focus Fire",
+        "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
         "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",
         "Shattered Wings", "Under the Skin", "Untimely Malfunction",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 21 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits + 1 Cycle-4 "
-        f"modal admit (Ruinous Rampage) + 1 Cycle-6 per-mode-target "
-        f"modal admit (Drill Too Deep) + 1 Cycle-6 some-targeted modal "
-        f"admit (Reroute Systems) + 1 co-admit (Untimely Malfunction) "
-        f"+ 1 Phase-4 multi-target-from-graveyard admit (Scout for "
-        f"Survivors, via the multi-target-admit-phase4 lane's "
-        f"``ReturnUpToNSmallCreaturesFromGraveyardWithCounters`` "
-        f"Effect variant + bridge arm + reverse-serializer leaf + "
-        f"Phase-4 admit-gate arm) — the set grew 15→21 across the "
-        f"six lanes; auto-grows further as the remaining Tier-A and "
-        f"per-mode-target modal spells close)")
+        f"exactly the 22 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
+        f"(incl. Beyond the Quiet) + 1 Cycle-4 modal admit "
+        f"(Ruinous Rampage) + 1 Cycle-6 per-mode-target modal admit "
+        f"(Drill Too Deep) + 1 Cycle-6 some-targeted modal admit "
+        f"(Reroute Systems) + 1 co-admit (Untimely Malfunction via "
+        f"DestroyTargetArtifact _leaf addition) + 1 Phase-4 "
+        f"multi-target-from-graveyard admit (Scout for Survivors via "
+        f"the multi-target-admit-phase4 lane's "
+        f"ReturnUpToNSmallCreaturesFromGraveyardWithCounters Effect "
+        f"variant + Phase-4 admit-gate arm) + 1 Effect-uncovered "
+        f"single-gated admit (Exorcise via the non-state-rs-tractable "
+        f"ExorciseEffect close) — the set grew 15→22 across the "
+        f"seven lanes; auto-grows further as the remaining Tier-A "
+        f"and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

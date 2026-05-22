@@ -9315,6 +9315,208 @@ fn apply_effect(
                 );
             }
         }
+        // ExorciseEffect (Effect-uncovered single-gated tier — Exorcise,
+        // Duskmourn). CR 406 (exile) with a 3-way OR target filter:
+        // (Artifact) OR (Enchantment) OR (Creature AND effective_power
+        // >= 4). Mirrors Python's `ExorciseEffect`
+        // (`effects/bespoke.py:2268`) whose `_matches` helper is
+        // `obj.printing.is_artifact OR "Enchantment" in
+        // obj.printing.card_types OR (obj.printing.is_creature AND
+        // effective_power(state, obj) >= 4)`, re-verified at resolution
+        // per CR 608.2b against the centralized `state.battlefield`
+        // walk (no controller restriction).
+        //
+        // **Cast-time-bound target via
+        // `current_resolve_payload_target_id`** (the
+        // `DestroyTargetArtifactEnchantmentOrFlyingCreature` /
+        // `SeedshipImpactEffect` payload-target swap pattern; CR
+        // 608.2b). None-payload synthetic-test fallback: deterministic-
+        // first permanent matching the 3-way OR filter in
+        // ETB-timestamp order across BOTH bfs (mirrors the Shattered
+        // Wings sibling's fallback).
+        //
+        // **Power-4 leg reads EFFECTIVE power** via the file-local
+        // `read_doubling_power` helper (base after
+        // `ueot_base_pt_override` / `ueot_becomes_land_creature_pt` /
+        // printed, plus `ueot_power_bonus`, plus signed `obj.counters`
+        // — matches Python's `effective_power` =
+        // `_compute_effective_pt` at game.py:2138-2251). A 3/3 creature
+        // pumped to effective power 4+ via counters / UEOT modifier IS
+        // legally targetable on BOTH engines byte-equal.
+        //
+        // **Indestructible is NOT skipped** here — exile bypasses
+        // indestructible per CR 702.12 (indestructible only prevents
+        // destroy + lethal-damage, not exile). Matches the shipped
+        // `Effect::ExileTarget { AnyCreature }` arm which has NO
+        // indestructible-skip. Distinguishes Exorcise from the destroy
+        // siblings (Shattered Wings, etc.) which DO skip indestructible.
+        //
+        // **DIES dispatch is creature-gated** (CR 700.4 — only a
+        // creature death fires DIES). The R76-2 / R74-2 fix shape: the
+        // artifact + enchantment legs do NOT fire DIES; the 4+ power
+        // creature leg does. Wait — exile doesn't trigger DIES
+        // (creatures going to exile go to exile, NOT to graveyard, so
+        // they don't "die" per CR 700.4 — "die" specifically means
+        // bf→graveyard). Skip the DIES push entirely. Only LEAVES +
+        // token-cease are queued. Mirrors the shipped
+        // `Effect::ExileTarget { AnyCreature }` arm which does NOT
+        // push pending_dies_dispatches.
+        Effect::ExorciseEffect => {
+            // Re-derive the 3-way OR predicate privately (file-iso —
+            // the `state_ops_legal.rs` `spell_targets_satisfiable` arm
+            // has its own copy; same convention as the Shattered Wings
+            // sibling). The "power 4+" leg reads effective power via
+            // the file-local `read_doubling_power` helper (folds
+            // base + ueot_power_bonus + obj.counters — matches Python's
+            // `effective_power`).
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                let is_artifact = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact");
+                                let is_enchantment = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Enchantment");
+                                let is_creature = printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature");
+                                let power_4_plus = is_creature
+                                    && read_doubling_power(
+                                        state, o.id,
+                                    ) >= 4;
+                                // 3-way OR filter re-checked at
+                                // resolve (defense-in-depth + the
+                                // CR 608.2b "still matches the typed
+                                // filter" leg). Indestructible is
+                                // NOT a disqualifier — exile bypasses
+                                // indestructible per CR 702.12.
+                                if !(is_artifact
+                                    || is_enchantment
+                                    || power_4_plus)
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback — deterministic-first
+                    // permanent matching the 3-way OR filter across
+                    // BOTH bfs in ETB-timestamp order. Mirrors the
+                    // Shattered Wings sibling's fallback shape.
+                    let mut picked: Option<(usize, u32)> = None;
+                    for obj in
+                        crate::bf_iter::bf_iter_etb_sorted(state)
+                            .into_iter()
+                    {
+                        let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        else {
+                            continue;
+                        };
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_enchantment = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Enchantment");
+                        let is_creature = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        let power_4_plus = is_creature
+                            && read_doubling_power(state, obj.id)
+                                >= 4;
+                        if !(is_artifact
+                            || is_enchantment
+                            || power_4_plus)
+                        {
+                            continue;
+                        }
+                        picked = Some((obj.controller as usize, obj.id));
+                        break;
+                    }
+                    picked
+                }
+            };
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect(
+                        "target_id from scan but not found on re-scan",
+                    );
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here
+                // (CR 302.1 — sickness is battlefield-only state).
+                // See I35.
+                obj.damage = 0;
+                // The shipped `ExileTarget { AnyCreature }` arm
+                // RESETS `obj.counters = 0` on zone change (a card
+                // entering a new zone is a new object per CR 400.7;
+                // counters specifically reset on bf→exile per the
+                // round-1 exile reset convention this arm mirrors).
+                // Diverges intentionally from the destroy siblings,
+                // which preserve counters on the dead-in-graveyard
+                // object per the R77-CFI1 byte-equal contract — that
+                // contract is specific to the bf→graveyard transition
+                // and doesn't extend to bf→exile.
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) =
+                    (obj.printing_id, obj.id);
+                // First-slice: target's controller == owner, so push
+                // onto `pidx`'s exile (where the target lives).
+                Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+                // LTB fan-out (the `mark_left_battlefield_if_nonland`
+                // helper gates on the printing — artifact / enchantment
+                // / creature all reach the LTB mark; lands cannot
+                // satisfy the 3-way OR filter anyway).
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // DIES is NOT pushed — exile is bf→exile, not
+                // bf→graveyard. Only the bf→graveyard transition
+                // satisfies CR 700.4's "die" definition. Mirrors the
+                // shipped `Effect::ExileTarget { AnyCreature }` arm
+                // which also omits the DIES push.
+                //
+                // LEAVES fan-out (always — every bf-exit fires LEAVES
+                // per CR 603.6c / `Event::LeavesBattlefield`'s
+                // contract).
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Round-55: token-cease sibling of the LEAVES push.
+                // The id is queued unconditionally; the is_token gate
+                // lives in drain_pending_token_cease (CR 111.7 /
+                // 704.5d).
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

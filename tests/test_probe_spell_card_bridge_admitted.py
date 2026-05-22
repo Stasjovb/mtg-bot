@@ -166,23 +166,25 @@ pytestmark = pytest.mark.skipif(
 # Combined with the Drill Too Deep slice: 17 → 20 across the merged
 # lanes.
 #
-# **multi-target-admit-phase4 (2026-05-21,
-# `feature/multi-target-admit-phase4`)**: added the Phase-4
-# multi-target admit arm to ``_printing_is_bridge_simple_spell``
+# **multi-target-admit-phase4 + non-state-rs-tractable-Exorcise
+# (2026-05-21)**: two sibling lanes landed concurrently. Phase 4 adds
+# the multi-target admit arm to ``_printing_is_bridge_simple_spell``
 # (``(min, N)`` shapes with uniform graveyard_creature slot kinds) +
 # new Rust ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWith
-# Counters`` variant + matching parse + to_pydict + bridge arm +
-# resolve arm + reverse-serializer leaf. Scout for Survivors
-# AUTO-JOINS — 20 → 21. Pull Through the Weft and Archenemy's Charm
-# stay declined (Pull Through the Weft needs its own
-# ReturnUpToNNonlandPermanentCardsFromGraveyardToHand variant;
-# Archenemy's Charm needs 3-mode modal + Mode-3 keyword-grant
-# substrate per the lane's honest-stop characterization).
+# Counters`` variant → Scout for Survivors AUTO-JOINS. The Exorcise
+# lane adds ``Effect::ExorciseEffect`` (Duskmourn {1}{W} Sorcery —
+# the 3-way OR target filter is the structural sibling of Shattered
+# Wings's destroy-half with exile-not-destroy + power-4-not-flying
+# swaps; the power-4 leg reads EFFECTIVE power via the file-local
+# ``read_doubling_power`` reader, byte-equal with Python's
+# ``effective_power``) → Exorcise AUTO-JOINS. Pull Through the Weft
+# + Archenemy's Charm stay declined per the multi-target lane's
+# honest-stop characterization. 20 → 22 — both AUTO-JOINED.
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-    "Drill Too Deep", "Emergency Eject", "Focus Fire",
+    "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
     "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
     "Pyroclasm", "Radiant Strike", "Reroute Systems",
     "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",

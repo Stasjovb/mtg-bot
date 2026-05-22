@@ -1772,6 +1772,87 @@ pub enum Effect {
     /// free construction). Mirrors the `DestroyTargetArtifactOr
     /// TappedCreature` Tier-A unit-variant convention.
     DestroyTargetArtifactEnchantmentOrFlyingCreature,
+    /// **Effect-uncovered single-gated tier — Exorcise (Duskmourn;
+    /// loaded via `data/duskmourn.json` into the EoE-aware test pool
+    /// — Effect-uncovered single-gated per the round-58 attribution
+    /// scout).** `{1}{W}` Sorcery: "Exile target artifact, enchantment,
+    /// or creature with power 4 or greater."
+    ///
+    /// Mirrors Python's `ExorciseEffect`
+    /// (`effects/bespoke.py:2268`) — a parameterless dataclass with a
+    /// 3-way OR target filter: (IsArtifact) OR (IsEnchantment) OR
+    /// (IsCreature AND effective_power ≥ 4). The Python `_matches`
+    /// helper re-evaluates the filter at BOTH legal-target time and
+    /// at resolve-time (defense-in-depth + CR 608.2b — a pump between
+    /// cast and resolve could drop a 4+ creature's effective power
+    /// below 4, fizzling the spell).
+    ///
+    /// **Field-free unit variant** (the
+    /// `DestroyTargetArtifactEnchantmentOrFlyingCreature` /
+    /// `DestroyTargetArtifactOrTappedCreature` idiom — the closest
+    /// siblings). No dict payload — the 3-way OR filter is intrinsic
+    /// to the variant. Python's `ExorciseEffect` carries no
+    /// constructor parameters.
+    ///
+    /// **Resolve semantics (mirrors `ExorciseEffect.resolve` at
+    /// `effects/bespoke.py:2317-2347` byte-equal to the SoT; same
+    /// shape as the shipped `DestroyTargetArtifactEnchantmentOr
+    /// FlyingCreature` arm with two swaps — exile-not-destroy and
+    /// power-4+-not-flying):**
+    /// 1. Read the cast-time-bound target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    `DestroyTargetArtifactEnchantmentOrFlyingCreature` /
+    ///    `DestroyTargetArtifactOrTappedCreature` /
+    ///    `SeedshipImpactEffect` payload-target swap pattern; CR
+    ///    608.2b). When `None` (synthetic-test `push_to_stack` path
+    ///    that doesn't seat a target), fall back to the deterministic-
+    ///    first permanent matching the 3-way OR filter in
+    ///    ETB-timestamp order across BOTH battlefields (mirrors
+    ///    `bf_iter_etb_sorted`).
+    /// 2. Re-validate the bound target at resolve (CR 608.2b): the
+    ///    target must still be on a battlefield AND still satisfy
+    ///    `IsArtifact OR IsEnchantment OR (IsCreature AND
+    ///    effective_power ≥ 4)`. The power leg reads EFFECTIVE power
+    ///    via the inlined `read_effective_power` helper (same body as
+    ///    the round-53 `read_doubling_power` — base after
+    ///    `ueot_base_pt_override` / `ueot_becomes_land_creature_pt` /
+    ///    printed, plus `ueot_power_bonus`, plus signed `obj.counters`;
+    ///    matches Python's `mtg_bot.game.effective_power` =
+    ///    `_compute_effective_pt` at `game.py:2138-2251`). Illegal
+    ///    target (gone, or no longer matches the filter) → silent
+    ///    fizzle, mirroring `ExorciseEffect.resolve`'s
+    ///    "no longer matches ... — Exorcise fizzles" branch.
+    /// 3. **Indestructible is NOT skipped** here — exile bypasses
+    ///    indestructible per CR 702.12 (indestructible only prevents
+    ///    destroy + lethal-damage, not exile). Matches the shipped
+    ///    `Effect::ExileTarget { AnyCreature }` arm which has NO
+    ///    indestructible-skip. Distinguishes Exorcise from the destroy
+    ///    siblings (Shattered Wings, etc.) which DO skip indestructible.
+    /// 4. Exile the target via the proven `ExileTarget` body shape:
+    ///    remove from bf, reset `zone/tapped/damage/counters/attached_to/
+    ///    exiled_with_source`, push to the target's owner's exile zone
+    ///    (first-slice: owner == controller, so push onto `pidx`'s
+    ///    exile), queue DIES dispatch if the victim was a Creature (CR
+    ///    700.4 — exile from bf still fires DIES for creatures via
+    ///    `mark_left_battlefield_if_nonland`'s downstream + the
+    ///    pending_dies path; matching the OrTapped + Shattered Wings
+    ///    sibling creature-gate), queue LEAVES dispatch, queue
+    ///    token-cease.
+    ///
+    /// **Power-4 leg reads EFFECTIVE power (NOT printed).** A 3/3
+    /// creature carrying +1/+1 counters or pumped by a UEOT modifier
+    /// to effective power 4+ is legally targetable on BOTH engines
+    /// byte-equal (Python's `effective_power` and Rust's
+    /// `read_effective_power` fold the same composition). A 4/4
+    /// creature debuffed below 4 effective power between cast and
+    /// resolve fizzles on BOTH engines (the resolve-time recheck).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `ExorciseEffect()` (field-free construction). Mirrors the
+    /// `DestroyTargetArtifactEnchantmentOrFlyingCreature` Tier-A
+    /// unit-variant convention.
+    ExorciseEffect,
     /// **Effect-uncovered single-gated tier — Emergency Eject
     /// (~6,291 17lands decks).** `{2}{W}` Instant: "Destroy target
     /// nonland permanent. Its controller creates a Lander token."
@@ -8238,6 +8319,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // OR-tapped-creature OR).
             Ok(Effect::DestroyTargetArtifactEnchantmentOrFlyingCreature)
         }
+        "exorcise_effect" => {
+            // Effect-uncovered single-gated tier — Exorcise (Duskmourn).
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("Artifact OR Enchantment OR (Creature AND effective
+            // power >= 4)"). Indestructible NOT skipped (exile bypasses
+            // indestructible per CR 702.12). Extra keys ignored.
+            // Mirrors `destroy_target_artifact_enchantment_or_flying_
+            // creature` parser arm shape — only the two filter swaps
+            // differ (exile-not-destroy, power-4-not-flying).
+            Ok(Effect::ExorciseEffect)
+        }
         "emergency_eject_effect" => {
             // Effect-uncovered single-gated tier — Emergency Eject
             // (~6,291 17lands decks). Single-field payload: the
@@ -12089,6 +12181,17 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "destroy_target_artifact_enchantment_or_flying_creature",
             )?;
+        }
+        Effect::ExorciseEffect => {
+            // Effect-uncovered single-gated tier — Exorcise.
+            // Unit variant — `kind` only (the Shattered Wings
+            // field-free to_dict idiom). Bidirectional with the
+            // `exorcise_effect` parse arm + the cross_engine.py
+            // bridge arm + the trajectory.py reverse-serializer
+            // leaf. The single target is NOT serialized here — it
+            // rides on the StackItem
+            // (`current_resolve_payload_target_id`).
+            d.set_item("kind", "exorcise_effect")?;
         }
         Effect::EmergencyEjectEffect { token_printing_id } => {
             // Effect-uncovered single-gated tier — Emergency Eject.
