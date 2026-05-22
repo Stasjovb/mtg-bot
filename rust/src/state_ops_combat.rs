@@ -195,6 +195,7 @@
 //! canaries in `test_tap.py` and `test_damage.py`.
 
 use crate::state::{GameObject, GameState};
+use crate::state_ops_cleanup::effective_controller_id;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -678,11 +679,18 @@ pub(crate) fn dynamic_base_pt_pub(
         locate_battlefield_obj(state, obj_id)?;
     let printing = state.registry.lookup(printing_id)?;
     let formula = printing.dynamic_pt_formula.as_deref()?;
+    // Control-change-UEOT subsystem — Cycle 2 (2026-05-21):
+    // dynamic-P/T formula resolution is a gameplay-decision read.
+    // Both the subject's controller AND the per-other-permanent
+    // "controlled by same player" predicate must observe the UEOT
+    // override so a Mutinous-Massacre-flipped Harmonious
+    // Grovestrider counts the NEW controller's lands until cleanup.
+    // Back-compat byte-equivalent today (no live mint site).
     let controller = state.players[player_idx]
         .battlefield
         .iter()
         .find(|o| o.id == obj_id)
-        .map(|o| o.controller)?;
+        .map(effective_controller_id)?;
     match formula {
         "harmonious_grovestrider" => {
             // P = T = lands controlled by the obj's controller.
@@ -693,7 +701,7 @@ pub(crate) fn dynamic_base_pt_pub(
             let mut n: i32 = 0;
             for player in state.players.iter() {
                 for bf_obj in player.battlefield.iter() {
-                    if bf_obj.controller != controller {
+                    if effective_controller_id(bf_obj) != controller {
                         continue;
                     }
                     if let Some(p) =
@@ -1110,11 +1118,19 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
 /// Read controller (player index) of a battlefield creature, or
 /// `None` if not present. Used by `deal_combat_damage` to credit
 /// lifelink life-gain to the right player.
+///
+/// **Cycle 2 reroute (2026-05-21):** consults the effective
+/// controller via `effective_controller_id` so lifelink life-gain
+/// credit and damage-source attribution flow to whichever player
+/// EFFECTIVELY controls the creature this turn — a creature
+/// stolen by Mutinous Massacre / Systems Override pays its
+/// lifelink life-gain to the NEW controller until cleanup.
+/// Back-compat byte-equivalent today (no live mint site).
 fn battlefield_creature_controller(state: &GameState, obj_id: u32) -> Option<u8> {
     for player in state.players.iter() {
         for obj in player.battlefield.iter() {
             if obj.id == obj_id {
-                return Some(obj.controller);
+                return Some(effective_controller_id(obj));
             }
         }
     }

@@ -436,6 +436,7 @@
 //! closed-G1 note.
 
 use crate::state::GameState;
+use crate::state_ops_cleanup::effective_controller_id;
 use crate::state_ops_steps::{
     PHASE_DECLARE_ATTACKERS, PHASE_DECLARE_BLOCKERS, PHASE_MAIN1, PHASE_MAIN2,
 };
@@ -1010,7 +1011,14 @@ fn spell_targets_satisfiable(
                 let any = crate::bf_iter::bf_iter_etb_sorted(state)
                     .into_iter()
                     .any(|o| {
-                        if o.controller != controller {
+                        // Control-change-UEOT subsystem — Cycle 2
+                        // (2026-05-21): consult the effective
+                        // controller (override-aware) so a UEOT
+                        // control-grant (Mutinous Massacre / Systems
+                        // Override) flips this legal-target predicate
+                        // correctly on the same turn. Back-compat
+                        // byte-equivalent today (no live mint site).
+                        if effective_controller_id(o) != controller {
                             return false;
                         }
                         state
@@ -1239,7 +1247,11 @@ fn spell_targets_satisfiable(
                 let any = crate::bf_iter::bf_iter_etb_sorted(state)
                     .into_iter()
                     .any(|o| {
-                        if o.controller != controller {
+                        // Cycle 2 reroute: effective controller so a
+                        // UEOT control-grant (Mutinous Massacre /
+                        // Systems Override) properly admits this
+                        // legal-target predicate on the same turn.
+                        if effective_controller_id(o) != controller {
                             return false;
                         }
                         let Some(p) =
@@ -1285,7 +1297,13 @@ fn spell_targets_satisfiable(
                     if !is_creature {
                         continue;
                     }
-                    if o.controller == controller {
+                    // Cycle 2 reroute: Diplomatic Relations 2-slot
+                    // "my creature / opp's creature" satisfiability
+                    // check. Effective-controller-aware so a UEOT
+                    // override correctly re-buckets a flipped
+                    // creature into the source-controller's "mine"
+                    // bucket on the same turn.
+                    if effective_controller_id(o) == controller {
                         have_mine = true;
                     } else {
                         have_theirs = true;

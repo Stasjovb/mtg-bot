@@ -83,6 +83,7 @@
 //! are the load-bearing canaries.
 
 use crate::state::{GameObject, GameState, ManaPool};
+use crate::state_ops_cleanup::effective_controller_id;
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -1810,7 +1811,12 @@ impl GameState {
                     if !is_creature {
                         continue;
                     }
-                    if o.controller == player_id {
+                    // Cycle 2 reroute (Diplomatic Relations cast-time
+                    // 2-slot bind): effective-controller-aware so a
+                    // UEOT control-grant correctly re-buckets a
+                    // flipped creature into the caster's "mine" slot
+                    // until cleanup.
+                    if effective_controller_id(o) == player_id {
                         if slot0.is_none() {
                             slot0 = Some(o.id);
                         }
@@ -2260,7 +2266,12 @@ impl GameState {
                     crate::bf_iter::bf_iter_etb_sorted(self)
                         .into_iter()
                         .find_map(|o| {
-                            if o.controller != caster {
+                            // Cycle 2 reroute: effective-controller-
+                            // aware cast-time target binding so a
+                            // UEOT control-grant correctly admits a
+                            // flipped Spacecraft/Planet as a "you
+                            // control" target until cleanup.
+                            if effective_controller_id(o) != caster {
                                 return None;
                             }
                             let p = self.registry.lookup(o.printing_id)?;
@@ -2365,7 +2376,9 @@ impl GameState {
                 let bf_pick = crate::bf_iter::bf_iter_etb_sorted(self)
                     .into_iter()
                     .find_map(|o| {
-                        if o.controller != player_id {
+                        // Cycle 2 reroute: effective-controller-aware
+                        // additional-cost creature-you-control pick.
+                        if effective_controller_id(o) != player_id {
                             return None;
                         }
                         let p = self.registry.lookup(o.printing_id)?;
@@ -2553,7 +2566,13 @@ impl GameState {
                 if !type_ok {
                     return None;
                 }
-                if yours_only && o.controller != player_id {
+                // Cycle 2 reroute: Aura cast-time `yours_only`
+                // host-eligibility check (e.g. Shardmage's Rescue
+                // "Enchant creature you control"). Effective-
+                // controller-aware so a UEOT control-grant on the
+                // would-be host correctly enables / disables the
+                // legal-host scan until cleanup.
+                if yours_only && effective_controller_id(o) != player_id {
                     return None;
                 }
                 Some(o.id)
