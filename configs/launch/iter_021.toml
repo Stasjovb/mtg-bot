@@ -1,0 +1,43 @@
+# iter_021 -- first production-style run with the unified launcher
+# AFTER the Bug A (storage_uri plumbing) + coord-fetcher (S3 arm
+# default) fixes landed. See worklog 2026-05-22.
+#
+# Cluster shape (per user directive 2026-05-22):
+#   - Win11 desktop (this machine): orchestrator + coordinator + UI only.
+#     NO worker daemon -- the MTGBotWorker scheduled task stays stopped.
+#   - Mac (greggs-macbook-pro-1, 100.77.31.125): the Mac worker daemon.
+#     Note: the OLD `greggs-macbook-pro` tailnet node is offline (3d+);
+#     the active node is `-1`. Use the IP to dodge DNS surprises.
+#   - AWS: 8x c7a.2xlarge spot in us-east-1c (with d/f fallback).
+#
+# Storage: real S3 via the IAM instance profile attached by the
+# runspec template (mtg-bot-spot-worker). cfg.aws.storage_uri below
+# is now ACTUALLY plumbed through to the worker daemon's CLI flag
+# via the user-data injection (commit 4c700546). And the coord's
+# S3 fetcher arm is on by default (commit 9e3f5d0e) so the npz
+# rehydrate path actually fires.
+
+[iter]
+target_iter = 21
+bootstrap_version = "v13s"
+nodes = 800
+samples = 4
+games_per_iteration = 500
+epochs = 4
+architecture = "structured"
+
+[cluster]
+local_only = false
+# master_url INTENTIONALLY OMITTED -- no worker on the Win11 desktop.
+mac_url = "http://100.77.31.125:5198"
+
+[aws]
+market_type = "spot"
+count = 8
+instance_type = "c7a.2xlarge"
+az_fallback = ["us-east-1c", "us-east-1d", "us-east-1f"]
+storage_uri = "s3://mtg-bot-artifacts-630589799985/iter_021/"
+
+[ui]
+auto_start_training_ui = true
+base_url = "http://desktop-j05412i:5103"
