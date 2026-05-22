@@ -828,6 +828,20 @@ PROBE_MODULES: tuple[Path, ...] = (
     # attribution gap and makes the metric robust against future
     # rearrangement of the redundant routes.
     REPO_ROOT / "tests" / "test_probe_ppp_downstream.py",
+    # **x-value-subsystem-cycle-3 (2026-05-22):** Zero Point Ballad
+    # `{X}{B}` — FIRST X-cost cross-engine probe. The
+    # ``test_cross_engine_real_eoe_zero_point_ballad_x_value_parity``
+    # probe drives the genuine parsed Zero Point Ballad EoE printing
+    # through the new ``Effect::ZeroPointBalladEffect`` Rust unit
+    # variant + the C1+C2.5 X-value substrate (StackItem.x_value mint,
+    # current_resolve_x_value bracket) + bridge arm + reverse-
+    # serializer leaf. Under the no-agent cross-engine harness X=0
+    # (per C2.5's no-agent fallback mint); the X-dependent destroy +
+    # lose-X-life + X>=6 reanimation surface stays dormant, but the
+    # printing parses + admits + serializer round-trips + resolves
+    # byte-equal. Flips Zero Point Ballad COVERED → PROBED (admit set
+    # 24 → 25; ~6,041 17lands decks).
+    REPO_ROOT / "tests" / "test_zero_point_ballad_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

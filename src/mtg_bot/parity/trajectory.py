@@ -4125,6 +4125,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         ExorciseEffect,
         FocusFireEffect,
         SeedshipImpactEffect,
+        ZeroPointBalladEffect,
     )
     from mtg_bot.effects.generic.damage import (
         DealDamageEachOpponent,
@@ -4746,6 +4747,27 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # for the exact Scout-print pattern, but a future parser
         # extension that adds e.g. ``or_artifact=True`` would silently
         # mistranslate without this guard).
+        # **X-value-subsystem Cycle 3 (2026-05-22).** Per-leaf
+        # serializer for ``ZeroPointBalladEffect()`` — Zero Point Ballad
+        # `{X}{B}`. Unit-variant round-trip: kind-only dict, mirroring
+        # the ``BiosynthicBurstEffect`` / ``DiplomaticRelationsEffect``
+        # / ``CloseEncounterEffect`` unit-leaf idiom. The X value rides
+        # on the spell StackItem (``current_resolve_x_value`` via the
+        # C1 bracket from ``StackItem.x_value`` minted at cast time by
+        # C2.5), NOT in this dict — the field-free dataclass at
+        # ``effects/bespoke.py:1677`` is the canonical Python parity.
+        # Adding this leaf — TOGETHER with the Rust
+        # ``Effect::ZeroPointBalladEffect`` variant + the matching
+        # ``zero_point_ballad_effect`` bridge arm in ``cross_engine.py``
+        # — is what flips Zero Point Ballad into the spell-card-bridge
+        # admit set (Phase-3 ``(0, 0)``-shape wrath admit + the
+        # X-cost C2.5 widen). The covered+bridged tooth picks up the
+        # newly-shipped Rust variant via the
+        # ``effect_coverage.covered_python_class_set()`` 1:1 identity
+        # mapping (``ZeroPointBalladEffect`` -> ``ZeroPointBalladEffect``,
+        # no override needed).
+        if isinstance(eff, ZeroPointBalladEffect):
+            return {"kind": "zero_point_ballad_effect"}
         if isinstance(eff, ReturnUpToNSmallCreaturesFromGraveyardWithCounters):
             if eff.max_n < 0 or eff.max_total_mv < 0:
                 return None

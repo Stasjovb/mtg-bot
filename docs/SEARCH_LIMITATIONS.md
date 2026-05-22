@@ -10099,16 +10099,94 @@ Required substrate:
   will land `Effect::ZeroPointBallad` + the bridge arm, at which
   point the admit gate opens and Zero Point Ballad flips
   (PROBED 279 → 280 expected).
-- **C3** — `Effect::ZeroPointBallad` resolve arm (destroy-with-
-  toughness-≤-X filter + life-loss + optional reanimation single-
-  target). Reads `state.current_resolve_x_value` via the Cycle 1
-  bracket. Reanimation arm needs a NEW resolve-time
-  `PendingDecision::ChooseFromOwnedDestroyedThisResolve` (the
-  candidate set is built mid-resolve, so it cannot be cast-time
-  bound). ~200 LoC + 6 probes.
-- **C4** — Real-EoE byte-equal probe with X=0/X=5/X=6/X=8
-  scenarios (the 4 X-tier branches: empty-filter, no-reanim,
-  reanim-trigger, reanim-with-no-candidate). Composite cycle if
+- **C3 LANDED (2026-05-22, x-value-subsystem-cycle-3-p1).** First
+  X-cost cross-engine close. Lands the
+  `Effect::ZeroPointBalladEffect` Rust unit variant + parse arm
+  + `to_pydict` arm + resolve arm + cross-engine bridge arm +
+  reverse serializer leaf. The §2 auto-grow teeth fire positively
+  (covered+bridged + round-trips + Phase-3 wrath shape), flipping
+  Zero Point Ballad COVERED → PROBED. Admit set 24 → 25; PROBED
+  279 → 280 on this branch (parallel sibling Mutinous Massacre +
+  Darkness C3 branches add +2 once they merge).
+
+  **Rust resolve arm shape (`Effect::ZeroPointBalladEffect` in
+  `state_ops_resolve.rs`).** Reads X from
+  `current_resolve_x_value` (C1 transient) with `None` defaulting
+  to 0 and negative X clamped to 0; reads controller via the I83
+  controller-of-effect convention. Two-pass per-victim destroy:
+  snapshot bf victim ids (creature card_types ∩ effective
+  toughness <= X, ETB-timestamp ordered) plus caster-owned-
+  victim-id subset; then per-victim destroy — skip indestructible
+  (CR 702.12), reset combat marks per CR 400.7, push to owner's
+  graveyard, queue LEAVES + DIES + token-cease dispatches via the
+  deferred queues. Caster loses X life (`players[c].life -= x`,
+  mirrors Python `bespoke.py:1716`). X>=6 reanimation tail: walks
+  caster's graveyard for the FIRST creature card whose id is in
+  the caster-owned-victim-ids snapshot, moves it to the caster's
+  battlefield (CR 400.7 zone-change reset, ETB-trigger via
+  `pending_etb_dispatches.push`). Empty candidate pool / X<6 =
+  silent fizzle.
+
+  **Effective toughness — inline.** The destroy filter computes
+  effective toughness inline (printed + UEOT base override +
+  counters + UEOT toughness bonus), mirroring the I76
+  `DealDamageToTargetCreatureWithExcessLanderRider` inline recipe.
+  Counters-inclusive (Python SoT view; matches
+  `_compute_effective_pt` byte-equal under the cross-engine
+  harness). Aura/static layer-7c is NOT folded — see the
+  divergence note below. If a future X-destroy card demands
+  Aura-inclusive toughness, promote
+  `battlefield_creature_toughness` from `state_ops_combat.rs` to
+  `pub(crate)` and substitute.
+
+  **Reanimation tail target-picker.** Uses the deterministic-first
+  convention (walk graveyard in Vec order, pick first matching
+  candidate). Python's resolver under the cross-engine no-agent
+  harness has `p.agent is None` and the X>=6 branch is GUARDED
+  by `if candidates and p.agent is not None:` — so Python NEVER
+  reanimates under the harness. Under the harness mint shape
+  (X=0 always), Rust's branch is ALSO dormant (X<6). The branch
+  is implemented in Rust for future X>=6 synthetic-test parity +
+  agent-driven probes; cross-engine byte-equality at X>=6 is
+  conditional on Python's branch firing (which the harness does
+  not exercise).
+
+  **No-agent harness X=0 dormancy — deliberate documented
+  limitation.** Under the cross-engine harness Python's
+  `_choose_and_apply_x` returns 0 when `p.agent is None`
+  (`actions.py:539`); C2.5's cast-pipeline detector mints
+  `StackItem.x_value = Some(0)` byte-equal. At X=0 the destroy
+  filter is `effective_toughness <= 0` (typically empty — SBA
+  has already removed every <=0 creature at the prior SBA pass);
+  lose-X-life is `-= 0`; X>=6 branch dormant. The
+  `test_cross_engine_real_eoe_zero_point_ballad_x_value_parity`
+  probe at X=0 verifies parse + admit + serializer round-trip +
+  resolve byte-equal without exercising the X-dependent action
+  surface. The X-dependent surface is exercised by the
+  synthetic-state Rust unit pins (X=2 destroy-by-toughness, X=6
+  reanimation, indestructible-skip). A future cycle that ships
+  an agent-driven X picker (e.g. an X-cost MCTS policy slot) can
+  promote the no-agent fallback into a real X bind and exercise
+  the X-dependent surface cross-engine; until then the X-dependent
+  parity proof rides on the synthetic pins.
+
+  **Tests.** `tests/test_zero_point_ballad_parity.py` (10 pins):
+  parser SoT; serializer round-trip; admit-gate flip;
+  covered-set membership; Rust unit pins (X=0 vacuous,
+  X=2 destroys-by-toughness, X=3 indestructible-skip-but-life-loss,
+  X=6 reanimates-caster-owned, X=6 dormant-when-no-caster-owned);
+  genuine real-EoE cross-engine byte-equal probe at X=0. Plus
+  admit-set pin updates in
+  `tests/test_cross_engine_etb_triggers.py::test_spell_card_lever_phase1_negative_pins_decline_set`
+  (24 → 25) and `tests/test_probe_spell_card_bridge_admitted.py`
+  (24 → 25); the C2.5 still-declined pin in
+  `tests/test_x_value_subsystem_cycle2_5.py::test_admit_predicate_zero_point_ballad_still_declined`
+  repurposed to an ADMIT pin (DECLINED→ADMITTED documented inline).
+- **C4 (still future, post-C3 lane).** Real-EoE byte-equal probe
+  with X=0/X=5/X=6/X=8 scenarios (the 4 X-tier branches: empty-
+  filter, no-reanim, reanim-trigger, reanim-with-no-candidate)
+  REQUIRES an agent-driven X picker landed on both engines;
+  today the X=0 probe is the C3 close. Composite cycle if
   paired with `Effect::DevastatingOnslaught` (X token copies +
   delayed-trigger end-step sac, sharing C1 substrate).
 

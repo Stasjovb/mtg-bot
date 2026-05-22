@@ -196,6 +196,18 @@ pytestmark = pytest.mark.skipif(
 # (``SearchLibraryForCard(filter_name="demon")``) stays declined per
 # the narrow-admit discipline — it auto-flips when a future lane
 # ships its per-card probe + guardrail flip.
+# **x-value-subsystem-cycle-3 (2026-05-22)** — admit set 24 → 25.
+# Cycle 3 lands the ``Effect::ZeroPointBalladEffect`` Rust variant (unit
+# variant; reads X from the C1 ``current_resolve_x_value`` transient
+# populated by C2.5's first live-mint cast detector) + matching dict
+# bridge arm + reverse-serializer leaf. Zero Point Ballad AUTO-JOINS
+# the admit set via the §2 auto-grow teeth: it's covered+bridged AND
+# round-trips AND fits the Phase-3 ``(0, 0)``-shape wrath admit (C2.5's
+# X-cost widen made Phase 3 the SOLE phase that admits X-cost
+# printings). Cross-engine probe under the no-agent harness runs at
+# X=0 (per C2.5's no-agent fallback mint) so the X-dependent
+# destroy/lose-X-life/X>=6 surface stays dormant — documented in
+# ``docs/SEARCH_LIMITATIONS.md`` as the deliberate harness limitation.
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
@@ -205,7 +217,7 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Orbital Plunge", "Pyroclasm", "Radiant Strike",
     "Reroute Systems", "Ruinous Rampage", "Scour for Scrap",
     "Scout for Survivors", "Seedship Impact", "Shattered Wings",
-    "Under the Skin", "Untimely Malfunction",
+    "Under the Skin", "Untimely Malfunction", "Zero Point Ballad",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

@@ -841,6 +841,42 @@ upstream of this dated paragraph).
   is no-agent). Full C2.5 entry at
   `docs/SEARCH_LIMITATIONS.md` §2 (Zero Point Ballad).
 
+  **X-value-subsystem Cycle 3 landed (2026-05-22,
+  `feature/x-value-subsystem-cycle-3-p1`).** First X-cost
+  cross-engine close. Lands `Effect::ZeroPointBalladEffect`
+  Rust unit variant + parse arm + `to_pydict` arm + resolve
+  arm in `state_ops_resolve.rs` + cross-engine bridge arm in
+  `cross_engine.py` + reverse serializer leaf in
+  `trajectory.py`. The §2 auto-grow teeth fire positively
+  (covered+bridged + round-trips + Phase-3 wrath shape from
+  C2.5's admit-widen), flipping Zero Point Ballad COVERED →
+  PROBED. Admit set 24 → 25; PROBED 279 → 280 on this branch
+  (parallel sibling Mutinous Massacre C5 + Darkness C3
+  branches add +2 each once they merge). Rust resolve arm
+  mirrors Python's `effects/bespoke.py::ZeroPointBalladEffect`
+  byte-equal: two-pass per-victim destroy (snapshot creature
+  ids whose effective toughness <= X + caster-owned-victim-id
+  subset; then per-victim destroy with indestructible skip,
+  CR 400.7 zone reset, LEAVES+DIES+token-cease queued), lose
+  X life, X>=6 reanimation tail walking caster's graveyard for
+  the first caster-owned-victim creature card. Effective
+  toughness is inline (printed + UEOT base override + counters
+  + UEOT toughness bonus; mirrors the I76 recipe). The X>=6
+  reanimation tail uses the deterministic-first convention;
+  under the no-agent harness Python NEVER reanimates
+  (`if candidates and p.agent is not None:` guard at
+  `bespoke.py:1728`) AND Rust is dormant (X=0 mint per C2.5
+  < 6). Tests: 10 pins in
+  `tests/test_zero_point_ballad_parity.py` (5 synthetic-state
+  Rust unit pins covering the X-dependent surface that the
+  no-agent cross-engine harness cannot exercise + the genuine
+  real-EoE byte-equal probe at X=0). The X-dependent action
+  surface cross-engine parity is conditional on an agent-
+  driven X picker landing on both engines — until then the
+  X=0 cross-engine probe rides on vacuous-resolve byte-equal,
+  documented as a deliberate harness limitation in
+  `docs/SEARCH_LIMITATIONS.md` §2 (C3 LANDED block).
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 

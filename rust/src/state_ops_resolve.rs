@@ -17534,6 +17534,247 @@ fn apply_effect(
                 state.pending_etb_dispatches.push(entered_id);
             }
         }
+        // **X-value-subsystem Cycle 3 (2026-05-22).** Zero Point Ballad
+        // `{X}{B}` — first consumer of the C1 `current_resolve_x_value`
+        // transient slot. Oracle (verified live): "Destroy all
+        // creatures with toughness X or less. You lose X life. If X is
+        // 6 or more, return a creature card put into a graveyard this
+        // way to the battlefield under your control."
+        //
+        // **X read.** From `state.current_resolve_x_value` (set by C1's
+        // save→set→restore bracket around this apply_effect call from
+        // the StackItem's `x_value`, in turn minted at cast time by
+        // C2.5's `cast_spell_noncreature` X-cost detector). `None` is
+        // treated as 0 defensively — only a synthetic test can drive
+        // that case (production cast-time bind always mints `Some(0)+`
+        // for an X-cost spell). Negative X is clamped to 0 (defensive;
+        // CR 107.1b says X is non-negative at cast time).
+        //
+        // **Controller read.** Standard I83 controller-of-effect:
+        // prefer `current_resolve_source_controller`, fall back to
+        // `active_player`. Mirrors every other Effect arm in this file.
+        //
+        // **Effective toughness.** Inlined (`printed_t + UEOT base
+        // override + counters + UEOT toughness bonus`); mirrors the
+        // I76 `DealDamageToTargetCreatureWithExcessLanderRider`
+        // inline-effective-toughness recipe at lines 7928-7946 above.
+        // Counters-inclusive (Python SoT view; matches
+        // `_compute_effective_pt`). NO Aura/static layer-7c fold here
+        // because the more compact inline shape from I76 is what every
+        // other resolve-time toughness consumer in this file uses; if
+        // a future card demands Aura-inclusive toughness for X-destroy,
+        // promote `battlefield_creature_toughness` from `state_ops_
+        // combat.rs` to `pub(crate)` and call it here.
+        //
+        // **Victim collection.** Two-pass: snapshot victim ids first
+        // (single immutable scan over both battlefields), then mutate.
+        // Mirrors `DestroyAllCreatures` (lines 6739-6814 above) which
+        // collects then mutates to avoid borrow conflicts. Walk order:
+        // `bf_iter_etb_sorted` (ETB-timestamp-monotone — same iteration
+        // order Python's pool walk produces, ensuring LEAVES / DIES
+        // dispatch ordering is byte-equal across engines).
+        //
+        // **Caster-owned-victim-ids.** Snapshot the subset of victims
+        // whose `controller == resolving_controller` BEFORE the destroy
+        // mutates anything (mirrors Python `bespoke.py:1705-1707` —
+        // "put into a graveyard this way" requires the caster owned
+        // the destroyed object). The X>=6 reanimation tail reads this
+        // snapshot from the caster's graveyard.
+        //
+        // **Destroy loop.** Per-victim: skip indestructible (CR 702.12),
+        // remove from owner's bf, reset combat marks (damage, tapped,
+        // attached_to per CR 400.7 / Python `move_off_battlefield`),
+        // counters survive zone change (matches Python's observable
+        // behavior + the `DestroyAllCreatures` precedent), push onto
+        // controller's graveyard, route LEAVES + DIES dispatches via
+        // the deferred queues + queue_token_cease. The destroyed
+        // object's `controller` is set to `obj.owner` per Python's
+        // move-to-owner-graveyard discipline at `bespoke.py:1713 ->
+        // turn.destroy -> move_off_battlefield`.
+        //
+        // **Lose X life.** Direct subtract (mirrors Python
+        // `bespoke.py:1716`). `players[controller].life -= x`. Clamped X
+        // (max(0, x)) ensures non-negative subtraction; CR 119.3 says
+        // lose-N-life requires N >= 0 so a negative X (defense-only)
+        // becomes a 0-life no-op.
+        //
+        // **X>=6 reanimation.** Walk the controller's graveyard for
+        // the FIRST creature card (front-to-back, Vec order) whose id
+        // is in the caster-owned-victim-ids set. Pick that one (matches
+        // Python's `_PickFirstLegalTargetAgent` shape that the cross-
+        // engine harness drives the Python side with; under the no-
+        // agent harness the branch is dormant at X=0, but the Rust arm
+        // implements it for future synthetic-test parity at X>=6 and
+        // for future agent-driven probes). Empty candidate pool /
+        // X<6 = silent fizzle (mirrors Python `if candidates and
+        // p.agent is not None:` guard).
+        //
+        // **Cross-engine harness X=0 dormancy.** Under the no-agent
+        // harness (`agent=None` on Python; X=0 mint on Rust per C2.5),
+        // X=0 means: victim filter `toughness <= 0` collects only
+        // creatures with effective toughness <= 0 (typically empty —
+        // SBA has already removed every <=0 creature at the prior SBA
+        // pass; the only window is a layer-7d counter-modifier moving
+        // it down between SBA passes); lose-X-life is `-= 0`; X>=6
+        // branch dormant. Trivial vacuous-resolve at X=0 — the cross-
+        // engine probe at X=0 verifies parse + admit + resolve byte-
+        // equal without exercising the X-dependent surface (documented
+        // as a harness limitation in `docs/SEARCH_LIMITATIONS.md`).
+        Effect::ZeroPointBalladEffect => {
+            let _ = source_obj_id;
+            // Resolve X: read transient (C1 bracket), default 0.
+            let x_raw = state.current_resolve_x_value.unwrap_or(0);
+            let x: i32 = x_raw.max(0);
+            // Resolve controller (I83 controller-of-effect).
+            let controller: u8 = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // Snapshot victim ids in bf-ETB-timestamp order. The
+            // inline effective-toughness recipe matches I76's
+            // `DealDamageToTargetCreatureWithExcessLanderRider` shape.
+            // Tuple: (owner_idx, obj_id, controller_at_destroy).
+            // owner_idx = the bf this object lives on (object is owner-
+            // keyed); controller = obj.controller snapshot (Python's
+            // bespoke filters on owner_id == controller_id which on the
+            // cross-engine harness equals obj.controller).
+            let mut victims: Vec<(usize, u32, u8)> = Vec::new();
+            for pidx in 0..state.players.len() {
+                for obj in state.players[pidx].battlefield.iter() {
+                    let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                        continue;
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        continue;
+                    }
+                    let printed_t = printing.toughness.unwrap_or(0) as i32;
+                    let base_t = obj
+                        .ueot_base_pt_override()
+                        .map(|(_, t)| t)
+                        .unwrap_or(printed_t);
+                    let eff_t = base_t
+                        + obj.counters
+                        + obj.ueot_toughness_bonus();
+                    if eff_t > x {
+                        continue;
+                    }
+                    victims.push((pidx, obj.id, obj.controller));
+                }
+            }
+            // Re-sort by ETB timestamp to match
+            // `bf_iter_etb_sorted` convention (the established LEAVES /
+            // DIES dispatch ordering across both engines). The sort is
+            // stable and ETB timestamps are strictly monotonic globally
+            // — same comparator the bf_iter uses.
+            victims.sort_by_key(|(owner_idx, obj_id, _)| {
+                state.players[*owner_idx]
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == *obj_id)
+                    .map(|o| o.etb_timestamp)
+                    .unwrap_or(u32::MAX)
+            });
+            // Snapshot caster-owned-victim-ids BEFORE destroying.
+            // Used by the X>=6 reanimation tail.
+            let caster_owned_victim_ids: std::collections::HashSet<u32> = victims
+                .iter()
+                .filter_map(|(_oidx, oid, c)| {
+                    if *c == controller { Some(*oid) } else { None }
+                })
+                .collect();
+            // Per-victim destroy. Skip indestructible (CR 702.12),
+            // reset combat marks per CR 400.7, move to OWNER's
+            // graveyard (the bf-zone is owner-keyed), route LEAVES +
+            // DIES + token-cease via the deferred queues.
+            for (owner_idx, victim_id, _ctrl_at_destroy) in victims {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[owner_idx].battlefield);
+                let pos = match bf_mut.iter().position(|o| o.id == victim_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip if vanished
+                };
+                // Indestructible check (CR 702.12). Skip if
+                // indestructible — the destroy is suppressed
+                // exactly like the SBA destroy path's
+                // indestructible gate (state_ops_sba.rs).
+                let printing_id = bf_mut[pos].printing_id;
+                let is_indestructible = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| p.keywords.iter().any(|k| k == "indestructible"))
+                    .unwrap_or(false);
+                if is_indestructible {
+                    continue;
+                }
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.damage = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                // R77-CFI1: counters retained on zone change
+                // (mirrors `DestroyAllCreatures` + SBA destroy path).
+                let leaving_obj_id = obj.id;
+                Arc::make_mut(&mut state.players[owner_idx].graveyard).push(obj);
+                // Route LEAVES dispatch + token-cease (mirrors
+                // `DestroyAllCreatures`'s Slice-11 defer-past-pop
+                // pattern: drain happens at `resolve_top_of_stack`'s
+                // tail after the stack pop).
+                mark_left_battlefield_if_nonland(state, printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // DIES too — victims are gated to Creatures by the
+                // collection filter above (CR 700.4 "a creature dies").
+                state.pending_dies_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            }
+            // Lose X life (CR 119.3; mirrors Python `bespoke.py:1716`).
+            // x is already clamped to >= 0.
+            state.players[controller as usize].life -= x;
+            // X>=6 reanimation tail. Walk caster's graveyard for the
+            // FIRST creature card whose id is in the caster-owned-
+            // victim-ids snapshot. Dormant at X=0 under the no-agent
+            // harness; implemented for future X>=6 synthetic-test
+            // parity + agent-driven probes.
+            if x >= 6 && !caster_owned_victim_ids.is_empty() {
+                let chosen_id: Option<u32> = {
+                    let gy = &state.players[controller as usize].graveyard;
+                    gy.iter().find_map(|o| {
+                        if !caster_owned_victim_ids.contains(&o.id) {
+                            return None;
+                        }
+                        let printing = state.registry.lookup(o.printing_id)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(chosen) = chosen_id {
+                    let etb_ts = crate::state::reserve_etb_timestamp(state);
+                    let gy_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[controller as usize].graveyard,
+                    );
+                    let pos = gy_mut.iter().position(|o| o.id == chosen);
+                    if let Some(p) = pos {
+                        let mut obj = gy_mut.remove(p);
+                        obj.zone = ZONE_BATTLEFIELD;
+                        obj.tapped = false;
+                        obj.summoning_sick = true;
+                        obj.damage = 0;
+                        obj.attached_to = None;
+                        obj.exiled_with_source = None;
+                        obj.etb_timestamp = etb_ts;
+                        obj.controller = controller; // CR 400.7
+                        let entered_id = obj.id;
+                        Arc::make_mut(
+                            &mut state.players[controller as usize].battlefield,
+                        )
+                        .push(obj);
+                        state.pending_etb_dispatches.push(entered_id);
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

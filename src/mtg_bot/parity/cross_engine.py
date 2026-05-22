@@ -848,6 +848,24 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
             amount=eff_dict["amount"],
         )
+    if kind == "zero_point_ballad_effect":
+        # **X-value-subsystem Cycle 3 (2026-05-22).** Zero Point Ballad
+        # `{X}{B}` — first consumer of the C1 `current_resolve_x_value`
+        # transient. Unit variant on both sides — no fields to thread
+        # through the dict; X is read at resolve time from the C1
+        # transient (set by C1's save→set→restore bracket from the
+        # StackItem's `x_value`, in turn minted at cast time by C2.5's
+        # `cast_spell_noncreature` X-cost detector). Mirrors Python's
+        # ``ZeroPointBalladEffect()`` at
+        # ``effects/bespoke.py:1677-1748`` — field-free dataclass; the
+        # X-dependent destroy + lose-X-life + X>=6 reanimation surface
+        # lives entirely inside the Python ``resolve`` method (and the
+        # mirrored Rust ``Effect::ZeroPointBalladEffect`` arm in
+        # ``state_ops_resolve.rs``). Same field-free idiom as
+        # ``BiosynthicBurstEffect`` / ``DiplomaticRelationsEffect`` /
+        # ``CloseEncounterEffect``.
+        from mtg_bot.effects.bespoke import ZeroPointBalladEffect
+        return ZeroPointBalladEffect()
     if kind == "return_up_to_n_small_creatures_from_graveyard_with_counters":
         # **Multi-target admit-gate Phase 4 widen (2026-05-21).** Scout
         # for Survivors: "Return up to N target creature cards with

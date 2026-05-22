@@ -161,10 +161,18 @@ def test_admit_predicate_non_x_phase1_regression():
 
 
 def test_admit_predicate_zero_point_ballad_still_declined():
-    """Pin 2: Zero Point Ballad's `{X}{B}{B}` admit gate flow stays
-    DECLINED in C2.5 because its `ZeroPointBalladEffect` is not
-    covered+bridged yet (C3+ work). The early `x_pips > 0` reject is
-    GONE, but the covered+bridged tooth carries the load."""
+    """Pin 2 (REPURPOSED post-C3): in C2.5 this asserted Zero Point
+    Ballad stayed DECLINED via the no-Effect-coverage tooth. C3 landed
+    ``Effect::ZeroPointBalladEffect`` + bridge arm + reverse serializer
+    leaf, so per the §2 auto-grow teeth (covered+bridged + round-trips
+    + Phase-3 shape) Zero Point Ballad now flips to ADMITTED. This pin
+    is preserved as an explicit ADMIT pin so the C2.5 admit-widen +
+    C3 Effect-arm closure are jointly tested here, and a regression
+    that re-declines Zero Point Ballad is caught.
+
+    The full C3 PROBED close is pinned in
+    ``tests/test_zero_point_ballad_parity.py``.
+    """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
@@ -172,10 +180,10 @@ def test_admit_predicate_zero_point_ballad_still_declined():
     if "Zero Point Ballad" not in printings:
         pytest.skip("Zero Point Ballad not in printing set")
     p = printings["Zero Point Ballad"]
-    # Substrate stays declined — but for a different reason than C1/C2
-    # (no longer the early `x_pips > 0` reject; now the covered+bridged
-    # tooth). When C3 lands `Effect::ZeroPointBallad`, this flips True.
-    assert _printing_is_bridge_simple_spell(p) is False
+    # Post-C3: covered+bridged + round-trip teeth now fire positively;
+    # the Phase-3 wrath admit + the C2.5 widen put Zero Point Ballad
+    # into the admit set.
+    assert _printing_is_bridge_simple_spell(p) is True
 
 
 def _make_synthetic_sorcery_printing(name, mana_cost, spell_effect):

@@ -21368,6 +21368,14 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # bridge arms + narrow ``_leaf(SearchLibraryForCard,
     # filter_name="artifact")`` admit (honest-stop). Scour for Scrap
     # AUTO-JOINS. Admit set 23 → 24.
+    # **x-value-subsystem-cycle-3 (2026-05-22):** FIRST X-cost closure.
+    # Adds ``Effect::ZeroPointBalladEffect`` Rust variant (unit
+    # variant; reads X from the C1 ``current_resolve_x_value`` transient
+    # populated by C2.5's live mint) + matching bridge arm + reverse-
+    # serializer leaf + the Phase-3 wrath admit (C2.5's admit-widen +
+    # the new Effect arm). Zero Point Ballad AUTO-JOINS via the §2
+    # auto-grow teeth (covered+bridged + round-trips + Phase-3 shape).
+    # Admit set 24 → 25.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Depressurize",
@@ -21377,9 +21385,10 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
         "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
         "Shattered Wings", "Under the Skin", "Untimely Malfunction",
+        "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 24 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 25 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet) + 1 Cycle-4 modal admit "
         f"(Ruinous Rampage) + 1 Cycle-6 per-mode-target modal admit "
@@ -21394,9 +21403,10 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"ExorciseEffect close) + 1 additional-cost-choice closure "
         f"(Close Encounter via close-encounter-substrate) + 1 "
         f"or_both modal closure (Scour for Scrap via "
-        f"scour-for-scrap-cycle-2) — the set grew 15→24 across the "
-        f"nine lanes; auto-grows further as the remaining Tier-A "
-        f"and per-mode-target modal spells close)")
+        f"scour-for-scrap-cycle-2) + 1 X-cost closure (Zero Point "
+        f"Ballad via x-value-subsystem-cycle-3) — the set grew "
+        f"15→25 across the ten lanes; auto-grows further as the "
+        f"remaining Tier-A and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
