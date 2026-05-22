@@ -85,6 +85,37 @@ def stub_heartbeat(monkeypatch):
     )
 
 
+def _seed_iam_instance_profile(name: str = "mtg-bot-spot-worker") -> None:
+    """Mirror of ``test_launcher_aws_fleet._seed_iam_instance_profile``.
+
+    moto starts each ``@mock_aws`` test with a fresh IAM state; the
+    production runspec template references an IamInstanceProfile.Name
+    that moto's ``run_instances`` validates against. Without seeding,
+    every aws-mode integration test raises NoSuchEntity. Call this
+    inside every ``@mock_aws`` test BEFORE the first
+    ``boto3.client('ec2', ...)`` -> launcher path.
+    """
+    trust = (
+        '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",'
+        '"Principal":{"Service":"ec2.amazonaws.com"},'
+        '"Action":"sts:AssumeRole"}]}'
+    )
+    iam = boto3.client("iam", region_name="us-east-1")
+    iam.create_role(RoleName=name, AssumeRolePolicyDocument=trust)
+    iam.create_instance_profile(InstanceProfileName=name)
+    iam.add_role_to_instance_profile(
+        InstanceProfileName=name, RoleName=name,
+    )
+
+
+def _stub_tailnet_resolver(instance_id: str) -> str:
+    """Mirror of ``test_launcher_aws_fleet._stub_tailnet_resolver``;
+    keeps wait_for_healthy IP assignment off the host tailscale
+    daemon."""
+    suffix = int(instance_id.replace("-", "")[-4:], 16) % 254 + 1
+    return f"100.64.0.{suffix}"
+
+
 def _spawn_stub(record: dict[str, Any], *, exit_code: int = 0):
     def _spawn(argv, env=None, cwd=None, popen_factory=None, **kwargs):
         record["argv"] = list(argv)
@@ -115,6 +146,7 @@ def _make_aws_fleet_factory(
             boto3_client=moto_client,
             http_get=http_get,
             sleep=sleep_fn or (lambda _: None),
+            tailnet_resolver=_stub_tailnet_resolver,
         )
 
     return factory
@@ -133,6 +165,7 @@ def test_aws_mode_full_flow(
     """End-to-end AWS-mode launch: FleetManager fires, shards_config
     has cluster + AWS URLs, iterate subprocess sees the right argv,
     fleet is terminated on exit."""
+    _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
     record: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -207,6 +240,7 @@ def test_aws_mode_terminate_fires_on_iterate_failure(
 ):
     """If iterate exits non-zero, the fleet teardown hook still
     fires (the lifecycle's _finalize runs on every exit path)."""
+    _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
     created: dict[str, Any] = {}
     base_factory = _make_aws_fleet_factory(moto_client=moto_client)
@@ -242,6 +276,7 @@ def test_aws_mode_terminate_fires_on_spawn_exception(
     """If the iterate subprocess raises (rare; usually iterate's
     exit code is the signal), the lifecycle's exception path still
     fires the fleet teardown hook."""
+    _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
     created: dict[str, Any] = {}
     base_factory = _make_aws_fleet_factory(moto_client=moto_client)
@@ -289,6 +324,7 @@ def test_aws_mode_dry_run_does_not_touch_ec2(
             boto3_client=bogus_client,
             sleep=lambda _: None,
             http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
+            tailnet_resolver=_stub_tailnet_resolver,
         )
 
     monkeypatch.setattr(id_mod, "FleetManager", factory)
@@ -317,6 +353,7 @@ def test_aws_mode_az_fallback_succeeds(
     the FleetManager's AZ fallback -- the end-to-end run still
     succeeds."""
     from botocore.exceptions import ClientError
+    _seed_iam_instance_profile()
     real_client = boto3.client("ec2", region_name="us-east-1")
 
     class _FailFirstAZ:
@@ -349,6 +386,7 @@ def test_aws_mode_az_fallback_succeeds(
             boto3_client=wrapped,
             http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
             sleep=lambda _: None,
+            tailnet_resolver=_stub_tailnet_resolver,
         )
 
     monkeypatch.setattr(id_mod, "FleetManager", factory)
@@ -388,6 +426,7 @@ local_only = false
 count = 1
 az_fallback = ["us-east-1a"]
 """, encoding="utf-8")
+    _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
 
     def factory(aws_section, paths):
@@ -396,6 +435,7 @@ az_fallback = ["us-east-1a"]
             boto3_client=moto_client,
             http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
             sleep=lambda _: None,
+            tailnet_resolver=_stub_tailnet_resolver,
         )
 
     monkeypatch.setattr(id_mod, "FleetManager", factory)
@@ -436,6 +476,7 @@ local_only = false
 count = 1
 az_fallback = ["us-east-1a"]
 """, encoding="utf-8")
+    _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
 
     def factory(aws_section, paths):
@@ -444,6 +485,7 @@ az_fallback = ["us-east-1a"]
             boto3_client=moto_client,
             http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
             sleep=lambda _: None,
+            tailnet_resolver=_stub_tailnet_resolver,
         )
 
     monkeypatch.setattr(id_mod, "FleetManager", factory)

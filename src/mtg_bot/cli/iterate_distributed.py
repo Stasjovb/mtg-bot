@@ -490,6 +490,21 @@ def _launch(
         return 0
 
     # Env vars iterate needs (runs.db transport + progress dir).
+    #
+    # If neither MTG_BOT_RUN_DB_URL nor MTG_BOT_RUN_DB_PATH is set
+    # in the caller's env, default URL transport pointing at the
+    # coord (queue_url == http://<master>:5099). The coord owns the
+    # canonical runs.db; without this default a worktree-launched
+    # run silently writes to a worktree-local runs.db that the UI
+    # never reads, leaving the cycle row stuck at its prior value
+    # (observed live during iter_020 demo). Mutate os.environ here
+    # so BOTH the launcher's own runs.client calls (cycle_lifecycle
+    # below) AND the subprocess env (env.copy below) pick it up.
+    if (
+        "MTG_BOT_RUN_DB_URL" not in os.environ
+        and "MTG_BOT_RUN_DB_PATH" not in os.environ
+    ):
+        os.environ["MTG_BOT_RUN_DB_URL"] = queue_url
     env = os.environ.copy()
     runs_db_path = (progress_dir / "runs.db").resolve()
     env.setdefault("MTG_BOT_RUN_DB_PATH", str(runs_db_path))

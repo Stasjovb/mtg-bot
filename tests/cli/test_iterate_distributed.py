@@ -8,6 +8,7 @@ flow without bringing up real workers.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -273,6 +274,62 @@ def test_launch_passes_env_with_runs_db_path(
     assert (progress_dir / "runs.db").resolve() == Path(
         env["MTG_BOT_RUN_DB_PATH"],
     )
+
+
+def test_launch_defaults_runs_db_url_to_queue_url_when_unset(
+    minimal_toml: Path, progress_dir: Path, stub_heartbeat,
+    monkeypatch,
+):
+    """When neither MTG_BOT_RUN_DB_URL nor MTG_BOT_RUN_DB_PATH is set
+    in the caller's env, the launcher must default URL transport to
+    the coord (queue_url == http://<master>:5099) so the launcher's
+    own cycle_lifecycle calls AND the child iterate subprocess both
+    write to the coord-owned runs.db. Without this default, a
+    worktree-launched run silently writes to a worktree-local runs.db
+    that the UI never reads, leaving the cycle row stuck at its prior
+    value -- observed live during iter_020 demo."""
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    record: dict[str, Any] = {}
+    monkeypatch.setattr(
+        id_mod, "spawn_iterate_subprocess", _stub_spawn(record, exit_code=0),
+    )
+    id_mod.main([
+        "--config", str(minimal_toml),
+        "--progress-dir", str(progress_dir),
+        "--deck-pool", "data/decks.json.gz",
+    ])
+    # Subprocess env carries the URL pointing at the coord (port 5099
+    # on the master derived from cluster.master_url's host).
+    env = record["env"]
+    assert env.get("MTG_BOT_RUN_DB_URL") == "http://desktop-j05412i:5099"
+    # And the launcher's own os.environ now has it (the runs.client
+    # reads fresh from os.environ on each call -- subsequent
+    # cycle_lifecycle invocations within the same process will see it).
+    assert os.environ.get("MTG_BOT_RUN_DB_URL") == "http://desktop-j05412i:5099"
+
+
+def test_launch_respects_explicit_runs_db_path_when_set(
+    minimal_toml: Path, progress_dir: Path, stub_heartbeat,
+    runs_db_env: Path, monkeypatch,
+):
+    """When the operator sets MTG_BOT_RUN_DB_PATH explicitly, the
+    launcher's queue_url default must NOT override it -- operator
+    intent (e.g. a per-cycle scratch DB) wins. The fixture
+    ``runs_db_env`` already sets PATH; assert URL stays unset."""
+    record: dict[str, Any] = {}
+    monkeypatch.setattr(
+        id_mod, "spawn_iterate_subprocess", _stub_spawn(record, exit_code=0),
+    )
+    id_mod.main([
+        "--config", str(minimal_toml),
+        "--progress-dir", str(progress_dir),
+        "--deck-pool", "data/decks.json.gz",
+    ])
+    env = record["env"]
+    # PATH preserved, URL never set.
+    assert "MTG_BOT_RUN_DB_PATH" in env
+    assert "MTG_BOT_RUN_DB_URL" not in env
 
 
 def test_launch_prints_clickable_tailnet_url(
