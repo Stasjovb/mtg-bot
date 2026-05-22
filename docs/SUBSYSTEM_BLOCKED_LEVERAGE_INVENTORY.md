@@ -660,6 +660,23 @@ Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
   admit-gate Phase 4 widen (3 candidates), followed by the
   control-change-UEOT lane (2 candidates).
 
+  **Control-change-UEOT Cycle 1 landed (2026-05-21,
+  `feature/control-change-ueot-cycle-1`).** Substrate-only:
+  `controller_override: Option<u8>` on `GameObject` +
+  `effective_controller_id` helper + cleanup-step drain +
+  `grant_control_change_ueot(target_id, new_pid)` PyO3 method +
+  per-object snapshot key. No live mint site yet — Cycle 2
+  reroutes the raw `.controller` read sites; Cycle 3 wires the
+  Python ↔ Rust bridge round-trip; Cycle 4 adds the Mutinous
+  Massacre / Systems Override Effect variants that mint the
+  override. Substrate landing is **back-compat byte-equivalent**
+  on production self-play / cross-engine trajectories — every
+  override defaults to `None`, the new snapshot key is `None`
+  for every pre-substrate object, and `controller_overrides_cleared`
+  in the cleanup-summary dict is `0` until Cycle 4 mints
+  overrides. Full Cycle 1 entry at `docs/SEARCH_LIMITATIONS.md`
+  §1 (Mutinous Massacre).
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 

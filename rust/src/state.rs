@@ -294,6 +294,48 @@ pub struct GameObject {
     /// Python's per-token `state.new_object(printing, ...)` is a
     /// fresh object whose supertype set is fixed at mint time.
     pub token_supertype_override: bool,
+    /// **Control-change-UEOT subsystem — Cycle 1 (2026-05-21).**
+    /// Per-object UEOT controller override. When `Some(pid)`, every
+    /// read site that asks "who controls this object?" must answer
+    /// `pid` instead of `self.controller`. Set by
+    /// `grant_control_change_ueot` (the substrate for Mutinous
+    /// Massacre / Systems Override / Threaten / Act of Treason
+    /// shapes); drained back to `None` at the cleanup step
+    /// (CR 514.3 / CR 613 layer-2 "until end of turn" expiration).
+    ///
+    /// Mirrors Python's layer-2 `"control_change"` registry entry
+    /// + the per-object `controller_id` write-through cache pattern
+    /// (see `src/mtg_bot/game.py:effective_controller` and
+    /// `grant_control_change_ueot`). Cycle 1 of this subsystem
+    /// (substrate only) provides the field + the
+    /// `effective_controller_id` helper + the cleanup-step drain;
+    /// Cycle 2 reroutes raw `.controller` read sites through the
+    /// helper; Cycle 3 wires the bridge round-trip into the cross-
+    /// engine harness; Cycle 4 adds the Mutinous Massacre /
+    /// Systems Override Effect variants that mint the override.
+    ///
+    /// **Distinct from `controller_baseline`.** `controller_baseline`
+    /// is the captured-baseline anchor for control-changing Auras
+    /// (Phase 2 S2 substrate); the Aura code writes the new
+    /// controller into `self.controller` itself and uses
+    /// `controller_baseline` to remember what to revert to when the
+    /// Aura leaves play. The UEOT path is intentionally lighter-
+    /// weight: it never mutates `self.controller`; the override is
+    /// the source of truth until cleanup drains it. The two
+    /// substrates compose cleanly — when Mutinous Massacre lands on
+    /// an Aura-controlled creature, the UEOT override beats the
+    /// Aura swap until cleanup, then the Aura swap re-asserts
+    /// itself via the unchanged `self.controller`.
+    ///
+    /// **Back-compat default: `None`.** Every freshly-allocated
+    /// GameObject (including `make_object`,
+    /// `register_and_inject_object`, and the bridge import path)
+    /// starts with `controller_override = None`. The per-object
+    /// fingerprint tuple does NOT include this slot, so pre-Cycle-1
+    /// pinned baselines stay byte-equal; only states that mint a
+    /// UEOT control override observe the new field's effect, and
+    /// those are new behavior in this slice.
+    pub controller_override: Option<u8>,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -2862,6 +2904,13 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // Moonlit-Meditation-replacement token-mint time. Back-compat
         // default; not in the per-object fingerprint tuple.
         token_supertype_override: false,
+        // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
+        // freshly-allocated objects have no UEOT controller override;
+        // the override is stamped only by
+        // `grant_control_change_ueot` (Mutinous Massacre / Systems
+        // Override / Threaten shape). Back-compat default; not in
+        // the per-object fingerprint tuple.
+        controller_override: None,
     }
 }
 

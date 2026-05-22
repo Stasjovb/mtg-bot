@@ -3891,6 +3891,10 @@ fn apply_effect(
                     // the loop from the pre-mint replacement-source
                     // lookup and threads through to every pushed token.
                     token_supertype_override: moonlit_override,
+                    // Control-change-UEOT substrate — Cycle 1
+                    // (2026-05-21): freshly-minted tokens never start
+                    // with a UEOT controller override.
+                    controller_override: None,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -4115,6 +4119,10 @@ fn apply_effect(
                         // was computed once above in the `per_recipient`
                         // pre-pass.
                         token_supertype_override: recipient_override,
+                        // Control-change-UEOT substrate — Cycle 1
+                        // (2026-05-21): freshly-minted tokens never
+                        // start with a UEOT controller override.
+                        controller_override: None,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -4285,6 +4293,10 @@ fn apply_effect(
                     // `moonlit_override` was computed once above off
                     // the pre-mint replacement-source lookup.
                     token_supertype_override: moonlit_override,
+                    // Control-change-UEOT substrate — Cycle 1
+                    // (2026-05-21): freshly-minted tokens never start
+                    // with a UEOT controller override.
+                    controller_override: None,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -7473,6 +7485,10 @@ fn apply_effect(
                         // check entirely. Mirror that: the override
                         // stays `false`.
                         token_supertype_override: false,
+                        // Control-change-UEOT substrate — Cycle 1
+                        // (2026-05-21): freshly-minted tokens never
+                        // start with a UEOT controller override.
+                        controller_override: None,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -7701,6 +7717,10 @@ fn apply_effect(
                     // Moonlit replacement check entirely. Mirror
                     // that: the override stays `false`.
                     token_supertype_override: false,
+                    // Control-change-UEOT substrate — Cycle 1
+                    // (2026-05-21): freshly-minted tokens never start
+                    // with a UEOT controller override.
+                    controller_override: None,
                 });
                 // Queue ENTERS for the fresh token.
                 state.pending_etb_dispatches.push(new_id);
@@ -7870,6 +7890,10 @@ fn apply_effect(
                         // rationale as the sister Seedship Impact
                         // arm above).
                         token_supertype_override: false,
+                        // Control-change-UEOT substrate — Cycle 1
+                        // (2026-05-21): freshly-minted tokens never
+                        // start with a UEOT controller override.
+                        controller_override: None,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -12298,6 +12322,10 @@ fn apply_effect(
                 // when a copy is made unconditionally if that
                 // semantic gap surfaces.
                 token_supertype_override: moonlit_override,
+                // Control-change-UEOT substrate — Cycle 1
+                // (2026-05-21): cloned tokens never start with a
+                // UEOT controller override.
+                controller_override: None,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -17463,6 +17491,11 @@ impl GameState {
             // caller-injected objects never start as Moonlit-
             // substituted tokens. Back-compat default.
             token_supertype_override: false,
+            // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
+            // caller-injected objects start with no UEOT controller
+            // override. Back-compat default; not in the per-object
+            // fingerprint tuple.
+            controller_override: None,
         };
 
         // R76-1: advance the monotonic id counter past this injected
@@ -17608,6 +17641,10 @@ impl GameState {
             // freshly-pushed stack objects (spell-as-source) are
             // never Moonlit-substituted tokens. Back-compat default.
             token_supertype_override: false,
+            // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
+            // freshly-pushed stack objects start with no UEOT
+            // controller override.
+            controller_override: None,
         };
         self.stack_objects.push(obj);
         self.stack.push(StackItem {

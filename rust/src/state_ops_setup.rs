@@ -227,6 +227,9 @@ fn push_object(
         // Aura-attachment Phase 4 S3 closure (2026-05-21): setup-
         // seeded objects are never Moonlit-substituted tokens.
         token_supertype_override: false,
+        // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
+        // setup-seeded objects start with no UEOT controller override.
+        controller_override: None,
     });
     *next_id += 1;
 }

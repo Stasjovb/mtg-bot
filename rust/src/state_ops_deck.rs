@@ -142,6 +142,10 @@ impl GameState {
                 // deck-loaded library cards are not Moonlit-substituted
                 // tokens. Back-compat default.
                 token_supertype_override: false,
+                // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
+                // deck-loaded library cards start with no UEOT controller
+                // override. Back-compat default.
+                controller_override: None,
             });
             next_id += 1;
         }

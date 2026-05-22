@@ -134,8 +134,14 @@ def test_gameobject_byte_size_is_compact():
       until source leaves" linkage, +8). The natural size is now 72
       bytes; bound the upper to 80 to leave one ``Option<u32>``-shaped
       slot of headroom before the next bump.
+    - 80 -> 96: Control-change-UEOT Cycle 1 (2026-05-21) added
+      ``controller_override: Option<u8>`` (1 + 1 niche-optimized bytes,
+      observed +8 with the surrounding alignment). The natural size
+      after the addition is 88 bytes; bound the upper to 96 to leave
+      one ``Option<u32>``-shaped slot of headroom before the next
+      bump.
 
-    Catches further field-creep that would blow past 80 bytes (e.g. a
+    Catches further field-creep that would blow past 96 bytes (e.g. a
     String, an Arc-of-anything)."""
     sz = mtg_bot_engine.gameobject_byte_size()
-    assert 16 <= sz <= 80, f"GameObject size unexpected: {sz} bytes"
+    assert 16 <= sz <= 96, f"GameObject size unexpected: {sz} bytes"
