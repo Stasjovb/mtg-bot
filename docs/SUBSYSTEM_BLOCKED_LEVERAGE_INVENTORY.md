@@ -711,10 +711,24 @@ stale — both shipped upstream of this dated paragraph.
       + resolve-time `ChooseFromOwnedDestroyedThisResolve`
       decision push. Multi-cycle (3-4); shares C1 with
       Devastating Onslaught.
-    * **Singularity Rupture** — `(0, N)` admit-arm widening for
-      "any number of target X" + cross-engine deterministic
-      subset-pick policy + `MillHalfTargetPlayersEach` variant.
-      Multi-cycle (2-3).
+    * **Singularity Rupture** — `(0, K)` admit-arm widening for
+      "any number of target X" + cross-engine deterministic-all
+      subset-pick policy + bespoke `Effect::SingularityRupture`
+      variant (NOT a `Sequence(DestroyAllCreatures,
+      MillHalfTargetPlayersEach)` composition — verify-first
+      2026-05-22 lane `feature/singularity-rupture-cycle-1-p1`
+      surfaced that the Python SoT is a unified bespoke
+      `SingularityRuptureEffect` class, not a Sequence). Also
+      needs a **new multi-target player binding substrate**
+      (StackItem `target_player_ids: Option<Vec<u8>>` field +
+      `GameState.current_resolve_target_player_ids` transient +
+      cast-time multi-pick arm) that does NOT yet exist. Mill is
+      floor (rounded DOWN, not up). `legal_targets` includes the
+      controller (deterministic-all subset → self-mill on every
+      cast). Multi-cycle (**3**, revised up from prior 2-3
+      guess). Full verify-first characterization at
+      `docs/SEARCH_LIMITATIONS.md` §3 "Verify-first correction
+      (2026-05-22)" subsection.
 
   Full characterization at
   `docs/SEARCH_LIMITATIONS.md` "Next-wrath-substrate triad

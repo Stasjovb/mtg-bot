@@ -10674,6 +10674,123 @@ widen could enable other "any number of target X" cards down
 the line, but their identification needs a separate inventory
 walk.
 
+#### Verify-first correction (2026-05-22, `feature/singularity-rupture-cycle-1-p1`)
+
+A verify-first walk of the **live Singularity Rupture printing**
+under HEAD `547c0321` (post-iter_021 launch / pre-this-lane)
+surfaced **multiple discrepancies** between the prior
+characterization and what actually ships in
+`src/mtg_bot/effects/bespoke.py:1599-1673`:
+
+* **Effect class name was wrong.** Prior text named the Rust
+  variant target `MillHalfTargetPlayersEach`; the live Python
+  class is `SingularityRuptureEffect` (a **bespoke unified
+  wrath+mill Effect**, NOT a composed
+  `Sequence(DestroyAllCreatures, MillHalfTargetPlayersEach)`).
+  The composition the prior C2 plan proposed is a valid
+  alternate architecture but is NOT what the Python SoT ships —
+  the bespoke unifies both clauses into a single Effect class.
+  Any Rust mirror must either (a) ship one bespoke
+  `Effect::SingularityRupture { }` variant whose resolve body
+  inlines BOTH the wrath and the mill walk, OR (b) build BOTH
+  the `MillHalfTargetPlayersEach` variant AND a way to compose
+  it into a Sequence with the existing `DestroyAllCreatures`
+  variant at parse time (the parser would have to recognize the
+  bespoke Python class and emit a synthetic Sequence on the Rust
+  side — a parity divergence the no-fallback-hybrid discipline
+  rejects). **Option (a) is the clean path.**
+* **Mill direction is DOWN, not "rounded down or up".** The
+  Python resolve at `bespoke.py:1655` is `n = len(p.library) //
+  2` — integer floor division. Library of 7 → mill 3 (NOT 4).
+  Pinned by the existing
+  `test_singularity_rupture_odd_library_rounds_down` test at
+  `tests/test_singularity_rupture.py:80`. The prior plan's
+  "rounded up or down — verify-first vs Python" caveat resolves
+  to DOWN.
+* **`legal_targets` includes the controller.** At
+  `bespoke.py:1623-1628` the method returns `[("player", p.id)
+  for p in state.players if not p.has_lost]` — every non-lost
+  player, **including the controller**. The deterministic-first
+  picker policy candidates ("pick all legal targets") therefore
+  cover SELF-MILL by default, NOT just opposing-mill. This is a
+  load-bearing observable: a "deterministic-all" subset-pick
+  policy will self-mill the controller every Singularity
+  Rupture cast, which is the correct byte-equal mirror of
+  Python's `_PickFirstLegalTargetAgent` enumerating all legal
+  player targets and the cast-time multi-pick loop binding each
+  in order. Tests at
+  `tests/test_singularity_rupture.py:124-128` pin this.
+* **`target_count_range == (0, 8)`** (constant 8, NOT
+  `state.player_count`). At `bespoke.py:1616-1621` the method
+  returns `(0, 8)` unconditionally — "We pick 8 to cover any
+  plausible multiplayer pod size; the cast pipeline clamps to
+  actual legal_targets length anyway." Any Rust mirror must
+  pick a matching constant ceiling OR clamp at cast time to
+  `state.players.len()`. The Phase-6 admit arm widening should
+  accept the `(0, K)` shape for K up to a small fixed ceiling
+  (e.g. K ≤ 8) rather than gating on `K == state.player_count`,
+  which would over-specify.
+
+#### Multi-target player binding substrate (the actual C1
+blocker, 2026-05-22)
+
+The C2 plan above assumed `bound_target` (single u32) was
+sufficient. **It is not.** Singularity Rupture binds a
+**variable-length list of player target ids** at cast time; the
+existing `StackItem` only carries `target_obj_id: Option<u32>`
++ `target_obj_id_2: Option<u32>` (single + Phase-2 2-slot).
+There is no list field. The actual closure requires a NEW
+StackItem field — the most obvious shape is
+`target_player_ids: Option<Vec<u8>>` (mirroring the existing
+`chosen_mode_idxs: Option<Vec<u8>>` multi-pick precedent from
+the Scour-for-Scrap or_both lane) — plus a new
+`current_resolve_target_player_ids: Option<Vec<u8>>` transient
+on `GameState` for the save → set → restore swap pattern, plus
+a new cast-time arm in `cast_spell_noncreature` that detects the
+`SingularityRupture`-shape spell and binds the deterministic-all
+subset (every non-lost player) onto the StackItem. **This is a
+new substrate cycle on its own** — separate from and larger than
+the single-target Phase-1 / 2-slot Phase-2 / multi-graveyard
+Phase-4 precedents.
+
+Realistic per-cycle scope:
+- **C1 (substrate)**: new `StackItem.target_player_ids` field +
+  new `GameState.current_resolve_target_player_ids` transient
+  + cast-time multi-pick arm + resolve-arm swap pattern + every
+  `new_spell_*` constructor signature widened. ~200-300 LoC.
+- **C2 (Effect variant)**: new bespoke
+  `Effect::SingularityRupture` variant (field-free, the
+  composition is intrinsic) + parse arm + to_pydict arm +
+  resolve arm reading `current_resolve_target_player_ids` for
+  the mill walk + falling through to the existing
+  `DestroyAllCreatures` victim-collect-and-move logic for the
+  wrath clause. ~150-200 LoC.
+- **C3 (PROBED flip)**: Phase-6 admit arm widen accepting the
+  `(0, K)` `target_kind=player` shape (K ≤ 8) + cross-engine
+  bridge arm + reverse-serializer leaf + `_PickAllLegalPlayer
+  TargetsAgent` picker shim (mirror of `_PickFirstLegalTarget
+  Agent` but returns the subset across multi-pick slots) +
+  Rust resolve unit pins + genuine real-EoE cross-engine
+  byte-equal probe + admit-set count update + docs regen.
+  ~150-200 LoC.
+
+**Total realistic estimate: 3 cycles** (revised UP from the
+prior "Multi-cycle (2-3)" guess — the multi-target player
+binding substrate alone is one full cycle, and the bespoke
+wrath+mill Effect variant + admit gate flip are two more).
+
+**Lane decision (`feature/singularity-rupture-cycle-1-p1`,
+2026-05-22)**: HONEST-STOP, no engine changes, no PROBED flip.
+The substrate cycle (C1 above) is large enough on its own to
+warrant a dedicated lane, and shipping JUST the bespoke Effect
+variant without the multi-target binding substrate produces no
+measurable progress (Singularity Rupture stays DECLINED until
+the admit-gate widen lands, which needs the substrate first).
+This honest-stop documents the verify-first findings + revised
+3-cycle scope so the next lane to tackle Singularity Rupture
+knows what was already walked and can skip the inventory-
+mismatch surprise.
+
 ### Lane decision
 
 All 3 candidates require multi-cycle subsystem work — none is a
