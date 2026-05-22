@@ -42,6 +42,20 @@ from mtg_bot.launcher.config import AwsSection
 from mtg_bot.launcher.state import LaunchPaths
 
 
+def _stub_tailnet_resolver(instance_id: str) -> str:
+    """Test-only resolver stub: maps each EC2 instance_id to a
+    deterministic 100.x.x.x IP. The production default at
+    ``aws_fleet._default_tailnet_resolver`` shells out to
+    ``tailscale status`` and matches hostname
+    ``mtg-bot-aws-warm-<instance_id>``; tests inject this stub so
+    ``wait_for_healthy`` assigns a non-None ``tailnet_ip`` without
+    depending on the host machine's tailscale daemon or real
+    instance registrations.
+    """
+    suffix = int(instance_id.replace("-", "")[-4:], 16) % 254 + 1
+    return f"100.64.0.{suffix}"
+
+
 def _seed_iam_instance_profile(name: str = "mtg-bot-spot-worker") -> None:
     """Create the IAM role + instance profile that the production
     runspec template references. moto starts each ``@mock_aws`` test
@@ -475,6 +489,7 @@ def test_wait_for_healthy_happy_path(
         template_path=template_path,
         http_get=http_get,
         sleep=lambda _: None,  # no real waits
+        tailnet_resolver=_stub_tailnet_resolver,
     )
     instances = fm.launch_fleet()
     urls = fm.wait_for_healthy(instances, timeout_s=10.0)
@@ -525,6 +540,7 @@ def test_wait_for_healthy_timeout(
             template_path=template_path,
             http_get=never_healthy,
             sleep=fake_sleep,
+            tailnet_resolver=_stub_tailnet_resolver,
         )
         instances = fm.launch_fleet()
         with pytest.raises(FleetHealthTimeoutError) as exc_info:
@@ -558,6 +574,7 @@ def test_wait_for_healthy_unrecognized_state_keeps_polling(
         template_path=template_path,
         http_get=http_get,
         sleep=lambda _: None,
+        tailnet_resolver=_stub_tailnet_resolver,
     )
     instances = fm.launch_fleet()
     urls = fm.wait_for_healthy(instances, timeout_s=10.0)
@@ -581,6 +598,7 @@ def test_wait_for_healthy_skips_terminated_instances(
         template_path=template_path,
         http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
         sleep=lambda _: None,
+        tailnet_resolver=_stub_tailnet_resolver,
     )
     instances = fm.launch_fleet()
     # Terminate the instance behind moto's back.
@@ -643,6 +661,7 @@ def test_wait_for_healthy_describe_instances_retry(
         template_path=template_path,
         http_get=lambda url, *, timeout: (200, {"state": "IDLE"}),
         sleep=lambda _: None,
+        tailnet_resolver=_stub_tailnet_resolver,
     )
     instances = fm.launch_fleet()
     urls = fm.wait_for_healthy(instances, timeout_s=30.0)

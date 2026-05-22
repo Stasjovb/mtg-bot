@@ -224,19 +224,44 @@ def _default_http_get(url: str, *, timeout: float = 5.0) -> tuple[int, dict[str,
         raise ConnectionError(f"{url}: {exc}") from exc
 
 
-def _default_tailnet_resolver(instance_ip: str) -> Optional[str]:
-    """Pass-through default: EC2's public/private IP IS the tailnet IP
-    for our setup (Tailscale assigns a 100.x address and we report it
-    back through EC2 tags / IPS on the warm bootstrap).
+def _default_tailnet_resolver(instance_id: str) -> Optional[str]:
+    """Resolve an EC2 instance_id to its Tailscale 100.x address by
+    running ``tailscale status`` and matching the hostname pattern
+    the warm bootstrap sets (``mtg-bot-aws-warm-<instance_id>`` --
+    see ``scripts/aws/user-data.worker.warm.sh`` ``tailscale up
+    --hostname=...`` line).
 
-    The launcher injects a real resolver that runs ``tailscale
-    status`` and matches on instance-id; tests pass in a dict-lookup
-    stub that returns the same thing.
+    Why we don't use EC2 public/private IPs: those are AWS-internal
+    (172.31.x / 34.x.x.x) and have no relationship to the Tailscale
+    overlay address (100.x.x.x) the daemon binds on. The earlier
+    pass-through default ``return instance_ip`` looked plausible
+    but caused ``wait_for_healthy`` to silently poll the wrong IP
+    forever and time out.
 
-    Returns ``None`` if the instance hasn't registered on the tailnet
-    yet -- ``wait_for_healthy`` interprets ``None`` as "keep polling".
+    Returns ``None`` if Tailscale isn't installed locally, if
+    ``tailscale status`` errors, or if the matching hostname
+    hasn't appeared yet -- ``wait_for_healthy`` reads ``None`` as
+    "keep polling, daemon not yet visible on the tailnet".
+
+    Tests inject a dict-lookup stub keyed on instance_id.
     """
-    return instance_ip if instance_ip else None
+    import subprocess  # local import: keep top-of-file lean
+    hostname = f"mtg-bot-aws-warm-{instance_id}"
+    try:
+        result = subprocess.run(
+            ["tailscale", "status"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        # Tailscale status format: ``<100.x.ip>  <hostname>  <user>  ...``
+        if len(parts) >= 2 and parts[1] == hostname:
+            return parts[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -612,15 +637,13 @@ class FleetManager:
                         # surface this instance in the failure list.
                         continue
                     if inst.tailnet_ip is None:
-                        # Try the instance's public/private IP through
-                        # the tailnet resolver. The resolver returns
-                        # None if the instance hasn't registered yet.
-                        candidate_ip = (
-                            raw.get("PublicIpAddress")
-                            or raw.get("PrivateIpAddress")
-                            or ""
+                        # Resolver takes the instance_id (the warm
+                        # bootstrap sets the tailnet hostname from
+                        # it) and returns the matching 100.x IP, or
+                        # None if not yet registered.
+                        tailnet_ip = self.tailnet_resolver(
+                            raw["InstanceId"],
                         )
-                        tailnet_ip = self.tailnet_resolver(candidate_ip)
                         if tailnet_ip:
                             inst.tailnet_ip = tailnet_ip
             # 2) For every instance with a tailnet IP, GET heartbeat.
