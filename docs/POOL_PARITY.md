@@ -208,6 +208,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Most Valuable Slayer
 - Mouth of the Storm
 - Murder
+- Mutinous Massacre
 - Nanoform Sentinel
 - Nebula Dragon
 - Nova Hellkite

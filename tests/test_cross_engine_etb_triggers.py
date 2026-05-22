@@ -21389,39 +21389,34 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # ``(0, 0)``-shape wrath admit arm (no admit-predicate widen
     # needed; the §2 teeth auto-grow the set positively). Admit set
     # 25 → 26.
+    # **control-change-ueot-cycle-4-p1 (2026-05-22):** Mutinous
+    # Massacre AUTO-JOINED. The C1-C3 control-change-UEOT substrate
+    # (controller_override field + helper + cleanup drain + bridge
+    # round-trip) + this lane's ``Effect::MutinousMassacreEffect``
+    # field-free unit variant + resolve arm (the FIRST Rust call
+    # site that mints a non-None override) + bridge arms + reverse-
+    # serializer leaf flip Mutinous Massacre COVERED → ADMITTED.
+    # Admit set 26 → 27 (4,671 17lands decks). The card rides the
+    # Phase-3 ``(0, 0)`` wrath admit shape (no targets — the destroy
+    # + gain-control + untap + haste resolution all walks the
+    # battlefield itself at resolve time). Per the §2 auto-grow
+    # teeth, no admit-set widening was needed — just landing the
+    # Effect coverage + serializer leaf.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
         "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
         "Exorcise", "Focus Fire", "Invasive Maneuvers",
-        "Manifest Dread", "Orbital Plunge", "Pyroclasm",
-        "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
-        "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
-        "Shattered Wings", "Under the Skin", "Untimely Malfunction",
-        "Zero Point Ballad",
+        "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
+        "Pyroclasm", "Radiant Strike", "Reroute Systems",
+        "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
+        "Seedship Impact", "Shattered Wings", "Under the Skin",
+        "Untimely Malfunction", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 26 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
-        f"(incl. Beyond the Quiet) + 1 Cycle-4 modal admit "
-        f"(Ruinous Rampage) + 1 Cycle-6 per-mode-target modal admit "
-        f"(Drill Too Deep) + 1 Cycle-6 some-targeted modal admit "
-        f"(Reroute Systems) + 1 co-admit (Untimely Malfunction via "
-        f"DestroyTargetArtifact _leaf addition) + 1 Phase-4 "
-        f"multi-target-from-graveyard admit (Scout for Survivors via "
-        f"the multi-target-admit-phase4 lane's "
-        f"ReturnUpToNSmallCreaturesFromGraveyardWithCounters Effect "
-        f"variant + Phase-4 admit-gate arm) + 1 Effect-uncovered "
-        f"single-gated admit (Exorcise via the non-state-rs-tractable "
-        f"ExorciseEffect close) + 1 additional-cost-choice closure "
-        f"(Close Encounter via close-encounter-substrate) + 1 "
-        f"or_both modal closure (Scour for Scrap via "
-        f"scour-for-scrap-cycle-2) + 1 X-cost closure (Zero Point "
-        f"Ballad via x-value-subsystem-cycle-3) + 1 Phase-3 wrath "
-        f"admit (Darkness via darkness-cycle-3-p1's "
-        f"PreventAllCombatDamageThisTurn Effect close — the "
-        f"production MINT SITE for the Cycle 1+2 substrate) — the "
-        f"set grew 15→26 across the eleven lanes; auto-grows further "
+        f"exactly the 27 covered+bridged Tier-A spells: the 26 "
+        f"prior + 1 control-change-UEOT closure: Mutinous Massacre "
+        f"via control-change-ueot-cycle-4-p1 — auto-grows further "
         f"as the remaining Tier-A and per-mode-target modal spells "
         f"close)")
 
