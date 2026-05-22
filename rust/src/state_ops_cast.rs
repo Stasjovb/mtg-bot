@@ -2092,16 +2092,74 @@ impl GameState {
         // per-leaf entries get added to this table — keeping the
         // "byte-equal-or-don't-admit" no-fallback-hybrid discipline.
         let bound_target: Option<u32> = if let Some(idx_u8) = bound_mode_idx {
-            // Modal: peek into `modes[idx]` and try to bind via
-            // per-mode filter. Falls back to whatever the non-modal
-            // ladder bound if the chosen mode is not in the
-            // recognized leaf table (back-compat: non-overriding
-            // default).
+            // Modal: peek into the chosen mode (or, when `or_both`,
+            // the FIRST chosen mode whose leaf has a recognized
+            // per-mode binder entry) and try to bind via per-mode
+            // filter. Falls back to whatever the non-modal ladder
+            // bound if the chosen mode is not in the recognized leaf
+            // table (back-compat: non-overriding default).
+            //
+            // **scour-for-scrap-cycle-2 (2026-05-21) — or_both walk.**
+            // When `bound_mode_idxs` is `Some` (the or_both=True
+            // multi-pick path), walk every chosen mode index in the
+            // supplied order. The peeked mode for the detector match
+            // is the FIRST chosen mode that IS a recognized targeted
+            // leaf (uses a small allowlist of known targeted Effect
+            // variants). If no chosen mode matches, fall through to
+            // the single-pick `bound_mode_idx` peek behavior.
+            //
+            // This admits Scour for Scrap's shape: mode 0
+            // (`SearchLibraryForCard`) is untargeted and skipped by
+            // the walk; mode 1
+            // (`ReturnTargetArtifactCardFromYourGraveyardToHand`)
+            // IS a recognized targeted leaf and its scan emits the
+            // cast-time-bound graveyard-artifact id. For the single-
+            // pick path (`bound_mode_idxs` is `None`) the existing
+            // single-mode peek behavior is preserved byte-identical —
+            // `bound_mode_idx` points at the chosen mode and the
+            // detector match is run once for that mode.
+            //
+            // The allowlist of "recognized targeted leaves" mirrors
+            // the detector arms in the match below — we skip a
+            // chosen mode whose Effect variant is NOT in that list
+            // so an untargeted mode (e.g. `SearchLibraryForCard`,
+            // `DrawCards`) is skipped, NOT picked as the peek.
+            fn is_recognized_targeted_mode_leaf(e: &crate::cards::Effect) -> bool {
+                use crate::cards::Effect;
+                matches!(
+                    e,
+                    Effect::DestroyTargetArtifact
+                        | Effect::PumpTargetArtifactOrCreatureUntilEOT { .. }
+                        | Effect::DealDamageToTargetTappedCreature { .. }
+                        | Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { .. }
+                        | Effect::ReturnTargetArtifactCardFromYourGraveyardToHand
+                )
+            }
             let chosen_mode: Option<crate::cards::Effect> = self
                 .registry
                 .lookup(printing_id)
                 .and_then(|p| match p.effects.first() {
                     Some(crate::cards::Effect::ChooseOneMode { modes, or_both: _ }) => {
+                        // Multi-pick (`or_both`) path: walk
+                        // `bound_mode_idxs` in supplied order, peek
+                        // the FIRST chosen mode whose Effect variant
+                        // is a recognized targeted leaf. Skips
+                        // untargeted modes (e.g. Scour mode 0
+                        // `SearchLibraryForCard`).
+                        if let Some(idxs) = &bound_mode_idxs {
+                            for i in idxs {
+                                if let Some(m) = modes.get(*i as usize) {
+                                    if is_recognized_targeted_mode_leaf(m) {
+                                        return Some(m.clone());
+                                    }
+                                }
+                            }
+                            // No chosen mode is a recognized
+                            // targeted leaf — fall through to the
+                            // single-pick peek behavior below.
+                        }
+                        // Single-pick fallback (back-compat byte-
+                        // identical for every non-or_both modal).
                         let idx = (idx_u8 as usize).min(
                             modes.len().saturating_sub(1),
                         );
@@ -2218,6 +2276,34 @@ impl GameState {
                                 return None;
                             }
                             Some(o.id)
+                        })
+                }
+                // **scour-for-scrap-cycle-2 (2026-05-21) — Scour for
+                // Scrap mode 1: `ReturnTargetArtifactCardFromYour
+                // GraveyardToHand`.** First artifact card in the
+                // CASTER's graveyard (insertion order). Filter
+                // mirrors the resolve arm at
+                // `state_ops_resolve.rs::ReturnTargetArtifactCardFrom
+                // YourGraveyardToHand` exactly:
+                // `printing.card_types.iter().any(|t| t ==
+                // "Artifact")` against the caster's graveyard. No
+                // indestructible reject (return-to-hand bypasses the
+                // indestructible filter — moving to hand is a zone
+                // change, not destruction). Source-controller scope
+                // mirrors Python's `ReturnFromGraveyard.legal_targets`
+                // walking `state.player_by_id(controller_id).graveyard`.
+                Some(crate::cards::Effect::ReturnTargetArtifactCardFromYourGraveyardToHand) => {
+                    let caster = player_id as usize;
+                    self.players[caster]
+                        .graveyard
+                        .iter()
+                        .find_map(|obj| {
+                            let p = self.registry.lookup(obj.printing_id)?;
+                            if p.card_types.iter().any(|t| t == "Artifact") {
+                                Some(obj.id)
+                            } else {
+                                None
+                            }
                         })
                 }
                 // Any other chosen mode (or no recognized leaf): keep

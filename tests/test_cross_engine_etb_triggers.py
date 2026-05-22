@@ -21122,21 +21122,28 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     assert g("Radiant Strike") is True
     assert g("Depressurize") is True
 
-    # Pin #11: Close Encounter stays DECLINED (the
-    # necessary-but-not-sufficient card). Verify-first at the
-    # implement HEAD: live ``Close Encounter.warp_cost is None`` (the
-    # spec ADDENDUM's "warp_cost is not None" reason is STALE) — the
-    # robust, load-bearing decline is the covered-set gate:
-    # ``CloseEncounterEffect`` is NOT covered+bridged (no additional-
-    # cost-choice substrate ships it). Stays Tier-C.
+    # Pin #11 (UPDATED via close-encounter-substrate at merge
+    # ``17dc7d02``, 2026-05-21 — picked up by scour-for-scrap-cycle-2's
+    # admit-set re-anchor): Close Encounter FLIPPED from DECLINED →
+    # ADMITTED. The Close Encounter substrate lane added the
+    # ``Effect::CloseEncounterEffect`` Rust variant + bridge arms +
+    # the additional-cost-choice substrate that lets the live
+    # printing satisfy both the covered-set gate AND the round-trip-
+    # or-bail teeth. The matching Phase-1 ``(1, 1)`` admit shape was
+    # already in place; Close Encounter rides the existing surgical
+    # widen. Pre-substrate this pin asserted DECLINED via the covered-
+    # set gate; post-substrate that load-bearing gate FLIPS True. The
+    # pin is preserved as an explicit ADMIT pin so the lane-credit is
+    # documented and a regression that re-declines Close Encounter is
+    # caught here.
     ce = src.get("Close Encounter")
     if ce is not None:
-        assert trajectory._printing_is_bridge_simple_spell(ce) is False
-        assert ce.warp_cost is None  # verify-first: the spec is stale
+        assert trajectory._printing_is_bridge_simple_spell(ce) is True
+        assert ce.warp_cost is None  # verify-first: the spec was stale
         assert (
             trajectory._spell_effect_is_covered_and_bridged(ce)
-            is False
-        ), "CloseEncounterEffect must NOT be covered+bridged (Tier-C)"
+            is True
+        ), "CloseEncounterEffect must be covered+bridged post-substrate"
 
     # Pin #12 (round-76 Phase 2 — FLIPPED from DECLINE to ADMITTED;
     # new-code-is-right per feedback_parity_new_code_is_right). In
@@ -21348,17 +21355,31 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # AUTO-JOINS. Pull Through the Weft + Archenemy's Charm stay
     # declined (each needs its own substrate per the multi-target
     # lane's honest-stop). 19 → 22 — both AUTO-JOINED.
+    # **close-encounter-substrate (2026-05-21, merge ``17dc7d02``):**
+    # adds the additional-cost-choice substrate +
+    # ``Effect::CloseEncounterEffect`` Rust variant + bridge arms
+    # → Close Encounter AUTO-JOINS the Phase-1 ``(1, 1)`` admit shape.
+    # Admit set 22 → 23 (the prior pin missed this drift; this
+    # re-anchor catches it up).
+    # **scour-for-scrap-cycle-2 (2026-05-21):** FIRST ``or_both=True``
+    # closure. Adds ``Effect::ReturnTargetArtifactCardFromYourGraveyard
+    # ToHand`` Rust variant + per-mode detector or_both walk + the
+    # Phase-5 ``(0, 1)`` ``or_both`` admit-shape widen + the matching
+    # bridge arms + narrow ``_leaf(SearchLibraryForCard,
+    # filter_name="artifact")`` admit (honest-stop). Scour for Scrap
+    # AUTO-JOINS. Admit set 23 → 24.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-        "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-        "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
-        "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
-        "Pyroclasm", "Radiant Strike", "Reroute Systems",
-        "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",
+        "Close Encounter", "Cut Propulsion", "Depressurize",
+        "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
+        "Exorcise", "Focus Fire", "Invasive Maneuvers",
+        "Manifest Dread", "Orbital Plunge", "Pyroclasm",
+        "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
+        "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
         "Shattered Wings", "Under the Skin", "Untimely Malfunction",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 22 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 24 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet) + 1 Cycle-4 modal admit "
         f"(Ruinous Rampage) + 1 Cycle-6 per-mode-target modal admit "
@@ -21370,8 +21391,11 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"ReturnUpToNSmallCreaturesFromGraveyardWithCounters Effect "
         f"variant + Phase-4 admit-gate arm) + 1 Effect-uncovered "
         f"single-gated admit (Exorcise via the non-state-rs-tractable "
-        f"ExorciseEffect close) — the set grew 15→22 across the "
-        f"seven lanes; auto-grows further as the remaining Tier-A "
+        f"ExorciseEffect close) + 1 additional-cost-choice closure "
+        f"(Close Encounter via close-encounter-substrate) + 1 "
+        f"or_both modal closure (Scour for Scrap via "
+        f"scour-for-scrap-cycle-2) — the set grew 15→24 across the "
+        f"nine lanes; auto-grows further as the remaining Tier-A "
         f"and per-mode-target modal spells close)")
 
 

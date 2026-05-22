@@ -2988,6 +2988,59 @@ pub enum Effect {
     /// untargeted_all, plus_one_counter, log_suffix). Bare
     /// `or_enchantment` only.
     ReturnEnchantmentOrCreatureFromYourGraveyardToHand,
+    /// **scour-for-scrap-cycle-2 (2026-05-21).** Return target artifact
+    /// card from the source-controller's graveyard to that player's
+    /// hand. Mirrors Python's
+    /// `ReturnTargetArtifactCardFromYourGraveyardToHand`
+    /// (`effects/generic/bounce.py:338`) — constructor sugar over
+    /// `ReturnFromGraveyard(artifact=True, destination="hand",
+    /// target_kind="graveyard_artifact")`. Cycle-2 ship-target for
+    /// Scour for Scrap's mode-1 leaf — the missing per-leaf Effect
+    /// variant whose absence kept Scour DECLINED at the bridge-admit
+    /// gate (Lane LL substrate-only landing).
+    ///
+    /// **Cast-time-bound target shape.** The cast-time per-mode
+    /// detector at `state_ops_cast.rs::cast_spell_noncreature` (when
+    /// the chosen mode resolves to this variant) binds the
+    /// deterministic-first legal target — first artifact card in the
+    /// caster's graveyard in iteration order — onto
+    /// `current_resolve_payload_target_id`. The resolve arm reads that
+    /// payload, re-validates per CR 608.2b (still in graveyard, still
+    /// an artifact card), and moves it to the caster's hand. Silent
+    /// fizzle on validation fail (target left the graveyard between
+    /// cast and resolve, or stopped being an artifact card — defense
+    /// in-depth since the printing is immutable).
+    ///
+    /// **Filter contract.** A graveyard card qualifies iff its
+    /// printing's `card_types` contains "Artifact". Mirrors Python's
+    /// `ReturnFromGraveyard._filter`'s `printing.is_artifact`
+    /// reading and the `target_kind == "graveyard_artifact"` slot
+    /// scoping. Artifact-creatures (printings carrying BOTH
+    /// "Artifact" AND "Creature") qualify; non-artifact cards
+    /// (creatures-only, enchantments, lands) do not.
+    ///
+    /// **Controller-of-effect.** Inherits the I82 contract:
+    /// `controller_idx` derives from
+    /// `current_resolve_source_controller`, falling back to
+    /// `active_player` for direct apply_effect_pub callers. For the
+    /// production Scour cast path the controller IS the caster (per-
+    /// mode binding routes through the spell's StackItem.controller
+    /// chain).
+    ///
+    /// **Zone-change reset (CR 400.7).** Same as the sibling
+    /// return-to-hand variants: `tapped`, `summoning_sick`, `damage`,
+    /// `counters`, `attached_to`, `exiled_with_source` all reset on
+    /// move to hand. `summoning_sick=true` matches the round-28 CE1
+    /// universal-true default for hand-zone objects.
+    ///
+    /// **Real EoE consumer.** Scour for Scrap (EoE Instant, {3}{U}):
+    /// "Choose one or both — Search your library for an artifact card,
+    /// reveal it, put it into your hand, then shuffle. // Return
+    /// target artifact card from your graveyard to your hand." The
+    /// or_both substrate (Lane LL's Cycle 1) handles the multi-pick
+    /// dispatch; this variant closes mode 1's per-leaf parity for the
+    /// bridge auto-grow flip.
+    ReturnTargetArtifactCardFromYourGraveyardToHand,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on each creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnEachCreatureYouControl(amount: int = 1)`
@@ -8820,6 +8873,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // dict-shape consistency.
             Ok(Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand)
         }
+        "return_target_artifact_card_from_your_graveyard_to_hand" => {
+            // **scour-for-scrap-cycle-2 (2026-05-21).** Unit variant;
+            // the artifact-card filter is baked into the variant
+            // identity itself, so no fields beyond `kind`. Mirrors
+            // Python's `ReturnTargetArtifactCardFromYourGraveyardToHand`
+            // (`bounce.py:338`) — a constructor-sugar subclass of
+            // `ReturnFromGraveyard` with `artifact=True`,
+            // `destination="hand"`, `target_kind="graveyard_artifact"`.
+            // Extra dict fields are silently ignored for round-trip
+            // dict-shape consistency.
+            Ok(Effect::ReturnTargetArtifactCardFromYourGraveyardToHand)
+        }
         "put_plus_one_counter_on_each_creature_you_control" => {
             // Python's PutPlusOneCounterOnEachCreatureYouControl
             // dataclass has amount: int = 1. Mirror that.
@@ -12540,6 +12605,12 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "return_enchantment_or_creature_from_your_graveyard_to_hand",
+            )?;
+        }
+        Effect::ReturnTargetArtifactCardFromYourGraveyardToHand => {
+            d.set_item(
+                "kind",
+                "return_target_artifact_card_from_your_graveyard_to_hand",
             )?;
         }
         Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {

@@ -5883,6 +5883,83 @@ honest-rename of a pin that flipped its underlying invariant).
 
 ---
 
+**Update 2026-05-21 (`scour-for-scrap-cycle-2` — closure landed;
+Scour for Scrap flipped COVERED → PROBED via the auto-grow teeth).**
+The follow-up cycle the substrate-only landing predicted. Closes
+Scour for Scrap by adding the missing per-leaf Effect variant + per-
+mode target binder + bridge arms + admit-shape widen:
+
+* New `Effect::ReturnTargetArtifactCardFromYourGraveyardToHand` Rust
+  unit variant (`cards.rs` declaration + parse arm + to_pydict arm +
+  `state_ops_resolve.rs` resolve arm). The resolve arm reads the
+  cast-time-bound target from `current_resolve_payload_target_id`,
+  re-validates per CR 608.2b (target must still be in the source-
+  controller's graveyard AND still be an artifact card), and moves
+  the card to the source-controller's hand. Silent fizzle on
+  validation fail (mirrors Python's modal-fizzle path). Fallback to
+  deterministic-first scan when `current_resolve_payload_target_id`
+  is `None` (substrate back-compat — used by direct
+  `apply_effect_pub` callers in synthetic tests).
+* New target-satisfiability arm in
+  `state_ops_legal.rs::spell_targets_satisfiable` (caster's
+  graveyard, artifact in card_types).
+* Cycle-5 per-mode detector table extended with the new variant +
+  the `or_both` walk. When the cast spell carries `or_both: true`,
+  the detector walks `bound_mode_idxs` in supplied order and peeks
+  the FIRST chosen mode whose Effect variant IS in the recognized-
+  targeted-leaf allowlist (`is_recognized_targeted_mode_leaf`). For
+  Scour, mode 0 (`SearchLibraryForCard`) is untargeted and skipped;
+  mode 1 (`ReturnTargetArtifactCardFromYourGraveyardToHand`) IS
+  recognized and its scan binds the deterministic-first artifact
+  card from the caster's graveyard.
+* `cross_engine.py::_ta_dict_to_python_effect` arm constructs the
+  Python class from the new `kind`.
+* `trajectory.py::_python_spell_effect_to_dict::_leaf` table adds
+  TWO new arms:
+    1. The new `return_target_artifact_card_from_your_graveyard_to_
+       hand` unit-leaf (mirrors `destroy_target_artifact` idiom).
+    2. A NARROW `search_library_for_card` leaf scoped to
+       `filter_name == "artifact"` (Scour's exact mode 0 shape).
+       The narrow scope honest-stops Demonic Counsel's
+       `filter_name="demon"` auto-flip to a follow-up cycle —
+       Demonic Counsel ALSO uses `SearchLibraryForCard` but as a
+       top-level body, so admitting the broader leaf would
+       auto-flip it without its dedicated probe + admit-set
+       guardrail update. The narrow admit is a `_leaf` predicate
+       on the reverse-serializer; the existing
+       `search_library_for_card` arms on the Rust parse + bridge +
+       resolve sides are UNCHANGED (those accept every filter
+       byte-identical).
+* `_printing_is_bridge_simple_spell` widened with a new Phase-5
+  admit shape `(min_t, max_t) == (0, 1)` with empty `slot_kinds` —
+  the shape `ModalChooseOne(or_both=True)` cards report when one
+  mode is untargeted and the other is single-target. Today the
+  only EoE consumer is Scour for Scrap (mode 0 untargeted search
+  + mode 1 single-target graveyard return ⇒ `(0, 1)`); any future
+  `or_both` modal with the same shape auto-flips through the same
+  arm provided both leaves are covered+bridged AND the per-mode
+  binder picks the targeted mode's filter.
+
+**Card flip.** Scour for Scrap COVERED → PROBED (+1; ~6,434 17lands
+decks). Admit set 23 → 24 (the prior admit-set pins were stale by 1
+— Close Encounter had flipped via the close-encounter-substrate
+merge but the two admit-set list pins missed the drift; this cycle
+re-anchors them to the live live set including Close Encounter).
+
+**Probe module.** New `tests/test_scour_for_scrap_parity.py` (10
+tests) carries the canonical
+`test_cross_engine_real_eoe_scour_for_scrap_return_target_artifact_card_from_your_graveyard_to_hand_parity`
+function for slug-credit. Also pins: verify-first parser shape,
+serializer round-trip with `or_both: True`, admit-gate flip,
+Demonic Counsel honest-stop decline, Rust unit pins for the new
+parse/to_pydict round-trip + per-mode detector or_both walk + the
+new resolve arm (cast-time-bound move + CR 608.2b fizzle on missing
+target + substrate self-scan fallback). Registered in
+`scripts/measure_pool_parity.py::PROBE_MODULES` so the slug-scanner
+discovers it.
+
+---
+
 **Update 2026-05-21 (Cycle 5 landed — per-mode target binding API
 on `cast_spell_noncreature`; substrate-only, NO admit widening, NO
 card-flip).** Cycle 5 shipped on

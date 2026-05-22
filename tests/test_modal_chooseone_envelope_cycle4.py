@@ -226,13 +226,22 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
     + new ``DealDamageToTargetTappedCreature`` variant — see
     ``test_reroute_systems.py``). The remaining 3 some-targeted
     modals stay declined.
+
+    **Scour for Scrap closure (scour-for-scrap-cycle-2, 2026-05-21).**
+    Scour for Scrap was originally pinned here too — it's the only
+    ``or_both=True`` modal in EoE. cycle-2 closed it via the new
+    ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`` Rust
+    variant + matching leaf + the Cycle-5 detector table extension
+    PLUS the Phase-5 ``(0, 1)`` ``or_both`` admit-shape widen in
+    ``_printing_is_bridge_simple_spell`` — Scour for Scrap is now
+    bridge-admitted (see ``test_scour_for_scrap_parity.py``). The
+    remaining 2 some-targeted modals stay declined.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
     declined_modals = [
-        "Scour for Scrap",
         "Archenemy's Charm",
         "Warping Wail",
     ]
