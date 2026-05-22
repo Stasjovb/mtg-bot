@@ -74022,6 +74022,42 @@ def test_cross_engine_real_eoe_ruinous_rampage_mode1_exile_all_artifacts_with_ma
     )
 
 
+def test_cross_engine_real_eoe_scout_for_survivors_return_up_to_n_creatures_with_counters_parity():
+    """**PROBED-tier credit alias for Scout for Survivors** — delegates
+    to the canonical Lane GG Phase-4 multi-target admit-gate closure
+    probe ``test_cross_engine_real_eoe_scout_for_survivors_return_up_to_n_creatures_with_counters_parity``
+    in ``tests/test_multi_target_phase4.py``. That probe drives the
+    GENUINE parsed Scout for Survivors printing
+    (``get_active_source().get_printings()["Scout for Survivors"]``,
+    ``spell_effect`` = ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+    max_n=3, max_total_mv=3)``) end-to-end on both engines: two MV-1
+    creatures seeded in p0's graveyard, p0 casts Scout for Survivors,
+    both creatures return to battlefield with a +1/+1 counter each.
+
+    Phase-4 multi-target admit-gate widen + Effect substrate landed at
+    merge ``1db74315`` (``feature/multi-target-admit-phase4``); the
+    probe lives in ``tests/test_multi_target_phase4.py`` which is NOT
+    in the ``measure_pool_parity.py`` ``PROBE_MODULES`` list nor the
+    ``SMOKE_TEST`` file, so the slug-keyed ``_smoke_probed_cards``
+    scanner never sees it — Scout for Survivors stayed COVERED despite
+    being PROBED-strength in practice. This thin ``_parity``-suffixed
+    delegator exists so the scanner credits Scout for Survivors in the
+    PROBED tier — same measurement-attribution idiom as the Moonlit
+    Meditation Aura Phase-4-S3 delegator above and the Cosmogoyf /
+    Tannuk / warp_cost Phase-3 ``_parity`` aliases.
+
+    The scanner regex matches ``test_cross_engine_real_eoe_<mid>_parity``;
+    ``<mid>`` is ``scout_for_survivors_return_up_to_n_creatures_with_counters``,
+    which starts with the Scout for Survivors card-name slug
+    ``scout_for_survivors`` and is credited under the longest-slug-first
+    prefix rule.
+    """
+    from tests.test_multi_target_phase4 import (
+        test_cross_engine_real_eoe_scout_for_survivors_return_up_to_n_creatures_with_counters_parity as _canonical,
+    )
+    _canonical()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
