@@ -394,6 +394,102 @@ def test_atexit_fallback_marks_failed_when_ctx_bypassed(runs_db_env: Path):
     assert "atexit fallback" in (row["notes"] or "")
 
 
+# ---------------------------------------------------------------------------
+# register_finalize_hook (Phase B: AWS fleet teardown wiring)
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_hook_fires_on_normal_exit(runs_db_env: Path):
+    """A registered hook runs inside the auto-finaliser on clean exit."""
+    fired: list[str] = []
+    with cycle_lifecycle(**_base_kwargs("hook-normal")) as handle:
+        handle.register_finalize_hook(lambda: fired.append("hook1"))
+    assert fired == ["hook1"]
+    row = _read_run(runs_db_env, "hook-normal")
+    assert row["status"] == "completed"
+
+
+def test_finalize_hook_fires_on_exception_exit(runs_db_env: Path):
+    """A registered hook also runs on the exception path, BEFORE the
+    failed status lands. (Cleanup must happen regardless of body
+    outcome.)"""
+    fired: list[str] = []
+    with pytest.raises(RuntimeError, match="boom"):
+        with cycle_lifecycle(**_base_kwargs("hook-fail")) as handle:
+            handle.register_finalize_hook(lambda: fired.append("teardown"))
+            raise RuntimeError("boom")
+    assert fired == ["teardown"]
+    row = _read_run(runs_db_env, "hook-fail")
+    assert row["status"] == "failed"
+
+
+def test_finalize_hook_fires_on_keyboard_interrupt(runs_db_env: Path):
+    fired: list[str] = []
+    with pytest.raises(KeyboardInterrupt):
+        with cycle_lifecycle(**_base_kwargs("hook-kbi")) as handle:
+            handle.register_finalize_hook(lambda: fired.append("teardown"))
+            raise KeyboardInterrupt("ctrl-c")
+    assert fired == ["teardown"]
+    row = _read_run(runs_db_env, "hook-kbi")
+    assert row["status"] == "killed"
+
+
+def test_finalize_hooks_fire_in_registration_order(runs_db_env: Path):
+    order: list[int] = []
+    with cycle_lifecycle(**_base_kwargs("hook-order")) as handle:
+        handle.register_finalize_hook(lambda: order.append(1))
+        handle.register_finalize_hook(lambda: order.append(2))
+        handle.register_finalize_hook(lambda: order.append(3))
+    assert order == [1, 2, 3]
+
+
+def test_finalize_hook_exception_does_not_block_others(
+    runs_db_env: Path, caplog,
+):
+    """A misbehaving hook is logged + swallowed; subsequent hooks
+    AND the finish_run write still happen."""
+    fired: list[str] = []
+
+    def boom():
+        raise RuntimeError("hook boom")
+
+    with caplog.at_level("ERROR"):
+        with cycle_lifecycle(**_base_kwargs("hook-boom")) as handle:
+            handle.register_finalize_hook(lambda: fired.append("before"))
+            handle.register_finalize_hook(boom)
+            handle.register_finalize_hook(lambda: fired.append("after"))
+    assert fired == ["before", "after"]
+    # finish_run still landed.
+    row = _read_run(runs_db_env, "hook-boom")
+    assert row["status"] == "completed"
+    # Hook failure was logged.
+    assert any(
+        "finalize hook" in rec.message for rec in caplog.records
+    )
+
+
+def test_finalize_hook_skipped_when_mark_finalized(runs_db_env: Path):
+    """``mark_finalized()`` short-circuits the ctx mgr's
+    auto-finaliser, so registered hooks are NOT fired (the body has
+    declared it owns finalisation, including teardown)."""
+    fired: list[str] = []
+    with cycle_lifecycle(**_base_kwargs("hook-skip")) as handle:
+        handle.register_finalize_hook(lambda: fired.append("hook"))
+        runs_client.finish_run("hook-skip", "killed")
+        handle.mark_finalized()
+    assert fired == []
+
+
+def test_finalize_hook_default_empty_list_per_instance(runs_db_env: Path):
+    """Two CycleLifecycle instances must not share a hook list (the
+    mutable-default trap)."""
+    a = CycleLifecycle(cycle_id="a")
+    b = CycleLifecycle(cycle_id="b")
+    a.register_finalize_hook(lambda: None)
+    assert len(a._on_finalize) == 1
+    assert len(b._on_finalize) == 0
+
+
 def test_spawn_iterate_terminates_child_on_kbi(tmp_path):
     """When the parent receives a KeyboardInterrupt (because its
     signal handler fired), the helper terminates the child before

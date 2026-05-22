@@ -130,9 +130,12 @@ def test_config_error_returns_2(
     assert "target_iter must be positive" in err
 
 
-def test_local_only_false_blocks_launch(
+def test_local_only_false_missing_aws_config_blocks_launch(
     tmp_path: Path, progress_dir: Path, runs_db_env: Path, capsys,
 ):
+    """Phase B path: local_only=false without [aws] section fails
+    at config-load time with a clear actionable message, not after
+    runs.db has been touched."""
     toml = tmp_path / "launch.toml"
     toml.write_text("""
 [iter]
@@ -140,6 +143,7 @@ target_iter = 5
 
 [cluster]
 local_only = false
+master_url = "http://h:5198"
 """, encoding="utf-8")
     rc = id_mod.main([
         "--config", str(toml),
@@ -147,7 +151,8 @@ local_only = false
         "--dry-run",
     ])
     assert rc == 2
-    assert "Phase B" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "aws.count must be >= 1" in err
 
 
 def test_no_worker_urls_raises(

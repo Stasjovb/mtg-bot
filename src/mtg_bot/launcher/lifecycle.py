@@ -73,11 +73,25 @@ class CycleLifecycle:
     ``mark_finalized()`` is an escape hatch for body code that has
     already written the terminal status itself (rare; the normal
     contract is "let the ctx mgr do it").
+
+    ``register_finalize_hook(fn)`` lets the body register cleanup
+    callables that the ctx mgr fires inside ``_finalize`` BEFORE the
+    runs.db ``finish_run`` write. Used by the CLI to wire
+    ``FleetManager.terminate_fleet`` into the lifecycle so any exit
+    path tears down AWS instances. Hook exceptions are logged but
+    don't block subsequent hooks (cleanup is best-effort).
     """
 
     cycle_id: str
     _finalized: bool = False
     _explicit_status: Optional[str] = None
+    _on_finalize: list[Callable[[], None]] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        # Mutable default workaround: dataclass fields can't safely
+        # use a list literal as a default, so init it lazily here.
+        if self._on_finalize is None:
+            self._on_finalize = []
 
     def mark_finalized(self) -> None:
         """Tell the ctx mgr the body has already written the
@@ -99,6 +113,25 @@ class CycleLifecycle:
                 f"completed/failed/killed; got {status!r}",
             )
         self._explicit_status = status
+
+    def register_finalize_hook(self, fn: Callable[[], None]) -> None:
+        """Register a teardown callable to fire inside ``_finalize``.
+
+        The hook runs BEFORE ``finish_run`` writes the terminal
+        status, so cleanup happens against a still-``running`` row
+        (the launcher's "true" terminal state -- whether the body
+        succeeded or raised -- is determined AFTER the hooks).
+
+        Multiple hooks accepted; fired in registration order.
+        Exceptions inside a hook are logged and swallowed -- a
+        misbehaving hook can't block other hooks or the finish_run
+        write.
+
+        Today this is consumed by ``mtg_bot.cli.iterate_distributed``
+        to register ``FleetManager.terminate_fleet`` so any exit path
+        tears the AWS fleet down.
+        """
+        self._on_finalize.append(fn)
 
 
 def _serialize_config(config: dict[str, Any]) -> str:
@@ -175,6 +208,22 @@ def cycle_lifecycle(
             if handle._finalized:
                 return
             handle._finalized = True
+        # Run body-registered cleanup hooks BEFORE finish_run. The
+        # body uses these to tear down side-effecting resources --
+        # AWS spot fleet termination is the canonical use case --
+        # and we want that cleanup to happen even when the launcher
+        # is on a signal-induced shutdown path. Each hook is fired
+        # under its own try/except so a misbehaving hook can't block
+        # subsequent hooks or the finish_run write.
+        for hook in list(handle._on_finalize or []):
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 - cleanup is best-effort
+                logger.exception(
+                    "cycle_lifecycle: finalize hook %r raised; "
+                    "continuing with remaining hooks + finish_run.",
+                    getattr(hook, "__name__", repr(hook)),
+                )
         # Best-effort: the runs.client already swallows network
         # errors; this just adds an extra "swallow-and-log" layer
         # for sqlite/SQLAlchemy-style failures that could surface
