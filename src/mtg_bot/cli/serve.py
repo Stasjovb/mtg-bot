@@ -699,7 +699,17 @@ def create_app(
             "error": "run database not configured on this server",
         }), 404
 
+    # Both ``/run/start`` and ``/run/start_or_restart`` route to the
+    # same handler. The aliased path is preferred by the unified
+    # launcher (``mtg_bot iterate-distributed``) because the launcher
+    # MUST register the cycle row before iterate runs, and the
+    # "or_restart" suffix makes the idempotent-on-failure semantics
+    # explicit at the call site. Both endpoints wrap
+    # :func:`mtg_bot.cli.runs.db.insert_or_restart_run` with identical
+    # behavior: ``inserted`` -> 200, ``restarted`` -> 200,
+    # ``conflict`` (running/completed) -> 409.
     @app.route("/run/start", methods=["POST"])
+    @app.route("/run/start_or_restart", methods=["POST"])
     def run_start():
         if runs_db_path is None:
             return _runs_db_disabled()
