@@ -2009,6 +2009,43 @@ impl GameState {
                 Some(crate::cards::Effect::ChooseOneMode { .. }) => Some(0u8),
                 _ => None,
             });
+        // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).** When
+        // the cast spell's `Effect::ChooseOneMode` carries
+        // `or_both: true`, bind the FULL mode-subset (one entry per
+        // mode index, in printed order) onto the StackItem's
+        // `chosen_mode_idxs` slot — the multi-pick sibling of
+        // `chosen_mode_idx`. Mirrors Python's no-agent fallback for
+        // the or_both branch: pick ALL modes (Scour for Scrap ALWAYS
+        // lets you do both, so picking both is the deterministic-
+        // first answer; a real agent-driven sub-subset selection is
+        // a Cycle-2 follow-up requiring a Decision callback).
+        //
+        // **Mutual-exclusion contract.** When `bound_mode_idxs` is
+        // `Some`, the multi-pick path is active and the single-pick
+        // `bound_mode_idx` is implicitly redundant (the resolve arm
+        // reads multi first); we still keep `bound_mode_idx`
+        // populated so the existing per-mode cast-time target binder
+        // (the `chosen_mode` peek below) operates on the FIRST mode
+        // for its target-slot scan — the only target slot bound
+        // today, since the per-leaf `ReturnTargetArtifactCard...`
+        // detector + admit-set flip ship in a follow-up cycle.
+        let bound_mode_idxs: Option<Vec<u8>> = self
+            .registry
+            .lookup(printing_id)
+            .and_then(|p| match p.effects.first() {
+                Some(crate::cards::Effect::ChooseOneMode {
+                    modes,
+                    or_both: true,
+                }) => {
+                    // Pick all modes by default (no-agent deterministic
+                    // fallback). The vec is `[0, 1, ..., modes.len()-1]`
+                    // — Python's `[i for i in range(len(modes))]`
+                    // shape under the no-agent path.
+                    let idxs: Vec<u8> = (0..modes.len() as u8).collect();
+                    Some(idxs)
+                }
+                _ => None,
+            });
         // **ModalChooseOne envelope — Cycle 5 (per-mode target
         // binding, 2026-05-21).** When the cast spell is modal AND
         // the chosen mode is a recognized single-target leaf, bind
@@ -2064,7 +2101,7 @@ impl GameState {
                 .registry
                 .lookup(printing_id)
                 .and_then(|p| match p.effects.first() {
-                    Some(crate::cards::Effect::ChooseOneMode { modes }) => {
+                    Some(crate::cards::Effect::ChooseOneMode { modes, or_both: _ }) => {
                         let idx = (idx_u8 as usize).min(
                             modes.len().saturating_sub(1),
                         );
@@ -2286,22 +2323,41 @@ impl GameState {
         // `resolve_top_of_stack` drains it: applies `printing.effects`
         // with the target(s) swapped in, then
         // `move_source_post_resolve` sends the spell hand → graveyard
-        // (FREE — CR 608.2m). `new_spell_with_targets_mode_and_addcost`
-        // carries the cast-time-bound target(s) PLUS the cast-time-
-        // bound modal pick PLUS the cast-time-bound additional-cost
-        // choice (`None` for every non-additional-cost spell —
-        // back-compat byte-identical to the pre-Close-Encounter-
-        // cycle push, with the additional-cost field defaulting to
-        // `None` for every printing whose
-        // `additional_cost_choose_your_creature` flag is false).
-        self.stack.push(crate::state::StackItem::new_spell_with_targets_mode_and_addcost(
-            obj_id,
-            player_id,
-            bound_target,
-            bound_target_2,
-            bound_mode_idx,
-            bound_additional_cost_choice_id,
-        ));
+        // (FREE — CR 608.2m).
+        //
+        // **Composite Lane KK + Lane LL routing.** Two non-overlapping
+        // cast-time channels feed the StackItem push:
+        //   - Lane LL (or_both=True multi-pick, `bound_mode_idxs`
+        //     `Some`): route to `new_spell_with_targets_and_modes`.
+        //     `or_both` modal spells are not on the
+        //     additional-cost-choose-your-creature pathway, so the
+        //     additional-cost slot is implicitly `None`. Mutual-
+        //     exclusion contract: this constructor leaves
+        //     `chosen_mode_idx` `None`.
+        //   - Default (single-pick modal OR non-modal OR additional-
+        //     cost): route to `new_spell_with_targets_mode_and_addcost`
+        //     which carries the cast-time-bound target(s) PLUS the
+        //     single-pick modal idx PLUS the additional-cost choice
+        //     id. The multi-pick sibling is `None` in this
+        //     constructor.
+        if let Some(idxs) = bound_mode_idxs {
+            self.stack.push(crate::state::StackItem::new_spell_with_targets_and_modes(
+                obj_id,
+                player_id,
+                bound_target,
+                bound_target_2,
+                Some(idxs),
+            ));
+        } else {
+            self.stack.push(crate::state::StackItem::new_spell_with_targets_mode_and_addcost(
+                obj_id,
+                player_id,
+                bound_target,
+                bound_target_2,
+                bound_mode_idx,
+                bound_additional_cost_choice_id,
+            ));
+        }
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.
         self.priority_player = self.active_player;

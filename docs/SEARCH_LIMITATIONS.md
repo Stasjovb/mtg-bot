@@ -5803,6 +5803,86 @@ still bails on `ModalChooseOne(or_both=True)`.
 
 ---
 
+**Update 2026-05-21 (`scour-for-scrap-slice` — `or_both` Cycle 1
+widen LANDED; substrate-only, no admit widening, no card-flip).**
+The `feature/scour-for-scrap-slice` lane widens the modal-cast
+substrate to support `ModalChooseOne(or_both=True)` cards (Scour for
+Scrap and any future Charm-shape):
+
+* New `or_both: bool` field on `Effect::ChooseOneMode` (defaulted
+  `false` so every pre-widen registered modal parses byte-identical;
+  the parse arm at `cards.rs::parse_effect::"choose_one_mode"`
+  reads the optional dict field; the to_pydict arm emits
+  `or_both: True` ONLY when set, keeping the back-compat omission
+  symmetric).
+* New `StackItem.chosen_mode_idxs: Option<Vec<u8>>` additive
+  multi-pick sibling of `chosen_mode_idx`. Mutual-exclusion
+  contract: the dedicated multi-pick constructor
+  `new_spell_with_targets_and_modes` populates `chosen_mode_idxs`
+  and leaves `chosen_mode_idx` `None`; the existing single-pick
+  constructor does the inverse. The 26+ existing read sites for
+  `chosen_mode_idx` keep working byte-identical (the
+  additive-sibling choice over a `Vec<u8>` refactor per the
+  honest-stop discipline).
+* `cast_spell_noncreature` detects `or_both: true` and binds the
+  full mode subset `[0, 1, ..., modes.len()-1]` onto
+  `chosen_mode_idxs` (the deterministic-all no-agent default —
+  mirrors Python's `ModalChooseOne(or_both=True)` "pick all modes
+  by default" no-agent semantics). The existing single-pick
+  `bound_mode_idx` stays populated alongside so the per-mode
+  target-binder (Cycle 5) keeps operating on mode 0 — only the
+  push routes via the multi-pick constructor.
+* `Effect::ChooseOneMode` resolve arm at
+  `state_ops_resolve.rs:15188` widened: when
+  `current_resolve_chosen_mode_idxs` is `Some(vec)`, dispatch each
+  chosen mode in supplied order via
+  `apply_effect_pub_with_controller` (mirrors CR 700.2d —
+  controller-picked order). When `None`, fall back to the legacy
+  single-pick path → fall back to the PendingDecision substrate
+  (back-compat byte-identical for every pre-widen modal cast).
+  Out-of-range and empty-subset cases are silently filtered /
+  no-op'd (mirrors Python's sanitisation).
+* New `stack_top_chosen_mode_idxs()` getter +
+  `set_stack_top_chosen_mode_idxs(...)` synthetic-test setter
+  (parallel to the single-pick siblings).
+* `_python_spell_effect_to_dict` no longer bails on `or_both=True`;
+  emits `or_both: True` when set (the Rust→Python `or_both` round-
+  trip is symmetric on both directions now).
+* Python `cross_engine._ta_dict_to_python_effect`
+  `"choose_one_mode"` arm reads the optional `or_both` field and
+  constructs `ModalChooseOne(modes=..., or_both=bool)`.
+
+**No card-flip.** Scour for Scrap STAYS DECLINED via the
+covered+bridged gate: its mode 1 leaf
+(`ReturnTargetArtifactCardFromYourGraveyardToHand`) has NO Rust
+`Effect` variant today. The round-trip-or-bail teeth at
+`_python_spell_effect_to_dict` correctly return `None` for Scour's
+spell effect (mode 1's `_leaf` returns `None` so the modal composer
+bails). PROBED count unchanged; spell-card-bridge admit set still 22.
+
+**What the substrate enables.** A follow-up cycle that adds (a) the
+`Effect::ReturnTargetArtifactCardFromYourGraveyardToHand` variant +
+parse/to_pydict/resolve arms + Python bridge arm, (b) the per-mode
+cast-time target-binder entry for it, and (c) the
+`_python_spell_effect_to_dict::_leaf` arm will flip Scour for Scrap
+into the spell-card-bridge admit set via the §2 auto-grow teeth —
+no further `or_both`-substrate work required.
+
+**Pin tests.** New module
+`tests/test_scour_for_scrap_substrate.py` (13 tests): empty-stack
++ single-pick back-compat getter contract, all-modes cast-time
+bind, 3-mode bind scaling, in-order multi-pick resolve dispatch,
+single-index subset resolve, reordered-order multi-pick,
+empty-subset silent no-op, out-of-range silent drop, single-pick
+back-compat resolve, `or_both` parse-accept smoke, default-false
+back-compat smoke, non-bool field validation. The pre-existing
+`test_modal_chooseone_envelope_cycle3.py::test_serializer_bails_on_or_both`
+was renamed to `test_serializer_emits_or_both_when_set` +
+companion `test_serializer_omits_or_both_when_false` (the
+honest-rename of a pin that flipped its underlying invariant).
+
+---
+
 **Update 2026-05-21 (Cycle 5 landed — per-mode target binding API
 on `cast_spell_noncreature`; substrate-only, NO admit widening, NO
 card-flip).** Cycle 5 shipped on

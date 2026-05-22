@@ -486,5 +486,9 @@ pub fn make_state(
         // apply_effect for an additional-cost-choose-your-creature
         // spell-cast resolution.
         current_resolve_additional_cost_choice_id: None,
+        // scour-for-scrap-slice Cycle 1 widen: transient multi-pick
+        // slot; None at construction; set during a modal-or-both
+        // spell-cast resolution.
+        current_resolve_chosen_mode_idxs: None,
     })
 }

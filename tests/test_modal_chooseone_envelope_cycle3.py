@@ -87,12 +87,20 @@ def test_serializer_bails_when_any_mode_is_unrecognized():
     assert d is None
 
 
-def test_serializer_bails_on_or_both():
-    """``or_both=True`` is explicitly deferred — Cycle 1's
-    ``chosen_mode_idx: Option<u8>`` only carries a single pick.
-    Admitting an ``or_both`` modal would diverge on the multi-pick
-    semantics. Bail at the serializer to prevent the admit
-    predicate from accidentally bench-admitting it later.
+def test_serializer_emits_or_both_when_set():
+    """**scour-for-scrap-slice Cycle 1 widen (2026-05-21).** The
+    pre-widen behavior bailed (returned ``None``) on
+    ``or_both=True`` because the single-pick StackItem slot couldn't
+    carry a multi-pick decision. The scour-for-scrap-slice widen
+    added the ``Effect::ChooseOneMode { ..., or_both: bool }`` Rust
+    field PLUS the ``StackItem.chosen_mode_idxs: Option<Vec<u8>>``
+    multi-pick slot — the round-trip now succeeds. The serializer
+    emits ``or_both: True`` alongside the recursive modes.
+
+    The substrate is wired but the admit-set still gates on per-leaf
+    coverage; Scour for Scrap (whose mode 1 has no Rust Effect
+    variant) stays declined via the round-trip-or-bail teeth even
+    though ``or_both`` itself is no longer a blocking factor.
     """
     from mtg_bot.effects.combinators import ModalChooseOne
     from mtg_bot.effects.generic.life import GainLife
@@ -103,7 +111,39 @@ def test_serializer_bails_on_or_both():
         or_both=True,
     )
     d = _python_spell_effect_to_dict(eff)
-    assert d is None
+    assert d == {
+        "kind": "choose_one_mode",
+        "or_both": True,
+        "modes": [
+            {"kind": "gain_life", "amount": 3},
+            {"kind": "gain_life", "amount": 7},
+        ],
+    }
+
+
+def test_serializer_omits_or_both_when_false():
+    """Back-compat tooth: ``or_both=False`` (the default) is OMITTED
+    from the dict so every pre-widen ModalChooseOne dict round-trips
+    byte-identical (the Rust to_pydict symmetry — the parse arm
+    defaults absent ``or_both`` to false; the emit arm must omit it
+    for that case so the dict pair is symmetric)."""
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import _python_spell_effect_to_dict
+
+    eff = ModalChooseOne(
+        modes=(GainLife(amount=3), GainLife(amount=7)),
+        # or_both omitted — default False
+    )
+    d = _python_spell_effect_to_dict(eff)
+    assert d == {
+        "kind": "choose_one_mode",
+        "modes": [
+            {"kind": "gain_life", "amount": 3},
+            {"kind": "gain_life", "amount": 7},
+        ],
+    }
+    assert "or_both" not in d
 
 
 def test_serializer_handles_three_mode_spell():

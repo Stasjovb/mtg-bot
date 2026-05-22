@@ -15371,29 +15371,69 @@ fn apply_effect(
         // dispatch passes the registry-clone `mode` ref into
         // apply_effect_pub_with_controller (already-cloned at the
         // outer effect-snapshot in `resolve_top_of_stack`).
-        Effect::ChooseOneMode { modes } => {
+        Effect::ChooseOneMode { modes, or_both: _ } => {
             let controller = state
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
-            match state.current_resolve_chosen_mode_idx {
-                Some(idx_u8) => {
-                    let idx = (idx_u8 as usize).min(modes.len().saturating_sub(1));
-                    let chosen = modes[idx].clone();
+            // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).**
+            // Prefer the multi-pick swap when set; fall through to
+            // the single-pick swap for back-compat; final fallback is
+            // the resolve-time PendingDecision (no cast-time bind).
+            //
+            // Multi-pick dispatch iterates the chosen subset in the
+            // SUPPLIED ORDER (mirrors Python's CR 700.2d "modes
+            // resolve in the order chosen by the controller"). Each
+            // chosen mode is dispatched via
+            // `apply_effect_pub_with_controller` exactly like the
+            // single-pick arm — same source / same controller / same
+            // semantics, repeated.
+            //
+            // **Out-of-range clamp.** Indices >= modes.len() are
+            // silently dropped (mirrors Python's sanitisation at
+            // `combinators.py::ModalChooseOne.resolve` which drops
+            // out-of-range and dedupes via `dict.fromkeys`).
+            if let Some(idxs) = &state.current_resolve_chosen_mode_idxs {
+                let chosen_subset: Vec<crate::cards::Effect> = idxs
+                    .iter()
+                    .filter_map(|i| modes.get(*i as usize).cloned())
+                    .collect();
+                for chosen in &chosen_subset {
                     apply_effect_pub_with_controller(
                         state,
-                        &chosen,
+                        chosen,
                         source_obj_id,
                         controller,
                     )?;
                 }
-                None => {
-                    state.pending_decisions.push(
-                        PendingDecision::ChooseModeChoice {
+                // If every supplied index was out-of-range AND the
+                // chosen subset is empty, fall through silently — the
+                // resolver did its job (the caller asked for nothing
+                // legal). This mirrors Python's "no valid indices →
+                // fall back to mode 0" sanitiser ONLY at the spec
+                // boundary; at the Rust cast-time bind we always
+                // emit at least one valid index, so the empty path
+                // is unreachable through the production carrier.
+            } else {
+                match state.current_resolve_chosen_mode_idx {
+                    Some(idx_u8) => {
+                        let idx = (idx_u8 as usize).min(modes.len().saturating_sub(1));
+                        let chosen = modes[idx].clone();
+                        apply_effect_pub_with_controller(
+                            state,
+                            &chosen,
                             source_obj_id,
                             controller,
-                            modes: modes.clone(),
-                        },
-                    );
+                        )?;
+                    }
+                    None => {
+                        state.pending_decisions.push(
+                            PendingDecision::ChooseModeChoice {
+                                source_obj_id,
+                                controller,
+                                modes: modes.clone(),
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -17640,12 +17680,23 @@ impl GameState {
         let saved_addcost_choice_id = self.current_resolve_additional_cost_choice_id;
         self.current_resolve_additional_cost_choice_id =
             top.additional_cost_choice_id;
+        // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).**
+        // Multi-pick mirror — save → set → restore-bracketed exactly
+        // like the single-pick sibling. The resolve arm of
+        // `Effect::ChooseOneMode` reads `current_resolve_chosen_mode_idxs`
+        // first; if `Some(vec)`, it dispatches every chosen mode in
+        // order. If `None`, it falls back to the single-pick path,
+        // which keeps every pre-widen modal cast byte-identical.
+        // The `clone()` is a Vec<u8> (typically 0-2 entries) — cheap.
+        let saved_mode_idxs = self.current_resolve_chosen_mode_idxs.clone();
+        self.current_resolve_chosen_mode_idxs = top.chosen_mode_idxs.clone();
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_chosen_mode_idxs = saved_mode_idxs;
         self.current_resolve_additional_cost_choice_id =
             saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
@@ -17886,12 +17937,23 @@ impl GameState {
         let saved_addcost_choice_id = self.current_resolve_additional_cost_choice_id;
         self.current_resolve_additional_cost_choice_id =
             top.additional_cost_choice_id;
+        // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).**
+        // Multi-pick mirror — save → set → restore-bracketed exactly
+        // like the single-pick sibling. The resolve arm of
+        // `Effect::ChooseOneMode` reads `current_resolve_chosen_mode_idxs`
+        // first; if `Some(vec)`, it dispatches every chosen mode in
+        // order. If `None`, it falls back to the single-pick path,
+        // which keeps every pre-widen modal cast byte-identical.
+        // The `clone()` is a Vec<u8> (typically 0-2 entries) — cheap.
+        let saved_mode_idxs = self.current_resolve_chosen_mode_idxs.clone();
+        self.current_resolve_chosen_mode_idxs = top.chosen_mode_idxs.clone();
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_chosen_mode_idxs = saved_mode_idxs;
         self.current_resolve_additional_cost_choice_id =
             saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
@@ -18204,6 +18266,8 @@ impl GameState {
             // Cycle 1: synthetic-spell push has no printing →
             // additional-cost flag never set → default `None`.
             additional_cost_choice_id: None,
+            // scour-for-scrap-slice Cycle 1 widen: same rationale.
+            chosen_mode_idxs: None,
         });
         Ok(next_id)
     }

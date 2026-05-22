@@ -6499,7 +6499,15 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         modes = tuple(
             _ta_dict_to_python_effect(mode) for mode in modes_dicts
         )
-        return ModalChooseOne(modes=modes)
+        # **scour-for-scrap-slice (2026-05-21).** Read the optional
+        # ``or_both`` field — defaults to ``False`` so every pre-widen
+        # dict (no ``or_both`` key) round-trips byte-identical. When
+        # present and ``True``, the bridge constructs
+        # ``ModalChooseOne(modes=..., or_both=True)`` (the Scour for
+        # Scrap / Charm shape) — Python's resolver then dispatches the
+        # multi-pick path via ``ModalChooseOne.resolve``.
+        or_both = bool(eff_dict.get("or_both", False))
+        return ModalChooseOne(modes=modes, or_both=or_both)
     if kind == "destroy_enchanted_permanent":
         # **Round-26 BLOCKED-BRIDGE-ARM slice -- "destroy enchanted
         # permanent" / Aura-host destruction primitive
