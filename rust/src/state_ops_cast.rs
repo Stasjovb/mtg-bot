@@ -2009,6 +2009,43 @@ impl GameState {
                 Some(crate::cards::Effect::ChooseOneMode { .. }) => Some(0u8),
                 _ => None,
             });
+        // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).** When
+        // the cast spell's `Effect::ChooseOneMode` carries
+        // `or_both: true`, bind the FULL mode-subset (one entry per
+        // mode index, in printed order) onto the StackItem's
+        // `chosen_mode_idxs` slot — the multi-pick sibling of
+        // `chosen_mode_idx`. Mirrors Python's no-agent fallback for
+        // the or_both branch: pick ALL modes (Scour for Scrap ALWAYS
+        // lets you do both, so picking both is the deterministic-
+        // first answer; a real agent-driven sub-subset selection is
+        // a Cycle-2 follow-up requiring a Decision callback).
+        //
+        // **Mutual-exclusion contract.** When `bound_mode_idxs` is
+        // `Some`, the multi-pick path is active and the single-pick
+        // `bound_mode_idx` is implicitly redundant (the resolve arm
+        // reads multi first); we still keep `bound_mode_idx`
+        // populated so the existing per-mode cast-time target binder
+        // (the `chosen_mode` peek below) operates on the FIRST mode
+        // for its target-slot scan — the only target slot bound
+        // today, since the per-leaf `ReturnTargetArtifactCard...`
+        // detector + admit-set flip ship in a follow-up cycle.
+        let bound_mode_idxs: Option<Vec<u8>> = self
+            .registry
+            .lookup(printing_id)
+            .and_then(|p| match p.effects.first() {
+                Some(crate::cards::Effect::ChooseOneMode {
+                    modes,
+                    or_both: true,
+                }) => {
+                    // Pick all modes by default (no-agent deterministic
+                    // fallback). The vec is `[0, 1, ..., modes.len()-1]`
+                    // — Python's `[i for i in range(len(modes))]`
+                    // shape under the no-agent path.
+                    let idxs: Vec<u8> = (0..modes.len() as u8).collect();
+                    Some(idxs)
+                }
+                _ => None,
+            });
         // **ModalChooseOne envelope — Cycle 5 (per-mode target
         // binding, 2026-05-21).** When the cast spell is modal AND
         // the chosen mode is a recognized single-target leaf, bind
@@ -2064,7 +2101,7 @@ impl GameState {
                 .registry
                 .lookup(printing_id)
                 .and_then(|p| match p.effects.first() {
-                    Some(crate::cards::Effect::ChooseOneMode { modes }) => {
+                    Some(crate::cards::Effect::ChooseOneMode { modes, or_both: _ }) => {
                         let idx = (idx_u8 as usize).min(
                             modes.len().saturating_sub(1),
                         );
@@ -2201,18 +2238,34 @@ impl GameState {
         // `resolve_top_of_stack` drains it: applies `printing.effects`
         // with the target(s) swapped in, then
         // `move_source_post_resolve` sends the spell hand → graveyard
-        // (FREE — CR 608.2m). `new_spell_with_targets_and_mode`
-        // carries the cast-time-bound target(s) PLUS the cast-time-
-        // bound modal pick (`None` for every non-modal spell —
-        // back-compat byte-identical to the pre-cycle
-        // `new_spell_with_targets` push).
-        self.stack.push(crate::state::StackItem::new_spell_with_targets_and_mode(
-            obj_id,
-            player_id,
-            bound_target,
-            bound_target_2,
-            bound_mode_idx,
-        ));
+        // (FREE — CR 608.2m).
+        //
+        // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).** Route
+        // to the multi-pick constructor when `bound_mode_idxs` is
+        // `Some` (the or_both=True path); otherwise use the existing
+        // single-pick constructor (back-compat byte-identical for
+        // every non-or_both modal + non-modal spell). The mutual-
+        // exclusion contract is enforced in the constructors
+        // themselves — the multi-pick constructor leaves
+        // `chosen_mode_idx` `None`, the single-pick constructor
+        // leaves `chosen_mode_idxs` `None`.
+        if let Some(idxs) = bound_mode_idxs {
+            self.stack.push(crate::state::StackItem::new_spell_with_targets_and_modes(
+                obj_id,
+                player_id,
+                bound_target,
+                bound_target_2,
+                Some(idxs),
+            ));
+        } else {
+            self.stack.push(crate::state::StackItem::new_spell_with_targets_and_mode(
+                obj_id,
+                player_id,
+                bound_target,
+                bound_target_2,
+                bound_mode_idx,
+            ));
+        }
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.
         self.priority_player = self.active_player;

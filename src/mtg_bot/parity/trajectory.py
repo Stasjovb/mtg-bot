@@ -4709,14 +4709,31 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     # discipline a partially-serializable ModalChooseOne would
     # silently drop a mode on Rust.
     #
-    # **`or_both` deferral.** Python's
-    # ``ModalChooseOne(or_both=True)`` is a different cast-time
-    # decision shape (an ORDERED list of mode indices instead of a
-    # single pick); Cycle 1's `chosen_mode_idx: Option<u8>` only
-    # carries a SINGLE pick. Bail on the or_both variant explicitly
-    # so the admit predicate doesn't accidentally bench-admit a
-    # spell whose Cycle-1 cast-time bind would diverge from Python's
-    # multi-pick semantics.
+    # **`or_both` widen (scour-for-scrap-slice, 2026-05-21).** The
+    # Cycle-1-widen substrate adds the multi-pick StackItem slot
+    # (``chosen_mode_idxs: Option<Vec<u8>>``) PLUS the
+    # ``Effect::ChooseOneMode { ..., or_both: bool }`` Rust field.
+    # The composer now emits the ``or_both`` round-trip field;
+    # downstream the cast-time bind (``cast_spell_noncreature``)
+    # detects ``or_both=true`` and binds the full mode subset, and
+    # the resolve arm dispatches each chosen mode in order. The
+    # admit-set still gates on per-leaf coverage; any leaf that
+    # remains uncovered keeps the spell declined (Scour for Scrap's
+    # mode 1, ``ReturnTargetArtifactCardFromYourGraveyardToHand``,
+    # is uncovered today and will keep Scour declined until a
+    # follow-up cycle adds that Effect variant + per-mode target
+    # binder — the substrate-only landing for this slice).
+    #
+    # **Round-trip-or-bail teeth preserved.** Recurses into each
+    # mode via the same ``_leaf`` table; bails (returns ``None``) if
+    # ANY mode is unrecognized — keeps the no-fallback-hybrid
+    # discipline a partially-serializable ModalChooseOne would
+    # silently drop a mode on Rust.
+    #
+    # **``or_both: false`` omitted.** Per the Rust to_pydict
+    # symmetry, the field is emitted ONLY when ``True`` — keeps the
+    # pre-widen dict shape byte-identical for every non-or_both
+    # modal.
     #
     # **Composer-not-leaf shape.** Lives outside ``_leaf`` because
     # ``_leaf`` is intentionally the pid-free covered LEAVES (the
@@ -4730,15 +4747,16 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     # admit shape.
     from mtg_bot.effects.combinators import ModalChooseOne
     if isinstance(spell_effect, ModalChooseOne):
-        if spell_effect.or_both:
-            return None
         mode_dicts: list[dict] = []
         for mode in spell_effect.modes:
             md = _leaf(mode)
             if md is None:
                 return None
             mode_dicts.append(md)
-        return {"kind": "choose_one_mode", "modes": mode_dicts}
+        out: dict = {"kind": "choose_one_mode", "modes": mode_dicts}
+        if spell_effect.or_both:
+            out["or_both"] = True
+        return out
     return _leaf(spell_effect)
 
 

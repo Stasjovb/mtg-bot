@@ -480,5 +480,9 @@ pub fn make_state(
         // Set by the resolver during apply_effect for a modal
         // spell-cast resolution.
         current_resolve_chosen_mode_idx: None,
+        // scour-for-scrap-slice Cycle 1 widen: transient multi-pick
+        // slot; None at construction; set during a modal-or-both
+        // spell-cast resolution.
+        current_resolve_chosen_mode_idxs: None,
     })
 }

@@ -4435,12 +4435,26 @@ pub enum Effect {
     /// `apply_effect` with the same `source_obj_id`.
     ///
     /// **First-slice scope.** Resolve-time pick only; cast-time mode
-    /// routing through `state.resolving_modes` and `or_both=True`
-    /// (the "choose one or both" Charm variant) are deferred. The
-    /// mode list is bounded by parse rejection — `modes.is_empty()`
-    /// raises at register time so the resolve arm always has at least
-    /// one mode to fall through to.
-    ChooseOneMode { modes: Vec<Effect> },
+    /// routing through `state.resolving_modes` is deferred to Cycle 1
+    /// of the ModalChooseOne envelope substrate. The mode list is
+    /// bounded by parse rejection — `modes.is_empty()` raises at
+    /// register time so the resolve arm always has at least one mode
+    /// to fall through to.
+    ///
+    /// **`or_both` (scour-for-scrap-slice, 2026-05-21).** When `true`,
+    /// the printed shape is the "choose one or both" Charm variant —
+    /// the controller may pick a 1- or 2-element subset of modes
+    /// (mirrors Python's `ModalChooseOne(or_both=True)` at
+    /// `combinators.py:1119`). When `false` (the back-compat default
+    /// for every pre-`or_both` registered ChooseOneMode), the printed
+    /// shape is plain "choose one". Carried as a parse + to_pydict
+    /// field for round-trip with the Python source-of-truth; the
+    /// cast-time bind (`cast_spell_noncreature`) and the resolve-time
+    /// dispatch (`Effect::ChooseOneMode` arm) read it to gate the
+    /// multi-pick path. Defaulted to `false` on every existing
+    /// `ChooseOneMode { modes }` construction site (back-compat
+    /// byte-identical for non-`or_both` modal spells).
+    ChooseOneMode { modes: Vec<Effect>, or_both: bool },
     /// **Round 28 if-you-do wrapper.** "[do_action]; if you do,
     /// [then_action]." Mirrors Python's `IfYouDo(do_action,
     /// then_action)` (combinators.py:560, 7+ EoE cards) in its
@@ -9467,7 +9481,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 })?;
                 parsed_modes.push(parse_effect(mode_dict)?);
             }
-            Ok(Effect::ChooseOneMode { modes: parsed_modes })
+            // **scour-for-scrap-slice (2026-05-21).** Optional
+            // `or_both: bool` field. Defaults to `false` so every pre-
+            // widen registered ChooseOneMode parses byte-identical.
+            // Scour for Scrap (and any future or_both Charm) emits
+            // `{"kind": "choose_one_mode", "or_both": true, ...}`.
+            let or_both: bool = match dict.get_item("or_both")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "choose_one_mode.or_both must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            Ok(Effect::ChooseOneMode { modes: parsed_modes, or_both })
         }
         "put_charge_counters_on_self" => {
             let amount: i32 = match dict.get_item("amount")? {
@@ -12665,13 +12692,22 @@ pub(crate) fn effect_to_pydict<'py>(
             // variant; no payload fields beyond `kind`.
             d.set_item("kind", "draw_cards_and_lose_life_equal_to_resolving_damage")?;
         }
-        Effect::ChooseOneMode { modes } => {
+        Effect::ChooseOneMode { modes, or_both } => {
             d.set_item("kind", "choose_one_mode")?;
             let mode_dicts: Vec<Bound<'_, PyDict>> = modes
                 .iter()
                 .map(|m| effect_to_pydict(py, m))
                 .collect::<PyResult<Vec<_>>>()?;
             d.set_item("modes", mode_dicts)?;
+            // **scour-for-scrap-slice (2026-05-21).** Emit `or_both`
+            // ONLY when `true` so every pre-widen ChooseOneMode dict
+            // round-trips byte-identical (the parse arm defaults the
+            // missing field to `false`; this asymmetry is intentional
+            // and mirrors the `granted_keywords`-when-non-empty idiom
+            // a few siblings above).
+            if *or_both {
+                d.set_item("or_both", true)?;
+            }
         }
         Effect::IfYouDo { do_action, then_action } => {
             d.set_item("kind", "if_you_do")?;

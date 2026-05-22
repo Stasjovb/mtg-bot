@@ -109,6 +109,56 @@ impl GameState {
         self.stack.last().and_then(|item| item.chosen_mode_idx)
     }
 
+    /// **ModalChooseOne envelope — scour-for-scrap-slice (Cycle 1
+    /// widen, 2026-05-21).** Read the cast-time-bound multi-pick
+    /// mode-index subset of the top stack item. Returns `Some(vec)`
+    /// if the top item carries a multi-pick bind (an or_both=true
+    /// modal spell cast through `cast_spell_noncreature`), `None` if
+    /// the top item has no multi-pick bind (every pre-widen modal +
+    /// non-modal spell — the single-pick `stack_top_chosen_mode_idx`
+    /// sibling reads those) OR the stack is empty.
+    ///
+    /// Mirrors the `stack_top_chosen_mode_idx` getter's contract /
+    /// rationale (additive surface — `peek_top_of_stack` /
+    /// `stack_snapshot` dict surfaces are pinned to their existing
+    /// shape; a dedicated getter avoids breaking those pins).
+    /// Returns a CLONED `Vec<u8>` (typically 0-2 entries) so the
+    /// caller owns its read.
+    fn stack_top_chosen_mode_idxs(&self) -> Option<Vec<u32>> {
+        // Convert Vec<u8> -> Vec<u32> at the wire boundary because
+        // PyO3 maps `Vec<u8>` to Python `bytes`, not `list[int]`.
+        // The internal storage stays Vec<u8> (matches the StackItem
+        // schema); the cross-language read returns a list[int].
+        self.stack
+            .last()
+            .and_then(|item| item.chosen_mode_idxs.as_ref())
+            .map(|v| v.iter().map(|x| *x as u32).collect())
+    }
+
+    /// **scour-for-scrap-slice Cycle 1 widen (2026-05-21).** Synthetic-
+    /// test setter for the top stack item's multi-pick mode slot.
+    /// Mirrors the synthetic `push_to_stack_with_target` shape: the
+    /// production cast-time bind always picks all modes (the no-agent
+    /// default), but synthetic tests need to override the subset to
+    /// validate sub-subset / out-of-range / empty-subset resolve
+    /// semantics. No-op when the stack is empty.
+    ///
+    /// **Production safety.** Never called from production code paths
+    /// (the cast-time bind sets it once at push time; the resolver
+    /// reads it during apply_effect; no re-binding mid-resolve). The
+    /// setter exists solely for the substrate test surface.
+    fn set_stack_top_chosen_mode_idxs(&mut self, idxs: Vec<u32>) {
+        // Accept Vec<u32> at the wire boundary (mirror of the
+        // getter's `Vec<u32>`) and downcast each entry to u8 for
+        // the storage shape. Out-of-range u8 entries silently
+        // saturate at 255 — the resolve arm clamps to
+        // modes.len()-1 anyway.
+        if let Some(item) = self.stack.last_mut() {
+            let internal: Vec<u8> = idxs.iter().map(|x| *x as u8).collect();
+            item.chosen_mode_idxs = Some(internal);
+        }
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the

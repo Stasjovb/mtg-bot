@@ -1195,6 +1195,29 @@ pub struct StackItem {
     /// `Option<Vec<u8>>` (or a fixed-arity `[u8; 2]` sibling) when
     /// the `or_both` lane lands.
     pub chosen_mode_idx: Option<u8>,
+    /// **ModalChooseOne envelope — scour-for-scrap-slice (Cycle 1
+    /// widen, 2026-05-21).** Multi-pick widening of `chosen_mode_idx`
+    /// for `ModalChooseOne(or_both=True)` cards (Scour for Scrap and
+    /// any future Charm-shape). When `Some(vec)`, the resolve arm
+    /// dispatches EACH chosen mode in supplied order (CR 700.2d —
+    /// modes resolve in the controller-picked order). When `None`,
+    /// the resolve arm falls through to the legacy single-pick path
+    /// via `chosen_mode_idx` (back-compat byte-identical for every
+    /// pre-widen modal cast).
+    ///
+    /// **Why a separate field instead of widening `chosen_mode_idx`
+    /// to `Vec<u8>`.** The single-pick field has 26+ read sites
+    /// (state_ops_cast, state_ops_resolve, state_ops_stack, test
+    /// modules). An additive sibling keeps every existing call site
+    /// byte-identical while letting the multi-pick path opt in via
+    /// `cast_spell_noncreature`'s `or_both` detector. Refactoring
+    /// the single-pick field into `Vec<u8>` is the natural Cycle 2
+    /// follow-up once the additive substrate has bedded in; the
+    /// honest-stop discipline prefers a clean additive landing here.
+    ///
+    /// **Default `None` everywhere** (every pre-widen StackItem
+    /// constructor + back-compat synthetic test pushes).
+    pub chosen_mode_idxs: Option<Vec<u8>>,
 }
 
 impl StackItem {
@@ -1215,6 +1238,10 @@ impl StackItem {
             // variant); default `None` is back-compat-correct for
             // every pre-cycle non-modal spell.
             chosen_mode_idx: None,
+            // **scour-for-scrap-slice Cycle 1 widen (2026-05-21).**
+            // The multi-pick sibling is `None` here too — same
+            // back-compat reasoning.
+            chosen_mode_idxs: None,
         }
     }
 
@@ -1261,6 +1288,9 @@ impl StackItem {
             // Tier-A single-target and Phase-2 2-slot arms) is
             // non-modal, so the default `None` is back-compat.
             chosen_mode_idx: None,
+            // scour-for-scrap-slice Cycle 1 widen — `None` for the
+            // non-or_both target-binding pathway.
+            chosen_mode_idxs: None,
         }
     }
 
@@ -1300,6 +1330,53 @@ impl StackItem {
             target_obj_id,
             target_obj_id_2,
             chosen_mode_idx,
+            // scour-for-scrap-slice Cycle 1 widen: the single-pick
+            // constructor leaves the multi-pick sibling `None`; the
+            // dedicated multi-pick constructor below (one slot down)
+            // takes the inverse path (sets `chosen_mode_idxs`, leaves
+            // `chosen_mode_idx` `None`).
+            chosen_mode_idxs: None,
+        }
+    }
+
+    /// **ModalChooseOne envelope — scour-for-scrap-slice (Cycle 1
+    /// widen, 2026-05-21).** Spell-shape constructor that carries the
+    /// cast-time-picked SUBSET of mode indices for a
+    /// `ModalChooseOne(or_both=True)` spell (Scour for Scrap and any
+    /// future Charm-shape).
+    ///
+    /// Mirrors `new_spell_with_targets_and_mode` but takes a vec of
+    /// chosen mode indices instead of a single Option. The single-
+    /// pick sibling stays in place for non-`or_both` modal spells;
+    /// this constructor is opt-in via `cast_spell_noncreature`'s
+    /// `or_both` detector (which sees `Effect::ChooseOneMode { ...,
+    /// or_both: true }` and picks the all-modes default for the
+    /// no-agent / deterministic-first fallback).
+    ///
+    /// **Mutual-exclusion contract.** The single-pick
+    /// `chosen_mode_idx` is left `None` so the resolve arm reads the
+    /// multi-pick slot first (its precedence rule is "multi-pick wins
+    /// when set"); the legacy single-pick path is unaffected.
+    pub(crate) fn new_spell_with_targets_and_modes(
+        source_obj_id: u32,
+        controller: u8,
+        target_obj_id: Option<u32>,
+        target_obj_id_2: Option<u32>,
+        chosen_mode_idxs: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::Spell,
+            trigger_payload: None,
+            target_obj_id,
+            target_obj_id_2,
+            // Mutual-exclusion: when the multi-pick path is active,
+            // leave the single-pick slot `None`. The resolve arm
+            // reads multi first; the legacy path is byte-identical
+            // for every non-`or_both` modal.
+            chosen_mode_idx: None,
+            chosen_mode_idxs,
         }
     }
 
@@ -1341,6 +1418,10 @@ impl StackItem {
             // (the path that predates this slice); the cast-time
             // bind only fires on the spell-cast path per CR 601.2e.
             chosen_mode_idx: None,
+            // scour-for-scrap-slice Cycle 1 widen: same Spell-kind-
+            // only rationale — the multi-pick slot is `None` for
+            // every trigger.
+            chosen_mode_idxs: None,
         }
     }
 
@@ -1377,6 +1458,8 @@ impl StackItem {
             target_obj_id_2: None,
             // ModalChooseOne envelope — Cycle 1: Spell-kind-only.
             chosen_mode_idx: None,
+            // scour-for-scrap-slice Cycle 1 widen: Spell-kind-only.
+            chosen_mode_idxs: None,
         }
     }
 }
@@ -2517,6 +2600,21 @@ pub struct GameState {
     /// game state pre- and post-resolve produces the same digest
     /// regardless of intermediate mode-index swaps.
     pub current_resolve_chosen_mode_idx: Option<u8>,
+    /// **ModalChooseOne envelope — scour-for-scrap-slice (Cycle 1
+    /// widen, 2026-05-21).** Multi-pick transient mirror of
+    /// `StackItem.chosen_mode_idxs` (the multi-pick sibling of
+    /// `chosen_mode_idx`). Bracketed by the stack resolver — set
+    /// from `top.chosen_mode_idxs` before the per-effect
+    /// `apply_effect` fan-out and restored after. When `Some(vec)`,
+    /// the `Effect::ChooseOneMode` resolve arm dispatches each chosen
+    /// mode in order via `apply_effect_pub_with_controller`; when
+    /// `None`, the arm falls back to the legacy single-pick
+    /// `current_resolve_chosen_mode_idx` path (back-compat with the
+    /// pre-widen Cycle-2 resolve dispatch).
+    ///
+    /// Transient like its single-pick sibling; not serialized into
+    /// the fingerprint.
+    pub current_resolve_chosen_mode_idxs: Option<Vec<u8>>,
 }
 
 impl Clone for GameState {
@@ -2589,6 +2687,9 @@ impl Clone for GameState {
             // by construction, so any clone taken mid-resolve still
             // sees a deterministic snapshot.
             current_resolve_chosen_mode_idx: self.current_resolve_chosen_mode_idx,
+            // scour-for-scrap-slice Cycle 1 widen: transient multi-
+            // pick slot. Vec<u8> clone is cheap (typically 0-2 idxs).
+            current_resolve_chosen_mode_idxs: self.current_resolve_chosen_mode_idxs.clone(),
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -3378,5 +3479,10 @@ pub fn make_synthetic_state(
         // call (the resolve arm reads it; the swap is save → set →
         // restore-bracketed like its payload-target sibling).
         current_resolve_chosen_mode_idx: None,
+        // scour-for-scrap-slice Cycle 1 widen: transient multi-pick
+        // mode-index slot. `None` until the resolver swaps in
+        // `top.chosen_mode_idxs` for the multi-pick (or_both=True)
+        // dispatch window.
+        current_resolve_chosen_mode_idxs: None,
     }
 }
