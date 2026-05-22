@@ -1853,6 +1853,94 @@ pub enum Effect {
     /// `DestroyTargetArtifactEnchantmentOrFlyingCreature` Tier-A
     /// unit-variant convention.
     ExorciseEffect,
+    /// **Close Encounter — additional-cost-choice closure (Cycle 3,
+    /// 2026-05-21; ~16,098 17lands decks — highest-deck-count BLOCKED
+    /// card in the substrate-gated tier).** `{1}{G}` Instant:
+    /// "As an additional cost to cast this spell, choose a creature
+    /// you control or a warped creature card you own in exile.
+    /// Close Encounter deals damage equal to the power of the chosen
+    /// creature or card to target creature."
+    ///
+    /// Mirrors Python's `CloseEncounterEffect`
+    /// (`effects/bespoke.py:1065`) — a parameterless dataclass that
+    /// reads `state.resolving_additional_cost_choice_id` at resolve
+    /// time to look up the cast-time-chosen creature/card, then
+    /// deals damage equal to that object's power to the bound
+    /// target creature.
+    ///
+    /// **Field-free unit variant** (the
+    /// `ExorciseEffect` / `DiplomaticRelationsEffect` /
+    /// `CutPropulsionEffect` idiom — the closest siblings). No dict
+    /// payload — the additional-cost choice carrier is the StackItem's
+    /// `additional_cost_choice_id` (Cycle 1 substrate), swapped into
+    /// `state.current_resolve_additional_cost_choice_id` (Cycle 1
+    /// resolve-time transient) by the resolver. The single damage-
+    /// target carrier is the StackItem's `target_obj_id`, swapped
+    /// into `state.current_resolve_payload_target_id` (the
+    /// established Tier-A single-target payload-target convention).
+    /// Python's `CloseEncounterEffect` carries no constructor
+    /// parameters.
+    ///
+    /// **Resolve semantics (mirrors `CloseEncounterEffect.resolve` at
+    /// `effects/bespoke.py:1094-1128` byte-equal to the SoT):**
+    /// 1. Read the cast-time-bound damage-target id from
+    ///    `state.current_resolve_payload_target_id` (the established
+    ///    Tier-A payload-target convention; CR 608.2b). When `None`
+    ///    (synthetic-test fallback) walk both bfs in
+    ///    `bf_iter_etb_sorted` order picking the first Creature.
+    /// 2. Re-validate the target at resolve (CR 608.2b): the target
+    ///    must still be on a battlefield AND its printing must be a
+    ///    Creature. Illegal target → silent fizzle, mirroring
+    ///    `CloseEncounterEffect.resolve`'s `if kind != "creature":
+    ///    return` short-circuit.
+    /// 3. Read the cast-time-bound additional-cost choice id from
+    ///    `state.current_resolve_additional_cost_choice_id` (the
+    ///    Cycle 1 transient). `None` → silent no-op (Python's
+    ///    `if chosen_id is None: return`); the additional-cost flag
+    ///    wasn't set on the printing, so the resolve arm is a
+    ///    fallback no-op (the substrate is parity-NEUTRAL for non-
+    ///    Close-Encounter cards).
+    /// 4. Look up the chosen object:
+    ///    a. **Battlefield branch**: scan both players' battlefields
+    ///       for the chosen id. If found, use EFFECTIVE power
+    ///       (`read_doubling_power`: printed + ueot_base_pt_override
+    ///       + counters + ueot_power_bonus) — mirrors Python's
+    ///       `effective_power(state, chosen)` at `:1112`.
+    ///    b. **Exile-warped branch**: if not on a battlefield, scan
+    ///       the caster's exile for the id. If found AND the object
+    ///       is `warped`, use PRINTED power (`printing.power.unwrap
+    ///       _or(0)`) — mirrors Python's `chosen.printing.power or
+    ///       0` at `:1121`. The exile pool isn't on the battlefield,
+    ///       so continuous effects don't apply (per CR 110.1 — only
+    ///       permanents on the battlefield are subject to effects;
+    ///       the exiled card is an object in exile, not a
+    ///       permanent).
+    ///    c. **Gone branch**: chosen object not found in either zone
+    ///       (left the bf in response between cast and resolve). Use
+    ///       amount = 0 — mirrors Python's `amount = 0` fallback at
+    ///       `:1127`.
+    /// 5. Apply damage to the bound target via the proven
+    ///    `apply_damage_marker` body (`obj.damage.saturating_add
+    ///    (amount)` on the target object), then dispatch the
+    ///    DEALT_DAMAGE receiver-side event (mirrors Python's
+    ///    `_fire_enchanted_dealt_damage_triggers` call at the tail
+    ///    of `_apply_damage`).
+    ///
+    /// **Power read is EFFECTIVE on bf, PRINTED on exile.**
+    /// Asymmetric by design — the bf creature could carry +1/+1
+    /// counters or a UEOT pump that raises its effective power
+    /// above printed; the exile card has no such modifiers (the
+    /// card's `counters` are reset on zone change per the round-1
+    /// exile reset convention; UEOT modifiers don't apply outside
+    /// the battlefield per CR 110.1). Byte-equal with Python on
+    /// both legs.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `CloseEncounterEffect()` (field-free construction). Mirrors the
+    /// `ExorciseEffect` / `DiplomaticRelationsEffect` Tier-A unit-
+    /// variant convention.
+    CloseEncounterEffect,
     /// **Effect-uncovered single-gated tier — Emergency Eject
     /// (~6,291 17lands decks).** `{2}{W}` Instant: "Destroy target
     /// nonland permanent. Its controller creates a Lander token."
@@ -8330,6 +8418,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // differ (exile-not-destroy, power-4-not-flying).
             Ok(Effect::ExorciseEffect)
         }
+        "close_encounter_effect" => {
+            // Close Encounter — additional-cost-choice closure
+            // (Cycle 3, 2026-05-21; ~16,098 17lands decks). Unit
+            // variant — no required fields. The damage amount is
+            // intrinsic (derived from the chosen object's effective
+            // power on bf or printed power on exile, read at
+            // resolve via `state.current_resolve_additional_cost_
+            // choice_id`). The single damage-target rides on the
+            // StackItem (`current_resolve_payload_target_id`); the
+            // additional-cost choice rides on the StackItem
+            // (`additional_cost_choice_id`, Cycle 1 substrate). Extra
+            // keys ignored. Mirrors the `exorcise_effect` /
+            // `diplomatic_relations_effect` field-free unit-variant
+            // parser arm shape.
+            Ok(Effect::CloseEncounterEffect)
+        }
         "emergency_eject_effect" => {
             // Effect-uncovered single-gated tier — Emergency Eject
             // (~6,291 17lands decks). Single-field payload: the
@@ -12192,6 +12296,21 @@ pub(crate) fn effect_to_pydict<'py>(
             // rides on the StackItem
             // (`current_resolve_payload_target_id`).
             d.set_item("kind", "exorcise_effect")?;
+        }
+        Effect::CloseEncounterEffect => {
+            // Close Encounter — additional-cost-choice closure
+            // (Cycle 3, 2026-05-21; ~16,098 17lands decks). Unit
+            // variant — `kind` only (the Exorcise / Diplomatic
+            // Relations field-free to_dict idiom). Bidirectional
+            // with the `close_encounter_effect` parse arm + the
+            // `cross_engine.py` bridge arm + the `trajectory.py`
+            // reverse-serializer leaf. The single damage-target is
+            // NOT serialized here — it rides on the StackItem
+            // (`current_resolve_payload_target_id`). The
+            // additional-cost choice is also NOT serialized here —
+            // it rides on the StackItem
+            // (`additional_cost_choice_id`, Cycle 1 substrate).
+            d.set_item("kind", "close_encounter_effect")?;
         }
         Effect::EmergencyEjectEffect { token_printing_id } => {
             // Effect-uncovered single-gated tier — Emergency Eject.

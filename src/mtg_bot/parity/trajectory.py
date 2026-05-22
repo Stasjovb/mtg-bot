@@ -4118,6 +4118,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
+        CloseEncounterEffect,
         CutPropulsionEffect,
         DepressurizeEffect,
         DiplomaticRelationsEffect,
@@ -4387,6 +4388,30 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # grow, no hardcoded list — the §2 teeth).
         if isinstance(eff, ExorciseEffect):
             return {"kind": "exorcise_effect"}
+        # Close Encounter — additional-cost-choice closure (Cycle 3,
+        # 2026-05-21; ~16,098 17lands decks — highest-deck-count
+        # BLOCKED card in the substrate-gated tier). Pid-FREE
+        # covered unit variant — Rust's ``parse_effect``
+        # ``"close_encounter_effect"`` arm takes NO fields and the
+        # dict→Python bridge arm (cross_engine.py
+        # ``close_encounter_effect``) constructs the field-free
+        # ``CloseEncounterEffect()``. The damage amount is intrinsic
+        # (computed at resolve from the additional-cost-choice
+        # object's power, read via the
+        # ``additional_cost_choice_id`` StackItem channel — the
+        # Cycle 1 substrate landed in this same lane). The single
+        # damage-target rides on the StackItem
+        # (``current_resolve_payload_target_id``), NOT in this dict.
+        # No token pid → no :func:`_seat_token_printings` dependency;
+        # the round-trip is the clean ``exorcise_effect`` /
+        # ``diplomatic_relations_effect`` unit-leaf idiom. Adding
+        # this leaf — TOGETHER with the admit-predicate widen below
+        # (which lets the choose-your-creature additional-cost flag
+        # through when the covered+bridged ``CloseEncounterEffect``
+        # is the spell's effect) — is what flips Close Encounter
+        # into the spell-card-bridge admit set.
+        if isinstance(eff, CloseEncounterEffect):
+            return {"kind": "close_encounter_effect"}
         # **Phase-3 wrath-admit-widening (2026-05-21).** Pyroclasm-shape
         # mass-damage leaf — ``DealNDamageToEachCreature(amount)``. The
         # bridge arm at ``cross_engine.py::damage_each_creature`` REQUIRES
@@ -4810,13 +4835,26 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     # exposes NO ``additional_cost_choice`` attribute (verify-first
     # at the implement HEAD — the spec ADDENDUM's "warp_cost is not
     # None" Close-Encounter reason is ALSO stale: live
-    # ``Close Encounter.warp_cost is None``). The robust, load-
-    # bearing decline for Close Encounter is the covered-set gate
-    # below (``CloseEncounterEffect`` is NOT covered+bridged until an
-    # additional-cost-choice substrate ships it). The explicit attr
-    # reject is kept defensively (future-proof; harmless no-op while
-    # the attr is absent) so the rejection is not solely implicit via
-    # coverage if a future parser starts structuring the marker.
+    # ``Close Encounter.warp_cost is None``).
+    #
+    # **Close Encounter additional-cost-choice closure — Cycle 3
+    # admit widen (2026-05-21).** With the Rust ``Effect::Close
+    # EncounterEffect`` variant + the bridge arms + the resolve-arm
+    # consumer of ``current_resolve_additional_cost_choice_id``
+    # (the Cycle 1 substrate), the covered+bridged ``CloseEncounter
+    # Effect`` is what flips Close Encounter into the admit set.
+    # The covered-set gate below carries the load-bearing decline
+    # for the GENERIC additional-cost-choice case: cards whose
+    # ``additional_cost_choose_your_creature`` is True but whose
+    # ``spell_effect`` is NOT a covered class STILL stay declined
+    # (the round-trip-or-bail serializer gate). The
+    # ``additional_cost_choose_your_creature`` flag itself is NOT a
+    # decline reason — the Cycle 1+2 substrate handles the choice
+    # binding at cast time on both engines, byte-equal.
+    # The defensive ``additional_cost_choice`` attr reject below
+    # is kept (future-proof; harmless no-op while the attr is
+    # absent) so a future parser that structures the marker into a
+    # distinct attribute still gets positively declined.
     if getattr(printing, "additional_cost_choice", None) is not None:
         return False
     # **ModalChooseOne envelope — Cycle 4 (admit-predicate widen,

@@ -2196,22 +2196,111 @@ impl GameState {
             // pre-Cycle-5 behavior).
             bound_target
         };
+        // **Close Encounter additional-cost-choice envelope — Cycle 2
+        // (cast-pipeline binding, 2026-05-21).** When the cast spell's
+        // printing carries `additional_cost_choose_your_creature =
+        // true` (today: Close Encounter; the `printing.additional_
+        // cost_choose_your_creature` flag is the gate), scan the
+        // caster's eligible objects for the deterministic-first
+        // legal choice and bind onto the StackItem. Mirrors Python's
+        // no-agent fallback at `actions.py:1737-1745` exactly:
+        //   - Battlefield-creatures-you-control come first (in
+        //     `bf_iter_etb_sorted` order, restricted to
+        //     `o.controller == player_id` AND printing-is-creature).
+        //   - Then warped creature CARDS in the caster's exile (warp-
+        //     exile cards have `o.warped == true` set by the warp
+        //     ETB/cleanup path; the printing must still be a Creature).
+        // The first eligible id wins (Python's `options[0].id` no-
+        // agent fallback). `None` for every non-additional-cost
+        // spell (the flag short-circuits — back-compat byte-equal).
+        //
+        // **Cycle 2 scope.** This wires the cast-time bind onto the
+        // StackItem; the resolve-arm consumer is Cycle 3 (the
+        // `Effect::CloseEncounterEffect` arm reads
+        // `state.current_resolve_additional_cost_choice_id` to
+        // compute the damage amount). Today no Effect arm reads the
+        // field, so Cycle 2 is parity-NEUTRAL — every existing
+        // Tier-A / Phase-1 / Phase-2 / modal arm self-scans and
+        // ignores the additional-cost slot.
+        //
+        // **Why deterministic-first and not via the agent.** Rust's
+        // bench and cross-engine harness drive deterministic-first
+        // agents (the `_PickFirstLegalTargetAgent` campaign-wide
+        // convention); a real agent-driven choice would require a
+        // Decision-style callback (parallel to
+        // `submit_choose_mode_decision` for the resolve-time path).
+        // The deterministic-first pick matches Python's no-agent
+        // fallback byte-equal.
+        let bound_additional_cost_choice_id: Option<u32> = self
+            .registry
+            .lookup(printing_id)
+            .filter(|p| p.additional_cost_choose_your_creature)
+            .and_then(|_| {
+                // Battlefield creatures the caster controls first
+                // (Python `:1727-1730` — `options` is initialised
+                // with this filter).
+                let bf_pick = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        if o.controller != player_id {
+                            return None;
+                        }
+                        let p = self.registry.lookup(o.printing_id)?;
+                        if p.card_types.iter().any(|t| t == "Creature") {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
+                    });
+                if bf_pick.is_some() {
+                    return bf_pick;
+                }
+                // Then warped creature cards in the caster's exile
+                // (Python `:1731-1736` — `options.extend(o for o in
+                // p.exile if o.owner_id == player_id and o.warped
+                // and o.printing.is_creature)`).
+                let player_idx = idx;
+                self.players[player_idx]
+                    .exile
+                    .iter()
+                    .find_map(|o| {
+                        if !o.warped {
+                            return None;
+                        }
+                        // `o.owner == player_id` is implied by the
+                        // exile zone belonging to player_idx (Rust's
+                        // exile is a per-player zone — every object
+                        // in `players[idx].exile` is owned by player
+                        // idx, mirroring Python's `p.exile` per-
+                        // player list).
+                        let p = self.registry.lookup(o.printing_id)?;
+                        if p.card_types.iter().any(|t| t == "Creature") {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
+                    })
+            });
         // Delta 4: push the spell StackItem (card stays in hand —
         // Rust's pre-existing spell-stack model). The existing
         // `resolve_top_of_stack` drains it: applies `printing.effects`
         // with the target(s) swapped in, then
         // `move_source_post_resolve` sends the spell hand → graveyard
-        // (FREE — CR 608.2m). `new_spell_with_targets_and_mode`
+        // (FREE — CR 608.2m). `new_spell_with_targets_mode_and_addcost`
         // carries the cast-time-bound target(s) PLUS the cast-time-
-        // bound modal pick (`None` for every non-modal spell —
-        // back-compat byte-identical to the pre-cycle
-        // `new_spell_with_targets` push).
-        self.stack.push(crate::state::StackItem::new_spell_with_targets_and_mode(
+        // bound modal pick PLUS the cast-time-bound additional-cost
+        // choice (`None` for every non-additional-cost spell —
+        // back-compat byte-identical to the pre-Close-Encounter-
+        // cycle push, with the additional-cost field defaulting to
+        // `None` for every printing whose
+        // `additional_cost_choose_your_creature` flag is false).
+        self.stack.push(crate::state::StackItem::new_spell_with_targets_mode_and_addcost(
             obj_id,
             player_id,
             bound_target,
             bound_target_2,
             bound_mode_idx,
+            bound_additional_cost_choice_id,
         ));
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.

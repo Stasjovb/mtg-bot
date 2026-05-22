@@ -9725,7 +9725,7 @@ Gaps on Rust side (each a multi-cycle subsystem lane):
 landing first to amortize the X-value subsystem). 2,238 17lands
 decks.
 
-### 2. Close Encounter — additional-cost runtime state-channel subsystem missing on Rust
+### 2. Close Encounter — additional-cost runtime state-channel subsystem (CLOSED 2026-05-21, all 3 cycles landed)
 
 Oracle: `{1}{G}` Instant — "As an additional cost to cast this
 spell, choose a creature you control or a warped creature card you
@@ -9738,41 +9738,84 @@ Python parses to `CloseEncounterEffect()` (bespoke unit class;
 object's effective power, then deals that much damage to the
 single target creature.
 
-Gaps on Rust side:
-1. **`resolving_additional_cost_choice_id` runtime channel** — a
-   new `GameState` field that the cast-pipeline writes at cost-pay
-   time and the resolve arm reads at resolve time. Rust today has
-   `printing.additional_cost_choose_your_creature` (a printing-level
-   bool — `cards.rs:6962`) and a legality gate
-   (`state_ops_legal.rs:1313`), but NO runtime state channel that
-   threads the CHOICE (the chosen object id) from cost-pay through
-   to resolve. Needs:
-   - `StackItem.additional_cost_choice_id: Option<u32>` field (the
-     chosen object's id, set at cast time).
-   - `state.current_resolve_additional_cost_choice_id` bracket
-     around resolve (mirrors the existing `current_resolve_kicked`
-     / `current_resolve_x_value` shape).
-   - Cast-pipeline plumbing that writes the choice into the
-     StackItem at cost-pay time (the choice is a `PendingDecision`
-     pump cycle the cast pipeline doesn't currently emit).
-2. **Effective-power-of-chosen-object resolver** — Rust's existing
-   damage arms read `target.power` from the StackItem's bound
-   target; this card's damage amount is sourced from a SECOND
-   object (the additional-cost choice), which may be on the
-   battlefield OR in the caster's exile (warped creature card —
-   exile pool reads printed power, not effective power). Needs a
-   new helper `effective_power_or_printed(state, obj_id) -> i32`
-   that walks both zones.
-3. **New `Effect::CloseEncounterEffect` variant** + parse +
-   to_pydict + resolve arms; bridge round-trip; admit auto-join
-   blocked until items (1) + (2) ship. ~200 LoC + 4 cross-engine
-   probes.
+**Status**: **CLOSED via `feature/close-encounter-substrate`
+(2026-05-21).** All three cycles landed:
 
-**Estimated cost**: 2-3 cycles (the additional-cost runtime channel
-is the dominant lift; other cards in the EoE pool that print
-additional-cost choose-a-creature ride the same substrate so the
-amortization is per-channel not per-card). 16,098 17lands decks —
-the highest deck count among the six candidates.
+1. **Cycle 1 LANDED — runtime state-channel substrate**:
+   - `StackItem.additional_cost_choice_id: Option<u32>` field added
+     at `rust/src/state.rs` (the cast-time-bound choice id).
+   - `GameState.current_resolve_additional_cost_choice_id:
+     Option<u32>` transient added at `rust/src/state.rs` (the
+     resolve-time mirror).
+   - Save → set → restore swap in both `resolve_top_of_stack` and
+     `resolve_top_of_stack_pause` at `rust/src/state_ops_resolve.rs`
+     bracketing the per-effect `apply_effect` fan-out — mirrors
+     Python's `state.resolving_additional_cost_choice_id =
+     item.additional_cost_choice_id` swap at `actions.py:2711` and
+     the `finally`-block `None` restore at `:2795`.
+   - Dedicated PyO3 getter `stack_top_additional_cost_choice_id()`
+     at `rust/src/state_ops_stack.rs` (parallel to
+     `stack_top_chosen_mode_idx` — the back-compat-stable surface).
+2. **Cycle 2 LANDED — cast-pipeline binding**: in
+   `cast_spell_noncreature` (`rust/src/state_ops_cast.rs`), when
+   `printing.additional_cost_choose_your_creature == true`, scan
+   the caster's battlefield-creatures-they-control first, then
+   warped-creature exile cards owned by the caster, and bind the
+   deterministic-first eligible id onto the StackItem. Mirrors
+   Python's no-agent fallback at `actions.py:1737-1745` byte-equal.
+   New StackItem constructor
+   `new_spell_with_targets_mode_and_addcost` carries the choice id
+   alongside the existing target + mode-pick slots; the prior
+   `new_spell_with_targets_and_mode` constructor was REMOVED (clean
+   replacement — no-fallback-hybrid discipline).
+3. **Cycle 3 LANDED — Effect variant + bridge + admit + flip**:
+   - `Effect::CloseEncounterEffect` field-free unit variant at
+     `rust/src/cards.rs` + parse arm `"close_encounter_effect"` +
+     `to_pydict` arm (mirrors `ExorciseEffect` /
+     `DiplomaticRelationsEffect` unit-variant idiom).
+   - Resolve arm at `rust/src/state_ops_resolve.rs` beside the
+     `ExorciseEffect` sibling: reads bound target via
+     `current_resolve_payload_target_id`; reads bound additional-
+     cost choice via `current_resolve_additional_cost_choice_id`;
+     computes amount from chosen object's EFFECTIVE power on a bf
+     OR PRINTED power on caster's exile (warped). Silent fizzle on
+     missing target / missing choice / amount<=0. Mirrors Python's
+     `CloseEncounterEffect.resolve` at `bespoke.py:1094-1128`
+     byte-equal: same bf-vs-exile branch, same `effective_power`
+     vs `printing.power or 0` power source.
+   - Legality predicate at `rust/src/state_ops_legal.rs` —
+     ANY-creature scan (mirrors Python
+     `CloseEncounterEffect.legal_targets`).
+   - Bridge: `cross_engine.py` `close_encounter_effect` dict→Python
+     arm + `trajectory.py` `_python_spell_effect_to_dict` `_leaf`
+     arm emitting `{"kind": "close_encounter_effect"}` +
+     admit-predicate widen (the `additional_cost_choose_your_
+     creature` flag is no longer a decline reason — the Cycle 1+2
+     substrate handles the binding byte-equal on both engines).
+   - Real-EoE byte-equal probe
+     `test_cross_engine_real_eoe_close_encounter_damage_parity` at
+     `tests/test_close_encounter_parity.py` pins the full lever
+     flip. Close Encounter moved from BLOCKED-subsystem-gated to
+     PROBED.
+
+**Impact**: 16,098 17lands decks — the highest deck count among
+the six BLOCKED-substrate-gated candidates as of the
+"Next-tractable-substrate hexad characterization" (the lane
+brief). Reverse serializer leaf grows the admit set; covered-set
+gate now includes `CloseEncounterEffect`. The additional-cost
+substrate (Cycles 1+2) is REUSABLE — future siblings carrying
+`additional_cost_choose_your_creature` (none on the current EoE
+live surface, but the substrate is in place for any future card
+that prints the rider) ride the same channel byte-equal.
+
+**Asymmetric power read documented**: EFFECTIVE power on bf
+(folds counters / UEOT modifiers via `read_doubling_power`) vs
+PRINTED power on exile (the card is not on the battlefield;
+continuous effects don't apply per CR 110.1). Mirrors Python's
+`effective_power(state, chosen)` vs `chosen.printing.power or 0`
+branch at `bespoke.py:1112-1121`. The exile pool's `counters`
+field is also reset on the bf→exile transition per the round-1
+exile reset convention.
 
 ### 3. Scout for Survivors — multi-target admit-gate Phase 4 widen + sum-MV-budget resolve substrate
 
@@ -9959,8 +10002,13 @@ are local additions). 6,434 17lands decks.
   control-change-UEOT subsystem (C1-C3 of the same triad lane).
 - Scout for Survivors + Pull Through the Weft + Archenemy's Charm
   mode 2 share the multi-target admit-gate Phase 4 widen.
-- Close Encounter is the only candidate with a standalone subsystem
-  gap (the additional-cost runtime channel; no current EoE sibling).
+- Close Encounter was the only candidate with a standalone
+  subsystem gap (the additional-cost runtime channel; no current
+  EoE sibling). **CLOSED 2026-05-21
+  (`feature/close-encounter-substrate`)** — all 3 cycles landed,
+  card flipped from BLOCKED-subsystem-gated to PROBED; the
+  additional-cost substrate (Cycles 1+2) is REUSABLE for any
+  future card printing the choose-your-creature additional cost.
 - Scour for Scrap is the only candidate gated on a Cycle-internal
   widening (or_both); the Cycle 1 widen amortizes across any future
   or_both modal.

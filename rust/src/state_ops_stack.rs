@@ -109,6 +109,28 @@ impl GameState {
         self.stack.last().and_then(|item| item.chosen_mode_idx)
     }
 
+    /// **Close Encounter additional-cost-choice envelope — Cycle 2
+    /// (cast-pipeline binding getter, 2026-05-21).** Read-only getter
+    /// for the cast-time-bound `additional_cost_choice_id` field of
+    /// the top stack item. Returns `Some(id)` if the top item carries
+    /// a bound additional-cost choice (a spell whose printing's
+    /// `additional_cost_choose_your_creature == true` cast through
+    /// `cast_spell_noncreature`), `None` if the top item has no
+    /// choice bind OR the stack is empty.
+    ///
+    /// **Why a dedicated getter** — parallel to
+    /// [`Self::stack_top_chosen_mode_idx`] /
+    /// [`Self::stack_top_target_id`]: the existing
+    /// `peek_top_of_stack()` / `stack_snapshot()` dict surfaces are
+    /// pinned by pre-existing tests (the `{"source_obj_id",
+    /// "controller"}` 2-key shape); adding a key would break every
+    /// pin. A dedicated getter is additive — existing readers ignore
+    /// it; the Cycle 2 unit tests opt in explicitly. Mirrors Python's
+    /// `state.stack[-1].additional_cost_choice_id` access pattern.
+    fn stack_top_additional_cost_choice_id(&self) -> Option<u32> {
+        self.stack.last().and_then(|item| item.additional_cost_choice_id)
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the

@@ -1159,6 +1159,37 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // Close Encounter — additional-cost-choice closure
+            // (Cycle 3, 2026-05-21; ~16,098 17lands decks). ANY-
+            // creature scan (NOT controller-restricted). Mirrors
+            // Python `CloseEncounterEffect.legal_targets`
+            // (`effects/bespoke.py:1085-1092`: every Creature on
+            // `state.battlefield`) — the established
+            // `CutPropulsionEffect` / `DepressurizeEffect` ANY-
+            // creature shape. The damage amount is intrinsic to
+            // the resolve arm (read off the additional-cost-choice
+            // object's power), NOT a legality predicate. The
+            // additional-cost predicate (`additional_cost_choose_
+            // your_creature` flag) is checked separately by
+            // `additional_costs_payable` (the CR 601.2f gate).
+            Effect::CloseEncounterEffect => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Emergency Eject: any non-land permanent on either
             // battlefield, non-indestructible (Python
             // `DestroyTargetNonlandPermanentWithLanderForController
