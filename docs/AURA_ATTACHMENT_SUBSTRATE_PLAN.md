@@ -1001,6 +1001,67 @@ green; 223/223 ``tests/test_rust_*.py`` green.
   0 17lands decks each) — DEALT_DAMAGE+IsHost+Destroy
   EnchantedPermanent + ENTERS+Look/Sacrifice shapes. Each
   needs its own Effect variant slice.
+
+##### Verify-first walk findings (2026-05-21, `feature/aura-s4-multigate-walk-p1`)
+
+Direct inspection of the 3 multi-gated S4 carriers' printings
++ Rust `Effect` enum + bridge arm + Phase-3 safe-set
+(`_aura_triggers_are_phase3_safe` at
+`src/mtg_bot/parity/trajectory.py:5215-5304`) confirmed: **all
+3 cards are multi-cycle; honest-stop. No 1-cycle close.**
+
+* **Chorale of the Void** — ATTACKS+IsHost(attacker)+Reanimate is
+  the long pole. **NO Rust `Effect::Reanimate…DefendersGraveyard`
+  variant**; only `Effect::ReanimateOneExiledWithSourceWithCounters`
+  exists (`rust/src/cards.rs:4478`, exile-not-graveyard target).
+  Needs a new target_kind=`("graveyard_creature", id)`
+  enumerated across opponent graveyards + put-into-bf-tapped-
+  and-attacking primitive + `IsHost(subject="attacker")`
+  predicate-subject-slot expansion. End-step
+  `BEGINNING_OF_END_STEP+ControlledByYou+
+  SacrificeSelfUnlessVoidActive` half IS fully shipped Rust+
+  bridge (`cards.rs:4186`, `cross_engine.py:8745`,
+  `Predicate::ControlledByYou` at `cards.rs:6130`,
+  `Event::BeginningOfEndStep` at `cards.rs:5843`); admit-set
+  widen only blocks that half. **Estimate: ≥2 cycles.**
+* **Cracked Skull** — ENTERS+IsSelf+`TargetOpponentLookHand
+  MayDiscard` (`src/mtg_bot/effects/generic/discard.py:298`) is
+  the long pole. **NO Rust `Effect` variant**; needs one-way-
+  reveal substrate (per-card `reveal_to`), `may`-gate
+  via `Agent.choose_yes_no` (sibling-shape precedent:
+  `PendingDecision::MayDoChoice`), agent-driven directed-discard
+  target choice. DEALT_DAMAGE+IsHost+DestroyEnchantedPermanent
+  half IS fully shipped Rust+bridge (`cards.rs:3581`,
+  `cross_engine.py:6594`); admit-set widen only blocks that
+  half. **Estimate: ≥2 cycles.**
+* **Sporogenic Infection** — ENTERS+IsSelf+`TargetOpponent
+  SacrificesCreatureOtherThanEnchanted`
+  (`src/mtg_bot/effects/generic/opponent_punishers.py:68`) is
+  the long pole. **NO Rust `Effect` variant**; needs targeted-
+  player Effect that reads target's battlefield + filters
+  out the host (`state.resolving_source.attached_to`) +
+  routes through target opponent's `Agent.choose_sacrifice`.
+  DEALT_DAMAGE half IS shipped as Cracked Skull's. **Estimate:
+  ≥2 cycles.**
+
+**Common admit-set widen these 3 cards share.** Both
+`Event.DEALT_DAMAGE + IsHost(subject=None) +
+DestroyEnchantedPermanent` (Cracked Skull + Sporogenic Infection
+tails) and `Event.BEGINNING_OF_END_STEP + Controlled(YOU,
+subject=None) + SacrificeSelfUnlessVoidActive` (Chorale tail)
+have full Rust+bridge today and would only need adding to the
+Phase-3 safe set — but the gate is all-or-nothing per the §2
+discipline, so adding these alone flips no cards. The widen
+needs to ride a card-closing Effect slice for its leverage to
+realize.
+
+**Cheapest follow-on candidate.** Look-at-target-opponent's-hand
++ may-discard (Cracked Skull's ETB) — no new target_kind needed
+(target-player is an existing Rust shape) and the may-gate has
+direct sibling-shape precedent in
+`PendingDecision::TapPermanentChoice` (`cards.rs:4187+`,
+Command Bridge slice). Still bounded multi-step but the
+least-blast-radius next slice of the three.
 * **Moonlit Meditation full admit — CLOSED 2026-05-21** via
   approach (b) per-object Token-supertype override. The Rust
   ``moonlit_token_substitution`` helper plumbs the consumer

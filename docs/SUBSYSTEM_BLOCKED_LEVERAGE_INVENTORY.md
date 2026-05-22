@@ -1351,6 +1351,93 @@ sub-gates that the original `ce564786` inventory didn't surface:
   Skull / Sporogenic Infection each need their Aura half (shipped
   `35ede8b0`) + Effect-uncovered closure + nonsafe-trigger event bridge.
   These are now exactly that cleanly-decomposed.
+  * **Verify-first walk on `feature/aura-s4-multigate-walk-p1`
+    (2026-05-21) — all 3 multi-cycle; honest-stop, no PROBED flip.**
+    Per-card scope as resolved by direct inspection of the printings'
+    `triggered_abilities` tuples + Rust `Effect` enum / bridge arm /
+    `_aura_triggers_are_phase3_safe` Phase-3 safe set:
+    * **Chorale of the Void** (2,783 17lands decks). Two triggers.
+      (a) `Event.ATTACKS + IsHost(subject='attacker') +
+      ReanimateTargetCreatureCardFromDefendersGraveyard`
+      (`src/mtg_bot/effects/generic/graveyard.py:474-549`) —
+      **NO Rust `Effect` variant**; only
+      `Effect::ReanimateOneExiledWithSourceWithCounters` exists
+      (`rust/src/cards.rs:4478`), which is a wholly different
+      reanimate shape (exile, not defenders' graveyard). The Python
+      class targets `("graveyard_creature", id)` across all
+      opponent graveyards, brings the card on tapped-and-attacking
+      under the resolving controller, requires a NEW target_kind
+      in Rust + cross-graveyard target enumeration + put-into-
+      battlefield-tapped-and-attacking primitive (`obj.attacking =
+      True`, `obj.summoning_sick = False` — combat-loop reads
+      `attacking`). Also `IsHost(subject='attacker')` is a NEW
+      predicate-subject-slot shape not in the Phase-3 admit set
+      (only `subject=None` is admitted today). (b)
+      `Event.BEGINNING_OF_END_STEP + Controlled(_Controller.YOU,
+      subject=None) + SacrificeSelfUnlessVoidActive` — Rust
+      `Effect::SacrificeSelfUnlessVoidActive` IS shipped
+      (`cards.rs:4186`), bridge arm IS shipped
+      (`cross_engine.py:8745`), `Predicate::ControlledByYou` IS
+      shipped (`cards.rs:6130`), `Event::BeginningOfEndStep`
+      dispatch IS wired (`cards.rs:5843`); the EoT half is admit-
+      set-only. **Total: ≥2 cycles** (one Rust slice for the
+      ATTACKS reanimate Effect + target_kind + IsHost-attacker
+      subject expansion; one admit-set + cross-engine probe
+      cycle).
+    * **Cracked Skull** (650+ 17lands decks). Two triggers. (a)
+      `Event.ENTERS + IsSelf + TargetOpponentLookHandMayDiscard`
+      (`src/mtg_bot/effects/generic/discard.py:298-380`) — **NO
+      Rust `Effect` variant**. Python class involves the one-way-
+      reveal substrate (`reveal_to` per-card), a `may`-gate via
+      `Agent.choose_yes_no`, and an agent-driven directed-discard
+      target choice. Multiple decision-pump surfaces (look-at-
+      hand reveal, may-gate, nonland-card choice). (b)
+      `Event.DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent` —
+      Rust `Effect::DestroyEnchantedPermanent` IS shipped
+      (`cards.rs:3581`), bridge arm IS shipped
+      (`cross_engine.py:6594`), `Predicate::IsHost` IS shipped,
+      `Event::DealtDamage` dispatch IS wired (`cards.rs:5962`);
+      the dealt_damage half is admit-set-only. **Total: ≥2
+      cycles** (one Rust slice for look-at-hand Effect +
+      may-gate decision + directed-discard agent path; one
+      admit-set + cross-engine probe cycle).
+    * **Sporogenic Infection** (~500 17lands decks). Two triggers.
+      (a) `Event.ENTERS + IsSelf +
+      TargetOpponentSacrificesCreatureOtherThanEnchanted`
+      (`src/mtg_bot/effects/generic/opponent_punishers.py:68-144`)
+      — **NO Rust `Effect` variant**. Python class targets a
+      player ("player", id), excludes the Aura's host
+      (`attached_to` lookup at resolve), and routes through the
+      target opponent's own `Agent.choose_sacrifice` — a NEW
+      target_kind=`("player", id)` for an Effect that reads the
+      target's battlefield + filter-excludes the host. (b) Same
+      `Event.DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent`
+      tail as Cracked Skull (admit-set-only). **Total: ≥2
+      cycles** (one Rust slice for target-opponent-sacrifice-
+      other-than-host Effect + agent-driven sac choice; one
+      admit-set + cross-engine probe cycle).
+  * **Common admit-set widen these 3 cards would need.** Two
+    Phase-3-safe new shapes share the workload across the three
+    cards: `Event.DEALT_DAMAGE + IsHost(subject=None) +
+    DestroyEnchantedPermanent` (used by Cracked Skull and
+    Sporogenic Infection) + `Event.BEGINNING_OF_END_STEP +
+    Controlled(YOU) + SacrificeSelfUnlessVoidActive` (used by
+    Chorale of the Void). Both have full Rust+bridge coverage
+    today — the admit-set extension alone is tractable, but
+    cannot flip any of the 3 cards because each card's OTHER
+    trigger surface carries an uncovered Effect. The admit-set
+    widen would only matter once the first uncovered Effect
+    on each card lands.
+  * **Cheapest next slice (deferred from this walk).** Look-at-
+    target-opponent's-hand + may-discard (Cracked Skull's ETB) is
+    arguably the smallest of the three new Effect ports — it
+    has no new target_kind (target-player is already a Rust
+    target shape via several spell Effects) and the decision-
+    pump primitives (`PendingDecision`-style may-gate) have
+    sibling-shape precedent in the Command Bridge tap-permanent
+    cost-decision pump (`PendingDecision::TapPermanentChoice`,
+    `cards.rs:4187+`). Multi-step but bounded; a Round-N+1
+    candidate after the admit-set add lands the dealt_damage tail.
 * **warp_cost Phase 3 — CLOSED round-83 (2026-05-20).** The 3 Phase-3
   carriers (Bygone Colossus, Red Tiger Mechan, Timeline Culler) flipped
   to PROBED on `feature/warp-cost-phase-3`. The Phase 1/1.5/2 substrate
