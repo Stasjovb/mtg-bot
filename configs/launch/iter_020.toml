@@ -30,7 +30,12 @@ master_url = "http://desktop-j05412i:5198"
 # mac_url = "http://greggs-macbook-pro:5198"  # re-enable after Mac daemon recovery
 
 [aws]
-count = 4
+# On-demand for tonight: spot quota counter has multi-minute
+# eventual-consistency lag that bit us 3 times; on-demand quota
+# (16 vCPU = 2x c7a.2xlarge) is always-available. ~3x cost per
+# hour but reliable enough to actually finish the demo.
+market_type = "on_demand"
+count = 2
 instance_type = "c7a.2xlarge"
 az_fallback = ["us-east-1c", "us-east-1d", "us-east-1f"]
 storage_uri = "s3://mtg-bot-artifacts-630589799985/iter_020/"

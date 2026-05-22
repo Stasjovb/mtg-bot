@@ -247,6 +247,7 @@ def _render_runspec(
     az: str,
     count: int,
     user_data: bytes,
+    market_type: str = "spot",
 ) -> dict[str, Any]:
     """Read the template, substitute ``{{var}}`` placeholders, return
     the JSON dict ready for ``boto3.client('ec2').run_instances(**spec)``.
@@ -290,6 +291,17 @@ def _render_runspec(
     # check (the comment intentionally contains literal "{{var}}"
     # placeholder names as documentation).
     spec.pop("_comment", None)
+    # On-demand path: strip InstanceMarketOptions entirely. The
+    # template carries the spot block as the default; popping it
+    # leaves a vanilla on-demand run_instances call. Cheaper than
+    # maintaining two templates and one source of truth.
+    if market_type == "on_demand":
+        spec.pop("InstanceMarketOptions", None)
+    elif market_type != "spot":
+        raise FleetConfigError(
+            f"market_type must be 'spot' or 'on_demand'; got "
+            f"{market_type!r}",
+        )
     # Sanity: any un-substituted placeholders left in the live spec?
     # Catch the operator-facing typo case (template references a
     # placeholder we forgot to add to the substitutions dict) before
@@ -475,6 +487,7 @@ class FleetManager:
                 az=az,
                 count=self.config.count,
                 user_data=user_data_bytes,
+                market_type=self.config.market_type,
             )
             client = self._ec2(az=az)
             try:

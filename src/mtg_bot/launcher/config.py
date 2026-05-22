@@ -97,18 +97,25 @@ class ClusterSection:
 
 @dataclass
 class AwsSection:
-    """The ``[aws]`` section: spot-fleet shape.
+    """The ``[aws]`` section: AWS fleet shape (spot or on-demand).
 
     Parsed but only Phase B consumes it. ``az_fallback`` is the list
-    of availability zones to try in order when spot capacity is
+    of availability zones to try in order when capacity is
     unavailable. ``storage_uri`` is the bucket prefix workers upload
     artifacts to (``s3://bucket/prefix`` or ``file:///nfs/path``).
+    ``market_type`` selects spot vs on-demand: spot is cheaper but
+    can be reclaimed and is subject to the per-region spot quota
+    (32 vCPU on the default mtg-bot account today); on-demand is
+    ~3x more expensive but reliable and uses a separate quota
+    (16 vCPU). FleetManager pops ``InstanceMarketOptions`` from
+    the runspec when market_type=="on_demand".
     """
 
     count: int = 0
     instance_type: str = "c7i.4xlarge"
     az_fallback: list[str] = field(default_factory=list)
     storage_uri: Optional[str] = None
+    market_type: str = "spot"
 
 
 @dataclass
@@ -459,6 +466,11 @@ def _validate(cfg: LaunchConfig) -> None:
                 "false; supply at least one AZ for the launcher to "
                 "try (e.g. [aws].az_fallback = [\"us-east-1a\", "
                 "\"us-east-1b\"]).",
+            )
+        if cfg.aws.market_type not in {"spot", "on_demand"}:
+            raise LaunchConfigError(
+                f"aws.market_type must be 'spot' or 'on_demand'; got "
+                f"{cfg.aws.market_type!r}.",
             )
 
 

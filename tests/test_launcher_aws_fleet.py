@@ -42,6 +42,31 @@ from mtg_bot.launcher.config import AwsSection
 from mtg_bot.launcher.state import LaunchPaths
 
 
+def _seed_iam_instance_profile(name: str = "mtg-bot-spot-worker") -> None:
+    """Create the IAM role + instance profile that the production
+    runspec template references. moto starts each ``@mock_aws`` test
+    with a fresh IAM state; without seeding, ``ec2.run_instances``
+    raises NoSuchEntity on the IamInstanceProfile.Name validation.
+
+    The role + profile names match the production IAM (provisioned
+    via ``aws iam create-role mtg-bot-spot-worker`` on the live
+    account); tests that exercise launch_fleet via moto need the
+    same name so the template's hardcoded ``IamInstanceProfile.Name``
+    resolves.
+    """
+    trust = (
+        '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",'
+        '"Principal":{"Service":"ec2.amazonaws.com"},'
+        '"Action":"sts:AssumeRole"}]}'
+    )
+    iam = boto3.client("iam", region_name="us-east-1")
+    iam.create_role(RoleName=name, AssumeRolePolicyDocument=trust)
+    iam.create_instance_profile(InstanceProfileName=name)
+    iam.add_role_to_instance_profile(
+        InstanceProfileName=name, RoleName=name,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures: shared template + paths
 # ---------------------------------------------------------------------------
@@ -123,6 +148,51 @@ def test_render_runspec_missing_template_raises(tmp_path: Path):
         )
 
 
+def test_render_runspec_default_market_type_is_spot(
+    template_path: Path,
+):
+    """Default market_type='spot' keeps the InstanceMarketOptions
+    block from the template so AWS treats this as a spot request."""
+    spec = _render_runspec(
+        template_path,
+        instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+        count=1, user_data=b"#!/bin/bash\n",
+    )
+    assert "InstanceMarketOptions" in spec
+    assert spec["InstanceMarketOptions"]["MarketType"] == "spot"
+
+
+def test_render_runspec_on_demand_strips_spot_options(
+    template_path: Path,
+):
+    """market_type='on_demand' pops InstanceMarketOptions so the
+    same template renders an on-demand run_instances spec without
+    needing a second template file."""
+    spec = _render_runspec(
+        template_path,
+        instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+        count=1, user_data=b"#!/bin/bash\n",
+        market_type="on_demand",
+    )
+    assert "InstanceMarketOptions" not in spec
+    # Everything else (InstanceType, AMI, AZ, count, UserData, IAM
+    # profile) is still rendered identically -- on-demand only flips
+    # the market_type bit.
+    assert spec["InstanceType"] == "c7a.2xlarge"
+    assert spec["ImageId"] == "ami-x"
+    assert spec["Placement"]["AvailabilityZone"] == "us-east-1a"
+
+
+def test_render_runspec_invalid_market_type_raises(template_path: Path):
+    with pytest.raises(FleetConfigError, match="market_type"):
+        _render_runspec(
+            template_path,
+            instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+            count=1, user_data=b"#!/bin/bash\n",
+            market_type="reserved",
+        )
+
+
 def test_render_runspec_un_substituted_placeholder_raises(tmp_path: Path):
     """If the template has a typo (placeholder we don't substitute),
     the renderer must fail loudly before sending the spec to AWS."""
@@ -186,6 +256,7 @@ def test_launch_fleet_happy_single_az(
     paths: LaunchPaths, template_path: Path, user_data_path: Path,
 ):
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=3, az_fallback=["us-east-1a"])
     fm = FleetManager(
         config, paths,
@@ -245,6 +316,7 @@ def test_launch_fleet_az_fallback_second_az_succeeds(
     paths: LaunchPaths, template_path: Path,
 ):
     real_client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     wrapped = _AZFallbackClient(real_client, failing_azs=["us-east-1a"])
     config = _make_config(
         count=2,
@@ -274,6 +346,7 @@ def test_launch_fleet_all_azs_exhausted_raises(
     paths: LaunchPaths, template_path: Path,
 ):
     real_client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     wrapped = _AZFallbackClient(
         real_client, failing_azs=["us-east-1a", "us-east-1b", "us-east-1c"],
     )
@@ -390,6 +463,7 @@ def test_wait_for_healthy_happy_path(
     paths: LaunchPaths, template_path: Path,
 ):
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=2, az_fallback=["us-east-1a"])
     # Heartbeat stub: every URL returns IDLE.
     def http_get(url, *, timeout=5.0):
@@ -423,6 +497,7 @@ def test_wait_for_healthy_timeout(
     """An instance whose heartbeat never reaches IDLE raises after
     timeout_s with the bad instance IDs in the exception."""
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=2, az_fallback=["us-east-1a"])
     # All heartbeats time out (raise).
     def never_healthy(url, *, timeout=5.0):
@@ -467,6 +542,7 @@ def test_wait_for_healthy_unrecognized_state_keeps_polling(
     """An instance returning non-IDLE state (e.g. BUSY) doesn't count
     as healthy; the loop keeps polling until either IDLE or timeout."""
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=1, az_fallback=["us-east-1a"])
     call_count = {"n": 0}
 
@@ -497,6 +573,7 @@ def test_wait_for_healthy_skips_terminated_instances(
     before its heartbeat goes IDLE, wait_for_healthy must surface it
     as unhealthy rather than waiting forever."""
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=1, az_fallback=["us-east-1a"])
     fm = FleetManager(
         config, paths,
@@ -535,6 +612,7 @@ def test_wait_for_healthy_describe_instances_retry(
     """A transient describe_instances ClientError must be retried
     rather than aborting the whole wait loop."""
     real_client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=1, az_fallback=["us-east-1a"])
 
     class _FlakyDescribe:
@@ -582,6 +660,7 @@ def test_terminate_fleet_calls_ec2_and_updates_state(
     paths: LaunchPaths, template_path: Path,
 ):
     client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=2, az_fallback=["us-east-1a"])
     fm = FleetManager(
         config, paths,
@@ -618,6 +697,7 @@ def test_terminate_fleet_idempotent_recall(
     """A re-call after the first terminate must be a no-op (no
     duplicate EC2 calls, no field mutation)."""
     real_client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=1, az_fallback=["us-east-1a"])
 
     class _CountTerminate:
@@ -677,6 +757,7 @@ def test_terminate_fleet_swallows_client_error(
     but does NOT re-raise -- the launcher's finaliser is last-line
     cleanup and we'd rather over-log than block exit."""
     real_client = boto3.client("ec2", region_name="us-east-1")
+    _seed_iam_instance_profile()
     config = _make_config(count=1, az_fallback=["us-east-1a"])
 
     class _TerminateBoom:
