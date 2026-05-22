@@ -9432,26 +9432,95 @@ distinct subsystems, two of which Rust does not yet implement:
 **Estimated substrate cost**: a multi-cycle subsystem lane (3-5
 cycles, comparable to ModalChooseOne envelope), not a single
 per-card slice. Cycle list:
-- **C1** — `controller_override_until_cleanup` field + per-object
-  reset on bf entry + cleanup-step drain (~100 LoC across
-  `state.rs` / `state_ops_cleanup.rs`).
-- **C2** — `effective_controller_id` helper + re-route every
-  raw `o.controller_id` read site across `state_ops_legal.rs` /
-  `state_ops_combat.rs` / `state_ops_decisions.rs` /
-  `state_ops_actions.rs` (~200 LoC across 5+ files; high
-  cross-cutting risk).
-- **C3** — `Effect::GrantControlOfTargetUntilEOT { ... }` + parse
-  + to_pydict + resolve arms; bridge round-trip; per-card slice
-  for Systems Override (`{2}{R}` single-target sibling, in the
-  same BLOCKED-subsystem-gated list) closes alongside; ~150 LoC
-  + 4 cross-engine probes.
-- **C4** — `Effect::MutinousMassacre { pick: u8 }` (variant-
-  parameter shape — different from per-mode dispatch shape;
-  composes destroy-by-parity + grant-control-all + untap +
-  haste-grant); bridge round-trip; admit auto-join; ~200 LoC + 5
-  cross-engine probes. Could also expose a resolve-time agent
-  prompt via a new `PendingDecision::ChooseOddOrEven` (deferred to
-  C5 for a deterministic-first first slice).
+- **C1 — LANDED (2026-05-21, `feature/control-change-ueot-cycle-1`).**
+  Substrate-only:
+  - `controller_override: Option<u8>` field on Rust `GameObject`
+    (sibling of `controller_baseline`, `token_supertype_override`,
+    `ueot_modifiers` — `rust/src/state.rs`); back-compat default
+    `None`; NOT in the per-object fingerprint tuple, so pre-Cycle-1
+    pinned baselines stay byte-equal. Every GameObject construction
+    site (`make_object`, `make_state`, `load_deck`, every
+    `state_ops_resolve.rs` token mint / stack-object push, plus
+    `register_and_inject_object`) defaults the slot to `None`.
+  - `pub(crate) fn effective_controller_id(obj: &GameObject) -> u8`
+    helper at `rust/src/state_ops_cleanup.rs` — returns the
+    override if set, else `obj.controller`. Cycle 1 does NOT
+    reroute the raw `.controller` read sites through the helper
+    (that's Cycle 2's invasive cross-module rerouting); the helper
+    is `pub(crate)` so the Cycle 2 rerouting lands without
+    re-exporting an unstable surface.
+  - `fn effective_controller_id(&self, obj_id: u32)` Python-facing
+    method on `GameState` — walks both battlefields and returns the
+    effective controller for tests / future bridge-round-trip
+    surface symmetry with Python's `effective_controller`.
+  - `fn grant_control_change_ueot(&mut self, target_id, new_pid)`
+    PyO3 method on `GameState` — stamps the override; raises
+    `IndexError` on out-of-range pid; silent `False` no-op on a
+    missing battlefield permanent; idempotent same-controller
+    short-circuit (matches Python's defensive head-of-function
+    behavior); CoW-safe (Arc::make_mut on the affected
+    battlefield only).
+  - `fn clear_controller_overrides_all(&mut self)` PyO3 primitive
+    + integration into `cleanup_step_for_active_player` (CR 514.3
+    drain pass that resets every override back to `None`). The
+    cleanup summary dict gains a new
+    `controller_overrides_cleared: int` key alongside
+    `ueot_cleared` — pre-Cycle-1 callers using the old three keys
+    keep working. Same warm-path skip-on-empty + CoW shape as
+    `clear_ueot_modifiers_all`.
+  - Snapshot bridge: per-object `controller_override: int | None`
+    key in the bridge-stable dict shape (`object_to_pydict` in
+    `rust/src/state_ops_snapshot.rs`). Pre-substrate snapshots
+    observe `None` on every object (back-compat); only states that
+    mint an override observe the new field's effect.
+  - GameObject byte-size cap bumped from 80 to 96 bytes in
+    `tests/test_rust_engine_smoke.py::test_gameobject_byte_size_is_compact`
+    (the `Option<u8>` added 8 bytes with surrounding alignment;
+    observed size 88, cap 96 leaves one `Option<u32>`-slot of
+    headroom).
+  - Tests: `tests/test_control_change_ueot_cycle1.py` (17 tests
+    covering default + snapshot, grant + read, idempotent +
+    short-circuit, missing-target + invalid-pid validation,
+    cleanup drain + warm-path + standalone primitive, CoW invariant
+    for grant + drain, summary-key composition).
+
+  Cycle 1 is intentionally substrate-only; no live Effect mints
+  the override yet, so production self-play / cross-engine
+  trajectories are byte-equivalent to pre-Cycle-1 (back-compat
+  baseline). The Python ↔ Rust bridge round-trip is NOT wired in
+  Cycle 1 — Python keeps using its layer-2 `"control_change"`
+  registry + `effective_controller` walk; Rust's
+  `controller_override` field is the parallel storage shape that
+  Cycle 3 will bidirectionalize. The substrate is sufficient for
+  Cycle 4 to mint overrides locally and verify the override + drain
+  behavior in isolation; full Python-Rust agreement on a real
+  Mutinous-Massacre / Systems-Override trajectory requires both
+  Cycle 2 (reroute reads) and Cycle 3 (bridge round-trip).
+- **C2** — `effective_controller_id` re-route every raw
+  `o.controller_id` / `.controller` read site across
+  `state_ops_legal.rs` / `state_ops_combat.rs` /
+  `state_ops_decisions.rs` / `state_ops_actions.rs` to consult the
+  helper (~200 LoC across 5+ files; high cross-cutting risk; the
+  helper landed in Cycle 1 with `pub(crate)` visibility precisely
+  to gate this).
+- **C3** — Bridge round-trip: cross-engine snapshot pin that
+  Python's `obj.controller_id` (which is Python's layer-2
+  write-through cache) and Rust's `effective_controller_id(obj_id)`
+  agree byte-for-byte on every battlefield permanent. Per-object
+  `controller_override` snapshot key (landed in Cycle 1) is the
+  primary surface; the bridge translates Python's layer-2
+  `"control_change"` registry entry presence to Rust's
+  `controller_override: Some(pid)` on import.
+- **C4** — `Effect::GrantControlOfTargetUntilEOT { ... }` parse +
+  to_pydict + resolve arms; per-card slice for Systems Override
+  (`{2}{R}` single-target sibling). Then
+  `Effect::MutinousMassacre { pick: u8 }` (variant-parameter shape
+  — different from per-mode dispatch shape; composes destroy-by-
+  parity + grant-control-all + untap + haste-grant); bridge round-
+  trip; admit auto-join; ~200 LoC + 5 cross-engine probes. Could
+  also expose a resolve-time agent prompt via a new
+  `PendingDecision::ChooseOddOrEven` (deferred to C5 for a
+  deterministic-first first slice).
 - **C5** — Threaten / Act-of-Treason / Sothera’s Requiem are
   cross-set siblings (not in EoE; deferred but the substrate
   carries the same shape) + agent-prompt extension.
@@ -9781,8 +9850,10 @@ step.
 Gaps on Rust side: **identical** to Mutinous Massacre's
 control-change-UEOT subsystem (already characterized in the prior
 "Next-wrath-substrate triad" entry; C1-C3 there cover the shared
-substrate). The Spacecraft-conditional charge-counter rider is an
-additional per-card piece atop the shared substrate:
+substrate). **Cycle 1 of the shared substrate LANDED 2026-05-21
+(`feature/control-change-ueot-cycle-1`).** The Spacecraft-
+conditional charge-counter rider is an additional per-card piece
+atop the shared substrate:
 - **Spacecraft-conditional charge-counter put** — a new resolve
   branch that reads the target's `card_types`, sets ten charge
   counters if "Spacecraft" is present.
@@ -9794,9 +9865,11 @@ additional per-card piece atop the shared substrate:
 
 **Estimated cost**: 3-5 cycles (rides the Mutinous Massacre
 control-change lane's C1-C3 substrate; per-card slice is ~1
-cycle on top). 4,775 17lands decks. The control-change subsystem
-unlocks BOTH Systems Override AND Mutinous Massacre — the
-shared-amortization lane.
+cycle on top). **C1 substrate landed 2026-05-21**; C2 (reroute
+reads) / C3 (bridge round-trip) / C4 (Effect variants) remain.
+4,775 17lands decks. The control-change subsystem unlocks BOTH
+Systems Override AND Mutinous Massacre — the shared-amortization
+lane.
 
 ### 5. Archenemy's Charm — three-mode ModalChooseOne with multi-target + multi-mode-shape gaps
 

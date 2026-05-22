@@ -120,6 +120,22 @@ fn object_to_pydict<'py>(
         "token_supertype_override",
         obj.token_supertype_override,
     )?;
+    // **Control-change-UEOT substrate — Cycle 1 (2026-05-21).**
+    // Surface the per-object UEOT controller override so cross-engine
+    // harnesses can observe the Rust side stamp it (Cycle 3 wires the
+    // Python ↔ Rust round-trip; Cycle 4 mints the override from
+    // Mutinous-Massacre / Systems-Override resolution arms). Pre-
+    // substrate snapshots observe `None` on every object (back-compat
+    // default — unchanged from the pre-substrate dict), so the new
+    // key is additive but the value is invariant on snapshots that
+    // don't exercise the new mint path.
+    //
+    // Emitted as Python `None` when no override is active, or as the
+    // override controller's player id (`0` or `1`) when set.
+    match obj.controller_override {
+        Some(pid) => d.set_item("controller_override", pid)?,
+        None => d.set_item("controller_override", py.None())?,
+    }
     Ok(d)
 }
 

@@ -87,10 +87,40 @@
 
 use crate::state::{GameObject, GameState};
 use crate::state_ops_steps::PHASE_CLEANUP;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
+
+/// Read-side helper for the control-change-UEOT subsystem (Cycle 1).
+/// Returns the effective controller id of `obj`: the per-object
+/// `controller_override` if set, else `obj.controller` (the printed
+/// baseline / Aura-swapped controller cache).
+///
+/// Cycle 1 (this lane) provides the helper only — read sites in
+/// `state_ops_legal` / `state_ops_combat` / `state_ops_decisions` /
+/// `state_ops_actions` still read raw `obj.controller`. Cycle 2
+/// reroutes those call sites through this helper; Cycle 3 wires
+/// the bridge round-trip; Cycle 4 mints the override from
+/// Mutinous-Massacre / Systems-Override resolution arms. The
+/// helper is `pub(crate)` so future cycles' module-internal call
+/// sites can adopt it without exporting an unstable surface.
+///
+/// Mirrors Python's `effective_controller(state, obj)` in
+/// `src/mtg_bot/game.py:999` — the layer-2 control-change registry
+/// walk that backs Python's source-of-truth control-change-UEOT
+/// implementation. The Python side keeps `obj.controller_id` as a
+/// write-through cache of `effective_controller`'s value (eager
+/// invalidation at every grant + cleanup site); Rust's
+/// `controller_override` field keeps the override as the
+/// source-of-truth and the helper is the read path. The
+/// observable surface is identical from a snapshot perspective —
+/// both engines answer "who controls X right now" with the same
+/// id — but the storage shape differs (Python: registry list +
+/// cache; Rust: per-object override field).
+pub(crate) fn effective_controller_id(obj: &GameObject) -> u8 {
+    obj.controller_override.unwrap_or(obj.controller)
+}
 
 #[pymethods]
 impl GameState {
@@ -184,6 +214,180 @@ impl GameState {
         cleared
     }
 
+    /// **Control-change-UEOT subsystem — Cycle 1 (2026-05-21).**
+    /// Drain every per-object `controller_override` back to `None`
+    /// across both players' battlefields. CR 514.3 / CR 613 layer-2
+    /// "until end of turn" expiration for control-changing effects
+    /// (Mutinous Massacre, Systems Override, Threaten / Act of
+    /// Treason shape).
+    ///
+    /// Returns the number of objects whose `controller_override`
+    /// was `Some(_)` before draining. Skips the `Arc::make_mut`
+    /// clone on a battlefield where no permanent has a UEOT
+    /// controller override — the warm path (no UEOT control-grant
+    /// active at end-of-turn) pays zero allocation. Same shape as
+    /// `clear_ueot_modifiers_all`.
+    ///
+    /// Callable independently for tests that want to assert the
+    /// drain in isolation; `cleanup_step_for_active_player` also
+    /// fires this after CR 514.3 (UEOT modifier expiration).
+    ///
+    /// Mirrors Python's controller-refresh loop in
+    /// `src/mtg_bot/turn.py:run_cleanup_step` (the
+    /// `for obj in state.battlefield: obj.controller_id =
+    /// effective_controller(state, obj)` pass that runs after
+    /// `expire_continuous_effects("cleanup")`). The Rust shape is
+    /// lighter because the override IS the source-of-truth — no
+    /// registry walk + cache refresh; just clear the override.
+    fn clear_controller_overrides_all(&mut self) -> usize {
+        let mut cleared: usize = 0;
+        for player in self.players.iter_mut() {
+            // Warm-path skip: nothing to clear on this battlefield.
+            if player.battlefield.iter().all(|o| o.controller_override.is_none()) {
+                continue;
+            }
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.controller_override.is_some() {
+                    cleared += 1;
+                    obj.controller_override = None;
+                }
+            }
+        }
+        cleared
+    }
+
+    /// **Control-change-UEOT subsystem — Cycle 1 (2026-05-21).**
+    /// Read-side accessor — returns the effective controller of the
+    /// object with id `obj_id`, walking BOTH players' battlefields.
+    /// Resolves the per-object `controller_override` (Some) or the
+    /// printed/Aura-cached `controller` (None). Raises `IndexError`
+    /// when no battlefield permanent matches `obj_id` — the caller
+    /// is asking "who controls this object on the battlefield" and
+    /// a missing-permanent answer is genuinely ambiguous (off-bf
+    /// objects have no controller in the CR sense; they revert to
+    /// owner on zone change).
+    ///
+    /// Exposed for Python so the cross-engine harness + future
+    /// Cycle 3 bridge round-trip + Cycle 4 minting tests can
+    /// observe the override surface symmetrically with Python's
+    /// `effective_controller(state, obj)`. Cycle 1 does NOT
+    /// reroute Rust's internal `.controller` read sites through
+    /// this method — that's Cycle 2's invasive cross-module
+    /// rerouting.
+    ///
+    /// Mirrors Python's `effective_controller(state, obj)` in
+    /// `src/mtg_bot/game.py:999`.
+    fn effective_controller_id(&self, obj_id: u32) -> PyResult<u8> {
+        for player in &self.players {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return Ok(effective_controller_id(obj));
+                }
+            }
+        }
+        Err(PyIndexError::new_err(format!(
+            "no battlefield permanent with id {obj_id}"
+        )))
+    }
+
+    /// **Control-change-UEOT subsystem — Cycle 1 (2026-05-21).**
+    /// Stamp a UEOT controller override on the battlefield permanent
+    /// with id `target_id`. The override sets that object's
+    /// "effective controller" to `new_controller_id` until the next
+    /// cleanup-step drain (CR 514.3 / CR 613 layer-2 expiration).
+    ///
+    /// Substrate-only in Cycle 1: this method writes the override
+    /// field directly, with no companion registry entry, no
+    /// re-routing of read sites, and no Effect-variant integration.
+    /// Cycle 2 reroutes call sites; Cycle 4 wires the Mutinous
+    /// Massacre / Systems Override `Effect` arms that call this.
+    ///
+    /// **Arguments:**
+    ///
+    /// * `target_id` — GameObject id of the battlefield permanent
+    ///   to override. Looked up across both players' battlefields.
+    /// * `new_controller_id` — Player id `0` or `1` who will be
+    ///   the effective controller until cleanup.
+    ///
+    /// **Returns** `True` when the override was applied,
+    /// `False` when the target permanent isn't on the battlefield
+    /// (mirroring Python's `if target is None: return` defensive
+    /// silent no-op at the head of `grant_control_change_ueot` —
+    /// the Mutinous-Massacre `for o in state.battlefield` loop
+    /// constructs the call from a battlefield iteration, so the
+    /// not-found branch is paranoia, not a hot path).
+    ///
+    /// **Raises** `IndexError` when `new_controller_id` is out of
+    /// range (must be 0 or 1).
+    ///
+    /// **Idempotent same-controller short-circuit.** If the
+    /// effective controller is ALREADY `new_controller_id` (either
+    /// because no override is set and `obj.controller ==
+    /// new_controller_id`, or because the override is already set
+    /// to `new_controller_id`), returns `True` WITHOUT mutating —
+    /// matches Python's `if effective_controller(...) ==
+    /// new_controller_id: return` short-circuit.
+    ///
+    /// **CoW-safe.** Routes the battlefield mutation through
+    /// `Arc::make_mut`, preserving the CoW invariant. A cloned
+    /// state's battlefield is unaffected by this call on the
+    /// source.
+    ///
+    /// Mirrors Python's `GameState.grant_control_change_ueot` in
+    /// `src/mtg_bot/game.py:2949`.
+    fn grant_control_change_ueot(
+        &mut self,
+        target_id: u32,
+        new_controller_id: u8,
+    ) -> PyResult<bool> {
+        if new_controller_id >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "new_controller_id must be 0 or 1, got {new_controller_id}"
+            )));
+        }
+        // Find which player's battlefield carries the target. Read
+        // the current effective controller first so we can no-op
+        // before paying the Arc::make_mut cost.
+        let mut found_player: Option<usize> = None;
+        let mut current_effective: u8 = 0;
+        for (pidx, player) in self.players.iter().enumerate() {
+            for obj in player.battlefield.iter() {
+                if obj.id == target_id {
+                    found_player = Some(pidx);
+                    current_effective = effective_controller_id(obj);
+                    break;
+                }
+            }
+            if found_player.is_some() {
+                break;
+            }
+        }
+        let Some(pidx) = found_player else {
+            // Defensive silent no-op — Python returns without raising.
+            return Ok(false);
+        };
+        // Idempotent same-controller short-circuit. Skip the CoW
+        // clone when the override would be a no-op.
+        if current_effective == new_controller_id {
+            return Ok(true);
+        }
+        let zone: &mut Vec<GameObject> = Arc::make_mut(
+            &mut self.players[pidx].battlefield,
+        );
+        for obj in zone.iter_mut() {
+            if obj.id == target_id {
+                obj.controller_override = Some(new_controller_id);
+                return Ok(true);
+            }
+        }
+        // Unreachable: the read-pass above found the object on this
+        // player's battlefield, and Arc::make_mut returns a mutable
+        // ref to the same Vec. A no-op fallthrough is still safer
+        // than panicking under PyO3.
+        Ok(false)
+    }
+
     /// Run the cleanup step for the current `active_player` —
     /// composition of CR 514.1 (hand-size discard, max=7 hard-coded),
     /// CR 514.2 (clear all marked damage on both battlefields), and
@@ -268,6 +472,32 @@ impl GameState {
             }
         }
 
+        // (3b) Control-change-UEOT subsystem — Cycle 1 (2026-05-21):
+        // drain every per-object `controller_override` back to `None`.
+        // CR 514.3 / CR 613 layer-2 "until end of turn" expiration
+        // for control-changing effects (Mutinous Massacre, Systems
+        // Override, Threaten / Act of Treason shape). Substrate-only
+        // in Cycle 1 — no live mint site has landed yet, but the
+        // drain is part of the substrate contract: if a future
+        // cycle mints an override and forgets to clear it, the
+        // override would silently leak across turns.
+        //
+        // Same CoW shape as the UEOT-modifier drain above — skip
+        // the `Arc::make_mut` clone when no object has an override.
+        let mut controller_overrides_cleared: usize = 0;
+        for player in self.players.iter_mut() {
+            if player.battlefield.iter().all(|o| o.controller_override.is_none()) {
+                continue;
+            }
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.controller_override.is_some() {
+                    controller_overrides_cleared += 1;
+                    obj.controller_override = None;
+                }
+            }
+        }
+
         // (4) ETB-trigger Slice 1 — reset the once-per-turn ledger
         // so any `once_per_turn = true` triggered ability becomes
         // re-fireable next turn. Mirrors Python's
@@ -291,6 +521,14 @@ impl GameState {
         d.set_item("discarded", discarded)?;
         d.set_item("damage_cleared", damage_cleared)?;
         d.set_item("ueot_cleared", ueot_cleared)?;
+        // Control-change-UEOT subsystem — Cycle 1 (2026-05-21):
+        // surface the drain count for tests + future Cycle 2/3/4
+        // assertions. Pre-Cycle-1 cleanup summaries never carried
+        // this key; callers reading the dict with a default fallback
+        // (`.get("controller_overrides_cleared", 0)`) stay back-
+        // compat. Substrate-only — every value will be 0 until
+        // Cycle 4 mints overrides.
+        d.set_item("controller_overrides_cleared", controller_overrides_cleared)?;
         Ok(d)
     }
 
