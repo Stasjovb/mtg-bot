@@ -4187,6 +4187,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetArtifactCardFromYourGraveyardToHand,
+        ReturnUpToNCreaturesFromYourGraveyardToHand,
         ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
         ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     )
@@ -5182,6 +5183,58 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": (
                     "return_up_to_n_nonland_permanent_cards_from_"
                     "graveyard_to_hand"
+                ),
+                "min_n": int(eff.min_n),
+                "max_n": int(eff.max_n),
+            }
+        # **Multi-target graveyard→HAND substrate (Archenemy's Charm
+        # Mode 1, 2026-05-22).** Per-leaf serializer for
+        # ``ReturnUpToNCreaturesFromYourGraveyardToHand(min_n, max_n)``
+        # — the Mode 1 substrate of Archenemy's Charm. Rust variant
+        # ``Effect::ReturnUpToNCreaturesFromYourGraveyardToHand
+        # { min_n: i32, max_n: i32 }`` ships in the SAME lane
+        # (declaration + parse + to_pydict + resolve arms + bridge
+        # arm). Three-field round-trip (``kind`` + ``min_n`` +
+        # ``max_n``) is bit-equal; non-negative invariant.
+        #
+        # **Riders gate.** The Python class is constructor sugar on
+        # ``ReturnFromGraveyard``; ``__post_init__`` pins
+        # ``creature=True``, ``destination='hand'``. The Rust variant
+        # carries ONLY ``min_n`` + ``max_n``; the destination +
+        # creature filter are intrinsic to the variant (not data
+        # fields). Bail if any rider that DOESN'T fold into this
+        # fixed shape is set (defensive — the parser only emits this
+        # shape for the bare creature-return-to-hand pattern, but a
+        # future parser extension that adds a rider would silently
+        # mistranslate without this guard). NOT bridge-admitted as a
+        # top-level spell_effect today — pool scan 2026-05-22 found 0
+        # cards using this bare Effect as their spell_effect
+        # (Archenemy's Charm uses it through a ChooseOneMode mode
+        # slot, which has its own admit path); ship substrate-only.
+        if isinstance(eff, ReturnUpToNCreaturesFromYourGraveyardToHand):
+            if eff.min_n < 0 or eff.max_n < 0:
+                return None
+            if (
+                not eff.creature
+                or eff.artifact
+                or eff.land
+                or eff.nonland_permanent
+                or eff.or_enchantment
+                or eff.or_spacecraft
+                or eff.or_artifact
+                or eff.destination != "hand"
+                or eff.plus_one_counter
+                or eff.untargeted_all
+                or eff.log_suffix
+                or eff.target_kind != "graveyard_creature"
+                or eff.max_mv != 0
+                or eff.max_total_mv != 0
+            ):
+                return None
+            return {
+                "kind": (
+                    "return_up_to_n_creatures_from_your_graveyard_"
+                    "to_hand"
                 ),
                 "min_n": int(eff.min_n),
                 "max_n": int(eff.max_n),

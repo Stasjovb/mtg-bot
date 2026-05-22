@@ -1028,6 +1028,40 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             min_n=eff_dict["min_n"],
             max_n=eff_dict["max_n"],
         )
+    if kind == "return_up_to_n_creatures_from_your_graveyard_to_hand":
+        # **Multi-target graveyard→HAND substrate (Archenemy's Charm
+        # Mode 1, 2026-05-22).** "Return up to N target creature cards
+        # from your graveyard to your hand" — the Mode 1 substrate of
+        # Archenemy's Charm. Rust's
+        # ``Effect::ReturnUpToNCreaturesFromYourGraveyardToHand {
+        # min_n: i32, max_n: i32 }`` (cards.rs) and Python's
+        # ``ReturnUpToNCreaturesFromYourGraveyardToHand(min_n=N, max_n=M)``
+        # constructor sugar at ``effects/generic/bounce.py:415`` resolve
+        # byte-equal on the 2-player EoE harness: both engines walk
+        # the source-controller's graveyard in Vec order (front =
+        # oldest), accept creature cards (no MV gate), and move each
+        # to HAND.
+        #
+        # ``min_n`` + ``max_n`` are BOTH REQUIRED in the round-trip
+        # dict shape (mirrors the Rust ``parse_effect`` ``require``
+        # contract). The reverse serializer at
+        # ``trajectory.py::_python_spell_effect_to_dict``'s ``_leaf``
+        # arm always emits both fields.
+        #
+        # **Resolve-time self-scan vs cast-time multi-target bind.**
+        # Same pattern as the Phase-4 sibling above; see the doc
+        # comment there for the full rationale. CR 601.2c says
+        # targets are picked at cast time but the cross-engine
+        # harness's ``_PickFirstLegalTargetAgent`` collapses to
+        # first-N-legal in graveyard order, matching the Rust resolve
+        # arm's self-scan byte-equal.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnUpToNCreaturesFromYourGraveyardToHand,
+        )
+        return ReturnUpToNCreaturesFromYourGraveyardToHand(
+            min_n=eff_dict["min_n"],
+            max_n=eff_dict["max_n"],
+        )
     if kind == "deal_damage":
         # "Deal N damage to target X." Rust's
         # ``Effect::DealDamage { amount: i32, target: TargetFilter }``

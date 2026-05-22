@@ -18883,6 +18883,82 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
         }
+        // **Multi-target graveyard→HAND substrate (Archenemy's Charm
+        // Mode 1, 2026-05-22).** Return up to `max_n` creature cards
+        // from the source-controller's graveyard to that player's
+        // hand. Substrate for Archenemy's Charm Mode 1 (`min_n=1,
+        // max_n=2`); no per-card MV gate (unlike the Phase-4 sibling
+        // `ReturnUpToNSmallCreaturesFromGraveyardWithCounters`).
+        // Mirrors Python's `ReturnFromGraveyard.resolve` at
+        // `effects/generic/graveyard.py:195-242` for `max_n > 1` with
+        // `destination="hand"`. See `docs/SEARCH_LIMITATIONS.md` entry
+        // "Multi-target Phase 4 resolve-time self-scan" for the
+        // deliberate divergence vs cast-time binding.
+        Effect::ReturnUpToNCreaturesFromYourGraveyardToHand {
+            min_n,
+            max_n,
+        } => {
+            if *min_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNCreaturesFromYourGraveyardToHand min_n must be non-negative, got {min_n}"
+                )));
+            }
+            if *max_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNCreaturesFromYourGraveyardToHand max_n must be non-negative, got {max_n}"
+                )));
+            }
+            if *max_n == 0 {
+                return Ok(()); // legitimate no-op
+            }
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let max_n_u = *max_n as usize;
+            // Collect winners by walking the graveyard front-to-back,
+            // accepting creature cards. No per-card MV gate. Front =
+            // oldest (smallest Vec index) — the same iteration order
+            // the Phase-4 sibling uses. Cross-engine harness's
+            // `_PickFirstLegalTargetAgent` collapses to "first-N
+            // legal in legal_targets order" which matches Python
+            // byte-equal.
+            let mut winners: Vec<u32> = Vec::new();
+            for obj in state.players[controller_idx].graveyard.iter() {
+                if winners.len() >= max_n_u {
+                    break;
+                }
+                let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                if !printing.card_types.iter().any(|t| t == "Creature") {
+                    continue;
+                }
+                winners.push(obj.id);
+            }
+            if winners.is_empty() {
+                return Ok(()); // silent fizzle
+            }
+            // Move each winner from graveyard → hand. Mirrors
+            // Python's `ReturnFromGraveyard._move_one` `destination ==
+            // "hand"` branch at `effects/generic/graveyard.py:284-295`:
+            // remove from graveyard, set zone=HAND, append to hand,
+            // reveal (no counter / no ETB trigger).
+            for target_id in winners {
+                let graveyard_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].graveyard);
+                let pos = match graveyard_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip if vanished
+                };
+                let mut obj = graveyard_mut.remove(pos);
+                obj.zone = ZONE_HAND;
+                obj.tapped = false;
+                obj.damage = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+            }
+        }
         // **Terminal Velocity — Cycle 1 (2026-05-22).** `{4}{R}{R}`
         // Sorcery resolve arm. Mirrors Python's
         // `TerminalVelocityEffect.resolve` at
