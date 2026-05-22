@@ -167,5 +167,13 @@ for i in $(seq 1 36); do
   sleep 5
 done
 echo "=== WORKER UNHEALTHY: daemon never answered /v2/heartbeat ==="
+# Dump the daemon log into cloud-init's stream so the crash trace
+# is visible via `aws ec2 get-console-output` even when the
+# tailnet ACL blocks SSH into the worker (tag:mtg-bot-worker is
+# locked down). Without this, debugging a daemon that fails to
+# bind port 5198 is impossible from outside the instance.
+echo "=== /var/log/mtg-bot-daemon.log (tail 100) ==="
+tail -100 /var/log/mtg-bot-daemon.log 2>&1 || echo "(no daemon log produced)"
+echo "=== end daemon log ==="
 mark daemon-unhealthy
 exit 1
