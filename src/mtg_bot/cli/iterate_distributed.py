@@ -107,6 +107,33 @@ def _http_get_json(
         return resp.status, json.loads(raw)
 
 
+def _default_deck_pool() -> Path:
+    """Return the canonical 17lands EoE deck pool path, anchored to
+    the repo root with a sibling-main-checkout fallback so the
+    launcher works from a worktree.
+
+    CLAUDE.md mandates the 17lands pool at
+    ``data/17lands/eoe_decks.json.gz`` for self-play/eval. Worktrees
+    share the main checkout's .venv (per the project's worktree
+    convention) but typically don't sync data/; falling back to
+    ``../../mtg-bot/data/...`` keeps worktree-launched runs working
+    without forcing the operator to copy a 10MB deck pool into every
+    branch. If neither exists, return the worktree-local path so
+    iterate's own argparse surfaces a clear "not found" error.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    relative = Path("data") / "17lands" / "eoe_decks.json.gz"
+    here = repo_root / relative
+    if here.is_file():
+        return here
+    # Sibling main-checkout fallback: worktrees live under
+    # ``<parent>/mtg-bot-worktrees/<branch>/`` next to ``<parent>/mtg-bot/``.
+    sibling_main = repo_root.parent.parent / "mtg-bot" / relative
+    if sibling_main.is_file():
+        return sibling_main
+    return here
+
+
 def verify_worker_idle(worker_url: str) -> None:
     """GET ``<worker_url>/v2/heartbeat`` and assert state == IDLE.
 
@@ -247,11 +274,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--deck-pool", type=Path, default=None,
+        "--deck-pool", type=Path,
+        default=_default_deck_pool(),
         help=(
             "Deck-pool path forwarded to ``mtg_bot iterate "
-            "--deck-pool``. Required by iterate itself; the launcher "
-            "doesn't validate it (iterate's own argparse does)."
+            "--deck-pool``. Defaults to the canonical 17lands EoE "
+            "pool (CLAUDE.md: 'Self-play / eval data-gen ... run on "
+            "the real 17lands deck pool at "
+            "data/17lands/eoe_decks.json.gz'); resolved to the repo "
+            "root with a sibling-main fallback so worktree-launched "
+            "runs work without copying data. Required by iterate "
+            "itself; the launcher doesn't validate it (iterate's "
+            "own argparse does)."
         ),
     )
     parser.add_argument(
