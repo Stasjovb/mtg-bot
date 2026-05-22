@@ -236,18 +236,81 @@ local_only = true
         load_config(p)
 
 
-def test_local_only_false_phase_a_guard(tmp_path: Path):
-    """Phase A only does local; setting local_only=false must fail
-    with a 'Phase B not yet implemented' message, not silently no-op."""
+def test_local_only_false_requires_aws_count(tmp_path: Path):
+    """Phase B AWS path: local_only=false + aws.count<1 fails the
+    config validator with a clear actionable message."""
     p = _write_toml(tmp_path, """
 [iter]
 target_iter = 1
 
 [cluster]
 local_only = false
+master_url = "http://desktop-j05412i:5198"
+
+[aws]
+count = 0
+az_fallback = ["us-east-1a"]
 """)
-    with pytest.raises(LaunchConfigError, match="Phase B"):
+    with pytest.raises(LaunchConfigError, match="aws.count must be >= 1"):
         load_config(p)
+
+
+def test_local_only_false_requires_az_fallback(tmp_path: Path):
+    """Phase B AWS path: local_only=false + empty az_fallback fails
+    the config validator before any AWS call."""
+    p = _write_toml(tmp_path, """
+[iter]
+target_iter = 1
+
+[cluster]
+local_only = false
+master_url = "http://desktop-j05412i:5198"
+
+[aws]
+count = 3
+az_fallback = []
+""")
+    with pytest.raises(LaunchConfigError, match="az_fallback is empty"):
+        load_config(p)
+
+
+def test_local_only_false_aws_section_ok_loads(tmp_path: Path):
+    """A well-formed AWS section + local_only=false loads cleanly --
+    the guard only fires on bad config, not on every Phase B launch."""
+    p = _write_toml(tmp_path, """
+[iter]
+target_iter = 21
+
+[cluster]
+local_only = false
+master_url = "http://desktop-j05412i:5198"
+
+[aws]
+count = 4
+az_fallback = ["us-east-1a", "us-east-1b"]
+storage_uri = "s3://mtg-bot/artifacts/"
+""")
+    cfg = load_config(p)
+    assert cfg.cluster.local_only is False
+    assert cfg.aws.count == 4
+    assert cfg.aws.az_fallback == ["us-east-1a", "us-east-1b"]
+
+
+def test_local_only_true_aws_defaults_allowed(tmp_path: Path):
+    """When local_only=true, the aws.* fields are parsed but unused;
+    bare defaults (count=0, empty az_fallback) must NOT fail
+    validation."""
+    p = _write_toml(tmp_path, """
+[iter]
+target_iter = 5
+
+[cluster]
+local_only = true
+""")
+    cfg = load_config(p)
+    assert cfg.cluster.local_only is True
+    assert cfg.aws.count == 0
+    assert cfg.aws.az_fallback == []
 
 
 def test_bad_bool_string_raises():
@@ -340,12 +403,15 @@ def test_parse_overrides_two_bool_flags_in_a_row():
 
 
 def test_bool_false_string_accepted():
-    """``--cluster.local-only=false`` parses to ``False``. Doesn't
-    pass the Phase-A guard but the coercer itself accepts it."""
+    """``--cluster.local-only=false`` parses to ``False``. With the
+    Phase-B validator in place, the launcher now requires aws.count
+    + az_fallback to also be set, so the post-coerce validation
+    raises specifically on the AWS section rather than on the
+    local_only flag itself."""
     overrides = parse_cli_overrides(
         ["--iter.target_iter=1", "--cluster.local-only=False"],
     )
-    with pytest.raises(LaunchConfigError, match="Phase B"):
+    with pytest.raises(LaunchConfigError, match="aws.count must be >= 1"):
         load_config(toml_path=None, overrides=overrides)
 
 

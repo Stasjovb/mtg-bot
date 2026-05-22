@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from mtg_bot.cli.runs import lifecycle as _runs_lifecycle
+from mtg_bot.launcher.aws_fleet import FleetManager
 from mtg_bot.launcher.config import (
     LaunchConfig,
     LaunchConfigError,
@@ -134,19 +135,27 @@ def verify_worker_idle(worker_url: str) -> None:
         )
 
 
-def collect_worker_urls(cfg: LaunchConfig) -> list[str]:
-    """Build the worker URL list from the cluster section.
+def collect_worker_urls(
+    cfg: LaunchConfig, *, require_nonempty: bool = True,
+) -> list[str]:
+    """Build the cluster-side worker URL list from the [cluster] section.
 
     Skips ``None`` entries (the TOML may omit a machine if only a
-    subset of the cluster is participating). Returns at least one
-    URL or raises.
+    subset of the cluster is participating).
+
+    ``require_nonempty=True`` (the historical default) raises when no
+    URLs are configured -- used by the local-only path where the
+    cluster section IS the worker list. The AWS path passes
+    ``require_nonempty=False`` because the FleetManager provides the
+    URLs and cluster-side workers (master / mac / win10) are optional
+    co-runners.
     """
     urls: list[str] = []
     for attr in ("master_url", "mac_url", "win10_url"):
         u = getattr(cfg.cluster, attr)
         if u:
             urls.append(u)
-    if not urls:
+    if not urls and require_nonempty:
         raise LaunchConfigError(
             "[cluster]: no worker URLs configured. Set at least one "
             "of master_url / mac_url / win10_url in the TOML.",
@@ -347,47 +356,110 @@ def _launch(
     skip_worker_verify: bool,
     iterate_passthrough: list[str],
     spawn: Optional[Any] = None,
+    fleet_factory: Optional[Any] = None,
 ) -> int:
     """Orchestrate the launch given a resolved LaunchConfig.
 
     Split out from :func:`main` so tests can drive the orchestrator
-    directly without parsing argv. ``spawn`` is an injection point
-    for the iterate subprocess factory; tests pass a stub that
-    records argv + env without actually spawning. Default ``None``
-    resolves at call time to the module's ``spawn_iterate_subprocess``
-    so a ``monkeypatch.setattr(id_mod, 'spawn_iterate_subprocess',
-    stub)`` lands at runtime (function-default capture at import
-    would freeze the original).
+    directly without parsing argv.
+
+    ``spawn`` is an injection point for the iterate subprocess
+    factory; tests pass a stub that records argv + env without
+    actually spawning. Default ``None`` resolves at call time to the
+    module's ``spawn_iterate_subprocess`` so a
+    ``monkeypatch.setattr(id_mod, 'spawn_iterate_subprocess', stub)``
+    lands at runtime (function-default capture at import would
+    freeze the original).
+
+    ``fleet_factory`` is the injection point for the AWS spot-fleet
+    manager. Defaults to :class:`FleetManager` (constructor) at
+    call-time so tests can substitute a fake. Only consulted when
+    ``cluster.local_only`` is False.
     """
     if spawn is None:
         # Late binding so monkeypatch on the module attribute wins.
         spawn = spawn_iterate_subprocess
-    # Worker URLs. Collected from [cluster] section.
-    worker_urls = collect_worker_urls(cfg)
+    if fleet_factory is None:
+        fleet_factory = FleetManager
+
+    # ---- Per-cycle ephemeral dir up-front (FleetManager needs it
+    #      to write aws_instances.json before launch_fleet returns).
+    paths = LaunchPaths.for_cycle(progress_dir, cfg.cycle_id).ensure()
+
+    # ---- Two paths: local_only (cluster URLs only) vs AWS
+    #      (FleetManager + optional cluster URLs).
+    cluster_urls = collect_worker_urls(
+        cfg, require_nonempty=cfg.cluster.local_only,
+    )
+    fleet: Optional[Any] = None
+    aws_urls: list[str] = []
+    if not cfg.cluster.local_only:
+        # AWS path: spin the fleet, register teardown hook (the
+        # actual hook registration happens inside cycle_lifecycle
+        # below so the hook fires on any exit path).
+        fleet = fleet_factory(cfg.aws, paths)
+        if not dry_run:
+            instances = fleet.launch_fleet()
+            aws_urls = fleet.wait_for_healthy(instances)
+        # In dry-run we DON'T spin real instances -- print what
+        # would happen and return without touching AWS at all.
+
+    worker_urls = list(cluster_urls) + list(aws_urls)
+    if not worker_urls and not dry_run:
+        # Defensive: shouldn't trigger -- collect_worker_urls + the
+        # AWS path between them should always produce at least one
+        # URL -- but a misconfig (local_only=false + aws.count=0
+        # bypassed somehow) would otherwise leave us with an empty
+        # shards_config that iterate silently falls back from.
+        raise LaunchConfigError(
+            "no worker URLs available; cluster section is empty AND "
+            "no AWS fleet was launched.",
+        )
 
     # Resolve queue_url: caller's --queue-url wins; otherwise derive
-    # from the first worker's host with the coord port.
+    # from the first cluster URL (the master typically hosts the
+    # coordinator). AWS-only mode requires --queue-url explicitly
+    # because there's no canonical coordinator host in the fleet.
     if queue_url is None:
-        # Naively yank the host from the first worker URL.
-        from urllib.parse import urlparse
-        parsed = urlparse(worker_urls[0])
-        if not parsed.hostname:
+        if cluster_urls:
+            from urllib.parse import urlparse
+            parsed = urlparse(cluster_urls[0])
+            if not parsed.hostname:
+                raise LaunchConfigError(
+                    f"could not derive coordinator URL from worker "
+                    f"{cluster_urls[0]!r}; pass --queue-url explicitly.",
+                )
+            queue_url = f"http://{parsed.hostname}:5099"
+        else:
             raise LaunchConfigError(
-                f"could not derive coordinator URL from worker "
-                f"{worker_urls[0]!r}; pass --queue-url explicitly.",
+                "no cluster URL to derive --queue-url from (AWS-only "
+                "fleet). Pass --queue-url explicitly.",
             )
-        queue_url = f"http://{parsed.hostname}:5099"
 
-    # Verify each worker is reachable + IDLE before any DB write.
-    if not skip_worker_verify:
-        for url in worker_urls:
+    # Verify each cluster-side worker is reachable + IDLE before any
+    # DB write. AWS instances have already been wait_for_healthy'd
+    # above so they don't need a second round of IDLE checks.
+    if not skip_worker_verify and not dry_run:
+        for url in cluster_urls:
             verify_worker_idle(url)
 
-    # Per-cycle ephemeral dir + shards_config.
-    paths = LaunchPaths.for_cycle(progress_dir, cfg.cycle_id).ensure()
-    shards_path = render_shards_config(worker_urls, paths.shards_config_path)
-    # Phase B will fill aws_instances.json; Phase A writes the stub.
-    write_aws_instances_json(paths.aws_instances_path)
+    # Render shards_config (cluster URLs + AWS URLs in order). In
+    # AWS dry-run mode the cluster URLs alone go in -- it's a
+    # documentation of what iterate WOULD launch with.
+    shards_input = worker_urls if worker_urls else cluster_urls
+    if shards_input:
+        shards_path = render_shards_config(
+            shards_input, paths.shards_config_path,
+        )
+    else:
+        # Dry-run + AWS-only + no cluster URLs: write a placeholder
+        # so the dry-run print can reference SOMETHING.
+        shards_path = paths.shards_config_path
+    # Phase A wrote a stub aws_instances.json; the FleetManager
+    # path overwrites with the real instance list. local_only path
+    # still writes the stub for forensic completeness.
+    if cfg.cluster.local_only:
+        write_aws_instances_json(paths.aws_instances_path)
 
     # Build iterate argv.
     iterate_argv = _build_iterate_argv(
@@ -402,6 +474,14 @@ def _launch(
         print(f"[iterate-distributed] cycle_id={cfg.cycle_id}")
         print(f"[iterate-distributed] shards_config={shards_path}")
         print(f"[iterate-distributed] queue_url={queue_url}")
+        print(f"[iterate-distributed] mode="
+              f"{'local_only' if cfg.cluster.local_only else 'aws'}")
+        if not cfg.cluster.local_only:
+            print(
+                f"[iterate-distributed] aws_count={cfg.aws.count} "
+                f"instance_type={cfg.aws.instance_type} "
+                f"az_fallback={cfg.aws.az_fallback}",
+            )
         print(f"[iterate-distributed] argv: {' '.join(iterate_argv)}")
         return 0
 
@@ -454,6 +534,18 @@ def _launch(
         label=cfg.iter_label,
         force_resume_from_failed=force_resume_from_failed,
     ) as handle:
+        # Register the AWS-fleet teardown hook on every exit path
+        # BEFORE we run iterate. The hook fires inside _finalize
+        # (lifecycle.py) prior to finish_run, so a launcher
+        # KeyboardInterrupt / iterate crash / launcher process death
+        # all still tear the fleet down. Idempotent: terminate_fleet
+        # tolerates re-call (the hook may fire twice on signal-+-
+        # atexit overlap; the FleetManager guards against double-
+        # tagging via _terminated).
+        if fleet is not None:
+            handle.register_finalize_hook(
+                lambda: fleet.terminate_fleet("launcher_finalize"),
+            )
         rc = spawn(iterate_argv, env=env)
         # Differentiate clean-stop from a real failure. iterate
         # exits non-zero on a user stop today; treat any non-zero

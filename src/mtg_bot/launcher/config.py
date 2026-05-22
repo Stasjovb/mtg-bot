@@ -429,9 +429,15 @@ def _validate(cfg: LaunchConfig) -> None:
     any side effect:
 
     - ``iter.target_iter`` must be > 0.
-    - When ``cluster.local_only`` is False (Phase B), bail with a
-      clear "Phase B not yet implemented" message rather than
-      silently proceeding without workers.
+    - When ``cluster.local_only`` is False (Phase B AWS path):
+      ``aws.count`` must be >= 1 AND ``aws.az_fallback`` must have
+      at least one entry. Otherwise the launcher would unconditionally
+      raise inside FleetManager.launch_fleet -- catching the config
+      mistake here means the failure surfaces at config-load time
+      with a clean stderr message, before runs.db ever sees the row.
+    - When ``cluster.local_only`` is True, ``aws.*`` fields are parsed
+      but unused (the launcher skips the FleetManager call path
+      entirely). Defaults are allowed and intentionally not validated.
     """
     if cfg.iter.target_iter <= 0:
         raise LaunchConfigError(
@@ -439,14 +445,21 @@ def _validate(cfg: LaunchConfig) -> None:
             f"{cfg.iter.target_iter}",
         )
     if not cfg.cluster.local_only:
-        # Phase A guard -- the unified launcher only does local-only
-        # cluster orchestration today. Phase B fills the AWS path.
-        raise LaunchConfigError(
-            "cluster.local_only must be true (Phase A); the AWS "
-            "fleet manager arrives in Phase B. Set "
-            "[cluster].local_only = true in your TOML, or pass "
-            "--cluster.local-only on the command line.",
-        )
+        # Phase B AWS path: validate the AWS section is actionable.
+        if cfg.aws.count < 1:
+            raise LaunchConfigError(
+                f"aws.count must be >= 1 when cluster.local_only is "
+                f"false; got {cfg.aws.count}. Either set "
+                f"[aws].count in the TOML / pass --aws.count N, or "
+                f"flip cluster.local_only = true.",
+            )
+        if not cfg.aws.az_fallback:
+            raise LaunchConfigError(
+                "aws.az_fallback is empty when cluster.local_only is "
+                "false; supply at least one AZ for the launcher to "
+                "try (e.g. [aws].az_fallback = [\"us-east-1a\", "
+                "\"us-east-1b\"]).",
+            )
 
 
 __all__ = [
