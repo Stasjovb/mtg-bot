@@ -1,7 +1,7 @@
 """v2 REST endpoint blueprint for the coordinator.
 
 Wired into the existing ``mtg_bot serve`` Flask app
-(``mtg_bot.cli.serve.create_app``) — the doc decision was to extend
+(``mtg_bot.cli.serve.create_app``) -- the doc decision was to extend
 the port-5099 server rather than spin up a second process.
 
 This module owns the v2 endpoints (``/v2/stage/...``, ``/v2/claim``,
@@ -10,6 +10,22 @@ Stateful machinery (the SQLite queue store + the HeartbeatPoller) is
 factored out into peer modules ``queue_db.py`` and
 ``heartbeat_poller.py``; this file is just request parsing + dispatch.
 
+``POST /v2/report_result`` is the load-bearing endpoint at cluster
+scale: workers POST one per finished game. Under the multipart-blob
+shape (Phase 1 and earlier) the per-request work (multipart parse +
+.npz disk write + DB upsert) bottlenecked the coord under ~30+
+workers -- see ``project_mtg_bot_coord_wsgi`` memory entry. Phase
+2B drops multipart entirely: workers upload artifacts to shared
+storage (file:// share or s3:// bucket) before POST and the JSON
+body carries only the URIs. The handler validates, enqueues a
+background job into a shared ThreadPoolExecutor, and returns 202
+in <10ms. The background job fetches each URI via the injected
+``ArtifactFetcher``, writes the bytes into ``iterate_data`` /
+``replays_root`` under the SAME deterministic filenames as before,
+and then calls ``queue_db.record_report``. Fetch failures retry
+3x then write an ``upload_failed`` row so forensics can locate the
+broken URI; the worker has already moved on so 5xx-ing is moot.
+
 See ``docs/DISTRIBUTED_API_v2.md`` for the wire contract and
 ``docs/DISTRIBUTED_RUN_FLOW.md`` for the runtime walkthrough.
 """
@@ -17,14 +33,30 @@ See ``docs/DISTRIBUTED_API_v2.md`` for the wire contract and
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
+from concurrent.futures import Executor
 from pathlib import Path
 from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
 from mtg_bot.cli.runs import queue_db
+from mtg_bot.cli.runs.coordinator_artifact_fetcher import (
+    ArtifactFetcher,
+    LocalArtifactFetcher,
+    MultiSchemeFetcher,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# Retry schedule for the background fetch + write job. Distinct
+# from the S3 fetcher's own retry loop -- this wraps the entire
+# fetch+write step, including the disk I/O.
+_REPORT_JOB_BACKOFF_SECONDS = (1.0, 3.0, 10.0)
 
 
 # Stage_id sanity: alphanumerics, underscores, dashes, dots, colons.
@@ -50,7 +82,7 @@ def _spec_signature(spec: dict[str, Any]) -> str:
     included; reordering games in two calls is a different spec).
     """
     # JSON-sorted-keys gives a deterministic string. We don't care
-    # about whitespace normalization here — both sides come from the
+    # about whitespace normalization here -- both sides come from the
     # same dumps() path.
     return json.dumps(spec, sort_keys=True)
 
@@ -75,6 +107,190 @@ def _resolve_paths(
     }
 
 
+def _safe_claim_basename(claim_id: str) -> str:
+    """Strip ``:`` and ``/`` from a claim_id so it slots into a
+    flat-file basename without smuggling extra directory levels."""
+    return claim_id.replace(":", "_").replace("/", "_")
+
+
+def _process_report_job(
+    *,
+    claim_id: str,
+    stage_id: str,
+    game_idx: int,
+    shard_label: str,
+    meta: dict[str, Any],
+    npz_uri: Optional[str],
+    replay_uri: Optional[str],
+    npz_size_bytes: Optional[int],
+    replay_size_bytes: Optional[int],
+    iterate_data_dir: Path,
+    replays_root: Path,
+    queue_db_path: Path,
+    fetcher: ArtifactFetcher,
+    heartbeat_poller_provider: Optional[Any],
+) -> None:
+    """Background-job body. Idempotent: if a results row already
+    exists for ``claim_id`` the work is skipped.
+
+    On terminal fetch/write failure, writes a row with
+    ``outcome="upload_failed"`` so the orchestrator can see the
+    failure rather than the game hanging in an in-flight state
+    until the claim TTL expires.
+    """
+    # ---- Idempotency check -----------------------------------------
+    conn = queue_db.connect(queue_db_path)
+    try:
+        existing_claim = queue_db.get_claim(conn, claim_id)
+        if existing_claim is not None and existing_claim["reported"] == 1:
+            logger.info(
+                "report_result job for claim_id=%s skipped: "
+                "already reported (idempotent)",
+                claim_id,
+            )
+            return
+    finally:
+        conn.close()
+
+    npz_path: Optional[str] = None
+    replay_path: Optional[str] = None
+    fetch_error: Optional[BaseException] = None
+    broken_uri: Optional[str] = None
+
+    # ---- Fetch + write (with retries) ------------------------------
+    for attempt in range(len(_REPORT_JOB_BACKOFF_SECONDS) + 1):
+        try:
+            if npz_uri:
+                npz_path = _fetch_and_write_npz(
+                    fetcher=fetcher,
+                    uri=npz_uri,
+                    expected_size=npz_size_bytes,
+                    stage_id=stage_id,
+                    shard_label=shard_label,
+                    claim_id=claim_id,
+                    iterate_data_dir=iterate_data_dir,
+                )
+            if replay_uri:
+                replay_path = _fetch_and_write_replay(
+                    fetcher=fetcher,
+                    uri=replay_uri,
+                    expected_size=replay_size_bytes,
+                    stage_id=stage_id,
+                    shard_label=shard_label,
+                    game_idx=game_idx,
+                    replays_root=replays_root,
+                )
+            fetch_error = None
+            broken_uri = None
+            break
+        except Exception as exc:  # noqa: BLE001 - retry+log shape
+            fetch_error = exc
+            broken_uri = npz_uri or replay_uri
+            if attempt >= len(_REPORT_JOB_BACKOFF_SECONDS):
+                break
+            time.sleep(_REPORT_JOB_BACKOFF_SECONDS[attempt])
+
+    # ---- Record the result -----------------------------------------
+    if fetch_error is not None:
+        logger.error(
+            "report_result job for claim_id=%s gave up after "
+            "%d attempts: npz_uri=%s replay_uri=%s err=%s",
+            claim_id,
+            len(_REPORT_JOB_BACKOFF_SECONDS) + 1,
+            npz_uri, replay_uri, fetch_error,
+        )
+        # Override the worker-supplied outcome so the row state
+        # tells the truth about what shipped. Keep the meta dict
+        # otherwise intact for forensics.
+        record_meta = dict(meta)
+        record_meta["outcome"] = "upload_failed"
+        with queue_db.WRITE_LOCK:
+            conn = queue_db.connect(queue_db_path)
+            try:
+                queue_db.record_report(
+                    conn,
+                    claim_id=claim_id,
+                    report_meta=record_meta,
+                    npz_path=None,
+                    replay_path=None,
+                    artifact_uri=broken_uri,
+                )
+            finally:
+                conn.close()
+        return
+
+    # Success path.
+    with queue_db.WRITE_LOCK:
+        conn = queue_db.connect(queue_db_path)
+        try:
+            outcome = queue_db.record_report(
+                conn,
+                claim_id=claim_id,
+                report_meta=meta,
+                npz_path=npz_path,
+                replay_path=replay_path,
+                artifact_uri=npz_uri,
+            )
+        finally:
+            conn.close()
+    if outcome == "accepted":
+        poller = (
+            heartbeat_poller_provider()
+            if heartbeat_poller_provider is not None else None
+        )
+        if poller is not None:
+            poller.untrack_claim(claim_id)
+
+
+def _fetch_and_write_npz(
+    *,
+    fetcher: ArtifactFetcher,
+    uri: str,
+    expected_size: Optional[int],
+    stage_id: str,
+    shard_label: str,
+    claim_id: str,
+    iterate_data_dir: Path,
+) -> str:
+    blob = fetcher.fetch(uri)
+    if expected_size is not None and len(blob) != expected_size:
+        raise ValueError(
+            f"npz size mismatch for claim_id={claim_id}: "
+            f"declared={expected_size} bytes, got={len(blob)} bytes "
+            f"(uri={uri!r})",
+        )
+    iterate_data_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{stage_id}_{shard_label}_{_safe_claim_basename(claim_id)}.npz"
+    target = iterate_data_dir / filename
+    target.write_bytes(blob)
+    return str(target)
+
+
+def _fetch_and_write_replay(
+    *,
+    fetcher: ArtifactFetcher,
+    uri: str,
+    expected_size: Optional[int],
+    stage_id: str,
+    shard_label: str,
+    game_idx: int,
+    replays_root: Path,
+) -> str:
+    blob = fetcher.fetch(uri)
+    if expected_size is not None and len(blob) != expected_size:
+        raise ValueError(
+            f"replay size mismatch for game_idx={game_idx}: "
+            f"declared={expected_size} bytes, got={len(blob)} bytes "
+            f"(uri={uri!r})",
+        )
+    replay_subdir = replays_root / f"{stage_id}_{shard_label}"
+    replay_subdir.mkdir(parents=True, exist_ok=True)
+    filename = f"{game_idx}.json.gz"
+    target = replay_subdir / filename
+    target.write_bytes(blob)
+    return str(target)
+
+
 def build_v2_blueprint(
     *,
     queue_db_path: Path,
@@ -83,6 +299,8 @@ def build_v2_blueprint(
     replays_root: Path,
     process_started_at_monotonic: float,
     heartbeat_poller_provider: Optional[callable] = None,
+    artifact_fetcher: Optional[ArtifactFetcher] = None,
+    report_executor: Optional[Executor] = None,
 ) -> Blueprint:
     """Construct the v2 Flask blueprint.
 
@@ -90,8 +308,21 @@ def build_v2_blueprint(
     the live HeartbeatPoller instance (or None when none is running).
     Wrapped in a provider so the blueprint can be built before the
     poller starts.
+
+    ``artifact_fetcher`` reads worker-uploaded ``.npz`` / replay
+    blobs by URI. Defaults to a local-only ``MultiSchemeFetcher`` --
+    callers that want S3 support pass a fully-configured fetcher in
+    (set up by ``serve.create_app``). ``report_executor`` is the
+    ThreadPoolExecutor that runs the background fetch+write+upsert
+    job per ``/v2/report_result`` POST. Both are injected so tests
+    can substitute a synchronous in-process executor and a stub
+    fetcher pointed at ``tmp_path``.
     """
     bp = Blueprint("v2_coordinator", __name__)
+
+    fetcher = artifact_fetcher or MultiSchemeFetcher(
+        local=LocalArtifactFetcher(),
+    )
 
     def _open_db():
         return queue_db.connect(queue_db_path)
@@ -259,25 +490,34 @@ def build_v2_blueprint(
 
     @bp.route("/v2/report_result", methods=["POST"])
     def report_result():
-        # multipart: meta JSON in form field, npz / replay optional file
-        meta_raw = request.form.get("meta")
-        if not meta_raw:
-            # Tolerate application/json bodies for the "no files"
-            # case — the eval path commonly skips both npz and replay.
-            if request.is_json:
-                meta = request.get_json(silent=True) or {}
-            else:
-                return jsonify({"error": "meta field required"}), 400
-        else:
-            try:
-                meta = json.loads(meta_raw)
-            except json.JSONDecodeError:
-                return jsonify({"error": "meta must be JSON"}), 400
+        """JSON-only async drop-off. The handler validates +
+        enqueues; the background executor does the fetch + write +
+        DB upsert. Returns 202 with ``queued: true`` on a fresh
+        accept (caller never blocks on the network or the disk)."""
+        if not request.is_json:
+            return jsonify({
+                "error": (
+                    "report_result requires application/json body "
+                    "(multipart removed in Phase 2B)"
+                ),
+            }), 400
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "body must be a JSON object"}), 400
+        meta = body.get("meta")
+        if not isinstance(meta, dict):
+            return jsonify({
+                "error": "meta required and must be a JSON object",
+            }), 400
         claim_id = meta.get("claim_id")
         if not claim_id:
             return jsonify({"error": "claim_id required in meta"}), 400
-        # Resolve the claim to its stage_id so we can build the on-disk
-        # path under iterate_data/replays.
+        npz_uri = body.get("npz_uri")
+        replay_uri = body.get("replay_uri")
+        npz_size_bytes = body.get("npz_size_bytes")
+        replay_size_bytes = body.get("replay_size_bytes")
+        # Resolve the claim to its stage_id + game_idx so the
+        # background job has everything it needs without re-reading.
         conn = _open_db()
         try:
             claim_row = queue_db.get_claim(conn, claim_id)
@@ -285,62 +525,49 @@ def build_v2_blueprint(
             conn.close()
         if claim_row is None:
             return jsonify({"error": "unknown claim_id"}), 404
+        if claim_row["reported"] == 1:
+            # Synchronous 409: don't let a duplicate POST get
+            # enqueued and silently swallowed by the idempotency
+            # check inside the job. The caller sees the conflict
+            # immediately.
+            return jsonify({
+                "accepted": False,
+                "error": "claim already reported",
+            }), 409
         stage_id = claim_row["stage_id"]
         game_idx = int(claim_row["game_idx"])
         shard_label = meta.get("shard_label") or "unknown"
-        # File writes happen *before* DB updates so a half-written
-        # report doesn't leave the DB pointing at a non-existent file.
-        npz_path: Optional[str] = None
-        replay_path: Optional[str] = None
-        npz_file = request.files.get("npz")
-        replay_file = request.files.get("replay")
-        if npz_file is not None:
-            iterate_data_dir.mkdir(parents=True, exist_ok=True)
-            # Stage + shard + claim_id basename for uniqueness; the
-            # claim_id already encodes the stage and game_idx.
-            safe_claim = claim_id.replace(":", "_").replace("/", "_")
-            npz_filename = f"{stage_id}_{shard_label}_{safe_claim}.npz"
-            target = iterate_data_dir / npz_filename
-            npz_file.save(str(target))
-            npz_path = str(target)
-        if replay_file is not None:
-            replay_subdir = replays_root / f"{stage_id}_{shard_label}"
-            replay_subdir.mkdir(parents=True, exist_ok=True)
-            replay_filename = f"{game_idx}.json.gz"
-            target = replay_subdir / replay_filename
-            replay_file.save(str(target))
-            replay_path = str(target)
-        with queue_db.WRITE_LOCK:
-            conn = _open_db()
-            try:
-                outcome = queue_db.record_report(
-                    conn,
-                    claim_id=claim_id,
-                    report_meta=meta,
-                    npz_path=npz_path,
-                    replay_path=replay_path,
-                )
-            finally:
-                conn.close()
-        if outcome == "accepted":
-            poller = (
-                heartbeat_poller_provider()
-                if heartbeat_poller_provider is not None else None
-            )
-            if poller is not None:
-                poller.untrack_claim(claim_id)
-            return jsonify({"accepted": True})
-        if outcome == "duplicate":
-            return jsonify({"accepted": True, "duplicate": True})
-        if outcome == "conflict":
-            return jsonify({
-                "accepted": False,
-                "error": "claim was re-delivered; report dropped",
-            }), 409
-        # outcome == "unknown" — claim row vanished between the read
-        # and the write. Treat as 404 for symmetry with the up-front
-        # check.
-        return jsonify({"error": "unknown claim_id"}), 404
+
+        kwargs = dict(
+            claim_id=claim_id,
+            stage_id=stage_id,
+            game_idx=game_idx,
+            shard_label=shard_label,
+            meta=meta,
+            npz_uri=npz_uri,
+            replay_uri=replay_uri,
+            npz_size_bytes=npz_size_bytes,
+            replay_size_bytes=replay_size_bytes,
+            iterate_data_dir=iterate_data_dir,
+            replays_root=replays_root,
+            queue_db_path=queue_db_path,
+            fetcher=fetcher,
+            heartbeat_poller_provider=heartbeat_poller_provider,
+        )
+
+        if report_executor is None:
+            # Tests that don't inject an executor get synchronous
+            # dispatch -- otherwise asserting on the post-job DB
+            # state is racy. Production always supplies one.
+            _process_report_job(**kwargs)
+        else:
+            report_executor.submit(_process_report_job, **kwargs)
+
+        return jsonify({
+            "accepted": True,
+            "queued": True,
+            "claim_id": claim_id,
+        }), 202
 
     # ---- GET /v2/weights/<version> ------------------------------------
 

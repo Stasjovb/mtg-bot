@@ -1,28 +1,51 @@
 """Tests for ``POST /v2/claim`` + ``POST /v2/report_result``.
 
-Cover the happy path (claim returns a per-game spec, report_result
-writes npz/replay to disk, results row populated), and the two
-distinct duplicate-report cases:
+Phase 2B cut the multipart-blob shape entirely: workers upload
+artifacts to shared storage and POST a JSON body with the URIs.
+The coord validates synchronously, enqueues the fetch+write+DB
+upsert on a background executor, and returns 202.
 
-- on-time duplicate retry (claim still owned by reporting worker) →
-  200 with ``duplicate: true``.
-- late duplicate (claim was re-queued + re-claimed + reported by
-  another worker; this is the zombie-worker case) → 409.
+Tests in this file run with a synchronous executor (``executor=None``
+falls into the in-process dispatch path) so the post-POST DB and
+filesystem state is observable immediately. The
+``test_v2_report_async.py`` companion file covers ThreadPoolExecutor
+semantics + idempotency edges that need a real Executor.
+
+Covers:
+- 202 ``queued: true`` happy path with file:// fetcher
+  rehydrating npz + replay bytes into ``iterate_data`` / replays.
+- 404 unknown claim_id.
+- 409 on a duplicate POST (synchronous; the coord detects the
+  already-reported claim before enqueueing).
+- 400 on bad body shape (non-JSON, missing meta, missing
+  claim_id).
+- Eval no-files path (no npz_uri / replay_uri keys).
+- Late-duplicate 409 via the zombie-worker requeue path.
 """
 
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 
-import pytest
-
 from mtg_bot.cli import serve as serve_mod
 from mtg_bot.cli.runs import queue_db
+from mtg_bot.cli.runs.coordinator_artifact_fetcher import (
+    LocalArtifactFetcher,
+    MultiSchemeFetcher,
+)
+
+
+# A file:// URI from a path (cross-platform: file:///C:/... on Win,
+# file:///tmp/... on POSIX).
+def _file_uri(path: Path) -> str:
+    return "file:///" + path.as_posix().lstrip("/")
 
 
 def _make_app(tmp_path: Path):
+    # Sync dispatch (no executor) so test asserts on post-POST DB
+    # state are deterministic.
+    fetcher = MultiSchemeFetcher(local=LocalArtifactFetcher())
     return serve_mod.create_app(
         repo_url="https://example.test/mtg-bot.git",
         master_pubkey="ssh-ed25519 KEY",
@@ -34,11 +57,13 @@ def _make_app(tmp_path: Path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        artifact_fetcher=fetcher,
+        report_executor=None,
     )
 
 
 def _spec(*, n_games: int = 2, kind: str = "self_play"):
-    spec = {
+    return {
         "stage_id": "iter_009_self_play_v6",
         "kind": kind,
         "weights": (
@@ -59,12 +84,19 @@ def _spec(*, n_games: int = 2, kind: str = "self_play"):
             for i in range(n_games)
         ],
     }
-    return spec
 
 
 def _create_stage(client, spec):
     res = client.post("/v2/stage/create", json=spec)
     assert res.status_code == 200, res.get_json()
+
+
+def _drop_npz(tmp_path: Path, name: str, body: bytes) -> str:
+    drop = tmp_path / "worker_drop"
+    drop.mkdir(parents=True, exist_ok=True)
+    target = drop / name
+    target.write_bytes(body)
+    return _file_uri(target)
 
 
 # ---- /v2/claim ------------------------------------------------------------
@@ -126,7 +158,7 @@ def test_claim_400_on_missing_fields(tmp_path):
     assert res.status_code == 400
 
 
-# ---- /v2/report_result ----------------------------------------------------
+# ---- /v2/report_result happy paths ---------------------------------------
 
 
 def _claim_one(client) -> dict:
@@ -138,35 +170,45 @@ def _claim_one(client) -> dict:
     return res.get_json()
 
 
-def test_report_result_happy_path_writes_files(tmp_path):
+def _claim_one_as(client, worker_id: str) -> dict:
+    res = client.post("/v2/claim", json={
+        "worker_id": worker_id,
+        "stage_id": "iter_009_self_play_v6",
+    })
+    assert res.status_code == 200, res.get_json()
+    return res.get_json()
+
+
+def test_report_result_happy_path_returns_202_and_writes_files(tmp_path):
     app = _make_app(tmp_path)
     client = app.test_client()
     _create_stage(client, _spec())
     claim = _claim_one(client)
-    meta = {
-        "claim_id": claim["claim_id"],
-        "outcome": "completed",
-        "winner": 0,
-        "n_samples": 1142,
-        "duration_s": 31.4,
-        "shard_label": "mac",
-    }
     npz_bytes = b"\x00\x01\x02fake-npz"
     replay_bytes = b"\x00\x01fake-replay"
-    res = client.post(
-        "/v2/report_result",
-        data={
-            "meta": json.dumps(meta),
-            "npz": (io.BytesIO(npz_bytes), "ignored.npz"),
-            "replay": (io.BytesIO(replay_bytes), "ignored.json.gz"),
+    npz_uri = _drop_npz(tmp_path, "wA_c0.npz", npz_bytes)
+    replay_uri = _drop_npz(tmp_path, "wA_c0.json.gz", replay_bytes)
+    res = client.post("/v2/report_result", json={
+        "meta": {
+            "claim_id": claim["claim_id"],
+            "outcome": "completed",
+            "winner": 0,
+            "n_samples": 1142,
+            "duration_s": 31.4,
+            "shard_label": "mac",
         },
-        content_type="multipart/form-data",
-    )
-    assert res.status_code == 200, res.get_json()
+        "npz_uri": npz_uri,
+        "replay_uri": replay_uri,
+        "npz_size_bytes": len(npz_bytes),
+        "replay_size_bytes": len(replay_bytes),
+    })
+    assert res.status_code == 202, res.get_json()
     body = res.get_json()
     assert body["accepted"] is True
+    assert body["queued"] is True
+    assert body["claim_id"] == claim["claim_id"]
 
-    # Files written to the expected layout.
+    # The sync executor ran the job in-process: files exist now.
     npzs = list((tmp_path / "iterate_data").glob("*.npz"))
     assert len(npzs) == 1
     assert npzs[0].read_bytes() == npz_bytes
@@ -177,105 +219,173 @@ def test_report_result_happy_path_writes_files(tmp_path):
     assert replays[0].name == "0.json.gz"
     assert replays[0].read_bytes() == replay_bytes
 
+    # record_report fired -- the result row carries npz_path +
+    # artifact_uri pointing back at the worker drop for forensics.
+    conn = queue_db.connect(tmp_path / "queue.db")
+    try:
+        row = conn.execute(
+            "SELECT * FROM results WHERE claim_id = ?",
+            (claim["claim_id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["outcome"] == "completed"
+    assert row["artifact_uri"] == npz_uri
+    assert row["npz_path"] is not None
+    assert row["replay_path"] is not None
 
-def test_report_result_no_files_ok(tmp_path):
-    """Eval reports commonly have no npz and no replay."""
+
+def test_report_result_no_uris_json_body_ok(tmp_path):
+    """Eval reports commonly have no npz / replay -- a body with
+    just ``meta`` and no URI fields is accepted."""
     app = _make_app(tmp_path)
     client = app.test_client()
     _create_stage(client, _spec(kind="eval"))
     claim = _claim_one(client)
-    meta = {
-        "claim_id": claim["claim_id"],
-        "outcome": "completed",
-        "winner": 0,
-        "n_samples": 0,
-        "duration_s": 5.0,
-        "shard_label": "mac",
-        "wins_new": 1,
-        "wins_old": 0,
-    }
-    res = client.post(
-        "/v2/report_result", json={"_": "no-files"},
-        # Body has to be multipart for the meta field; use json=
-        # falls through to the is_json branch in the handler when
-        # there's no meta multipart field.
-    )
-    # The above doesn't include claim_id → 400. Re-send properly:
-    assert res.status_code == 400
-
-
-def test_report_result_no_files_via_json_meta(tmp_path):
-    app = _make_app(tmp_path)
-    client = app.test_client()
-    _create_stage(client, _spec(kind="eval"))
-    claim = _claim_one(client)
-    meta = {
-        "claim_id": claim["claim_id"],
-        "outcome": "completed",
-        "winner": 0,
-        "n_samples": 0,
-        "duration_s": 5.0,
-        "shard_label": "mac",
-        "wins_new": 1,
-        "wins_old": 0,
-    }
-    res = client.post(
-        "/v2/report_result", json=meta,
-    )
-    assert res.status_code == 200, res.get_json()
+    res = client.post("/v2/report_result", json={
+        "meta": {
+            "claim_id": claim["claim_id"],
+            "outcome": "completed",
+            "winner": 0,
+            "n_samples": 0,
+            "duration_s": 5.0,
+            "shard_label": "mac",
+            "wins_new": 1,
+            "wins_old": 0,
+        },
+    })
+    assert res.status_code == 202, res.get_json()
     body = res.get_json()
     assert body["accepted"] is True
+    assert body["queued"] is True
     # No files written.
     assert not (tmp_path / "iterate_data").exists() or list(
         (tmp_path / "iterate_data").glob("*"),
     ) == []
 
 
-def test_report_result_on_time_duplicate_returns_200(tmp_path):
+def test_report_result_npz_only_no_replay(tmp_path):
+    """Self-play with no capture-every hit: npz but no replay."""
     app = _make_app(tmp_path)
     client = app.test_client()
     _create_stage(client, _spec())
     claim = _claim_one(client)
-    meta = {
-        "claim_id": claim["claim_id"],
-        "outcome": "completed",
-        "winner": 0,
-        "n_samples": 100,
-        "duration_s": 1.0,
-        "shard_label": "mac",
+    npz_bytes = b"npz-only-bytes"
+    npz_uri = _drop_npz(tmp_path, "npz_only.npz", npz_bytes)
+    res = client.post("/v2/report_result", json={
+        "meta": {
+            "claim_id": claim["claim_id"],
+            "outcome": "completed",
+            "winner": 0,
+            "n_samples": 50,
+            "duration_s": 2.0,
+            "shard_label": "mac",
+        },
+        "npz_uri": npz_uri,
+        "npz_size_bytes": len(npz_bytes),
+    })
+    assert res.status_code == 202
+    npzs = list((tmp_path / "iterate_data").glob("*.npz"))
+    assert len(npzs) == 1
+    # No replay directory created.
+    assert not (tmp_path / "replays").exists() or not list(
+        (tmp_path / "replays").rglob("*.json.gz"),
+    )
+
+
+# ---- /v2/report_result error / validation paths --------------------------
+
+
+def test_report_result_404_on_unknown_claim_id(tmp_path):
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    res = client.post("/v2/report_result", json={
+        "meta": {"claim_id": "no_such_claim:0000"},
+    })
+    assert res.status_code == 404
+
+
+def test_report_result_400_on_missing_claim_id(tmp_path):
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    res = client.post("/v2/report_result", json={
+        "meta": {"outcome": "completed"},
+    })
+    assert res.status_code == 400
+
+
+def test_report_result_400_on_missing_meta(tmp_path):
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    res = client.post("/v2/report_result", json={"npz_uri": "x"})
+    assert res.status_code == 400
+
+
+def test_report_result_400_on_non_json_body(tmp_path):
+    """Multipart is dead; sending one fails fast."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    res = client.post(
+        "/v2/report_result",
+        data={"meta": json.dumps({"claim_id": "x"})},
+        content_type="multipart/form-data",
+    )
+    assert res.status_code == 400
+
+
+def test_report_result_400_on_non_dict_body(tmp_path):
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    res = client.post("/v2/report_result", json=["not", "a", "dict"])
+    assert res.status_code == 400
+
+
+# ---- /v2/report_result duplicate / conflict paths ------------------------
+
+
+def test_report_result_synchronous_409_on_duplicate(tmp_path):
+    """Idempotent POST: the second post for the same claim_id hits
+    the sync 409 path (the claim's ``reported`` flag is 1 once the
+    first job lands). No second job is enqueued."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    claim = _claim_one(client)
+    body = {
+        "meta": {
+            "claim_id": claim["claim_id"],
+            "outcome": "completed",
+            "winner": 0,
+            "n_samples": 100,
+            "duration_s": 1.0,
+            "shard_label": "mac",
+        },
     }
-    res1 = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps(meta)},
-        content_type="multipart/form-data",
-    )
-    assert res1.status_code == 200
-    assert res1.get_json()["accepted"] is True
-    # Retry the same report — silent 200 with duplicate flag.
-    res2 = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps(meta)},
-        content_type="multipart/form-data",
-    )
-    assert res2.status_code == 200
-    body = res2.get_json()
-    assert body["accepted"] is True
-    assert body.get("duplicate") is True
+    res1 = client.post("/v2/report_result", json=body)
+    assert res1.status_code == 202
+    res2 = client.post("/v2/report_result", json=body)
+    assert res2.status_code == 409
+    body2 = res2.get_json()
+    assert body2["accepted"] is False
 
 
 def test_report_result_late_duplicate_409(tmp_path):
-    """The zombie-worker path. Worker A's claim gets re-queued (e.g.
-    coordinator marked it DEAD), worker B re-claims and reports
-    successfully. When worker A's stale claim eventually shows up
-    with a result, the coordinator rejects it with 409."""
+    """Zombie-worker path. Worker A claims; coord marks the claim
+    abandoned (DEAD-worker handler); worker B re-claims and reports
+    successfully. Worker A's late report hits the sync 409 path
+    because the claim's ``reported`` flag is 1 (set by
+    ``requeue_claim``'s tombstone)."""
     app = _make_app(tmp_path)
     client = app.test_client()
     _create_stage(client, _spec(n_games=1))
     claim_a = _claim_one(client)
 
-    # Manually re-queue worker A's claim (simulate the DEAD-worker
-    # re-queue path). Then a fresh claim picks up the same game_idx
-    # with a different claim_id.
     conn = queue_db.connect(tmp_path / "queue.db")
     try:
         with queue_db.WRITE_LOCK:
@@ -289,135 +399,37 @@ def test_report_result_late_duplicate_409(tmp_path):
     assert claim_b_resp.status_code == 200
     claim_b = claim_b_resp.get_json()
     assert claim_b["game_idx"] == 0
-    # The requeue path tombstones the old claim row but doesn't
-    # delete it; the fresh claim_next_game call sees the collision
-    # and appends a ms-timestamp suffix to the new claim_id so the
-    # two are distinguishable.
     assert claim_b["claim_id"] != claim_a["claim_id"]
 
-    # Worker B reports successfully.
-    meta_b = {
-        "claim_id": claim_b["claim_id"],
-        "outcome": "completed",
-        "winner": 1,
-        "n_samples": 100,
-        "duration_s": 1.0,
-        "shard_label": "wB",
-    }
-    res_b = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps(meta_b)},
-        content_type="multipart/form-data",
-    )
-    assert res_b.status_code == 200
-
-    # Worker A's late report under the tombstoned claim_id → 409.
-    meta_a = {
-        "claim_id": claim_a["claim_id"],
-        "outcome": "completed",
-        "winner": 0,
-        "n_samples": 100,
-        "duration_s": 1.0,
-        "shard_label": "wA",
-    }
-    res_a = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps(meta_a)},
-        content_type="multipart/form-data",
-    )
-    assert res_a.status_code == 409
-
-
-def test_report_result_late_duplicate_409_when_claim_persists(tmp_path):
-    """Variant where the re-queue path KEPT the old claim row (e.g.
-    only the heartbeat poller marked it abandoned but the row wasn't
-    deleted). In that case the on-claim-id path should treat it as
-    409 because another claim has already produced a result."""
-    app = _make_app(tmp_path)
-    client = app.test_client()
-    _create_stage(client, _spec(n_games=1))
-    claim_a = _claim_one(client)
-    # Bypass requeue_claim and instead just re-INSERT the game in
-    # queued_games (leave the old claim row intact).
-    conn = queue_db.connect(tmp_path / "queue.db")
-    try:
-        with queue_db.WRITE_LOCK:
-            conn.execute(
-                "INSERT OR IGNORE INTO queued_games "
-                "(stage_id, game_idx, deck_indices_json, seed) "
-                "VALUES (?, ?, ?, ?)",
-                (
-                    "iter_009_self_play_v6", 0, "[10, 20]", 9000000,
-                ),
-            )
-    finally:
-        conn.close()
-    claim_b_resp = client.post("/v2/claim", json={
-        "worker_id": "wB", "stage_id": "iter_009_self_play_v6",
-    })
-    claim_b = claim_b_resp.get_json()
-    # Worker B reports first.
-    res_b = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps({
+    res_b = client.post("/v2/report_result", json={
+        "meta": {
             "claim_id": claim_b["claim_id"],
             "outcome": "completed",
             "winner": 1,
             "n_samples": 100,
             "duration_s": 1.0,
             "shard_label": "wB",
-        })},
-        content_type="multipart/form-data",
-    )
-    assert res_b.status_code == 200
-    # Worker A's stale claim row is still present; report_result
-    # detects an existing results row for (stage_id, game_idx)
-    # and returns conflict.
-    res_a = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps({
+        },
+    })
+    assert res_b.status_code == 202
+
+    # Worker A's late report is rejected synchronously: the
+    # tombstone set claim_a.reported=1, so the up-front
+    # already-reported check hits.
+    res_a = client.post("/v2/report_result", json={
+        "meta": {
             "claim_id": claim_a["claim_id"],
             "outcome": "completed",
             "winner": 0,
             "n_samples": 100,
             "duration_s": 1.0,
             "shard_label": "wA",
-        })},
-        content_type="multipart/form-data",
-    )
+        },
+    })
     assert res_a.status_code == 409
 
 
-def test_report_result_404_on_unknown_claim_id(tmp_path):
-    app = _make_app(tmp_path)
-    client = app.test_client()
-    _create_stage(client, _spec())
-    res = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps({"claim_id": "no_such_claim:0000"})},
-        content_type="multipart/form-data",
-    )
-    assert res.status_code == 404
-
-
-def test_report_result_400_on_bad_meta(tmp_path):
-    app = _make_app(tmp_path)
-    client = app.test_client()
-    _create_stage(client, _spec())
-    # Bad JSON in meta field.
-    res = client.post(
-        "/v2/report_result",
-        data={"meta": "{not json"},
-        content_type="multipart/form-data",
-    )
-    assert res.status_code == 400
-    # Missing claim_id altogether.
-    res2 = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps({"outcome": "completed"})},
-        content_type="multipart/form-data",
-    )
-    assert res2.status_code == 400
+# ---- counters surfaced through report_result -----------------------------
 
 
 def test_eval_stage_counters_aggregate_wins(tmp_path):
@@ -428,37 +440,25 @@ def test_eval_stage_counters_aggregate_wins(tmp_path):
     _create_stage(client, _spec(n_games=2, kind="eval"))
     for _ in range(2):
         claim = _claim_one(client)
-        meta = {
-            "claim_id": claim["claim_id"],
-            "outcome": "completed",
-            "winner": 0,
-            "n_samples": 0,
-            "duration_s": 1.0,
-            "shard_label": "wA",
-            "wins_new": 1,
-            "wins_old": 0,
-        }
-        res = client.post(
-            "/v2/report_result",
-            data={"meta": json.dumps(meta)},
-            content_type="multipart/form-data",
-        )
-        assert res.status_code == 200
+        res = client.post("/v2/report_result", json={
+            "meta": {
+                "claim_id": claim["claim_id"],
+                "outcome": "completed",
+                "winner": 0,
+                "n_samples": 0,
+                "duration_s": 1.0,
+                "shard_label": "wA",
+                "wins_new": 1,
+                "wins_old": 0,
+            },
+        })
+        assert res.status_code == 202
     res = client.get("/v2/stage/iter_009_self_play_v6")
     body = res.get_json()
     assert body["kind"] == "eval"
     assert body["wins_new"] == 2
     assert body["wins_old"] == 0
     assert body["n_games_done"] == 2
-
-
-def _claim_one_as(client, worker_id: str) -> dict:
-    res = client.post("/v2/claim", json={
-        "worker_id": worker_id,
-        "stage_id": "iter_009_self_play_v6",
-    })
-    assert res.status_code == 200, res.get_json()
-    return res.get_json()
 
 
 def test_stage_counters_carries_n_samples_and_total_duration(tmp_path):
@@ -473,18 +473,15 @@ def test_stage_counters_carries_n_samples_and_total_duration(tmp_path):
     ]
     for p in payloads:
         claim = _claim_one(client)
-        meta = {
-            "claim_id": claim["claim_id"],
-            "outcome": "completed",
-            "winner": 0,
-            **p,
-        }
-        res = client.post(
-            "/v2/report_result",
-            data={"meta": json.dumps(meta)},
-            content_type="multipart/form-data",
-        )
-        assert res.status_code == 200
+        res = client.post("/v2/report_result", json={
+            "meta": {
+                "claim_id": claim["claim_id"],
+                "outcome": "completed",
+                "winner": 0,
+                **p,
+            },
+        })
+        assert res.status_code == 202
     body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
     assert body["n_samples"] == 12
     assert body["total_duration_s"] == 7.0
@@ -500,8 +497,6 @@ def test_stage_counters_machines_per_worker_breakdown(tmp_path):
     client = app.test_client()
     _create_stage(client, _spec(n_games=4))
 
-    # wA reports 2 completed games, wB reports 1 completed + 1
-    # timed-out, wC claims one game and never reports (in-flight).
     reports = [
         ("wA", {"outcome": "completed", "winner": 0, "n_samples": 10, "duration_s": 5.0, "shard_label": "wA"}),
         ("wA", {"outcome": "completed", "winner": 1, "n_samples": 12, "duration_s": 6.0, "shard_label": "wA"}),
@@ -510,21 +505,16 @@ def test_stage_counters_machines_per_worker_breakdown(tmp_path):
     ]
     for worker_id, meta_extra in reports:
         claim = _claim_one_as(client, worker_id)
-        meta = {"claim_id": claim["claim_id"], **meta_extra}
-        res = client.post(
-            "/v2/report_result",
-            data={"meta": json.dumps(meta)},
-            content_type="multipart/form-data",
-        )
-        assert res.status_code == 200
+        res = client.post("/v2/report_result", json={
+            "meta": {"claim_id": claim["claim_id"], **meta_extra},
+        })
+        assert res.status_code == 202
 
     body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
-    # Aggregate sanity: 4 done, total samples / duration.
     assert body["n_games_done"] == 4
     assert body["n_samples"] == 30
     assert body["timed_out"] == 1
 
-    # machines is a sorted-by-label list.
     machines = {m["label"]: m for m in body["machines"]}
     assert set(machines.keys()) == {"wA", "wB"}
     assert machines["wA"]["n_games_done"] == 2
@@ -535,7 +525,6 @@ def test_stage_counters_machines_per_worker_breakdown(tmp_path):
     assert machines["wB"]["n_games_done"] == 2
     assert machines["wB"]["n_samples"] == 8
     assert machines["wB"]["timed_out"] == 1
-    # n_workers reflects distinct machines with any activity.
     assert body["n_workers"] == 2
 
 
@@ -546,27 +535,22 @@ def test_stage_counters_surfaces_in_flight_worker_before_first_report(tmp_path):
     app = _make_app(tmp_path)
     client = app.test_client()
     _create_stage(client, _spec(n_games=3))
-    # wB claims, doesn't report.
     claim_b = _claim_one_as(client, "wB")
     assert claim_b is not None
-    # wA claims AND reports one game.
     claim_a = _claim_one_as(client, "wA")
-    meta = {
-        "claim_id": claim_a["claim_id"],
-        "outcome": "completed", "winner": 0,
-        "n_samples": 3, "duration_s": 1.0, "shard_label": "wA",
-    }
-    res = client.post(
-        "/v2/report_result",
-        data={"meta": json.dumps(meta)},
-        content_type="multipart/form-data",
-    )
-    assert res.status_code == 200
+    res = client.post("/v2/report_result", json={
+        "meta": {
+            "claim_id": claim_a["claim_id"],
+            "outcome": "completed", "winner": 0,
+            "n_samples": 3, "duration_s": 1.0, "shard_label": "wA",
+        },
+    })
+    assert res.status_code == 202
 
     body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
     machines = {m["label"]: m for m in body["machines"]}
     assert "wA" in machines
-    assert "wB" in machines  # surfaced via claims, not results
+    assert "wB" in machines
     assert machines["wA"]["n_games_done"] == 1
     assert machines["wA"]["n_in_flight"] == 0
     assert machines["wB"]["n_games_done"] == 0

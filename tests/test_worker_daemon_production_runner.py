@@ -1066,19 +1066,7 @@ def _make_test_client_adapter(coordinator_app):
         resp = client.post(_strip_base(url), json=payload)
         return resp.status_code, resp.data, dict(resp.headers)
 
-    def http_post_multipart(url, fields, files, timeout=30.0):
-        data: dict = {}
-        for k, v in fields.items():
-            data[k] = v
-        for k, (filename, content, content_type) in files.items():
-            data[k] = (io.BytesIO(content), filename, content_type)
-        resp = client.post(
-            _strip_base(url), data=data,
-            content_type="multipart/form-data",
-        )
-        return resp.status_code, resp.data, dict(resp.headers)
-
-    return http_get, http_post_json, http_post_multipart
+    return http_get, http_post_json
 
 
 @pytest.mark.slow
@@ -1137,9 +1125,7 @@ def test_production_self_play_runner_plays_one_real_game(tmp_path):
 
     # Wire the worker daemon's ClaimLoopRunner against the coordinator
     # via the Flask test-client adapter.
-    http_get, http_post_json, http_post_multipart = (
-        _make_test_client_adapter(coord_app)
-    )
+    http_get, http_post_json = _make_test_client_adapter(coord_app)
     cache_root = tmp_path / "worker_weights"
     runner = prr.build_self_play_runner(
         coordinator_url="http://coord-test:5099",
@@ -1163,7 +1149,6 @@ def test_production_self_play_runner_plays_one_real_game(tmp_path):
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=http_get,
         http_post_json=http_post_json,
-        http_post_multipart=http_post_multipart,
     )
     state = worker_daemon.WorkerState(start_delay_s=0.01)
     cbs = cl.StateCallbacks(

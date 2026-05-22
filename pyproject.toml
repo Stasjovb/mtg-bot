@@ -34,7 +34,22 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "pytest-xdist>=3",
+    # ``moto[s3]`` mocks the AWS S3 API in-process so the storage
+    # tests (``tests/test_worker_daemon_storage.py``,
+    # ``tests/cli/runs/test_coordinator_artifact_fetcher.py``) can
+    # exercise the S3 code paths without real AWS creds. The boto3
+    # extra below pulls the runtime client; moto is dev-only.
+    "moto[s3]>=5.0",
 ]
+# Optional ``[s3]`` extra: workers and the coordinator both need
+# boto3 to upload/fetch ``.npz`` self-play artifacts to/from S3.
+# The coordinator imports it eagerly at boot if
+# ``MTG_BOT_COORD_ARTIFACT_BACKEND=s3``; workers import it lazily
+# from ``mtg_bot.worker_daemon_storage`` only when an ``s3://`` URI
+# is configured. ``pip install -e .[s3]`` on hosts that need it
+# (master coord, AWS spot workers); CPU-only LAN workers using
+# ``file://`` schemes can skip it.
+s3 = ["boto3>=1.34"]
 
 [project.scripts]
 mtg-bot = "mtg_bot.__main__:main"

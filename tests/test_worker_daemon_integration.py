@@ -16,10 +16,20 @@ enough to drive the loop through every state transition the real
 runner will hit.
 
 We don't open real TCP sockets either: the worker-daemon HTTP client
-hooks (``http_get``, ``http_post_json``, ``http_post_multipart`` on
-:class:`ClaimLoopConfig`) are swapped for adapters that dispatch into
-the coordinator's Flask test_client. Werkzeug's test_client handles
-the WSGI environ correctly for both JSON POSTs and multipart uploads.
+hooks (``http_get``, ``http_post_json`` on :class:`ClaimLoopConfig`)
+are swapped for adapters that dispatch into the coordinator's Flask
+test_client.
+
+**Phase 2A note**: the worker now uses the drop-off protocol — it
+uploads .npz / replay blobs to shared storage and POSTs only the
+URIs back to ``/v2/report_result`` as JSON. The coordinator's
+matching ``/v2/report_result`` rewrite (multipart-parse -> JSON ping
++ URI fetch) is Phase 2B's responsibility. Until 2B lands, the
+end-to-end tests in this file are SKIPPED with the marker below.
+The worker-side wire shape is fully exercised by
+``tests/test_worker_daemon_claim_loop.py``'s drop-off-protocol
+tests; this file's tests come back online when the matching coord
+rewrite lands.
 """
 
 from __future__ import annotations
@@ -34,6 +44,12 @@ import pytest
 from mtg_bot import worker_daemon
 from mtg_bot import worker_daemon_claim_loop as cl
 from mtg_bot.cli import serve as serve_mod
+from mtg_bot.worker_daemon_storage import LocalFileUploader
+
+
+# Phase 2A + 2B both landed (2026-05-21 integration commit): coord
+# /v2/report_result now consumes the JSON ping and the worker emits
+# the JSON shape. These integration tests are live again.
 
 
 # ---------------------------------------------------------------------------
@@ -42,14 +58,17 @@ from mtg_bot.cli import serve as serve_mod
 
 
 def _make_test_client_adapter(coordinator_app):
-    """Return ``(http_get, http_post_json, http_post_multipart)`` that
-    dispatch into ``coordinator_app.test_client()`` instead of urllib.
+    """Return ``(http_get, http_post_json)`` that dispatch into
+    ``coordinator_app.test_client()`` instead of urllib.
 
     Flask's test_client doesn't speak network -- it walks the WSGI
     stack directly. That makes this a fast, deterministic, in-process
     integration: the daemon's loop hits exactly the same handlers the
-    coordinator exposes to real workers, with the same JSON/multipart
-    parsing.
+    coordinator exposes to real workers.
+
+    Phase 2A note: the multipart adapter is gone — drop-off protocol
+    means all worker -> coord traffic is JSON now. Blobs land in
+    shared storage via the configured ``ArtifactUploader``.
     """
     client = coordinator_app.test_client()
 
@@ -74,29 +93,7 @@ def _make_test_client_adapter(coordinator_app):
         )
         return resp.status_code, resp.data, dict(resp.headers)
 
-    def http_post_multipart(url, fields, files, timeout=30.0):
-        # Werkzeug's test_client accepts ``data=`` with mixed
-        # text-string fields + (filename, BytesIO, content_type)
-        # tuples; flask hands them to ``request.form.get`` /
-        # ``request.files.get`` exactly the same way an over-the-wire
-        # multipart would. The hand-rolled urllib multipart in
-        # production goes through the same parser on the server side,
-        # so this dispatcher is a fair stand-in.
-        import io
-
-        data: dict = {}
-        for k, v in fields.items():
-            data[k] = v
-        for k, (filename, content, content_type) in files.items():
-            data[k] = (io.BytesIO(content), filename, content_type)
-        resp = client.post(
-            _strip_base(url),
-            data=data,
-            content_type="multipart/form-data",
-        )
-        return resp.status_code, resp.data, dict(resp.headers)
-
-    return http_get, http_post_json, http_post_multipart
+    return http_get, http_post_json
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +102,12 @@ def _make_test_client_adapter(coordinator_app):
 
 
 def _build_coordinator_app(tmp_path: Path):
+    # report_executor=None forces synchronous report dispatch (the
+    # /v2/report_result handler does the fetch + DB write inline
+    # instead of submitting to a ThreadPoolExecutor). Production
+    # path is async (the load-bearing fix from the coord-async-
+    # storage refactor); the test path uses sync so post-drain
+    # assertions don't race the executor.
     return serve_mod.create_app(
         repo_url="https://example.test/mtg-bot.git",
         master_pubkey="ssh-ed25519 KEY",
@@ -116,6 +119,7 @@ def _build_coordinator_app(tmp_path: Path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        report_executor=None,
     )
 
 
@@ -159,9 +163,7 @@ def _drive_loop_on(
     """Build the ClaimLoopRunner pointed at ``coord_app`` via the
     Flask test-client adapter, then start its thread."""
 
-    http_get, http_post_json, http_post_multipart = (
-        _make_test_client_adapter(coord_app)
-    )
+    http_get, http_post_json = _make_test_client_adapter(coord_app)
     cfg = cl.ClaimLoopConfig(
         coordinator_url="http://coord-test:5099",
         stage_id=stage_id,
@@ -173,7 +175,9 @@ def _drive_loop_on(
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=http_get,
         http_post_json=http_post_json,
-        http_post_multipart=http_post_multipart,
+        artifact_uploader=LocalFileUploader(
+            Path("trained_weights_test") / "artifacts"
+        ),
     )
     cbs = cl.StateCallbacks(
         is_stop_requested=daemon_state.is_stop_requested,

@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS results (
     timed_out           INTEGER,
     npz_path            TEXT,
     replay_path         TEXT,
+    -- artifact_uri records the original drop-off URI the worker
+    -- gave us (e.g. ``s3://mtg-bot-artifacts/...`` or
+    -- ``file:///tank/share/...``). When the coord's async fetcher
+    -- succeeds, npz_path/replay_path point at the local rehydrated
+    -- copies AND artifact_uri remembers the source for a manual
+    -- ``mtg_bot db retry-fetch`` if the local copy is later lost.
+    -- When the fetcher fails after retries, npz_path/replay_path
+    -- stay NULL and the row is marked ``outcome='upload_failed'``
+    -- with artifact_uri set so the operator can investigate.
+    artifact_uri        TEXT,
     reported_at         TEXT NOT NULL,
     PRIMARY KEY (stage_id, game_idx)
 );
@@ -131,7 +141,23 @@ def _apply_pragmas(conn: sqlite3.Connection) -> None:
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema apply. Safe on a fresh or existing DB."""
     conn.executescript(SCHEMA_SQL)
+    _migrate_add_artifact_uri(conn)
     conn.commit()
+
+
+def _migrate_add_artifact_uri(conn: sqlite3.Connection) -> None:
+    """Add the ``results.artifact_uri`` column to pre-existing DBs.
+
+    SQLite's ``CREATE TABLE IF NOT EXISTS`` does not back-fill new
+    columns on already-existing tables — only fresh DBs pick the
+    column up from the CREATE statement. We probe ``PRAGMA
+    table_info`` and ``ALTER TABLE`` if absent. Idempotent: a fresh
+    DB already has the column (from SCHEMA_SQL) and the probe is a
+    no-op.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+    if "artifact_uri" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN artifact_uri TEXT")
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -463,6 +489,7 @@ def record_report(
     report_meta: dict[str, Any],
     npz_path: Optional[str],
     replay_path: Optional[str],
+    artifact_uri: Optional[str] = None,
 ) -> str:
     """Mark ``claim_id`` reported and write the matching ``results``
     row. Returns one of:
@@ -526,12 +553,14 @@ def record_report(
             "INSERT INTO results "
             "(stage_id, game_idx, claim_id, outcome, winner, n_samples, "
             " duration_s, shard_label, wins_new, wins_old, draws, "
-            " crashed, timed_out, npz_path, replay_path, reported_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " crashed, timed_out, npz_path, replay_path, artifact_uri, "
+            " reported_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stage_id, game_idx, claim_id, outcome, winner, n_samples,
                 duration_s, shard_label, wins_new, wins_old, draws,
-                crashed, timed_out, npz_path, replay_path, reported_at,
+                crashed, timed_out, npz_path, replay_path, artifact_uri,
+                reported_at,
             ),
         )
         conn.execute(

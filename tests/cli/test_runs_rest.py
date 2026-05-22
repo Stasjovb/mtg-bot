@@ -105,7 +105,12 @@ def test_run_start_invalid_kind_400(tmp_path: Path):
     assert res.status_code == 400
 
 
-def test_run_start_duplicate_400(tmp_path: Path):
+def test_run_start_duplicate_running_returns_409(tmp_path: Path):
+    # Post-coord-async-storage refactor: a second /run/start on a
+    # run_id whose existing row is in {running, completed} returns
+    # 409 conflict (NOT the old 400). The "failed/killed -> running
+    # transition" case returns 200 with outcome="restarted" instead
+    # -- see ``test_run_start_duplicate_failed_restarts_and_returns_200``.
     db_path = tmp_path / "runs.db"
     app = _make_app(runs_db_path=db_path)
     client = app.test_client()
@@ -117,7 +122,10 @@ def test_run_start_duplicate_400(tmp_path: Path):
     }
     assert client.post("/run/start", json=payload).status_code == 200
     res = client.post("/run/start", json=payload)
-    assert res.status_code == 400
+    assert res.status_code == 409
+    body = res.get_json()
+    assert body["ok"] is False
+    assert body["outcome"] == "conflict"
 
 
 # ---- /run/<id>/progress ----------------------------------------------------

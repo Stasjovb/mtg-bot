@@ -477,6 +477,7 @@ def create_app(
     n_workers: int = 0,
     deck_pool_path: str | None = None,
     nn_device: str | None = None,
+    artifact_storage_uri: str = "null://",
     repo_root: Path | None = None,
     self_update_reexec: Callable[[], None] | None = None,
     self_update_runner: "_self_update.Runner | None" = None,
@@ -554,6 +555,30 @@ def create_app(
         throughput than ``device=cpu`` — real but OFF by default
         because per-worker CUDA-context init under Windows-spawn can
         deadlock; enable only on GPU hosts.
+    artifact_storage_uri:
+        URI for the worker's drop-off artifact store. Worker-owned
+        config from the daemon's ``--artifact-storage-uri`` flag,
+        baked into the native service file. Schemes:
+
+        - ``null://`` (the default) — drops blobs on the floor,
+          returns a ``null:///...`` URI. Production-safe ONLY when
+          paired with the legacy multipart coord (which ignores the
+          URI and reads ``request.files`` instead — the Phase 2A
+          worker degrades cleanly against a Phase 1 coord because
+          the JSON ping carries no blob and the legacy coord rejects
+          with a 400 the claim-loop treats as fatal-on-report).
+          For real use ``null://`` is test/dev only.
+        - ``file:///abs/dir`` — drop blobs into a local directory
+          the coord can read (SMB-mounted shared FS, single-host
+          smoke).
+        - ``s3://bucket/optional/prefix`` — drop blobs into S3 via
+          boto3 (the [s3] pyproject extra installs the client).
+
+        ``ClaimLoopConfig.artifact_uploader`` is built from this URI
+        via :func:`worker_daemon_storage.uploader_from_uri` and
+        threaded into the claim-loop's ``_report_one``. The legacy
+        multipart-POST path is gone — see
+        ``project_mtg_bot_coord_wsgi`` memory for why.
     repo_root:
         The worker's git checkout ``/v2/self_update`` operates on.
         Defaults to the daemon's cwd (the service file's
@@ -620,6 +645,16 @@ def create_app(
     # the pre-flag behavior). Carried unresolved into the production
     # runner; resolved per-worker in NNPimcConfig.build().
     app.config["NN_DEVICE"] = nn_device
+    # Drop-off-protocol artifact storage. Worker uploads per-game
+    # blobs here, then POSTs the URI back to the coord via the small
+    # JSON ping at /v2/report_result (see worker_daemon_claim_loop
+    # ``_report_one``). Resolved here at create_app time — a bad URI
+    # scheme fails the daemon fast at boot rather than per-claim. The
+    # built uploader is stored on app.config and rebound onto every
+    # ClaimLoopConfig the runner factory spawns.
+    from mtg_bot.worker_daemon_storage import uploader_from_uri  # noqa: PLC0415
+    app.config["ARTIFACT_STORAGE_URI"] = artifact_storage_uri
+    app.config["ARTIFACT_UPLOADER"] = uploader_from_uri(artifact_storage_uri)
 
     # --- self-update wiring -------------------------------------------
     effective_repo_root = (
@@ -705,6 +740,7 @@ def create_app(
             deck_pool_path=app.config.get("DECK_POOL_PATH"),
             nn_device=app.config.get("NN_DEVICE"),
             retry_backoff_s=effective_backoff,
+            artifact_uploader=app.config["ARTIFACT_UPLOADER"],
         )
         cbs = _state_callbacks()
         assert runner_factory is not None  # narrowed via caller
@@ -1068,6 +1104,22 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
         ),
     )
     parser.add_argument(
+        "--artifact-storage-uri",
+        default="null://",
+        help=(
+            "Drop-off URI for per-game artifacts (.npz, replay.json.gz). "
+            "WORKER-OWNED config — bake into the native service file's "
+            "ExecStart per machine. Schemes: 'null://' (default; test/dev "
+            "only — blobs dropped on the floor), 'file:///abs/dir' "
+            "(shared FS / single-host smoke), 's3://bucket/prefix' "
+            "(production AWS path; requires the [s3] extra). The "
+            "worker uploads here and POSTs the URI back to the coord's "
+            "/v2/report_result as a small JSON ping (no more multipart "
+            "blob in the request body — see project_mtg_bot_coord_wsgi "
+            "memory for why)."
+        ),
+    )
+    parser.add_argument(
         "--spot-watch",
         action="store_true",
         help=(
@@ -1150,6 +1202,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
         n_workers=args.n_workers,
         deck_pool_path=args.deck_pool_path,
         nn_device=resolved_nn_device,
+        artifact_storage_uri=args.artifact_storage_uri,
         worker_id=args.worker_id,
         runner_factory=_runner_factory,
         spot_watch=args.spot_watch,
