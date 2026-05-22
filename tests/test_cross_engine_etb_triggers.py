@@ -21392,7 +21392,7 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # **control-change-ueot-cycle-4-p1 (2026-05-22):** Mutinous
     # Massacre AUTO-JOINED. The C1-C3 control-change-UEOT substrate
     # (controller_override field + helper + cleanup drain + bridge
-    # round-trip) + this lane's ``Effect::MutinousMassacreEffect``
+    # round-trip) + Cycle-4's ``Effect::MutinousMassacreEffect``
     # field-free unit variant + resolve arm (the FIRST Rust call
     # site that mints a non-None override) + bridge arms + reverse-
     # serializer leaf flip Mutinous Massacre COVERED → ADMITTED.
@@ -21402,6 +21402,23 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # battlefield itself at resolve time). Per the §2 auto-grow
     # teeth, no admit-set widening was needed — just landing the
     # Effect coverage + serializer leaf.
+    # **control-change-ueot-cycle-5-p1 (2026-05-22):** Systems
+    # Override AUTO-JOINED. Cycle 5 lands ``Effect::SystemsOverride
+    # Effect`` (field-free unit variant) + the resolve arm (control-
+    # grant + untap + haste + Spacecraft-conditional +10 charge
+    # counters + delayed-trigger schedule) + the new
+    # ``Effect::RemoveChargeCountersFromSourceDelayed { amount }``
+    # delayed-trigger effect + the end-step drain (composes with the
+    # existing G7 Class-C ``run_delayed_end_step_triggers``
+    # machinery — second consumer after WarpExileSelf) + bridge arms
+    # + reverse-serializer leaves. Systems Override COVERED →
+    # ADMITTED. 25 → 26 (4,775 17lands decks). The card rides the
+    # Phase-1 ``(1, 1)`` single-target admit shape; the single
+    # target rides on the StackItem's payload-target field, the
+    # +10/-10 amount + Spacecraft-conditional rider are intrinsic
+    # to the resolve arm. Per the §2 auto-grow teeth, no admit-set
+    # widening was needed — just landing the Effect coverage +
+    # serializer leaves.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
@@ -21410,13 +21427,14 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
-        "Seedship Impact", "Shattered Wings", "Under the Skin",
-        "Untimely Malfunction", "Zero Point Ballad",
+        "Seedship Impact", "Shattered Wings", "Systems Override",
+        "Under the Skin", "Untimely Malfunction", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 27 covered+bridged Tier-A spells: the 26 "
-        f"prior + 1 control-change-UEOT closure: Mutinous Massacre "
-        f"via control-change-ueot-cycle-4-p1 — auto-grows further "
+        f"exactly the 28 covered+bridged Tier-A spells: the 26 "
+        f"prior + 2 control-change-UEOT closures: Mutinous Massacre "
+        f"via control-change-ueot-cycle-4-p1 + Systems Override via "
+        f"control-change-ueot-cycle-5-p1 — auto-grows further "
         f"as the remaining Tier-A and per-mode-target modal spells "
         f"close)")
 
