@@ -24,6 +24,84 @@ historical itemization (genuinely_missing 2→0 via Pain for All + cast-
 from-exile substrate; blocked_non_effect 2→0 via Tractor Beam + Dauntless
 Scrapbot).
 
+### Inventory refresh + ground-truth audit (2026-05-21,
+`feature/inventory-refresh-and-close-p1`)
+
+**Headline post-refresh:** `scout_r58_subsystem_attribution` reports
+**110 subsystem-gated** cards (down from the doc's body text of 128) /
+**35 single-gated** (down from 53). `docs/POOL_PARITY.md` at this HEAD
+reports **PROBED 279 / covered 86 / BLOCKED-subsystem 110**. The
+inventory-body wording below (§0, §2 table, §3, §4, §6, §7) was
+written against the `post-emergency-eject` HEAD (PROBED 269 /
+BLOCKED-subsystem 118) and pre-dates the **Aura Phase 4 S3
+Moonlit-Meditation closure** (`b226fbf4`: `GameObject.token_supertype_
+override` + `moonlit_token_substitution` helper + loader admit widen
++ `3dc1719d` slug-credit delegator) and the four single-card
+Effect-uncovered cycles that followed (`Close Encounter` cycle 2,
+`Scout for Survivors`, `Scour for Scrap` slice + cycle 2,
+`probe-modules-scanner-fix` audit). Per-row deltas vs the body text:
+
+  * **Aura-attachment substrate** — now `3 cards, 0 single-gated`
+    (was `7/1/633`). Moonlit Meditation PROBED; the 3 multi-gated
+    residue (Chorale of the Void, Cracked Skull, Sporogenic
+    Infection) remains.
+  * **Effect-uncovered** — now `82 cards, 12 single-gated` (was
+    `94/24/103349`). 12 cycles of per-card closures landed across
+    the session.
+  * **Static / layered abilities** — unchanged (`9/2/0`; the 2
+    single-gated Soulrager / Wickerfolk are still EoE-snapshot-
+    absent honest-stops).
+  * **Non-basic land substrate** — unchanged (`13/13/8893`).
+  * **All other rows** — unchanged.
+
+**Per-card audit:** scanned the `subsystem_attribution` cards dict
+against the live `classify_pool` tiering for every card the body
+text claims as BLOCKED-single-gated. Confirmed-stale references
+all point at **Moonlit Meditation** (now PROBED, the Aura row's
+single-gated count dropped 1→0). Spot-checked Close Encounter,
+Scout for Survivors, Scour for Scrap, Frantic Strength, Shardmage's
+Rescue, Duskmourn's Domination, Tractor Beam, Pain for All,
+Dauntless Scrapbot, Lightstall Inquisitor, Cut Propulsion,
+Shattered Wings, Emergency Eject, Cosmogoyf — all PROBED or
+COVERED today (no new cruft surfaced for them; their body-text
+mentions are historical-narrative closures).
+
+**Part-2 candidate walk (honest-stop):** The 12 single-gated
+`effect_uncovered` candidates were each scoped against the §3
+1-cycle slice shape (field-free or small-field unit Effect variant
++ parse + to_pydict + resolve + bridge leaf + admit widen). All 12
+are multi-cycle when their substrate is honestly accounted for:
+
+  * `Darkness` (43 decks, `PreventAllCombatDamageThisTurn`) —
+    forbidden territory; concurrent
+    `feature/darkness-cycle-1-p1` agent owns the substrate.
+  * `Coordinated Clobbering` / `Mutinous Massacre` /
+    `Systems Override` / `Vengeful Possession` (control-change-
+    UEOT carriers) — `ThreatenTargetCreatureUEOT` /
+    `controller_override` is the in-flight forbidden-territory
+    substrate.
+  * `Zero Point Ballad` (6041 decks) — X-value substrate + reanimation
+    conditional, multi-cycle.
+  * `Singularity Rupture` (5046 decks) — destroy-all + dynamic mill,
+    multi-cycle.
+  * `Archenemy's Charm` (4286 decks) — modal-3 with UEOT-keyword-grant
+    leaf substrate (no Rust mirror today).
+  * `Devastating Onslaught` (2218 decks) — X-token-copies + delayed
+    sac substrate.
+  * `Pull Through the Weft` (2235 decks) — 2-target nonland +
+    2-target land grav-to-bf substrate, multi-cycle.
+  * `Terminal Velocity` (630 decks) — multi-cycle bespoke.
+  * `Warping Wail` (23 decks) — single Effect variant gap
+    (`ExileTargetCreatureWithPowerOrToughnessAtMost`) BUT
+    `ModalChooseOne` composer's spell-card `_leaf` table is
+    missing arms for `CounterTargetSpell` AND `CreateToken`
+    (only the trigger-side path admits `CreateToken` today; the
+    Eldrazi Scion token's activated ability is an additional pid-
+    seating concern in the spell-card admit path). Multi-cycle.
+
+  No single 1-cycle close shipped. The doc cruft cleanup is the
+  full deliverable of this lane.
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
@@ -358,7 +436,7 @@ to reflect what substrate already exists post-session.
 | Dynamic-P/T formula | 0 | 0 | 0 | medium | substrate landed `6a8b6402`; Grovestrider closed round-78; Cosmogoyf closed round-84 (this lane: cosmogoyf-arm extension on the SAME dispatch table) | **CLOSED for single-gated** — Emissary Escort honest-stopped Rust-side (different shape: printed-base + X-from-other-artifact-MV, not CDA-only; absent from EoE snapshot) |
 | Station / Spacecraft | 8 | 1 | 5,938 | sprawling | large (§2-declined) | DEFERRED (unchanged) |
 | Carrier activated abilities | 30 | 0 | 0 | sprawling | sprawling (per-card; 0 single-gated) | DEFERRED (unchanged) |
-| Aura-attachment substrate | 7 | 1 | 633 | sprawling | Phase 1/2/2.5/3 LANDED; **Phase 4 only** (S3 token-replacement Moonlit Meditation 633 decks) | **PARTIAL** — Phase 1 flash widening attribution close (2026-05-21) flipped Frantic Strength + Shardmage's Rescue → PROBED + Duskmourn's Domination → COVERED; only Moonlit Meditation single-gated remains |
+| Aura-attachment substrate | 3 | 0 | 0 | sprawling | Phase 1/2/2.5/3/4-S3 LANDED — single-gated count is now 0 (Moonlit Meditation flipped PROBED via `b226fbf4` token-supertype-override substrate + `3dc1719d` slug-credit delegator, 2026-05-21; verified by `scout_r58_subsystem_attribution` re-run for this refresh lane) | **CLOSED for single-gated** — 3 multi-gated tail remains (Chorale of the Void / Cracked Skull / Sporogenic Infection — each effect-uncovered + nonsafe-trig + Aura) |
 | BECOMES_TAPPED event | 2 | 0 | 0 | contained | small (event bridge) — 0 single-gated | DEFERRED (unchanged) |
 | Ward (declined) | dropped | — | — | medium | — | row gone from scout (0-binding) |
 | Kicker / Impending | 1 | 0 | 0 | medium | medium — 0 single-gated | DEFERRED (unchanged) |
@@ -482,13 +560,16 @@ attribution gaps:
 gated.** Headline before → after: PROBED 236→238, byte-equal 333→336,
 single-gated 67→64.
 
-The 7-card subsystem-gated row's residue:
+The 3-card subsystem-gated row's residue (refreshed 2026-05-21):
 
-* **Single-gated 1 (post-flash-widening attribution close):** Moonlit
-  Meditation. **Moonlit Meditation (633 decks) needs Phase 4 S3
-  replacement-effect substrate consumer wire-up — substrate landed at
-  `7b2f62f0`; the host-as-token swap mechanism is the remaining
-  honest-stop and gates the loader admit widen.**
+* **Single-gated 0** — Moonlit Meditation was the single-gated
+  residue and is now PROBED (`b226fbf4` Aura Phase 4 S3 closure:
+  `GameObject.token_supertype_override` + `moonlit_token_substitution`
+  helper + loader admit widen + `3dc1719d` slug-credit delegator). The
+  body wording below describing Moonlit as un-shipped / honest-stopped
+  is **stale historical narrative** from a branch forked before
+  `b226fbf4`; preserved here as cycle-history rather than current
+  state. The Phase 4 S3 substrate consumer is wired end-to-end.
 * **Multi-gated 3:** Chorale of the Void, Cracked Skull, Sporogenic
   Infection — all S4-shape, all multi-gated with effect-uncovered +
   nonsafe-trig + Aura. Phase 3 S4 substrate (`35ede8b0`) is the Aura
@@ -1165,7 +1246,7 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
 | 1 | **Static / layered abilities — Mechan Shieldmate (Phase 3.5)** | (single card in the 8) | 1 | — | **CLOSED round-82 (2026-05-20)** — `feature/mechan-shieldmate-closure` |
 | ~~2~~ | ~~**warp_cost Phase 3**~~ | ~~15,436~~ | — | — | **CLOSED round-83 (2026-05-20)** — `feature/warp-cost-phase-3`; +3 PROBED |
 | ~~2~~ | ~~**Dynamic-P/T formula — Cosmogoyf**~~ | ~~small~~ | ~~1-2~~ | — | **CLOSED round-84 (2026-05-20)** — `feature/dynamic-pt-cosmogoyf`; +1 PROBED; one-arm extension to the round-78 dispatch table |
-| 3 | **Aura Phase 4 S3 — Moonlit Meditation** | 633 | 2-3 (token-replacement substrate) | ~210 | Substrate LANDED via `feature/aura-phase-4-s3` (`4dae568e`); consumer wire-up gated on the supertype-override mechanism (in flight on `feature/aura-supertype-override`) |
+| ~~3~~ | ~~**Aura Phase 4 S3 — Moonlit Meditation**~~ | ~~633~~ | — | — | **CLOSED 2026-05-21** — substrate + consumer wire-up shipped (`b226fbf4` token-supertype-override + `3dc1719d` slug-credit delegator); Moonlit Meditation PROBED; Aura row single-gated count is now 0 |
 | 4 | **Effect-uncovered per-card drain — next 3-5 cheap single-gated** | varies (~5-15k cumulative) | 3-5 | ~3,000 | Cheaper Tier-A lane exhausted; remainder is Tier-C |
 
 **Sequencing rationale:**
@@ -1180,8 +1261,9 @@ Sorted by **decks(1g) ÷ cycles-remaining**, post-session-substrate:
   after Static + warp_cost both closed — the round-78 dispatch table
   was already paid for and Cosmogoyf added a single match arm +
   bridge admit-set widen. Closed round-84.
-* **Aura Phase 4 dropped to #4** because attach substrate is paid but
-  S3 token-replacement is its own small substrate.
+* **Aura Phase 4 — CLOSED 2026-05-21** (`b226fbf4` + `3dc1719d`).
+  Moonlit Meditation PROBED; the historical "dropped to #4" framing
+  is stale — the lever is fully closed for the single-gated tier.
 * **Effect-uncovered lane** continues in parallel; pace is bounded by
   per-card Rust scope, not substrate availability.
 
@@ -1259,8 +1341,12 @@ sub-gates that the original `ce564786` inventory didn't surface:
   `ControlledArtifactEnteredThisTurn` Condition.** Surfaced by Mechan
   Shieldmate honest-stop in the Phase 3 merge (`ddd93684`); lane 1 in
   flight.
-* **Aura Phase 4 S3 — token-replacement-effect substrate.** Surfaced
-  by Moonlit Meditation as the only un-shipped Aura sub-shape.
+* **Aura Phase 4 S3 — token-replacement-effect substrate. CLOSED
+  2026-05-21** (`b226fbf4` + `3dc1719d`). Moonlit Meditation flipped
+  PROBED via `GameObject.token_supertype_override` +
+  `moonlit_token_substitution` helper + loader admit widen + slug-
+  credit delegator. (The "only un-shipped Aura sub-shape" wording
+  is stale historical narrative.)
 * **Aura S4 multi-gate composition** — Chorale of the Void / Cracked
   Skull / Sporogenic Infection each need their Aura half (shipped
   `35ede8b0`) + Effect-uncovered closure + nonsafe-trigger event bridge.
@@ -1286,9 +1372,10 @@ existing substrates that the session's substrate-builds clarified.
   in the roadmap.
 * **`docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`** — 4-phase Aura plan;
   Phases 1+2+2.5+3 LANDED, Phase 4 first-deliverable (`6fa5ac9c`)
-  + Phase 4 S3 substrate (`4dae568e`) LANDED; Phase 4 S3 consumer
-  wire-up (Moonlit Meditation loader admit widen) gated on
-  `feature/aura-supertype-override` in flight.
+  + Phase 4 S3 substrate (`4dae568e`) LANDED + Phase 4 S3 consumer
+  wire-up + Moonlit Meditation loader admit widen **CLOSED**
+  (`b226fbf4` token-supertype-override + `3dc1719d` slug-credit
+  delegator, 2026-05-21).
 * **`docs/BLOCKED_GENUINELY_MISSING_INVENTORY.md`** — historical
   itemization of the now-empty genuinely_missing + blocked_non_effect
   tiers. Read together with this doc to understand how the residue
