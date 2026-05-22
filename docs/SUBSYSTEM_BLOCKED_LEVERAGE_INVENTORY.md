@@ -747,8 +747,29 @@ stale — both shipped upstream of this dated paragraph.
       variant + parser surgery for its dropped lands clause (~3
       cycles), and Archenemy's Charm needs full 3-mode envelope +
       Mode-3 keyword-grant composition (~3-4 cycles). Scout was
-      the only clean substrate-only flip; the other two remain
-      DEFERRED with their own per-card slices required. Per
+      the only clean substrate-only flip; the other two remained
+      DEFERRED with their own per-card slices required.
+    * **Pull Through the Weft** — **PROBED 2026-05-22**
+      (`feature/pull-through-the-weft-cycle-1-p1`). Closed in a
+      single cycle (not the ~3 cycles estimated above; the parser
+      surgery was already in place via the per-clause grammar at
+      `parser/effects.py:1746-1782` so the lane only needed the
+      Rust Effect variant + bridge + serializer + admit-gate
+      consumer). Closed via new Rust
+      `Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand
+      { min_n, max_n }` variant + resolve-time self-scan
+      (graveyard Vec order, nonland-permanent filter, max_n cap)
+      + spell_targets_satisfiable arm + cross-engine bridge +
+      Python reverse-serializer leaf. The Phase-4 multi-target
+      admit predicate's `(0, 2)` / empty-slot_kinds shape already
+      accepted uniform `graveyard_creature` slot kinds (legacy
+      emit semantics per the Python class docstring), so Pull
+      Through the Weft AUTO-JOINED the admit set the moment its
+      Effect class entered the covered+bridged set (admit set
+      24 → 25). The dropped lands clause is byte-equal-irrelevant
+      under the cross-engine probe (neither engine attempts to
+      return lands) — documented in `docs/SEARCH_LIMITATIONS.md`
+      "Pull Through the Weft — second-clause parse-drop" entry. Per
       `docs/SEARCH_LIMITATIONS.md` "Multi-target Phase 4
       resolve-time self-scan" — the resolve-time self-scan is a
       documented deliberate divergence vs CR 601.2c cast-time

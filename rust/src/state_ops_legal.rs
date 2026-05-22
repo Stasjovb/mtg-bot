@@ -1383,6 +1383,54 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // **Pull Through the Weft Cycle 1 (2026-05-22) — leaf
+            // `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`.**
+            // Satisfiable iff the caster controls AT LEAST `min_n`
+            // nonland-permanent cards in their graveyard. For Pull
+            // Through the Weft itself `min_n == 0` (the printed "up
+            // to N" optionality), so this gate is trivially True for
+            // that card — but we honor `min_n` here so a future
+            // printing with `min_n >= 1` lands on the same primitive
+            // without further work (parameterized-recognizer-
+            // preferred per parser CLAUDE.md). Python SoT:
+            // `ReturnFromGraveyard.legal_targets` walks the
+            // controller's graveyard and emits
+            // `("graveyard_creature", card.id)` entries per
+            // nonland-permanent card (note the legacy
+            // `graveyard_creature` target_kind is reused for the
+            // nonland-permanent shape per the class docstring at
+            // `effects/generic/bounce.py:441-464`). Filter mirrors
+            // Python's `_gy_card_matches` nonland-permanent branch
+            // (`effects/generic/graveyard.py:81-82`):
+            // `primary_ok = not p.is_land`.
+            Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand {
+                min_n,
+                ..
+            } => {
+                let needed = *min_n;
+                if needed <= 0 {
+                    // up-to-N optional: always satisfiable
+                } else {
+                    let count = state.players[controller_idx]
+                        .graveyard
+                        .iter()
+                        .filter(|o| {
+                            state
+                                .registry
+                                .lookup(o.printing_id)
+                                .map(|p| {
+                                    !p.card_types
+                                        .iter()
+                                        .any(|t| t == "Land")
+                                })
+                                .unwrap_or(false)
+                        })
+                        .count() as i32;
+                    if count < needed {
+                        return false;
+                    }
+                }
+            }
             // **Reroute Systems closure (2026-05-21) — mode 1 leaf
             // `DealDamageToTargetTappedCreature`.** Satisfiable iff
             // SOME tapped creature on EITHER bf. Mirrors the cast-

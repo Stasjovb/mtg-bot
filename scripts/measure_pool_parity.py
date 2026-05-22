@@ -888,6 +888,19 @@ PROBE_MODULES: tuple[Path, ...] = (
     # delta (the smoke delegator already covers it); pure metric
     # truthfulness — same precedent as the cycle-10 reconciliation.
     REPO_ROOT / "tests" / "test_multi_target_phase4.py",
+    # **pull-through-the-weft-cycle-1 (2026-05-22):** Pull Through the
+    # Weft ({3}{G}{G} Sorcery) via the new ``Effect::ReturnUpToN
+    # NonlandPermanentCardsFromGraveyardToHand`` Rust variant + bridge
+    # arm + reverse-serializer leaf. The Phase-4 multi-target admit
+    # predicate AUTO-JOINS the card the moment its Effect class enters
+    # the covered+bridged set (no admit-predicate widen needed — the
+    # ``(0, 2)`` / empty-slot_kinds shape was already accepted). The
+    # dedicated probe module ``test_pull_through_the_weft_parity.py``
+    # carries the canonical
+    # ``test_cross_engine_real_eoe_pull_through_the_weft_return_up_to
+    # _n_nonland_permanents_parity`` function which binds the genuine
+    # parsed "Pull Through the Weft" printing. PROBED 279 → 280.
+    REPO_ROOT / "tests" / "test_pull_through_the_weft_parity.py",
     # **PPP Pins 1+2+3 (10th Rust slice, ``41c57251``):** the
     # ``test_probe_ppp_downstream.py`` module carries three canonical
     # probes naming the ``_parity`` convention (Drix Fatemaker,

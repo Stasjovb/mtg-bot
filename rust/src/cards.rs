@@ -6000,6 +6000,68 @@ pub enum Effect {
     /// not by static printing trigger lists — same
     /// `RUST_AHEAD_OF_POOL` rationale as `WarpExileSelf`).
     SacrificeSourceDelayed,
+    /// **Pull Through the Weft Cycle 1 (2026-05-22).** "Return up to
+    /// N target nonland permanent cards from your graveyard to your
+    /// hand." Models the first (modeled) clause of Pull Through the
+    /// Weft (`{3}{G}{G}` Sorcery); the second "then return up to M
+    /// target land cards from your graveyard to the battlefield
+    /// tapped" clause is dropped at parse time on the Python side
+    /// (no `Return*LandFromGraveyardToBattlefieldTapped` primitive
+    /// exists today) — the Rust mirror inherits that drop by simply
+    /// not modeling it, byte-equal-irrelevant under the cross-engine
+    /// probe (the engine never tries to return lands, on either
+    /// side).
+    ///
+    /// **Field shape.** Two `i32` fields mirroring Python's
+    /// `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(min_n=0,
+    /// max_n=2)` constructor sugar at
+    /// `effects/generic/bounce.py:441-464`. Both fields non-negative
+    /// (schema invariant — count and MV are non-negative; mirrors
+    /// the `ExileAllArtifactsWithManaValueAtMost` /
+    /// `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` /
+    /// `ReturnUpToNCreaturesFromYourGraveyardToHand` raise-on-
+    /// negative sibling precedent).
+    ///
+    /// **Filter — nonland permanent.** Walks the source-controller's
+    /// graveyard front-to-back; accepts a card iff
+    /// `printing.card_types` does NOT include "Land" (i.e. `is_land
+    /// == false`). Mirrors Python's `_gy_card_matches` with the
+    /// `nonland_permanent=True` branch (`effects/generic/graveyard.
+    /// py:81-82`): `primary_ok = not p.is_land`. No per-card MV gate.
+    ///
+    /// **Resolve semantics — substrate + admit closure.** Pull
+    /// Through the Weft is the inaugural consumer of this variant —
+    /// not a substrate-only landing. Self-scan the controller's
+    /// graveyard front-to-back (Vec) order for up to `max_n` nonland
+    /// permanent cards, moving each to that player's HAND. Silent
+    /// fizzle on no matches.
+    ///
+    /// **`min_n` is informational at resolve.** The deterministic-
+    /// first scan picks `min(graveyard_nonland_perms, max_n)` cards
+    /// regardless of `min_n`; `min_n` is used by the legality /
+    /// target-satisfiability gate and by the cross-engine harness's
+    /// `_PickFirstLegalTargetAgent` (which picks the first `min_n..=
+    /// max_n` legal targets).
+    ///
+    /// **Resolve-time self-scan vs cast-time binding.** Same pattern
+    /// as `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` (the
+    /// Phase-4 sibling at `state_ops_resolve.rs:17423`): the cross-
+    /// engine harness's `_PickFirstLegalTargetAgent` picks `pool[0]`
+    /// then `pool[0]` of remaining etc., collapsing to "first-N
+    /// legal in legal_targets order"; Python's
+    /// `ReturnFromGraveyard.legal_targets` walks `p.graveyard` in
+    /// Vec order so the self-scan matches Python byte-equal under
+    /// the harness. See `docs/SEARCH_LIMITATIONS.md` entry "Multi-
+    /// target Phase 4 resolve-time self-scan vs CR 601.2c cast-time
+    /// binding" — same deliberate divergence.
+    ///
+    /// **Empty graveyard or no nonland permanent in graveyard:
+    /// silent fizzle.** No targets remain after filtering — return
+    /// Ok(()) without state mutation.
+    ReturnUpToNNonlandPermanentCardsFromGraveyardToHand {
+        min_n: i32,
+        max_n: i32,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10852,8 +10914,34 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "sacrifice_source_delayed" => {
             Ok(Effect::SacrificeSourceDelayed)
         }
+        // **Pull Through the Weft Cycle 1 (2026-05-22).** Parse arm
+        // for `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand
+        // { min_n, max_n }`. Both fields REQUIRED — the matching
+        // bridge arm in `cross_engine.py` also requires both. Negative
+        // values rejected at parse time (schema invariant; mirrors the
+        // `return_up_to_n_small_creatures_from_graveyard_with_counters`
+        // / `return_up_to_n_creatures_from_your_graveyard_to_hand`
+        // raise-on-negative siblings).
+        "return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand" => {
+            let min_n: i32 = require(dict, "min_n")?.extract()?;
+            let max_n: i32 = require(dict, "max_n")?.extract()?;
+            if min_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand.min_n must be non-negative, got {min_n}"
+                )));
+            }
+            if max_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand.max_n must be non-negative, got {max_n}"
+                )));
+            }
+            Ok(Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand {
+                min_n,
+                max_n,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand"
         ))),
     }
 }
@@ -13717,6 +13805,24 @@ pub(crate) fn effect_to_pydict<'py>(
         // trigger).
         Effect::SacrificeSourceDelayed => {
             d.set_item("kind", "sacrifice_source_delayed")?;
+        }
+        // **Pull Through the Weft Cycle 1 (2026-05-22).** Round-trip
+        // dict-shape for `ReturnUpToNNonlandPermanentCardsFromGraveyard
+        // ToHand { min_n, max_n }`. Three-field schema (`kind` +
+        // `min_n` + `max_n`) — both ints required, mirroring the parse
+        // arm's required-fields contract and the Python serializer
+        // leaf at `parity/trajectory.py::_python_spell_effect_to_dict
+        // ::_leaf`.
+        Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand {
+            min_n,
+            max_n,
+        } => {
+            d.set_item(
+                "kind",
+                "return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand",
+            )?;
+            d.set_item("min_n", *min_n)?;
+            d.set_item("max_n", *max_n)?;
         }
     }
     Ok(d)

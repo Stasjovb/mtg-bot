@@ -4567,16 +4567,25 @@ the Weft on the ~2,235 17lands decks that run it (the engine resolves
 the higher-value first clause faithfully; only the secondary
 land-ramp-from-graveyard rider is missing).
 
-**Pinned by**: (to be added at B8 implement time) the B8 genuine
-real-EoE probe
-`test_cross_engine_real_eoe_pull_through_the_weft_multiselect_parity`
-must assert byte-equal hand contents for the *first clause only* with
-a land card in the graveyard explicitly NOT returned to the
-battlefield (the parsed-effect-is-SoT pin — confirming Rust does NOT
-over-implement the dropped clause). Until B8 lands this entry is the
-record of the pre-existing parser drop; no Rust consumer exercises it
-yet (Pull Through the Weft stays loader-gated on the spell-card-bridge
-lever).
+**Pinned by**: (closure landed 2026-05-22 via
+`feature/pull-through-the-weft-cycle-1-p1`) the genuine real-EoE
+cross-engine probe
+`test_cross_engine_real_eoe_pull_through_the_weft_return_up_to_n_nonland_permanents_parity`
+in `tests/test_pull_through_the_weft_parity.py` asserts byte-equal
+HAND contents for the *first clause only* — both engines walk the
+controller's graveyard in Vec order, accept nonland permanent cards
+(filter `not p.is_land`), and move them to HAND. The dropped lands
+clause is byte-equal-irrelevant: neither engine attempts to return
+lands. The new Rust
+`Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand
+{ min_n, max_n }` variant lands the parsed-effect-is-SoT pin —
+Rust mirrors the *parsed* single-clause Python effect exactly, NOT
+the printed oracle text's full compound sentence. Pull Through the
+Weft flipped from loader-DECLINED to spell-card-bridge ADMITTED
+(admit set 24 → 25) the moment the Effect class entered the
+covered+bridged set; the Phase-4 multi-target admit predicate's
+`(0, 2)` / empty-slot_kinds shape auto-fires without further admit
+widen.
 
 ---
 

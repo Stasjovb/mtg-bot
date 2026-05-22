@@ -227,6 +227,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Pinnacle Kill-Ship
 - Plains
 - Plasma Bolt
+- Pull Through the Weft
 - Pulsar Squadron Ace
 - Pyroclasm
 - Quantum Riddler

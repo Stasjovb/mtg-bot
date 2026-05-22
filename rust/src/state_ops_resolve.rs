@@ -18534,6 +18534,93 @@ fn apply_effect(
             state.pending_dies_dispatches.push(leaving_obj_id);
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
+        // **Pull Through the Weft Cycle 1 (2026-05-22).** Return up to
+        // `max_n` nonland permanent cards from the source-controller's
+        // graveyard to that player's HAND. Models the first (modeled)
+        // clause of Pull Through the Weft (`{3}{G}{G}` Sorcery); the
+        // second "then return up to M target land cards to the
+        // battlefield tapped" clause is dropped at parse time on the
+        // Python side (`parser/effects.py:5794` regex consumes both
+        // counts but only emits the first clause's Effect). The Rust
+        // mirror inherits the drop by simply not modeling the lands
+        // half — byte-equal-irrelevant under the cross-engine probe.
+        // Mirrors Python's `ReturnFromGraveyard.resolve` at
+        // `effects/generic/graveyard.py:195-242` for `max_n > 1` with
+        // `destination="hand"` and `nonland_permanent=True` filter.
+        // See `docs/SEARCH_LIMITATIONS.md` entry "Multi-target Phase
+        // 4 resolve-time self-scan" for the deliberate divergence vs
+        // cast-time binding.
+        Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand {
+            min_n,
+            max_n,
+        } => {
+            let _ = source_obj_id;
+            if *min_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNNonlandPermanentCardsFromGraveyardToHand min_n must be non-negative, got {min_n}"
+                )));
+            }
+            if *max_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNNonlandPermanentCardsFromGraveyardToHand max_n must be non-negative, got {max_n}"
+                )));
+            }
+            if *max_n == 0 {
+                return Ok(()); // legitimate no-op
+            }
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let max_n_u = *max_n as usize;
+            // Collect winners by walking the graveyard front-to-back,
+            // accepting cards whose printing is NOT a Land. Front =
+            // oldest (smallest Vec index) — the same iteration order
+            // the Phase-4 sibling uses. Cross-engine harness's
+            // `_PickFirstLegalTargetAgent` collapses to "first-N
+            // legal in legal_targets order" which matches Python
+            // byte-equal. Python's nonland-permanent filter at
+            // `effects/generic/graveyard.py:81-82` is `primary_ok =
+            // not p.is_land`; mirror exactly by rejecting "Land" in
+            // card_types.
+            let mut winners: Vec<u32> = Vec::new();
+            for obj in state.players[controller_idx].graveyard.iter() {
+                if winners.len() >= max_n_u {
+                    break;
+                }
+                let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Land") {
+                    continue;
+                }
+                winners.push(obj.id);
+            }
+            if winners.is_empty() {
+                return Ok(()); // silent fizzle
+            }
+            // Move each winner from graveyard → hand. Mirrors
+            // Python's `ReturnFromGraveyard._move_one` `destination ==
+            // "hand"` branch at `effects/generic/graveyard.py:284-295`:
+            // remove from graveyard, set zone=HAND, append to hand,
+            // reveal (no counter / no ETB trigger). Same shape as the
+            // `ReturnUpToNCreaturesFromYourGraveyardToHand` sibling
+            // (graveyard → hand pattern).
+            for target_id in winners {
+                let graveyard_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].graveyard);
+                let pos = match graveyard_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip if vanished
+                };
+                let mut obj = graveyard_mut.remove(pos);
+                obj.zone = ZONE_HAND;
+                obj.tapped = false;
+                obj.damage = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+            }
+        }
     }
     Ok(())
 }

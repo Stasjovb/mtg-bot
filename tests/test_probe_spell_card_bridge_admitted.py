@@ -222,6 +222,22 @@ pytestmark = pytest.mark.skipif(
 # serializer leaf. The §2 teeth all fire positively (covered+bridged
 # AND round-trips), so the lever auto-grows the admit set — no
 # hardcoded card-name list.
+#
+# **Re-anchor at pull-through-the-weft-cycle-1 (2026-05-22)** — admit
+# set 29 → 30. The +1 in THIS lane is **Pull Through the Weft** — a
+# `{3}{G}{G}` Sorcery whose modeled first clause (``Return up to two
+# target nonland permanent cards from your graveyard to your hand``)
+# carries the new ``Effect::ReturnUpToNNonlandPermanentCardsFrom
+# GraveyardToHand`` Rust variant + bridge arm + reverse-serializer
+# leaf. The dropped lands clause (``then return up to M target land
+# cards from your graveyard to the battlefield tapped``) is byte-
+# equal-irrelevant — the parser drops it on the Python side and the
+# Rust mirror inherits the drop by not modeling it. The Phase-4
+# admit predicate at ``trajectory._printing_is_bridge_simple_spell``
+# already accepts the ``(0, 2)`` / empty-slot_kinds shape (uniform
+# ``graveyard_creature`` slot kind via the class docstring's legacy
+# emit semantics), so Pull Through the Weft AUTO-JOINS the moment
+# its Effect class enters the covered+bridged set.
 # This stays an EXACT-set pin.
 # **devastating-onslaught-cycle-1 (2026-05-22)** — admit set 25 → 26.
 # Cycle 1 lands ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
@@ -238,7 +254,8 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Devastating Onslaught",
     "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
     "Exorcise", "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
-    "Mutinous Massacre", "Orbital Plunge", "Pyroclasm",
+    "Mutinous Massacre", "Orbital Plunge", "Pull Through the Weft",
+    "Pyroclasm",
     "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
     "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
     "Shattered Wings", "Systems Override", "Under the Skin",

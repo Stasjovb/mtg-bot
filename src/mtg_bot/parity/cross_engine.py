@@ -942,6 +942,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             max_n=eff_dict["max_n"],
             max_total_mv=eff_dict["max_total_mv"],
         )
+    if kind == "return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand":
+        # **Pull Through the Weft Cycle 1 (2026-05-22).** "Return up
+        # to N target nonland permanent cards from your graveyard to
+        # your hand" — the modeled first clause of Pull Through the
+        # Weft ({3}{G}{G} Sorcery). Rust's
+        # ``Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand
+        # { min_n: i32, max_n: i32 }`` (cards.rs) and Python's
+        # ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(min_n=
+        # N, max_n=M)`` constructor sugar at
+        # ``effects/generic/bounce.py:441-464`` resolve byte-equal on
+        # the 2-player EoE harness: both engines walk the source-
+        # controller's graveyard in Vec order (front = oldest),
+        # accept cards whose printing is NOT a land (the nonland-
+        # permanent filter), and move each to HAND.
+        #
+        # ``min_n`` + ``max_n`` are BOTH REQUIRED in the round-trip
+        # dict shape (mirrors the Rust ``parse_effect`` ``require``
+        # contract). The reverse serializer at
+        # ``trajectory.py::_python_spell_effect_to_dict``'s ``_leaf``
+        # arm always emits both fields.
+        #
+        # **Dropped lands clause.** Pull Through the Weft's printed
+        # oracle text is "Return up to N target nonland permanent
+        # cards from your graveyard to your hand, then return up to
+        # M target land cards from your graveyard to the battlefield
+        # tapped." The Python parser at ``parser/effects.py:5794``
+        # consumes the FULL compound sentence in one regex but only
+        # emits the FIRST clause as an Effect — the second
+        # (lands-to-bf-tapped) clause is DROPPED because no
+        # ``ReturnLandFromGraveyardToBattlefieldTapped`` primitive
+        # exists in the engine today. The Rust mirror inherits the
+        # drop by simply not modeling it; byte-equal-irrelevant under
+        # the cross-engine probe (the engine never tries to return
+        # lands, on either side). See ``docs/SEARCH_LIMITATIONS.md``
+        # entry "Pull Through the Weft dropped lands clause".
+        #
+        # **Resolve-time self-scan vs cast-time multi-target bind.**
+        # Same pattern as the Phase-4 sibling above; see the doc
+        # comment there for the full rationale. CR 601.2c says
+        # targets are picked at cast time but the cross-engine
+        # harness's ``_PickFirstLegalTargetAgent`` collapses to
+        # first-N-legal in graveyard order, matching the Rust resolve
+        # arm's self-scan byte-equal.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
+        )
+        return ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(
+            min_n=eff_dict["min_n"],
+            max_n=eff_dict["max_n"],
+        )
     if kind == "deal_damage":
         # "Deal N damage to target X." Rust's
         # ``Effect::DealDamage { amount: i32, target: TargetFilter }``

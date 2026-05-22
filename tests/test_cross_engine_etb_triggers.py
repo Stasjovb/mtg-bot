@@ -21433,6 +21433,20 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # Onslaught AUTO-JOINS via the §2 auto-grow teeth (covered+bridged
     # + round-trips + Phase-1 ``(1, 1)``-shape with X-cost). Admit set
     # 28 → 29.
+    # **pull-through-the-weft-cycle-1 (2026-05-22):** Adds the new
+    # Rust ``Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardTo
+    # Hand`` variant + parse/to_pydict/resolve arms +
+    # ``spell_targets_satisfiable`` arm + cross-engine bridge arm +
+    # Python reverse-serializer leaf. The Phase-4 multi-target admit
+    # predicate already accepts the ``(0, 2)`` / empty-slot_kinds
+    # shape (uniform ``graveyard_creature`` slot kind), so Pull
+    # Through the Weft AUTO-JOINS the moment its Effect class enters
+    # the covered+bridged set. The dropped lands clause (``then
+    # return up to M target land cards from your graveyard to the
+    # battlefield tapped``) is byte-equal-irrelevant — the parser
+    # drops it on the Python side (``parser/effects.py:5794``) and
+    # the Rust mirror inherits the drop by not modeling it. Admit
+    # set 29 → 30.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
@@ -21440,20 +21454,23 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
         "Exorcise", "Focus Fire", "Invasive Maneuvers",
         "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
+        "Pull Through the Weft",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
         "Seedship Impact", "Shattered Wings", "Systems Override",
         "Under the Skin", "Untimely Malfunction", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 29 covered+bridged Tier-A spells: the 26 "
+        f"exactly the 30 covered+bridged Tier-A spells: the 26 "
         f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
         f"via control-change-ueot-cycle-4-p1 + Systems Override via "
         f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
         f"closure (Devastating Onslaught via "
-        f"devastating-onslaught-cycle-1) — auto-grows further "
-        f"as the remaining Tier-A and per-mode-target modal spells "
-        f"close)")
+        f"devastating-onslaught-cycle-1) + 1 multi-target "
+        f"nonland-permanent graveyard-to-hand admit (Pull Through "
+        f"the Weft via pull-through-the-weft-cycle-1) — auto-grows "
+        f"further as the remaining Tier-A and per-mode-target modal "
+        f"spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

@@ -4173,6 +4173,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetArtifactCardFromYourGraveyardToHand,
+        ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
         ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     )
     from mtg_bot.effects.generic.search import (
@@ -4952,6 +4953,71 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 ),
                 "max_n": int(eff.max_n),
                 "max_total_mv": int(eff.max_total_mv),
+            }
+        # **Pull Through the Weft Cycle 1 (2026-05-22).** Per-leaf
+        # serializer for
+        # ``ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(min_n,
+        # max_n)`` — the modeled first clause of Pull Through the
+        # Weft ({3}{G}{G} Sorcery, 17lands deck presence: see EoE
+        # pool). Rust variant
+        # ``Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand
+        # { min_n: i32, max_n: i32 }`` ships in the SAME lane
+        # (declaration + parse + to_pydict + resolve arms + bridge
+        # arm + spell_targets_satisfiable arm). Three-field round-
+        # trip (``kind`` + ``min_n`` + ``max_n``) is bit-equal; non-
+        # negative invariant.
+        #
+        # **Dropped lands clause is byte-equal-irrelevant.** Pull
+        # Through the Weft's parser at ``parser/effects.py:5794``
+        # consumes the full compound sentence ("Return up to N target
+        # nonland permanent cards … then return up to M target land
+        # cards … to the battlefield tapped") in one regex but only
+        # emits the FIRST clause as a Python Effect — the lands-to-
+        # bf-tapped clause is DROPPED. The Rust mirror inherits the
+        # drop by simply not modeling it; the engine never tries to
+        # return lands on either side, so the round-trip is byte-
+        # equal under the cross-engine probe. Documented in
+        # ``docs/SEARCH_LIMITATIONS.md`` entry "Pull Through the Weft
+        # dropped lands clause".
+        #
+        # **Riders gate.** The Python class is constructor sugar on
+        # the unified ``ReturnFromGraveyard`` base; ``__post_init__``
+        # pins ``nonland_permanent=True``, ``destination='hand'``.
+        # The Rust variant carries ONLY ``min_n`` + ``max_n``; the
+        # destination + nonland-permanent filter are intrinsic to
+        # the variant (not data fields). Bail if any rider that
+        # DOESN'T fold into this fixed shape is set (defensive — the
+        # parser only emits this shape for the bare nonland-
+        # permanent-return-to-hand pattern, but a future parser
+        # extension that adds a rider would silently mistranslate
+        # without this guard).
+        if isinstance(eff, ReturnUpToNNonlandPermanentCardsFromGraveyardToHand):
+            if eff.min_n < 0 or eff.max_n < 0:
+                return None
+            if (
+                eff.creature
+                or eff.artifact
+                or eff.land
+                or not eff.nonland_permanent
+                or eff.or_enchantment
+                or eff.or_spacecraft
+                or eff.or_artifact
+                or eff.destination != "hand"
+                or eff.plus_one_counter
+                or eff.untargeted_all
+                or eff.log_suffix
+                or eff.target_kind != "graveyard_creature"
+                or eff.max_mv != 0
+                or eff.max_total_mv != 0
+            ):
+                return None
+            return {
+                "kind": (
+                    "return_up_to_n_nonland_permanent_cards_from_"
+                    "graveyard_to_hand"
+                ),
+                "min_n": int(eff.min_n),
+                "max_n": int(eff.max_n),
             }
         return None
 
