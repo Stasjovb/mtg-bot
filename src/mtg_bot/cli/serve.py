@@ -1049,14 +1049,23 @@ def create_app(
             app.extensions["v2_heartbeat_poller"] = poller
 
         # Artifact fetcher: caller can inject one for tests; default
-        # builds a local-only fetcher, optionally adding the S3 arm
-        # when ``MTG_BOT_COORD_ARTIFACT_BACKEND`` is set. The s3
-        # branch imports boto3 at construction time (fail-loud if
-        # the [s3] extra isn't installed on this host).
+        # constructs BOTH the local arm and the S3 arm. The S3 arm's
+        # boto3 import is deferred to first fetch (see
+        # ``S3ArtifactFetcher._get_client``), so construction is free
+        # on hosts that never see an s3:// URI.
+        #
+        # Default flipped 2026-05-22 from opt-in to opt-out: iter_020's
+        # 45 ``upload_failed`` rows were ALL fetcher bounces ("no S3
+        # fetcher is configured") because the coord process didn't set
+        # ``MTG_BOT_COORD_ARTIFACT_BACKEND``. The objects were in S3
+        # and readable; the coord just refused to look. Now: pass
+        # ``MTG_BOT_COORD_ARTIFACT_BACKEND=local`` to explicitly opt
+        # out of S3 (legacy local-only behavior); any other value or
+        # unset constructs the S3 arm.
         if artifact_fetcher is None:
-            backend = os.environ.get("MTG_BOT_COORD_ARTIFACT_BACKEND", "")
+            backend = os.environ.get("MTG_BOT_COORD_ARTIFACT_BACKEND", "auto")
             s3_arm = (
-                S3ArtifactFetcher() if backend in {"s3", "auto"} else None
+                None if backend == "local" else S3ArtifactFetcher()
             )
             artifact_fetcher = MultiSchemeFetcher(
                 local=LocalArtifactFetcher(), s3=s3_arm,
