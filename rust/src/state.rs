@@ -2846,6 +2846,47 @@ pub struct GameState {
     /// `x_value: None`, so the swap is a no-op and the back-compat
     /// invariant holds byte-identical.
     pub current_resolve_x_value: Option<i32>,
+    /// **Darkness-shape combat-damage prevention substrate — Cycle 1
+    /// (2026-05-21).** State-level "all combat damage is prevented
+    /// for the rest of this turn" flag. When `true`, every combat-
+    /// damage routing site (Cycle 2 will reroute them) must short-
+    /// circuit to zero — non-combat damage (direct damage, pings) is
+    /// **NOT** affected. The flag is stamped by the future Cycle 3
+    /// `Effect::PreventAllCombatDamageThisTurn` resolve arm
+    /// (Darkness, `{B}` Instant — DSK special-guests reprint in the
+    /// EoE pool, 43 17lands decks) and drained back to `false` at
+    /// the cleanup step (CR 514.3 — "all damage prevention effects
+    /// with duration 'this turn' end at the cleanup step").
+    ///
+    /// Mirrors Python's `state.prevent_combat_damage_this_turn` flag
+    /// (declared at `src/mtg_bot/game.py:2732`, set by
+    /// `PreventAllCombatDamageThisTurn.resolve` at
+    /// `src/mtg_bot/effects/generic/stack_control.py:266`, consumed
+    /// by `combat._resolve_damage_step` at
+    /// `src/mtg_bot/combat.py:479`, and cleared at end-of-turn
+    /// cleanup at `src/mtg_bot/turn.py:1102`). Naming: Rust uses the
+    /// more-explicit `prevent_all_combat_damage_this_turn` (the
+    /// Python name dropped "all" for brevity, but the semantics are
+    /// the unconditional global prevention).
+    ///
+    /// **Substrate-only this slice.** No Rust call site reads this
+    /// flag yet — `state_ops_combat.rs` still applies combat damage
+    /// unconditionally. Cycle 2 reroutes the combat-damage routing
+    /// site through the preventer (the only consumer); Cycle 3 adds
+    /// the `Effect::PreventAllCombatDamageThisTurn` parse / resolve
+    /// arms + the cross-engine bridge round-trip + the
+    /// `(0, 0)`-target-shape admit widen for Darkness's bridge-
+    /// import + the PROBED flip.
+    ///
+    /// **Back-compat byte-equal invariant.** Pre-substrate snapshots
+    /// observe `false` on every construction site (`make_state`,
+    /// `make_synthetic_state`, the `Clone` impl). The flag is NOT
+    /// in the fingerprint (transient turn-scoped state, same shape
+    /// as `permanent_left_battlefield_this_turn` and
+    /// `spell_warped_this_turn`) and no read site consumes it yet,
+    /// so every pre-Cycle-1 trajectory is byte-equivalent through
+    /// the substrate landing.
+    pub prevent_all_combat_damage_this_turn: bool,
 }
 
 impl Clone for GameState {
@@ -2921,6 +2962,15 @@ impl Clone for GameState {
             // scour-for-scrap-slice Cycle 1 widen: transient multi-
             // pick slot. Vec<u8> clone is cheap (typically 0-2 idxs).
             current_resolve_chosen_mode_idxs: self.current_resolve_chosen_mode_idxs.clone(),
+            // Darkness-shape combat-damage prevention substrate —
+            // Cycle 1 (2026-05-21): turn-scoped state-level flag. A
+            // determinized clone must carry this forward (mirrors
+            // Python's `prevent_combat_damage_this_turn=self.prevent_
+            // combat_damage_this_turn` at `game.py:3378-3379`) so a
+            // mid-turn clone preserves the prevention until the
+            // shared cleanup-step drain fires.
+            prevent_all_combat_damage_this_turn: self
+                .prevent_all_combat_damage_this_turn,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -3741,5 +3791,11 @@ pub fn make_synthetic_state(
         // `Effect::ZeroPointBallad` / `Effect::DevastatingOnslaught`
         // resolve arms to read it).
         current_resolve_x_value: None,
+        // Darkness-shape combat-damage prevention substrate —
+        // Cycle 1 (2026-05-21): synthetic states start with no
+        // active combat-damage prevention. Back-compat default;
+        // no fingerprint impact (transient turn-scoped flag, same
+        // shape as `permanent_left_battlefield_this_turn`).
+        prevent_all_combat_damage_this_turn: false,
     }
 }
