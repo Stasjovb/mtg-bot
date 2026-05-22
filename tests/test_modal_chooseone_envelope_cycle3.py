@@ -74,15 +74,22 @@ def test_serializer_bails_when_any_mode_is_unrecognized():
     spell would silently drop the unrecognized mode on Rust.
 
     Driver: mix a recognized ``GainLife`` mode with an unrecognized
-    ``DrawCards`` mode (DrawCards is NOT on the ``_leaf`` pid-free-
-    covered table today). The serializer must bail.
+    ``Scry`` mode (Scry is NOT on the ``_leaf`` pid-free-covered table
+    today). Previously this test used ``DrawCards`` as the unrecognized
+    mode, but the **vengeful-possession-cycle-1-p1** lane (2026-05-22)
+    added ``DrawCards`` to the ``_leaf`` table (so Vengeful Possession's
+    ``Sequence`` looter rider could round-trip cleanly). ``Scry`` is the
+    next-best uncovered-leaf canary — it's a high-frequency Python
+    Effect that the ``_leaf`` table still excludes today. When the
+    Scry leaf eventually lands, swap this driver to whatever Effect is
+    next-most uncovered.
     """
     from mtg_bot.effects.combinators import ModalChooseOne
     from mtg_bot.effects.generic.life import GainLife
-    from mtg_bot.effects import DrawCards
+    from mtg_bot.effects.generic.library_lookat import Scry
     from mtg_bot.parity.trajectory import _python_spell_effect_to_dict
 
-    eff = ModalChooseOne(modes=(GainLife(amount=3), DrawCards(amount=1)))
+    eff = ModalChooseOne(modes=(GainLife(amount=3), Scry(amount=1)))
     d = _python_spell_effect_to_dict(eff)
     assert d is None
 

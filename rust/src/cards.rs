@@ -2190,6 +2190,68 @@ pub enum Effect {
     /// fields. The bridge translates this Rust variant to
     /// `SystemsOverrideEffect()` (field-free construction).
     SystemsOverrideEffect,
+    /// **Control-change-UEOT subsystem — Vengeful Possession Cycle 1
+    /// (2026-05-22).** Generic Threaten core — "Gain control of target
+    /// creature until end of turn. Untap it. It gains haste until end
+    /// of turn."
+    ///
+    /// Mirrors Python's `ThreatenTargetCreatureUEOT`
+    /// (`effects/generic/pump.py:1017`). Field-free unit variant — the
+    /// single creature target rides on the resolving `StackItem` via
+    /// `current_resolve_payload_target_id` (the proven
+    /// `Effect::SystemsOverrideEffect` payload-target swap shape;
+    /// distinct from Systems Override's artifact-OR-creature filter —
+    /// this variant restricts to creatures only, matching the Python
+    /// `legal_targets` walk that filters on `printing.is_creature`).
+    ///
+    /// **Resolve semantics (mirrors `ThreatenTargetCreatureUEOT.resolve`
+    /// at `effects/generic/pump.py:1053-1092` byte-equal):**
+    /// 1. Read the cast-time-bound target via
+    ///    `current_resolve_payload_target_id`. Silent no-op when
+    ///    `None` (the synthetic-test `push_to_stack` path without
+    ///    `push_to_stack_with_target`) or when no eligible creature
+    ///    exists on the battlefield.
+    /// 2. Locate the target on a battlefield. Filter: creature card
+    ///    type required (Python: `printing.is_creature`); the Mutinous
+    ///    Massacre / Systems Override gain-control phase precedent
+    ///    establishes that indestructible / hexproof are NOT decline
+    ///    reasons here (CR 110.1 — control change works on any
+    ///    creature; hexproof only matters at target-selection time).
+    /// 3. **Gain-control phase.** Stamp
+    ///    `controller_override = Some(caster)` (the Cycle-1 substrate's
+    ///    live mint shape inlined per per-slice file-iso — the C4 /
+    ///    C5 arms' precedent), with same-controller short-circuit so
+    ///    own-creature targets get no override but still untap and
+    ///    gain haste UEOT.
+    /// 4. **Untap.** `obj.tapped = false` (CR 110.1 — stolen creatures
+    ///    untap so they can attack the same turn alongside the haste
+    ///    grant).
+    /// 5. **Haste UEOT.** Push `UeotModifier::GrantKeyword
+    ///    { keyword: "haste" }` onto `obj.ueot_modifiers` (proven
+    ///    `BiosynthicBurstEffect` / Mutinous Massacre / Systems
+    ///    Override shape).
+    /// 6. **Cleanup drain.** Cycle-1's
+    ///    `clear_controller_overrides_all` reverts the override at end
+    ///    of turn; the round-27 `clear_ueot_modifiers_all` clears the
+    ///    haste UEOT modifier. Both fire in the same pass.
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `SystemsOverrideEffect` / `ExorciseEffect` Tier-A unit-variant
+    /// idiom). No dict payload — the spell's target rides on the
+    /// `StackItem`'s payload-target field.
+    ///
+    /// **Composition** — Vengeful Possession's spell_effect is a
+    /// `Sequence(ThreatenTargetCreatureUEOT, IfYouDo(MayDo(DiscardSelf(1)),
+    /// DrawCards(1)))` looter rider. Each of the surrounding composite
+    /// Effects (`Sequence`, `IfYouDo`, `MayDo`, `DiscardSelf`,
+    /// `DrawCards`) was already covered+bridged Rust-side at this
+    /// cycle's HEAD; only `Effect::ThreatenTargetCreatureUEOT` is the
+    /// new closure.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `ThreatenTargetCreatureUEOT()` (field-free construction).
+    ThreatenTargetCreatureUEOT,
     /// **Control-change-UEOT subsystem — Cycle 5 (2026-05-22).**
     /// Delayed-trigger "remove `amount` charge counters from this
     /// permanent" effect, scheduled by `SystemsOverrideEffect` and
@@ -9057,6 +9119,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // parser arm shape.
             Ok(Effect::SystemsOverrideEffect)
         }
+        "threaten_target_creature_ueot" => {
+            // Control-change-UEOT subsystem — Vengeful Possession
+            // Cycle 1 (2026-05-22). Unit variant — no required fields.
+            // The single creature target rides on the `StackItem`'s
+            // payload-target field. Mirrors the
+            // `systems_override_effect` field-free unit-variant parser
+            // arm shape; the only divergence is the target-filter (this
+            // variant restricts to creatures only, Systems Override
+            // allows artifact OR creature).
+            Ok(Effect::ThreatenTargetCreatureUEOT)
+        }
         "remove_charge_counters_from_source_delayed" => {
             // Control-change-UEOT subsystem — Cycle 5 (2026-05-22).
             // Delayed-trigger remove-N-charge-counters effect. Single
@@ -13069,6 +13142,18 @@ pub(crate) fn effect_to_pydict<'py>(
             // conditional charge-counter rider are intrinsic to the
             // resolve arm.
             d.set_item("kind", "systems_override_effect")?;
+        }
+        Effect::ThreatenTargetCreatureUEOT => {
+            // Control-change-UEOT subsystem — Vengeful Possession
+            // Cycle 1 (2026-05-22). Unit variant — `kind` only (the
+            // Systems Override / Mutinous Massacre field-free to_dict
+            // idiom). Bidirectional with the
+            // `threaten_target_creature_ueot` parse arm + the
+            // `cross_engine.py` bridge arm + the `trajectory.py`
+            // reverse-serializer leaf. The single creature target
+            // rides on the StackItem (`current_resolve_payload_target_id`)
+            // and is NOT serialized here.
+            d.set_item("kind", "threaten_target_creature_ueot")?;
         }
         Effect::RemoveChargeCountersFromSourceDelayed { amount } => {
             // Control-change-UEOT subsystem — Cycle 5 (2026-05-22).

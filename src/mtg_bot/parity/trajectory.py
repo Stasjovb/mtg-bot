@@ -4167,7 +4167,11 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.pump import (
         PumpTargetArtifactOrCreatureUntilEOT,
+        ThreatenTargetCreatureUEOT,
     )
+    from mtg_bot.effects.combinators import IfYouDo, MayDo
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.counters import (
         PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     )
@@ -4586,6 +4590,78 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # auto-grow teeth.
         if isinstance(eff, SystemsOverrideEffect):
             return {"kind": "systems_override_effect"}
+        # **Control-change-UEOT subsystem — Vengeful Possession Cycle 1
+        # (2026-05-22).** Pid-FREE covered unit variant — Rust's
+        # ``parse_effect`` ``"threaten_target_creature_ueot"`` arm
+        # takes NO fields and the dict→Python bridge arm
+        # (cross_engine.py ``threaten_target_creature_ueot``) constructs
+        # the field-free ``ThreatenTargetCreatureUEOT()``. The single
+        # creature target rides on the ``StackItem``'s payload-target
+        # field. No token pid → no :func:`_seat_token_printings`
+        # dependency; the round-trip is the clean
+        # ``systems_override_effect`` / ``mutinous_massacre_effect``
+        # unit-leaf idiom.
+        if isinstance(eff, ThreatenTargetCreatureUEOT):
+            return {"kind": "threaten_target_creature_ueot"}
+        # **Vengeful Possession Cycle 1 — looter-rider composite leaves
+        # (2026-05-22).** Vengeful Possession's spell_effect is
+        # ``Sequence(ThreatenTargetCreatureUEOT,
+        # IfYouDo(MayDo(DiscardSelf(1)), DrawCards(1)))`` — a
+        # threaten-then-may-discard-draw looter rider. The composite
+        # Effects (Sequence, IfYouDo, MayDo, DiscardSelf, DrawCards)
+        # are ALREADY Rust-covered AND have ``cross_engine.py`` bridge
+        # arms; they were just missing here in the
+        # ``_python_spell_effect_to_dict`` reverse-serializer
+        # ``_leaf`` table. Adding these leaves lets ``Sequence`` (whose
+        # composer recurses into ``_leaf`` for each child) emit the
+        # full looter dict shape — auto-grow §2 teeth.
+        #
+        # **Schema parity with the cross_engine.py bridge arms:**
+        #
+        #   * ``DrawCards`` → ``{"kind": "draw_cards", "count": N}``
+        #     (cross_engine.py:765; Python `DrawCards.amount` →
+        #     dict `count` — the documented field rename. Rust's
+        #     ``parse_effect`` reads ``count``.)
+        #   * ``DiscardSelf`` → ``{"kind": "discard_self", "amount": N}``
+        #     (cross_engine.py:1162; field name matches both sides.)
+        #   * ``MayDo`` → ``{"kind": "may_do", "inner_effect": <eff>,
+        #     "prompt": str}`` (cross_engine.py:1933; Python
+        #     ``MayDo.inner`` → dict ``inner_effect`` — the documented
+        #     field rename. Rust's ``parse_effect`` REQUIRES
+        #     ``inner_effect`` and reads ``prompt`` with empty-string
+        #     default.)
+        #   * ``IfYouDo`` → ``{"kind": "if_you_do", "do_action": <eff>,
+        #     "then_action": <eff>}`` (cross_engine.py:1898; both fields
+        #     REQUIRED on the Rust parser.)
+        #
+        # The recurse-or-bail discipline matches the Sequence composer
+        # (line 4845): if a nested child can't be serialized, the
+        # recursive ``_leaf`` call returns ``None`` and the composer
+        # bails — keeps the no-fallback-hybrid teeth (a partially-
+        # serializable composite would silently drop a child on Rust).
+        if isinstance(eff, DrawCards):
+            return {"kind": "draw_cards", "count": int(eff.amount)}
+        if isinstance(eff, DiscardSelf):
+            return {"kind": "discard_self", "amount": int(eff.amount)}
+        if isinstance(eff, MayDo):
+            inner_dict = _leaf(eff.inner)
+            if inner_dict is None:
+                return None  # recurse-or-bail
+            return {
+                "kind": "may_do",
+                "inner_effect": inner_dict,
+                "prompt": str(eff.prompt),
+            }
+        if isinstance(eff, IfYouDo):
+            do_dict = _leaf(eff.do_action)
+            then_dict = _leaf(eff.then_action)
+            if do_dict is None or then_dict is None:
+                return None  # recurse-or-bail
+            return {
+                "kind": "if_you_do",
+                "do_action": do_dict,
+                "then_action": then_dict,
+            }
         # **Control-change-UEOT subsystem — Cycle 5 delayed-trigger
         # complement (2026-05-22).** Single-field
         # ``RemoveChargeCountersFromSourceDelayed(amount)`` leaf.

@@ -21447,6 +21447,22 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # drops it on the Python side (``parser/effects.py:5794``) and
     # the Rust mirror inherits the drop by not modeling it. Admit
     # set 29 → 30.
+    # **vengeful-possession-cycle-1-p1 (2026-05-22):** Vengeful
+    # Possession AUTO-JOINED. Adds ``Effect::ThreatenTargetCreatureUEOT``
+    # (field-free unit variant — generic Threaten core, creature-only
+    # target filter) + the resolve arm (control-grant + untap + haste
+    # UEOT, inlined override-mint per the Cycle 4 / Cycle 5 precedent)
+    # + the matching ``_leaf`` arms in ``trajectory.py`` for the
+    # surrounding composite Effects (``IfYouDo``, ``MayDo``,
+    # ``DiscardSelf``, ``DrawCards`` — all four ALREADY Rust-covered
+    # and ``cross_engine.py``-bridged; the ``_leaf`` table was the
+    # only missing piece). Vengeful Possession COVERED → ADMITTED.
+    # 30 → 31 (~0 17lands decks — uncommon Effect-uncovered closure).
+    # The card rides the Phase-1 ``(1, 1)`` single-target admit shape
+    # (the threaten core takes one creature target; the looter rider
+    # is untargeted). Per the §2 auto-grow teeth, no admit-set widen
+    # was needed — landing the Effect coverage + serializer leaves
+    # made the round-trip whole + auto-flipped the gate.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
@@ -21458,17 +21474,20 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
         "Seedship Impact", "Shattered Wings", "Systems Override",
-        "Under the Skin", "Untimely Malfunction", "Zero Point Ballad",
+        "Under the Skin", "Untimely Malfunction",
+        "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 30 covered+bridged Tier-A spells: the 26 "
+        f"exactly the 31 covered+bridged Tier-A spells: the 26 "
         f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
         f"via control-change-ueot-cycle-4-p1 + Systems Override via "
         f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
         f"closure (Devastating Onslaught via "
         f"devastating-onslaught-cycle-1) + 1 multi-target "
         f"nonland-permanent graveyard-to-hand admit (Pull Through "
-        f"the Weft via pull-through-the-weft-cycle-1) — auto-grows "
+        f"the Weft via pull-through-the-weft-cycle-1) + 1 "
+        f"control-change-UEOT non-EoE consumer (Vengeful Possession "
+        f"via vengeful-possession-cycle-1-p1) — auto-grows "
         f"further as the remaining Tier-A and per-mode-target modal "
         f"spells close)")
 

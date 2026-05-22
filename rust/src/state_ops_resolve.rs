@@ -10303,6 +10303,134 @@ fn apply_effect(
             }
             let _ = source_obj_id; // source is the spell; not needed
         }
+        // **Control-change-UEOT subsystem — Vengeful Possession
+        // Cycle 1 (2026-05-22).** Generic Threaten core: "Gain control
+        // of target creature until end of turn. Untap it. It gains
+        // haste until end of turn." Vengeful Possession's spell_effect
+        // composes this with an `IfYouDo(MayDo(DiscardSelf(1)),
+        // DrawCards(1))` looter rider via `Sequence` — each of the
+        // composite Effects is already covered+bridged at this cycle's
+        // HEAD.
+        //
+        // Mirrors Python's `ThreatenTargetCreatureUEOT.resolve` at
+        // `effects/generic/pump.py:1053-1092` byte-equal:
+        //
+        // 1. **Read target.** Pull `current_resolve_payload_target_id`
+        //    (the proven Systems Override / Emergency Eject /
+        //    Depressurize payload-target swap pattern). When `None`
+        //    (synthetic-test `push_to_stack` path without
+        //    `push_to_stack_with_target`), fall back to the
+        //    deterministic-first creature in ETB-timestamp order
+        //    across both battlefields. Silent no-op when no eligible
+        //    creature target exists.
+        // 2. **Locate + filter.** Target must be a creature (Python:
+        //    `printing.is_creature` in `legal_targets`). Indestructible
+        //    / hexproof are NOT decline reasons (CR 110.1 — control
+        //    change works on any creature; hexproof only matters at
+        //    target-selection time).
+        // 3. **Gain-control phase.** Stamp `controller_override =
+        //    Some(caster)` with same-controller short-circuit
+        //    (matching the Cycle-1 substrate's mint shape, inlined
+        //    here per per-slice file-iso — the Cycle 4 Mutinous
+        //    Massacre / Cycle 5 Systems Override precedent).
+        // 4. **Untap.** `obj.tapped = false` (CR 110.1 — stolen
+        //    creatures untap so they can attack the same turn).
+        // 5. **Haste UEOT.** Push `UeotModifier::GrantKeyword
+        //    { keyword: "haste" }` onto `obj.ueot_modifiers` (proven
+        //    `BiosynthicBurstEffect` / Mutinous Massacre / Systems
+        //    Override push shape).
+        // 6. **Cleanup drain.** The Cycle-1
+        //    `clear_controller_overrides_all` reverts the override to
+        //    None; the round-27 `clear_ueot_modifiers_all` clears the
+        //    haste UEOT modifier. Both fire at end of turn.
+        //
+        // **Field-iso inlining note** (identical to Cycle 4 / Cycle 5):
+        // the Cycle-1 `grant_control_change_ueot` helper is
+        // `#[pymethods] impl GameState`-private and not accessible
+        // across files; the grant body is inlined here per the per-
+        // slice file-iso convention.
+        Effect::ThreatenTargetCreatureUEOT => {
+            // Source-controller resolution (mirrors Systems Override's
+            // pattern; prefer the transient
+            // current_resolve_source_controller swap, fall back to
+            // active_player).
+            let caster = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // Read the cast-time-bound target (payload-target swap) or
+            // fall back to deterministic-first creature for the
+            // synthetic push_to_stack path.
+            let payload_target_opt =
+                state.current_resolve_payload_target_id;
+            let target: Option<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        if let Some(pt) = payload_target_opt {
+                            if obj.id != pt {
+                                return None;
+                            }
+                        }
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        let is_creature = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        if !is_creature {
+                            return None;
+                        }
+                        // Find the owner_idx whose battlefield holds
+                        // this object (controller may be different
+                        // from owner under existing override stamps,
+                        // but the physical zone is keyed on owner).
+                        let owner_idx_opt: Option<usize> = (0..state
+                            .players
+                            .len())
+                            .find(|&pidx| {
+                                state.players[pidx]
+                                    .battlefield
+                                    .iter()
+                                    .any(|o| o.id == obj.id)
+                            });
+                        owner_idx_opt.map(|pidx| (pidx, obj.id))
+                    });
+            let Some((owner_idx, target_id)) = target else {
+                let _ = source_obj_id; // silent no-op — no eligible target
+                return Ok(());
+            };
+            // Read current effective controller before mutation
+            // (idempotent same-controller short-circuit mirrors the
+            // Cycle-1 helper at `state_ops_cleanup.rs:372`).
+            let current_effective: u8 = state.players[owner_idx]
+                .battlefield
+                .iter()
+                .find(|o| o.id == target_id)
+                .map(|o| {
+                    crate::state_ops_cleanup::effective_controller_id(o)
+                })
+                .unwrap_or(0);
+            let needs_grant = current_effective != caster;
+            // Mutate the target: stamp override (if needed), untap,
+            // push haste UEOT.
+            let zone: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[owner_idx].battlefield,
+            );
+            for obj in zone.iter_mut() {
+                if obj.id != target_id {
+                    continue;
+                }
+                if needs_grant {
+                    obj.controller_override = Some(caster);
+                }
+                obj.tapped = false;
+                obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                    keyword: "haste".to_string(),
+                });
+                break;
+            }
+            let _ = source_obj_id; // source is the spell; not needed
+        }
         // **Control-change-UEOT subsystem — Cycle 5 (2026-05-22).**
         // Delayed-trigger "remove `amount` charge counters from
         // CARDNAME" effect, scheduled by Systems Override and drained

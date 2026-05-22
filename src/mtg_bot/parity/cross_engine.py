@@ -9461,6 +9461,42 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # after Cycle 4 / Mutinous Massacre landed).
         from mtg_bot.effects.bespoke import SystemsOverrideEffect
         return SystemsOverrideEffect()
+    if kind == "threaten_target_creature_ueot":
+        # **Control-change-UEOT subsystem — Vengeful Possession Cycle 1
+        # (2026-05-22).** Rust substrate
+        # ``Effect::ThreatenTargetCreatureUEOT`` (cards.rs field-free
+        # UNIT variant; parser ``"threaten_target_creature_ueot"``;
+        # resolve in state_ops_resolve.rs beside the
+        # ``SystemsOverrideEffect`` arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "threaten_target_creature_ueot"}``. Python's
+        # ``ThreatenTargetCreatureUEOT`` (effects/generic/pump.py:1017)
+        # is a frozen dataclass with no constructor parameters. The
+        # single creature target rides on the StackItem
+        # (``current_resolve_payload_target_id``).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines locate
+        # the target on the battlefield (creature filter — distinct
+        # from Systems Override's artifact-OR-creature filter), stamp
+        # the controller_override = caster (Cycle-1 substrate's mint
+        # shape), untap, grant haste UEOT. The cleanup-step drain
+        # (Cycle-1's ``clear_controller_overrides_all`` + round-27's
+        # ``clear_ueot_modifiers_all``) reverts both UEOT pieces at end
+        # of turn.
+        #
+        # **Real test-pool consumer**: Vengeful Possession — Sorcery
+        # ``{2}{R}`` "Gain control of target creature until end of
+        # turn. Untap it. It gains haste until end of turn. You may
+        # discard a card. If you do, draw a card." 0 17lands decks
+        # (uncommon Effect-uncovered closure; this Cycle-1 closes the
+        # only previously-missing class for the card — the surrounding
+        # ``Sequence``, ``IfYouDo``, ``MayDo``, ``DiscardSelf``,
+        # ``DrawCards`` composite Effects were already covered+bridged).
+        from mtg_bot.effects.generic.pump import (
+            ThreatenTargetCreatureUEOT,
+        )
+        return ThreatenTargetCreatureUEOT()
     if kind == "remove_charge_counters_from_source_delayed":
         # **Control-change-UEOT subsystem — Cycle 5 delayed-trigger
         # complement (2026-05-22).** Rust substrate

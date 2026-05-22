@@ -1192,9 +1192,54 @@ stale — both shipped upstream of this dated paragraph.
   `docs/SEARCH_LIMITATIONS.md` §2 (Devastating Onslaught Cycle 1
   LANDED block).
 
+  **Vengeful Possession Cycle 1 landed (2026-05-22,
+  `feature/vengeful-possession-cycle-1-p1`).** First non-EoE
+  consumer of the substrate: Vengeful Possession (DSK; `{2}{R}`
+  Sorcery — "Gain control of target creature until end of turn.
+  Untap it. It gains haste until end of turn. You may discard a
+  card. If you do, draw a card."; ~0 17lands decks — uncommon
+  Effect-uncovered closure surfaced by the Effect-uncovered next-5
+  walk). Vengeful Possession is admitted into the EoE-aware test
+  pool via the Effect-uncovered single-gated tier classifier
+  (same admit class as Exorcise, which is also Duskmourn-source).
+  Adds:
+    * `Effect::ThreatenTargetCreatureUEOT` field-free unit variant
+      + resolve arm (the generic Threaten core: read
+      `current_resolve_payload_target_id`, creature-only filter,
+      inline override-mint + same-controller short-circuit + untap
+      + haste UEOT push). Mirrors the Cycle 4 / Cycle 5 inline
+      shape but creature-only target filter (vs Systems Override's
+      artifact-OR-creature filter).
+    * Bridge arm `kind == "threaten_target_creature_ueot"` in
+      `cross_engine.py::_ta_dict_to_python_effect`.
+    * **Five new `_leaf` arms** in `trajectory.py::
+      _python_spell_effect_to_dict` for the surrounding composite
+      Effects — `ThreatenTargetCreatureUEOT`, `IfYouDo`, `MayDo`,
+      `DiscardSelf`, `DrawCards`. All five were ALREADY Rust-
+      covered AND bridged at this cycle's HEAD; the reverse-
+      serializer table was the only missing piece. The Sequence
+      composer's child-recurse + IfYouDo's do/then-recurse now
+      serialize Vengeful Possession's full looter-rider tree
+      byte-equal.
+
+  PROBED 281 → 282 (Vengeful Possession); admit set 30 → 31.
+  Vengeful Possession rides the Phase-1 `(1, 1)` single-target
+  admit shape — the looter rider is untargeted, the threaten core
+  takes one creature target. 11 new tests in
+  `tests/test_vengeful_possession_parity.py` (parser SoT + 2
+  serializer round-trips + admit-gate flip + covered-class pin +
+  5 Rust resolve unit pins covering opponent-creature grant,
+  own-target same-controller short-circuit, creature filter
+  declining an artifact target, no-target silent no-op, cleanup
+  drain + the GENUINE real-EoE cross-engine probe driving the
+  parsed Vengeful Possession printing through the Rust resolve
+  arm). Full Vengeful Possession Cycle 1 entry at
+  `docs/SEARCH_LIMITATIONS.md` §1.
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence (C4+C5
-  together flipped 2 cards × ~5k decks each).
+  + Vengeful Possession Cycle 1 together flipped 3 cards across the
+  three lanes).
 
 ### (4) Dynamic-P/T formula — **CLOSED** (round-84, 2026-05-20)
 

@@ -9954,8 +9954,51 @@ per-card slice. Cycle list:
   carries the same shape) + agent-prompt extension (live agent-
   driven odd/even pick via a new `PendingDecision::ChooseOddOrEven`).
 
-Pool-flip per the cycle list: 2 cards across C4+C5 (Mutinous
-Massacre LANDED C4, Systems Override LANDED C5) at ~5k decks each.
+- **Vengeful Possession Cycle 1 — LANDED (2026-05-22,
+  `feature/vengeful-possession-cycle-1-p1`).** Vengeful Possession
+  (DSK; `{2}{R}` Sorcery — "Gain control of target creature until
+  end of turn. Untap it. It gains haste until end of turn. You may
+  discard a card. If you do, draw a card."; ~0 17lands decks —
+  uncommon Effect-uncovered closure surfaced by the Effect-uncovered
+  next-5 walk) — the C1-C5 substrate's first non-EoE *consumer*
+  (Vengeful Possession is a Duskmourn printing, admitted into the
+  EoE-aware test pool via the Effect-uncovered single-gated tier
+  classifier, same admit class as Exorcise). Adds:
+
+    - `Effect::ThreatenTargetCreatureUEOT` field-free unit variant
+      in `rust/src/cards.rs` (parse + to_pydict; sibling shape of
+      Systems Override but creature-only target filter).
+    - Resolve arm in `rust/src/state_ops_resolve.rs` mirroring the
+      C5 / Systems Override inline override-mint shape: read
+      `current_resolve_payload_target_id`, filter to creature card-
+      type, stamp `controller_override = Some(caster)` (same-
+      controller short-circuit retained), untap, push the haste
+      UEOT modifier.
+    - Bridge arms in `cross_engine.py::_ta_dict_to_python_effect`
+      (one new `kind == "threaten_target_creature_ueot"` arm
+      reconstructing `ThreatenTargetCreatureUEOT()`).
+    - **Five `_leaf` arms added** to `trajectory.py::
+      _python_spell_effect_to_dict` for the surrounding composite
+      Effects — `ThreatenTargetCreatureUEOT`, `IfYouDo`, `MayDo`,
+      `DiscardSelf`, `DrawCards`. All five composite Effects were
+      ALREADY Rust-covered AND `cross_engine.py`-bridged at this
+      cycle's HEAD; the `_leaf` table was the only missing piece.
+      Composer recursion (Sequence walks `_leaf` on each child)
+      now serializes the full looter-rider spell_effect shape
+      byte-equal.
+
+  PROBED 281 → 282 (Vengeful Possession); admit set 26 → 27.
+  Vengeful Possession rides the Phase-1 `(1, 1)` single-target
+  admit shape. Pinned end-to-end in the real-EoE cross-engine probe
+  driving the parsed Vengeful Possession printing against an
+  opponent-controlled tapped creature — the threaten core grants
+  effective control + untap + haste; the looter rider fizzles on
+  empty hand (the `DiscardSelf` False-return path skips the draw).
+
+Pool-flip per the cycle list: 3 cards across C4+C5+VP1 (Mutinous
+Massacre LANDED C4 ~4,671 decks, Systems Override LANDED C5 ~4,775
+decks, Vengeful Possession LANDED VP1 ~0 decks — uncommon Effect-
+uncovered closure).
 
 ### 2. Zero Point Ballad — X-cost subsystem missing on Rust
 

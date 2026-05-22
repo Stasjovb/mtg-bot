@@ -980,6 +980,27 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Flips Devastating Onslaught COVERED → PROBED (admit set
     # 28 → 29).
     REPO_ROOT / "tests" / "test_devastating_onslaught_parity.py",
+    # **vengeful-possession-cycle-1-p1 (2026-05-22):** Closes
+    # Vengeful Possession (~0 17lands decks — uncommon Effect-uncovered
+    # closure). The dedicated probe module
+    # ``test_vengeful_possession_parity.py`` carries the canonical
+    # ``test_cross_engine_real_eoe_vengeful_possession_control_change_
+    # parity`` function which drives the genuine parsed Vengeful
+    # Possession printing through the Rust resolve arm. The control-
+    # change-UEOT C1-C5 substrate (controller_override field + helper
+    # + cleanup drain + bridge round-trip + Mutinous Massacre / Systems
+    # Override resolve precedents) + this lane's
+    # ``Effect::ThreatenTargetCreatureUEOT`` field-free unit variant +
+    # resolve arm (control-grant + untap + haste UEOT, creature-only
+    # target filter — distinct from Systems Override's artifact-OR-
+    # creature filter) + bridge arms + reverse-serializer leaves
+    # (including the previously-missing ``_leaf`` arms for the
+    # surrounding composite Effects ``IfYouDo`` / ``MayDo`` /
+    # ``DiscardSelf`` / ``DrawCards`` — all four were Rust-covered and
+    # ``cross_engine.py``-bridged at this cycle's HEAD; the trajectory.py
+    # ``_leaf`` table was the only missing piece) flips Vengeful
+    # Possession COVERED → PROBED.
+    REPO_ROOT / "tests" / "test_vengeful_possession_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

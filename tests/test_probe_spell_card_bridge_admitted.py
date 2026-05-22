@@ -259,7 +259,8 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
     "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
     "Shattered Wings", "Systems Override", "Under the Skin",
-    "Untimely Malfunction", "Zero Point Ballad",
+    "Untimely Malfunction", "Vengeful Possession",
+    "Zero Point Ballad",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus
