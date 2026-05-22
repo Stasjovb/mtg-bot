@@ -9653,13 +9653,96 @@ per-card slice. Cycle list:
   behavior in isolation; full Python-Rust agreement on a real
   Mutinous-Massacre / Systems-Override trajectory requires both
   Cycle 2 (reroute reads) and Cycle 3 (bridge round-trip).
-- **C2** — `effective_controller_id` re-route every raw
-  `o.controller_id` / `.controller` read site across
-  `state_ops_legal.rs` / `state_ops_combat.rs` /
-  `state_ops_decisions.rs` / `state_ops_actions.rs` to consult the
-  helper (~200 LoC across 5+ files; high cross-cutting risk; the
-  helper landed in Cycle 1 with `pub(crate)` visibility precisely
-  to gate this).
+- **C2 — LANDED (2026-05-21, `feature/control-change-ueot-cycle-2-p1`).**
+  Rerouted the highest-leverage gameplay-decision raw
+  `obj.controller` reads through `effective_controller_id`. The
+  reroute is back-compat byte-equivalent today (no live mint site;
+  every `controller_override.is_none()` so the helper returns
+  `obj.controller` verbatim). Pool-flip is gated on Cycle 4's mint
+  sites, but the substrate is now in place so a future override
+  flows through the rerouted decision sites the same turn it's
+  minted and reverts at the cleanup-step drain landed in Cycle 1.
+
+  Read sites rerouted (10 total across 3 files):
+  - `state_ops_legal.rs` (3): `BiosynthicBurstEffect` legal-target
+    predicate; `PutChargeCountersOnTargetSpacecraftOrPlanetYou
+    Control` legal-target predicate; `DiplomaticRelationsEffect`
+    2-slot satisfiability bucketing.
+  - `state_ops_combat.rs` (3): `dynamic_base_pt_pub` subject-
+    controller lookup AND per-other-permanent "controlled by same
+    player" predicate (Harmonious Grovestrider P=T=lands-
+    controlled); `battlefield_creature_controller` (lifelink credit
+    + damage-source attribution).
+  - `state_ops_cast.rs` (4): Diplomatic Relations cast-time 2-slot
+    bind; `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`
+    cast-time bind; additional-cost "creature you control" pick;
+    Aura cast-time `yours_only` host-eligibility filter.
+
+  Kept raw on purpose (NOT rerouted; documented inline):
+  - `state_ops_snapshot.rs` / `state_ops_fingerprint.rs` —
+    identity-serialization must observe the printed/Aura-cached
+    controller, not the transient override (the override is a
+    separate snapshot key per Cycle 1). Rerouting these would
+    invalidate every pre-Cycle-1 pinned baseline and conflate the
+    override surface with the storage-shape surface.
+  - `state_ops_sba.rs` SBA destruction graveyard routing (lines
+    615 / 694 / 699 / 776-782) — the existing code routes corpses
+    to the CONTROLLER's graveyard rather than the OWNER's
+    (intentional first-slice deviation from CR 400.6, documented
+    inline at `state_ops_sba.rs:776-782`). Override-aware reroute
+    here would compound that gap (a UEOT-stolen creature dying
+    would land in the new controller's graveyard instead of the
+    original owner's). Left as the existing zone-routing read
+    until the orthogonal "destination = owner, not controller"
+    slice lands; that slice will revisit both convergently.
+  - `state_ops_sba.rs` Aura `aura.controller` reads (lines 198,
+    215, 223, 253, 260) — used for `move_aura_to_owners_graveyard`
+    destination routing (zone-residency, owner-bound on cast from
+    hand per the inline docstring at `state_ops_sba.rs:183-185`).
+    Same rationale as the SBA-graveyard cluster above.
+  - `state_ops_resolve.rs` source-controller multi-zone scans
+    (~30+ sites, the `source_controller = Some(obj.controller)`
+    pattern when locating the effect's source across hand /
+    library / battlefield / graveyard / exile) — substrate-only-
+    equivalent today since the override never mints outside the
+    battlefield (Cycle 1's `grant_control_change_ueot` walks both
+    bfs only, and the cleanup-step drain runs CR 514.3 before any
+    zone-change for off-bf objects can stamp an override). Left
+    raw to keep the C2 patch surface small + readable; each Effect
+    arm has its own variant of the multi-zone scan and a
+    follow-up cycle can sweep them with a single helper migration
+    if a future override site (e.g. cast-from-graveyard mint)
+    needs it.
+  - `StackItem.controller` reads (`state_ops_priority.rs`,
+    `state_ops_stack.rs`, `state_ops_counterspell.rs:155`) — the
+    UEOT override is a `GameObject` property, NOT a `StackItem`
+    property; the two structs are independent. KEEP RAW.
+  - Constructor writes (`obj.controller = X` in
+    `state_ops_cast.rs`, `state_ops_zones.rs`, `state_ops_sba.rs`
+    Aura layer-2 swap, `state_ops_decisions.rs`,
+    `state_ops_combat.rs` bf-swap, `state_ops_resolve.rs`
+    reanimate/ETB) — these are WRITES, never reads, and not in
+    Cycle 2's scope.
+  - `cards.rs:6675/6683` + `state.rs` find-source-controller
+    helpers — multi-zone scans (same rationale as the
+    `state_ops_resolve.rs` `source_controller` cluster above).
+
+  Tests: `tests/test_control_change_ueot_cycle2.py` (4 tests) —
+  Harmonious Grovestrider dynamic-P/T flips under override and
+  reverts after cleanup drain (subject-controller reroute); per-
+  other-permanent predicate also routes through `effective_controller_id`
+  (stolen Forest counts for the new controller); helper round-trip
+  through cleanup; cleanup summary `controller_overrides_cleared`
+  count composition.
+
+  Sanity gates: 640/640 sanity-suite PASS (test_control_change_ueot_
+  cycle1 + cycle2 + test_rust_engine_smoke + test_parity_smoke +
+  test_rust_bridge_parity); 65/65 supplementary tests PASS
+  (test_combat + test_tier4_and_dynamic_pt + test_cosmogoyf +
+  test_aura_substrate_phase_2_s2 + test_aura_substrate_phase_4_s3).
+
+  C3 / C4 still apply (bridge round-trip + Mutinous Massacre /
+  Systems Override Effect variants).
 - **C3** — Bridge round-trip: cross-engine snapshot pin that
   Python's `obj.controller_id` (which is Python's layer-2
   write-through cache) and Rust's `effective_controller_id(obj_id)`

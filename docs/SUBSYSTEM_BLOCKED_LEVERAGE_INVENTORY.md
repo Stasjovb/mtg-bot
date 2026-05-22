@@ -708,6 +708,29 @@ upstream of this dated paragraph).
   overrides. Full Cycle 1 entry at `docs/SEARCH_LIMITATIONS.md`
   §1 (Mutinous Massacre).
 
+  **Control-change-UEOT Cycle 2 landed (2026-05-21,
+  `feature/control-change-ueot-cycle-2-p1`).** Rerouted 10
+  gameplay-decision raw `.controller` reads through
+  `effective_controller_id` across `state_ops_legal.rs` (3
+  legal-target predicates: BiosynthicBurst / Spacecraft-or-Planet-
+  You-Control / Diplomatic-Relations) + `state_ops_combat.rs` (3:
+  dynamic-P/T subject + per-permanent predicate +
+  battlefield_creature_controller for lifelink) +
+  `state_ops_cast.rs` (4: Diplomatic-Relations cast-bind +
+  Spacecraft-Planet cast-bind + additional-cost creature-you-
+  control + Aura `yours_only` host filter). Back-compat byte-
+  equivalent (no live mint site yet, so every reroute returns
+  `obj.controller` unchanged); the substrate is now in place for
+  Cycle 4's Mutinous-Massacre / Systems-Override Effect variants
+  to flip these decisions on the same turn the override mints.
+  Kept raw on purpose: snapshot/fingerprint identity sites, SBA
+  graveyard routing (CR 400.6 owner-vs-controller gap is
+  orthogonal), state_ops_resolve.rs source-controller multi-zone
+  scans (substrate-equivalent today since override never mints
+  off-bf), StackItem.controller (different struct), and
+  constructor writes. Full Cycle 2 audit at
+  `docs/SEARCH_LIMITATIONS.md` §1.
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 
