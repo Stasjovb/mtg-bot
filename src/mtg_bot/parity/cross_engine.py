@@ -9230,6 +9230,48 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # uncovered single-gated tier classifier.
         from mtg_bot.effects.bespoke import ExorciseEffect
         return ExorciseEffect()
+    if kind == "close_encounter_effect":
+        # **Close Encounter — additional-cost-choice closure
+        # (Cycle 3, 2026-05-21; ~16,098 17lands decks — highest-
+        # deck-count BLOCKED card in the substrate-gated tier).**
+        # Rust substrate ``Effect::CloseEncounterEffect`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"close_encounter_effect"``; resolve in state_ops_resolve.rs
+        # beside the Exorcise ``ExorciseEffect`` arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "close_encounter_effect"}``. Python's
+        # ``CloseEncounterEffect`` (effects/bespoke.py:1065) is a
+        # frozen dataclass with no constructor parameters. The
+        # damage amount is intrinsic (computed at resolve from the
+        # additional-cost-choice object's effective power on bf or
+        # printed power on exile).
+        #
+        # **Resolve semantics (parity-relevant).** Rust reads the
+        # cast-time-bound damage target from
+        # ``current_resolve_payload_target_id`` (the established
+        # Tier-A single-target payload-target convention) and the
+        # cast-time-bound additional-cost choice from
+        # ``current_resolve_additional_cost_choice_id`` (the Cycle 1
+        # transient). The chosen object's power is read via
+        # ``read_doubling_power`` (effective power) when on a bf,
+        # or via ``printing.power`` (printed power) when in the
+        # caster's exile + warped. Mirrors Python's
+        # ``CloseEncounterEffect.resolve`` (``effects/bespoke.py:
+        # 1094-1128``) byte-equal: same bf-vs-exile branch, same
+        # ``effective_power`` vs ``printing.power or 0`` power
+        # source, same silent fizzle on missing target / missing
+        # choice / amount=0.
+        #
+        # **Real test-pool consumer**: Close Encounter — Instant
+        # {1}{G} "As an additional cost to cast this spell, choose
+        # a creature you control or a warped creature card you own
+        # in exile. Close Encounter deals damage equal to the power
+        # of the chosen creature or card to target creature."
+        # ~16,098 17lands decks (highest deck count among the BLOCKED
+        # substrate-gated tier as of 2026-05-21).
+        from mtg_bot.effects.bespoke import CloseEncounterEffect
+        return CloseEncounterEffect()
     if kind == "seedship_impact_effect":
         # **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
         # Rust substrate ``Effect::SeedshipImpactEffect {

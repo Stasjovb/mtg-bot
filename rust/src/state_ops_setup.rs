@@ -480,5 +480,11 @@ pub fn make_state(
         // Set by the resolver during apply_effect for a modal
         // spell-cast resolution.
         current_resolve_chosen_mode_idx: None,
+        // Close Encounter additional-cost-choice envelope —
+        // Cycle 1: transient choice-id slot; None at construction
+        // (no spell on the stack yet). Set by the resolver during
+        // apply_effect for an additional-cost-choose-your-creature
+        // spell-cast resolution.
+        current_resolve_additional_cost_choice_id: None,
     })
 }

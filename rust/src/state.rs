@@ -1195,6 +1195,39 @@ pub struct StackItem {
     /// `Option<Vec<u8>>` (or a fixed-arity `[u8; 2]` sibling) when
     /// the `or_both` lane lands.
     pub chosen_mode_idx: Option<u8>,
+    /// **Close Encounter additional-cost-choice envelope — Cycle 1
+    /// (cast-time choice binding, 2026-05-21).** The cast-time-picked
+    /// additional-cost choice id for a `StackItemKind::Spell` whose
+    /// printing carries `additional_cost_choose_your_creature = true`
+    /// (today: Close Encounter; future siblings as the lane unlocks
+    /// more "choose a creature" additional-cost cards). Mirrors
+    /// Python's `StackItem.additional_cost_choice_id: Optional[int]`
+    /// at `game.py:2314` — the chosen object's id (a creature the
+    /// caster controls OR a warped creature card the caster owns in
+    /// exile, per CR 601.2f additional-cost-pay).
+    ///
+    /// **Wire shape**: cast pipeline picks the deterministic-first
+    /// legal option at cast time (scan battlefield-creatures-you-
+    /// control first, then warped exile creature cards; first-id
+    /// wins) and stores it here. The resolve arm reads it via the
+    /// `state.current_resolve_additional_cost_choice_id` transient
+    /// (the save → set → restore swap pattern, same as
+    /// `current_resolve_chosen_mode_idx`). `None` for every spell
+    /// whose printing does NOT carry the choose-your-creature flag
+    /// — back-compat byte-identical to the pre-Cycle-1 push.
+    ///
+    /// **Cycle 1 substrate-only scope.** This field stores the
+    /// choice; the resolve-arm consumer is Cycle 3 (the
+    /// `Effect::CloseEncounterEffect` arm). Cycle 1 ships the
+    /// envelope + cast-time bind + transient swap so the substrate
+    /// is in place before the Effect variant lands; until Cycle 3
+    /// no Effect arm reads it, so the substrate is parity-NEUTRAL
+    /// (no Close-Encounter card is bridge-admitted yet — the
+    /// `additional_cost_choose_your_creature` flag still triggers
+    /// the bridge decline at `trajectory.py::_printing_is_bridge_
+    /// simple_spell`'s covered-set check via `CloseEncounterEffect`
+    /// not in `covered_python_class_set`).
+    pub additional_cost_choice_id: Option<u32>,
 }
 
 impl StackItem {
@@ -1215,6 +1248,13 @@ impl StackItem {
             // variant); default `None` is back-compat-correct for
             // every pre-cycle non-modal spell.
             chosen_mode_idx: None,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1. Default `None` — the bare untargeted spell
+            // push does not see the `additional_cost_choose_your_
+            // creature` flag (the dedicated cast-pipeline detector
+            // populates `Some(_)` only for the choose-your-creature
+            // additional-cost shape, Cycle 2).
+            additional_cost_choice_id: None,
         }
     }
 
@@ -1256,41 +1296,69 @@ impl StackItem {
             target_obj_id_2,
             // ModalChooseOne envelope — Cycle 1. Spells that bind
             // a modal pick at cast time use the dedicated
-            // `new_spell_with_targets_and_mode` sibling below;
-            // every existing target-binding caller (the closed
-            // Tier-A single-target and Phase-2 2-slot arms) is
-            // non-modal, so the default `None` is back-compat.
+            // `new_spell_with_targets_mode_and_addcost` sibling
+            // below; every existing target-binding caller (the
+            // closed Tier-A single-target and Phase-2 2-slot arms)
+            // is non-modal, so the default `None` is back-compat.
             chosen_mode_idx: None,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1. Default `None` — every pre-Cycle-1 caller
+            // (Phase-1 single-target / Phase-2 2-slot) is on a
+            // non-additional-cost-choice card, so the back-compat
+            // default holds.
+            additional_cost_choice_id: None,
         }
     }
 
     /// **ModalChooseOne envelope — Cycle 1 (cast-time mode binding,
-    /// 2026-05-21).** Spell-shape constructor that carries the
-    /// cast-time-picked mode index. Mirrors
-    /// `new_spell_with_targets` for the target-carrying superset;
-    /// extends with the mode-index slot for modal spells whose
-    /// printed `spell_effect` is an `Effect::ChooseOneMode { modes }`.
+    /// 2026-05-21) + Close Encounter additional-cost-choice envelope
+    /// — Cycle 2 (cast-time choice binding, 2026-05-21).** Spell-
+    /// shape constructor that carries the cast-time-picked mode
+    /// index PLUS the cast-time-bound additional-cost choice id.
+    /// Mirrors `new_spell_with_targets` for the target-carrying
+    /// superset; extends with the mode-index slot for modal spells
+    /// whose printed `spell_effect` is an
+    /// `Effect::ChooseOneMode { modes }` AND the additional-cost
+    /// choice-id slot for spells whose printing carries
+    /// `additional_cost_choose_your_creature = true`.
     ///
-    /// Usage: `cast_spell_noncreature` detects the modal shape
-    /// (first effect is `Effect::ChooseOneMode`) and binds the
-    /// deterministic-first mode pick (`Some(0)`, matching Python's
-    /// `_choose_modes_at_cast` no-agent fallback at
-    /// `actions.py:1222-1223`). The bound mode is read at resolve
-    /// time by the `Effect::ChooseOneMode` arm (Cycle 2 — when the
-    /// resolve arm dispatches directly to `modes[idx]` instead of
-    /// pushing `PendingDecision::ChooseModeChoice`).
+    /// Usage: `cast_spell_noncreature` detects each shape
+    /// independently:
+    /// - Modal detection (first effect is `Effect::ChooseOneMode`)
+    ///   binds the deterministic-first mode pick (`Some(0)`,
+    ///   matching Python's `_choose_modes_at_cast` no-agent fallback
+    ///   at `actions.py:1222-1223`).
+    /// - Additional-cost detection
+    ///   (`printing.additional_cost_choose_your_creature`) scans the
+    ///   caster's battlefield-creatures + warped-creature exile
+    ///   cards for the deterministic-first eligible id (matching
+    ///   Python's no-agent fallback at `actions.py:1737-1745`).
     ///
-    /// Cycle-1-only constructor: today's resolve arm still pushes
-    /// the PendingDecision regardless of the bound mode (the
-    /// resolve-arm read happens in Cycle 2). Cycle 1 ships the
-    /// cast-time bind + round-trip serialization on the StackItem
-    /// only; Cycle 2 wires the consumer.
-    pub(crate) fn new_spell_with_targets_and_mode(
+    /// The fields are independent — a non-modal additional-cost
+    /// spell sets `chosen_mode_idx = None,
+    /// additional_cost_choice_id = Some(id)`, and a modal non-
+    /// additional-cost spell sets the inverse. Non-modal /
+    /// non-additional-cost spells set both to `None` (back-compat
+    /// byte-equal to the pre-cycle `new_spell_with_targets` push).
+    ///
+    /// The bound mode is read at resolve time by the
+    /// `Effect::ChooseOneMode` arm (already wired); the bound
+    /// additional-cost choice is read by the
+    /// `Effect::CloseEncounterEffect` arm (Cycle 3 — when the
+    /// resolve arm reads
+    /// `state.current_resolve_additional_cost_choice_id` to compute
+    /// the damage amount).
+    ///
+    /// Cycles 1+2 ship this constructor + the cast-time binds + the
+    /// transient swaps; Cycle 3 wires the
+    /// `Effect::CloseEncounterEffect` consumer.
+    pub(crate) fn new_spell_with_targets_mode_and_addcost(
         source_obj_id: u32,
         controller: u8,
         target_obj_id: Option<u32>,
         target_obj_id_2: Option<u32>,
         chosen_mode_idx: Option<u8>,
+        additional_cost_choice_id: Option<u32>,
     ) -> Self {
         Self {
             source_obj_id,
@@ -1300,6 +1368,7 @@ impl StackItem {
             target_obj_id,
             target_obj_id_2,
             chosen_mode_idx,
+            additional_cost_choice_id,
         }
     }
 
@@ -1341,6 +1410,10 @@ impl StackItem {
             // (the path that predates this slice); the cast-time
             // bind only fires on the spell-cast path per CR 601.2e.
             chosen_mode_idx: None,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1. Spell-kind-only — additional costs apply at
+            // cast time per CR 601.2f, not when a trigger fires.
+            additional_cost_choice_id: None,
         }
     }
 
@@ -1377,6 +1450,9 @@ impl StackItem {
             target_obj_id_2: None,
             // ModalChooseOne envelope — Cycle 1: Spell-kind-only.
             chosen_mode_idx: None,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1: Spell-kind-only.
+            additional_cost_choice_id: None,
         }
     }
 }
@@ -2517,6 +2593,42 @@ pub struct GameState {
     /// game state pre- and post-resolve produces the same digest
     /// regardless of intermediate mode-index swaps.
     pub current_resolve_chosen_mode_idx: Option<u8>,
+    /// **Close Encounter additional-cost-choice envelope — Cycle 1
+    /// (resolve-time transient mirror, 2026-05-21).** Transient
+    /// resolve-time mirror of the resolving spell's
+    /// `StackItem.additional_cost_choice_id`. Set by the stack
+    /// resolver (`resolve_top_of_stack` / `resolve_top_of_stack_pause`)
+    /// BEFORE the per-effect `apply_effect` fan-out for a
+    /// `StackItemKind::Spell` whose pushed item carries a cast-time-
+    /// bound additional-cost choice; restored to its prior value
+    /// after. The `Effect::CloseEncounterEffect` resolve arm (Cycle
+    /// 3) reads this field — `Some(id)` is the cast-time chosen
+    /// creature (battlefield) or warped creature card (caster's
+    /// exile); `None` means no choice was bound (the
+    /// additional-cost-choose-your-creature flag wasn't set on the
+    /// printing, so the resolve arm — if hit — should be a no-op
+    /// fallback).
+    ///
+    /// **Mirrors Python's `state.resolving_additional_cost_choice_id`
+    /// swap** at `actions.py:2681-2683` / `:2711` / `:2698` / `:2795`
+    /// (set BEFORE the resolve closure, restored to `None` in the
+    /// `finally`). Same save → set → restore bracketing as
+    /// `current_resolve_chosen_mode_idx`.
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect.** Same rationale as
+    /// `current_resolve_payload_target_id` / `_2` /
+    /// `current_resolve_source_controller` /
+    /// `current_resolve_chosen_mode_idx`: apply_effect has ~90 arms,
+    /// threading an `Option<u32>` through every signature is invasive
+    /// for surfaces that don't care. Mirror the existing payload-
+    /// target swap pattern.
+    ///
+    /// **Not serialized into the fingerprint.** Transient like its
+    /// payload-target / source-controller / mode-index siblings —
+    /// same observable game state pre- and post-resolve produces the
+    /// same digest regardless of intermediate choice-id swaps.
+    pub current_resolve_additional_cost_choice_id: Option<u32>,
 }
 
 impl Clone for GameState {
@@ -2597,6 +2709,12 @@ impl Clone for GameState {
             // DrawCards controller-of-effect fix: transient resolve-
             // time source controller. Cloned as Option<u8> (Copy).
             current_resolve_source_controller: self.current_resolve_source_controller,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1. Transient choice-id slot; cloned as
+            // `Option<u32>` (Copy). Bracketed by the resolver —
+            // `None` outside the resolve window by construction.
+            current_resolve_additional_cost_choice_id:
+                self.current_resolve_additional_cost_choice_id,
         }
     }
 }
@@ -3378,5 +3496,13 @@ pub fn make_synthetic_state(
         // call (the resolve arm reads it; the swap is save → set →
         // restore-bracketed like its payload-target sibling).
         current_resolve_chosen_mode_idx: None,
+        // Close Encounter additional-cost-choice envelope —
+        // Cycle 1: transient choice-id slot. `None` until the
+        // resolver swaps in `top.additional_cost_choice_id` for
+        // the duration of an apply_effect call (the
+        // `Effect::CloseEncounterEffect` resolve arm — Cycle 3 —
+        // reads it; the swap is save → set → restore bracketed
+        // like its mode-index sibling).
+        current_resolve_additional_cost_choice_id: None,
     }
 }

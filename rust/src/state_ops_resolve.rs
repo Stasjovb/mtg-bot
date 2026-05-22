@@ -9517,6 +9517,192 @@ fn apply_effect(
                 );
             }
         }
+        // **Close Encounter — additional-cost-choice closure (Cycle
+        // 3, 2026-05-21; ~16,098 17lands decks — highest-deck-count
+        // BLOCKED card in the substrate-gated tier).** Mirrors
+        // Python's `CloseEncounterEffect.resolve` at
+        // `effects/bespoke.py:1094-1128` byte-equal:
+        // 1. Read bound target (single creature) from
+        //    `current_resolve_payload_target_id`. Synthetic-test
+        //    fallback: first creature in `bf_iter_etb_sorted` order.
+        // 2. CR 608.2b — re-validate at resolve: target must be a
+        //    battlefield Creature. Illegal → silent fizzle.
+        // 3. Read bound additional-cost choice from
+        //    `current_resolve_additional_cost_choice_id` (Cycle 1
+        //    transient). `None` → silent no-op (no choice was bound,
+        //    e.g. the choose-your-creature flag wasn't set).
+        // 4. Look up chosen object:
+        //    - Battlefield: EFFECTIVE power (`read_doubling_power`).
+        //    - Caster's exile + `warped`: PRINTED power
+        //      (`printing.power.unwrap_or(0)`).
+        //    - Gone: amount = 0.
+        // 5. Apply damage marker, dispatch DEALT_DAMAGE.
+        Effect::CloseEncounterEffect => {
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if !printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback (the established
+                    // `CutPropulsionEffect` / `ExorciseEffect` None-
+                    // payload fallback): deterministic-first creature
+                    // in ETB-timestamp order across BOTH bfs.
+                    let registry = &state.registry;
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            let printing =
+                                registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some((obj.controller as usize, obj.id))
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            let Some((pidx, target_id)) = target else {
+                return Ok(()); // no eligible target → silent fizzle
+            };
+            // Read the cast-time-bound additional-cost choice id.
+            // `None` means the choose-your-creature flag wasn't set
+            // on the printing (back-compat fallback); resolve is a
+            // no-op. Mirrors Python `if chosen_id is None: return`
+            // at `bespoke.py:1106-1107`.
+            let Some(chosen_id) =
+                state.current_resolve_additional_cost_choice_id
+            else {
+                return Ok(());
+            };
+            // Look up the chosen object: battlefield first
+            // (effective power), then caster's exile (printed power
+            // for a warped creature card). Gone → amount 0.
+            //
+            // **Source-controller resolution.** We need the
+            // caster's exile, not the active player's. Prefer the
+            // transient `current_resolve_source_controller` (set by
+            // the stack resolver around each `apply_effect` call),
+            // falling back to `state.active_player` for back-compat
+            // with direct `apply_effect_pub` callers. Same pattern
+            // as `DealDamageAnyTarget` / `DealDamage`.
+            let caster_idx = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let amount: i32 = {
+                // Battlefield branch: scan BOTH bfs for the chosen
+                // id. Mirrors Python's `next((o for o in
+                // state.battlefield if o.id == chosen_id), None)`
+                // at `bespoke.py:1108-1110` — `state.battlefield` is
+                // the centralized cross-bf view.
+                let bf_pick: Option<u32> = state
+                    .players
+                    .iter()
+                    .find_map(|player| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == chosen_id)
+                            .map(|o| o.id)
+                    });
+                if let Some(bf_id) = bf_pick {
+                    // EFFECTIVE power (printed + ueot_base_pt
+                    // override + counters + ueot_power_bonus). Same
+                    // reader the `ExorciseEffect` / `CutPropulsion
+                    // Effect` arms use.
+                    read_doubling_power(state, bf_id)
+                } else {
+                    // Caster's exile branch: scan for the chosen id
+                    // among caster's exile cards. Match must also
+                    // be a Creature AND warped — Python `:1117-1121`.
+                    let exile_pick: Option<&GameObject> = state
+                        .players[caster_idx]
+                        .exile
+                        .iter()
+                        .find(|o| o.id == chosen_id);
+                    match exile_pick {
+                        Some(obj) if obj.warped => {
+                            // PRINTED power (the exile pool is not
+                            // on the battlefield; continuous
+                            // effects don't apply per CR 110.1).
+                            // Mirrors Python `chosen.printing.power
+                            // or 0` at `bespoke.py:1121`.
+                            state
+                                .registry
+                                .lookup(obj.printing_id)
+                                .and_then(|p| p.power)
+                                .unwrap_or(0)
+                                as i32
+                        }
+                        // Gone (left bf in response between cast
+                        // and resolve, or not warped, or not in
+                        // caster's exile). Amount = 0 — Python
+                        // `:1125-1127`.
+                        _ => 0,
+                    }
+                }
+            };
+            if amount <= 0 {
+                // No damage to apply. The Python arm at `:1128`
+                // still calls `_apply_damage(state, targets[0],
+                // amount)` which short-circuits inside on
+                // `amount <= 0` (per `_apply_damage` at
+                // `effects/base.py:286-288`). Byte-equal: skip the
+                // damage path entirely. The receiver-side
+                // DEALT_DAMAGE dispatch does NOT fire (no damage
+                // was dealt — CR 119.2).
+                return Ok(());
+            }
+            let amount_i16 = amount.min(i16::MAX as i32) as i16;
+            // Apply damage marker via the proven shape
+            // (`apply_damage_marker` body inlined). Same `Arc::make
+            // _mut` + saturating_add as `CutPropulsionEffect` /
+            // `InvasiveManeuversEffect`.
+            let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[pidx].battlefield,
+            );
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.damage =
+                        obj.damage.saturating_add(amount_i16);
+                    break;
+                }
+            }
+            // DEALT_DAMAGE receiver-side event (Python's
+            // `_fire_enchanted_dealt_damage_triggers` call at the
+            // tail of `_apply_damage`, `effects/base.py:303-305`).
+            dispatch_event(
+                state,
+                crate::cards::Event::DealtDamage,
+                target_id,
+            )?;
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared
@@ -17440,12 +17626,28 @@ impl GameState {
         // never sets it, so the swap is a correct no-op for them).
         let saved_mode_idx = self.current_resolve_chosen_mode_idx;
         self.current_resolve_chosen_mode_idx = top.chosen_mode_idx;
+        // Close Encounter additional-cost-choice envelope — Cycle 1
+        // (resolve-time swap). Save → set → restore bracketed
+        // exactly like the mode-index sibling above. `None` for
+        // every non-additional-cost push (back-compat — every
+        // closed Phase-1 / Phase-2 / modal arm + every trigger /
+        // activation never sets it, so the swap is a correct no-op
+        // for them). Mirrors Python's
+        // `state.resolving_additional_cost_choice_id =
+        // item.additional_cost_choice_id` swap at
+        // `actions.py:2711`, with the `None` restore mirroring
+        // the `finally` clause at `:2795`.
+        let saved_addcost_choice_id = self.current_resolve_additional_cost_choice_id;
+        self.current_resolve_additional_cost_choice_id =
+            top.additional_cost_choice_id;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_additional_cost_choice_id =
+            saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
@@ -17675,12 +17877,23 @@ impl GameState {
         // never sets it, so the swap is a correct no-op for them).
         let saved_mode_idx = self.current_resolve_chosen_mode_idx;
         self.current_resolve_chosen_mode_idx = top.chosen_mode_idx;
+        // Close Encounter additional-cost-choice envelope — Cycle 1
+        // (resolve-time swap, `_pause` sibling). Save → set →
+        // restore bracketed identically to the `resolve_top_of_stack`
+        // entry point above. Mirrored across BOTH resolve entry
+        // points per the §3.4 sibling-parity requirement (the same
+        // pattern Phase-2 / mode-index siblings follow).
+        let saved_addcost_choice_id = self.current_resolve_additional_cost_choice_id;
+        self.current_resolve_additional_cost_choice_id =
+            top.additional_cost_choice_id;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_additional_cost_choice_id =
+            saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
@@ -17987,6 +18200,10 @@ impl GameState {
             // lookup); modal mode binding rides on the production
             // `cast_spell_noncreature` path. Default `None`.
             chosen_mode_idx: None,
+            // Close Encounter additional-cost-choice envelope —
+            // Cycle 1: synthetic-spell push has no printing →
+            // additional-cost flag never set → default `None`.
+            additional_cost_choice_id: None,
         });
         Ok(next_id)
     }
