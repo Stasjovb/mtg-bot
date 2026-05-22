@@ -10375,6 +10375,93 @@ EoE X-cost spells (Devastating Onslaught — Sorcery, "Create X
 tokens that are copies of...") are independent slices that share
 the X-tracking C1 substrate.
 
+- **Devastating Onslaught Cycle 1 LANDED (2026-05-22,
+  devastating-onslaught-cycle-1-p1).** Second X-cost cross-engine
+  close — immediate follow-on to X-value C3. Lands the
+  `Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac`
+  Rust unit variant (parse arm + `to_pydict` arm + resolve arm +
+  `spell_targets_satisfiable` arm) + the sibling
+  `Effect::SacrificeSourceDelayed` per-token end-step sac
+  delayed-trigger Effect (parse / to_pydict / resolve mirroring
+  the established `WarpExileSelf` delayed-trigger drain pattern)
+  + matching cross-engine bridge arms + reverse-serializer leaves.
+
+  **Phase 1 admit-predicate widen.** Removes the unconditional
+  `_printing_is_x_cost` reject from `_PHASE1_SHAPE` in
+  `trajectory.py::_printing_is_bridge_simple_spell`. The covered+
+  bridged + round-trip-or-bail teeth still gate: until this lane
+  shipped, the only Phase-1 X-cost EoE card (Devastating Onslaught)
+  was DECLINED by the no-Effect-coverage tooth; with this lane's
+  Effect arms + bridge arms + serializer leaves, Devastating
+  Onslaught auto-joins via the §2 teeth (admit set 25 → 26,
+  PROBED 280 → 281 on this branch).
+
+  **X-cost bench-loader fix.** `trajectory._parse_mana_cost_string`
+  now accepts the `{X}` symbol (contributes 0 to generic — mirrors
+  the no-agent harness X=0 fold-in semantics, byte-equal to Rust's
+  post-fold `ManaCost.generic`). Closes the pre-existing X-value
+  C3 baseline bench-loader failure (Zero Point Ballad admit-gate-
+  passing post C3 but crashing at bench-loader parse time); also
+  enables Devastating Onslaught to flow through the bench loader.
+  Production agents that pick X>0 are out of scope for the bench-
+  loader path (the bench bot is no-agent by construction).
+
+  **Rust resolve arm shape
+  (`Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac`).**
+  Reads X from `current_resolve_x_value` (C1 transient, no-agent
+  X=0 default); reads cast-time-bound target from
+  `current_resolve_payload_target_id` per CR 608.2b (re-validates
+  artifact-OR-creature on bf at resolve time; silent fizzle on
+  validation fail). Synthetic-test-path fallback to deterministic-
+  first artifact-or-creature on the resolving controller's bf
+  when payload-target is `None`. For X > 0: mints X token copies
+  with fresh `next_object_id` + fresh ETB timestamp + summoning-
+  sick + controller=caster + `UeotModifier::GrantKeyword
+  { keyword: "haste" }` per token; pushes a `DelayedTrigger
+  { effect: SacrificeSourceDelayed, source_id: token.id,
+  fire_at_turn: state.turn_number, controller_id: caster }` per
+  token; routes ENTERS dispatches + token-creation flags.
+
+  **`Effect::SacrificeSourceDelayed` arm shape.** Sibling of
+  `WarpExileSelf` — re-look up `source_obj_id` on bf, move to
+  controller's graveyard with CR 400.7 reset. Silent no-op if
+  the source has left the battlefield between schedule and
+  resolve (CR 603.10). R77-CFI1 counters intact (same byte-equal
+  contract as WarpExileSelf / SBA destroy). LEAVES + DIES +
+  token-cease dispatches routed through the deferred queues.
+
+  **Cross-engine harness limitation (mirrors Zero Point Ballad).**
+  Under the no-agent harness Rust mints X=0 and Python's
+  `_choose_and_apply_x` returns 0; the X-dependent mint surface
+  (token copies, haste UEOT, per-token sac schedules) is dormant
+  at X=0. Trivial vacuous-resolve byte-equality. The X-dependent
+  surface is exercised by synthetic-state Rust unit pins (X=0
+  silent no-op, X=2 mints 2 token copies with haste, X=2 schedules
+  2 end-step sacs, indestructible target still copied, CR 608.2b
+  fizzle, summoning-sick + haste-UEOT composition). A future
+  cycle with an agent-driven X picker can promote the no-agent
+  fallback into a real X bind and exercise X>0 cross-engine.
+
+  **`RUST_AHEAD_OF_POOL` allowlist entry.** Adds
+  `SacrificeSourceDelayed` to the allowlist (mirrors the
+  `WarpExileSelf` / `RemoveChargeCountersFromSourceDelayed`
+  precedent) — the delayed-trigger Effect is spawned dynamically
+  by `CreateXTokensOfTargetPermanentWithHasteEndStepSac.resolve`
+  (and by Python's `ScheduleSelfSacAtNextEndStep` for Kav
+  Landseeker), never observed by the static-printing pool walker.
+
+  **Tests.** `tests/test_devastating_onslaught_parity.py` (12 pins):
+  parser SoT; serializer round-trip for both new Effects;
+  admit-gate flip; covered-set membership; Rust unit pins (X=0
+  silent no-op, X=2 mints 2 copies with haste, X=2 schedules 2
+  end-step sacs, indestructible target still copied, CR 608.2b
+  target-fizzle, summoning-sick + haste-UEOT composition);
+  genuine real-EoE cross-engine byte-equal probe at X=0. Plus
+  admit-set pin updates in
+  `tests/test_cross_engine_etb_triggers.py::test_spell_card_lever_phase1_negative_pins_decline_set`
+  (25 → 26) and `tests/test_probe_spell_card_bridge_admitted.py`
+  (25 → 26).
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any

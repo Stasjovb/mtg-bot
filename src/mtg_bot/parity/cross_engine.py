@@ -866,6 +866,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``CloseEncounterEffect``.
         from mtg_bot.effects.bespoke import ZeroPointBalladEffect
         return ZeroPointBalladEffect()
+    if kind == "create_x_tokens_of_target_permanent_with_haste_end_step_sac":
+        # **Devastating Onslaught — Cycle 1 (2026-05-22).** `{X}{X}{R}`
+        # Sorcery — second X-cost consumer of the C1
+        # `current_resolve_x_value` transient (Zero Point Ballad shipped
+        # at X-value C3). Unit variant on both sides — no data fields;
+        # X is read at resolve time from the C1 transient (set by C2.5's
+        # cast-pipeline detector), and the cast-time-bound target rides
+        # on `current_resolve_payload_target_id` (the established
+        # Phase-1 single-target binding pattern). Mirrors Python's
+        # ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()`` at
+        # ``effects/generic/tokens.py:404-486`` — field-free dataclass;
+        # the X-dependent mint loop + per-token haste UEOT + per-token
+        # `SacrificeSourceDelayed` end-step schedule lives entirely
+        # inside the Python ``resolve`` method (and the mirrored Rust
+        # ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
+        # arm in ``state_ops_resolve.rs``).
+        from mtg_bot.effects.generic.tokens import (
+            CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+        )
+        return CreateXTokensOfTargetPermanentWithHasteEndStepSac()
+    if kind == "sacrifice_source_delayed":
+        # **Devastating Onslaught — Cycle 1 (2026-05-22).** Sibling
+        # bridge arm for the per-token end-step sac delayed-trigger
+        # Effect. Unit variant — the source to sacrifice is carried by
+        # the surrounding `DelayedTrigger.source_id` plumbing, NOT in
+        # this dict. Mirrors Python's
+        # ``SacrificeSourceDelayed()`` at
+        # ``effects/generic/delayed_actions.py:29-64``. Used today by
+        # Devastating Onslaught's per-token sac schedule + Kav
+        # Landseeker (Python-only; Rust-side dynamic-spawn, never
+        # observed by the pool walker — same RUST_AHEAD_OF_POOL shape
+        # as ``WarpExileSelf`` /
+        # ``RemoveChargeCountersFromSourceDelayed``).
+        from mtg_bot.effects.generic.delayed_actions import (
+            SacrificeSourceDelayed,
+        )
+        return SacrificeSourceDelayed()
     if kind == "return_up_to_n_small_creatures_from_graveyard_with_counters":
         # **Multi-target admit-gate Phase 4 widen (2026-05-21).** Scout
         # for Survivors: "Return up to N target creature cards with

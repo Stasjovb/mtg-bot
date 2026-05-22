@@ -1275,8 +1275,28 @@ def _parse_mana_cost_string(s: str) -> tuple[int, tuple[tuple[str, int], ...]]:
             generic += int(sym)
         elif sym in _COLOR_LETTERS:
             colored[sym] = colored.get(sym, 0) + 1
+        elif sym == "X":
+            # **X-cost bench-loader support (devastating-onslaught-cycle-1,
+            # 2026-05-22).** ``{X}`` contributes 0 to ``generic`` —
+            # mirrors the no-agent cross-engine harness's X=0 bind
+            # (Rust's ``cast_spell_noncreature`` Delta-2 mint at C2.5
+            # + Python's ``_choose_and_apply_x`` returning 0 when
+            # ``p.agent is None``). At X=0 the cost-fold
+            # ``x_pips * x_value = 0`` is a no-op on generic, so
+            # reporting generic without the X contribution is
+            # byte-equal to Rust's post-fold ``ManaCost.generic`` for
+            # the no-agent harness path. Closes the X-cost C3 baseline
+            # bench-loader failure on Zero Point Ballad (admit-gate-
+            # passing post X-value C3 but bench loader crashed at
+            # parse time); also enables Devastating Onslaught (Phase-1
+            # X-cost admit) to flow through. Production agents that
+            # pick X>0 are out of scope for this bench-loader path —
+            # the bench bot is no-agent by construction. See
+            # ``docs/SEARCH_LIMITATIONS.md`` for the X-cost bench-
+            # loader harness limitation.
+            pass
         else:
-            # Hybrid (W/U), Phyrexian (W/P), X, snow (S), 2/W, etc.
+            # Hybrid (W/U), Phyrexian (W/P), snow (S), 2/W, etc.
             raise ValueError(
                 f"unsupported mana symbol {sym!r} in cost {s!r} "
                 f"(production filter should drop this card)"
@@ -4158,6 +4178,15 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.search import (
         SearchLibraryForCard,
     )
+    # **Devastating Onslaught — Cycle 1 (2026-05-22).** Two new leaves
+    # for the X-cost token-copy + per-token end-step sac delayed
+    # trigger. Imports kept narrow per the established convention.
+    from mtg_bot.effects.generic.tokens import (
+        CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+    )
+    from mtg_bot.effects.generic.delayed_actions import (
+        SacrificeSourceDelayed,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -4853,6 +4882,44 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # no override needed).
         if isinstance(eff, ZeroPointBalladEffect):
             return {"kind": "zero_point_ballad_effect"}
+        # **Devastating Onslaught — Cycle 1 (2026-05-22).** Per-leaf
+        # serializer for ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()``
+        # — second X-cost consumer (Zero Point Ballad shipped at C3 of
+        # the X-value subsystem). Unit-variant round-trip: kind-only
+        # dict, mirroring the ``ZeroPointBalladEffect`` /
+        # ``BiosynthicBurstEffect`` / ``CloseEncounterEffect`` /
+        # ``DiplomaticRelationsEffect`` unit-leaf idiom. The X value
+        # rides on the spell StackItem
+        # (``current_resolve_x_value`` via the C1 bracket from
+        # ``StackItem.x_value`` minted at cast time by C2.5), the
+        # cast-time-bound target rides on
+        # ``current_resolve_payload_target_id`` — NOT in this dict.
+        # The field-free dataclass at
+        # ``effects/generic/tokens.py:404`` is the canonical Python
+        # parity. Adding this leaf — TOGETHER with the Rust
+        # ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
+        # variant + the matching
+        # ``create_x_tokens_of_target_permanent_with_haste_end_step_sac``
+        # bridge arm in ``cross_engine.py`` — is what flips
+        # Devastating Onslaught into the spell-card-bridge admit set
+        # (Phase-1 ``(1, 1)``-shape + the X-cost C2.5 widen extended
+        # to Phase 1 in this lane).
+        if isinstance(eff, CreateXTokensOfTargetPermanentWithHasteEndStepSac):
+            return {
+                "kind":
+                "create_x_tokens_of_target_permanent_with_haste_end_step_sac",
+            }
+        # **Devastating Onslaught — Cycle 1 (2026-05-22).** Per-leaf
+        # serializer for the per-token end-step sac
+        # ``SacrificeSourceDelayed()`` delayed-trigger effect. Unit-
+        # variant — sibling of ``WarpExileSelf`` /
+        # ``RemoveChargeCountersFromSourceDelayed``. Strictly for the
+        # round-trip dict-shape surface; the delayed-trigger effect is
+        # spawned dynamically by ``CreateXTokensOfTargetPermanentWith
+        # HasteEndStepSac.resolve`` and is never a static printing-trigger
+        # leaf the pool walker observes.
+        if isinstance(eff, SacrificeSourceDelayed):
+            return {"kind": "sacrifice_source_delayed"}
         if isinstance(eff, ReturnUpToNSmallCreaturesFromGraveyardWithCounters):
             if eff.max_n < 0 or eff.max_total_mv < 0:
                 return None
@@ -5125,10 +5192,21 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     # X-value-subsystem-C2.5: every non-Phase-3 phase explicitly
     # excludes X-cost printings (`mc.x_pips > 0`). Only Phase 3
     # admits X-cost (the wrath-shape lane that motivated the widen).
+    # **Devastating Onslaught — Cycle 1 (2026-05-22).** Phase 1
+    # widened to also admit X-cost single-target printings. The covered
+    # +bridged + round-trip-or-bail teeth still gate: until this lane
+    # lands the
+    # `Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac`
+    # Rust variant + per-leaf serializer + bridge arms, the only X-cost
+    # Phase-1 EoE card (Devastating Onslaught) stays DECLINED via the
+    # no-Effect-coverage tooth. Once this lane ships, Devastating
+    # Onslaught AUTO-JOINS via the §2 auto-grow teeth. No other EoE
+    # X-cost Phase-1 card exists today (Zero Point Ballad is Phase-3;
+    # every other X-cost EoE card has shape (0, 0) or non-single-
+    # target). The widen is structurally clean substrate.
     _PHASE1_SHAPE = (
         (min_t, max_t) == (1, 1)
         and not slot_kinds
-        and not _printing_is_x_cost
     )
     # Phase-2 admit shape: exactly two required targets with the
     # disjoint friendly/opponent creature slot pair. ``_select_spell

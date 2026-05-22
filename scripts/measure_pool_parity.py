@@ -896,6 +896,26 @@ PROBE_MODULES: tuple[Path, ...] = (
     # machinery (second non-WarpExileSelf consumer). Systems
     # Override COVERED → PROBED.
     REPO_ROOT / "tests" / "test_systems_override_parity.py",
+    # **devastating-onslaught-cycle-1 (2026-05-22):** Devastating
+    # Onslaught `{X}{X}{R}` — SECOND X-cost cross-engine probe.
+    # The
+    # ``test_cross_engine_real_eoe_devastating_onslaught_create_x_tokens_of_target_permanent_with_haste_end_step_sac_parity``
+    # probe drives the genuine parsed Devastating Onslaught EoE
+    # printing through the new
+    # ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
+    # Rust unit variant + the C1+C2.5 X-value substrate
+    # (StackItem.x_value mint, current_resolve_x_value bracket) +
+    # ``Effect::SacrificeSourceDelayed`` per-token end-step sac
+    # delayed-trigger sibling + bridge arms + reverse-serializer
+    # leaves. Under the no-agent cross-engine harness X=0 (per
+    # C2.5's no-agent fallback mint); the X-dependent token-mint
+    # surface stays dormant under the cross-engine probe but the
+    # printing parses + admits + serializer round-trips + resolves
+    # byte-equal. The X>=2 mint + haste-grant + end-step-sac surface
+    # is pinned via dedicated Rust unit pins (synthetic-state path).
+    # Flips Devastating Onslaught COVERED → PROBED (admit set
+    # 28 → 29).
+    REPO_ROOT / "tests" / "test_devastating_onslaught_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

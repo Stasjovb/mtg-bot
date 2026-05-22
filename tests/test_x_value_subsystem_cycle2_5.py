@@ -206,22 +206,33 @@ def _make_synthetic_sorcery_printing(name, mana_cost, spell_effect):
     )
 
 
-def test_admit_predicate_phase1_x_cost_excluded():
-    """Pin 3: a synthetic X-cost printing in the Phase-1 (1, 1) target
-    shape stays DECLINED — the X-cost flag is restricted to Phase 3 by
-    construction (the `and not _printing_is_x_cost` conjunct on Phase
-    1/2/4/5)."""
+def test_admit_predicate_phase1_x_cost_admitted_post_devastating_onslaught_cycle1():
+    """Pin 3 — FLIPPED post-devastating-onslaught-cycle-1
+    (2026-05-22). A synthetic X-cost printing in the Phase-1 (1, 1)
+    target shape is now ADMITTED — the Phase-1 X-cost reject was
+    removed in this lane to enable Devastating Onslaught (the only
+    EoE Phase-1 X-cost card). The covered+bridged + round-trip-or-bail
+    teeth still gate (a synthetic X-cost printing reusing
+    Depressurize's covered effect carrier passes all three teeth).
+
+    Previous pin (renamed from
+    ``test_admit_predicate_phase1_x_cost_excluded``) asserted REJECTED;
+    that contract held while only Phase 3 admitted X-cost (the
+    X-value C2.5 widen). With the Phase-1 widen in
+    devastating-onslaught-cycle-1, X-cost in Phase-1 SHAPE flows
+    through the covered+bridged + round-trip teeth like any other
+    admit candidate — synthetic X-cost copy of Depressurize's
+    covered effect is now ADMITTED. The actual EoE Phase-1 X-cost
+    card (Devastating Onslaught) auto-joins via this widen.
+    """
     from mtg_bot.cards.base import ManaCost
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     # Reuse a real EoE Phase-1 effect carrier (Depressurize's effect
-    # shape). The admit-gate's covered+bridged tooth would also gate
-    # this, but we're testing the FIRST tooth (X-cost + Phase-1 shape):
-    # if Phase 1 admitted X-cost, the gate would proceed to covered+
-    # bridged and might still admit. The point is the SHAPE rejects.
-    #
-    # Take Depressurize's spell_effect (a real Phase-1 single-target
-    # effect) and rebuild the printing with an X-cost mana_cost.
+    # shape). The admit-gate's covered+bridged tooth passes (Depressurize
+    # is covered), so post-widen the only remaining gate is the
+    # round-trip-or-bail tooth — which Depressurize's effect also
+    # passes. Result: ADMITTED.
     from mtg_bot.cards.source import get_active_source
     printings = get_active_source().get_printings()
     if "Depressurize" not in printings:
@@ -232,8 +243,10 @@ def test_admit_predicate_phase1_x_cost_excluded():
         mana_cost=ManaCost(generic=0, colored=(("U", 1),), x_pips=1),
         spell_effect=base.spell_effect,
     )
-    # X-cost + Phase-1 shape — REJECTED.
-    assert _printing_is_bridge_simple_spell(p) is False
+    # X-cost + Phase-1 shape — now ADMITTED (post devastating-onslaught-
+    # cycle-1's Phase-1 widen). Covered+bridged + round-trips all
+    # fire positively.
+    assert _printing_is_bridge_simple_spell(p) is True
 
 
 def test_admit_predicate_phase4_x_cost_excluded():

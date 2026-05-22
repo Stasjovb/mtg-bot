@@ -94,6 +94,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Demonic Counsel
 - Depressurize
 - Desculpting Blast
+- Devastating Onslaught
 - Diplomatic Relations
 - Divert Disaster
 - Dockworker Drone
@@ -354,7 +355,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 30 | 0 | 30 | 34,470 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 80 | 10 | 70 | 209,201 | 20,522 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 80 | 10 | 70 | 209,714 | 21,035 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 43 | 0 | 43 | 147,471 | 0 | diffuse |
 
@@ -390,7 +391,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Cracked Skull
 - Deafening Silence
 - Deserted Temple
-- Devastating Onslaught
 - Echoing Deeps
 - Enduring Curiosity
 - Entropic Battlecruiser

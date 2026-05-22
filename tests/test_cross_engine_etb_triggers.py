@@ -21412,16 +21412,31 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # existing G7 Class-C ``run_delayed_end_step_triggers``
     # machinery — second consumer after WarpExileSelf) + bridge arms
     # + reverse-serializer leaves. Systems Override COVERED →
-    # ADMITTED. 25 → 26 (4,775 17lands decks). The card rides the
+    # ADMITTED. 27 → 28 (4,775 17lands decks). The card rides the
     # Phase-1 ``(1, 1)`` single-target admit shape; the single
     # target rides on the StackItem's payload-target field, the
     # +10/-10 amount + Spacecraft-conditional rider are intrinsic
     # to the resolve arm. Per the §2 auto-grow teeth, no admit-set
     # widening was needed — just landing the Effect coverage +
     # serializer leaves.
+    # **devastating-onslaught-cycle-1 (2026-05-22):** SECOND X-cost
+    # closure (immediate follow-on to X-value C3). Adds
+    # ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
+    # Rust variant (unit variant; reads X from the C1
+    # ``current_resolve_x_value`` transient + cast-time-bound target
+    # via ``current_resolve_payload_target_id``) +
+    # ``Effect::SacrificeSourceDelayed`` per-token end-step sac
+    # delayed-trigger sibling + matching bridge arms + reverse-
+    # serializer leaves + the Phase-1 ``(1, 1)``-shape X-cost widen
+    # (removes the previous unconditional X-cost reject in Phase 1;
+    # the covered+bridged + round-trip teeth still gate). Devastating
+    # Onslaught AUTO-JOINS via the §2 auto-grow teeth (covered+bridged
+    # + round-trips + Phase-1 ``(1, 1)``-shape with X-cost). Admit set
+    # 28 → 29.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
+        "Devastating Onslaught",
         "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
         "Exorcise", "Focus Fire", "Invasive Maneuvers",
         "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
@@ -21431,10 +21446,12 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Under the Skin", "Untimely Malfunction", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 28 covered+bridged Tier-A spells: the 26 "
-        f"prior + 2 control-change-UEOT closures: Mutinous Massacre "
+        f"exactly the 29 covered+bridged Tier-A spells: the 26 "
+        f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
         f"via control-change-ueot-cycle-4-p1 + Systems Override via "
-        f"control-change-ueot-cycle-5-p1 — auto-grows further "
+        f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
+        f"closure (Devastating Onslaught via "
+        f"devastating-onslaught-cycle-1) — auto-grows further "
         f"as the remaining Tier-A and per-mode-target modal spells "
         f"close)")
 

@@ -435,6 +435,22 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # ``WarpExileSelf`` above — override-mapping it elsewhere would
     # be wrong.
     "RemoveChargeCountersFromSourceDelayed",
+    # **Devastating Onslaught — Cycle 1 (2026-05-22).** Rust
+    # ``Effect::SacrificeSourceDelayed`` is the per-token end-step sac
+    # delayed-trigger effect spawned by
+    # ``CreateXTokensOfTargetPermanentWithHasteEndStepSac.resolve``.
+    # Python has the exact same-named class at
+    # ``effects/generic/delayed_actions.py:30`` (``SacrificeSourceDelayed``),
+    # used by Devastating Onslaught (`tokens.py:474`) AND by
+    # `ScheduleSelfSacAtNextEndStep` for Kav Landseeker's Lander sac
+    # rider — but the parsed-pool vocab never observes either consumer
+    # directly because it is NOT a printing's `triggered_abilities`
+    # member: it's spawned dynamically at resolve time as a delayed-
+    # trigger entry, never by a static trigger definition. Same
+    # invisibility-to-the-static-walker shape as ``WarpExileSelf`` /
+    # ``RemoveChargeCountersFromSourceDelayed``. Override-mapping it
+    # elsewhere would be wrong.
+    "SacrificeSourceDelayed",
 }
 
 

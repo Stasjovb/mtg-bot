@@ -5890,6 +5890,116 @@ pub enum Effect {
     /// Mirrors the `ExorciseEffect` / `CloseEncounterEffect` /
     /// `CutPropulsionEffect` Tier-A unit-variant convention.
     PreventAllCombatDamageThisTurn,
+    /// **Devastating Onslaught — Cycle 1 (2026-05-22).** `{X}{X}{R}`
+    /// Sorcery — second X-cost consumer (Zero Point Ballad was C3 of
+    /// the X-value subsystem). Oracle text (verified live, EoE
+    /// printing):
+    ///
+    /// "Create X tokens that are copies of target artifact or creature
+    ///  you control. Those tokens gain haste until end of turn.
+    ///  Sacrifice them at the beginning of the next end step."
+    ///
+    /// **Unit variant.** No data fields — X is read from the C1
+    /// `current_resolve_x_value` transient (populated by C2.5's cast-
+    /// pipeline detector mint for X-cost printings; under the no-agent
+    /// cross-engine harness this is `Some(0)`). The cast-time-bound
+    /// target rides on `current_resolve_payload_target_id` (the
+    /// established Phase-1 single-target binding pattern, mirrored
+    /// from `EquipToTargetCreatureYouControl` /
+    /// `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`).
+    /// Mirrors Python's
+    /// `effects.generic.tokens.CreateXTokensOfTargetPermanentWithHasteEndStepSac`
+    /// at `effects/generic/tokens.py:404-486`.
+    ///
+    /// **Resolve semantics (mirrors Python `tokens.py:430-479`).**
+    /// 1. Read X via `current_resolve_x_value.unwrap_or(0).max(0)`.
+    ///    X = 0 = silent no-op (no tokens minted; no haste applied;
+    ///    no delayed triggers scheduled). Mirrors Python `tokens.py:
+    ///    443-445: if x <= 0: return`.
+    /// 2. Read the cast-time-bound target via
+    ///    `current_resolve_payload_target_id`. Re-validate per CR
+    ///    608.2b — target must still be on a battlefield AND still
+    ///    be an artifact OR creature. Validation fail = silent fizzle
+    ///    (mirrors Python `tokens.py:440-442: if target is None:
+    ///    return`).
+    /// 3. For each of X iterations, mint a token copy of the target's
+    ///    printing onto the resolving controller's battlefield.
+    ///    Mirrors the existing `CreateTokenCopyOfTargetCreatureYouControl`
+    ///    mint shape (fresh `next_object_id`, fresh ETB timestamp,
+    ///    summoning-sick=true, controller=resolving controller). Each
+    ///    token's `controller_override` is `None` (cloned tokens never
+    ///    inherit UEOT overrides). Per-token `pending_etb_dispatches`
+    ///    push fires ENTERS triggers.
+    /// 4. Grant `haste` UEOT to each minted token via the existing
+    ///    `ueot_modifiers` keyword-grant slot (the same vehicle the
+    ///    GrantKeywords + EndOfTurn pattern compiles to on Python and
+    ///    on Rust; for first-cycle scope the token's `ueot_modifiers`
+    ///    carries a `("haste",)`-shape entry that the
+    ///    `effective_keywords` reader at combat / declare-attacker
+    ///    sites composes in).
+    /// 5. Schedule a `DelayedTrigger {effect:
+    ///    Effect::SacrificeSourceDelayed, source_id: token.id,
+    ///    fire_at_turn: state.turn_number, controller_id: caster}`
+    ///    per token onto `state.delayed_triggers`. The standard
+    ///    `run_delayed_end_step_triggers` machinery picks these up at
+    ///    PHASE_END_STEP entry and fires the sac. Mirrors Python
+    ///    `tokens.py:470-475`.
+    ///
+    /// **Indestructible target behavior.** The TARGET (cast-time bound)
+    /// is the COPY-SOURCE; the new tokens are independent objects.
+    /// Indestructibility on the target is irrelevant to the copy — the
+    /// tokens themselves inherit no copy-of-indestructible, and the
+    /// delayed end-step SAC at step 5 bypasses indestructible per CR
+    /// 701.16 anyway (sacrifice is not destroy). The target is NOT
+    /// itself sacrificed.
+    ///
+    /// **Cross-engine harness X=0 dormancy.** Under the no-agent
+    /// harness, X=0 means the resolve is a silent no-op: 0 tokens
+    /// minted, 0 haste grants, 0 delayed triggers scheduled. Byte-
+    /// equal vacuous resolve — same harness-limitation shape as Zero
+    /// Point Ballad's X=0 documented at `docs/SEARCH_LIMITATIONS.md`.
+    /// The X-dependent surface (token mint count, sac scheduling)
+    /// is exercised by synthetic Rust unit pins in
+    /// `tests/test_devastating_onslaught_parity.py`, not by the
+    /// cross-engine probe.
+    CreateXTokensOfTargetPermanentWithHasteEndStepSac,
+    /// **Devastating Onslaught — Cycle 1 (2026-05-22).** Sibling of
+    /// `WarpExileSelf` / `RemoveChargeCountersFromSourceDelayed` — a
+    /// delayed-trigger effect that fires at the next end step. Mirrors
+    /// Python's `effects.generic.delayed_actions.SacrificeSourceDelayed`
+    /// at `effects/generic/delayed_actions.py:29-64`.
+    ///
+    /// **Unit variant.** No data fields — the source to sacrifice is
+    /// carried by the `DelayedTrigger.source_id` slot (the same
+    /// `source_id` plumbing `WarpExileSelf` reads at end-step drain
+    /// time; the drain pushes a synthetic `StackItem::TriggeredAbility`
+    /// with `source_obj_id == DelayedTrigger.source_id`).
+    ///
+    /// **Resolve semantics (mirrors Python `delayed_actions.py:43-61`).**
+    /// 1. Walk both battlefields for `source_obj_id`. If absent (the
+    ///    sacrificed token already left the battlefield via prior
+    ///    LTB / opp removal between schedule and resolve, CR 603.10),
+    ///    silent no-op — the trigger "fires" but has no permanent to
+    ///    act on. Mirrors Python `if obj is None: return`.
+    /// 2. Remove from bf, push to controller's graveyard with CR 400.7
+    ///    reset (tapped=false, damage=0, attached_to=None,
+    ///    exiled_with_source=None; counters NOT cleared per R77-CFI1
+    ///    invariant — same byte-equal contract as `WarpExileSelf` /
+    ///    SBA destroy / `OptionalSacArtifactForEffect`).
+    /// 3. Route LEAVES + token-cease dispatches through the deferred
+    ///    queues (mirrors `WarpExileSelf` arm). DIES dispatch fires
+    ///    too if the source is a creature — same as Python's
+    ///    `sacrifice` helper at `turn.py:537-578`.
+    ///
+    /// **Consumer.** Today exclusively Devastating Onslaught's per-
+    /// token end-step sac schedule. The Python class is also used by
+    /// Kav Landseeker (sacrifice the Lander token at end step) and
+    /// `ScheduleSelfSacAtNextEndStep`'s recursive trigger; those
+    /// consumers are not yet wired on the Rust side and stay invisible
+    /// to the pool walker (delayed triggers are spawned dynamically,
+    /// not by static printing trigger lists — same
+    /// `RUST_AHEAD_OF_POOL` rationale as `WarpExileSelf`).
+    SacrificeSourceDelayed,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10728,8 +10838,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "zero_point_ballad_effect" => {
             Ok(Effect::ZeroPointBalladEffect)
         }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
+        // parse arm — no data fields (X via C1 transient, target via
+        // payload-target slot). Mirrors the `zero_point_ballad_effect`
+        // sibling idiom: extra dict fields silently ignored.
+        "create_x_tokens_of_target_permanent_with_haste_end_step_sac" => {
+            Ok(Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac)
+        }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
+        // parse arm — sibling of `WarpExileSelf`. No data fields (source
+        // to sacrifice is carried by `DelayedTrigger.source_id` →
+        // synthetic StackItem `source_obj_id`).
+        "sacrifice_source_delayed" => {
+            Ok(Effect::SacrificeSourceDelayed)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed"
         ))),
     }
 }
@@ -13574,6 +13698,25 @@ pub(crate) fn effect_to_pydict<'py>(
         // `close_encounter_effect` unit-variant to_pydict idiom.
         Effect::ZeroPointBalladEffect => {
             d.set_item("kind", "zero_point_ballad_effect")?;
+        }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
+        // round-trip dict-shape. No data fields — X / target ride on
+        // resolve transients per C1+C2.5 substrate.
+        Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac => {
+            d.set_item(
+                "kind",
+                "create_x_tokens_of_target_permanent_with_haste_end_step_sac",
+            )?;
+        }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
+        // round-trip dict-shape — sibling of WarpExileSelf. Note this
+        // dict shape is for the to_pydict round-trip surface; the
+        // delayed-trigger effect itself is spawned dynamically by the
+        // CreateXTokensOfTargetPermanentWithHasteEndStepSac resolve arm
+        // (never observed by the pool walker as a static printing
+        // trigger).
+        Effect::SacrificeSourceDelayed => {
+            d.set_item("kind", "sacrifice_source_delayed")?;
         }
     }
     Ok(d)

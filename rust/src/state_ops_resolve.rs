@@ -18309,6 +18309,231 @@ fn apply_effect(
                 }
             }
         }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).**
+        // `{X}{X}{R}` Sorcery resolve arm. Reads X from the C1
+        // transient (populated by C2.5's cast-pipeline detector; the
+        // no-agent cross-engine harness mints `Some(0)`), reads the
+        // cast-time-bound target from `current_resolve_payload_target_id`
+        // per CR 608.2b, and mints X token copies with haste UEOT +
+        // a per-token `SacrificeSourceDelayed` delayed trigger.
+        //
+        // Mirrors Python's
+        // `CreateXTokensOfTargetPermanentWithHasteEndStepSac.resolve`
+        // at `effects/generic/tokens.py:430-479`. Source-controller
+        // lookup uses the established
+        // `CreateTokenCopyOfTargetCreatureYouControl` 5-zone scan +
+        // stack fallback + active-player default. Target validation
+        // re-checks artifact-OR-creature on bf per CR 608.2b; fizzle
+        // is silent.
+        Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac => {
+            // Step 1: read X. C2.5 mints `Some(0)` on the no-agent
+            // harness; defensive `unwrap_or(0).max(0)` mirrors Python's
+            // `x = state.resolving_x_value; if x <= 0: return`.
+            let x_raw = state.current_resolve_x_value.unwrap_or(0);
+            let x: i32 = x_raw.max(0);
+            if x == 0 {
+                return Ok(()); // silent no-op at X=0 (harness path)
+            }
+            // Step 2: resolve source controller (5-zone walk + stack
+            // fallback + active-player default — the established
+            // `CreateTokenCopyOfTargetCreatureYouControl` pattern).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let cidx: usize = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Step 3: read cast-time-bound target + re-validate per
+            // CR 608.2b. Target must still be on a battlefield AND
+            // still be an artifact OR creature. If `payload_target` is
+            // `None` (synthetic-test path with no cast-bind), fall
+            // back to deterministic-first artifact-or-creature on the
+            // resolving controller's bf — mirrors the
+            // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`
+            // synthetic-test fallback precedent. This is the
+            // load-bearing path for the Rust unit pins (which seed the
+            // source via `push_to_stack` and don't go through the
+            // cast pipeline).
+            let payload_target_opt = state.current_resolve_payload_target_id;
+            let target_printing_id: Option<u32> = {
+                let qualifies = |obj: &GameObject| -> bool {
+                    if obj.controller != cidx as u8 {
+                        return false;
+                    }
+                    let Some(printing) = state.registry.lookup(obj.printing_id)
+                    else {
+                        return false;
+                    };
+                    let is_artifact =
+                        printing.card_types.iter().any(|t| t == "Artifact");
+                    let is_creature =
+                        printing.card_types.iter().any(|t| t == "Creature");
+                    is_artifact || is_creature
+                };
+                if let Some(pt) = payload_target_opt {
+                    let mut found: Option<u32> = None;
+                    for player in state.players.iter() {
+                        if let Some(obj) = player.battlefield.iter().find(|o| o.id == pt) {
+                            if qualifies(obj) {
+                                found = Some(obj.printing_id);
+                            }
+                            break;
+                        }
+                    }
+                    found
+                } else {
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            if qualifies(obj) {
+                                Some(obj.printing_id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            let Some(target_printing_id) = target_printing_id else {
+                return Ok(()); // silent fizzle (CR 608.2b)
+            };
+            // Step 4: mint X token copies. Each mints a fresh
+            // `next_object_id`, fresh ETB timestamp, summoning-sick,
+            // controller=resolving controller. Then push a
+            // `UeotModifier::GrantKeyword { keyword: "haste" }` to grant
+            // haste UEOT (mirrors Python's
+            // `ApplyEffect(GrantKeywords({"haste"}), EndOfTurn())`).
+            // Finally schedule a `DelayedTrigger` per token for the
+            // end-step sac.
+            for _ in 0..x {
+                let new_id = crate::state::reserve_object_id(state);
+                let etb_ts = state.next_etb_timestamp;
+                state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+                let mut new_obj = GameObject {
+                    id: new_id,
+                    printing_id: target_printing_id,
+                    controller: cidx as u8,
+                    zone: ZONE_BATTLEFIELD,
+                    tapped: false,
+                    summoning_sick: true,
+                    damage: 0,
+                    counters: 0,
+                    charge_counters: 0,
+                    loyalty_counters: 0,
+                    attached_to: None,
+                    exiled_with_source: None,
+                    stun_counters: 0,
+                    etb_timestamp: etb_ts,
+                    ueot_modifiers: Vec::new(),
+                    warp_exile_pending: false,
+                    warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
+                    token_supertype_override: false,
+                    controller_override: None,
+                };
+                // Grant haste UEOT via the established `UeotModifier::
+                // GrantKeyword` push shape (lowercase keyword, mirrors
+                // every other GrantKeyword push site in this file).
+                new_obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                    keyword: "haste".to_string(),
+                });
+                Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
+                // Queue ENTERS dispatch for the cloned token.
+                state.pending_etb_dispatches.push(new_id);
+                if cidx < state.created_tokens_this_turn.len() {
+                    state.created_tokens_this_turn[cidx] = true;
+                }
+                // Schedule the per-token end-step sac delayed trigger.
+                // `fire_at_turn = state.turn_number` matches Python's
+                // "next end step on the current turn" interpretation
+                // (mirrors the `ScheduleSelfSacAtNextEndStep` /
+                // `WarpExileSelf` schedule shape).
+                state.delayed_triggers.push(crate::cards::DelayedTrigger {
+                    fire_at_turn: state.turn_number,
+                    controller_id: cidx as u8,
+                    source_id: new_id,
+                    effect: Effect::SacrificeSourceDelayed,
+                });
+            }
+        }
+        // **Devastating Onslaught — Cycle 1 (2026-05-22).**
+        // `SacrificeSourceDelayed` delayed-trigger resolve arm. Sibling
+        // of `WarpExileSelf` — re-look up `source_obj_id` on bf, move
+        // to controller's graveyard with CR 400.7 reset. Silent no-op
+        // if the source has left the battlefield between schedule and
+        // resolve (CR 603.10).
+        //
+        // Mirrors Python `SacrificeSourceDelayed.resolve` at
+        // `effects/generic/delayed_actions.py:43-61`. Counters NOT
+        // cleared per R77-CFI1 (same byte-equal contract as
+        // `WarpExileSelf` / SBA destroy / sacrifice). LEAVES + DIES +
+        // token-cease dispatches routed through the deferred queues.
+        Effect::SacrificeSourceDelayed => {
+            // Walk both battlefields for source_obj_id. Mirrors the
+            // `WarpExileSelf` re-lookup pattern.
+            let mut found_at: Option<(usize, usize)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(idx) = player
+                    .battlefield
+                    .iter()
+                    .position(|o| o.id == source_obj_id)
+                {
+                    found_at = Some((pidx, idx));
+                    break;
+                }
+            }
+            let Some((pidx, idx)) = found_at else {
+                // CR 603.10 — the trigger fired but the source has
+                // already left the bf; silent no-op.
+                return Ok(());
+            };
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            let mut obj = bf.remove(idx);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            // R77-CFI1: counters intact on the dead object (same as
+            // WarpExileSelf / SBA destroy / OptionalSacArtifactForEffect).
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            let controller_for_gy = obj.controller as usize;
+            Arc::make_mut(&mut state.players[controller_for_gy].graveyard).push(obj);
+            // LEAVES + DIES + token-cease dispatch (mirrors
+            // sacrifice/destroy precedent).
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            // DIES dispatch — the sacrificed source could be a
+            // creature token, in which case CR 700.4 fires DIES.
+            // Defer the creature-type gating to the dispatcher (other
+            // arms push unconditionally and the dispatcher's
+            // `is_creature` filter at fire time gates correctly).
+            state.pending_dies_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+        }
     }
     Ok(())
 }

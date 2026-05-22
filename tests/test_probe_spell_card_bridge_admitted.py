@@ -223,9 +223,19 @@ pytestmark = pytest.mark.skipif(
 # AND round-trips), so the lever auto-grows the admit set — no
 # hardcoded card-name list.
 # This stays an EXACT-set pin.
+# **devastating-onslaught-cycle-1 (2026-05-22)** — admit set 25 → 26.
+# Cycle 1 lands ``Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac``
+# (unit variant; reads X from the C1 transient + cast-time-bound target
+# via ``current_resolve_payload_target_id``) + the per-token end-step
+# sac sibling ``Effect::SacrificeSourceDelayed`` + matching bridge arms
+# + reverse-serializer leaves + the Phase-1 ``(1, 1)``-shape X-cost
+# widen. Devastating Onslaught AUTO-JOINS via the §2 auto-grow teeth.
+# Cross-engine probe under the no-agent harness mints 0 token copies
+# (X=0) — same harness-limitation shape as Zero Point Ballad.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
+    "Devastating Onslaught",
     "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
     "Exorcise", "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
     "Mutinous Massacre", "Orbital Plunge", "Pyroclasm",

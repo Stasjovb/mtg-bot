@@ -1412,6 +1412,38 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // **Devastating Onslaught — Cycle 1 (2026-05-22).**
+            // `CreateXTokensOfTargetPermanentWithHasteEndStepSac`:
+            // caster-controlled artifact OR creature on bf. Mirrors
+            // Python's `legal_targets` at `effects/generic/tokens.py:
+            // 420-428`: walks `state.battlefield` and emits
+            // `("permanent", o.id)` per object whose `controller_id ==
+            // controller_id` AND (`is_artifact OR is_creature`). The
+            // cast-time-bound target rides on
+            // `current_resolve_payload_target_id`; this arm is the
+            // legality gate that mirrors the Python `legal_targets`
+            // walk + the resolve arm's `qualifies` re-check.
+            Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        if o.controller != controller {
+                            return false;
+                        }
+                        let Some(p) = state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_artifact =
+                            p.card_types.iter().any(|t| t == "Artifact");
+                        let is_creature =
+                            p.card_types.iter().any(|t| t == "Creature");
+                        is_artifact || is_creature
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Every other Effect (untargeted bodies — the dominant
             // bridge-simple-creature axis whose `spell_effect is
             // None`; or a not-yet-admitted targeted shape): the

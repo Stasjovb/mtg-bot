@@ -1073,6 +1073,23 @@ stale — both shipped upstream of this dated paragraph.
   consumers across C4 (Mutinous Massacre) + C5 (Systems Override);
   C6 is cross-set / agent-prompt extension only.
 
+  **Devastating Onslaught Cycle 1 landed (2026-05-22,
+  `feature/devastating-onslaught-cycle-1-p1`).** Second X-cost
+  cross-engine close, immediate follow-on to Zero Point Ballad's
+  X-value C3. Lands the
+  `Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac`
+  Rust unit variant + sibling `Effect::SacrificeSourceDelayed`
+  delayed-trigger Effect + matching bridge arms + reverse
+  serializer leaves + Phase-1 `(1, 1)`-shape X-cost admit widen.
+  The admit set grows 25 → 26; PROBED 280 → 281 on this branch.
+  Closes the pre-existing X-cost bench-loader baseline failure
+  (Zero Point Ballad admit-gate-passing post C3 but crashing on
+  `_parse_mana_cost_string` at bench loader time) by accepting
+  the `{X}` symbol with 0-contribution-to-generic (mirrors
+  Rust's no-agent X=0 fold-in semantics). Full entry at
+  `docs/SEARCH_LIMITATIONS.md` §2 (Devastating Onslaught Cycle 1
+  LANDED block).
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence (C4+C5
   together flipped 2 cards × ~5k decks each).

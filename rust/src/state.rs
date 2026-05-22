@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -3034,6 +3035,56 @@ impl GameState {
     #[getter]
     fn life_totals(&self) -> [i32; 2] {
         [self.players[0].life, self.players[1].life]
+    }
+
+    /// **Devastating Onslaught — Cycle 1 (2026-05-22).** Inspect the
+    /// length of `state.delayed_triggers` from Python. Sufficient for
+    /// before/after diff pins (e.g. "X=2 must schedule 2 end-step
+    /// sacs"). Mirrors the existing `battlefield_sizes` /
+    /// `hand_sizes` getter idiom — read-only inspector for a
+    /// per-state Vec count.
+    #[getter]
+    fn delayed_trigger_count(&self) -> usize {
+        self.delayed_triggers.len()
+    }
+
+    /// **Devastating Onslaught — Cycle 1 (2026-05-22).** Snapshot
+    /// `state.delayed_triggers` as a list of dicts for Python-side
+    /// inspection in tests. Each dict mirrors the
+    /// `crate::cards::DelayedTrigger` shape:
+    /// ``{fire_at_turn, controller_id, source_id, effect_kind}``
+    /// where `effect_kind` is the dict-shape kind string (mirrors
+    /// the existing `Effect::to_pydict` arm — but only emits the
+    /// `kind` field since the full to_pydict surface is heavier than
+    /// these inspector tests need).
+    fn delayed_triggers_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let mut out = Vec::with_capacity(self.delayed_triggers.len());
+        for t in self.delayed_triggers.iter() {
+            let d = PyDict::new(py);
+            d.set_item("fire_at_turn", t.fire_at_turn)?;
+            d.set_item("controller_id", t.controller_id)?;
+            d.set_item("source_id", t.source_id)?;
+            // Map the Effect variant to its dict-shape kind string —
+            // mirrors the `Effect::to_pydict` `kind` field. Only the
+            // delayed-trigger consumer Effects are represented here
+            // (WarpExileSelf, SacrificeSourceDelayed, etc.); other
+            // variants fall through to a generic "<other>" sentinel
+            // for inspector robustness (no test currently needs
+            // exhaustive coverage).
+            let kind: &'static str = match &t.effect {
+                crate::cards::Effect::WarpExileSelf => "warp_exile_self",
+                crate::cards::Effect::SacrificeSourceDelayed => {
+                    "sacrifice_source_delayed"
+                }
+                _ => "<other>",
+            };
+            d.set_item("effect_kind", kind)?;
+            out.push(d);
+        }
+        Ok(out)
     }
 
     /// **EEE downstream complement — 8th Rust slice.**

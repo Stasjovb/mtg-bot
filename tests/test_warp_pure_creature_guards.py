@@ -201,19 +201,33 @@ def test_warp_guard_declines_ward_cost():
 
 def test_warp_guard_declines_unparseable_warp_cost_string():
     """A warp creature whose ``warp_cost_str`` contains a symbol the
-    codec can't parse (``{X}``) is DECLINED — the predicate parses
-    BOTH the normal and warp mana strings and falls back to declining
-    on ``ValueError`` (the production-filter contract). The normal
-    ``mana_cost_str`` stays valid so the failure is isolated to the
-    warp-side parse."""
-    p = _warp_creature(warp_cost_str="{X}{R}")
+    codec can't parse (``{W/U}`` hybrid) is DECLINED — the predicate
+    parses BOTH the normal and warp mana strings and falls back to
+    declining on ``ValueError`` (the production-filter contract). The
+    normal ``mana_cost_str`` stays valid so the failure is isolated
+    to the warp-side parse.
+
+    **devastating-onslaught-cycle-1 (2026-05-22).** Previous test used
+    ``{X}{R}`` as the unparseable shape; with the X-cost bench-loader
+    fix in this lane ``{X}`` now parses (contributes 0 to generic
+    under no-agent X=0 semantics). Switched to a hybrid ``{W/U}{R}``
+    cost as the still-unparseable shape — hybrid mana remains the
+    bench-loader's positive decline-trigger (CardDef has no hybrid
+    representation today).
+    """
+    p = _warp_creature(warp_cost_str="{W/U}{R}")
     assert _printing_is_bridge_pure_warp_creature(p) is False
 
 
 def test_warp_guard_declines_unparseable_normal_cost_string():
     """The sibling of the above on the NORMAL mana string — a
-    hybrid/Phyrexian/X symbol in ``mana_cost_str`` also declines (the
-    first of the two parsed strings in the same try/except)."""
+    hybrid/Phyrexian symbol in ``mana_cost_str`` also declines (the
+    first of the two parsed strings in the same try/except).
+
+    **devastating-onslaught-cycle-1 (2026-05-22).** Note that ``{X}``
+    is no longer in the unparseable set (the X-cost bench-loader fix
+    contributes 0 to generic under no-agent X=0 semantics); hybrid
+    ``{W/U}`` remains the canonical positive-decline shape."""
     p = _warp_creature(mana_cost_str="{W/U}{R}")
     assert _printing_is_bridge_pure_warp_creature(p) is False
 
