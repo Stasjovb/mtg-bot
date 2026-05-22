@@ -1,0 +1,107 @@
+# Launch config template for `mtg_bot iterate-distributed`.
+#
+# Copy to `configs/launch/iter_NNN.toml`, edit the highlighted
+# fields, then run:
+#
+#   mtg_bot iterate-distributed --config configs/launch/iter_NNN.toml
+#
+# Every field shown here has a default in
+# `mtg_bot.launcher.config` (see the dataclass docstrings); the
+# template is verbose so you don't have to dig for the schema. Drop
+# any field you want to take the default.
+#
+# CLI overrides win over the TOML on a per-key basis:
+#
+#   mtg_bot iterate-distributed --config configs/launch/iter_021.toml \
+#       --iter.nodes 800 \
+#       --iter.games-per-iteration 16000
+
+# ----------------------------------------------------------------------
+# [iter] -- what training cycle to run
+# ----------------------------------------------------------------------
+[iter]
+# REQUIRED. Must be > 0. The launcher derives cycle_id = "iter_NNN_cycle"
+# from this for the runs.db row + the per-cycle ephemeral dir.
+target_iter = 21
+
+# REQUIRED in practice. The version `mtg_bot iterate` starts from.
+# Drop if you're bootstrapping a brand-new v-chain.
+bootstrap_version = "v5"
+
+# MCTS max_nodes per sub-search. Default 200 (= production self-play
+# depth; matches eval-must-match-self-play-depth rule).
+nodes = 200
+
+# PIMC samples K. Default 8.
+samples = 8
+
+# Self-play games per iteration. Default 8000 (= production scale).
+games_per_iteration = 8000
+
+# Training epochs per iteration. Default 4.
+epochs = 4
+
+# Dual-head model class. Default "structured" (= v1-v10 path).
+# "shared" / "separate" are the legacy pre-structured architectures
+# and are NOT cross-loadable with structured -- switching forms a
+# fresh v-chain.
+architecture = "structured"
+
+
+# ----------------------------------------------------------------------
+# [cluster] -- which workers + local-vs-distributed
+# ----------------------------------------------------------------------
+[cluster]
+# `true` short-circuits AWS fleet management entirely. Today the
+# launcher REQUIRES this (Phase B fills the AWS path). When Phase B
+# lands you'll set this to `false` to enable the AWS fleet manager.
+local_only = true
+
+# Worker URL list. Configure the machines that should run this
+# cycle's self-play / eval. The launcher refuses to dispatch unless
+# every configured worker's /v2/heartbeat returns IDLE.
+master_url = "http://desktop-j05412i:5198"
+mac_url    = "http://greggs-macbook-pro:5198"
+# win10_url  = "http://desktop-g72aptg:5198"  # uncomment to include
+
+
+# ----------------------------------------------------------------------
+# [aws] -- spot-fleet shape (Phase B owns; parsed-but-ignored today)
+# ----------------------------------------------------------------------
+[aws]
+# Number of additional AWS workers to bring up. Default 0
+# (= local-only). Phase B fills the fleet manager that consumes
+# this; today the launcher errors out at parse time if you set
+# cluster.local_only = false.
+count = 0
+
+# EC2 instance type for spot workers. Default c7i.4xlarge.
+instance_type = "c7i.4xlarge"
+
+# Availability zones to try in order when spot capacity is
+# unavailable. The launcher walks the list until placement
+# succeeds.
+az_fallback = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+# Bucket prefix workers upload artifacts to. `s3://bucket/prefix`
+# or `file:///nfs/path`. Workers GET weights + POST npzs through
+# this URI; the coordinator handshakes the prefix once at start.
+storage_uri = "s3://my-bucket/iter_021/"
+
+
+# ----------------------------------------------------------------------
+# [ui] -- clickable links + auto-start training UI
+# ----------------------------------------------------------------------
+[ui]
+# When `true`, the launcher probes the training UI at base_url; if
+# it's not responding, it asks the hub (port 9000) to start the
+# registered project `mtg_bot_train_ui_windows`. Best-effort -- UI
+# failure NEVER blocks the launcher.
+auto_start_training_ui = true
+
+# Base URL for the cycle's clickable link. Defaults to the user's
+# tailnet hostname (`http://desktop-j05412i:5103`) per the project's
+# Tailscale-only link policy. The launcher prints
+# `<base_url>/run/<cycle_id>` to stderr after the cycle row lands
+# in runs.db.
+base_url = "http://desktop-j05412i:5103"

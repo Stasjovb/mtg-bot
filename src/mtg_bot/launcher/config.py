@@ -123,7 +123,7 @@ class UiSection:
     """
 
     auto_start_training_ui: bool = False
-    base_url: str = "http://desktop-j05412i:5500"
+    base_url: str = "http://desktop-j05412i:5103"
 
 
 # ---------------------------------------------------------------------------

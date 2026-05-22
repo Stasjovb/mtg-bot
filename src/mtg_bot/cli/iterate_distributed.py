@@ -57,8 +57,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional, Sequence
+from urllib.parse import urljoin
 
 from mtg_bot.cli.runs import lifecycle as _runs_lifecycle
+from mtg_bot.launcher import ui_autostart as _ui_autostart
 from mtg_bot.launcher.aws_fleet import FleetManager
 from mtg_bot.launcher.config import (
     LaunchConfig,
@@ -208,10 +210,12 @@ def _cycle_url(cfg: LaunchConfig) -> str:
     """Build the clickable URL for the cycle's UI card.
 
     Uses ``[ui].base_url`` -- defaults to the user's tailnet host
-    per the project's Tailscale-only link policy.
+    (``http://desktop-j05412i:5103``) per the project's
+    Tailscale-only link policy. Built via :func:`urllib.parse.urljoin`
+    so a base_url with or without trailing slash works identically.
     """
-    base = cfg.ui.base_url.rstrip("/")
-    return f"{base}/run/{cfg.cycle_id}"
+    base = cfg.ui.base_url.rstrip("/") + "/"
+    return urljoin(base, f"run/{cfg.cycle_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +494,23 @@ def _launch(
     runs_db_path = (progress_dir / "runs.db").resolve()
     env.setdefault("MTG_BOT_RUN_DB_PATH", str(runs_db_path))
 
-    # Tell the user where the cycle's UI card lives BEFORE the long
-    # iterate run starts.
-    print(
-        f"[iterate-distributed] launching cycle {cfg.cycle_id}; "
-        f"track at {_cycle_url(cfg)}",
-    )
+    # Phase C: best-effort training-UI auto-start.
+    # Runs BEFORE the cycle is registered so when the lifecycle ctx
+    # mgr enters and the UI gets its first row to render, the UI
+    # is up and ready. The helper is best-effort: any failure logs
+    # a warning and continues -- the launcher must NOT be coupled
+    # to UI liveness. See `mtg_bot.launcher.ui_autostart`.
+    if cfg.ui.auto_start_training_ui:
+        try:
+            _ui_autostart.ensure_training_ui(cfg.ui.base_url)
+        except Exception:  # noqa: BLE001 - defence-in-depth
+            # ensure_training_ui already catches its own errors, but
+            # if a future change widens the throw surface, the
+            # launcher still must not crash here.
+            logger.exception(
+                "[iterate-distributed] ui auto-start raised; "
+                "continuing without UI.",
+            )
 
     # Drive the lifecycle ctx mgr so the cycle row always lands
     # terminal in the DB, no matter how the iterate subprocess exits.
@@ -546,6 +561,17 @@ def _launch(
             handle.register_finalize_hook(
                 lambda: fleet.terminate_fleet("launcher_finalize"),
             )
+        # Phase C: clickable Tailscale-hosted link. Printed to stderr
+        # so it survives stdout redirection (the iterate child
+        # writes a lot of stdout once it starts; stderr stays clean).
+        # Per CLAUDE.md's Tailscale-only link policy, base_url
+        # defaults to the tailnet hostname not localhost.
+        print(
+            f"[launcher] cycle {cfg.cycle_id} started. "
+            f"Track in UI: {_cycle_url(cfg)}",
+            file=sys.stderr,
+            flush=True,
+        )
         rc = spawn(iterate_argv, env=env)
         # Differentiate clean-stop from a real failure. iterate
         # exits non-zero on a user stop today; treat any non-zero

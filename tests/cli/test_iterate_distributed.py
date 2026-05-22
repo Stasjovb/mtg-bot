@@ -279,8 +279,11 @@ def test_launch_prints_clickable_tailnet_url(
     minimal_toml: Path, progress_dir: Path, stub_heartbeat,
     runs_db_env: Path, monkeypatch, capsys,
 ):
-    """The launcher's 'track at <url>' message must use the Tailnet
-    base_url, not localhost."""
+    """The launcher's 'Track in UI: <url>' message must use the
+    Tailnet base_url, not localhost. Phase C wires this against the
+    canonical training-UI port 5103 (hub's mtg_bot_train_ui_windows
+    registration) and prints to stderr so it survives stdout
+    redirection."""
     monkeypatch.setattr(
         id_mod, "spawn_iterate_subprocess", _stub_spawn({}, exit_code=0),
     )
@@ -289,8 +292,11 @@ def test_launch_prints_clickable_tailnet_url(
         "--progress-dir", str(progress_dir),
         "--deck-pool", "data/decks.json.gz",
     ])
-    out = capsys.readouterr().out
-    assert "track at http://desktop-j05412i:5500/run/iter_021_cycle" in out
+    err = capsys.readouterr().err
+    assert (
+        "Track in UI: http://desktop-j05412i:5103/run/iter_021_cycle"
+        in err
+    )
 
 
 # ---------------------------------------------------------------------------
