@@ -68,34 +68,112 @@ Run these once when you sit down at the desktop:
 
 ## Running an iteration
 
+The unified `mtg_bot iterate-distributed` launcher is the canonical
+entrypoint. One TOML config + one command -- the launcher pre-
+registers the cycle row in `runs.db` (so the UI sees it immediately),
+auto-starts the training UI if it's not up, prints a clickable
+Tailscale link, then spawns `mtg_bot iterate` as a child subprocess
+with the right argv. The cycle row is **guaranteed** to end with a
+terminal status (`completed` / `failed` / `killed`) -- no more
+silently-stuck "running" rows after a launcher crash / signal /
+hard kill.
+
 ```bash
-PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli iterate \
-    --bootstrap-version v6 \
-    --shards-config shards_config.json \
-    --queue-url http://desktop-j05412i:5099 \
-    --games-per-iteration 1000 \
-    --eval-games 2000 \
-    --acceptance-threshold 0.525
+mtg_bot iterate-distributed --config configs/launch/iter_021.toml
 ```
 
-What happens (see [`DISTRIBUTED_RUN_FLOW.md`](DISTRIBUTED_RUN_FLOW.md)
-for the gritty step-by-step):
+The launcher prints to **stderr** (so it survives stdout redirection)
+right after the cycle row lands in runs.db:
 
-1. Orchestrator reads `shards_config.json` for the worker URL list.
-2. Orchestrator POSTs `/v2/stage/create` on the coordinator with the
-   self-play stage spec (1000 games, deck indices, seeds).
-3. Orchestrator POSTs `/v2/start_self_play` to every worker URL in
-   parallel. Each worker accepts (202) and starts pulling games via
-   `/v2/claim`.
-4. Orchestrator polls `GET /v2/stage/<id>` every 5s until
-   `status == "complete"`.
-5. Aggregates npzs from `iterate_data/` (each worker streamed them
-   back via `/v2/report_result` multipart) and runs `mtg_bot train`
-   in-process on the master.
-6. Builds an eval stage spec, POSTs `/v2/stage/create`, POSTs
-   `/v2/start_eval` to each worker, polls until complete.
-7. Reads `wins_new` / `wins_old` off the final `GET /v2/stage/<id>`,
-   applies the 0.525 gate, promotes or keeps best version.
+```
+[launcher] cycle iter_021_cycle started.
+Track in UI: http://desktop-j05412i:5103/run/iter_021_cycle
+```
+
+### TOML config
+
+See [`configs/launch/iter_TEMPLATE.toml`](../configs/launch/iter_TEMPLATE.toml)
+for the canonical template (copy + edit). Four sections, all
+optional fields take defaults from `mtg_bot.launcher.config`:
+
+- **`[iter]`** — what training cycle to run: `target_iter` (the
+  `iter_NNN` label the cycle_id derives from; the only field
+  without a sensible default), `bootstrap_version`, `nodes`,
+  `samples`, `games_per_iteration`, `epochs`, `architecture`. The
+  launcher hand-merges these into the corresponding `mtg_bot
+  iterate` flags.
+- **`[cluster]`** — which workers: `local_only` (true short-circuits
+  the AWS fleet; today this MUST be true — Phase B fills the AWS
+  path), `master_url` / `mac_url` / `win10_url` (heartbeat targets;
+  the launcher refuses to dispatch unless every configured worker's
+  `/v2/heartbeat` returns IDLE).
+- **`[aws]`** — parsed-but-ignored today; Phase B's fleet manager
+  consumes it. Fields: `count`, `instance_type`, `az_fallback`,
+  `storage_uri`.
+- **`[ui]`** — `auto_start_training_ui` (best-effort: probe
+  `base_url`; if not up, ask the hub on port 9000 to start
+  `mtg_bot_train_ui_windows`); `base_url` (defaults to
+  `http://desktop-j05412i:5103` per the project's Tailscale-only
+  link policy).
+
+### CLI overrides
+
+Any TOML key can be overridden on the command line via
+`--<section>.<key> <value>`:
+
+```bash
+mtg_bot iterate-distributed --config configs/launch/iter_021.toml \
+    --iter.nodes 800 \
+    --iter.games-per-iteration 16000 \
+    --cluster.local-only
+```
+
+Bare bool flags (no value) default to `true` — `--cluster.local-only`
+is equivalent to `--cluster.local-only true`. Dashes in keys are
+normalised to underscores (`--cluster.local-only` -> `local_only`).
+Unknown sections / keys fail loudly with `exit 2` and a clear
+message rather than silently dropping into a no-op.
+
+### Other CLI flags
+
+- `--config PATH` — the TOML. Optional only if every required field
+  is supplied via overrides.
+- `--progress-dir PATH` — root for runs.db + per-cycle ephemeral dirs
+  (default `training_progress/`).
+- `--deck-pool PATH` — forwarded to `iterate --deck-pool`.
+- `--queue-url URL` — forwarded to `iterate --queue-url`. Defaults
+  to `http://<first_worker_host>:5099`.
+- `--dry-run` — resolve config + render shards_config but DON'T
+  spawn iterate. Prints the resolved argv. Useful for validating a
+  TOML before a live launch.
+- `--skip-worker-verify` — skip the heartbeat IDLE check. Use only
+  when testing the launcher itself (no live workers) — production
+  launches should always verify.
+- `--force-resume-from-failed-cycle` — suppress the "cycle row
+  already exists" guard when the existing row is in a non-restartable
+  state. Reserved for future strict-mode behaviour; today the
+  runs.client swallows conflicts as warnings.
+
+### What happens under the hood
+
+See [`DISTRIBUTED_RUN_FLOW.md`](DISTRIBUTED_RUN_FLOW.md) for the
+gritty step-by-step of the iterate subprocess; the launcher's pre-
+and post-flight is:
+
+1. Parse TOML + CLI overrides into `LaunchConfig`; validate.
+2. (Optional) Auto-start training UI via hub if not responding.
+3. Verify every `[cluster]` worker URL's `/v2/heartbeat == IDLE`.
+4. Render per-cycle `shards_config.json` under
+   `training_progress/launches/<cycle_id>/`.
+5. Pre-register the cycle row in `runs.db` (`status=running`).
+6. Print the clickable Tailscale link to stderr.
+7. Spawn `mtg_bot iterate ...` as a child subprocess + wait.
+8. On any exit path (normal, signal, exception, atexit), funnel
+   through one finaliser that writes a terminal status to the DB
+   row. The runs.db row is **never** left at `running`.
+
+For the REST contract every worker speaks, see
+[`DISTRIBUTED_API_v2.md`](DISTRIBUTED_API_v2.md).
 
 ## Monitoring
 
@@ -166,5 +244,49 @@ Multiple options, depending on what you want to stop:
 - [`DISTRIBUTED_API_v2.md`](DISTRIBUTED_API_v2.md) — REST contract.
 - [`DISTRIBUTED_RUN_FLOW.md`](DISTRIBUTED_RUN_FLOW.md) — runtime
   walkthrough.
+- [`../configs/launch/iter_TEMPLATE.toml`](../configs/launch/iter_TEMPLATE.toml)
+  — copy-and-edit launcher config.
 - [`../deploy/README.md`](../deploy/README.md) — operator install
   guide.
+
+## Legacy manual flow (deprecated)
+
+**Do not use; left for forensics on pre-launcher iters.**
+
+Pre-launcher (iter_001 through iter_005 era) the operator drove the
+cycle by hand:
+
+1. Edit `shards_config.json` in the repo root to list the worker URLs.
+2. Run `mtg_bot iterate` directly:
+   ```bash
+   PYTHONPATH=src .venv-py313/Scripts/python.exe -m mtg_bot.cli iterate \
+       --bootstrap-version v6 \
+       --shards-config shards_config.json \
+       --queue-url http://desktop-j05412i:5099 \
+       --games-per-iteration 1000 \
+       --eval-games 2000 \
+       --acceptance-threshold 0.525
+   ```
+3. Run the eval-early-stop watcher in a second terminal so eval
+   could stop on Wilson 95% CI clearance:
+   ```bash
+   python scripts/eval_early_stop_watcher.py \
+       --alpha 0.025 --min-decisive 30
+   ```
+
+The problems this flow had that the launcher fixes:
+
+- Cycle row sometimes stuck at `running` in the UI when iterate
+  segfaulted / was hard-killed / the launcher PC rebooted mid-run.
+  The launcher's lifecycle ctx mgr guarantees a terminal status.
+- Two concurrent launches could trample each other's
+  `shards_config.json`. The launcher renders a per-cycle ephemeral
+  file under `training_progress/launches/<cycle_id>/`.
+- Worker-IDLE pre-flight was a manual `curl` step; the launcher
+  refuses to dispatch unless every configured worker reports IDLE.
+- No clickable link to the cycle's UI card; the launcher prints one
+  to stderr right after the row lands.
+
+Old `iterate` invocations still work (the launcher just composes
+the same argv internally), but new operators should use the
+launcher unconditionally.

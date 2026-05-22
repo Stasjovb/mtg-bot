@@ -195,6 +195,23 @@ in place. Pipeline in `mtg_bot.worker_daemon_self_update`; endpoint +
 requirement, Windows Task-Scheduler re-exec, rebuild heuristic) are
 in [`deploy/README.md`](deploy/README.md).
 
+**Canonical entrypoint (Phase C unified launcher):** Start an
+iteration cycle with `mtg_bot iterate-distributed --config
+configs/launch/iter_NNN.toml`. The launcher reads one TOML, pre-
+registers the cycle row in `runs.db` (UI sees it immediately),
+auto-starts the training UI via the hub if not up, verifies every
+configured worker's `/v2/heartbeat == IDLE`, renders a per-cycle
+ephemeral `shards_config.json`, prints a clickable Tailscale link
+to stderr, then spawns `mtg_bot iterate` as a child subprocess with
+the right argv. The cycle row is **guaranteed** to end with a
+terminal status — no more silently-stuck `running` rows on a
+crash / signal / hard kill. Full operator guide + TOML schema in
+[`docs/RUNNING_DISTRIBUTED.md`](docs/RUNNING_DISTRIBUTED.md);
+template config at
+[`configs/launch/iter_TEMPLATE.toml`](configs/launch/iter_TEMPLATE.toml).
+Direct `mtg_bot iterate` invocations still work but are the legacy
+manual flow — new operators should use the launcher unconditionally.
+
 ## Run database
 
 Every `mtg_bot` subcommand records its run into a SQLite DB at
