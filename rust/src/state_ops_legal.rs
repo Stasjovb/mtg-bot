@@ -444,6 +444,57 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashSet;
 
+/// Effective-power reader for the `Effect::ExorciseEffect`
+/// `spell_targets_satisfiable` arm (the "creature with power 4 or
+/// greater" leg of Exorcise's 3-way OR filter).
+///
+/// Mirrors the resolve-side `read_doubling_power` helper at
+/// `state_ops_resolve.rs:1798-1825` byte-equal — same composition:
+/// `base (UEOT-SetBasePT override / manland / printed) +
+///  ueot_power_bonus() + obj.counters` (CR 613 layer 7b/7c/7d).
+/// Inlined here per the per-slice file-isolation rule (the combat
+/// slice's `battlefield_creature_power` is module-private to that
+/// file; the resolve slice's `read_doubling_power` is module-private
+/// to that file; this is the third copy of the same recipe for the
+/// legal-target slice).
+///
+/// Matches Python's `effective_power(state, obj)` =
+/// `_compute_effective_pt` at `game.py:2138-2251` — the same SoT the
+/// Python `ExorciseEffect._matches` helper at `effects/bespoke.py:
+/// 2304` reads. Returns 0 for non-creatures or unknown ids.
+///
+/// **Documented residual.** Layer-7c static anthems and layer-7e P/T
+/// switches are NOT folded here (nor by the combat-side reader, nor
+/// by the resolve-side `read_doubling_power`). Same established
+/// combat-side asymmetry documented in the round-53 SEARCH_LIMITATIONS
+/// entry.
+fn legal_effective_power(state: &GameState, obj_id: u32) -> i32 {
+    let mut found: Option<&crate::state::GameObject> = None;
+    for player in state.players.iter() {
+        if let Some(obj) =
+            player.battlefield.iter().find(|o| o.id == obj_id)
+        {
+            found = Some(obj);
+            break;
+        }
+    }
+    let Some(obj) = found else {
+        return 0;
+    };
+    let Some(printing) =
+        state.registry.printings.get(obj.printing_id as usize)
+    else {
+        return 0;
+    };
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let base = obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| obj.ueot_becomes_land_creature_pt().map(|(p, _)| p))
+        .unwrap_or(printed_base);
+    base + obj.ueot_power_bonus() + obj.counters
+}
+
 // **G1 (the C1-analog for the combat axis) — the powerset / product
 // caps are GONE.** The former `DECLARE_ATTACKERS_POWERSET_CAP` (4),
 // `DECLARE_BLOCKERS_PRODUCT_CAP` (3), and
@@ -1057,6 +1108,48 @@ fn spell_targets_satisfiable(
                         continue;
                     }
                     if p.keywords.iter().any(|k| k == "indestructible") {
+                        continue;
+                    }
+                    found = true;
+                    break;
+                }
+                if !found {
+                    return false;
+                }
+            }
+            // Exorcise's exile half (Effect-uncovered single-gated
+            // tier, Duskmourn): `IsArtifact() | IsEnchantment() |
+            // (IsCreature() & effective_power >= 4)`. Mirrors Python
+            // `ExorciseEffect.legal_targets` (`effects/bespoke.py:
+            // 2308-2315`) — its `_matches` helper returns True iff
+            // `is_artifact OR "Enchantment" in card_types OR
+            // (is_creature AND effective_power(state, obj) >= 4)`. The
+            // power-4 leg reads EFFECTIVE power via the file-local
+            // `legal_effective_power` helper (folds base +
+            // ueot_power_bonus + obj.counters — matches Python's
+            // `effective_power` = `_compute_effective_pt` at
+            // game.py:2138-2251 and the resolve arm's
+            // `read_doubling_power` reader). **Indestructible is NOT
+            // a disqualifier** — exile bypasses indestructible per
+            // CR 702.12 (the resolve arm has no indestructible-skip;
+            // mirror that here). NOT controller-restricted.
+            Effect::ExorciseEffect => {
+                let mut found = false;
+                for o in crate::bf_iter::bf_iter_etb_sorted(state) {
+                    let Some(p) = state.registry.lookup(o.printing_id)
+                    else {
+                        continue;
+                    };
+                    let is_artifact =
+                        p.card_types.iter().any(|t| t == "Artifact");
+                    let is_enchantment =
+                        p.card_types.iter().any(|t| t == "Enchantment");
+                    let is_creature =
+                        p.card_types.iter().any(|t| t == "Creature");
+                    let power_4_plus = is_creature
+                        && legal_effective_power(state, o.id) >= 4;
+                    if !(is_artifact || is_enchantment || power_4_plus)
+                    {
                         continue;
                     }
                     found = true;

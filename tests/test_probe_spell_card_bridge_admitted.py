@@ -165,11 +165,25 @@ pytestmark = pytest.mark.skipif(
 # Cycle-4 widen + Cycle-5/6 per-mode detector entries — 19 → 20.
 # Combined with the Drill Too Deep slice: 17 → 20 across the merged
 # lanes.
+#
+# **non-state-rs-tractable-slice / Exorcise closure (2026-05-21)**:
+# the ``ExorciseEffect`` substrate (Rust ``Effect::ExorciseEffect``
+# field-free unit variant + parse + to_pydict + resolve arm in
+# state_ops_resolve.rs + spell_targets_satisfiable arm in
+# state_ops_legal.rs + cross_engine.py ``exorcise_effect`` bridge
+# arm + trajectory.py reverse-serializer leaf) AUTO-JOINS Exorcise
+# (Duskmourn {1}{W} Sorcery — "Exile target artifact, enchantment,
+# or creature with power 4 or greater"; the 3-way OR target filter
+# is the structural sibling of Shattered Wings's destroy-half
+# filter with two swaps — exile-not-destroy and power-4-not-flying;
+# the power-4 leg reads EFFECTIVE power via the file-local
+# ``read_doubling_power`` reader, byte-equal with Python's
+# ``effective_power``). 20 → 21.
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-    "Drill Too Deep", "Emergency Eject", "Focus Fire",
+    "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
     "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
     "Pyroclasm", "Radiant Strike", "Reroute Systems",
     "Ruinous Rampage", "Seedship Impact", "Shattered Wings",

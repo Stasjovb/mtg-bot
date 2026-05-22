@@ -754,6 +754,21 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``destroy_target_artifact`` serializer leaf — see the slice's
     # admit-set test note).
     REPO_ROOT / "tests" / "test_drill_too_deep_parity.py",
+    # **non-state-rs-tractable-slice (2026-05-21):** Effect-uncovered
+    # single-gated tier closure — Exorcise (Duskmourn {1}{W} Sorcery).
+    # The ``test_cross_engine_real_eoe_exorcise_parity`` probe drives
+    # the genuine parsed Exorcise printing through the new
+    # ``Effect::ExorciseEffect`` Rust unit variant + the file-local
+    # ``read_doubling_power`` effective-power reader + bridge arm +
+    # reverse-serializer leaf. The 3-way OR target filter (Artifact OR
+    # Enchantment OR Creature-with-effective-power-4+) is the
+    # structural sibling of Shattered Wings's destroy-half filter,
+    # with two swaps — exile-not-destroy (no indestructible-skip, per
+    # CR 702.12) and power-4-not-flying (reads effective power, folds
+    # counters + UEOT bonuses, matches Python's
+    # ``effective_power`` byte-equal). Flips Exorcise COVERED →
+    # PROBED (admit set 20 → 21 — the §2 auto-grow teeth).
+    REPO_ROOT / "tests" / "test_exorcise_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -21335,17 +21335,29 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # declined only because the serializer leaf was missing. The
     # §2 auto-grow teeth: covered+bridged AND round-trips ⇒
     # admitted, no fallback hybrid. 17 → 19 — both AUTO-JOINED.
+    # **non-state-rs-tractable-slice / Exorcise (2026-05-21):** the
+    # ``ExorciseEffect`` substrate (Rust ``Effect::ExorciseEffect``
+    # field-free unit variant + parse + to_pydict + resolve arm in
+    # state_ops_resolve.rs + spell_targets_satisfiable arm in
+    # state_ops_legal.rs + cross_engine.py ``exorcise_effect``
+    # bridge arm + trajectory.py reverse-serializer leaf)
+    # AUTO-JOINED Exorcise (Duskmourn {1}{W} Sorcery — "Exile target
+    # artifact, enchantment, or creature with power 4 or greater";
+    # the 3-way OR target filter is the structural sibling of
+    # Shattered Wings's destroy-half filter with two swaps — exile-
+    # not-destroy and power-4-not-flying). 20 → 21 — AUTO-JOINED via
+    # the §2 auto-grow teeth.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-        "Drill Too Deep", "Emergency Eject", "Focus Fire",
+        "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
         "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
         "Under the Skin", "Untimely Malfunction",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 20 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 21 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet via the beyond-the-quiet-slice's "
         f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
@@ -21367,9 +21379,13 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"slice's ``DestroyTargetArtifact`` ``_leaf`` table addition "
         f"(Untimely Malfunction; the bridge arm + Rust variant had "
         f"shipped previously, only the serializer leaf was missing) "
-        f"— the set grew 15→20 across the five lanes; "
-        f"auto-grows further as the remaining Tier-A and "
-        f"per-mode-target modal spells close)")
+        f"+ 1 Effect-uncovered single-gated admit via the non-state-"
+        f"rs-tractable-slice ``ExorciseEffect`` close (Exorcise — "
+        f"Rust ``Effect::ExorciseEffect`` field-free unit variant + "
+        f"bridge arm + reverse-serializer leaf + 3-way OR filter in "
+        f"state_ops_legal.rs / state_ops_resolve.rs) — the set grew "
+        f"15→21 across the six lanes; auto-grows further as the "
+        f"remaining Tier-A and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

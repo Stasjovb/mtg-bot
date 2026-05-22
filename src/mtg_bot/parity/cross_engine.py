@@ -9153,6 +9153,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyTargetArtifactEnchantmentOrFlyingCreature,
         )
         return DestroyTargetArtifactEnchantmentOrFlyingCreature()
+    if kind == "exorcise_effect":
+        # **Effect-uncovered single-gated tier — Exorcise (Duskmourn).**
+        # Rust substrate ``Effect::ExorciseEffect`` (cards.rs field-free
+        # UNIT variant; parser ``"exorcise_effect"``; resolve in
+        # state_ops_resolve.rs beside the Shattered Wings
+        # ``DestroyTargetArtifactEnchantmentOrFlyingCreature`` arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "exorcise_effect"}``. Python's
+        # ``ExorciseEffect`` (effects/bespoke.py:2268) is a frozen
+        # dataclass with no constructor parameters. The 3-way OR
+        # filter (Artifact OR Enchantment OR (Creature AND
+        # effective_power >= 4)) is intrinsic to the class via the
+        # ``_matches`` helper that runs at both legal-target and
+        # resolve time.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first permanent
+        # matching the 3-way OR filter (Artifact OR Enchantment OR
+        # (Creature AND effective_power >= 4)). The power-4 leg reads
+        # EFFECTIVE power via the file-local ``read_doubling_power``
+        # helper (folds base + ueot_power_bonus + obj.counters) —
+        # matches Python's ``effective_power(state, obj)``
+        # (``mtg_bot.game._compute_effective_pt`` at game.py:2138-2251).
+        # Python's ``ExorciseEffect.resolve`` re-verifies the same
+        # filter at resolution per CR 608.2b. **Indestructible is NOT
+        # skipped** on either engine — exile bypasses indestructible
+        # per CR 702.12 (distinguishes Exorcise from the destroy
+        # siblings).
+        #
+        # **Real test-pool consumer**: Exorcise — Sorcery {1}{W}
+        # "Exile target artifact, enchantment, or creature with power
+        # 4 or greater." Duskmourn source (``data/duskmourn.json``);
+        # admitted into the EoE-aware test pool via the Effect-
+        # uncovered single-gated tier classifier.
+        from mtg_bot.effects.bespoke import ExorciseEffect
+        return ExorciseEffect()
     if kind == "seedship_impact_effect":
         # **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
         # Rust substrate ``Effect::SeedshipImpactEffect {
