@@ -95,9 +95,17 @@ echo "AMI baked at commit: $BAKED_COMMIT"
 # Try to pull from coordinator's repo.bundle (same source as the
 # heavy user-data used at bake time). If unreachable / no new
 # commits, the existing baked state is fine.
+#
+# IMPORTANT: --max-time has to be > the bundle's transfer time.
+# Tailscale -> WSL2/Windows-coord throttles at ~1MB/s in the worst
+# case; the bundle is ~75MB today. The previous 5s budget truncated
+# the download to ~3MB, git fetch saw "index-pack died", the script
+# silently fell back to BAKED code (missing any post-bake commits),
+# and the daemon's argparse rejected new flags on launch. 180s is
+# generous headroom for the full bundle even on slow tailnet paths.
 mark wait-coord
 for i in $(seq 1 30); do
-  curl -fsS --max-time 5 "$COORD/repo.bundle" -o /opt/mtg-bot-new.bundle && break || true
+  curl -fsS --max-time 180 "$COORD/repo.bundle" -o /opt/mtg-bot-new.bundle && break || true
   echo "coord retry $i/30"
   sleep 4
 done
