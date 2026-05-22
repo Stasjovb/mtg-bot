@@ -1326,6 +1326,45 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // **scour-for-scrap-cycle-2 (2026-05-21) — Scour for
+            // Scrap mode 1 leaf
+            // `ReturnTargetArtifactCardFromYourGraveyardToHand`.**
+            // Satisfiable iff the caster controls AT LEAST one
+            // artifact card in their graveyard. Mirrors the cast-
+            // time per-mode detector's filter exactly (caster's
+            // graveyard, artifact in card_types). Note that for
+            // Scour for Scrap specifically the printed effect is a
+            // `ModalChooseOne(or_both=True)` whose mode 0 is
+            // untargeted (`SearchLibraryForCard`); requires_target()
+            // on the modal returns False because ANY mode is
+            // playable, so this arm never short-circuits the
+            // satisfiability gate to False for the modal as a whole
+            // — but the per-leaf arm is honest about the targeted-
+            // mode predicate for any future card that prints this
+            // leaf at the top level (or in a non-or_both modal).
+            // Python SoT: `ReturnFromGraveyard.legal_targets`
+            // (effects/generic/graveyard.py) walks the controller's
+            // graveyard and emits `("graveyard_artifact", card.id)`
+            // entries per artifact card.
+            Effect::ReturnTargetArtifactCardFromYourGraveyardToHand => {
+                let any = state.players[controller_idx]
+                    .graveyard
+                    .iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // **Reroute Systems closure (2026-05-21) — mode 1 leaf
             // `DealDamageToTargetTappedCreature`.** Satisfiable iff
             // SOME tapped creature on EITHER bf. Mirrors the cast-

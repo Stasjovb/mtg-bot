@@ -180,15 +180,32 @@ pytestmark = pytest.mark.skipif(
 # ``effective_power``) → Exorcise AUTO-JOINS. Pull Through the Weft
 # + Archenemy's Charm stay declined per the multi-target lane's
 # honest-stop characterization. 20 → 22 — both AUTO-JOINED.
+#
+# **Re-anchor at scour-for-scrap-cycle-2 (2026-05-21)** — admit set
+# 22 → 23 → 24. The pin was stale by one (was 22 at the prior pin,
+# live grew to 23 when the close-encounter substrate's Effect arm +
+# Cycle-3 admit widen landed; the cycle-2 lane catches that drift by
+# re-deriving the live set here). The +1 in THIS lane is
+# **Scour for Scrap** — the new
+# ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`` Rust
+# variant + the narrow ``SearchLibraryForCard(filter_name=
+# "artifact")`` ``_leaf`` admit (the honest-stop discipline scoped
+# admit; the basic-land / demon / spacecraft filters stay declined
+# in this lane's narrowing) + the Phase-5 ``(0, 1)`` ``or_both`` shape
+# admit-widen flip Scour DECLINED→ADMITTED. Demonic Counsel
+# (``SearchLibraryForCard(filter_name="demon")``) stays declined per
+# the narrow-admit discipline — it auto-flips when a future lane
+# ships its per-card probe + guardrail flip.
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-    "Cut Propulsion", "Depressurize", "Diplomatic Relations",
-    "Drill Too Deep", "Emergency Eject", "Exorcise", "Focus Fire",
-    "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
-    "Pyroclasm", "Radiant Strike", "Reroute Systems",
-    "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",
-    "Shattered Wings", "Under the Skin", "Untimely Malfunction",
+    "Close Encounter", "Cut Propulsion", "Depressurize",
+    "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
+    "Exorcise", "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
+    "Orbital Plunge", "Pyroclasm", "Radiant Strike",
+    "Reroute Systems", "Ruinous Rampage", "Scour for Scrap",
+    "Scout for Survivors", "Seedship Impact", "Shattered Wings",
+    "Under the Skin", "Untimely Malfunction",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

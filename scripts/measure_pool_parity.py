@@ -754,6 +754,20 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``destroy_target_artifact`` serializer leaf — see the slice's
     # admit-set test note).
     REPO_ROOT / "tests" / "test_drill_too_deep_parity.py",
+    # **scour-for-scrap-cycle-2 (2026-05-21):** ModalChooseOne envelope
+    # — FIRST ``or_both=True`` flip. The
+    # ``test_cross_engine_real_eoe_scour_for_scrap_return_target_artifact
+    # _card_from_your_graveyard_to_hand_parity`` probe drives the
+    # genuine Scour for Scrap printing through the new
+    # ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`` Rust
+    # unit variant + the per-mode detector table extension (the
+    # or_both walk peeks the targeted mode-1 leaf) + the matching
+    # bridge round-trip arms + the Phase-5 ``(0, 1)`` ``or_both``
+    # admit-shape widen. Flips Scour for Scrap COVERED → PROBED
+    # (admit set 23 → 24; ~6,434 17lands decks). The narrow
+    # ``SearchLibraryForCard(filter_name="artifact")`` ``_leaf`` admit
+    # honest-stops Demonic Counsel's auto-flip to a follow-up cycle.
+    REPO_ROOT / "tests" / "test_scour_for_scrap_parity.py",
     # **non-state-rs-tractable-slice (2026-05-21):** Effect-uncovered
     # single-gated tier closure — Exorcise (Duskmourn {1}{W} Sorcery).
     # The ``test_cross_engine_real_eoe_exorcise_parity`` probe drives

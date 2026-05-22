@@ -4143,7 +4143,11 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     )
     from mtg_bot.effects.generic.bounce import (
+        ReturnTargetArtifactCardFromYourGraveyardToHand,
         ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    )
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForCard,
     )
 
     def _leaf(eff) -> Optional[dict]:
@@ -4172,6 +4176,78 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # admit shape.
         if isinstance(eff, DestroyTargetArtifact):
             return {"kind": "destroy_target_artifact"}
+        # **scour-for-scrap-cycle-2 (2026-05-21) — Scour for Scrap
+        # mode 0 leaf `SearchLibraryForCard` (NARROW
+        # ``filter_name="artifact"`` admit).** Library-tutor primitive
+        # with three serializable axes: ``filter_name`` (str,
+        # required), ``max_mv`` (int, default 0), and ``may_fail``
+        # (bool, default True). Rust's ``parse_effect``
+        # ``"search_library_for_card"`` arm (cards.rs) reads all three
+        # fields and the resolve arm (state_ops_resolve.rs) consumes
+        # them deterministically. The dict→Python bridge arm
+        # (cross_engine.py:4068 ``search_library_for_card``)
+        # constructs ``SearchLibraryForCard(filter_name, max_mv,
+        # may_fail)``. All three fields participate in equality on the
+        # Python side, so the round-trip dict carries them all.
+        #
+        # **Narrow ``filter_name == "artifact"`` admit (honest-stop
+        # discipline).** Scour for Scrap mode 0 uses
+        # ``filter_name="artifact"``, ``max_mv=0``, ``may_fail=True``
+        # — the EXACT shape this lane is responsible for landing.
+        # Other ``SearchLibraryForCard`` filters
+        # (``filter_name="demon"`` — Demonic Counsel,
+        # ``filter_name="basic_land"`` / per-color basics — fetch
+        # lands, etc.) ALSO have full Rust + bridge coverage and
+        # would also round-trip if this leaf admitted them, but each
+        # auto-flips a distinct card class (Demonic Counsel auto-
+        # flips a {1}{B} tutor; basic-land filters touch Spineseeker
+        # Centipede and triggered-ability surfaces). Per the
+        # honest-stop discipline (a follow-up cycle ships each card's
+        # parity probe + admit-set guardrail flip in its own lane),
+        # this leaf narrowly admits ONLY the ``filter_name="artifact"``
+        # shape today. The narrowing is a `_leaf` predicate, not a
+        # cross-engine arm change — the existing
+        # `search_library_for_card` arm in cross_engine.py / cards.rs
+        # / state_ops_resolve.rs accepts every filter byte-identical
+        # (no narrowing on the cross-engine side); only the bridge-
+        # admit-set serializer narrows.
+        if isinstance(eff, SearchLibraryForCard):
+            if eff.filter_name != "artifact":
+                # Other filters stay declined at the bridge-admit-set
+                # gate until a per-card cycle ships their probe +
+                # guardrail flip.
+                return None
+            return {
+                "kind": "search_library_for_card",
+                "filter_name": str(eff.filter_name),
+                "max_mv": int(eff.max_mv),
+                "may_fail": bool(eff.may_fail),
+            }
+        # **scour-for-scrap-cycle-2 (2026-05-21) — Scour for Scrap
+        # mode 1 leaf `ReturnTargetArtifactCardFromYourGraveyardTo
+        # Hand`.** Pid-FREE covered unit variant — Rust's
+        # ``parse_effect`` ``"return_target_artifact_card_from_your_
+        # graveyard_to_hand"`` arm takes NO fields and the dict→Python
+        # bridge arm (cross_engine.py
+        # ``return_target_artifact_card_from_your_graveyard_to_hand``)
+        # constructs the field-free
+        # ``ReturnTargetArtifactCardFromYourGraveyardToHand()``. No
+        # token pid → no :func:`_seat_token_printings` dependency;
+        # the round-trip is the clean
+        # ``destroy_target_artifact`` unit-leaf idiom. Adding this
+        # leaf — TOGETHER with mode 0's ``SearchLibraryForCard`` leaf
+        # above AND the Cycle-1 ``or_both`` substrate (Lane LL) AND
+        # the admit-predicate widen below to accept Scour's ``(0, 1)``
+        # ``or_both=True`` shape — is what flips Scour for Scrap
+        # into the spell-card-bridge admit set: both modes are now
+        # serializable, the ModalChooseOne composer recurses cleanly,
+        # the cast-time multi-pick + per-mode target binder both fire,
+        # and the {3}{U} Instant joins the bridge admit set
+        # (auto-grow, no hardcoded list — the §2 teeth).
+        if isinstance(eff, ReturnTargetArtifactCardFromYourGraveyardToHand):
+            return {
+                "kind": "return_target_artifact_card_from_your_graveyard_to_hand",
+            }
         if isinstance(eff, GainLife):
             return {"kind": "gain_life", "amount": int(eff.amount)}
         if isinstance(eff, DepressurizeEffect):
@@ -4994,11 +5070,37 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
             )
         )
     )
+    # **Phase 5 — scour-for-scrap-cycle-2 (2026-05-21) — `or_both`
+    # modal admit-widen.** ``ModalChooseOne(or_both=True)`` cards whose
+    # ``target_count_range() == (0, 1)`` and ``slot_kinds == ()``.
+    # Reports `(0, 1)` because at least one mode is untargeted (so you
+    # can pick the untargeted mode alone — `min_t == 0`) and the
+    # most-targeted mode needs at most one target (`max_t == 1`). The
+    # empty ``slot_kinds`` mirrors ``ModalChooseOne``'s base default
+    # — it doesn't override ``target_slot_kinds()``. Today's consumer
+    # is exactly **Scour for Scrap** (its mode 0 is the untargeted
+    # ``SearchLibraryForCard``, mode 1 is the single-target
+    # ``ReturnTargetArtifactCardFromYourGraveyardToHand``); any future
+    # ``or_both`` modal with the same shape (one untargeted mode +
+    # one single-target mode) will auto-flip the same way provided
+    # both leaves are covered+bridged AND the per-mode binder picks
+    # the targeted mode's filter (the
+    # ``is_recognized_targeted_mode_leaf`` allowlist in
+    # ``state_ops_cast.rs``). The round-trip-or-bail teeth at
+    # ``_python_spell_effect_to_dict`` continue to carry the load:
+    # a modal whose modes are NOT all leaf-recognized bails at the
+    # serializer (returns ``None``) and the admit gate's
+    # ``_python_spell_effect_to_dict(se) is None`` clause rejects it.
+    _PHASE5_OR_BOTH_MIXED_TARGET_SHAPE = (
+        (min_t, max_t) == (0, 1)
+        and not slot_kinds
+    )
     if not (
         _PHASE1_SHAPE
         or _PHASE2_SHAPE
         or _PHASE3_WRATH_SHAPE
         or _PHASE4_MULTI_GRAVEYARD_SHAPE
+        or _PHASE5_OR_BOTH_MIXED_TARGET_SHAPE
     ):
         return False  # every other target grammar stays declined
     # The load-bearing §2 gate: the effect must be COVERED + BRIDGED

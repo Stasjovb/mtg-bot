@@ -1820,6 +1820,46 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToHand,
         )
         return ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)
+    if kind == "return_target_artifact_card_from_your_graveyard_to_hand":
+        # **scour-for-scrap-cycle-2 (2026-05-21) — Scour for Scrap
+        # mode 1 closure.** Mirrors Rust's
+        # ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand``
+        # (cards.rs new unit variant). Sister to the
+        # ``return_creature_from_your_graveyard_to_hand`` family;
+        # filter delta is "artifact card" instead of "creature card"
+        # — Python's class is a distinct dataclass subclass
+        # (``effects/generic/bounce.py:338``
+        # ``ReturnTargetArtifactCardFromYourGraveyardToHand``)
+        # rather than a rider-flag variant on
+        # ``ReturnCreatureFromYourGraveyardToHand`` (the rider-flag
+        # convention applies to "creature OR X" widenings, not
+        # "artifact only").
+        #
+        # **Filter contract.** Both engines admit a graveyard card
+        # iff its printing's ``card_types`` contains "Artifact".
+        # Artifact-creatures (printings carrying BOTH "Artifact" AND
+        # "Creature") qualify.
+        #
+        # **Cast-time-bound target shape.** When this Effect appears
+        # as the chosen mode of a modal cast (today: Scour for Scrap
+        # mode 1 via the or_both substrate), the Rust cast-time
+        # per-mode detector binds the deterministic-first legal
+        # graveyard artifact onto
+        # ``current_resolve_payload_target_id``. The resolve arm
+        # re-validates per CR 608.2b (still in graveyard, still an
+        # artifact card) and moves the target to the caster's hand;
+        # silent fizzle on validation fail. Python mirrors the bind
+        # via ``ModalChooseOne._resolve_or_both``'s "consume first
+        # remaining target whose value appears in mode.legal_targets"
+        # behavior (combinators.py:1290-1302).
+        #
+        # **Real EoE consumer.** Scour for Scrap (EoE Instant,
+        # {3}{U}, ~6,434 17lands decks): mode 1 of the or_both
+        # modal.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnTargetArtifactCardFromYourGraveyardToHand,
+        )
+        return ReturnTargetArtifactCardFromYourGraveyardToHand()
     if kind == "sequence":
         # **Phase 5 composer bridge arm (sequence).**
         # Mirrors Rust's ``Effect::Sequence { effects: Vec<Effect> }``

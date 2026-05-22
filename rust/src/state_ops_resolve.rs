@@ -5533,6 +5533,133 @@ fn apply_effect(
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
+        // **scour-for-scrap-cycle-2 (2026-05-21) — Scour for Scrap mode
+        // 1 leaf.** Return target artifact card from the source-
+        // controller's graveyard to that player's hand. Mirrors
+        // Python's `ReturnTargetArtifactCardFromYourGraveyardToHand`
+        // (`effects/generic/bounce.py:338`, a `ReturnFromGraveyard`
+        // subclass pinning `artifact=True`, `destination="hand"`,
+        // `target_kind="graveyard_artifact"`).
+        //
+        // **Cast-time-bound target via
+        // `current_resolve_payload_target_id`.** Per the established
+        // cast-time-bound-target pattern (SeedshipImpactEffect at
+        // `state_ops_resolve.rs:7271`, etc.), this arm reads the
+        // pre-bound target id and re-validates at resolve time per
+        // CR 608.2b. The validation matches the cast-time per-mode
+        // detector's filter exactly: the target must still live in
+        // the controller's graveyard AND still be an artifact card
+        // (defense-in-depth — the printing is immutable, but a
+        // future continuous type-changing effect could in theory
+        // strip Artifact). If the target left the graveyard (e.g.
+        // another effect moved it) or no longer matches the filter,
+        // silent fizzle — byte-equal with Python's "target became
+        // illegal → mode silently does nothing" semantics from
+        // `ModalChooseOne._resolve_or_both`
+        // (`combinators.py:1290-1302` — picks the first remaining
+        // target whose value appears in mode.legal_targets;
+        // `None` => `modal fizzle: mode {idx} requires a legal
+        // target`).
+        //
+        // **Cycle-1 substrate fallback.** When `current_resolve_
+        // payload_target_id` is `None` (e.g. a direct
+        // apply_effect_pub call from a synthetic test that didn't
+        // route through the cast-time binder), fall back to the
+        // deterministic-first-legal scan from the controller's
+        // graveyard. Mirrors the sibling
+        // `ReturnArtifactOrCreatureFromYourGraveyardToHand`'s
+        // self-scan behavior (`state_ops_resolve.rs:5357`) — safe
+        // back-compat for the substrate-only paths.
+        //
+        // **Controller / zone-change reset.** Identical contract to
+        // the sibling return-to-hand variants: controller_idx from
+        // `current_resolve_source_controller`; on move to hand,
+        // reset `tapped`, `summoning_sick=true`, `damage=0`,
+        // `counters=0`, `attached_to=None`, `exiled_with_source=
+        // None`. The `summoning_sick=true` matches the round-28
+        // CE1 universal-true default for hand-zone objects.
+        Effect::ReturnTargetArtifactCardFromYourGraveyardToHand => {
+            let _ = source_obj_id;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            // Re-validation predicate shared by both code paths:
+            // graveyard object's printing must contain "Artifact" in
+            // its card_types.
+            let is_legal_artifact_in_gy = |state: &GameState, id: u32| -> bool {
+                state.players[controller_idx]
+                    .graveyard
+                    .iter()
+                    .any(|o| {
+                        if o.id != id {
+                            return false;
+                        }
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types.iter().any(|t| t == "Artifact")
+                            })
+                            .unwrap_or(false)
+                    })
+            };
+            let target_obj_id: Option<u32> =
+                match state.current_resolve_payload_target_id {
+                    Some(payload_id) => {
+                        if is_legal_artifact_in_gy(state, payload_id) {
+                            Some(payload_id)
+                        } else {
+                            // CR 608.2b: silent fizzle when the
+                            // bound target left the graveyard or is
+                            // no longer an artifact card. Mirrors
+                            // Python's modal-fizzle path for an
+                            // illegal-at-resolve mode target.
+                            None
+                        }
+                    }
+                    None => {
+                        // Substrate fallback — deterministic-first
+                        // legal scan from the controller's
+                        // graveyard. Used by direct apply_effect_pub
+                        // callers (synthetic tests) that bypass the
+                        // cast-time per-mode binder.
+                        state.players[controller_idx]
+                            .graveyard
+                            .iter()
+                            .find_map(|obj| {
+                                match state.registry.lookup(obj.printing_id) {
+                                    Some(printing)
+                                        if printing
+                                            .card_types
+                                            .iter()
+                                            .any(|t| t == "Artifact") =>
+                                    {
+                                        Some(obj.id)
+                                    }
+                                    _ => None,
+                                }
+                            })
+                    }
+                };
+            let Some(target_id) = target_obj_id else {
+                return Ok(());
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+        }
         // **Controller resolution (I83 follow-up to the
         // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
         // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /

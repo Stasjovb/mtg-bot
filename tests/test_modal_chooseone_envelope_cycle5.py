@@ -358,13 +358,23 @@ def test_admit_predicate_still_declines_some_targeted_modal_cards_post_cycle5():
     + new ``DealDamageToTargetTappedCreature`` variant — see
     ``test_reroute_systems.py``). Scour for Scrap and Archenemy's
     Charm stay declined here pending their own per-leaf closures.
+
+    **Scour for Scrap closure (scour-for-scrap-cycle-2, 2026-05-21).**
+    Scour for Scrap was originally pinned here too. cycle-2 closed it
+    via the new
+    ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`` Rust
+    variant + matching leaf + the Cycle-5 detector table extension
+    (the multi-pick or_both walk picks the targeted mode 1's
+    ``ReturnTargetArtifactCardFromYourGraveyardToHand`` for cast-time
+    target binding) PLUS the Phase-5 ``(0, 1)`` ``or_both`` admit-
+    shape widen — see ``test_scour_for_scrap_parity.py``. Only
+    Archenemy's Charm remains declined.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
     declined_modals = [
-        "Scour for Scrap",
         "Archenemy's Charm",
     ]
     for nm in declined_modals:
