@@ -80,9 +80,14 @@ def _region_from_az(az: str) -> str:
 
 # Heartbeat / readiness defaults. The launcher overrides via
 # ``wait_for_healthy(timeout_s=...)`` when a slower bootstrap is
-# acceptable; the default 420s covers the warm-AMI's measured ~90s
-# best-case plus generous headroom for Tailscale registration +
-# control-plane propagation lag.
+# acceptable; the default 900s (15 min) covers the warm-AMI's
+# real-world ~7-10 min worst case: tailscale auth + repo.bundle
+# pull (the bundle is ~75MB and Tailscale -> WSL2/Windows coord
+# can throttle to ~1MB/s, so the curl has a 180s budget) + boot-
+# time boto3 install (~5s) + daemon startup + the bootstrap
+# script's own 36*5s=180s internal healthcheck loop. Previous
+# 420s default was too tight and timed out wait_for_healthy on
+# instances that DID eventually reach IDLE.
 HEARTBEAT_POLL_INTERVAL_S = 5.0
 WORKER_PORT = 5198
 
@@ -550,7 +555,7 @@ class FleetManager:
         self,
         instances: Optional[list[FleetInstance]] = None,
         *,
-        timeout_s: float = 420.0,
+        timeout_s: float = 900.0,
     ) -> list[str]:
         """Poll each instance for tailnet IP + ``state=IDLE``.
 
