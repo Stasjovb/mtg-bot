@@ -212,6 +212,57 @@ RESIDUE_WORKLIST = REPO_ROOT / "docs" / "residue_worklist.json"
 #     cross-engine full-cast-resolve pin (a stronger but
 #     non-PROBE_MODULES-credited shape); the YYY probe closes the
 #     attribution gap at the established bar.
+#
+# MEASUREMENT-ATTRIBUTION SWEEP P1 (2026-05-21,
+# ``feature/measurement-attribution-sweep-p1``) — exhaustive scanner-vs-
+# source audit, sibling to the same-day
+# ``feature/probe-modules-scanner-fix`` (registered 3 dedicated probe
+# modules) / ``feature/loader-admits-attribution-sweep`` (folded missing
+# loader-admits disjuncts) / ``feature/scout-survivors-slug`` (added a
+# slug delegator for Scout for Survivors) lanes.  The sweep enumerated
+# every ``def test_cross_engine_real_eoe_<...>_parity`` function in the
+# test surface (324 across 94 files) and cross-checked each enclosing
+# module against this PROBE_MODULES list + ``SMOKE_TEST``.  Findings:
+#
+#   * **0 missing canonical probes.** 10 unregistered modules surfaced
+#     -- ALL 10 are ``tests/test_divergence_pins_*.py`` post-closure
+#     markers whose ``*_parity`` functions ALL use the ``_FIXED_parity``
+#     convention (e.g.
+#     ``test_cross_engine_real_eoe_lightless_evangel_is_sacrificed_ordering_FIXED_parity``).
+#     The ``_FIXED_parity`` convention pins a previously-divergent shape
+#     post-closure, NOT a canonical real-EoE byte-equal probe; the
+#     ``feature/probe-modules-scanner-fix`` precedent honest-stopped
+#     these by design.  Registering them would CHANGE the inclusion
+#     semantic (post-closure markers are a different shape, different
+#     intent), not close an attribution gap.  HONEST-STOP: do NOT
+#     register the 10 ``test_divergence_pins_*.py`` modules.
+#
+#   * **0 misnamed canonical probes.** A search for ``test_*`` functions
+#     that bind an unprobed pool card via ``get_printings().get("X")``
+#     AND carry a cross-engine byte-equal signature
+#     (``compare_fields`` / ``byte_equal`` / ``FAIL_DIVERGENCE`` + a
+#     ``rust`` / ``cross_engine`` reference) returned 0 candidates.  The
+#     scanner's ``get_printings()``-binding match (introduced when
+#     PROBE_MODULES was widened beyond SMOKE_TEST) sidesteps the
+#     apostrophe-elision class of bug entirely; no slug-mismatch class
+#     remains.
+#
+#   * **0 loader_admits disjunct gaps.**  ``loader_admits`` currently
+#     mirrors all 10 disjuncts of
+#     ``trajectory._filter_deck_to_bridge_supported``'s admit gate
+#     (verified line-by-line against ``trajectory.py:7738-7853``); no
+#     11th disjunct has landed since the round-85 N1
+#     ``_printing_is_bridge_simple_tapped_mana_land`` widening that the
+#     ``feature/loader-admits-attribution-sweep`` lane already folded
+#     in.
+#
+# Audit shape: 324 ``_parity`` functions enumerated across 94 modules,
+# 88 PROBE_MODULES + 1 SMOKE_TEST = 89 registered carriers, 10
+# ``_FIXED_parity`` honest-stop excludes, 0 missing attributions.
+# PROBED 279 unchanged (the metric is tight at this point in the
+# campaign — every canonical real-EoE byte-equal probe in the test
+# surface is credited).  This is a doc-only audit commit; no
+# attribution counts move.
 PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_a.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",
