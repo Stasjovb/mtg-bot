@@ -8,7 +8,9 @@
 #   - Mac (greggs-macbook-pro-1, 100.77.31.125): the Mac worker daemon.
 #     Note: the OLD `greggs-macbook-pro` tailnet node is offline (3d+);
 #     the active node is `-1`. Use the IP to dodge DNS surprises.
-#   - AWS: 8x c7a.2xlarge spot in us-east-1c (with d/f fallback).
+#   - AWS: 4x c7a.2xlarge spot in us-east-1c (with d/f fallback).
+#     (Originally 8x; bumped down to fit the 32 vCPU spot quota --
+#     we hit MaxSpotInstanceCountExceeded on the first attempt.)
 #
 # Storage: real S3 via the IAM instance profile attached by the
 # runspec template (mtg-bot-spot-worker). cfg.aws.storage_uri below
@@ -33,7 +35,7 @@ mac_url = "http://100.77.31.125:5198"
 
 [aws]
 market_type = "spot"
-count = 8
+count = 4
 instance_type = "c7a.2xlarge"
 az_fallback = ["us-east-1c", "us-east-1d", "us-east-1f"]
 storage_uri = "s3://mtg-bot-artifacts-630589799985/iter_021/"
