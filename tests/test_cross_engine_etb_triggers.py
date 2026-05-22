@@ -21483,13 +21483,14 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # qualifying: return`` and Rust's identical empty-qualifying-
     # pool early-return for trivial byte-equal vacuous resolve.
     # Terminal Velocity AUTO-JOINS via the §2 auto-grow teeth. Admit
-    # set 31 → 32.
+    # set 31 → 32. Gravkill closure (effect-exile-target-creature-p1)
+    # adds bare ``Effect::ExileTargetCreature`` arm; admit set 32 → 33.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
         "Devastating Onslaught",
         "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
-        "Exorcise", "Focus Fire", "Invasive Maneuvers",
+        "Exorcise", "Focus Fire", "Gravkill", "Invasive Maneuvers",
         "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
         "Pull Through the Weft",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
@@ -21500,7 +21501,7 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 32 covered+bridged Tier-A spells: the 26 "
+        f"exactly the 33 covered+bridged Tier-A spells: the 26 "
         f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
         f"via control-change-ueot-cycle-4-p1 + Systems Override via "
         f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
@@ -21511,8 +21512,10 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"control-change-UEOT non-EoE consumer (Vengeful Possession "
         f"via vengeful-possession-cycle-1-p1) + 1 Phase-3 "
         f"wrath-shape closure (Terminal Velocity via "
-        f"terminal-velocity-cycle-1) — auto-grows further as the "
-        f"remaining Tier-A and per-mode-target modal spells close)")
+        f"terminal-velocity-cycle-1) + 1 bare-exile-target-creature "
+        f"closure (Gravkill via effect-exile-target-creature-p1) — "
+        f"auto-grows further as the remaining Tier-A and per-mode-"
+        f"target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

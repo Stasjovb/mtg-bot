@@ -6274,6 +6274,64 @@ pub enum Effect {
         power_bonus: i32,
         toughness_bonus: i32,
     },
+    /// **Bare-shape `exile target creature` Effect variant (Cycle 1
+    /// substrate for Archenemy's Charm Mode 0 and the small-pool bare
+    /// `ExileTargetCreature` spell printings — Gravkill / Final
+    /// Vengeance).** Sibling of the existing
+    /// `Effect::ExileTarget { TargetFilter::AnyCreature }` arm; differs
+    /// in that this variant reads its target from the cast-time-bound
+    /// `state.current_resolve_payload_target_id` per CR 608.2b (the
+    /// `Effect::ExorciseEffect` / `SeedshipImpactEffect` payload-target
+    /// pattern) rather than running the legacy
+    /// `defender = 1 - controller` first-slice picker. The bare
+    /// `Exile`-class subclass on the Python side is
+    /// `ExileTargetCreature` (`effects/generic/exile.py:717` — sugar
+    /// over `Exile(targets=(TargetSpec(IsCreature()),))`).
+    ///
+    /// **Resolve semantics.** Read the cast-time-bound target from
+    /// `state.current_resolve_payload_target_id` (the proven
+    /// payload-swap pattern). Re-validate at resolve per CR 608.2b
+    /// that the target is still a battlefield Creature; illegal →
+    /// silent fizzle (Python's `Exile.resolve` filter-recheck does
+    /// the same via `_slot_target_still_legal`). Exile target by
+    /// moving it to its OWNER's exile zone with the CR 400.7
+    /// zone-change reset (tapped=false, counters=0, damage=0,
+    /// attached_to=None, exiled_with_source=None). Exile BYPASSES
+    /// indestructible per CR 702.12c — no indestructible-skip in the
+    /// resolve filter (mirrors the established
+    /// `Effect::ExileTarget { AnyCreature }` and `ExorciseEffect`
+    /// arms). DIES dispatch is SKIPPED — bf→exile is not "die" per CR
+    /// 700.4 (which defines die as bf→graveyard). LEAVES dispatch
+    /// fires via `pending_leaves_dispatches`; token-cease drain
+    /// queued via `queue_token_cease` (CR 111.7 / 704.5d).
+    ///
+    /// **Synthetic-state fallback (None-payload).** If the cast-time
+    /// bind was skipped (e.g. a unit test pushing the effect onto the
+    /// stack without driving `cast_spell_noncreature`'s target
+    /// binder), fall back to a deterministic-first Creature scan
+    /// across BOTH battlefields in `bf_iter_etb_sorted` order. This
+    /// mirrors the `ExorciseEffect` / `CloseEncounterEffect`
+    /// None-payload fallback convention.
+    ///
+    /// **Schema parity with Python.** Field-free unit variant — the
+    /// Python `ExileTargetCreature` dataclass overrides
+    /// `__post_init__` to seat its `IsCreature()` TargetSpec but
+    /// carries no constructor args. Round-trip dict shape:
+    /// `{"kind": "exile_target_creature"}` (no other fields).
+    ///
+    /// **Why a new variant vs reusing `Effect::ExileTarget`.** The
+    /// existing `Effect::ExileTarget { target: TargetFilter }` arm
+    /// uses the legacy `defender = 1 - controller` first-slice target
+    /// picker, NOT the cast-time payload-target binding required for
+    /// CR 608.2b parity. Migrating that arm to payload-target binding
+    /// would be a broader cross-cutting change with implications for
+    /// other ExileTarget consumers; this dedicated variant keeps the
+    /// migration scope narrow to the bare `ExileTargetCreature`
+    /// Python subclass, exactly the
+    /// `DestroyTargetArtifact` / `DestroyTargetArtifactOrTapped
+    /// Creature` per-leaf precedent for the spell-card-bridge admit
+    /// flow.
+    ExileTargetCreature,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -9741,6 +9799,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "exile_target_creature_until_source_leaves" => {
             Ok(Effect::ExileTargetCreatureUntilSourceLeaves)
         }
+        "exile_target_creature" => {
+            // Bare-shape exile-target-creature parse arm (Cycle 1
+            // substrate for Archenemy's Charm Mode 0 + Gravkill /
+            // Final Vengeance bare-spell-effect consumers). Unit
+            // variant; no fields. Mirrors Python's
+            // `ExileTargetCreature` dataclass (`effects/generic/
+            // exile.py:717`), which is constructor sugar over
+            // `Exile(targets=(TargetSpec(IsCreature()),))` and takes
+            // no extra constructor args. Round-trip dict-shape
+            // consistency convention: dict carries only `kind`.
+            Ok(Effect::ExileTargetCreature)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -11221,7 +11291,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature"
         ))),
     }
 }
@@ -13686,6 +13756,14 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ExileTargetCreatureUntilSourceLeaves => {
             d.set_item("kind", "exile_target_creature_until_source_leaves")?;
+        }
+        Effect::ExileTargetCreature => {
+            // Bare-shape exile-target-creature to_pydict arm (Cycle 1
+            // substrate). Unit variant; no payload fields beyond
+            // `kind`. Mirrors Python's `ExileTargetCreature` dict
+            // shape (no constructor args). Round-trip dict-shape
+            // consistency: only `kind` emitted.
+            d.set_item("kind", "exile_target_creature")?;
         }
         Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
             d.set_item("kind", "exile_opponents_nonland_permanent_until_leaves")?;

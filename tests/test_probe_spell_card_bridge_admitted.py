@@ -266,12 +266,21 @@ pytestmark = pytest.mark.skipif(
 # identical empty-qualifying-pool early-return — byte-equal vacuous
 # resolve. The §2 covered+bridged + round-trip-or-bail teeth all
 # fire positively post Cycle 1.
+# **effect-exile-target-creature-p1 (2026-05-22)** — admit set 32 → 33.
+# Cycle 1 lands the bare unit-variant ``Effect::ExileTargetCreature``
+# (cards.rs enum + parse + to_pydict + resolve arm; legal-targets
+# narrow gate in state_ops_legal.rs reflecting the ANY-Creature
+# filter; cross-engine bridge arm + reverse-serializer leaf) covering
+# the small bare-spell-effect pool Gravkill / Final Vengeance and the
+# Archenemy's Charm Mode 0 substrate. Gravkill AUTO-JOINS via the §2
+# auto-grow teeth.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
     "Devastating Onslaught",
     "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
-    "Exorcise", "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
+    "Exorcise", "Focus Fire", "Gravkill", "Invasive Maneuvers",
+    "Manifest Dread",
     "Mutinous Massacre", "Orbital Plunge", "Pull Through the Weft",
     "Pyroclasm",
     "Radiant Strike", "Reroute Systems", "Ruinous Rampage",

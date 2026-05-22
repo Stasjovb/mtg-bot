@@ -4131,6 +4131,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.exile import (
         ExileAllCreaturesAndSpacecraft,
+        ExileTargetCreature,
     )
     from mtg_bot.effects.generic.library_lookat import (
         ManifestDread,
@@ -4299,6 +4300,34 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             return {
                 "kind": "return_target_artifact_card_from_your_graveyard_to_hand",
             }
+        # **Bare-shape ``ExileTargetCreature`` leaf (Cycle 1 substrate
+        # for Archenemy's Charm Mode 0 + Gravkill / Final Vengeance
+        # bare-spell-effect consumers, 2026-05-22).** Pid-FREE covered
+        # unit variant — Rust's ``parse_effect``
+        # ``"exile_target_creature"`` arm takes NO fields and the
+        # dict→Python bridge arm (cross_engine.py
+        # ``exile_target_creature``) constructs the field-free
+        # ``ExileTargetCreature()``. The single creature target rides
+        # on the spell StackItem (cast-time bind via the default-
+        # first-creature branch of ``cast_spell_noncreature``'s
+        # ladder); the resolve arm reads
+        # ``current_resolve_payload_target_id`` per CR 608.2b. No token
+        # pid → no :func:`_seat_token_printings` dependency; the
+        # round-trip is the clean ``destroy_target_artifact`` /
+        # ``biosynthic_burst_effect`` unit-leaf idiom.
+        #
+        # **Subclass-specific isinstance.** ``ExileTargetCreature``
+        # subclasses ``Exile`` (the generic exile primitive); the
+        # check matches the SPECIFIC subclass to avoid accidentally
+        # admitting other ``Exile`` subclasses (e.g.
+        # ``ExileTargetCreatureWithPowerOrToughnessAtMost`` — a
+        # parameterized rider that would need its own leaf arm). The
+        # ``ExileTargetCreature`` printed shape — bare "exile target
+        # creature" with no rider — round-trips byte-equal across
+        # engines provided the Rust resolve arm matches; this lane
+        # ships that arm + this leaf together.
+        if type(eff) is ExileTargetCreature:
+            return {"kind": "exile_target_creature"}
         if isinstance(eff, GainLife):
             return {"kind": "gain_life", "amount": int(eff.amount)}
         if isinstance(eff, DepressurizeEffect):
@@ -5268,6 +5297,38 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     if printing.kicker_cost or printing.impending_cost:
         return False
     if printing.room_halves:
+        return False
+    # **Additional-cost-sacrifice riders (Cycle 1 for the bare
+    # ``ExileTargetCreature`` lane, 2026-05-22).** These riders modify
+    # the cost-payment leg of the spell cast (you must sacrifice a
+    # qualifying permanent IN ADDITION to paying the mana cost — CR
+    # 601.2f). Today the Rust engine does NOT model the per-card
+    # sacrifice-creature-or-X riders; modeling them would require a
+    # parallel ``additional_cost_choose_your_creature``-style channel
+    # (the substrate the Close Encounter closure shipped for that
+    # specific rider). Until that channel exists for the
+    # creature-or-enchantment and creature-or-artifact variants,
+    # admitting these cards would silently mistranslate cross-engine —
+    # Python would enforce the additional sacrifice; Rust would not,
+    # and cast-legality + post-cast game state would diverge. EoE pool
+    # consumers gated by this guard today (verify-first pool scan,
+    # 2026-05-22): Final Vengeance ({B} Sorcery, Duskmourn —
+    # ``additional_cost_sacrifice_creature_or_enchantment=True``);
+    # Embrace Oblivion ({B} Sorcery), Scrounge for Eternity ({2}{B}
+    # Sorcery) — both ``additional_cost_sacrifice_creature_or_artifact``.
+    # The latter two are already declined by the covered-set gate
+    # (their ``spell_effect`` is ``DestroyTargetCreature`` /
+    # ``Sequence``, NEITHER currently covered+bridged with a
+    # round-trip leaf) — adding this guard is defense-in-depth:
+    # closing the spell_effect side for those two cards in a future
+    # lane would NOT inadvertently flip them into the admit set
+    # without the cost channel substrate also landing. The
+    # ``additional_cost_choose_your_creature`` rider (Close Encounter)
+    # is HANDLED — its substrate landed in the Close Encounter Cycle
+    # 1-3 work — so it is INTENTIONALLY OMITTED from this guard.
+    if getattr(printing, "additional_cost_sacrifice_creature_or_enchantment", False):
+        return False
+    if getattr(printing, "additional_cost_sacrifice_creature_or_artifact", False):
         return False
     mc = printing.mana_cost
     # **X-value-subsystem-C2.5 (2026-05-22).** X-cost admit-predicate

@@ -2888,6 +2888,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileTargetCreatureUntilSourceLeaves,
         )
         return ExileTargetCreatureUntilSourceLeaves()
+    if kind == "exile_target_creature":
+        # Bare-shape "exile target creature" bridge arm — Cycle 1
+        # substrate for Archenemy's Charm Mode 0 + Gravkill / Final
+        # Vengeance bare-spell-effect consumers. Rust's
+        # ``Effect::ExileTargetCreature`` (cards.rs) is a UNIT
+        # VARIANT — no fields. Its ``parse_effect`` arm takes no
+        # fields. The resolve arm at ``state_ops_resolve.rs`` reads
+        # the cast-time-bound target from
+        # ``current_resolve_payload_target_id`` per CR 608.2b
+        # (the established Exorcise / Seedship payload-target swap
+        # pattern), re-validates "is still a battlefield Creature",
+        # exiles to the target's owner zone, and skips DIES dispatch
+        # (bf→exile is not "die" per CR 700.4). Indestructible is
+        # NOT skipped — exile bypasses indestructible per CR 702.12c.
+        #
+        # **Rust target-pick semantics.** Cast-time bind via the
+        # default-first-creature branch of
+        # ``cast_spell_noncreature``'s ladder (the bare
+        # ExileTargetCreature is NOT one of the explicit ``is_*``
+        # recognized shapes, so it falls through to the default scan
+        # which picks the first Creature on EITHER bf — exactly the
+        # right filter for this Effect). Synthetic-state
+        # None-payload fallback: deterministic-first Creature in
+        # ETB-timestamp order across BOTH bfs.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ExileTargetCreature`` (effects/generic/exile.py:717) is
+        # sugar over ``Exile(targets=(TargetSpec(IsCreature()),))``;
+        # the Exile base class's resolve walks the slot, re-verifies
+        # the IsCreature filter at fire time per CR 608.2b, and
+        # invokes ``move_off_battlefield(state, obj,
+        # destination="exile")``. The targeting pipeline picks at
+        # PUSH time via ``push_triggered_ability`` →
+        # ``controller.agent.choose_target`` over the legal_targets
+        # pool (every Creature on the battlefield); cross-engine
+        # probes seat a deterministic-first agent on the source's
+        # controller — the agent's first-legal pick mirrors Rust's
+        # default-first-creature cast-time bind exactly on the
+        # 2-player harness.
+        #
+        # **Distinct from ``exile_target``.** The sibling
+        # ``exile_target`` arm bridges to Python's generic ``Exile``
+        # base class (not the ``ExileTargetCreature`` subclass) and
+        # uses the legacy ``defender = 1 - controller`` first-slice
+        # picker — pre-CR-608.2b. The two arms emit DISJOINT dict
+        # shapes (``exile_target`` carries a ``target`` filter dict;
+        # this arm is field-free).
+        from mtg_bot.effects.generic.exile import ExileTargetCreature
+        return ExileTargetCreature()
     if kind == "discard_card":
         # "Target player discards a card." Rust's
         # ``Effect::DiscardCard { target: TargetFilter }`` is the

@@ -19185,6 +19185,161 @@ fn apply_effect(
                 }
             }
         }
+        // Bare-shape "exile target creature" resolve arm — Cycle 1
+        // substrate for Archenemy's Charm Mode 0 and the bare-spell-
+        // effect consumers Gravkill / Final Vengeance. Sibling of the
+        // `Effect::ExileTarget { AnyCreature }` arm; differs in that
+        // this variant reads its target from the cast-time-bound
+        // `state.current_resolve_payload_target_id` per CR 608.2b
+        // (the `Effect::ExorciseEffect` / `SeedshipImpactEffect`
+        // payload-target swap pattern) rather than the legacy
+        // `defender = 1 - controller` first-slice picker. The Python
+        // class on the bridge is `ExileTargetCreature`
+        // (`effects/generic/exile.py:717` — sugar over
+        // `Exile(targets=(TargetSpec(IsCreature()),))`).
+        //
+        // **Resolve semantics.** Read cast-time-bound target id; if
+        // payload was bound (cast through `cast_spell_noncreature`'s
+        // default-first-creature branch — the bare ExileTargetCreature
+        // is NOT one of the `is_*` recognized cast-time-bind shapes,
+        // so it falls through to the default first-creature scan,
+        // which IS the correct creature-filter bind for this Effect):
+        // re-validate at resolve per CR 608.2b that the target is
+        // still a battlefield Creature on EITHER side (no controller-
+        // restriction; the Python `IsCreature()` slot filter is not
+        // controller-restricted). If the target ceased between cast
+        // and resolve, OR is no longer a Creature, silent fizzle —
+        // byte-equal with Python's `Exile.resolve` filter-recheck via
+        // `_slot_target_still_legal` and the `obj is None` early
+        // return.
+        //
+        // **None-payload synthetic-test fallback.** Deterministic-
+        // first Creature in ETB-timestamp order across BOTH bfs
+        // (`bf_iter_etb_sorted`). Mirrors `ExorciseEffect` /
+        // `CloseEncounterEffect` None-payload fallback shape. The
+        // synthetic-state Rust tests in this lane exercise this path.
+        //
+        // **Exile bypasses indestructible per CR 702.12c** — no
+        // indestructible-skip filter (mirrors the established
+        // `Effect::ExileTarget { AnyCreature }` and `ExorciseEffect`
+        // arms; distinguishes from the destroy siblings which DO skip
+        // indestructible).
+        //
+        // **DIES dispatch is SKIPPED** — bf→exile is not "die" per CR
+        // 700.4 (which defines "die" as bf→graveyard). Mirrors the
+        // `ExorciseEffect` arm's DIES omission rationale. LEAVES
+        // dispatch fires via `pending_leaves_dispatches` (every
+        // bf-exit fires LEAVES per CR 603.6c / Event::LEAVES
+        // contract); token-cease drain queued via `queue_token_cease`
+        // (CR 111.7 / 704.5d) — both unconditional, the is_token gate
+        // lives in the drain helper.
+        //
+        // **CR 400.7 zone-change reset.** tapped=false, counters=0,
+        // damage=0, attached_to=None, exiled_with_source=None.
+        // Matches the `ExorciseEffect` reset pattern (counters CLEARED
+        // on bf→exile per round-1 exile-reset convention; diverges
+        // intentionally from the destroy siblings' preserve-counters-
+        // on-graveyard contract).
+        //
+        // **Owner-on-re-scan routing.** First-slice owner-as-
+        // controller shape: target's `controller` is its owner, so
+        // the exiled object lands on its owner's exile zone (mirrors
+        // every other bf→exile arm in this file).
+        Effect::ExileTargetCreature => {
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if !printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    return None;
+                                }
+                                Some((pidx, o.id))
+                            })
+                    }),
+                None => {
+                    // Synthetic-test fallback (mirrors the
+                    // `ExorciseEffect` / `CloseEncounterEffect`
+                    // None-payload fallback shape): deterministic-
+                    // first Creature in ETB-timestamp order across
+                    // BOTH bfs.
+                    let registry = &state.registry;
+                    crate::bf_iter::bf_iter_etb_sorted(state)
+                        .into_iter()
+                        .find_map(|obj| {
+                            let printing =
+                                registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some((obj.controller as usize, obj.id))
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect(
+                        "target_id from scan but not found on re-scan",
+                    );
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here
+                // (CR 302.1 — sickness is battlefield-only state).
+                // See I35.
+                obj.damage = 0;
+                // bf→exile resets counters (CR 400.7 zone-change /
+                // round-1 exile-reset convention; matches the
+                // `ExorciseEffect` and `Effect::ExileTarget`
+                // siblings).
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) =
+                    (obj.printing_id, obj.id);
+                // First-slice: target's controller == owner, so push
+                // onto `pidx`'s exile zone.
+                Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+                // LTB fan-out (the `mark_left_battlefield_if_nonland`
+                // helper gates on the printing — target is a Creature
+                // by filter → nonland → mark flips).
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // DIES is NOT pushed — bf→exile is not "die" per CR
+                // 700.4. Mirrors the `ExorciseEffect` arm.
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Round-55: token-cease sibling of the LEAVES push.
+                // is_token gate lives in drain_pending_token_cease
+                // (CR 111.7 / 704.5d).
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+            }
+        }
     }
     Ok(())
 }

@@ -1492,6 +1492,37 @@ fn spell_targets_satisfiable(
                     return false;
                 }
             }
+            // Bare-shape `Effect::ExileTargetCreature` (Cycle 1
+            // substrate for Archenemy's Charm Mode 0 + Gravkill /
+            // Final Vengeance bare-spell-effect consumers).
+            // Satisfiable iff SOME Creature on EITHER battlefield.
+            // Mirrors Python's `ExileTargetCreature` (sugar over
+            // `Exile(targets=(TargetSpec(IsCreature()),))`) which
+            // emits a `("creature", o.id)` entry per creature on
+            // `state.battlefield` via the slot's `IsCreature()`
+            // filter. NOT controller-restricted — matches the
+            // ANY-creature `ExileTarget { AnyCreature }` / Cut
+            // Propulsion / Depressurize precedent. Indestructible is
+            // NOT a disqualifier — exile bypasses indestructible per
+            // CR 702.12c (mirrors the resolve arm).
+            Effect::ExileTargetCreature => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
             // Every other Effect (untargeted bodies — the dominant
             // bridge-simple-creature axis whose `spell_effect is
             // None`; or a not-yet-admitted targeted shape): the

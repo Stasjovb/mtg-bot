@@ -67211,42 +67211,49 @@ def test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal():
             )
 
     # ---- Property 2: the new default recovers a timeout into a verdict.
-    # Archetype 7 seed 0 FAIL_TIMEOUTs at cap-25 (a `no_board`-at-25
+    # Archetype 10 seed 0 FAIL_TIMEOUTs at cap-25 (a `no_board`-at-25
     # game that draws a creature and progresses with more turns). At
     # cap-60 it must yield a real cross-engine verdict and NOT have
     # been masking a divergence.
     #
-    # **Fixture re-derive (next-effect-uncovered slice, 2026-05-21).**
-    # Pre-Emergency-Eject the fixture was arch=9 seed=1. The
-    # ``feature/next-effect-uncovered`` close admits Emergency Eject
-    # into the spell-card-bridge bench-admit set — that archetype
-    # contains the card, so the legitimately-changed bench trajectory
-    # now extends past the cap-60 timeout (the Lander rider adds
-    # permanents that shift game progression). The new
-    # cap-60→PASS-recovery fixture is arch=7 seed=0 (also a
-    # ``no_board`` cap-25 timeout that recovers at cap-60),
-    # re-derived from a fresh stall-anatomy sweep per the fixture's
-    # own re-derivation contract. The TWO properties this pin asserts
-    # — parity-safety (Property 1) and timeout-recovery (Property 2) —
-    # remain unchanged; only the per-archetype carrier shifted.
+    # **Fixture re-derive history.** The carrier archetype has
+    # legitimately shifted twice as new cards joined the spell-card-
+    # bridge admit set and altered game trajectories:
+    #
+    #   1. Pre-Emergency-Eject (round-69 original) — arch=9 seed=1.
+    #   2. Post-Emergency-Eject (``feature/next-effect-uncovered``,
+    #      2026-05-21) — arch=7 seed=0. The Emergency Eject admit
+    #      added Lander permanents that shifted archetype 9's
+    #      trajectory.
+    #   3. Post-bare-``ExileTargetCreature`` (this lane,
+    #      ``feature/effect-exile-target-creature-p1``, 2026-05-22) —
+    #      arch=10 seed=0. The bare ``ExileTargetCreature`` admit
+    #      adds Gravkill to the bench-admit set; archetype 7 now
+    #      runs Gravkill's resolves and PASSes at cap-25.
+    #
+    # The TWO properties this pin asserts — parity-safety (Property 1)
+    # and timeout-recovery (Property 2) — remain unchanged; only the
+    # per-archetype carrier shifted. Re-derived from a fresh stall-
+    # anatomy sweep per the fixture's own re-derivation contract.
     lo7 = drive_one_game(
-        archetype=7, seed=0, max_turns=25,
+        archetype=10, seed=0, max_turns=25,
         combat_strategy="attack_all", mulligans=0,
     )
     hi7 = drive_one_game(
-        archetype=7, seed=0, max_turns=60,
+        archetype=10, seed=0, max_turns=60,
         combat_strategy="attack_all", mulligans=0,
     )
     assert lo7.status == "FAIL_TIMEOUT", (
-        "round-69 data fixture (re-derived post-Emergency-Eject): "
-        f"arch=7 seed=0 is expected to FAIL_TIMEOUT at cap-25; got "
+        "round-69 data fixture (re-derived post-bare-"
+        "ExileTargetCreature): "
+        f"arch=10 seed=0 is expected to FAIL_TIMEOUT at cap-25; got "
         f"{lo7.status}. If the bench trajectory legitimately changed, "
         "re-derive the fixture from a fresh stall-anatomy run (do NOT "
         "just relax this assertion)."
     )
     assert hi7.status in ("PASS", "FAIL_DIVERGENCE"), (
         f"raising the cap must convert the timeout into a real parity "
-        f"verdict; arch=7 seed=0 got {hi7.status} at cap-60"
+        f"verdict; arch=10 seed=0 got {hi7.status} at cap-60"
     )
     assert hi7.status != "FAIL_DIVERGENCE" or lo7.status != "PASS", (
         "sanity: a cap-25 PASS cannot become a cap-60 DIVERGENCE "
