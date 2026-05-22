@@ -165,6 +165,19 @@ pytestmark = pytest.mark.skipif(
 # Cycle-4 widen + Cycle-5/6 per-mode detector entries — 19 → 20.
 # Combined with the Drill Too Deep slice: 17 → 20 across the merged
 # lanes.
+#
+# **multi-target-admit-phase4 (2026-05-21,
+# `feature/multi-target-admit-phase4`)**: added the Phase-4
+# multi-target admit arm to ``_printing_is_bridge_simple_spell``
+# (``(min, N)`` shapes with uniform graveyard_creature slot kinds) +
+# new Rust ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWith
+# Counters`` variant + matching parse + to_pydict + bridge arm +
+# resolve arm + reverse-serializer leaf. Scout for Survivors
+# AUTO-JOINS — 20 → 21. Pull Through the Weft and Archenemy's Charm
+# stay declined (Pull Through the Weft needs its own
+# ReturnUpToNNonlandPermanentCardsFromGraveyardToHand variant;
+# Archenemy's Charm needs 3-mode modal + Mode-3 keyword-grant
+# substrate per the lane's honest-stop characterization).
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
@@ -172,8 +185,8 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Drill Too Deep", "Emergency Eject", "Focus Fire",
     "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
     "Pyroclasm", "Radiant Strike", "Reroute Systems",
-    "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
-    "Under the Skin", "Untimely Malfunction",
+    "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",
+    "Shattered Wings", "Under the Skin", "Untimely Malfunction",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus

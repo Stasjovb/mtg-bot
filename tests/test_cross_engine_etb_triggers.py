@@ -21335,40 +21335,36 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # declined only because the serializer leaf was missing. The
     # §2 auto-grow teeth: covered+bridged AND round-trips ⇒
     # admitted, no fallback hybrid. 17 → 19 — both AUTO-JOINED.
+    # **multi-target-admit-phase4 (2026-05-21):** Phase 4 widens the
+    # admit predicate to accept ``(min, N)`` graveyard-source multi-
+    # target shapes with uniform slot_kinds. New Rust
+    # ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters``
+    # variant + matching parse + to_pydict + bridge arm + resolve arm
+    # + reverse-serializer leaf. Scout for Survivors AUTO-JOINS via
+    # the §2 auto-grow teeth: 20 → 21. Pull Through the Weft + Archenemy's
+    # Charm stay declined (each needs its own substrate per the lane's
+    # honest-stop characterization).
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Cut Propulsion", "Depressurize", "Diplomatic Relations",
         "Drill Too Deep", "Emergency Eject", "Focus Fire",
         "Invasive Maneuvers", "Manifest Dread", "Orbital Plunge",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
-        "Ruinous Rampage", "Seedship Impact", "Shattered Wings",
-        "Under the Skin", "Untimely Malfunction",
+        "Ruinous Rampage", "Scout for Survivors", "Seedship Impact",
+        "Shattered Wings", "Under the Skin", "Untimely Malfunction",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 20 covered+bridged Tier-A spells: the 11 "
-        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
-        f"(incl. Beyond the Quiet via the beyond-the-quiet-slice's "
-        f"``ExileAllCreaturesAndSpacecraft`` Effect variant + bridge "
-        f"arm + reverse-serializer leaf) + 1 Cycle-4 modal admit "
-        f"(Ruinous Rampage via the modal-chooseone-cycle-4 widen + "
-        f"per-leaf ``DealDamageEachOpponent`` / "
-        f"``ExileAllArtifactsWithManaValueAtMost`` Effect serializer "
-        f"leaves) + 1 Cycle-6 per-mode-target modal admit "
-        f"(Drill Too Deep via the drill-too-deep-slice's "
-        f"``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` "
+        f"exactly the 21 covered+bridged Tier-A spells: the 11 "
+        f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits + 1 Cycle-4 "
+        f"modal admit (Ruinous Rampage) + 1 Cycle-6 per-mode-target "
+        f"modal admit (Drill Too Deep) + 1 Cycle-6 some-targeted modal "
+        f"admit (Reroute Systems) + 1 co-admit (Untimely Malfunction) "
+        f"+ 1 Phase-4 multi-target-from-graveyard admit (Scout for "
+        f"Survivors, via the multi-target-admit-phase4 lane's "
+        f"``ReturnUpToNSmallCreaturesFromGraveyardWithCounters`` "
         f"Effect variant + bridge arm + reverse-serializer leaf + "
-        f"per-mode target-binding detector table extension) + 1 "
-        f"Cycle-6 some-targeted modal admit (Reroute Systems via the "
-        f"reroute-systems-slice-v2 closure — extended "
-        f"``PumpTargetArtifactOrCreatureUntilEOT`` with ``granted_"
-        f"keywords`` field + added ``DealDamageToTargetTappedCreature`` "
-        f"variant + per-mode detector table entries + reverse "
-        f"serializer leaves) + 1 co-admit via the drill-too-deep-"
-        f"slice's ``DestroyTargetArtifact`` ``_leaf`` table addition "
-        f"(Untimely Malfunction; the bridge arm + Rust variant had "
-        f"shipped previously, only the serializer leaf was missing) "
-        f"— the set grew 15→20 across the five lanes; "
-        f"auto-grows further as the remaining Tier-A and "
+        f"Phase-4 admit-gate arm) — the set grew 15→21 across the "
+        f"six lanes; auto-grows further as the remaining Tier-A and "
         f"per-mode-target modal spells close)")
 
 

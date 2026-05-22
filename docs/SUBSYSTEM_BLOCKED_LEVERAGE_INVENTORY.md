@@ -635,10 +635,28 @@ Velocity, Vengeful Possession, Warping Wail, Zero Point Ballad.
       `resolving_additional_cost_choice_id` runtime state channel
       + cast-pipeline choice plumbing. Multi-cycle (2-3); 16,098
       decks (highest count among the six).
-    * **Scout for Survivors** needs Phase 4 multi-target admit-gate
-      widen + multi-target cast-time binding + sum-MV-budget
-      resolve + +1/+1 counter rider. Multi-cycle (3-4); shared
-      with Pull Through the Weft and Archenemy's Charm mode 2.
+    * **Scout for Survivors** — **PROBED 2026-05-21**
+      (`feature/multi-target-admit-phase4`). Closed via Phase 4
+      multi-target admit-gate widen + new Rust
+      `Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters`
+      variant + resolve-time self-scan (graveyard Vec order,
+      per-card MV + running sum-MV budget, +1/+1 counter rider).
+      The hexad-lane's "shared substrate unlocks Pull Through the
+      Weft + Archenemy's Charm mode 2" claim DID NOT pan out under
+      verify-first: Pull Through the Weft needs its own
+      `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` Rust
+      variant + parser surgery for its dropped lands clause (~3
+      cycles), and Archenemy's Charm needs full 3-mode envelope +
+      Mode-3 keyword-grant composition (~3-4 cycles). Scout was
+      the only clean substrate-only flip; the other two remain
+      DEFERRED with their own per-card slices required. Per
+      `docs/SEARCH_LIMITATIONS.md` "Multi-target Phase 4
+      resolve-time self-scan" — the resolve-time self-scan is a
+      documented deliberate divergence vs CR 601.2c cast-time
+      binding (cross-engine harness's `_PickFirstLegalTargetAgent`
+      makes the divergence unobservable; real-game multi-target
+      pick freedom would require a `StackItem.target_obj_ids:
+      Vec<u32>` follow-up).
     * **Systems Override** shares the control-change-UEOT
       subsystem with Mutinous Massacre (C1-C3 of the triad lane).
       Multi-cycle (3-5); +1 cycle for Spacecraft-conditional

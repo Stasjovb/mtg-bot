@@ -4140,6 +4140,9 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.counters import (
         PutChargeCountersOnTargetSpacecraftOrPlanetYouControl,
     )
+    from mtg_bot.effects.generic.bounce import (
+        ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -4592,6 +4595,70 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 ),
                 "amount": int(eff.amount),
             }
+        # **Multi-target admit-gate Phase 4 widen (2026-05-21).** Per-
+        # leaf serializer for
+        # ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters(max_n,
+        # max_total_mv)`` — Scout for Survivors. Rust variant
+        # ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters
+        # { max_n: i32, max_total_mv: i32 }`` ships in the SAME lane
+        # (declaration + parse + to_pydict + resolve arms + bridge arm).
+        # Three-field round-trip (``kind`` + ``max_n`` + ``max_total_mv``)
+        # is bit-equal — mirrors the
+        # ``invasive_maneuvers_effect`` two-int-field idiom widened to
+        # the count + sum-MV-budget pair. Non-negative invariant per
+        # CR 202.3 (mv is non-negative; max_n is non-negative); Python
+        # class defaults to max_n=3, max_total_mv=3 (Scout's printed
+        # values). Bail defensively on a negative if a hand-constructed
+        # instance ever leaks through. Adding this leaf — TOGETHER with
+        # the multi-target admit-gate Phase-4 widen below — is what
+        # flips Scout for Survivors into the spell-card-bridge admit
+        # set.
+        #
+        # **Riders gate.** The Python class is constructor sugar on the
+        # unified ``ReturnFromGraveyard`` base; ``__post_init__`` pins
+        # ``creature=True``, ``destination='battlefield'``,
+        # ``plus_one_counter=True``, ``min_n=0``, ``max_mv=max_total_mv``.
+        # The Rust variant carries ONLY ``max_n`` + ``max_total_mv``;
+        # the destination + counter + creature filter + per-card MV cap
+        # are intrinsic to the variant (not data fields). Bail if any
+        # printed-from-text rider that DOESN'T fold into this fixed
+        # shape is set (defensive; the parser only emits this shape
+        # for the exact Scout-print pattern, but a future parser
+        # extension that adds e.g. ``or_artifact=True`` would silently
+        # mistranslate without this guard).
+        if isinstance(eff, ReturnUpToNSmallCreaturesFromGraveyardWithCounters):
+            if eff.max_n < 0 or eff.max_total_mv < 0:
+                return None
+            # Riders that don't fold into the fixed Rust variant shape.
+            # The class pins creature=True, destination='battlefield',
+            # plus_one_counter=True, min_n=0 in __post_init__; any
+            # deviation from those defaults means the parser produced
+            # a shape this round-trip doesn't cover.
+            if (
+                not eff.creature
+                or eff.artifact
+                or eff.land
+                or eff.nonland_permanent
+                or eff.or_enchantment
+                or eff.or_spacecraft
+                or eff.or_artifact
+                or eff.destination != "battlefield"
+                or not eff.plus_one_counter
+                or eff.min_n != 0
+                or eff.untargeted_all
+                or eff.log_suffix
+                or eff.target_kind != "graveyard_creature"
+                or eff.max_mv != eff.max_total_mv
+            ):
+                return None
+            return {
+                "kind": (
+                    "return_up_to_n_small_creatures_from_graveyard_"
+                    "with_counters"
+                ),
+                "max_n": int(eff.max_n),
+                "max_total_mv": int(eff.max_total_mv),
+            }
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child
@@ -4810,7 +4877,54 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
         and not slot_kinds
         and not getattr(printing, "targets", ())
     )
-    if not (_PHASE1_SHAPE or _PHASE2_SHAPE or _PHASE3_WRATH_SHAPE):
+    # **Phase 4 — multi-target admit widen (2026-05-21).** Graveyard-
+    # source multi-target spell-effects with a uniform target kind
+    # (``"graveyard_creature"`` today; Scout for Survivors's (0, 3)
+    # shape is the inaugural consumer). Admit only when:
+    #
+    #   1. ``min_t == 0`` (optional targets — "up to N target ...") OR
+    #      ``min_t >= 1 and max_t > min_t`` (range "one or two ...");
+    #      the bound is "max_t > 1" so single-target shapes go through
+    #      Phase 1 instead.
+    #   2. ``slot_kinds`` is empty OR has length ``max_t`` with all
+    #      slots reporting the SAME kind (uniform-kind multi-target).
+    #   3. The covered+bridged gate (`_spell_effect_is_covered_and_
+    #      bridged`) AND the round-trip-or-bail gate
+    #      (``_python_spell_effect_to_dict(se) is None``) below carry
+    #      the load — admitting a covered+bridged shape that round-
+    #      trips and whose serializer leaf emits the Rust-variant dict
+    #      auto-grows the admit set; an uncovered or non-serializable
+    #      shape stays declined (the §2 teeth).
+    #
+    # **Resolve binding shape.** Today's resolve path SELF-SCANS the
+    # source-controller's graveyard at resolve time (the
+    # ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters``
+    # arm in ``state_ops_resolve.rs``), mirroring the established
+    # ``ReturnCreatureFromYourGraveyardToBattlefield`` single-target
+    # self-scan pattern. The cross-engine harness's
+    # ``_PickFirstLegalTargetAgent`` picks first-N-legal in
+    # legal_targets order, which coincides byte-equal with the self-
+    # scan — see ``docs/SEARCH_LIMITATIONS.md`` entry "Multi-target
+    # Phase 4 resolve-time self-scan" for the deliberate divergence
+    # vs cast-time binding the §2 admit gate accepts.
+    _PHASE4_MULTI_GRAVEYARD_SHAPE = (
+        max_t > 1
+        and min_t in (0, 1)
+        and (
+            not slot_kinds
+            or (
+                len(slot_kinds) == max_t
+                and len(set(slot_kinds)) == 1
+                and slot_kinds[0] in ("graveyard_creature",)
+            )
+        )
+    )
+    if not (
+        _PHASE1_SHAPE
+        or _PHASE2_SHAPE
+        or _PHASE3_WRATH_SHAPE
+        or _PHASE4_MULTI_GRAVEYARD_SHAPE
+    ):
         return False  # every other target grammar stays declined
     # The load-bearing §2 gate: the effect must be COVERED + BRIDGED
     # (its emitted Effect classes ⊆ the LIVE covered set AND each has
