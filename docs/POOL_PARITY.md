@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **364 / 475 EoE cards (76.6%) are byte-equal at the Effect+bridge level**; of those, **277 (58.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 87 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **364 / 475 EoE cards (76.6%) are byte-equal at the Effect+bridge level**; of those, **278 (58.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 86 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **111 (23.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 277 | 58.3% |
-| Effect+bridge covered (not individually probed) | 87 | 18.3% |
+| PROBED byte-equal | 278 | 58.5% |
+| Effect+bridge covered (not individually probed) | 86 | 18.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -74,6 +74,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cautious Survivor
 - Cerebral Download
 - Chrome Companion
+- Close Encounter
 - Cloudsculpt Technician
 - Come Back Wrong
 - Command Bridge

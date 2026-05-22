@@ -769,6 +769,51 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``effective_power`` byte-equal). Flips Exorcise COVERED →
     # PROBED (admit set 20 → 21 — the §2 auto-grow teeth).
     REPO_ROOT / "tests" / "test_exorcise_parity.py",
+    # **close-encounter-substrate (2026-05-21):** Close Encounter
+    # additional-cost-choice closure (~16,098 17lands decks — highest-
+    # deck-count BLOCKED card in the substrate-gated tier as of the
+    # close-encounter merge 2406068c). The
+    # ``test_cross_engine_real_eoe_close_encounter_damage_parity`` probe
+    # drives the genuine parsed Close Encounter EoE printing through
+    # the new ``Effect::CloseEncounterEffect`` Rust unit variant + the
+    # additional-cost-choice transient + bridge arm. The dedicated
+    # ``test_close_encounter_parity.py`` module was authored alongside
+    # the substrate but its scanner registration was missed at merge —
+    # this entry closes the measurement-attribution gap. Flips Close
+    # Encounter COVERED → PROBED (the highest-deck-count BLOCKED card
+    # in the prior cycle's substrate-gated tier finally banks the
+    # PROBED-tier credit it earned).
+    REPO_ROOT / "tests" / "test_close_encounter_parity.py",
+    # **multi-target-admit-phase4 (round-pre-launcher, merged
+    # 2026-05-20 via ``feature/multi-target-admit-phase4``):** Scout
+    # for Survivors via the Phase-4 multi-target admit-gate widen.
+    # The dedicated probe module
+    # ``test_multi_target_phase4.py`` carries the canonical
+    # ``test_cross_engine_real_eoe_scout_for_survivors_return_up_to_n
+    # _creatures_with_counters_parity`` function which binds the
+    # genuine parsed "Scout for Survivors" printing via
+    # ``get_active_source().get_printings().get("Scout for Survivors")``.
+    # Lane JJ subsequently added a smoke-file delegator (so the slug-
+    # scanner credits via the smoke path), but the canonical probe
+    # module remained unregistered — this entry plugs the
+    # measurement-attribution gap at the canonical source. No PROBED
+    # delta (the smoke delegator already covers it); pure metric
+    # truthfulness — same precedent as the cycle-10 reconciliation.
+    REPO_ROOT / "tests" / "test_multi_target_phase4.py",
+    # **PPP Pins 1+2+3 (10th Rust slice, ``41c57251``):** the
+    # ``test_probe_ppp_downstream.py`` module carries three canonical
+    # probes naming the ``_parity`` convention (Drix Fatemaker,
+    # Cautious Survivor, Savior of the Small) but was never registered
+    # alongside its sibling ``test_probe_<letters>_downstream.py``
+    # modules already in PROBE_MODULES (bbb / eee / mmm / rrr / ttt /
+    # vvv / ddd / xxx). The cards each probe pins are already PROBED
+    # via redundant routes (Drix Fatemaker has a smoke-file probe;
+    # Cautious Survivor + Savior of the Small are credited via
+    # vvv_downstream), so registration is metric-truthfulness only
+    # (no PROBED delta) — closes the per-slice-canonical-probe
+    # attribution gap and makes the metric robust against future
+    # rearrangement of the redundant routes.
+    REPO_ROOT / "tests" / "test_probe_ppp_downstream.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
