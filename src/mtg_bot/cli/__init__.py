@@ -21,6 +21,7 @@ from typing import Sequence
 
 _SUBCOMMANDS = {
     "iterate": "mtg_bot.cli.iterate",
+    "iterate-distributed": "mtg_bot.cli.iterate_distributed",
     "train": "mtg_bot.cli.train",
     "serve": "mtg_bot.cli.serve",
     "capture": "mtg_bot.cli.capture",
@@ -31,6 +32,7 @@ _SUBCOMMANDS = {
 
 _DESCRIPTIONS = {
     "iterate": "Run the AlphaZero training loop (self-play -> train -> eval).",
+    "iterate-distributed": "Unified distributed-iter launcher (Phase A: local-only); single TOML config, runs.db pre-registration, lifecycle-spanned iterate child.",
     "train": "Train the value+policy network from saved self-play data.",
     "serve": "Bundle/queue HTTP server (port 5099) for the distributed flow.",
     "capture": "Capture annotated NN-driven self-play replays for replay-viewer review.",

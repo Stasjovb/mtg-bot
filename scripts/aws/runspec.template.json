@@ -1,0 +1,39 @@
+{
+  "_comment": "Jinja-style {{var}} template for boto3 ec2.run_instances(**spec). The launcher's FleetManager._render_runspec(...) reads this file, str.replace's each placeholder, json.loads the result, and passes it to boto3 directly. NO Jinja runtime dep -- substitution is plain str.replace. Variables: {{instance_type}} (e.g. 'c7a.2xlarge'), {{ami_id}} (e.g. 'ami-07bd7300ab2800515'), {{az}} (one entry from config.aws.az_fallback, e.g. 'us-east-1a'), {{count}} (int, becomes both MinCount and MaxCount), {{user_data_b64}} (base64-encoded scripts/aws/user-data.worker.warm.sh). The _comment key is stripped before the spec is sent to AWS.",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "BlockDeviceMappings": [
+    {
+      "Ebs": {
+        "VolumeSize": 30,
+        "DeleteOnTermination": true,
+        "VolumeType": "gp3"
+      },
+      "DeviceName": "/dev/sda1"
+    }
+  ],
+  "InstanceType": "{{instance_type}}",
+  "UserData": "{{user_data_b64}}",
+  "ImageId": "{{ami_id}}",
+  "MinCount": {{count}},
+  "MaxCount": {{count}},
+  "Placement": {
+    "AvailabilityZone": "{{az}}"
+  },
+  "TagSpecifications": [
+    {
+      "Tags": [
+        {"Key": "Project", "Value": "mtg-bot"},
+        {"Key": "Role", "Value": "worker"},
+        {"Key": "Name", "Value": "mtg-bot-launcher-warm"}
+      ],
+      "ResourceType": "instance"
+    }
+  ],
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate"
+    }
+  }
+}
