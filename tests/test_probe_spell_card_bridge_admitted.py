@@ -208,10 +208,24 @@ pytestmark = pytest.mark.skipif(
 # X=0 (per C2.5's no-agent fallback mint) so the X-dependent
 # destroy/lose-X-life/X>=6 surface stays dormant — documented in
 # ``docs/SEARCH_LIMITATIONS.md`` as the deliberate harness limitation.
+#
+# **Darkness Cycle 3 (2026-05-22)** — admit set 25 → 26. Darkness
+# ({B} Instant, DSK special-guests reprint in the EoE pool, 43
+# 17lands decks) AUTO-JOINS via the existing Phase-3 wrath admit
+# arm: ``target_count_range() == (0, 0)`` with no ``slot_kinds``
+# and no ``targets`` attribute on the printing. The closure adds
+# ``Effect::PreventAllCombatDamageThisTurn`` (cards.rs field-free
+# unit variant + parse arm + to_pydict arm + resolve arm that flips
+# the Cycle-1-substrate ``state.prevent_all_combat_damage_this_
+# turn`` flag — the PRODUCTION MINT SITE for the Cycle 1+2
+# substrate) + the matching cross-engine bridge arm + the reverse-
+# serializer leaf. The §2 teeth all fire positively (covered+bridged
+# AND round-trips), so the lever auto-grows the admit set — no
+# hardcoded card-name list.
 # This stays an EXACT-set pin.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-    "Close Encounter", "Cut Propulsion", "Depressurize",
+    "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
     "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
     "Exorcise", "Focus Fire", "Invasive Maneuvers", "Manifest Dread",
     "Orbital Plunge", "Pyroclasm", "Radiant Strike",

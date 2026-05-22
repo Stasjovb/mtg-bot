@@ -4116,6 +4116,9 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         ManifestDread,
         Surveil,
     )
+    from mtg_bot.effects.generic.stack_control import (
+        PreventAllCombatDamageThisTurn,
+    )
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
         CloseEncounterEffect,
@@ -4489,6 +4492,31 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # into the spell-card-bridge admit set.
         if isinstance(eff, CloseEncounterEffect):
             return {"kind": "close_encounter_effect"}
+        # Darkness — combat-damage prevention closure (Cycle 3,
+        # 2026-05-22; DSK special-guests reprint in the EoE pool, 43
+        # 17lands decks). Pid-FREE covered unit variant — Rust's
+        # ``parse_effect`` ``"prevent_all_combat_damage_this_turn"`` arm
+        # takes NO fields and the dict→Python bridge arm
+        # (cross_engine.py ``prevent_all_combat_damage_this_turn``)
+        # constructs the field-free
+        # ``PreventAllCombatDamageThisTurn()``. The prevention is
+        # unconditional (no targets, no scoping); the global per-turn
+        # state-level flag is the carrier (Python's
+        # ``state.prevent_combat_damage_this_turn`` / Rust's
+        # ``state.prevent_all_combat_damage_this_turn`` — Cycle 1
+        # substrate). No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is
+        # the clean ``exorcise_effect`` / ``close_encounter_effect``
+        # unit-leaf idiom. Adding this leaf flips Darkness into the
+        # spell-card-bridge admit set via the existing Phase-3
+        # ``(0, 0)``-shape wrath admit arm in
+        # :func:`_printing_is_bridge_simple_spell`: ``target_count_
+        # range() == (0, 0)``, no ``slot_kinds``, no ``targets``
+        # attribute on the printing. The §2 teeth all fire positively
+        # (covered+bridged AND round-trips), so the lever auto-grows
+        # the admit set 24 → 25 — no hardcoded card-name list.
+        if isinstance(eff, PreventAllCombatDamageThisTurn):
+            return {"kind": "prevent_all_combat_damage_this_turn"}
         # **Phase-3 wrath-admit-widening (2026-05-21).** Pyroclasm-shape
         # mass-damage leaf — ``DealNDamageToEachCreature(amount)``. The
         # bridge arm at ``cross_engine.py::damage_each_creature`` REQUIRES

@@ -207,4 +207,5 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 155 | `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | 1 |
 | 156 | `Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | 1 |
 | 157 | `Effect::ZeroPointBalladEffect` | `ZeroPointBalladEffect` | 1 |
+| 158 | `Effect::PreventAllCombatDamageThisTurn` | `PreventAllCombatDamageThisTurn` | 1 |
 

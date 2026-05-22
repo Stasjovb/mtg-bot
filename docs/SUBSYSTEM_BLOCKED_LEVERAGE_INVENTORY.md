@@ -941,6 +941,33 @@ upstream of this dated paragraph).
   trip / admit widen / PROBED flip — see Search Limitations
   Darkness entry.
 
+  **Darkness Cycle 3 landed (2026-05-22,
+  `feature/darkness-cycle-3-p1`).** `Effect::PreventAllCombat
+  DamageThisTurn` Rust field-free unit variant (`rust/src/
+  cards.rs`) + parse arm `"prevent_all_combat_damage_this_turn"`
+  + `to_pydict` arm + resolve arm in `state_ops_resolve.rs` (the
+  PRODUCTION MINT SITE for the Cycle 1+2 substrate — a single
+  bool flip on `state.prevent_all_combat_damage_this_turn`,
+  byte-equal with Python's `PreventAllCombatDamageThisTurn.
+  resolve` at `effects/generic/stack_control.py:266`). Cross-
+  engine bridge arm in `src/mtg_bot/parity/cross_engine.py::
+  _ta_dict_to_python_effect` constructs the field-free Python
+  class. Reverse-serializer leaf in `src/mtg_bot/parity/
+  trajectory.py::_python_spell_effect_to_dict::_leaf` emits
+  `{"kind": "prevent_all_combat_damage_this_turn"}`. Darkness
+  AUTO-JOINS the spell-card-bridge admit set via the existing
+  Phase-3 `(0, 0)`-shape wrath admit arm (no admit-predicate
+  widen needed — `target_count_range() == (0, 0)`, no
+  `slot_kinds`, no `targets` attribute on the printing). The §2
+  teeth all fire positively (covered+bridged AND round-trips), so
+  the lever auto-grows the admit set 24 → 25. **PROBED 279 →
+  280**; Darkness flips COVERED→PROBED at 43 17lands decks.
+  Cross-engine pin proves the Cycle 3 → Cycle 1 flag flip → Cycle
+  2 guard routing handoff: cast Darkness, resolve flips the flag,
+  combat damage zeros out on BOTH engines, cleanup drains the
+  flag, next turn's combat applies damage normally. The 3-cycle
+  subsystem is LANDED end-to-end.
+
 * **Pool-flip per cycle:** 1 card + its deck count.
 * **Cumulative reach:** largest row but incremental cadence.
 

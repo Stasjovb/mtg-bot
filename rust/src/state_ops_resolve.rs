@@ -9830,6 +9830,43 @@ fn apply_effect(
                 target_id,
             )?;
         }
+        // PreventAllCombatDamageThisTurn — Darkness combat-damage
+        // prevention closure (Cycle 3, 2026-05-22; 43 17lands decks).
+        // The PRODUCTION MINT SITE for the Cycle 1+2 substrate:
+        // Cycle 1 (4fbbd67b) added the
+        // `prevent_all_combat_damage_this_turn` field on
+        // `GameState` + setter / getter / cleanup-step drain (CR
+        // 514.3); Cycle 2 (eca1bb04) added the routing guard at
+        // `state_ops_combat.rs::deal_combat_damage:1656` that
+        // early-returns when the flag is set; THIS Cycle 3 arm
+        // flips the flag from false to true at resolve time.
+        // Without this arm the Cycle 1+2 substrate would be a
+        // forever-dormant no-op.
+        //
+        // Mirrors Python's
+        // `PreventAllCombatDamageThisTurn.resolve` at
+        // `effects/generic/stack_control.py:262-267` byte-equal —
+        // a single state-level flag flip with no targets, no
+        // controller scope, no source-controller resolution.
+        // Idempotent (Python sets True unconditionally; we mirror).
+        //
+        // Field-free unit variant — no payload to read. The
+        // (0, 0) wrath shape carries no targets in the StackItem,
+        // so no `current_resolve_payload_target_id` read. CR 615.4
+        // — "if a damage event would be prevented entirely, it
+        // doesn't happen at all" — is enforced by the Cycle 2
+        // routing guard reading this flag from the routing
+        // bottleneck.
+        //
+        // Cleanup-step drain composition: the flag resets to
+        // false at the active player's cleanup step via the
+        // Cycle 1 inline drain in
+        // `state_ops_cleanup.rs::cleanup_step_for_active_player`,
+        // so the prevention is scoped to "this turn" (the duration
+        // marker on the printed oracle text).
+        Effect::PreventAllCombatDamageThisTurn => {
+            state.prevent_all_combat_damage_this_turn = true;
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

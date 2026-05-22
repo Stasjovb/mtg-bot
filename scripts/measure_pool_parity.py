@@ -768,6 +768,29 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``SearchLibraryForCard(filter_name="artifact")`` ``_leaf`` admit
     # honest-stops Demonic Counsel's auto-flip to a follow-up cycle.
     REPO_ROOT / "tests" / "test_scour_for_scrap_parity.py",
+    # **darkness-cycle-3-p1 (2026-05-22):** Darkness combat-damage
+    # prevention closure (Cycle 3 of a 3-cycle subsystem lane; ~43
+    # 17lands decks — DSK special-guests reprint in the EoE pool). The
+    # ``test_cross_engine_real_eoe_darkness_prevent_all_combat_damage_
+    # this_turn_parity`` probe drives the genuine parsed Darkness
+    # printing ({B} Instant: "Prevent all combat damage that would be
+    # dealt this turn.") through the new
+    # ``Effect::PreventAllCombatDamageThisTurn`` Rust field-free unit
+    # variant + the matching parse + to_pydict + resolve arm (the
+    # production MINT SITE flipping the Cycle 1 substrate's
+    # ``state.prevent_all_combat_damage_this_turn`` flag, after which
+    # the Cycle 2 routing guard at
+    # ``state_ops_combat.rs::deal_combat_damage:1656`` zeros out every
+    # combat damage event for the rest of the turn). Bridge round-trips
+    # via ``cross_engine.py::prevent_all_combat_damage_this_turn``
+    # (constructs the field-free Python class) and the
+    # ``trajectory.py::_python_spell_effect_to_dict`` ``_leaf`` arm
+    # (emits the bare ``{"kind": "prevent_all_combat_damage_this_
+    # turn"}`` dict). Darkness AUTO-JOINS the spell-card-bridge admit
+    # set via the existing Phase-3 ``(0, 0)``-shape wrath admit arm
+    # (no admit-predicate widen needed). Flips Darkness COVERED →
+    # PROBED (admit set 24 → 25 — the §2 auto-grow teeth).
+    REPO_ROOT / "tests" / "test_darkness_parity.py",
     # **non-state-rs-tractable-slice (2026-05-21):** Effect-uncovered
     # single-gated tier closure — Exorcise (Duskmourn {1}{W} Sorcery).
     # The ``test_cross_engine_real_eoe_exorcise_parity`` probe drives

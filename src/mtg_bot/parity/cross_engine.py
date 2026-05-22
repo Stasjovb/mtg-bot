@@ -9338,6 +9338,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # substrate-gated tier as of 2026-05-21).
         from mtg_bot.effects.bespoke import CloseEncounterEffect
         return CloseEncounterEffect()
+    if kind == "prevent_all_combat_damage_this_turn":
+        # **Darkness — combat-damage prevention closure (Cycle 3,
+        # 2026-05-22; DSK special-guests reprint in the EoE pool, 43
+        # 17lands decks).** Rust substrate
+        # ``Effect::PreventAllCombatDamageThisTurn`` (cards.rs field-
+        # free UNIT variant; parser
+        # ``"prevent_all_combat_damage_this_turn"``; resolve in
+        # state_ops_resolve.rs beside the Close Encounter
+        # ``CloseEncounterEffect`` arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "prevent_all_combat_damage_this_turn"}``. Python's
+        # ``PreventAllCombatDamageThisTurn`` (effects/generic/stack_
+        # control.py:254) is a frozen dataclass with no constructor
+        # parameters. The prevention is unconditional (no targets, no
+        # scoping); the global per-turn flag is the carrier.
+        #
+        # **Resolve semantics (parity-relevant).** Rust flips
+        # ``state.prevent_all_combat_damage_this_turn`` from false to
+        # true (the production MINT SITE for the Cycle 1+2 substrate).
+        # Python likewise flips ``state.prevent_combat_damage_this_
+        # turn = True`` at ``stack_control.py:266``. The Cycle 2
+        # Rust routing guard at
+        # ``state_ops_combat.rs::deal_combat_damage:1656`` and
+        # Python's ``combat._resolve_damage_step`` early-out at
+        # ``combat.py:479`` each read the flag from their engine's
+        # state and zero out every combat damage event until the
+        # cleanup-step drain resets the flag (CR 514.3).
+        #
+        # **Real test-pool consumer**: Darkness — Instant {B}
+        # "Prevent all combat damage that would be dealt this turn."
+        # DSK special-guests reprint; 43 17lands decks in the EoE
+        # pool.
+        from mtg_bot.effects.generic.stack_control import (
+            PreventAllCombatDamageThisTurn,
+        )
+        return PreventAllCombatDamageThisTurn()
     if kind == "seedship_impact_effect":
         # **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
         # Rust substrate ``Effect::SeedshipImpactEffect {

@@ -10932,16 +10932,41 @@ single read site, not a cross-module rerouting walk). Cycle list:
     all inside `deal_combat_damage`); the guard's single
     location at `deal_combat_damage`'s top covers them all.
 
-- **C3** — `Effect::PreventAllCombatDamageThisTurn` parse arm
-  + resolve arm + to_pydict / from_pydict bridge round-trip
-  + cross-engine harness admit widen (Phase-3 `(0, 0)`-shape
-  simple-spell admit auto-grow already supports the shape; the
-  per-spell `_python_spell_effect_to_dict` positive-emit path
-  is the only widen needed) + the PROBED flip (Darkness joins
-  the PROBED set from the BLOCKED-Effect-uncovered single-gated
-  list — `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §3 (3)
-  Effect-uncovered diffuse tail). ~150 LoC + 4 cross-engine
-  probes.
+- **C3 — LANDED (2026-05-22, `feature/darkness-cycle-3-p1`).**
+  `Effect::PreventAllCombatDamageThisTurn` Rust field-free unit
+  variant (`rust/src/cards.rs`) + parse arm
+  `"prevent_all_combat_damage_this_turn"` + `to_pydict` arm +
+  resolve arm in `state_ops_resolve.rs` (the PRODUCTION MINT SITE
+  for the Cycle 1+2 substrate — a single bool flip on
+  `state.prevent_all_combat_damage_this_turn`, byte-equal with
+  Python's `PreventAllCombatDamageThisTurn.resolve` at
+  `effects/generic/stack_control.py:266`). Cross-engine bridge arm
+  in `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  constructs the field-free Python class. Reverse-serializer leaf
+  in `src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict
+  ::_leaf` emits `{"kind": "prevent_all_combat_damage_this_turn"}`.
+  Darkness AUTO-JOINS the spell-card-bridge admit set via the
+  existing Phase-3 `(0, 0)`-shape wrath admit arm (no admit-
+  predicate widen needed — `target_count_range() == (0, 0)`, no
+  `slot_kinds`, no `targets` attribute on the printing). The §2
+  teeth all fire positively (covered+bridged AND round-trips), so
+  the lever auto-grows the admit set 24 → 25.
+  - Tests: `tests/test_darkness_parity.py` (9 pins: parser SoT
+    pin; Python serializer round-trip; Rust serializer round-trip;
+    effect-coverage class pin; admit-gate flip pin; Rust resolve-
+    arm flag flip pin; Rust resolve + combat-damage zero-out pin;
+    Cycle-1 cleanup-step drain composition pin; GENUINE real-EoE
+    cross-engine byte-equal probe). Registered in
+    `scripts/measure_pool_parity.py::PROBE_MODULES`.
+  - Pool delta: PROBED 279 → 280 (Darkness flips
+    COVERED→PROBED). Admit set 24 → 25.
+  - Combat-damage routing handoff verified: post-resolve, the
+    Cycle 2 routing guard at `state_ops_combat.rs::deal_combat_
+    damage:1656` reads the now-true flag and zeros every combat
+    damage event; the cleanup-step drain
+    (`state_ops_cleanup.rs::cleanup_step_for_active_player`,
+    Cycle 1) resets the flag at end-of-turn (CR 514.3) and the
+    next turn's combat applies damage normally.
 
 Pool-flip per the cycle list: 1 card (Darkness) at 43 17lands
 decks. Lighter pool reach than the Mutinous-Massacre /
@@ -10955,10 +10980,13 @@ Salve mode 2, Hot Soup-style first-strike prevention).
 `rust/src/state_ops_setup.rs` + `rust/src/state.rs` (Clone +
 construction sites — Cycle 1), `rust/src/state_ops_cleanup.rs`
 (drain function + setter / getter / standalone-primitive +
-cleanup-step inline drain — Cycle 1), `rust/src/state_ops_combat.rs::deal_combat_damage`
-(routing-point early-out guard — Cycle 2). Cycle 3's Effect
-variant / bridge round-trip / admit widen / PROBED flip remain
-outstanding.
+cleanup-step inline drain — Cycle 1),
+`rust/src/state_ops_combat.rs::deal_combat_damage` (routing-point
+early-out guard — Cycle 2), `rust/src/cards.rs` +
+`rust/src/state_ops_resolve.rs` (Effect variant + parse + to_pydict
++ resolve arm — Cycle 3), `src/mtg_bot/parity/cross_engine.py` +
+`src/mtg_bot/parity/trajectory.py` (bridge round-trip arms —
+Cycle 3). The 3-cycle subsystem is LANDED; Darkness is now PROBED.
 
 ---
 

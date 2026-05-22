@@ -5682,6 +5682,55 @@ pub enum Effect {
     /// X-dependent action surface; see `docs/SEARCH_LIMITATIONS.md`
     /// for the deliberate documented harness limitation.
     ZeroPointBalladEffect,
+    /// **Darkness — combat-damage prevention closure (Cycle 3,
+    /// 2026-05-22; DSK special-guests reprint in the EoE pool, 43
+    /// 17lands decks).** `{B}` Instant: "Prevent all combat damage
+    /// that would be dealt this turn."
+    ///
+    /// Mirrors Python's `PreventAllCombatDamageThisTurn`
+    /// (`effects/generic/stack_control.py:254`) — a parameterless
+    /// frozen dataclass whose `resolve` flips
+    /// `state.prevent_combat_damage_this_turn = True`. The flag is
+    /// consumed by `combat._resolve_damage_step` (Python) /
+    /// `state_ops_combat.rs::deal_combat_damage` (Rust Cycle 2
+    /// routing guard at `:1656`) and reset at the cleanup step
+    /// (CR 514.3) by Python's `turn.cleanup_step` (Python) / the
+    /// Cycle 1 inline drain in
+    /// `state_ops_cleanup.rs::cleanup_step_for_active_player`
+    /// (Rust).
+    ///
+    /// **Field-free unit variant** (the `ExorciseEffect` /
+    /// `CutPropulsionEffect` / `DiplomaticRelationsEffect` idiom —
+    /// the closest siblings). No dict payload — the prevention is
+    /// unconditional. Python's `PreventAllCombatDamageThisTurn`
+    /// carries no constructor parameters.
+    ///
+    /// **Resolve semantics — production MINT SITE for the Cycle 1+2
+    /// substrate.** This arm is the live mint site that flips the
+    /// `state.prevent_all_combat_damage_this_turn` flag from `false`
+    /// to `true`. Without this arm the Cycle 1+2 substrate would
+    /// be a forever-dormant no-op (Cycle 1 added the field + setter
+    /// + cleanup drain default-false; Cycle 2 added the routing
+    /// guard reading the flag but no live mint). The resolve arm
+    /// is a single bool flip via the
+    /// `grant_prevent_all_combat_damage_this_turn` setter shape
+    /// (idempotent — Python's `resolve` likewise sets `True`
+    /// unconditionally). No targets to validate (`(0, 0)` shape),
+    /// no controller-scoped state (the flag is global per-turn).
+    ///
+    /// **Cycle 2 routing handoff.** Post-resolve, every subsequent
+    /// `deal_combat_damage` call short-circuits at the routing
+    /// bottleneck (Cycle 2 guard, `state_ops_combat.rs:1656`) until
+    /// the cleanup-step drain (Cycle 1, `state_ops_cleanup.rs:539`)
+    /// resets the flag. CR 615.4 — "if a damage event would be
+    /// prevented entirely, it doesn't happen at all".
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `PreventAllCombatDamageThisTurn()` (field-free construction).
+    /// Mirrors the `ExorciseEffect` / `CloseEncounterEffect` /
+    /// `CutPropulsionEffect` Tier-A unit-variant convention.
+    PreventAllCombatDamageThisTurn,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -8629,6 +8678,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // `diplomatic_relations_effect` field-free unit-variant
             // parser arm shape.
             Ok(Effect::CloseEncounterEffect)
+        }
+        "prevent_all_combat_damage_this_turn" => {
+            // Darkness — combat-damage prevention closure
+            // (Cycle 3, 2026-05-22; 43 17lands decks). Unit
+            // variant — no required fields. The prevention is
+            // unconditional (no targets, no scoping; the global
+            // `state.prevent_all_combat_damage_this_turn` flag is
+            // the carrier). Extra keys ignored. Mirrors the
+            // `exorcise_effect` / `close_encounter_effect` field-
+            // free unit-variant parser arm shape.
+            Ok(Effect::PreventAllCombatDamageThisTurn)
         }
         "emergency_eject_effect" => {
             // Effect-uncovered single-gated tier — Emergency Eject
@@ -12550,6 +12610,25 @@ pub(crate) fn effect_to_pydict<'py>(
             // it rides on the StackItem
             // (`additional_cost_choice_id`, Cycle 1 substrate).
             d.set_item("kind", "close_encounter_effect")?;
+        }
+        Effect::PreventAllCombatDamageThisTurn => {
+            // Darkness — combat-damage prevention closure
+            // (Cycle 3, 2026-05-22; 43 17lands decks). Unit
+            // variant — `kind` only (the Exorcise / Close
+            // Encounter / Cut Propulsion field-free to_dict idiom).
+            // Bidirectional with the
+            // `prevent_all_combat_damage_this_turn` parse arm + the
+            // `cross_engine.py` bridge arm + the `trajectory.py`
+            // reverse-serializer leaf. No targets — the prevention
+            // is unconditional (the (0, 0) wrath shape). No state
+            // payload — the global
+            // `state.prevent_all_combat_damage_this_turn` flag is
+            // the carrier (Cycle 1 substrate); this resolve flips
+            // it via the `grant_prevent_all_combat_damage_this_turn`
+            // setter shape, after which the Cycle 2 guard at
+            // `state_ops_combat.rs::deal_combat_damage` zeroes out
+            // every combat damage event for the rest of the turn.
+            d.set_item("kind", "prevent_all_combat_damage_this_turn")?;
         }
         Effect::EmergencyEjectEffect { token_printing_id } => {
             // Effect-uncovered single-gated tier — Emergency Eject.

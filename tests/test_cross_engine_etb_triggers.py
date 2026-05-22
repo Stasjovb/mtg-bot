@@ -21376,9 +21376,22 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # the new Effect arm). Zero Point Ballad AUTO-JOINS via the §2
     # auto-grow teeth (covered+bridged + round-trips + Phase-3 shape).
     # Admit set 24 → 25.
+    # **darkness-cycle-3-p1 (2026-05-22):** Darkness combat-damage
+    # prevention closure (3-cycle subsystem lane; Cycle 1 substrate
+    # 4fbbd67b + Cycle 2 routing guard eca1bb04 + Cycle 3 this lane).
+    # Adds ``Effect::PreventAllCombatDamageThisTurn`` Rust field-free
+    # unit variant + parse + to_pydict + resolve arm (the production
+    # MINT SITE flipping the Cycle 1 substrate's
+    # ``state.prevent_all_combat_damage_this_turn`` flag) + the
+    # matching cross-engine bridge arm + reverse-serializer leaf.
+    # Darkness ({B} Instant, DSK special-guests reprint in the EoE
+    # pool, 43 17lands decks) AUTO-JOINS via the existing Phase-3
+    # ``(0, 0)``-shape wrath admit arm (no admit-predicate widen
+    # needed; the §2 teeth auto-grow the set positively). Admit set
+    # 25 → 26.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-        "Close Encounter", "Cut Propulsion", "Depressurize",
+        "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
         "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
         "Exorcise", "Focus Fire", "Invasive Maneuvers",
         "Manifest Dread", "Orbital Plunge", "Pyroclasm",
@@ -21388,7 +21401,7 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 25 covered+bridged Tier-A spells: the 11 "
+        f"exactly the 26 covered+bridged Tier-A spells: the 11 "
         f"Phase-1/Phase-2 admits + 5 Phase-3 wrath admits "
         f"(incl. Beyond the Quiet) + 1 Cycle-4 modal admit "
         f"(Ruinous Rampage) + 1 Cycle-6 per-mode-target modal admit "
@@ -21404,9 +21417,13 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"(Close Encounter via close-encounter-substrate) + 1 "
         f"or_both modal closure (Scour for Scrap via "
         f"scour-for-scrap-cycle-2) + 1 X-cost closure (Zero Point "
-        f"Ballad via x-value-subsystem-cycle-3) — the set grew "
-        f"15→25 across the ten lanes; auto-grows further as the "
-        f"remaining Tier-A and per-mode-target modal spells close)")
+        f"Ballad via x-value-subsystem-cycle-3) + 1 Phase-3 wrath "
+        f"admit (Darkness via darkness-cycle-3-p1's "
+        f"PreventAllCombatDamageThisTurn Effect close — the "
+        f"production MINT SITE for the Cycle 1+2 substrate) — the "
+        f"set grew 15→26 across the eleven lanes; auto-grows further "
+        f"as the remaining Tier-A and per-mode-target modal spells "
+        f"close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():

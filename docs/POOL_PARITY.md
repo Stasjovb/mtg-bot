@@ -84,6 +84,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cryoshatter
 - Cut Propulsion
 - Dark Endurance
+- Darkness
 - Dashing Bloodsucker
 - Dauntless Scrapbot
 - Dawnstrike Vanguard
@@ -351,7 +352,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 30 | 0 | 30 | 34,470 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 81 | 11 | 70 | 211,932 | 23,253 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 81 | 11 | 70 | 217,930 | 29,251 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 43 | 0 | 43 | 147,471 | 0 | diffuse |
 
@@ -385,7 +386,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Contested War Zone
 - Coordinated Clobbering
 - Cracked Skull
-- Darkness
 - Deafening Silence
 - Deserted Temple
 - Devastating Onslaught
@@ -421,5 +421,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Mirrorpool
 - Murky Sewer
 - Mutinous Massacre
+- Mystifying Maze
 - … and 49 more
 
