@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import shlex
 import time
 import urllib.error
 import urllib.request
@@ -269,6 +270,35 @@ def _default_tailnet_resolver(instance_id: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _build_env_injection(storage_uri: Optional[str]) -> str:
+    """Render the ``export`` lines the launcher injects into user-data.
+
+    The user-data script declares a ``{{LAUNCHER_ENV_INJECTION}}``
+    placeholder that this output replaces. The daemon then reads the
+    exported vars at start time -- ``MTG_BOT_ARTIFACT_STORAGE_URI``
+    feeds ``worker_daemon_storage.uploader_from_uri`` so the worker
+    knows where to drop ``.npz`` artifacts.
+
+    Keeping this as a free function (not a FleetManager method) lets
+    tests assert the rendered string directly without instantiating
+    boto3 / paths.
+    """
+    if storage_uri is None or storage_uri == "":
+        raise FleetConfigError(
+            "aws.storage_uri must be set in the launch TOML when "
+            "aws.count > 0; supply either an `s3://bucket/prefix` "
+            "URI, a `file:///shared/path` URI, or `null://` for a "
+            "dev run that drops artifacts on the floor.",
+        )
+    # The shell-side ${VAR:?...} reference in user-data.worker.warm.sh
+    # will fail loud if this export is absent, so a missing storage_uri
+    # never silently downgrades to the daemon's argparse default.
+    return f"export MTG_BOT_ARTIFACT_STORAGE_URI={shlex.quote(storage_uri)}"
+
+
+_USER_DATA_ENV_PLACEHOLDER = "# {{LAUNCHER_ENV_INJECTION}}"
+
+
 def _render_runspec(
     template_path: Path,
     *,
@@ -278,6 +308,7 @@ def _render_runspec(
     count: int,
     user_data: bytes,
     market_type: str = "spot",
+    env_injection: str = "",
 ) -> dict[str, Any]:
     """Read the template, substitute ``{{var}}`` placeholders, return
     the JSON dict ready for ``boto3.client('ec2').run_instances(**spec)``.
@@ -287,10 +318,13 @@ def _render_runspec(
     leave int placeholders bare. See ``scripts/aws/runspec.template.json``
     for the canonical form.
 
-    ``user_data`` is the raw script bytes; the renderer base64-encodes
-    it because EC2's ``UserData`` field expects base64 when the spec
-    goes over the boto3 wire. (The aws-cli accepts raw bytes and
-    encodes for you; boto3 does NOT, so we encode here.)
+    ``user_data`` is the raw script bytes; the renderer (a) substitutes
+    the ``{{LAUNCHER_ENV_INJECTION}}`` placeholder with ``env_injection``
+    so the daemon launches with launcher-controlled env vars, then
+    (b) base64-encodes the result because EC2's ``UserData`` field
+    expects base64 when the spec goes over the boto3 wire. (The
+    aws-cli accepts raw bytes and encodes for you; boto3 does NOT, so
+    we encode here.)
 
     Strips the leading ``_comment`` field if present so the spec is
     valid for ``run_instances`` (which rejects unknown keys).
@@ -300,6 +334,27 @@ def _render_runspec(
             f"runspec template not found: {template_path}",
         )
     raw = template_path.read_text(encoding="utf-8")
+    # Substitute the env-injection placeholder in user_data BEFORE
+    # base64-encoding -- otherwise the placeholder would end up in
+    # the base64 blob and the worker would never see the exports.
+    # Strict only when env_injection is non-empty: a caller wiring
+    # exports MUST be using a script that knows where to receive them.
+    # When env_injection is empty (e.g. unit tests with a stub
+    # user_data), missing the placeholder is fine -- nothing would
+    # have been injected anyway.
+    if env_injection:
+        if _USER_DATA_ENV_PLACEHOLDER.encode() not in user_data:
+            raise FleetConfigError(
+                f"user-data script is missing the "
+                f"`{_USER_DATA_ENV_PLACEHOLDER}` placeholder; the "
+                f"launcher needs that line to inject "
+                f"MTG_BOT_ARTIFACT_STORAGE_URI. Re-sync from "
+                f"scripts/aws/user-data.worker.warm.sh.",
+            )
+        user_data = user_data.replace(
+            _USER_DATA_ENV_PLACEHOLDER.encode(),
+            env_injection.encode(),
+        )
     user_data_b64 = base64.b64encode(user_data).decode("ascii")
     substitutions = {
         "{{instance_type}}": instance_type,
@@ -507,6 +562,10 @@ class FleetManager:
                 f"user-data script not found: {self.user_data_path}",
             )
         user_data_bytes = self.user_data_path.read_bytes()
+        # Build the env-injection block ONCE -- same for every AZ
+        # attempt. Fails loud here (before any AWS call) if
+        # aws.storage_uri is missing.
+        env_injection = _build_env_injection(self.config.storage_uri)
 
         attempts: list[tuple[str, str]] = []
         for az in self.config.az_fallback:
@@ -518,6 +577,7 @@ class FleetManager:
                 count=self.config.count,
                 user_data=user_data_bytes,
                 market_type=self.config.market_type,
+                env_injection=env_injection,
             )
             client = self._ec2(az=az)
             try:

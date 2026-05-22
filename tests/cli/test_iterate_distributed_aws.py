@@ -425,6 +425,7 @@ local_only = false
 [aws]
 count = 1
 az_fallback = ["us-east-1a"]
+storage_uri = "null://"
 """, encoding="utf-8")
     _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")
@@ -475,6 +476,7 @@ local_only = false
 [aws]
 count = 1
 az_fallback = ["us-east-1a"]
+storage_uri = "null://"
 """, encoding="utf-8")
     _seed_iam_instance_profile()
     moto_client = boto3.client("ec2", region_name="us-east-1")

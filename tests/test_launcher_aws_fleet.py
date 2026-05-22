@@ -35,6 +35,7 @@ from mtg_bot.launcher.aws_fleet import (
     FleetHealthTimeoutError,
     FleetInstance,
     FleetManager,
+    _build_env_injection,
     _region_from_az,
     _render_runspec,
 )
@@ -241,6 +242,108 @@ def test_render_runspec_invalid_json_after_subst_raises(tmp_path: Path):
             instance_type="t", ami_id="a", az="us-east-1a",
             count=1, user_data=b"",
         )
+
+
+# ---------------------------------------------------------------------------
+# _build_env_injection + env-injection wiring in _render_runspec
+# ---------------------------------------------------------------------------
+
+
+def test_build_env_injection_emits_export_for_s3_uri():
+    line = _build_env_injection("s3://mtg-bot-artifacts-630589799985/launcher/")
+    # shlex.quote keeps URIs without special chars unquoted, but s3://
+    # has no shell metachars so the URI appears verbatim.
+    assert line == (
+        "export MTG_BOT_ARTIFACT_STORAGE_URI="
+        "s3://mtg-bot-artifacts-630589799985/launcher/"
+    )
+
+
+def test_build_env_injection_quotes_shell_metachars():
+    """Defensive: storage_uri values with spaces / dollar signs / etc
+    must survive intact through shell parsing on the worker."""
+    line = _build_env_injection("file:///tmp/with spaces/$weird")
+    # shlex.quote wraps in single quotes for any non-trivial input.
+    assert "MTG_BOT_ARTIFACT_STORAGE_URI=" in line
+    # Round-trip via shlex to confirm the worker would see the
+    # original value back.
+    import shlex as _shlex
+    after_eq = line.split("=", 1)[1]
+    parsed = _shlex.split(f"x={after_eq}")[0].split("=", 1)[1]
+    assert parsed == "file:///tmp/with spaces/$weird"
+
+
+def test_build_env_injection_null_uri_is_accepted():
+    """``null://`` is a valid storage_uri for dev / local-only AWS
+    runs that exercise the launcher path without burning S3 puts."""
+    line = _build_env_injection("null://")
+    assert line == "export MTG_BOT_ARTIFACT_STORAGE_URI=null://"
+
+
+def test_build_env_injection_empty_raises():
+    """A missing aws.storage_uri fails at config-time, NOT at
+    daemon-boot-time -- the launcher's whole point is structurally
+    enforced wiring, so a TOML missing storage_uri shouldn't get
+    far enough to spin spot capacity."""
+    with pytest.raises(FleetConfigError, match="aws.storage_uri must be set"):
+        _build_env_injection(None)
+    with pytest.raises(FleetConfigError, match="aws.storage_uri must be set"):
+        _build_env_injection("")
+
+
+def test_render_runspec_injects_env_into_user_data(
+    template_path: Path, user_data_path: Path,
+):
+    """The real user-data script has the {{LAUNCHER_ENV_INJECTION}}
+    placeholder; rendering with a non-empty env_injection must
+    replace the placeholder line with the export(s) BEFORE
+    base64-encoding (so the worker actually sees the exports)."""
+    user_data = user_data_path.read_bytes()
+    assert b"{{LAUNCHER_ENV_INJECTION}}" in user_data, (
+        "fixture sanity: real user-data must carry the placeholder"
+    )
+    env = "export MTG_BOT_ARTIFACT_STORAGE_URI=s3://test-bucket/p/"
+    spec = _render_runspec(
+        template_path,
+        instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+        count=1, user_data=user_data,
+        env_injection=env,
+    )
+    # base64-decode and confirm the export landed, AND the
+    # placeholder line is gone.
+    decoded = base64.b64decode(spec["UserData"]).decode("utf-8")
+    assert env in decoded
+    assert "{{LAUNCHER_ENV_INJECTION}}" not in decoded
+
+
+def test_render_runspec_strict_when_env_injection_supplied_but_placeholder_missing(
+    template_path: Path,
+):
+    """A bare-bones user-data without the placeholder + non-empty
+    env_injection is a wiring bug: the launcher would silently fail
+    to set MTG_BOT_ARTIFACT_STORAGE_URI on the worker. Fail loud."""
+    with pytest.raises(FleetConfigError, match="LAUNCHER_ENV_INJECTION"):
+        _render_runspec(
+            template_path,
+            instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+            count=1, user_data=b"#!/bin/bash\necho hi\n",
+            env_injection="export MTG_BOT_ARTIFACT_STORAGE_URI=null://",
+        )
+
+
+def test_render_runspec_empty_env_injection_is_back_compat(
+    template_path: Path,
+):
+    """Existing tests pass user_data without the placeholder and no
+    env_injection arg. That path must keep working (no injection
+    requested -> no placeholder requirement)."""
+    spec = _render_runspec(
+        template_path,
+        instance_type="c7a.2xlarge", ami_id="ami-x", az="us-east-1a",
+        count=1, user_data=b"#!/bin/bash\necho hi\n",
+    )
+    decoded = base64.b64decode(spec["UserData"]).decode("utf-8")
+    assert decoded == "#!/bin/bash\necho hi\n"
 
 
 # ---------------------------------------------------------------------------

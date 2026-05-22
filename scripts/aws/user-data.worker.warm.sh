@@ -12,6 +12,14 @@ set -uxo pipefail
 exec > >(tee -a /var/log/mtg-bot-bootstrap.log) 2>&1
 echo "=== mtg-bot worker WARM bootstrap START $(date -u) ==="
 
+# {{LAUNCHER_ENV_INJECTION}}
+# The launcher (FleetManager in src/mtg_bot/launcher/aws_fleet.py) replaces
+# the line above with `export FOO=bar` lines built from cfg.aws.storage_uri
+# (and any future env-knobs). When the placeholder remains literal (e.g. an
+# operator running this script ad-hoc, not via FleetManager), no env vars
+# are set and the `${VAR:?...}` references below fail loud — that's by
+# design, so the daemon never silently runs with the wrong storage URI.
+
 # Cost backstop: poweroff after 6h if no contact. Same envelope as
 # the iter017/018 heavy user-data; intentionally longer than a
 # single iter's expected duration so the watchdog only fires on
@@ -162,7 +170,7 @@ nohup env PYTHONPATH=src AWS_DEFAULT_REGION=us-east-1 AWS_REGION=us-east-1 \
   .venv-py313/bin/python -m mtg_bot.worker_daemon \
   --host "$TS_IP" --port 5198 --n-workers "$NW" --worker-id "${HOSTNAME_TAG}-${IID}" \
   --deck-pool-path "$REPO/data/17lands/eoe_decks.json.gz" \
-  --artifact-storage-uri "${MTG_BOT_ARTIFACT_STORAGE_URI:-s3://mtg-bot-artifacts-630589799985/launcher/}" \
+  --artifact-storage-uri "${MTG_BOT_ARTIFACT_STORAGE_URI:?launcher did not inject MTG_BOT_ARTIFACT_STORAGE_URI; aws.storage_uri must be set in the launch TOML}" \
   > /var/log/mtg-bot-daemon.log 2>&1 &
 
 mark healthcheck
