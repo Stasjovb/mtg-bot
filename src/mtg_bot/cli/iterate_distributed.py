@@ -625,31 +625,58 @@ def _launch(
 
     # Drive the lifecycle ctx mgr so the cycle row always lands
     # terminal in the DB, no matter how the iterate subprocess exits.
+    #
+    # Schema note: top-level keys MUST mirror iterate.py's
+    # ``_cycle_config_dict`` (nodes, samples, games_per_iteration,
+    # epochs, bootstrap_version, iter_idx, ...) because the training
+    # UI reads these from ``config_json`` directly to display search
+    # depth, sample width, game count, etc. The launcher's own
+    # nested view (iter/cluster/aws/ui) is kept under ``launcher``
+    # for forensic completeness without colliding with UI keys.
+    # Without flat keys, the UI shows "depth: -" / "samples: -"
+    # because ``config_json.nodes`` is undefined (observed live
+    # during iter_020 demo). The launcher races iterate's own
+    # start_run (iterate's call returns 409 -- launcher's row
+    # wins), so the launcher carries the responsibility for the
+    # canonical flat schema.
     config_dict = {
-        "iter": {
-            "target_iter": cfg.iter.target_iter,
-            "nodes": cfg.iter.nodes,
-            "samples": cfg.iter.samples,
-            "games_per_iteration": cfg.iter.games_per_iteration,
-            "epochs": cfg.iter.epochs,
-            "architecture": cfg.iter.architecture,
-            "bootstrap_version": cfg.iter.bootstrap_version,
-        },
-        "cluster": {
-            "local_only": cfg.cluster.local_only,
-            "master_url": cfg.cluster.master_url,
-            "mac_url": cfg.cluster.mac_url,
-            "win10_url": cfg.cluster.win10_url,
-        },
-        "aws": {
-            "count": cfg.aws.count,
-            "instance_type": cfg.aws.instance_type,
-            "az_fallback": cfg.aws.az_fallback,
-            "storage_uri": cfg.aws.storage_uri,
-        },
-        "ui": {
-            "auto_start_training_ui": cfg.ui.auto_start_training_ui,
-            "base_url": cfg.ui.base_url,
+        "kind": "cycle",
+        "iter_idx": cfg.iter.target_iter,
+        "bootstrap_version": cfg.iter.bootstrap_version,
+        "best_version_at_start": cfg.iter.bootstrap_version,
+        "games_per_iteration": cfg.iter.games_per_iteration,
+        "samples": cfg.iter.samples,
+        "nodes": cfg.iter.nodes,
+        "epochs": cfg.iter.epochs,
+        "architecture": cfg.iter.architecture,
+        "n_iterations": 1,
+        "deck_pool": str(deck_pool) if deck_pool is not None else None,
+        "launcher": {
+            "iter": {
+                "target_iter": cfg.iter.target_iter,
+                "nodes": cfg.iter.nodes,
+                "samples": cfg.iter.samples,
+                "games_per_iteration": cfg.iter.games_per_iteration,
+                "epochs": cfg.iter.epochs,
+                "architecture": cfg.iter.architecture,
+                "bootstrap_version": cfg.iter.bootstrap_version,
+            },
+            "cluster": {
+                "local_only": cfg.cluster.local_only,
+                "master_url": cfg.cluster.master_url,
+                "mac_url": cfg.cluster.mac_url,
+                "win10_url": cfg.cluster.win10_url,
+            },
+            "aws": {
+                "count": cfg.aws.count,
+                "instance_type": cfg.aws.instance_type,
+                "az_fallback": cfg.aws.az_fallback,
+                "storage_uri": cfg.aws.storage_uri,
+            },
+            "ui": {
+                "auto_start_training_ui": cfg.ui.auto_start_training_ui,
+                "base_url": cfg.ui.base_url,
+            },
         },
     }
 
