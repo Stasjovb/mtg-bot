@@ -107,29 +107,72 @@ def _http_get_json(
         return resp.status, json.loads(raw)
 
 
-def _default_deck_pool() -> Path:
-    """Return the canonical 17lands EoE deck pool path, anchored to
-    the repo root with a sibling-main-checkout fallback so the
-    launcher works from a worktree.
+def _resolve_canonical_path(relative: Path, *, must_be_dir: bool = False) -> Path:
+    """Resolve ``relative`` against the repo root with a
+    sibling-main-checkout fallback so the launcher works from a
+    worktree.
 
-    CLAUDE.md mandates the 17lands pool at
-    ``data/17lands/eoe_decks.json.gz`` for self-play/eval. Worktrees
-    share the main checkout's .venv (per the project's worktree
-    convention) but typically don't sync data/; falling back to
-    ``../../mtg-bot/data/...`` keeps worktree-launched runs working
-    without forcing the operator to copy a 10MB deck pool into every
-    branch. If neither exists, return the worktree-local path so
-    iterate's own argparse surfaces a clear "not found" error.
+    Worktrees in this project share ``.venv/`` with the main checkout
+    (per CLAUDE.md's worktree convention); large shared assets
+    (data/, trained_weights/) are similarly not duplicated per
+    worktree. This helper picks the worktree-local path when present,
+    otherwise falls back to the sibling main checkout, otherwise
+    returns the worktree-local path so the consumer's own validation
+    surfaces a clear error message.
+
+    ``must_be_dir`` flips the existence check from ``is_file()`` to
+    ``is_dir()`` for registry-style paths like ``trained_weights/``.
     """
     repo_root = Path(__file__).resolve().parents[3]
-    relative = Path("data") / "17lands" / "eoe_decks.json.gz"
     here = repo_root / relative
-    if here.is_file():
+    check = here.is_dir if must_be_dir else here.is_file
+    if check():
         return here
     # Sibling main-checkout fallback: worktrees live under
     # ``<parent>/mtg-bot-worktrees/<branch>/`` next to ``<parent>/mtg-bot/``.
     sibling_main = repo_root.parent.parent / "mtg-bot" / relative
-    if sibling_main.is_file():
+    sibling_check = sibling_main.is_dir if must_be_dir else sibling_main.is_file
+    if sibling_check():
+        return sibling_main
+    return here
+
+
+def _default_deck_pool() -> Path:
+    """Return the canonical 17lands EoE deck pool path (CLAUDE.md:
+    'Self-play / eval data-gen ... run on the real 17lands deck
+    pool at data/17lands/eoe_decks.json.gz'). Resolved via
+    :func:`_resolve_canonical_path` so worktree-launched runs find
+    the sibling main checkout's data without manual copying."""
+    return _resolve_canonical_path(
+        Path("data") / "17lands" / "eoe_decks.json.gz",
+    )
+
+
+def _default_registry_root() -> Path:
+    """Return the canonical trained-weights registry root (iterate's
+    own default is ``Path('trained_weights')`` CWD-relative; the
+    launcher resolves it via the repo-root + sibling-main fallback
+    so a worktree-launched iterate can still load bootstrap weights
+    like v13s from the main checkout's registry).
+
+    Custom validation: trained_weights/ may exist as an empty
+    placeholder dir in a worktree (the worktree pattern doesn't
+    auto-clone large weight files). Fall back to the sibling main
+    if the local dir has no registered version (no ``vN`` subdirs)
+    -- empty here means iterate would emit
+    ``Bootstrap version 'X' not found`` even though main has the
+    version. Observed live during iter_020 demo.
+    """
+    relative = Path("trained_weights")
+    repo_root = Path(__file__).resolve().parents[3]
+    here = repo_root / relative
+    if here.is_dir() and any(
+        p.is_dir() and p.name.startswith("v") and p.name[1:].isdigit()
+        for p in here.iterdir()
+    ):
+        return here
+    sibling_main = repo_root.parent.parent / "mtg-bot" / relative
+    if sibling_main.is_dir():
         return sibling_main
     return here
 
@@ -203,6 +246,7 @@ def _build_iterate_argv(
     shards_config_path: Path,
     queue_url: str,
     deck_pool: Optional[Path],
+    registry_root: Optional[Path],
     extra_iterate_args: list[str],
 ) -> list[str]:
     """Construct the ``mtg_bot iterate`` argv from the LaunchConfig.
@@ -229,6 +273,8 @@ def _build_iterate_argv(
         argv += ["--bootstrap-version", cfg.iter.bootstrap_version]
     if deck_pool is not None:
         argv += ["--deck-pool", str(deck_pool)]
+    if registry_root is not None:
+        argv += ["--registry-root", str(registry_root)]
     argv += list(extra_iterate_args)
     return argv
 
@@ -271,6 +317,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Root for runs.db + per-cycle ephemeral dirs (default "
             "``training_progress/``). Per-cycle files land under "
             "<progress-dir>/launches/<cycle_id>/."
+        ),
+    )
+    parser.add_argument(
+        "--registry-root", type=Path,
+        default=_default_registry_root(),
+        help=(
+            "Trained-weights registry root forwarded to ``mtg_bot "
+            "iterate --registry-root``. Defaults to "
+            "``trained_weights/`` resolved against the repo root "
+            "with a sibling-main fallback (worktree-launched runs "
+            "find the main checkout's registry without manual "
+            "copying). Iterate needs this set correctly to locate "
+            "the bootstrap version's weights."
         ),
     )
     parser.add_argument(
@@ -375,6 +434,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cfg,
         progress_dir=known.progress_dir,
         deck_pool=known.deck_pool,
+        registry_root=known.registry_root,
         queue_url=known.queue_url,
         force_resume_from_failed=known.force_resume_from_failed_cycle,
         dry_run=known.dry_run,
@@ -393,6 +453,7 @@ def _launch(
     dry_run: bool,
     skip_worker_verify: bool,
     iterate_passthrough: list[str],
+    registry_root: Optional[Path] = None,
     spawn: Optional[Any] = None,
     fleet_factory: Optional[Any] = None,
 ) -> int:
@@ -505,6 +566,7 @@ def _launch(
         shards_config_path=shards_path,
         queue_url=queue_url,
         deck_pool=deck_pool,
+        registry_root=registry_root,
         extra_iterate_args=iterate_passthrough,
     )
 
