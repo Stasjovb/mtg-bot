@@ -9989,6 +9989,135 @@ triad's finding), the absence of any X-value subsystem in
 `rust/src/state.rs`, the absence of any token-copy substrate in
 `rust/src/`.
 
+## Multi-target Phase 4 resolve-time self-scan vs CR 601.2c cast-time binding (Lane `feature/multi-target-admit-phase4`, 2026-05-21)
+
+**Scope of this lane**: widen the spell-card-bridge admit predicate
+to accept `(min, N)` graveyard-source multi-target shapes with
+uniform `slot_kinds`, and land the inaugural consumer Effect
+variant `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` (Scout
+for Survivors's `{2}{W}` Sorcery: "Return up to three target
+creature cards with total mana value 3 or less from your graveyard
+to the battlefield. Put a +1/+1 counter on each of them."). 4,170
+17lands decks. PROBED admit set 20 → 21.
+
+**Shortcut**: the Rust resolve arm at
+`rust/src/state_ops_resolve.rs::Effect::ReturnUpToNSmallCreatures
+FromGraveyardWithCounters` SELF-SCANS the source-controller's
+graveyard at resolve time (front-to-back Vec order, per-card MV
+gate + running sum-MV budget, accept up to `max_n` creature cards),
+rather than reading a multi-target list bound onto the StackItem at
+cast time. Single-target sibling
+`ReturnCreatureFromYourGraveyardToBattlefield` does the same self-
+scan; this variant extends that pattern to multi-pick.
+
+**Why it's OK (today)**:
+1. Python's `_select_spell_targets` (`actions.py:1275`) calls the
+   per-player agent's `choose_target` for each slot in
+   `range(max_t)`, removing the picked target from the remaining
+   pool after each pick. The cross-engine harness's
+   `_PickFirstLegalTargetAgent` picks `pool[0]` on every call —
+   which collapses to "the first-N-legal entries in
+   `legal_targets` order".
+2. Python's `ReturnFromGraveyard.legal_targets` walks
+   `p.graveyard` in Vec order (front = oldest, smallest index) and
+   emits one `(target_kind, card.id)` per matching card.
+3. The Rust resolve arm walks the same Vec in the same order with
+   the same filter. So the harness's deterministic-first picks
+   coincide byte-equal with the Rust self-scan.
+4. The §2 round-trip-or-bail teeth at
+   `parity/trajectory.py::_python_spell_effect_to_dict::_leaf` only
+   accept the EXACT pinned-by-`__post_init__` rider shape (`creature
+   =True, destination='battlefield', plus_one_counter=True,
+   min_n=0, max_mv=max_total_mv`), so the only printing that flips
+   admit under this lane is Scout for Survivors's exact pattern.
+
+**Failure mode**: a real-game player picking a NON-first-N target
+sequence (e.g., skipping the first creature card to reach a later
+one within budget) would observe the cast-time pick on the Python
+side but the resolve-time self-scan on the Rust side — divergent
+behavior in MCTS / PIMC paths whose agent's `choose_target` returns
+anything other than `pool[0]`. **Inside the cross-engine harness,
+which fixes the agent to deterministic-first, this divergence is
+unobservable.**
+
+**Fix scope**: a follow-up cycle widens `StackItem` with
+`target_obj_ids: Vec<u32>` (or generalizes the existing
+`target_obj_id`/`target_obj_id_2` pair to a true list), extends
+`cast_spell_noncreature` to bind up to `max_n` deterministic-first
+legal target ids at cast time (mirroring Python's
+`_select_spell_targets` per-slot picks), and the resolve arm reads
+the bound list instead of self-scanning. Approx 200 LoC across 5
+files (`rust/src/state.rs`,
+`rust/src/state_ops_cast.rs`,
+`rust/src/state_ops_resolve.rs`,
+`rust/src/cards.rs` if a new pyclass constructor is needed,
+`src/mtg_bot/parity/cross_engine.py` for the harness adapter).
+
+**Impact**: zero strength cost inside the cross-engine harness +
+production self-play paths that use deterministic-first / random
+agents driven through the same `_PickFirstLegalTargetAgent` shim
+(every probe + the bench). Real-game divergence only surfaces if a
+search path with non-deterministic-first multi-target picks runs
+on Rust; the lane's hexad-characterization parent (Reroute Systems
+v2 closure + Drill Too Deep slice) ships Rust through the same
+deterministic-first cast-time-bind convention, so this lane stays
+consistent with the established substrate.
+
+**Location**:
+- `rust/src/cards.rs::Effect::ReturnUpToNSmallCreaturesFromGraveyard
+  WithCounters` — Effect variant declaration (cards.rs ~5281).
+- `rust/src/cards.rs::parse_effect` arm
+  `return_up_to_n_small_creatures_from_graveyard_with_counters`
+  (cards.rs ~10028).
+- `rust/src/cards.rs::to_pydict` arm
+  `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` (cards.rs
+  ~12692).
+- `rust/src/state_ops_resolve.rs::Effect::ReturnUpToNSmallCreatures
+  FromGraveyardWithCounters` — resolve arm with self-scan + sum-MV
+  budget + +1/+1 counter rider (state_ops_resolve.rs ~16828).
+- `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  arm `return_up_to_n_small_creatures_from_graveyard_with_counters`
+  (cross_engine.py ~851).
+- `src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`
+  per-leaf serializer arm
+  `ReturnUpToNSmallCreaturesFromGraveyardWithCounters`
+  (trajectory.py ~4595).
+- `src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_
+  spell` Phase-4 admit shape arm (trajectory.py ~4813,
+  `_PHASE4_MULTI_GRAVEYARD_SHAPE`).
+- `tests/test_multi_target_phase4.py` — 5 Rust unit pins + 1 Python
+  round-trip pin + 1 real-EoE cross-engine parity probe for Scout
+  for Survivors.
+
+**Honest-stop on the other two candidates of the cheapest-amortized
+hexad lane**:
+- **Pull Through the Weft** (`{3}{G}{G}` Sorcery): two distinct
+  multi-target effects ("Return up to two target nonland permanent
+  cards from your graveyard to your hand, then return up to two
+  target land cards from your graveyard to the battlefield
+  tapped"). Python today only parses the FIRST half
+  (`ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`); the
+  lands-to-battlefield clause is dropped at parse time. Flipping
+  this card requires (a) a separate Rust Effect variant for the
+  nonland-permanent-return-to-hand half, AND (b) parser surgery to
+  carry the lands clause through, AND (c) a second Rust Effect
+  variant for the lands clause, AND (d) a Sequence-composer admit
+  shape. ~3 cycles. DEFERRED.
+- **Archenemy's Charm** (`{B}{B}{B}` Instant, 3-mode
+  ModalChooseOne): mode 2 is the multi-target return-to-hand shape
+  (`ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1)`),
+  but the full 3-mode envelope also needs Mode 1 (`ExileTargetCreature`)
+  + Mode 3 (`PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+  YouControl`) Rust support + a 3-mode dispatch (Cycle 5/6
+  detector table is currently sized for 2-mode and untargeted-mode
+  shapes; extending to 3-mode is mechanical but a separate cycle).
+  ~3-4 cycles. DEFERRED.
+
+The lane's cheapest-amortized "unlock 3 candidates" rationale
+collapses under verify-first: Scout for Survivors is the only
+clean substrate-only flip — the other two need their own per-card
+slices.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

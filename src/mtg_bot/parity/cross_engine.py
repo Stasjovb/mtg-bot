@@ -848,6 +848,45 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutChargeCountersOnTargetSpacecraftOrPlanetYouControl(
             amount=eff_dict["amount"],
         )
+    if kind == "return_up_to_n_small_creatures_from_graveyard_with_counters":
+        # **Multi-target admit-gate Phase 4 widen (2026-05-21).** Scout
+        # for Survivors: "Return up to N target creature cards with
+        # total mana value M or less from your graveyard to the
+        # battlefield. Put a +1/+1 counter on each of them."
+        # Rust's ``Effect::ReturnUpToNSmallCreaturesFromGraveyardWith
+        # Counters { max_n: i32, max_total_mv: i32 }`` (cards.rs) and
+        # Python's ``ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+        # max_n=N, max_total_mv=M)`` constructor sugar at
+        # ``effects/generic/bounce.py:296`` resolve byte-equal on the
+        # 2-player EoE harness: both engines walk the source-
+        # controller's graveyard in Vec order (front = oldest), accept
+        # creature cards whose individual MV fits the per-card cap AND
+        # whose addition keeps the running sum within budget, and move
+        # each to the battlefield with a +1/+1 counter applied.
+        #
+        # ``max_n`` + ``max_total_mv`` are BOTH REQUIRED in the round-
+        # trip dict shape (mirrors the Rust ``parse_effect``
+        # ``require`` contract). The reverse serializer at
+        # ``trajectory.py::_python_spell_effect_to_dict``'s ``_leaf``
+        # arm always emits both fields.
+        #
+        # **Resolve-time self-scan vs cast-time multi-target bind.**
+        # CR 601.2c says targets are picked at cast time. The cross-
+        # engine harness uses ``_PickFirstLegalTargetAgent`` which
+        # picks ``pool[0]`` then ``pool[0]`` of the remaining etc. —
+        # collapsing to "first-N legal in legal_targets order". Since
+        # Python's ``ReturnFromGraveyard.legal_targets`` walks
+        # ``p.graveyard`` in Vec order, that matches the Rust resolve
+        # arm's self-scan byte-equal under the harness. See the
+        # ``docs/SEARCH_LIMITATIONS.md`` entry for the deliberate
+        # divergence vs a real-game stack of arbitrary target picks.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
+        )
+        return ReturnUpToNSmallCreaturesFromGraveyardWithCounters(
+            max_n=eff_dict["max_n"],
+            max_total_mv=eff_dict["max_total_mv"],
+        )
     if kind == "deal_damage":
         # "Deal N damage to target X." Rust's
         # ``Effect::DealDamage { amount: i32, target: TargetFilter }``

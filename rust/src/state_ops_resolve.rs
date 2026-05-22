@@ -16853,6 +16853,132 @@ fn apply_effect(
                 }
             }
         }
+        // **Multi-target admit-gate Phase 4 widen (2026-05-21).** Scout
+        // for Survivors: return up to `max_n` creature cards from the
+        // source-controller's graveyard whose summed mana value is
+        // <= `max_total_mv`, each entering the battlefield with a
+        // +1/+1 counter. Substrate-only resolve-time self-scan: front-
+        // to-back graveyard order, per-card MV gate + running sum-MV
+        // budget. Mirrors Python's `ReturnFromGraveyard.resolve` at
+        // `effects/generic/graveyard.py:195-242` for `max_n > 1`. See
+        // `docs/SEARCH_LIMITATIONS.md` entry "Multi-target Phase 4
+        // resolve-time self-scan" for the deliberate divergence vs
+        // cast-time binding (cross-engine harness uses
+        // `_PickFirstLegalTargetAgent` which coincides with self-scan).
+        Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters {
+            max_n,
+            max_total_mv,
+        } => {
+            if *max_n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNSmallCreaturesFromGraveyardWithCounters max_n must be non-negative, got {max_n}"
+                )));
+            }
+            if *max_total_mv < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "ReturnUpToNSmallCreaturesFromGraveyardWithCounters max_total_mv must be non-negative, got {max_total_mv}"
+                )));
+            }
+            if *max_n == 0 {
+                return Ok(()); // legitimate no-op
+            }
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let max_n_u = *max_n as usize;
+            let max_total_mv_local = *max_total_mv;
+            // Compute total mana value of a printing (generic +
+            // colored). Mirrors the
+            // `ExileAllArtifactsWithManaValueAtMost` MV computation
+            // pattern at line 16639-16644 above.
+            let mv_of = |obj: &GameObject| -> i32 {
+                match state.registry.lookup(obj.printing_id) {
+                    Some(printing) => {
+                        let mc = &printing.mana_cost;
+                        mc.generic as i32
+                            + mc.white as i32
+                            + mc.blue as i32
+                            + mc.black as i32
+                            + mc.red as i32
+                            + mc.green as i32
+                    }
+                    None => 0,
+                }
+            };
+            // Collect winners by walking the graveyard front-to-back,
+            // accepting creature cards whose individual MV fits AND
+            // whose addition keeps the running sum within budget.
+            // Front = oldest (smallest Vec index) — the same iteration
+            // order `ReturnCreatureFromYourGraveyardToBattlefield` uses
+            // for its single-target scan. Python's
+            // `_PickFirstLegalTargetAgent` picks pool[0] then
+            // pool[0]-of-remaining etc., which collapses to "first-N
+            // in legal_targets order" — and `ReturnFromGraveyard.
+            // legal_targets` walks `p.graveyard` in Vec order — so the
+            // self-scan matches Python byte-equal under the
+            // cross-engine harness.
+            let mut winners: Vec<u32> = Vec::new();
+            let mut running_mv: i32 = 0;
+            for obj in state.players[controller_idx].graveyard.iter() {
+                if winners.len() >= max_n_u {
+                    break;
+                }
+                let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                if !printing.card_types.iter().any(|t| t == "Creature") {
+                    continue;
+                }
+                let card_mv = mv_of(obj);
+                if card_mv > max_total_mv_local {
+                    continue; // per-card cap (Python's `max_mv` rider)
+                }
+                if running_mv.saturating_add(card_mv) > max_total_mv_local {
+                    continue; // would bust the running budget
+                }
+                running_mv = running_mv.saturating_add(card_mv);
+                winners.push(obj.id);
+            }
+            if winners.is_empty() {
+                return Ok(()); // silent fizzle
+            }
+            // Move each winner from graveyard → battlefield with
+            // summoning_sick=true, fresh etb_timestamp, +1/+1 counter.
+            // Mirrors the
+            // `ReturnCreatureFromYourGraveyardToBattlefield` arm at
+            // line 5567-5658 for per-card move semantics, repeated per
+            // winner. ETB triggers fan out via pending_etb_dispatches.
+            for target_id in winners {
+                let etb_ts = crate::state::reserve_etb_timestamp(state);
+                // No walker reseed scan — this variant filters on
+                // Creature, not Planeswalker; loyalty_counters stays 0.
+                let graveyard_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].graveyard);
+                let pos = match graveyard_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip if vanished
+                };
+                let mut obj = graveyard_mut.remove(pos);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = false;
+                obj.summoning_sick = true;
+                obj.damage = 0;
+                // Apply the +1/+1 counter rider. Mirrors Python's
+                // `add_plus_one_counters(state, card, 1)` post-move
+                // call at `effects/generic/graveyard.py:283`.
+                obj.counters = obj.counters.saturating_add(1);
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                // I83 controller-of-effect: stamp to the reanimation
+                // effect's controller (same as the single-target
+                // sibling arm above).
+                obj.controller = controller_idx as u8;
+                let entered_id = obj.id;
+                Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+                state.pending_etb_dispatches.push(entered_id);
+            }
+        }
     }
     Ok(())
 }
