@@ -35,5 +35,8 @@
       "SpotInstanceType": "one-time",
       "InstanceInterruptionBehavior": "terminate"
     }
+  },
+  "IamInstanceProfile": {
+    "Name": "mtg-bot-spot-worker"
   }
 }

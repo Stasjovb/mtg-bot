@@ -1,0 +1,40 @@
+# iter_020 -- live launcher demo (created 2026-05-22).
+#
+# Cluster: master (16-worker Windows daemon) + 4x c7a.2xlarge spot
+# in us-east-1c with us-east-1d/f fallback. Mac excluded -- its
+# daemon was stuck in STOPPING and re-restoring takes its own
+# tailscale-ssh recovery. Skip for the first end-to-end live test.
+#
+# Storage: real S3 via the new mtg-bot-spot-worker IAM instance
+# profile attached by the runspec template; workers PutObject to
+# s3://mtg-bot-artifacts-630589799985/iter_020/, coord rehydrates
+# async. The coord on this machine reads from ~/.aws/credentials
+# [default] profile (admin perms).
+#
+# Demo sizing: small enough to finish in ~30-60 min on the cluster
+# above, large enough to prove the data path end-to-end. Override
+# any field via --section.key CLI flag.
+
+[iter]
+target_iter = 20
+bootstrap_version = "v13s"
+nodes = 200
+samples = 4
+games_per_iteration = 200
+epochs = 2
+architecture = "structured"
+
+[cluster]
+local_only = false
+master_url = "http://desktop-j05412i:5198"
+# mac_url = "http://greggs-macbook-pro:5198"  # re-enable after Mac daemon recovery
+
+[aws]
+count = 4
+instance_type = "c7a.2xlarge"
+az_fallback = ["us-east-1c", "us-east-1d", "us-east-1f"]
+storage_uri = "s3://mtg-bot-artifacts-630589799985/iter_020/"
+
+[ui]
+auto_start_training_ui = true
+base_url = "http://desktop-j05412i:5103"

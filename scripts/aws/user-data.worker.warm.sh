@@ -135,9 +135,26 @@ fi
 # trace (the diagnostic scaffolding lived in this file 2026-05-20).
 mark daemon
 NCPU=$(nproc); NW=$(( NCPU>2 ? NCPU-2 : 1 ))
-nohup env PYTHONPATH=src .venv-py313/bin/python -m mtg_bot.worker_daemon \
+# AMI baked 2026-05-20 predates the [s3] extra (boto3). The
+# worker_daemon imports boto3 lazily inside S3ArtifactUploader, so
+# without it the daemon crashes before binding port 5198. Install
+# it at boot time so the warm path keeps working until the AMI
+# gets re-baked with boto3 in the venv.
+.venv-py313/bin/python -m pip install --quiet boto3>=1.34 || \
+  echo "WARN: boto3 install failed; S3 artifact upload will not work"
+# AWS_DEFAULT_REGION pinned for boto3 -- without it the client
+# init falls back to a multi-second IMDS region lookup, which made
+# the daemon appear to hang for ~7 min on first /v2/heartbeat (the
+# daemon's import-time uploader_from_uri() constructs boto3.client
+# eagerly). Hardcoded to us-east-1 because the warm AMI lives
+# there and the worker only ever runs on instances launched off
+# that AMI. AWS_REGION is set too because some boto3 paths read
+# that name instead.
+nohup env PYTHONPATH=src AWS_DEFAULT_REGION=us-east-1 AWS_REGION=us-east-1 \
+  .venv-py313/bin/python -m mtg_bot.worker_daemon \
   --host "$TS_IP" --port 5198 --n-workers "$NW" --worker-id "${HOSTNAME_TAG}-${IID}" \
   --deck-pool-path "$REPO/data/17lands/eoe_decks.json.gz" \
+  --artifact-storage-uri "${MTG_BOT_ARTIFACT_STORAGE_URI:-s3://mtg-bot-artifacts-630589799985/launcher/}" \
   > /var/log/mtg-bot-daemon.log 2>&1 &
 
 mark healthcheck
