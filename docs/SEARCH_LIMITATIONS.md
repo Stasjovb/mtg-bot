@@ -11175,42 +11175,203 @@ reads) / C3 (bridge round-trip) / C4 (Effect variants) remain.
 Systems Override AND Mutinous Massacre — the shared-amortization
 lane.
 
-### 5. Archenemy's Charm — three-mode ModalChooseOne with multi-target + multi-mode-shape gaps
+### 5. Archenemy's Charm — three-mode ModalChooseOne, fully-characterized verify-first; closure prerequisites identified on existing branches
 
-Oracle: `{B}{B}{B}` Instant — "Choose one — Exile target creature
-or planeswalker. — Return one or two target creature and/or
-planeswalker cards from your graveyard to your hand. — Put two
-+1/+1 counters on target creature you control. It gains lifelink
-until end of turn."
+**Verify-first re-characterization (2026-05-22,
+`feature/archenemys-charm-cycle-1-p2`).** Walked every layer of
+the closure path at current main HEAD (`95423db0`) and confirmed
+the live parser SoT + the admit gate's residual gaps + the existing
+substrate-branch coverage. The earlier characterization in this
+section (Cycle 1 substrate from the prior session, the "(0, N)
+variant Scout would need" frame) was superseded by the
+`feature/multi-target-admit-phase4` landing (`(min, N)` Phase-4
+shape now admits Archenemy's Charm's `(1, 2)` target grammar) and
+the `feature/scour-for-scrap-slice` landing (or_both substrate
+shipped; the serializer no longer bails on `or_both=True`). This
+block re-anchors the closure intel against the live HEAD.
 
-Python parses to `ModalChooseOne(modes=(ExileTargetCreature(),
-ReturnUpToNCreaturesFromYourGraveyardToHand(max_n=2, min_n=1),
-ArchenemysCharmMode3Effect()))` (the Mode 3 is a bespoke
-parameterless class wrapping +2/+2 counters + lifelink-UEOT).
+Oracle (verified live, EoE printing): `{B}{B}{B}` Instant — "Choose
+one — Exile target creature. — Return up to two target creature
+cards from your graveyard to your hand. — Put two +1/+1 counters
+on target creature you control. It gains lifelink until end of
+turn."
 
-Gaps on Rust side:
-1. **Mode 1 (`ExileTargetCreature`)** — already covered in Rust
-   (`Effect::ExileTarget` shape). NO substrate gap.
-2. **Mode 2 (multi-target return-to-hand)** — needs the same
-   multi-target admit widen + multi-target cast-time binding as
-   Scout for Survivors (above). The Python class has
-   `target_count_range == (1, 2)` — a NEW shape not covered by
-   the (0, N) variant Scout would need.
-3. **Mode 3 (+2/+2 counters + lifelink UEOT)** — bespoke
-   composition. Rust today has `PutPlusOneCounterOnSelf` (round-15)
-   and `UeotModifier::GrantKeyword` (round-16) primitives, but
-   no single Effect variant that composes "put N counters on a
-   target then grant a keyword UEOT". Needs a new variant or a
-   sequence-composer extension.
-4. **ModalChooseOne 3-mode dispatch** — the existing modal
-   substrate handles 2-mode ModalChooseOne (Reroute Systems
-   demonstrated the per-mode target-binding shape); 3-mode adds
-   the per-mode detector table widen (more rows, no new
-   primitives).
+Live parser output (verified live):
 
-**Estimated cost**: 3-4 cycles (mode 2 carries the load — the
-multi-target return-to-hand substrate; mode 3 is ~1 cycle of
-composition work). 4,498 17lands decks.
+```
+ModalChooseOne(modes=(
+  ExileTargetCreature(targets=(TargetSpec(filter=IsCreature(),
+    count_min=1, count_max=1),)),
+  ReturnUpToNCreaturesFromYourGraveyardToHand(creature=True,
+    artifact=False, land=False, ..., min_n=1, max_n=2,
+    destination='hand', target_kind='graveyard_creature'),
+  PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+    amount=2, granted_keywords=frozenset({'lifelink'}),
+    you_control_only=True),
+), or_both=False)
+```
+
+`target_count_range() == (1, 2)`, `target_slot_kinds() == ()`,
+`or_both = False`. Note the parser's Mode 0 filter is `IsCreature()`
+(not creature-or-planeswalker as the printed oracle text reads); the
+parser is the SoT and the Rust mirror must match the parser, not the
+printed text.
+
+**Admit-gate verify-first (main HEAD `95423db0`).** The Phase-4
+`_PHASE4_MULTI_GRAVEYARD_SHAPE` predicate at
+`src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_spell`
+already accepts the `(1, 2)` + empty `slot_kinds` shape (`min_t in
+(0, 1)` AND `max_t > 1` AND empty `slot_kinds`). No new admit phase
+or Phase-4 widen is needed. The remaining gates the closure must
+satisfy are the §2 auto-grow teeth:
+
+1. `_spell_effect_is_covered_and_bridged(printing)` — every
+   `ModalChooseOne` mode's Python Effect class must be in the LIVE
+   covered set (i.e., have a Rust `Effect` variant).
+2. `_python_spell_effect_to_dict(se) is not None` — the reverse
+   serializer must recurse into each mode via a `_leaf` arm.
+
+Both teeth fail today because Modes 0, 1, 2 are uncovered Rust-side.
+
+**Pre-existing substrate branches (not yet merged to main).**
+
+* `feature/effect-exile-target-creature-p1` (`e064bc33`) — **adds
+  `Effect::ExileTargetCreature` substrate AND flips Gravkill
+  PROBED.** Ships the Rust variant declaration + parse + to_pydict +
+  resolve + `state_ops_legal.rs` arm; the Python bridge
+  `cross_engine.py::exile_target_creature` arm; the `trajectory.py`
+  `_leaf` arm; the admit-gate narrow rejecting
+  `additional_cost_sacrifice_creature_or_*` riders (defense-in-depth
+  for Final Vengeance); the `tests/test_gravkill_parity.py` parity
+  module (9 tests including a genuine real-EoE cross-engine probe).
+  `_PHASE1_ADMITTED_AT_THIS_HEAD` admit-set pin in
+  `tests/test_probe_spell_card_bridge_admitted.py` bumps 32 → 33
+  (Gravkill auto-joins).
+* `feature/effect-return-up-to-n-creatures-graveyard-to-hand-p1`
+  (`be1603f9`) — **substrate-only Rust variant** for
+  `Effect::ReturnUpToNCreaturesFromYourGraveyardToHand { min_n: i32,
+  max_n: i32 }`. Ships declaration + parse + to_pydict + resolve
+  (front-to-back graveyard self-scan, byte-equal with Python's
+  `ReturnFromGraveyard.resolve` for `destination='hand'`); the
+  Python bridge arm; the `trajectory.py` `_leaf` arm with strict
+  rider-shape gate; the
+  `tests/test_effect_return_up_to_n_creatures_graveyard_to_hand.py`
+  parity module (9 tests including parse/resolve/round-trip pins).
+  Admit-set pin **unchanged** (no EoE printing carries this Effect
+  as a top-level `spell_effect`; Archenemy's Charm uses it via a
+  `ModalChooseOne` mode slot).
+
+**Remaining substrate gap for the full Archenemy's Charm closure.**
+
+* **Mode 2 (`PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+  YouControl`).** Python class lives at
+  `src/mtg_bot/effects/generic/counters.py:662` and carries the
+  fields `amount: int = 2`, `granted_keywords: frozenset[str] =
+  frozenset()`, `you_control_only: bool = True`. The class composes
+  `add_plus_one_counters(state, obj, amount)` with an `ApplyEffect(
+  inner=GrantKeywords(keywords=...), ends_at=EndOfTurn())` resolve
+  body. Rust today carries the primitives separately
+  (`PutPlusOneCounterOnTargetCreature`,
+  `GrantKeywordsToTargetCreatureUntilEOT`) but no single Effect
+  variant that composes both on a SINGLE chosen target (the two
+  primitives each take their own target selection, so cannot be
+  chained on the same target without a composition variant — the
+  Cycle-1-substrate pattern documented for Comet Crawler's
+  `OptionalSacAnotherForPumpSelfUEOT`). Needs a new
+  `Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl
+  { amount: i32, granted_keywords: Vec<String>, you_control_only:
+  bool }` variant (declaration + parse + to_pydict + resolve +
+  bridge + `_leaf`).
+
+**Closure prerequisites (in landing order):**
+
+1. **Land the two substrate branches.** Each is an independent
+   closure with its own per-card probe (Gravkill ships as a PROBED
+   flip; the Return-up-to-N is substrate-only with no immediate
+   card flip). They can be reviewed + merged independently of this
+   lane.
+2. **Add Mode 2 substrate** (the
+   `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+   Control` Effect variant). New variant + parse + to_pydict +
+   resolve + bridge + `_leaf` arm. No new EoE printing carries this
+   Effect class as a top-level `spell_effect` (Archenemy's Charm is
+   the sole consumer through a `ModalChooseOne` mode slot), so the
+   Mode-2 substrate is naturally substrate-only — symmetric with
+   the Mode-1 substrate-only landing.
+3. **Per-mode detector entries.** Three new arms in
+   `rust/src/state_ops_cast.rs::is_recognized_targeted_mode_leaf` +
+   the per-leaf `chosen_mode` match: one for `ExileTargetCreature`
+   (any-creature scan, mirroring the standalone resolve arm's
+   filter), one for `ReturnUpToNCreaturesFromYourGraveyardToHand`
+   (graveyard self-scan — no cast-time bind needed since the resolve
+   arm self-scans; the detector entry is a no-op but the
+   `is_recognized_targeted_mode_leaf` allowlist must include it
+   so the multi-pick walk doesn't skip it), one for
+   `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`
+   (you-control creature scan).
+4. **Integration closure**: bumps the admit-set pin to include
+   `Archenemy's Charm` (alphabetically first; 33 → 34 after Gravkill
+   from substrate 1; or 32 → 33 if landed before Gravkill). New
+   `tests/test_archenemys_charm_parity.py` mirroring Vengeful
+   Possession's per-card module shape: parser SoT pin, serializer
+   round-trip for all 3 modes, admit-gate flip, covered-set
+   membership, GENUINE real-EoE cross-engine byte-equal probe for
+   each mode (the no-agent harness's mode pick will exercise Mode 0
+   only by default; Modes 1 and 2 each ride their own dedicated
+   probe via a synthetic-state push).
+
+**Cycle accounting.** With the two substrate branches taken as
+already-shipped (review and merge them first), the integration
+closure is **2 cycles** (Mode 2 substrate + integration test +
+admit pin bump + doc update). The earlier "3-4 cycles" estimate
+collapses because Modes 0 and 1 already shipped on their own
+branches.
+
+**Honest-stop, no PROBED flip in this lane.** The
+`feature/archenemys-charm-cycle-1-p2` worktree carries the verify-
+first re-characterization as a doc-only commit. The substrate-merge
+work attempted in this lane surfaced large (300+ line) merge
+conflicts in `rust/src/cards.rs` / `state_ops_resolve.rs` driven by
+concurrent main-side append-additive variant landings between the
+substrate branches' fork points and current main HEAD; resolving
+those cleanly is single-cycle-tractable as part of each substrate
+branch's own review-merge, but is NOT within scope for a
+combined-multi-substrate single-cycle closure. The proper sequencing
+is: (a) review + merge `feature/effect-exile-target-creature-p1`
+(includes a Gravkill PROBED-flip + admit pin bump 32 → 33), then
+(b) review + merge `feature/effect-return-up-to-n-creatures-graveyard-to-hand-p1`
+(substrate-only, no admit pin change), then (c) a clean Archenemy's
+Charm Cycle 2 lane that lands Mode 2 substrate + integration test +
+admit pin bump 33 → 34.
+
+4,498 17lands decks remain pending the closure sequence above.
+
+**Location:**
+- `src/mtg_bot/parity/trajectory.py:5459-5471`
+  (`_PHASE4_MULTI_GRAVEYARD_SHAPE` — already accepts `(1, 2)` empty-
+  slot_kinds shape; no widen needed).
+- `src/mtg_bot/parity/trajectory.py:5196-5208` (`ModalChooseOne`
+  composer in `_python_spell_effect_to_dict` — recurses into each
+  mode via `_leaf`; bails on any unrecognized mode per the §2
+  round-trip-or-bail teeth).
+- `rust/src/state_ops_cast.rs:2216-2226`
+  (`is_recognized_targeted_mode_leaf` allowlist + the per-mode
+  `chosen_mode` match) — needs new arms for the 3 Archenemy modes.
+- `src/mtg_bot/effects/generic/counters.py:662` (Mode 2 Python
+  class `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+  Control`).
+- `src/mtg_bot/effects/generic/exile.py:717` (Mode 0 Python class
+  `ExileTargetCreature` — sugar over
+  `Exile(targets=(TargetSpec(IsCreature()),))`).
+- `src/mtg_bot/effects/generic/bounce.py:416` (Mode 1 Python class
+  `ReturnUpToNCreaturesFromYourGraveyardToHand` — sugar over
+  `ReturnFromGraveyard` with `creature=True, destination='hand'`).
+- Pre-existing branches: `feature/effect-exile-target-creature-p1`
+  (commit `e064bc33`), `feature/effect-return-up-to-n-creatures-graveyard-to-hand-p1`
+  (commit `be1603f9`), `feature/archenemys-charm-cycle-1-p1`
+  (commit `e4780213` — prior session's doc-only verify-first
+  finding; superseded by THIS lane's update which corrects the
+  Phase-4 admit-gate intel).
 
 ### 6. Scour for Scrap — `or_both=True` Cycle 1 widening from `Option<u8>` to `Option<Vec<u8>>`
 
