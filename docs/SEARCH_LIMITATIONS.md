@@ -13968,6 +13968,183 @@ Imago / Fanatic of the Harrowing / Vaultguard Trooper).
 on Rust (cast-from-exile substrate is a multi-cycle ratchet; see
 "Fix scope" above).
 
+## Wickerfolk Thresher Cycle 1 LANDED — `Effect::PeekTopMayBattlefieldIfLandElseHand` (unit) Effect half shipped byte-equal on no-agent / library→hand branch; agent-yes / land-onto-battlefield-with-ETB branch honest-stopped (no Rust agent surface); Delirium state-predicate substrate honest-stopped on Rust (probe sidesteps via synthetic-carrier predicate narrowing)
+
+**Single-cycle landing (2026-05-23,
+`feature/wickerfolk-thresher-cycle-1-p1`).** Wickerfolk Thresher —
+`{3}{G}` Artifact Creature — Scarecrow, 5/4 (Duskmourn — DSK, in the
+active CardSource). Delirium attack trigger: "Delirium — Whenever
+this creature attacks, if there are four or more card types among
+cards in your graveyard, look at the top card of your library. If
+it's a land card, you may put it onto the battlefield. If you don't
+put the card onto the battlefield, put it into your hand."
+Parsed live as `TriggeredAbility(event=ATTACKS,
+predicate=And(IsSelf, StateBound(Delirium())),
+effect=PeekTopMayBattlefieldIfLandElseHand())` (a parameterless
+frozen dataclass at `effects/generic/library_lookat.py:296`).
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for Wickerfolk Thresher is now
+Effect-closed at the **observable zone-change layer for the
+no-agent branch**. The `PeekTopMayBattlefieldIfLandElseHand` Rust
+Effect variant ships with parse + to_pydict + resolve arms; the
+cross_engine dict→Python bridge arm round-trips it; a per-card
+real-DSK byte-equal probe flips Wickerfolk Thresher to **PROBED at
+the per-card parity layer** on the no-agent / non-land-top → hand
+path (the agent-yes / land-onto-battlefield branch is honest-
+stopped on Rust — see "The shortcut" below).
+
+**What landed:**
+
+* **Rust `Effect::PeekTopMayBattlefieldIfLandElseHand` variant
+  (field-free unit).** New enum variant on `rust/src/cards.rs`
+  immediately after `TerritorialBruntarLandfallEffect` — same
+  Tier-A unit-variant idiom (`MutinousMassacreEffect` /
+  `BoilerbilgesRipperETBEffect` / `FanaticOfTheHarrowingETBEffect`
+  / `TerritorialBruntarLandfallEffect` precedent). Round-trip dict
+  shape: `{"kind": "peek_top_may_battlefield_if_land_else_hand"}`
+  (only `kind` emitted).
+* **Parse arm.** Closed-vocab string kind
+  `"peek_top_may_battlefield_if_land_else_hand"` parses to the unit
+  variant; no payload fields. The fallback unknown-kind error
+  string is extended to include the new kind so a typo surfaces
+  loudly. Sibling of the
+  `territorial_bruntar_landfall_effect` /
+  `fanatic_of_the_harrowing_etb_effect` /
+  `boilerbilges_ripper_etb_effect` unit-variant parse arms.
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`), mirroring the
+  `TerritorialBruntarLandfallEffect` sibling on adjacent lines.
+  Round-trip is a single-key dict.
+* **Resolve arm.** `rust/src/state_ops_resolve.rs` arm immediately
+  after the `TerritorialBruntarLandfallEffect` resolve. Mechanism:
+  5-zone walk + stack scan to find the source controller (same
+  shape as `TerritorialBruntarLandfallEffect` /
+  `FanaticOfTheHarrowingETBEffect` / `DiscardSelf` source-finder);
+  library-empty short-circuit (silent no-op); pop `library[0]`
+  (top); CR 400.7 zone-change reset (tapped / summoning_sick /
+  damage / counters / attached_to / exiled_with_source all
+  cleared); zone = ZONE_HAND; push to controller's hand. The
+  Land-onto-battlefield branch is NOT mirrored — Rust has no agent
+  surface and no library-to-bf-with-ETB substrate (see "The
+  shortcut" below). Source untrackable = silent fizzle.
+* **Cross-engine bridge arm.** New
+  `peek_top_may_battlefield_if_land_else_hand` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately above the `PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE`
+  marker. Translates the Rust-shape dict back into a Python
+  `PeekTopMayBattlefieldIfLandElseHand()` instance. Field-free unit
+  variant — no field translation required.
+* **Tests.** `tests/test_wickerfolk_thresher_parity.py` carries
+  ten probes:
+    - 3 parser SoT pins (card-claim, printed attrs, ATTACKS
+      trigger emits the expected
+      `PeekTopMayBattlefieldIfLandElseHand()` under
+      `And(IsSelf, StateBound(Delirium))`);
+    - 2 serializer round-trip pins (dict→Python bridge round-trip
+      + Rust effect_to_pydict one-key shape);
+    - 3 Rust unit pins (land top → hand on no-agent branch;
+      non-land top → hand; empty library silent no-op);
+    - 1 covered-set / membership pin (covered-set membership via
+      the 1:1 identity-mapping rule);
+    - 1 GENUINE real-DSK cross-engine byte-equal probe driving
+      the ACTUAL parsed Wickerfolk Thresher printing on Python
+      against a bridged synthetic carrier on Rust; the ATTACKS
+      trigger fires after declaring an attacker (non-land top →
+      hand branch, library top-to-bottom = [non-land,
+      deeper-non-land]; Python's graveyard is seeded with 4
+      distinct card types so Delirium is satisfied); the top
+      non-land moves to hand on BOTH engines, and
+      `compare_fields == []` over the WHOLE field view.
+
+**The shortcut #1 — agent-yes / land-onto-battlefield branch NOT
+mirrored.** Python's `PeekTopMayBattlefieldIfLandElseHand.resolve`
+routes a Land top card through `put_into_battlefield` if the
+controller has an agent and that agent answers
+`choose_yes_no(...) == True`; the land enters untapped, firing
+landfall + any other ETB triggers cleanly. **Rust has no agent
+surface** and **no library-to-battlefield-with-ETB-fan-out
+substrate** wired into the Effect dispatcher today; this branch is
+honest-stopped (same shape as the Boilerbilges Ripper / Terrapact
+Intimidator agent-gate honest-stops — Cycle 1 lands ONLY the
+no-agent mirror).
+
+**The shortcut #2 — Delirium state-predicate substrate NOT
+mirrored.** Python's real Wickerfolk Thresher trigger gate is
+`And(IsSelf, StateBound(Delirium()))`; Rust has no `StateBound`
+predicate kind and no `Delirium` state predicate. The probe
+sidesteps the divergence by giving the Rust synthetic carrier a
+simpler `source_is_self` predicate (no Delirium gate) and seeding
+Python's graveyard with 4+ card types so Delirium IS satisfied on
+the Python side. Both engines fire the trigger and resolve to
+library→hand on the no-agent branch; the byte-equal field-view
+compare sees the same graveyard contents + the same library→hand
+zone change on both sides. This is exactly the synthetic-carrier-
+shape-narrowing trick the Comet Crawler / Territorial Bruntar
+precedent already uses (precedent: a synthetic Rust carrier that
+shares the Effect class but uses a simpler trigger predicate, so
+the Rust side doesn't need the state-predicate substrate to drive
+the probe).
+
+**Why this is OK.** Per-card cross-engine byte-equal parity at the
+**zone-change observable on the no-agent branch** is the same tier
+closed by every other PROBED-via-dedicated-probe per-card cycle in
+this lane (Genemorph Imago, Fanatic of the Harrowing, Vaultguard
+Trooper, Boilerbilges Ripper, Comet Crawler, Friendly Teddy,
+Terrapact Intimidator, Territorial Bruntar). The probe's
+non-land-top scenario doesn't need the agent-yes branch (the
+Python class's land+agent-yes gate requires both `is_land == True`
+AND `agent is not None` AND `agent.choose_yes_no(...) == True`;
+the probe drives the non-land-top path which short-circuits at
+`is_land == False` and falls through to the hand branch on the
+Python side too).
+
+**Failure mode.** A subsequent ply that:
+* tries to **cast the agent-routed land from battlefield** when
+  Python's agent says yes: Python's land enters via
+  `put_into_battlefield` and fires landfall on the controller; Rust
+  routes the land to hand instead (no landfall fires); zone-change
+  observables diverge.
+* tries to **drive the Delirium gate through Rust**: Rust's
+  synthetic carrier has no Delirium gate, so the trigger fires
+  unconditionally; if the carrier is repurposed for a non-Delirium-
+  satisfied state (graveyard has <4 card types), Rust will fire the
+  trigger and Python won't.
+
+The probe paths in this branch deliberately drive the no-agent /
+non-land-top / Delirium-satisfied scenario where both shortcuts
+collapse to the same observable.
+
+**Fix scope.** Two distinct subsystem ratchets:
+
+  * **Rust agent surface + library-to-bf-with-ETB substrate.**
+    Cycle 2+ closure that lands a Rust agent abstraction (the
+    Boilerbilges Ripper / Terrapact Intimidator cycle docstrings
+    already note this as the shared multi-card next step) PLUS a
+    library-to-battlefield helper that fires the landfall + ETB
+    fan-out via the standard `dispatch_event(Event::Enters, ...)`
+    chain. Touches every agent-gated Effect (currently honest-
+    stopped on multiple cards).
+  * **Rust `StateBound` + `Delirium` state predicate.** Cycle 2+
+    closure that lands the `Predicate::StateBound { inner:
+    StatePredicate }` shape on Rust + the per-state-predicate
+    leaf kinds (Delirium, DungeonCompletion, RevoltActive, etc.).
+    Touches the round-58 state-predicate vocab classifier and the
+    static / triggered abilities that gate on global state.
+
+Both are multi-card lifts; the per-card real-DSK probe shipped
+here is the right tool for **this card** in **this cycle**.
+
+**Impact estimate.** No coverage regression — Effect-class side is
+LANDED; Wickerfolk Thresher is now PROBED at the per-card parity
+layer despite the multi-gated classifier status. `_SAFE_TRIGGERS`
+deliberately NOT widened (separate concern; precedent: Genemorph
+Imago / Fanatic of the Harrowing / Vaultguard Trooper / Territorial
+Bruntar). Agent-yes / land-onto-bf branch deliberately honest-
+stopped on Rust (multi-cycle agent-surface ratchet; see "Fix scope"
+above). Delirium state-predicate deliberately honest-stopped on
+Rust (multi-cycle state-predicate ratchet; see "Fix scope" above).
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

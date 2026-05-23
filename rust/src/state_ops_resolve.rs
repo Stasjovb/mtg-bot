@@ -20546,6 +20546,109 @@ fn apply_effect(
             // 5. Gain X life on the source-controller.
             state.players[controller_idx].life += x;
         }
+        // **Wickerfolk Thresher Cycle 1 (2026-05-23).** Mirrors Python's
+        // `PeekTopMayBattlefieldIfLandElseHand.resolve`
+        // (`effects/generic/library_lookat.py:320-355`) on the no-
+        // agent branch — the agent-yes (land-onto-battlefield with
+        // ETB fan-out) branch is honest-stopped (Rust has no agent
+        // surface, no library-to-battlefield-with-ETB substrate wired
+        // into the Effect dispatcher today; see SEARCH_LIMITATIONS.md).
+        //
+        // **Resolve steps (mirror Python no-agent branch).**
+        //   1. Source-controller resolution: 5-zone walk + stack scan
+        //      (same shape as `FanaticOfTheHarrowingETBEffect` /
+        //      `TerritorialBruntarLandfallEffect` /
+        //      `DiscardSelf` / `EachOpponentDiscards` source-finder).
+        //      Source not found anywhere = silent fizzle.
+        //   2. If the source-controller's library is empty: silent
+        //      no-op (Python: `if not p.library: return`).
+        //   3. Pop `library[0]` (top); CR 400.7 zone-change reset
+        //      on the popped object (tapped / summoning_sick /
+        //      damage / counters / attached_to / exiled_with_source
+        //      all cleared).
+        //   4. Set zone = ZONE_HAND; push to the controller's hand.
+        //      Python's no-agent path takes this branch regardless
+        //      of whether the top card is a land — `put_on_
+        //      battlefield` initialises to False and only flips to
+        //      True if `is_land && agent is not None && agent.
+        //      choose_yes_no(...)` (`effects/generic/library_lookat
+        //      .py:332-337`). With no agent surface on Rust, the
+        //      gate is never entered, so every card (land or non-
+        //      land) goes to hand.
+        //
+        // **Agent-yes branch — HONEST-STOPPED.** Python's land+
+        // agent-yes branch routes the land through `put_into_
+        // battlefield` so landfall + other ETB triggers fire cleanly
+        // (`effects/generic/library_lookat.py:340-348`). Rust has no
+        // agent surface and no library-to-bf-with-ETB substrate wired
+        // into the Effect dispatcher today; this branch is honest-
+        // stopped per Cycle 1 scope (same shape as Boilerbilges
+        // Ripper / Terrapact Intimidator agent gates). The cross-
+        // engine probe drives BOTH engines with no agent surface, so
+        // the byte-equal observable holds on the no-agent path.
+        // Documented as a deliberate divergence in
+        // `docs/SEARCH_LIMITATIONS.md`.
+        //
+        // **CR 400.7 zone-change reset.** The popped card gets
+        // tapped / summoning_sick / damage / counters / attached_to /
+        // exiled_with_source all cleared on the move to hand (mirrors
+        // the `TerritorialBruntarLandfallEffect` /
+        // `FanaticOfTheHarrowingETBEffect` / Mill / DestroyTarget
+        // reset shape). Python's `PeekTopMayBattlefieldIfLandElse
+        // Hand` also resets these by virtue of moving through the
+        // engine's standard zone-move pipeline.
+        Effect::PeekTopMayBattlefieldIfLandElseHand => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // 2. Library-empty: silent no-op.
+            if state.players[controller_idx].library.is_empty() {
+                return Ok(());
+            }
+            // 3. Pop library[0]; CR 400.7 zone-change reset.
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].library);
+            let mut obj = lib_mut.remove(0);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            // 4. Push to hand (no-agent branch — land or non-land
+            // both go to hand on this path).
+            Arc::make_mut(&mut state.players[controller_idx].hand)
+                .push(obj);
+        }
     }
     Ok(())
 }

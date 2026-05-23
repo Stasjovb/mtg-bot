@@ -7176,6 +7176,105 @@ pub enum Effect {
     /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
     /// reconstructs `ScheduleSelfSacAtNextEndStep()`.
     ScheduleSelfSacAtNextEndStep,
+    /// **Wickerfolk Thresher Cycle 1 closure (2026-05-23).** Mirrors
+    /// Python's `PeekTopMayBattlefieldIfLandElseHand` (parameterless
+    /// frozen dataclass at `effects/generic/library_lookat.py:296`).
+    /// Wickerfolk Thresher (`{3}{G}` Artifact Creature — Scarecrow,
+    /// 5/4, DSK) carries the Delirium attack trigger body: "Whenever
+    /// this creature attacks, if there are four or more card types
+    /// among cards in your graveyard, look at the top card of your
+    /// library. If it's a land card, you may put it onto the
+    /// battlefield. If you don't put the card onto the battlefield,
+    /// put it into your hand."
+    ///
+    /// **Multi-gated card (effect_uncovered +
+    /// nonsafe_triggered_ability).** Per the round-58 subsystem-
+    /// attribution classifier, Wickerfolk Thresher is multi-gated:
+    /// this Rust variant closes the `effect_uncovered` gate
+    /// (`PeekTopMayBattlefieldIfLandElseHand` moves from
+    /// `missing_effect_classes` to covered via the 1:1 identity-
+    /// mapping rule in `effect_coverage.map_rust_to_python`), but
+    /// the `nonsafe_triggered_ability` gate KEEPS the card multi-
+    /// gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is
+    /// deliberately NOT widened — see the safe-trigger-vs-per-card
+    /// distinction the Genemorph Imago / Fanatic of the Harrowing /
+    /// Boilerbilges Ripper / Comet Crawler / Terrapact Intimidator /
+    /// Territorial Bruntar precedent established). The card still
+    /// flips to PROBED tier through the dedicated per-card real-EoE
+    /// byte-equal cross-engine probe
+    /// (`tests/test_wickerfolk_thresher_parity.py`).
+    ///
+    /// **Field-free unit variant** (the `FanaticOfTheHarrowingETB
+    /// Effect` / `BoilerbilgesRipperETBEffect` / `MutinousMassacre
+    /// Effect` / `TerritorialBruntarLandfallEffect` Tier-A unit-
+    /// variant idiom). The Python class is a parameterless frozen
+    /// dataclass; no constructor args.
+    ///
+    /// **Resolve semantics (mirrors `PeekTopMayBattlefieldIfLandElse
+    /// Hand.resolve` at `effects/generic/library_lookat.py:320-355`).**
+    /// The Python class walks:
+    ///   1. Source-controller resolution (this Rust mirror uses the
+    ///      5-zone walk + stack scan pattern; Python's ATTACKS
+    ///      trigger dispatch already passes `controller_id` directly).
+    ///   2. If the source-controller's library is empty: silent
+    ///      no-op (Python: `if not p.library: return`).
+    ///   3. Peek `library[0]` (top); look up `printing.is_land`
+    ///      (Python: `top.printing.is_land` reads `"Land" in
+    ///      card_types` at `cards/base.py:1021`).
+    ///   4. If the top card is a land AND the controller has an
+    ///      agent, ask the agent `choose_yes_no(...)`. **Rust has
+    ///      no agent surface** today, so this gate ALWAYS falls
+    ///      through to the no-agent branch (mirrors the
+    ///      `BoilerbilgesRipperETBEffect` / `TerrapactIntimidator
+    ///      ETBEffect` no-agent gate-3 precedent). The cross-engine
+    ///      probe drives both engines with no agent surface; the
+    ///      observable byte-equality holds.
+    ///   5. Pop `library[0]`; CR 400.7 zone-change reset on the
+    ///      popped object (tapped / summoning_sick / damage /
+    ///      counters / attached_to / exiled_with_source all cleared).
+    ///   6. **No-agent branch (Cycle 1 landed).** Top card goes to
+    ///      hand — whether land or non-land. Mirrors Python's
+    ///      `else: top.zone = Zone.HAND; p.hand.append(top)` branch
+    ///      (`effects/generic/library_lookat.py:349-355`) when
+    ///      `put_on_battlefield == False`.
+    ///   7. **Agent-yes branch — HONEST-STOPPED.** Python's
+    ///      land+agent-yes branch routes the land through
+    ///      `put_into_battlefield` so landfall + other ETB triggers
+    ///      fire cleanly. Rust has no agent surface and no
+    ///      "land-onto-battlefield-from-library" substrate with ETB
+    ///      fan-out wired into the Effect dispatcher today; this
+    ///      branch is honest-stopped per Cycle 1 scope (same shape
+    ///      as Boilerbilges Ripper / Terrapact Intimidator agent
+    ///      gates). Documented as a deliberate divergence in
+    ///      `docs/SEARCH_LIMITATIONS.md`.
+    ///
+    /// **Source-finder dispatch (5-zone walk + stack scan).** Mirrors
+    /// the `FanaticOfTheHarrowingETBEffect` /
+    /// `TerritorialBruntarLandfallEffect` / `DiscardSelf` /
+    /// `EachOpponentDiscards` source-finder convention; the ATTACKS
+    /// trigger dispatch already routes the source's controller, but
+    /// the 5-zone walk is defense-in-depth for the synthetic carrier
+    /// probe path. Source not found anywhere = silent fizzle.
+    ///
+    /// **Library-empty path.** Mirrors `Effect::Mill` — if the
+    /// library is empty at peek time, the resolve silently stops.
+    /// CR 704.5b "draw from empty library" does NOT apply here —
+    /// the effect is a peek-and-route, not a draw.
+    ///
+    /// **No per-card event dispatch.** Python's `state.log.append`
+    /// is text-only observability — no event fan-out. The Rust
+    /// mirror skips `dispatch_event` (the no-agent branch routes the
+    /// card to hand; the existing engine has no `Event::PeeksCard`
+    /// or `Event::PutInHandFromLibrary` to fire).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// no fields. Round-trip dict-shape: `{"kind":
+    /// "peek_top_may_battlefield_if_land_else_hand"}` (only `kind`
+    /// emitted). The bridge `_ta_dict_to_python_effect` arm at
+    /// `cross_engine.py` reconstructs
+    /// `PeekTopMayBattlefieldIfLandElseHand()`.
+    PeekTopMayBattlefieldIfLandElseHand,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10789,6 +10888,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "schedule_self_sac_at_next_end_step" => {
             Ok(Effect::ScheduleSelfSacAtNextEndStep)
         }
+        // **Wickerfolk Thresher Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's `PeekTopMayBattlefieldIfLandElseHand`
+        // (`effects/generic/library_lookat.py:296`) is a parameterless
+        // frozen dataclass. Round-trip dict shape: `{"kind":
+        // "peek_top_may_battlefield_if_land_else_hand"}` (no other
+        // fields). Sibling of the `FanaticOfTheHarrowingETBEffect` /
+        // `MutinousMassacreEffect` / `BoilerbilgesRipperETBEffect` /
+        // `TerritorialBruntarLandfallEffect` field-free unit-variant
+        // idiom.
+        "peek_top_may_battlefield_if_land_else_hand" => {
+            Ok(Effect::PeekTopMayBattlefieldIfLandElseHand)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -12446,7 +12557,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand"
         ))),
     }
 }
@@ -15520,6 +15631,14 @@ pub(crate) fn effect_to_pydict<'py>(
         // kind.
         Effect::ScheduleSelfSacAtNextEndStep => {
             d.set_item("kind", "schedule_self_sac_at_next_end_step")?;
+        }
+        // **Wickerfolk Thresher Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `PeekTopMayBattlefieldIfLandElseHand`
+        // dict shape; the bridge dict→Python arm in
+        // `cross_engine.py` consumes the same one-key shape.
+        Effect::PeekTopMayBattlefieldIfLandElseHand => {
+            d.set_item("kind", "peek_top_may_battlefield_if_land_else_hand")?;
         }
     }
     Ok(d)

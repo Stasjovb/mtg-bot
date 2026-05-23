@@ -11334,6 +11334,76 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ScheduleSelfSacAtNextEndStep,
         )
         return ScheduleSelfSacAtNextEndStep()
+    if kind == "peek_top_may_battlefield_if_land_else_hand":
+        # **Wickerfolk Thresher Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::PeekTopMayBattlefieldIfLandElseHand`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"peek_top_may_battlefield_if_land_else_hand"``; resolve in
+        # state_ops_resolve.rs mirrors Python's no-agent branch byte-
+        # equal — top of library moves to hand whether land or non-
+        # land. The agent-yes / land-onto-battlefield-with-ETB branch
+        # is honest-stopped on the Rust side; see SEARCH_LIMITATIONS.md).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "peek_top_may_battlefield_if_land_else_hand"}``.
+        # Python's ``PeekTopMayBattlefieldIfLandElseHand``
+        # (effects/generic/library_lookat.py:296) is a frozen
+        # dataclass with no constructor parameters.
+        #
+        # **Resolve semantics — no-agent branch byte-equal.**
+        # Python's ``PeekTopMayBattlefieldIfLandElseHand.resolve``
+        # (effects/generic/library_lookat.py:320-355) peeks the
+        # controller's library top; if it's a land AND the controller
+        # has an agent, asks the agent ``choose_yes_no(...)`` whether
+        # to put the land onto the battlefield (firing landfall + any
+        # other ETB triggers). On the agent-yes branch the land enters
+        # via ``put_into_battlefield``; on any other branch (non-land
+        # top, agent-no, no agent at all) the top card goes to the
+        # controller's hand. The Rust mirror has no agent surface, so
+        # the no-agent branch is the only path exercised — the top
+        # card always moves library→hand. Empty-library = silent
+        # no-op on both sides.
+        #
+        # **DISTINCTION from Territorial Bruntar / Boilerbilges
+        # Ripper.** Territorial Bruntar's landfall walks the library
+        # exiling cards (zone-change observable); Boilerbilges Ripper
+        # asks the controller's agent for a yes/no sac choice (the
+        # no-agent path is silent no-op). Wickerfolk Thresher's
+        # Delirium attack body is the third shape in this idiom: a
+        # library peek + agent-gated route + hand fallback. All three
+        # have unit-variant Effect shapes on both sides; all three
+        # flip to PROBED via a dedicated per-card real-EoE byte-equal
+        # cross-engine probe driving the no-agent branch.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Wickerfolk
+        # Thresher as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``PeekTopMayBattlefieldIfLandElseHand`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-
+        # gated at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened —
+        # the per-card real-EoE probe in
+        # ``tests/test_wickerfolk_thresher_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Real test-pool consumer**: Wickerfolk Thresher — Artifact
+        # Creature — Scarecrow ({3}{G}, 5/4) with the Delirium attack
+        # trigger "Whenever this creature attacks, if there are four
+        # or more card types among cards in your graveyard, look at
+        # the top card of your library. If it's a land card, you may
+        # put it onto the battlefield. If you don't put the card
+        # onto the battlefield, put it into your hand." Sourced from
+        # DSK (data/duskmourn.json); admitted into the active
+        # ``OracleParserCardSource`` printings without any pool gate.
+        from mtg_bot.effects.generic.library_lookat import (
+            PeekTopMayBattlefieldIfLandElseHand,
+        )
+        return PeekTopMayBattlefieldIfLandElseHand()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
