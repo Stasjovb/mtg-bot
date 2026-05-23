@@ -11755,6 +11755,103 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``OracleParserCardSource`` printings without any pool gate.
         from mtg_bot.effects.bespoke import PossibilityTechnicianETBEffect
         return PossibilityTechnicianETBEffect()
+    if kind == "owner_puts_target_warped_exile_card_on_bottom_of_library":
+        # **Blade of the Swarm Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary``
+        # (cards.rs field-free UNIT variant; parser
+        # ``"owner_puts_target_warped_exile_card_on_bottom_of_library"``;
+        # resolve in state_ops_resolve.rs mirrors Python's
+        # warp-exile-to-library-bottom body byte-equal — reads the
+        # cast-time-bound target via
+        # ``current_resolve_payload_target_id`` (the Phase-1 single-
+        # target pattern), scans every player's exile zone for the
+        # bound id with ``warped == true``, removes from owner's exile,
+        # clears the ``warped`` flag, sets ``zone = LIBRARY``, pushes
+        # to bottom of owner's library; silent fizzle on None payload /
+        # not-found / not-warped — mirrors Python's
+        # ``effects/generic/zone_moves.py:174-209`` resolve).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "owner_puts_target_warped_exile_card_on_bottom_of_
+        # library"}``. Python's
+        # ``OwnerPutsTargetWarpedExileCardOnBottomOfLibrary``
+        # (effects/generic/zone_moves.py:144) is a frozen dataclass
+        # with no constructor parameters.
+        #
+        # **Resolve semantics — warp-exile-to-library-bottom byte-
+        # equal.** Python's
+        # ``OwnerPutsTargetWarpedExileCardOnBottomOfLibrary.resolve``
+        # (effects/generic/zone_moves.py:174-209) scans every player's
+        # exile for the target id; re-checks ``warped == True`` at
+        # resolve time (CR 608.2b — a targeted ability whose target
+        # has ceased to satisfy the typed filter fizzles); removes the
+        # warped card from owner's exile; clears the warp flag; sets
+        # ``zone = Zone.LIBRARY``; appends to owner's library
+        # (bottom). The Rust mirror ships every observable byte-equal
+        # — the same cast-time bind via
+        # ``current_resolve_payload_target_id`` (Phase-1 single-target
+        # pattern, the proven
+        # ``SeedshipImpactEffect`` / ``DepressurizeEffect`` /
+        # ``DestroyTargetArtifactOrTappedCreature`` precedent).
+        #
+        # **Warp substrate distinction.** This bridge arm closes the
+        # warp-exile-REMOVAL half (Blade of the Swarm's mode 1 reads
+        # ``warped`` and bottom-decks). The warp-exile-ADD half is
+        # already live (``Effect::WarpExileSelf`` at
+        # ``state_ops_resolve.rs:18534``); the cast-from-warp-exile
+        # surface lives at ``state_ops_legal.rs:2638-2683``. Blade of
+        # the Swarm's effect does NOT exercise the ``warp_cost`` cast
+        # pipeline (which remains the multi-cycle substrate
+        # intentionally NOT closed by this cycle — see Possibility
+        # Technician / Boilerbilges Ripper / Codecracker Hound).
+        #
+        # **DISTINCTION from ChooseOneMode wrapper.** Blade of the
+        # Swarm's printed ETB is a ChooseOneMode with two modes
+        # (mode 0: +2 +1/+1 counters via ``PutPlusOneCounterOnSelf``;
+        # mode 1: this warp-exile-to-library-bottom body). The
+        # ``ChooseOneMode`` Rust substrate + bridge arm is already
+        # live; this Cycle 1 closes the missing leaf
+        # (``OwnerPutsTargetWarpedExileCardOnBottomOfLibrary``) so the
+        # full ETB shape is bridgeable. The probe drives mode 1
+        # specifically via the cast-time chosen-mode bind
+        # (``current_resolve_chosen_mode_idx == 1``).
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Blade of the
+        # Swarm as multi-gated across TWO gates
+        # (``effect_uncovered`` + ``nonsafe_triggered_ability``). This
+        # bridge arm closes the ``effect_uncovered`` gate at the
+        # covered-set level
+        # (``OwnerPutsTargetWarpedExileCardOnBottomOfLibrary`` flips
+        # from ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-gated
+        # at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened — the
+        # per-card real-EoE probe in
+        # ``tests/test_blade_of_the_swarm_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Probe path.** The probe seats a warped exile card on both
+        # engines (Python: ``obj.warped = True``; Rust: synthetic
+        # ``set_warped`` test helper landed alongside this Cycle 1),
+        # seats Blade of the Swarm on the bf, fires the ETB trigger
+        # with mode 1 chosen + the warped-exile-card target bound,
+        # and pins the bottom-deck observable + the cleared warp flag.
+        #
+        # **Real test-pool consumer**: Blade of the Swarm —
+        # Creature — Insect Assassin ({3}{B}, 3/1) with the ETB
+        # ChooseOneMode "When this creature enters, choose one — • Put
+        # two +1/+1 counters on this creature. • Put target exiled
+        # card with warp on the bottom of its owner's library."
+        # Sourced from EoE (data/edge_of_eternities.json); admitted
+        # into the active ``OracleParserCardSource`` printings without
+        # any pool gate.
+        from mtg_bot.effects.generic.zone_moves import (
+            OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
+        )
+        return OwnerPutsTargetWarpedExileCardOnBottomOfLibrary()
     if kind == "schedule_self_sac_at_next_end_step":
         # **Attack-in-the-Box Cycle 1 (2026-05-23).** Rust substrate
         # ``Effect::ScheduleSelfSacAtNextEndStep`` (cards.rs field-free

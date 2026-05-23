@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **404 / 475 EoE cards (85.1%) are byte-equal at the Effect+bridge level**; of those, **286 (60.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 118 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **405 / 475 EoE cards (85.3%) are byte-equal at the Effect+bridge level**; of those, **286 (60.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 119 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **71 (14.9%)** are BLOCKED, broken out below.
+- **70 (14.7%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -17,11 +17,11 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | Tier | Count | % of pool |
 |---|---:|---:|
 | PROBED byte-equal | 286 | 60.2% |
-| Effect+bridge covered (not individually probed) | 118 | 24.8% |
+| Effect+bridge covered (not individually probed) | 119 | 25.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 71 | 14.9% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 70 | 14.7% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -339,7 +339,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - (none)
 
-## BLOCKED — subsystem-gated / Effect-uncovered (71)
+## BLOCKED — subsystem-gated / Effect-uncovered (70)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
@@ -348,7 +348,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | BECOMES_TAPPED event (unbridged) | 1 | 0 | 1 | 14,585 | 0 | contained |
 | Cost-reduction substrate | 5 | 5 | 0 | 53,648 | 53,648 | medium |
 | Non-basic land substrate | 2 | 2 | 0 | 7,688 | 7,688 | medium |
-| warp_cost (declined cost-mechanic) | 7 | 0 | 7 | 46,209 | 0 | medium |
+| warp_cost (declined cost-mechanic) | 6 | 0 | 6 | 39,844 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
 | Static / layered abilities | 9 | 2 | 7 | 21,051 | 0 | sprawling |
 | Station / Spacecraft | 8 | 1 | 7 | 41,281 | 5,938 | sprawling |
@@ -356,11 +356,11 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 30 | 0 | 30 | 34,470 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 55 | 3 | 52 | 137,574 | 9,332 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 54 | 3 | 51 | 129,080 | 9,332 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
-| Non-safe triggered ability (unbridged event/shape) | 26 | 0 | 26 | 91,470 | 0 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 25 | 0 | 25 | 82,976 | 0 | diffuse |
 
-**Reconciliation:** 71 subsystem-gated = 14 single-gated + 57 multi-gated; the per-subsystem `1gate` column sums to 14 (== single-gated total). The breakout partitions exactly the same 71 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 70 subsystem-gated = 14 single-gated + 56 multi-gated; the per-subsystem `1gate` column sums to 14 (== single-gated total). The breakout partitions exactly the same 70 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (1):** `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -373,8 +373,8 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Atomic Microsizer
 - Auxiliary Boosters
 - Baseball Bat
-- Blade of the Swarm
 - Blast Zone
+- Burgeoning
 - Charred Foyer // Warped Space
 - Chorale of the Void
 - Codecracker Hound
@@ -412,7 +412,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Osseous Sticktwister
 - Petrified Field
 - Pinnacle Starcage
-- Possibility Technician
 - Rampaging Soulrager
 - Reflecting Pool
 - Robe of Stars
@@ -426,5 +425,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Sporogenic Infection
 - Starfield Vocalist
 - Swarm Culler
-- … and 11 more
+- Swarmyard
+- … and 10 more
 

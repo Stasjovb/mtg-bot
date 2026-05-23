@@ -7660,6 +7660,92 @@ pub enum Effect {
     /// bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
     /// reconstructs `PossibilityTechnicianETBEffect()`.
     PossibilityTechnicianETBEffect,
+    /// **Blade of the Swarm Cycle 1 (2026-05-23).** Blade of the Swarm
+    /// `{3}{B}` 3/1 Creature — Insect Assassin (EoE — sourced from
+    /// `data/edge_of_eternities.json`). ETB body is a ChooseOneMode
+    /// with two modes:
+    ///   * Mode 0: "Put two +1/+1 counters on this creature."
+    ///     (`PutPlusOneCounterOnSelf{amount: 2}` — Rust substrate
+    ///     `Effect::PutPlusOneCounterOnSelf` already lives in cards.rs).
+    ///   * Mode 1: "Put target exiled card with warp on the bottom of
+    ///     its owner's library." (THIS variant — the Cycle 1 closure).
+    /// Mirrors Python's
+    /// `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` (parameterless
+    /// frozen dataclass at `effects/generic/zone_moves.py:144`).
+    ///
+    /// **Multi-gated card (effect_uncovered + nonsafe_triggered_ability).**
+    /// Per the round-58 subsystem-attribution classifier, Blade of the
+    /// Swarm is multi-gated across TWO gates: this Rust variant closes
+    /// the `effect_uncovered` gate
+    /// (`OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` moves from
+    /// `missing_effect_classes` to covered via the 1:1 identity-mapping
+    /// rule in `effect_coverage.map_rust_to_python`), but the
+    /// `nonsafe_triggered_ability` gate KEEPS the card multi-gated at
+    /// the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is deliberately
+    /// NOT widened — see the safe-trigger-vs-per-card distinction the
+    /// Boilerbilges Ripper / Fanatic of the Harrowing / Possibility
+    /// Technician precedent established). The card still flips to
+    /// PROBED tier through the dedicated per-card real-EoE byte-equal
+    /// cross-engine probe (`tests/test_blade_of_the_swarm_parity.py`)
+    /// — same classifier-bypass precedent that closed Splitskin Doll /
+    /// Boilerbilges Ripper / Possibility Technician / Terrapact
+    /// Intimidator etc.
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `ExorciseEffect` / `PossibilityTechnicianETBEffect` Tier-A
+    /// unit-variant idiom). The Python class is a parameterless frozen
+    /// dataclass; no constructor args.
+    ///
+    /// **Resolve semantics (mirrors
+    /// `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary.resolve` at
+    /// `effects/generic/zone_moves.py:174-209` byte-equal).** The
+    /// resolve arm:
+    ///   1. Reads the cast-time-bound target via
+    ///      `current_resolve_payload_target_id` (the proven Phase-1
+    ///      single-target pattern — `SeedshipImpactEffect` /
+    ///      `DepressurizeEffect` / `DestroyTargetArtifactOrTappedCreature`
+    ///      precedent). `None` payload → silent fizzle (mirrors
+    ///      Python's `if not targets: return`).
+    ///   2. Scans every player's exile zone for the bound id; the
+    ///      object must carry `warped == true` (the same re-check
+    ///      Python performs at `zone_moves.py:200-201` —
+    ///      `if not obj.warped: return`). Not-found or not-warped =
+    ///      silent fizzle.
+    ///   3. Removes the warped exile card from the owner's exile zone.
+    ///   4. Clears the `warped` flag (mirrors Python's
+    ///      `obj.warped = False` at `zone_moves.py:203`).
+    ///   5. Sets `obj.zone = ZONE_LIBRARY`.
+    ///   6. Pushes the card to the BOTTOM of the owner's library
+    ///      (`library.push(obj)` — post-CE3 convention is library[0] =
+    ///      TOP / library[-1] = BOTTOM, matching Python's
+    ///      `owner.library.append(obj)` at `zone_moves.py:205`).
+    ///
+    /// **Owner-as-controller convention preserved.** The exile zone is
+    /// owner-keyed in Python (`for p in state.players: for c in
+    /// p.exile`), and Rust's exile zones likewise live per-player
+    /// (`state.players[idx].exile`); first-slice synthetic states never
+    /// split owner from controller, so the player whose exile contains
+    /// the target IS the card's owner. The destination is the owner's
+    /// library bottom (CR 401.1 "into its owner's library").
+    ///
+    /// **Warp substrate distinction.** This arm READS the `warped`
+    /// flag (set by `Effect::WarpExileSelf` at
+    /// `state_ops_resolve.rs:18534`); it does NOT exercise the
+    /// `warp_cost` cast pipeline. The `warped` substrate itself is
+    /// already in Rust (per the Codecracker Hound / Boilerbilges
+    /// Ripper closures — see `state_ops_legal.rs:2638-2683` for the
+    /// cast-from-warp-exile surface). Blade of the Swarm's effect is
+    /// the warp-exile-REMOVAL counterpart to the warp-exile-add
+    /// substrate.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "owner_puts_target_warped_exile_card_on_bottom_of_library"}`
+    /// (only `kind` emitted). The bridge `_ta_dict_to_python_effect`
+    /// arm at `cross_engine.py` reconstructs
+    /// `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary()`.
+    OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     /// **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedules a delayed
     /// `Effect::SacrificeSourceDelayed` trigger keyed at the current
     /// turn so the source is sacrificed at the next end step. Mirrors
@@ -11553,6 +11639,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // idiom.
         "possibility_technician_etb_effect" => {
             Ok(Effect::PossibilityTechnicianETBEffect)
+        }
+        // **Blade of the Swarm Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's
+        // `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary`
+        // (`effects/generic/zone_moves.py:144`) is a parameterless
+        // frozen dataclass. Round-trip dict shape: `{"kind":
+        // "owner_puts_target_warped_exile_card_on_bottom_of_library"}`
+        // (no other fields). Sibling of the `MutinousMassacreEffect` /
+        // `PossibilityTechnicianETBEffect` field-free unit-variant
+        // idiom; the warp-exile-removal counterpart to the existing
+        // warp-exile-add substrate (`Effect::WarpExileSelf`).
+        "owner_puts_target_warped_exile_card_on_bottom_of_library" => {
+            Ok(Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary)
         }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Unit-variant
         // parse arm — Python's `ScheduleSelfSacAtNextEndStep`
@@ -16539,6 +16638,18 @@ pub(crate) fn effect_to_pydict<'py>(
         // consumes the same one-key shape.
         Effect::PossibilityTechnicianETBEffect => {
             d.set_item("kind", "possibility_technician_etb_effect")?;
+        }
+        // **Blade of the Swarm Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless
+        // `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` dict shape;
+        // the bridge dict→Python arm in `cross_engine.py` consumes the
+        // same one-key shape.
+        Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary => {
+            d.set_item(
+                "kind",
+                "owner_puts_target_warped_exile_card_on_bottom_of_library",
+            )?;
         }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Field-free
         // unit-variant to_pydict arm — only `kind` emitted. Mirrors

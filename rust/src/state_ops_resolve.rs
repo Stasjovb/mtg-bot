@@ -21097,6 +21097,98 @@ fn apply_effect(
             Arc::make_mut(&mut state.players[controller_idx].exile)
                 .push(obj);
         }
+        // **Blade of the Swarm Cycle 1 (2026-05-23).** Mirrors Python's
+        // `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary.resolve`
+        // (`effects/generic/zone_moves.py:174-209`) byte-equal on the
+        // OBSERVABLE zone-change half. Mode 1 of Blade of the Swarm's
+        // ETB ChooseOneMode.
+        //
+        // **Resolve steps (mirror Python).**
+        //   1. Read the cast-time-bound target via
+        //      `current_resolve_payload_target_id` (the proven Phase-1
+        //      single-target pattern — `SeedshipImpactEffect` /
+        //      `DepressurizeEffect` / `DestroyTargetArtifactOrTappedCreature`
+        //      precedent). `None` payload → silent fizzle (mirrors
+        //      Python's `if not targets: return`). The synthetic-test
+        //      `push_to_stack_with_target` API seats the target id;
+        //      bare `push_to_stack` (no target) → None payload →
+        //      silent fizzle.
+        //   2. Scan every player's exile zone for the bound id; the
+        //      object must carry `warped == true` (the same re-check
+        //      Python performs at `zone_moves.py:200-201` —
+        //      `if not obj.warped: return`). Not-found or not-warped =
+        //      silent fizzle (mirrors Python's `if obj is None or
+        //      owner is None: return` + the `if not obj.warped:
+        //      return` re-check).
+        //   3. Remove the warped exile card from the owner's exile.
+        //   4. Clear the `warped` flag (mirrors Python's
+        //      `obj.warped = False` at `zone_moves.py:203`).
+        //   5. Set `obj.zone = ZONE_LIBRARY`.
+        //   6. Push the card to the BOTTOM of the owner's library
+        //      (`library.push(obj)` — post-CE3 convention is
+        //      library[0] = TOP / library[-1] = BOTTOM, matching
+        //      Python's `owner.library.append(obj)` at
+        //      `zone_moves.py:205`).
+        //
+        // **CR 400.7 zone-change reset.** The card is moving from
+        // EXILE to LIBRARY, which IS a zone change — but it's NOT a
+        // permanent leaving the battlefield. Python's `resolve` only
+        // mutates `warped`, `zone`, and library placement; it doesn't
+        // touch `tapped` / `damage` / `counters` because the card was
+        // in exile (not on the battlefield) so those fields were
+        // already zero. We mirror Python verbatim — no extra resets
+        // beyond what Python performs.
+        //
+        // **Owner-as-controller convention.** Exile is owner-keyed on
+        // both engines; we find the target by id across all players'
+        // exile zones and use that player's library for the bottom
+        // destination. First-slice synthetic states never split owner
+        // from controller, so this is exact for the probe.
+        Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary => {
+            let _ = source_obj_id;
+            // 1. Read cast-time-bound target. None → silent fizzle.
+            let Some(target_id) = state.current_resolve_payload_target_id
+            else {
+                return Ok(());
+            };
+            // 2. Scan every player's exile for the bound id with
+            //    `warped == true`. Both conditions must hold.
+            let owner_idx: Option<usize> = state
+                .players
+                .iter()
+                .enumerate()
+                .find_map(|(pidx, p)| {
+                    p.exile.iter().find_map(|o| {
+                        if o.id == target_id && o.warped {
+                            Some(pidx)
+                        } else {
+                            None
+                        }
+                    })
+                });
+            let Some(owner_idx) = owner_idx else {
+                return Ok(()); // not found or not warped: silent fizzle
+            };
+            // 3. Remove from owner's exile.
+            let exile_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[owner_idx].exile);
+            let pos = exile_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect(
+                    "target_id was just found in exile but missing on \
+                     re-scan",
+                );
+            let mut obj = exile_mut.remove(pos);
+            // 4. Clear warped flag.
+            obj.warped = false;
+            // 5. Set zone to LIBRARY.
+            obj.zone = ZONE_LIBRARY;
+            // 6. Push to bottom of owner's library (library[-1] =
+            //    BOTTOM per post-CE3 convention; Python uses
+            //    `owner.library.append(obj)`).
+            Arc::make_mut(&mut state.players[owner_idx].library).push(obj);
+        }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedule a
         // delayed `SacrificeSourceDelayed` trigger keyed at the
         // current turn so the source is sacrificed at the next end
@@ -22197,6 +22289,16 @@ impl GameState {
         // Pick a fresh obj_id: 1 + max across all zones on both
         // players. Synthetic-state ids start at 0 and pack densely;
         // this guarantees no collision regardless of seed shape.
+        //
+        // **Blade of the Swarm Cycle 1 (2026-05-23) — exile scan
+        // added.** The pre-Cycle-1 scan missed `exile` (only
+        // hand / library / battlefield / graveyard), which silently
+        // re-issued an id whenever a prior injection landed in exile
+        // (impossible before this cycle since exile wasn't a
+        // supported `target_zone`; now that exile injection is
+        // legal, the scan must cover it to keep id collisions
+        // impossible). Same defensive shape as the original four-
+        // zone scan.
         let mut next_id: u32 = 0;
         for player in &self.players {
             for zone in [
@@ -22204,6 +22306,7 @@ impl GameState {
                 &player.library,
                 &player.battlefield,
                 &player.graveyard,
+                &player.exile,
             ] {
                 for obj in zone.iter() {
                     if obj.id >= next_id {
@@ -22311,9 +22414,22 @@ impl GameState {
             ZONE_GRAVEYARD => {
                 Arc::make_mut(&mut player.graveyard).push(obj);
             }
+            ZONE_EXILE => {
+                // **Blade of the Swarm Cycle 1 (2026-05-23).** Extends
+                // injection support to the EXILE zone so per-card
+                // probes can pre-seed exile cards directly. The
+                // warp-exile-removal substrate (Blade of the Swarm's
+                // mode-1 effect) needs an exile-seated card whose
+                // `warped` flag is then stamped via the new
+                // `set_warped` test helper. No back-compat impact:
+                // every prior caller used ZONE_HAND / ZONE_LIBRARY /
+                // ZONE_BATTLEFIELD / ZONE_GRAVEYARD, which keep their
+                // exact prior shape.
+                Arc::make_mut(&mut player.exile).push(obj);
+            }
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "register_and_inject_object: unsupported target_zone {other} (valid: 0-3)"
+                    "register_and_inject_object: unsupported target_zone {other} (valid: 0-3, 5)"
                 )));
             }
         }
@@ -22639,5 +22755,43 @@ impl GameState {
         }
         self.players[player_idx].noncreature_spells_cast_this_turn = value;
         Ok(())
+    }
+
+    /// **Blade of the Swarm Cycle 1 (2026-05-23) — test helper.**
+    /// Directly set `GameObject.warped = value` for an object in a
+    /// player's exile zone. The `warped` field is normally only
+    /// stamped by `Effect::WarpExileSelf` at the delayed end-step
+    /// trigger (the warp-exile-add half of the Warp keyword), but the
+    /// Blade-of-the-Swarm cross-engine probe needs to seat a
+    /// pre-warped exile card without exercising the full warp_cost
+    /// cast pipeline (which is the multi-cycle substrate
+    /// intentionally NOT closed by this cycle — see the Possibility
+    /// Technician / Boilerbilges Ripper precedent). Same shape /
+    /// validation as `set_spells_cast_this_turn` /
+    /// `set_artifacts_entered_under_your_control_this_turn`. Raises
+    /// `IndexError` for `player_idx >= 2`; raises `ValueError` for
+    /// `obj_id` not in the player's exile.
+    fn set_warped(
+        &mut self,
+        player_idx: usize,
+        obj_id: u32,
+        value: bool,
+    ) -> PyResult<()> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        let exile_mut: &mut Vec<GameObject> =
+            Arc::make_mut(&mut self.players[player_idx].exile);
+        for obj in exile_mut.iter_mut() {
+            if obj.id == obj_id {
+                obj.warped = value;
+                return Ok(());
+            }
+        }
+        Err(PyValueError::new_err(format!(
+            "obj_id {obj_id} not found in player {player_idx}'s exile zone"
+        )))
     }
 }

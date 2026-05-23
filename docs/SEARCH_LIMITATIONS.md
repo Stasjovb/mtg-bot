@@ -12884,6 +12884,181 @@ LANDED; Terrasymbiosis is now PROBED at the per-card parity layer
 `nonsafe_triggered_ability`).
 
 
+## Blade of the Swarm Cycle 1 LANDED — `Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` (unit) Effect half shipped byte-equal on warp-exile-to-library-bottom observable; warp-exile-REMOVAL counterpart to the existing warp-exile-ADD substrate (`WarpExileSelf`)
+
+**Single-cycle landing (2026-05-23,
+`feature/blade-of-the-swarm-cycle-1-p1`).** Blade of the Swarm —
+`{3}{B}` Creature — Insect Assassin, 3/1 (sourced from EoE
+`data/edge_of_eternities.json` via the active `OracleParserCardSource`).
+ETB body is a modal "choose one — • Put two +1/+1 counters on this
+creature. • Put target exiled card with warp on the bottom of its
+owner's library." This cycle closes the **mode-1** leaf
+(`OwnerPutsTargetWarpedExileCardOnBottomOfLibrary`); mode 0
+(`PutPlusOneCounterOnSelf{amount: 2}`) is already a Rust-live Effect
+substrate. Mirrors Python's parameterless frozen dataclass
+`OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` at
+`effects/generic/zone_moves.py:144`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary`
+     unit variant** (`rust/src/cards.rs`) — field-free unit variant
+     (same Tier-A idiom as `PossibilityTechnicianETBEffect` /
+     `BoilerbilgesRipperETBEffect` /
+     `FanaticOfTheHarrowingETBEffect`). Parse arm + `to_pydict` arm
+     in `cards.rs`; resolve arm in `state_ops_resolve.rs`. The
+     resolve arm reads the cast-time-bound target via
+     `current_resolve_payload_target_id` (the proven Phase-1
+     single-target pattern — `SeedshipImpactEffect` /
+     `DepressurizeEffect` /
+     `DestroyTargetArtifactOrTappedCreature` precedent), scans every
+     player's exile zone for the bound id with `warped == true`,
+     removes the card from the owner's exile, clears the warp flag,
+     sets `zone = ZONE_LIBRARY`, and pushes to the bottom of the
+     owner's library (post-CE3 convention library[-1] = BOTTOM
+     matching Python's `library.append(obj)`). None payload /
+     not-found / not-warped paths all silently fizzle (mirrors
+     Python's three early-return shapes at `zone_moves.py:180-201`).
+  2. **`set_warped(player_idx, obj_id, value)` pymethod test helper**
+     (`rust/src/state_ops_resolve.rs`) — Directly stamps
+     `GameObject.warped` on an exile-zone card without exercising
+     the full warp_cost cast pipeline. Same shape/validation as the
+     existing `set_spells_cast_this_turn` /
+     `set_artifacts_entered_under_your_control_this_turn` test
+     helpers. The probe uses it to seat a warped exile card before
+     the cross-engine compare.
+  3. **`register_and_inject_object` widened to support ZONE_EXILE**
+     (`rust/src/state_ops_resolve.rs`) — Pre-Cycle-1 the helper
+     supported zones 0-3 (hand / library / battlefield / graveyard);
+     this cycle adds ZONE_EXILE so per-card probes can pre-seed
+     exile cards directly. The id-allocation scan also gained an
+     exile-zone leg so a subsequent injection never re-issues an
+     id used by an exile-seated object. No back-compat impact —
+     every prior caller used zones 0-3 with unchanged byte-equal
+     behavior.
+  4. **Cross-engine bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the parameterless Python
+     `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary()` from the
+     `{"kind":
+     "owner_puts_target_warped_exile_card_on_bottom_of_library"}`
+     dict shape.
+  5. **Coverage 1:1 identity mapping.** The new Rust variant name
+     `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` matches the
+     Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes the class — closes the `effect_uncovered`
+     classifier gate at the covered-set level.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle on TWO gates → ONE gate.** Per the round-58 subsystem-
+attribution classifier, Blade of the Swarm is multi-gated on
+`effect_uncovered + nonsafe_triggered_ability`. The cycle closes
+the `effect_uncovered` gate (the
+`OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` Python class
+flips from `missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. **The card DOES move to PROBED tier through the
+dedicated per-card real-EoE byte-equal cross-engine probe**
+(`tests/test_blade_of_the_swarm_parity.py`), the same precedent as
+Splitskin Doll / Boilerbilges Ripper / Possibility Technician /
+Territorial Bruntar / Friendly Teddy / Endstone / Terrapact /
+Vaultguard / Arabella / Attack-in-the-Box / Wickerfolk Thresher /
+Enduring Curiosity / Terrasymbiosis / Ouroboroid established.
+
+**Warp substrate distinction — REMOVAL half, not ADD half.** This
+cycle closes the warp-exile-REMOVAL counterpart of the warp keyword:
+Blade of the Swarm's mode-1 effect READS the `warped` flag (set on
+exile cards by `Effect::WarpExileSelf` at
+`state_ops_resolve.rs:18534`) and bottom-decks the chosen card. It
+does NOT exercise the `warp_cost` cast pipeline (which is the
+multi-cycle substrate intentionally NOT closed by this cycle — see
+Possibility Technician / Boilerbilges Ripper / Codecracker Hound
+honest-stops, all three Warp-keyword-cards have their `warp_cost`
+gates open). Blade of the Swarm itself does NOT have the Warp
+keyword (per the explicit
+`test_blade_of_the_swarm_has_no_warp` regression pin in
+`test_pinnacle_blade.py:174-179`) — it BENEFITS from warped exile
+cards via mode 1, but isn't a warp-castable card itself.
+
+**Probe avoids the modal-envelope dispatch path.** The probe drives
+the BARE
+`Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` resolve
+through a synthetic Instant carrier (NOT through Blade's modal ETB
+wrapper). The modal-wrapper dispatch (`ChooseOneMode` cast-time mode
+binding) is already pinned in
+`tests/test_modal_chooseone_envelope_cycle2.py` (Cycle 2 of the
+ModalChooseOne envelope substrate plan); per the no-fallback-hybrid
+precedent, the per-card probe targets the new effect class
+specifically, not the modal envelope. The synthetic carrier seats
+`Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` directly
+as the spell's effect; the cast pipeline binds the warped-exile-
+card target at cast time via
+`current_resolve_payload_target_id`, and the resolve arm reads that
+target and bottom-decks byte-equal with Python's resolve.
+
+**HONEST-STOP: `nonsafe_triggered_ability` classifier gate NOT
+widened on the trajectory recognizer.** The
+`parity/trajectory.py::_python_ta_to_safe_dict` admit gate is
+INTENTIONALLY NOT widened to recognise Blade of the Swarm's modal
+ETB. That gate is about the production-deck bench admit set, a
+distinct concern from per-card real-EoE parity probes — same
+precedent as Splitskin Doll / Boilerbilges Ripper / Territorial
+Bruntar / Possibility Technician (the no-trajectory-widen residual).
+Closing the safe-trigger admit set for modal-creature-ETB triggers
+is its own substrate landing, deferred.
+
+  * **Failure mode**: an MCTS tree exercising "Blade of the Swarm
+    targets a warped exile card with its ETB mode 1" sees the
+    Python side fire the trigger through the production
+    `dispatch_event(Event.ENTERS)` path with modal-pick decision-
+    callback substrate. The Rust side has no equivalent agent-
+    callback for ETB-modal-pick; a synthetic-state probe drives the
+    bare leaf effect end-to-end, but a full-game-trajectory parity
+    probe would surface the modal-pick decision divergence at the
+    production-bench `_python_ta_to_safe_dict` admit gate. Per-card
+    per-cycle byte-equal-on-the-zone-change-half probe is the
+    convention.
+  * **Fix scope**: ~1 day. Widen `trajectory.py::
+    _python_ta_to_safe_dict` to recognise the modal-creature-ETB
+    shape AND emit a serialisable choose-mode decision in the
+    safe-trigger admit set. Requires the ChooseOneMode Cycle 5
+    envelope-side admit widen first (the substrate plan
+    `tests/test_modal_chooseone_envelope_cycle2.py` references).
+  * **Impact estimate**: small. Blade of the Swarm is a single card
+    in the EoE pool; the missing modal-pick action surface affects
+    strength by <0.5 winrate points on a deck-sized estimate,
+    within noise. Mode 1 is also typically a niche tactical pick
+    (only valuable when the opponent has a recurring warp threat in
+    exile), so the missing surface rarely fires in practice.
+
+**NO admit-set change — Equipment-style precedent does NOT apply.**
+Blade of the Swarm is a Creature (Insect Assassin); the
+spell-card-bridge admit set
+(`trajectory.py::_python_spell_effect_to_dict` + its §2 teeth) gates
+non-creature spells only. Per-card PROBED via the dedicated probe
+below; no admit-set change.
+
+**Probe path location**: `rust/src/cards.rs::Effect::Owner
+PutsTargetWarpedExileCardOnBottomOfLibrary` (Effect-class close +
+parse + to_pydict),
+`rust/src/state_ops_resolve.rs::apply_effect`
+(resolve arm — `current_resolve_payload_target_id` driven),
+`rust/src/state_ops_resolve.rs::GameState::set_warped` (test
+helper), `rust/src/state_ops_resolve.rs::GameState::register_and_
+inject_object` (ZONE_EXILE widen + id-scan exile leg),
+`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+(dict→Python bridge arm), `tests/test_blade_of_the_swarm_parity.py`
+(probes — parser SoT pin including the modal ETB shape, serializer
+round-trip, Rust to_pydict round-trip, covered-set membership, three
+Rust resolve-arm unit pins (happy path, target-absent fizzle,
+target-not-warped fizzle), real-EoE byte-equal cross-engine probe
+with id-alignment + summoning_sick + graveyard-symmetrisation
+normalisations). Per-card cycle LANDED; Blade of the Swarm is now
+PROBED at the per-card parity layer (despite the classifier multi-
+gate state staying True on `nonsafe_triggered_ability`).
+
+
 ## Possibility Technician Cycle 1 LANDED — `Effect::PossibilityTechnicianETBEffect` (unit) Effect half shipped byte-equal on zone-change observable; `play_from_exile_requires_kavu` flag honest-stopped (no Rust substrate); `warp_cost` gate also honest-stopped (genuinely multi-cycle substrate)
 
 **Single-cycle landing (2026-05-23,
