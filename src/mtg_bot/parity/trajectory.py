@@ -4192,6 +4192,14 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.delayed_actions import (
         SacrificeSourceDelayed,
     )
+    # **Terminal Velocity — Cycle 1 (2026-05-22).** Two new leaves for
+    # the Terminal Velocity Sorcery + the LTB damage-equal-to-MV-
+    # each-creature trigger body. Both are field-free dataclasses;
+    # both emit bare unit-variant dicts. Imports kept narrow.
+    from mtg_bot.effects.bespoke import (
+        TerminalVelocityEffect,
+        DealSelfMVDamageToEachCreature,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -4997,6 +5005,29 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # leaf the pool walker observes.
         if isinstance(eff, SacrificeSourceDelayed):
             return {"kind": "sacrifice_source_delayed"}
+        # **Terminal Velocity — Cycle 1 (2026-05-22).** Per-leaf
+        # serializer for ``TerminalVelocityEffect()`` — the field-free
+        # bespoke Sorcery body at ``effects/bespoke.py:3043``. The
+        # corresponding Rust ``Effect::TerminalVelocityEffect``
+        # variant + ``terminal_velocity_effect`` bridge arm in
+        # ``cross_engine.py`` flip Terminal Velocity into the spell-
+        # card-bridge admit set (Phase-3 ``(0, 0)``-shape wrath
+        # admit — same target grammar as Pyroclasm / Manifest Dread
+        # / Darkness; the §2 covered+bridged + round-trip-or-bail
+        # teeth carry the load).
+        if isinstance(eff, TerminalVelocityEffect):
+            return {"kind": "terminal_velocity_effect"}
+        # **Terminal Velocity — Cycle 1 (2026-05-22).** Per-leaf
+        # serializer for ``DealSelfMVDamageToEachCreature()`` — the
+        # LTB-trigger-body bespoke dataclass at
+        # ``effects/bespoke.py:2998``. Unit-variant — sibling of
+        # ``SacrificeSourceDelayed`` / ``WarpExileSelf``. Strictly for
+        # the round-trip dict-shape surface; the LTB body is spawned
+        # dynamically by ``TerminalVelocityEffect.resolve`` as the
+        # body of a ``GrantTriggeredAbility`` UEOT push, never as a
+        # static printing-trigger leaf the pool walker observes.
+        if isinstance(eff, DealSelfMVDamageToEachCreature):
+            return {"kind": "deal_self_mv_damage_to_each_creature"}
         if isinstance(eff, ReturnUpToNSmallCreaturesFromGraveyardWithCounters):
             if eff.max_n < 0 or eff.max_total_mv < 0:
                 return None

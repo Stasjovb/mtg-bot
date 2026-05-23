@@ -451,6 +451,22 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # ``RemoveChargeCountersFromSourceDelayed``. Override-mapping it
     # elsewhere would be wrong.
     "SacrificeSourceDelayed",
+    # **Terminal Velocity — Cycle 1 (2026-05-22).** Rust
+    # ``Effect::DealSelfMVDamageToEachCreature`` is the LTB-trigger
+    # body for Terminal Velocity: "When this permanent leaves the
+    # battlefield, it deals damage equal to its mana value to each
+    # creature." Python has the exact same-named class at
+    # ``effects/bespoke.py:2998`` (``DealSelfMVDamageToEachCreature``),
+    # but the parsed-pool vocab never observes it directly because
+    # it is NOT a printing's ``triggered_abilities`` member — it is
+    # spawned dynamically by ``TerminalVelocityEffect.resolve`` as
+    # the body of an ``ApplyEffect(GrantTriggeredAbility(...))`` UEOT
+    # push at ``effects/bespoke.py:3132-3142``. Same invisibility-to-
+    # the-static-walker shape as ``WarpExileSelf`` /
+    # ``RemoveChargeCountersFromSourceDelayed`` /
+    # ``SacrificeSourceDelayed``. Override-mapping it elsewhere
+    # would be wrong.
+    "DealSelfMVDamageToEachCreature",
 }
 
 

@@ -18749,6 +18749,230 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
         }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).** `{4}{R}{R}`
+        // Sorcery resolve arm. Mirrors Python's
+        // `TerminalVelocityEffect.resolve` at
+        // `effects/bespoke.py:3075-3160`.
+        //
+        // **Step 1 — qualifying-pool walk.** Walk the resolving
+        // controller's hand for artifact-or-creature cards (Python:
+        // `qualifying = [c for c in p.hand if c.printing.is_artifact
+        // or c.printing.is_creature]` at `bespoke.py:3090-3093`).
+        //
+        // **Step 2 — empty-pool dormancy = silent no-op.** If the
+        // qualifying pool is empty, return silently. Mirrors Python
+        // `if not qualifying: return` at `bespoke.py:3094-3099`. The
+        // cross-engine harness EMPTY-HAND path hits this branch
+        // identically on both engines for trivial byte-equal vacuous
+        // resolve.
+        //
+        // **Steps 3-6 — agent-driven put-from-hand + haste-UEOT +
+        // LTB-trigger-UEOT-grant + end-step sac — HONEST-STOP.** The
+        // remaining steps require both an agent-callback substrate
+        // (`choose_card_from_hand` — same shape as Python
+        // `bespoke.py:3104`) AND a UEOT grant-triggered-ability
+        // registry that Rust does not yet have (the only existing
+        // precedent is the narrow Perigee `GrantedDiesReturnTapped`
+        // marker; the broader registry's absence is documented by
+        // `Effect::GrantTriggeredAbilityUEOTRequiem`'s identical
+        // honest-stop no-op arm). Same RUST_AHEAD_OF_POOL pattern as
+        // the Requiem closure.
+        //
+        // When the agent-callback + UEOT grant-triggered-ability
+        // substrate lands in a future cycle, this arm flips to: pick
+        // qualifying card; move from hand to caster's bf; push a
+        // `UeotModifier::GrantKeyword { keyword: "haste" }`;
+        // register a UEOT layer-6 grant of the
+        // `Effect::DealSelfMVDamageToEachCreature` LTB trigger
+        // (sibling variant immediately below — already implemented);
+        // schedule a `DelayedTrigger { effect:
+        // Effect::SacrificeSourceDelayed, source_id: card.id,
+        // fire_at_turn: state.turn_number + (0 if active else 1),
+        // controller_id }`.
+        //
+        // **Cross-engine harness X=0-style dormancy.** Under
+        // `agent=None` on Python AND empty-hand on Rust, the resolve
+        // is byte-equal vacuous on both sides. Documented in
+        // `docs/SEARCH_LIMITATIONS.md` under the Terminal Velocity
+        // Cycle 1 LANDED block.
+        Effect::TerminalVelocityEffect => {
+            // Resolve controller (CR 119.5 / 608.2 — the "your hand"
+            // owner equals the source's controller). Mirrors the
+            // `AstelliReclaimerETBEffect` controller-resolution shape.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            if controller_idx >= state.players.len() {
+                return Ok(());
+            }
+            // Step 1: walk hand for artifact-or-creature qualifiers.
+            let qualifying_count = {
+                let player = &state.players[controller_idx];
+                player
+                    .hand
+                    .iter()
+                    .filter(|obj| {
+                        match state.registry.lookup(obj.printing_id) {
+                            Some(p) => {
+                                let is_artifact = p
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Artifact");
+                                let is_creature = p
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature");
+                                is_artifact || is_creature
+                            }
+                            None => false,
+                        }
+                    })
+                    .count()
+            };
+            // Step 2: empty qualifying pool = silent no-op.
+            if qualifying_count == 0 {
+                let _ = source_obj_id;
+                return Ok(());
+            }
+            // Steps 3-6 honest-stop. Cross-engine state stays byte-
+            // equal because Python ALSO returns early in the no-agent
+            // case (`if agent is None: return` at
+            // `bespoke.py:3101-3102`). See SEARCH_LIMITATIONS.md
+            // "Terminal Velocity Cycle 1 LANDED" entry for the full
+            // substrate-gap rationale.
+            let _ = source_obj_id;
+        }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).**
+        // `DealSelfMVDamageToEachCreature` LTB-trigger-body resolve
+        // arm. Mirrors Python's
+        // `DealSelfMVDamageToEachCreature.resolve` at
+        // `effects/bespoke.py:3012-3033`.
+        //
+        // **Direct-resolve byte-equal (not honest-stop).** This arm
+        // is exercised when a caller drives the LTB trigger directly
+        // (e.g. a synthetic probe seeded with the trigger source on
+        // the stack via `push_to_stack` and a printing_id for MV
+        // read). Same wiring discipline as
+        // `DrawCardsAndLoseLifeEqualToResolvingDamage`'s Requiem-
+        // body arm — the cross-engine round-trip needs the resolve
+        // to be present for the dict-shape-consistency probe to
+        // pass, even though no Python production code-path reaches
+        // it today on the Rust side (Python spawns it via the
+        // GrantTriggeredAbility UEOT push that Rust honest-stops at
+        // `Effect::TerminalVelocityEffect`).
+        //
+        // **Resolve semantics.**
+        //   1. Look up the departing permanent's `printing_id` via
+        //      `source_obj_id`. Walk both bf, both graveyards
+        //      (the departing object MAY have already moved
+        //      gy-ward by the time this resolves; Python reads
+        //      `state.resolving_source.printing.mana_cost.total`
+        //      which is stable across the move).
+        //   2. Read MV = `printing.mana_cost.total`. If `mv <= 0`,
+        //      silent no-op (Python `bespoke.py:3020-3025`).
+        //   3. Snapshot creature-victim ids on the union battlefield
+        //      (Python `victims = [o for o in state.battlefield if
+        //      o.printing.is_creature]`).
+        //   4. Apply MV damage to each victim via the
+        //      `apply_damage_marker` helper (byte-equal with Python's
+        //      `_apply_damage(state, ("creature", victim.id), mv)`).
+        //   5. **No follow-up SBA pass.** This arm only stamps damage;
+        //      SBA destroy and pending_dies_dispatches fire when the
+        //      caller runs `apply_sbas()` next — same convention as
+        //      every other damage-stamping arm in this file.
+        Effect::DealSelfMVDamageToEachCreature => {
+            // Step 1: source printing_id lookup — walk all 5 zones
+            // + stack fallback (mirrors the
+            // `AstelliReclaimerETBEffect` source-lookup pattern;
+            // the source MAY have already moved gy-ward / exile-ward
+            // by LTB trigger fire-time, hence the full-zone walk).
+            let mut printing_id: Option<u32> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        printing_id = Some(obj.printing_id);
+                        break 'outer;
+                    }
+                }
+            }
+            if printing_id.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    if let Some(obj) = state
+                        .players
+                        .iter()
+                        .flat_map(|p| {
+                            p.hand
+                                .iter()
+                                .chain(p.battlefield.iter())
+                                .chain(p.graveyard.iter())
+                                .chain(p.exile.iter())
+                                .chain(p.library.iter())
+                        })
+                        .find(|o| o.id == item.source_obj_id)
+                    {
+                        printing_id = Some(obj.printing_id);
+                    }
+                }
+            }
+            let Some(printing_id) = printing_id else {
+                return Ok(()); // silent no-op — source unfindable
+            };
+            // Step 2: read MV (printing.mana_cost summed — same
+            // metric as Python's ``ManaCost.total`` at
+            // ``src/mtg_bot/cards/base.py``; sums generic + W + U +
+            // B + R + G, matching the
+            // ``ExileAllArtifactsWithManaValueAtMost`` MV
+            // computation at line 17744-17761 in this file).
+            let printing = match state.registry.lookup(printing_id) {
+                Some(p) => p,
+                None => return Ok(()),
+            };
+            let mc = &printing.mana_cost;
+            let mv: i16 = (mc.generic as i16)
+                + (mc.white as i16)
+                + (mc.blue as i16)
+                + (mc.black as i16)
+                + (mc.red as i16)
+                + (mc.green as i16);
+            if mv <= 0 {
+                return Ok(()); // Python `if mv <= 0: log + return`
+            }
+            // Step 3: snapshot creature-victim ids on union bf.
+            let victim_ids: Vec<u32> = {
+                let mut ids = Vec::new();
+                for player in state.players.iter() {
+                    for obj in player.battlefield.iter() {
+                        let is_creature = state
+                            .registry
+                            .lookup(obj.printing_id)
+                            .map(|p| {
+                                p.card_types.iter().any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false);
+                        if is_creature {
+                            ids.push(obj.id);
+                        }
+                    }
+                }
+                ids
+            };
+            // Step 4: apply MV damage to each victim.
+            for victim_id in victim_ids {
+                apply_damage_marker(state, victim_id, mv);
+            }
+        }
     }
     Ok(())
 }

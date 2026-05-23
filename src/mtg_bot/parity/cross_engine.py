@@ -903,6 +903,42 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             SacrificeSourceDelayed,
         )
         return SacrificeSourceDelayed()
+    if kind == "terminal_velocity_effect":
+        # **Terminal Velocity — Cycle 1 (2026-05-22).** `{4}{R}{R}`
+        # Sorcery: "You may put an artifact or creature card from your
+        # hand onto the battlefield. That permanent gains haste, [LTB
+        # damage-equal-to-MV-each-creature trigger], and [end-step sac
+        # trigger]." Unit variant on both sides — no data fields; the
+        # agent-driven put-from-hand pick + downstream haste-UEOT +
+        # LTB-trigger-UEOT-grant + end-step sac all ride on the
+        # resolve-site substrate (Python: agent + GrantTriggeredAbility
+        # UEOT registry; Rust: the agent-callback substrate + the UEOT
+        # grant-triggered-ability registry are both honest-stopped at
+        # this resolve site — see `Effect::TerminalVelocityEffect`
+        # resolve arm in `state_ops_resolve.rs` for the documented
+        # dormancy path). Mirrors Python's
+        # ``TerminalVelocityEffect()`` at
+        # ``effects/bespoke.py:3043-3168`` — field-free dataclass,
+        # same idiom as ``BiosynthicBurstEffect`` /
+        # ``DiplomaticRelationsEffect`` / ``CloseEncounterEffect`` /
+        # ``ZeroPointBalladEffect``.
+        from mtg_bot.effects.bespoke import TerminalVelocityEffect
+        return TerminalVelocityEffect()
+    if kind == "deal_self_mv_damage_to_each_creature":
+        # **Terminal Velocity — Cycle 1 (2026-05-22).** Sibling bridge
+        # arm for the LTB-damage-equal-to-MV-each-creature trigger
+        # body. Unit variant — the departing permanent (the source
+        # whose MV is read) is carried by the surrounding LEAVES_
+        # BATTLEFIELD dispatch's ``state.resolving_source`` plumbing
+        # (Python side) / ``source_obj_id`` (Rust side). Mirrors
+        # Python's ``DealSelfMVDamageToEachCreature()`` at
+        # ``effects/bespoke.py:2998-3039``. Today's sole consumer is
+        # Terminal Velocity's resolve site — but the bridge arm
+        # exists so the Rust→Python dict-shape round-trip closes
+        # cleanly (same RUST_AHEAD_OF_POOL shape as
+        # ``WarpExileSelf`` / ``SacrificeSourceDelayed``).
+        from mtg_bot.effects.bespoke import DealSelfMVDamageToEachCreature
+        return DealSelfMVDamageToEachCreature()
     if kind == "return_up_to_n_small_creatures_from_graveyard_with_counters":
         # **Multi-target admit-gate Phase 4 widen (2026-05-21).** Scout
         # for Survivors: "Return up to N target creature cards with

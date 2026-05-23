@@ -248,6 +248,24 @@ pytestmark = pytest.mark.skipif(
 # widen. Devastating Onslaught AUTO-JOINS via the §2 auto-grow teeth.
 # Cross-engine probe under the no-agent harness mints 0 token copies
 # (X=0) — same harness-limitation shape as Zero Point Ballad.
+# **terminal-velocity-cycle-1 (2026-05-22)** — admit set 31 → 32.
+# Cycle 1 lands ``Effect::TerminalVelocityEffect`` (unit variant; the
+# agent-driven put-from-hand + haste-UEOT + LTB-damage-trigger UEOT
+# grant + end-step sac all resolve to a documented honest-stop
+# dormancy on Rust because the UEOT grant-triggered-ability registry
+# is a known multi-cycle substrate gap — same shape as the
+# ``Effect::GrantTriggeredAbilityUEOTRequiem`` honest-stop arm). The
+# LTB-trigger-body sibling ``Effect::DealSelfMVDamageToEachCreature``
+# (RUST_AHEAD_OF_POOL — spawned dynamically by Python's resolve site,
+# never as a static printing trigger) is fully wired on the Rust side
+# so the dict round-trip closes. Terminal Velocity AUTO-JOINS the
+# Phase-3 ``(0, 0)``-shape wrath admit (no slot_kinds, no ``targets``
+# attribute — same target grammar as Pyroclasm / Manifest Dread /
+# Darkness). Cross-engine probe under the no-agent harness with
+# EMPTY HAND hits Python's ``if not qualifying: return`` and Rust's
+# identical empty-qualifying-pool early-return — byte-equal vacuous
+# resolve. The §2 covered+bridged + round-trip-or-bail teeth all
+# fire positively post Cycle 1.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
@@ -258,7 +276,9 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Pyroclasm",
     "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
     "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
-    "Shattered Wings", "Systems Override", "Under the Skin",
+    "Shattered Wings", "Systems Override",
+    "Terminal Velocity",
+    "Under the Skin",
     "Untimely Malfunction", "Vengeful Possession",
     "Zero Point Ballad",
 ]

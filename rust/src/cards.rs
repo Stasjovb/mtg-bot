@@ -6124,6 +6124,110 @@ pub enum Effect {
         min_n: i32,
         max_n: i32,
     },
+    /// **Terminal Velocity — Cycle 1 (2026-05-22).** Terminal Velocity
+    /// `{4}{R}{R}` Sorcery (EoE): "You may put an artifact or creature
+    /// card from your hand onto the battlefield. That permanent gains
+    /// haste, 'When this permanent leaves the battlefield, it deals
+    /// damage equal to its mana value to each creature,' and 'At the
+    /// beginning of your end step, sacrifice this permanent.'"
+    ///
+    /// **Unit variant.** No data fields — the put-from-hand choice is
+    /// agent-driven (`choose_card_from_hand`) on the Python side; the
+    /// haste UEOT grant + LTB damage-equal-to-MV-each-creature trigger
+    /// grant + end-step sac schedule all ride downstream of that agent
+    /// pick. Mirrors Python's `effects.bespoke.TerminalVelocityEffect`
+    /// at `effects/bespoke.py:3043-3168` (field-free dataclass — same
+    /// idiom as `BiosynthicBurstEffect` / `DiplomaticRelationsEffect`
+    /// / `CloseEncounterEffect` / `ZeroPointBalladEffect`).
+    ///
+    /// **Resolve semantics (mirrors Python `bespoke.py:3075-3160`).**
+    /// 1. Walk the resolving controller's hand for artifact-or-creature
+    ///    cards (the "qualifying" pool — same predicate as Python
+    ///    `bespoke.py:3090-3093`).
+    /// 2. **No-agent / empty-pool dormancy.** If the qualifying pool
+    ///    is empty, silent no-op — mirrors Python's
+    ///    `if not qualifying: return` at `bespoke.py:3094-3099`. The
+    ///    cross-engine harness with EMPTY HAND (or hand of non-
+    ///    artifact-non-creature cards) hits this branch on both
+    ///    engines for trivial byte-equal vacuous resolve.
+    ///
+    /// **Honest-stop on the agent-driven put-from-hand surface.**
+    /// Steps 3-6 below (Python `bespoke.py:3100-3160`: agent picks the
+    /// card, move from hand to bf, grant haste UEOT, grant LTB
+    /// triggered-ability UEOT, schedule end-step sac) require:
+    ///   (a) an agent-callback substrate (`choose_card_from_hand`)
+    ///       that Rust does not plumb at this resolve site, AND
+    ///   (b) a UEOT grant-triggered-ability registry that Rust does
+    ///       not yet have (the only existing precedent is the narrow
+    ///       Perigee `GrantedDiesReturnTapped` marker at
+    ///       `state.rs:299`; the broader registry is documented as a
+    ///       known multi-cycle gap by `Effect::
+    ///       GrantTriggeredAbilityUEOTRequiem`'s honest-stop arm).
+    ///
+    /// Steps 3-6 thus resolve to a silent no-op today. The cross-
+    /// engine probe closes via dormancy (empty-hand path identical
+    /// on both engines). When the agent-callback + UEOT grant-
+    /// triggered-ability substrate lands in a future cycle, this arm
+    /// flips to writing the put-from-hand + haste-UEOT
+    /// (via `UeotModifier::GrantKeyword`) + LTB-trigger-grant + end-
+    /// step sac schedule (the trigger body is the sibling
+    /// `Effect::DealSelfMVDamageToEachCreature` variant immediately
+    /// below).
+    ///
+    /// **Documented in `docs/SEARCH_LIMITATIONS.md`** under the
+    /// "Terminal Velocity Cycle 1 LANDED" block — partial closure
+    /// (parser SoT + Effect variant + bridge round-trip + cross-
+    /// engine harness dormancy; agent-driven surface honest-stopped
+    /// pending UEOT-grant-triggered-ability substrate).
+    TerminalVelocityEffect,
+    /// **Terminal Velocity — Cycle 1 (2026-05-22).** The LTB damage
+    /// trigger body for Terminal Velocity: "When this permanent
+    /// leaves the battlefield, it deals damage equal to its mana
+    /// value to each creature." Mirrors Python's
+    /// `effects.bespoke.DealSelfMVDamageToEachCreature` at
+    /// `effects/bespoke.py:2998-3039` (field-free dataclass).
+    ///
+    /// **Unit variant.** No data fields — the source permanent (the
+    /// departing object) is carried by the surrounding LEAVES_
+    /// BATTLEFIELD dispatch's `resolving_source` / `source_obj_id`
+    /// plumbing (same precedent as `WarpExileSelf` and
+    /// `SacrificeSourceDelayed`).
+    ///
+    /// **Resolve semantics (mirrors Python `bespoke.py:3012-3033`).**
+    /// 1. Locate the departing permanent via `source_obj_id`. Across
+    ///    all 5 zones + stack fallback (mirrors the
+    ///    `AstelliReclaimerETBEffect` source-lookup pattern). If the
+    ///    source is unfindable AND the printing_id cannot be
+    ///    recovered, silent no-op — mirrors Python's
+    ///    `if source is None: return`.
+    /// 2. Read mana value (MV) = `printing.mana_cost.total` of the
+    ///    departing permanent. If `mv <= 0`: log + silent no-op
+    ///    mirroring Python's `if mv <= 0: state.log.append(...);
+    ///    return`.
+    /// 3. Snapshot the victim list = every creature on EITHER
+    ///    battlefield (Python iterates `state.battlefield`, the union
+    ///    bf-snapshot). Iterate the snapshot and apply `mv` damage to
+    ///    each creature (`apply_damage` shape — sets `obj.damage +=
+    ///    mv` on the bf object byte-equal to Python's
+    ///    `_apply_damage(state, ("creature", victim.id), mv)`).
+    /// 4. **No follow-up SBA pass.** This arm only stamps damage;
+    ///    SBA destroy and `pending_dies_dispatches` fire when the
+    ///    caller runs `apply_sbas()` next — same convention as every
+    ///    other damage-stamping arm in this file.
+    ///
+    /// **RUST_AHEAD_OF_POOL — invisible to the static pool walker.**
+    /// This Effect is spawned dynamically by Python's
+    /// `TerminalVelocityEffect.resolve` as the body of an
+    /// `ApplyEffect(GrantTriggeredAbility(LTB-trigger))` UEOT grant,
+    /// NOT by a static printing's `triggered_abilities` member.
+    /// Today's Python pool likewise never observes
+    /// `DealSelfMVDamageToEachCreature` as a static trigger payload —
+    /// the only consumer is Terminal Velocity's resolve site. Same
+    /// invisibility-to-the-static-walker shape as `WarpExileSelf` /
+    /// `RemoveChargeCountersFromSourceDelayed` /
+    /// `SacrificeSourceDelayed` — override-mapping it elsewhere in
+    /// the covered-class set would be wrong.
+    DealSelfMVDamageToEachCreature,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -11013,8 +11117,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 max_n,
             })
         }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).** Unit-variant
+        // parse arm — no data fields (the put-from-hand pick is agent-
+        // driven on Python; under Rust harness the resolve arm hits the
+        // documented honest-stop dormancy path). Mirrors the
+        // `zero_point_ballad_effect` /
+        // `create_x_tokens_of_target_permanent_with_haste_end_step_sac`
+        // unit-variant idiom: extra dict fields silently ignored.
+        "terminal_velocity_effect" => {
+            Ok(Effect::TerminalVelocityEffect)
+        }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).** Unit-variant
+        // parse arm — sibling of `SacrificeSourceDelayed` /
+        // `WarpExileSelf`. No data fields (departing permanent is
+        // carried by surrounding LEAVES_BATTLEFIELD dispatch's
+        // `source_obj_id` plumbing). Same RUST_AHEAD_OF_POOL shape —
+        // never observed by the pool walker as a static printing
+        // trigger (only spawned by Python's TerminalVelocityEffect
+        // resolve as the body of a GrantTriggeredAbility UEOT push).
+        "deal_self_mv_damage_to_each_creature" => {
+            Ok(Effect::DealSelfMVDamageToEachCreature)
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature"
         ))),
     }
 }
@@ -13908,6 +14033,27 @@ pub(crate) fn effect_to_pydict<'py>(
             )?;
             d.set_item("min_n", *min_n)?;
             d.set_item("max_n", *max_n)?;
+        }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).** Unit-variant
+        // round-trip dict-shape. No data fields — the agent-driven
+        // put-from-hand choice and the downstream haste-UEOT / LTB-
+        // grant / end-step-sac all ride on the resolve-site
+        // substrate (today honest-stopped pending UEOT-grant-
+        // triggered-ability infrastructure). Mirrors the
+        // `biosynthic_burst_effect` / `zero_point_ballad_effect`
+        // unit-variant to_pydict idiom.
+        Effect::TerminalVelocityEffect => {
+            d.set_item("kind", "terminal_velocity_effect")?;
+        }
+        // **Terminal Velocity — Cycle 1 (2026-05-22).** Unit-variant
+        // round-trip dict-shape — sibling of SacrificeSourceDelayed.
+        // Note this dict shape is for the to_pydict round-trip surface;
+        // the LTB-damage effect itself is spawned dynamically by
+        // Python's TerminalVelocityEffect resolve as the body of a
+        // GrantTriggeredAbility UEOT push (never observed by the pool
+        // walker as a static printing trigger).
+        Effect::DealSelfMVDamageToEachCreature => {
+            d.set_item("kind", "deal_self_mv_damage_to_each_creature")?;
         }
     }
     Ok(d)

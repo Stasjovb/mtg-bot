@@ -10514,6 +10514,124 @@ the X-tracking C1 substrate.
   (25 → 26) and `tests/test_probe_spell_card_bridge_admitted.py`
   (25 → 26).
 
+- **Terminal Velocity Cycle 1 LANDED (2026-05-22,
+  terminal-velocity-cycle-1-p1).** Phase-3 ``(0, 0)``-shape wrath-
+  admit closure for Terminal Velocity ``{4}{R}{R}`` Sorcery (EoE):
+  "You may put an artifact or creature card from your hand onto the
+  battlefield. That permanent gains haste, 'When this permanent
+  leaves the battlefield, it deals damage equal to its mana value
+  to each creature,' and 'At the beginning of your end step,
+  sacrifice this permanent.'" Lands the
+  `Effect::TerminalVelocityEffect` Rust unit variant (parse arm +
+  `to_pydict` arm + resolve arm) + the LTB-trigger-body sibling
+  `Effect::DealSelfMVDamageToEachCreature` (parse / to_pydict /
+  resolve mirroring the established damage-stamp arm pattern) +
+  matching cross-engine bridge arms + reverse-serializer leaves.
+
+  **Phase-3 wrath admit shape — no widening needed.** Terminal
+  Velocity reports `target_count_range() == (0, 0)` with no
+  `slot_kinds` and no `targets` attribute on the printing —
+  identical target grammar to Pyroclasm / Manifest Dread / Darkness.
+  The §2 covered+bridged + round-trip-or-bail teeth auto-flip the
+  card into the admit set once this lane's Effect arms + bridge
+  arms + serializer leaves land (admit set 29 → 30; PROBED 281 →
+  282 on this branch).
+
+  **HONEST-STOP on the agent-driven put-from-hand + UEOT-grant-
+  triggered-ability surface (Rust side).** Python's
+  `TerminalVelocityEffect.resolve` (at `effects/bespoke.py:3075-3160`)
+  is a 6-step pipeline:
+
+  1. Walk caster's hand for artifact-or-creature qualifiers.
+  2. If qualifying pool empty: silent no-op
+     (`if not qualifying: return`).
+  3. If `p.agent is None`: silent no-op (`if agent is None: return`).
+  4. `agent.choose_card_from_hand(...)`. If None: silent no-op.
+  5. Move chosen card from hand to bf via `put_into_battlefield`;
+     `ApplyEffect(GrantKeywords({"haste"}), EndOfTurn())` push +
+     `ApplyEffect(GrantTriggeredAbility(LTB-trigger), EndOfTurn())`
+     push for the LTB damage trigger.
+  6. Schedule end-step sac via
+     `state.delayed_triggers.append(SacrificeSourceDelayed)`.
+
+  Rust implements Steps 1-2 byte-equal (walk hand, silent no-op
+  on empty qualifying pool). **Steps 3-6 honest-stop on Rust** as
+  a silent no-op because BOTH:
+    (a) the agent-callback substrate
+        (`choose_card_from_hand`) is not plumbed at this resolve
+        site (Rust has no general agent-callback infrastructure
+        outside the narrow choose_yes_no / look_top_n /
+        choose_card_from_zone primitives wired for other Effects),
+        AND
+    (b) the UEOT grant-triggered-ability registry is a known
+        multi-cycle substrate gap — the only existing precedent is
+        the narrow Perigee `GrantedDiesReturnTapped` marker at
+        `state.rs:299`; the broader registry's absence is documented
+        by the `Effect::GrantTriggeredAbilityUEOTRequiem` honest-
+        stop arm at `state_ops_resolve.rs:15726`.
+
+  Building the agent-callback substrate is one multi-cycle slice;
+  building the UEOT grant-triggered-ability registry is another.
+  Both are deferred. When EITHER lands in a future cycle this
+  resolve arm flips to writing the put-from-hand + haste-UEOT
+  (via `UeotModifier::GrantKeyword`) + LTB-trigger-grant + end-step
+  sac schedule (the trigger body is the sibling
+  `Effect::DealSelfMVDamageToEachCreature` variant already wired
+  in this lane).
+
+  **`Effect::DealSelfMVDamageToEachCreature` arm shape.** Direct-
+  resolve damage-stamp arm — looks up the source printing's MV via
+  the 5-zone + stack-fallback registry walk (mirrors the
+  `AstelliReclaimerETBEffect` source-lookup precedent), reads MV =
+  `mana_cost.generic + W + U + B + R + G` (same `ManaCost` summing
+  the `ExileAllArtifactsWithManaValueAtMost` arm uses at
+  `state_ops_resolve.rs:17744-17761`), then iterates the union
+  battlefield snapshot stamping `mv` damage on each creature via
+  the `apply_damage_marker` helper. `mv <= 0` = silent no-op
+  (mirrors Python's `if mv <= 0: log + return`). The arm is wired
+  even though no production Rust code-path reaches it today (Rust's
+  `TerminalVelocityEffect` honest-stops the GrantTriggeredAbility
+  UEOT push that would normally schedule the LTB-trigger firing
+  this body); the wiring exists so the cross-engine round-trip
+  needs the resolve to be present for the dict-shape-consistency
+  probe to pass + so a future cycle that lands the UEOT-grant-
+  triggered-ability substrate can call into it byte-equally. Same
+  wiring discipline as `Effect::DrawCardsAndLoseLifeEqualToResolvingDamage`'s
+  Requiem-body direct-resolve arm at
+  `state_ops_resolve.rs:15770`.
+
+  **Cross-engine harness empty-hand dormancy.** Under the no-agent
+  cross-engine harness with EMPTY HAND on both engines, Python's
+  Step 2 hits (`not qualifying`) and Rust's empty-qualifying-pool
+  early-return both silent-no-op. Byte-equal vacuous resolve. The
+  cross-engine probe at empty hand verifies parse + admit +
+  serializer round-trip + resolve byte-equal without exercising
+  any agent-driven or UEOT-grant-triggered-ability surface. This
+  is the deliberate harness limitation — analogous to Devastating
+  Onslaught's X=0 dormancy and Zero Point Ballad's X=0 dormancy.
+
+  **`RUST_AHEAD_OF_POOL` allowlist entry.** Adds
+  `DealSelfMVDamageToEachCreature` to the allowlist (mirrors the
+  `WarpExileSelf` / `RemoveChargeCountersFromSourceDelayed` /
+  `SacrificeSourceDelayed` precedent) — the LTB-trigger-body
+  Effect is spawned dynamically by Python's
+  `TerminalVelocityEffect.resolve` as the body of a
+  `GrantTriggeredAbility` UEOT push, never observed by the
+  static-printing pool walker as a `triggered_abilities` member.
+
+  **Tests.** `tests/test_terminal_velocity_parity.py` (13 pins):
+  parser SoT; serializer round-trip for both new Effects;
+  admit-gate flip; covered-set membership for the spell + RUST_
+  AHEAD_OF_POOL membership for the LTB body; Rust unit pins
+  (empty-hand silent no-op; hand-only-lands silent no-op; hand-
+  with-artifact honest-stop silent no-op; MV=6 LTB-body damages
+  every creature; MV=0 silent no-op; unfindable-source dormancy
+  documentation); genuine real-EoE cross-engine byte-equal probe
+  under empty-hand dormancy. Plus admit-set pin updates in
+  `tests/test_cross_engine_etb_triggers.py::test_spell_card_lever_phase1_negative_pins_decline_set`
+  (29 → 30) and `tests/test_probe_spell_card_bridge_admitted.py`
+  (29 → 30).
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any

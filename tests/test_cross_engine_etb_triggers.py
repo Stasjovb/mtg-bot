@@ -21463,6 +21463,27 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # is untargeted). Per the §2 auto-grow teeth, no admit-set widen
     # was needed — landing the Effect coverage + serializer leaves
     # made the round-trip whole + auto-flipped the gate.
+    # **terminal-velocity-cycle-1 (2026-05-22):** Terminal Velocity
+    # ``{4}{R}{R}`` Sorcery closure (Phase-3 ``(0, 0)``-shape wrath
+    # admit — same target grammar as Pyroclasm / Darkness; no widening
+    # needed). Adds ``Effect::TerminalVelocityEffect`` Rust variant
+    # (unit variant; the agent-driven put-from-hand + UEOT haste +
+    # UEOT-grant-triggered-ability + end-step sac all resolve to a
+    # documented honest-stop dormancy because the UEOT grant-
+    # triggered-ability registry is a known multi-cycle substrate gap
+    # — same shape as the ``Effect::GrantTriggeredAbilityUEOTRequiem``
+    # honest-stop arm) + the LTB-trigger-body sibling
+    # ``Effect::DealSelfMVDamageToEachCreature`` (RUST_AHEAD_OF_POOL
+    # — spawned dynamically by Python's TerminalVelocityEffect
+    # resolve, never as a static printing trigger; fully implemented
+    # on the Rust side as a direct-resolve damage-stamp arm so the
+    # round-trip dict-shape closes cleanly) + matching bridge arms +
+    # reverse-serializer leaves. Cross-engine probe under the no-
+    # agent harness with EMPTY HAND hits Python's ``if not
+    # qualifying: return`` and Rust's identical empty-qualifying-
+    # pool early-return for trivial byte-equal vacuous resolve.
+    # Terminal Velocity AUTO-JOINS via the §2 auto-grow teeth. Admit
+    # set 31 → 32.
     assert admitted == [
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
@@ -21474,11 +21495,12 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
         "Seedship Impact", "Shattered Wings", "Systems Override",
+        "Terminal Velocity",
         "Under the Skin", "Untimely Malfunction",
         "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 31 covered+bridged Tier-A spells: the 26 "
+        f"exactly the 32 covered+bridged Tier-A spells: the 26 "
         f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
         f"via control-change-ueot-cycle-4-p1 + Systems Override via "
         f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
@@ -21487,9 +21509,10 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         f"nonland-permanent graveyard-to-hand admit (Pull Through "
         f"the Weft via pull-through-the-weft-cycle-1) + 1 "
         f"control-change-UEOT non-EoE consumer (Vengeful Possession "
-        f"via vengeful-possession-cycle-1-p1) — auto-grows "
-        f"further as the remaining Tier-A and per-mode-target modal "
-        f"spells close)")
+        f"via vengeful-possession-cycle-1-p1) + 1 Phase-3 "
+        f"wrath-shape closure (Terminal Velocity via "
+        f"terminal-velocity-cycle-1) — auto-grows further as the "
+        f"remaining Tier-A and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
