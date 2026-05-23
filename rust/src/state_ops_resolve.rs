@@ -12409,6 +12409,59 @@ fn apply_effect(
                 }
             }
         }
+        // **Burgeoning Cycle 1 (2026-05-23) — No-agent decline silent
+        // no-op.** Byte-equal mirror of Python's
+        // `OptionalPutLandFromHandOntoBattlefield.resolve` no-agent
+        // gate-4 short-circuit (`effects/combinators.py:258-291`).
+        //
+        // **Why this collapses to a silent no-op.** Python's resolve
+        // walks five gates in order:
+        //   1. Build `options = [c for c in p.hand if c.printing.is_land]`.
+        //   2. Empty options → silent return.
+        //   3. `if p.agent is not None: chosen_id = p.agent.
+        //      choose_card_from_library(...)` else `chosen_id = None`.
+        //   4. `if chosen_id is None: return` (DECLINE silent no-op).
+        //      This is the no-agent default — `chosen_id` stays None
+        //      whenever no agent is configured on the source's
+        //      controller.
+        //   5. (Only with a yes-agent that returned a valid card id.)
+        //      Move the chosen land hand→bf, set tapped =
+        //      printing.enters_tapped, fire landfall triggers.
+        //
+        // Since Rust's `apply_effect` has no agent surface (the
+        // agent-driven card-pick path is honest-stopped for Cycle 2+
+        // — see the enum docstring), Rust ALWAYS takes the decline
+        // path. Observable parity vs Python's no-agent probe path:
+        // same (no hand→bf zone move, no landfall fire, no
+        // observable delta). Log strings differ between engines but
+        // are NOT in the harness's `_build_field_view` byte-equal
+        // slot set — they're a soft observable the cross-engine
+        // probe doesn't pin (the round-74 R74-3 byte-equal cleanup
+        // mapping precedent established for Boilerbilges Ripper).
+        //
+        // **Cycle 2+ agent-surface widening.** When a future cycle
+        // lands a Rust agent surface, the body grows to mirror gates
+        // 3-5: ask the agent to pick a land id from
+        // controller's hand, move the picked `GameObject` from
+        // `hand` to `battlefield` with CR 400.7 reset + `tapped =
+        // enters_tapped`, then dispatch
+        // `Event::EntersTheBattlefield` (which fires landfall on
+        // the active watchers). Cycle 1 lands ONLY the
+        // effect_uncovered gate closure + the no-agent byte-equal
+        // mirror; the yes-agent put-land path is honest-stopped
+        // today.
+        //
+        // **Gate-2 defense-in-depth (informational only).** The
+        // Python class also short-circuits at gate 2 when no land
+        // options exist in hand — same observable as gate 4. Both
+        // converge to "silent no-op" on the cross-engine probe,
+        // which is exactly what this empty arm produces. Adding a
+        // hand-land-scan here would be dead code (gate 4 already
+        // fires for the no-agent probe regardless of gate 2's
+        // state).
+        Effect::OptionalPutLandFromHandOntoBattlefield => {
+            // Honest-stopped no-op — see docstring.
+        }
         // Round-28 single-target counter add. Rayblade-Trooper-shape:
         // pick the FIRST creature on source-controller's bf and add
         // `amount` to its `counters` scalar. Empty bf or no eligible

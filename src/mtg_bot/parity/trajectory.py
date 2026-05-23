@@ -4347,6 +4347,17 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.pump import (
         PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     )
+    # **Burgeoning Cycle 1 (2026-05-23).** Per-leaf serializer for
+    # ``OptionalPutLandFromHandOntoBattlefield()`` — the field-free
+    # optional-choice effect for Burgeoning's opponent-plays-land
+    # trigger body ("you may put a land card from your hand onto the
+    # battlefield"). Unit-variant sibling of
+    # ``BoilerbilgesRipperETBEffect`` — both are field-free optional-
+    # choice effect classes where the agent surface controls
+    # DO-vs-DECLINE.
+    from mtg_bot.effects.combinators import (
+        OptionalPutLandFromHandOntoBattlefield,
+    )
     # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer for
     # ``DrawCardsEqualToResolvingCounterAmount()`` — the field-free
     # counter-amount sibling of
@@ -5378,6 +5389,20 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                     "pump_target_other_creature_by_x_over_x_where_"
                     "x_is_source_power"
                 ),
+            }
+        # **Burgeoning Cycle 1 (2026-05-23).** Per-leaf serializer for
+        # ``OptionalPutLandFromHandOntoBattlefield()`` — the field-free
+        # optional-choice effect body for Burgeoning's opponent-plays-
+        # land trigger. Unit-variant — emits the bare ``{"kind":
+        # "optional_put_land_from_hand_onto_battlefield"}`` (no static
+        # fields; the "may" + land-card target shape is intrinsic).
+        # Sibling of the ``BoilerbilgesRipperETBEffect`` field-free
+        # optional-choice serializer.
+        if isinstance(
+            eff, OptionalPutLandFromHandOntoBattlefield
+        ):
+            return {
+                "kind": "optional_put_land_from_hand_onto_battlefield",
             }
         # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer
         # for ``DrawCardsEqualToResolvingCounterAmount()`` — the

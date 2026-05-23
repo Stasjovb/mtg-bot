@@ -2802,6 +2802,45 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
         )
         return PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()
+    if kind == "optional_put_land_from_hand_onto_battlefield":
+        # **Burgeoning Cycle 1 (2026-05-23).** Rust's field-free
+        # ``Effect::OptionalPutLandFromHandOntoBattlefield`` round-trips
+        # to Python's ``OptionalPutLandFromHandOntoBattlefield()``
+        # parameterless dataclass at
+        # ``effects/combinators.py:247-294``. Unit variant — no fields;
+        # extra dict keys are silently ignored (round-49 unit-variant
+        # convention; sibling of the ``boilerbilges_ripper_etb_effect``
+        # bridge arm — both are field-free optional-choice effects
+        # where the agent surface controls DO-vs-DECLINE).
+        #
+        # **Real EoE consumer.** Burgeoning ``{G}`` Enchantment
+        # (Special Guest reprint, SPG/EoE 126). Triggered ability
+        # body: "Whenever an opponent plays a land, you may put a land
+        # card from your hand onto the battlefield." The parser at
+        # ``cards/parser/effects.py:6519-6526`` maps the literal oracle
+        # line via the
+        # ``_OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD``
+        # parameterized recognizer (land branch) to
+        # ``OptionalPutLandFromHandOntoBattlefield()``.
+        #
+        # **No-agent decline default = byte-equal silent no-op.**
+        # Both engines: build the land-options list from controller's
+        # hand; under the cross-engine no-agent probe convention,
+        # Python takes gate-4 (``chosen_id is None``) silent return;
+        # Rust's apply_effect arm is an empty no-op. Both observably
+        # match (no hand→bf zone move, no landfall fire, no
+        # observable delta). **DISTINCTION from
+        # ``optional_sac_another_for_pump_self_ueot`` (Comet Crawler):
+        # ``OptionalSacAnotherForPumpSelfUEOT`` defaults to "DO" when
+        # no agent (picks options[0]); the optional-put-land-from-
+        # hand variant defaults to "DECLINE" (the explicit
+        # ``chosen_id = None`` else-branch). Both bridge dict→Python
+        # arms hand the engine a parameterless dataclass; the
+        # divergence is the no-agent default, not the substrate.
+        from mtg_bot.effects.combinators import (
+            OptionalPutLandFromHandOntoBattlefield,
+        )
+        return OptionalPutLandFromHandOntoBattlefield()
     if kind == "return_creature_from_your_graveyard_to_battlefield":
         # "Return target creature card from your graveyard to the
         # battlefield." Sister-arm to

@@ -13222,6 +13222,126 @@ the classifier multi-gate state staying True on
 `nonsafe_triggered_ability`).
 
 
+## Burgeoning Cycle 1 LANDED — `Effect::OptionalPutLandFromHandOntoBattlefield` (unit) "you may put a land card from your hand onto the battlefield" Effect class shipped byte-equal at the no-agent decline silent-no-op surface; agent-driven yes-DO put-land path honest-stopped for Cycle 2+
+
+**Single-cycle landing (2026-05-23,
+`feature/burgeoning-cycle-1-p1`).** Burgeoning — `{G}` Enchantment
+(Special Guest reprint, SPG/EoE 126; sourced from
+`data/special_guests_eoe.json` via the active
+`OracleParserCardSource`). Printed trigger body: "Whenever an
+opponent plays a land, you may put a land card from your hand onto
+the battlefield." The parser maps the literal oracle line via the
+`_OPTIONAL_PUT_PERMANENT_FROM_HAND_ONTO_BATTLEFIELD` parameterized
+recognizer (`cards/parser/effects.py:6519-6526`, "land" branch) to
+`OptionalPutLandFromHandOntoBattlefield()`. Mirrors Python's
+parameterless frozen dataclass at `effects/combinators.py:247-294`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::OptionalPutLandFromHandOntoBattlefield`** —
+     field-free unit variant (`rust/src/cards.rs`), parse arm
+     (`parse_effect` dispatcher; round-trips the bare
+     `{"kind": "optional_put_land_from_hand_onto_battlefield"}` dict
+     shape), `to_pydict` arm (emits only `kind`), and resolve arm in
+     `rust/src/state_ops_resolve.rs` that is a byte-equal **silent
+     no-op** mirror of Python's no-agent gate-4 short-circuit
+     (`if chosen_id is None: return` at
+     `effects/combinators.py:274`). Rust has no agent surface in
+     `apply_effect`; the resolve body is an empty match arm. Cycle
+     2+ widens to the yes-agent put-land path (hand→bf zone move
+     with CR 400.7 reset + `tapped = enters_tapped` + landfall
+     trigger dispatch).
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `OptionalPutLandFromHandOntoBattlefield()`
+     from the one-key dict shape.
+  3. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind":
+     "optional_put_land_from_hand_onto_battlefield"}` for
+     `OptionalPutLandFromHandOntoBattlefield` instances — sibling of
+     the Boilerbilges Ripper field-free optional-choice unit-variant
+     leaf serializer.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `OptionalPutLandFromHandOntoBattlefield` — closes
+     the `effect_uncovered` classifier gate at the covered-set
+     level.
+
+**No-agent default = DECLINE silent no-op.** Python's
+`OptionalPutLandFromHandOntoBattlefield.resolve` walks:
+
+  1. Build `options = [c for c in p.hand if c.printing.is_land]`.
+  2. Empty options → silent return.
+  3. `if p.agent is not None: chosen_id = p.agent.choose_card_
+     from_library(...)` else `chosen_id = None`.
+  4. `if chosen_id is None: return` — DECLINE silent no-op. This is
+     the no-agent default: when `p.agent is None`, the explicit
+     `chosen_id = None` else-branch chains directly into this
+     return.
+  5. (Only with a yes-agent that returned a valid card id.) Move
+     the chosen land hand→bf, set `tapped = printing.enters_tapped`,
+     fire landfall triggers via `fire_landfall_triggers`.
+
+**DISTINCTION from `OptionalSacAnotherForPumpSelfUEOT` (Comet
+Crawler).** Comet Crawler's
+`OptionalSacAnotherForPumpSelfUEOT` defaults to "DO" when no agent
+(`combinators.py:461-462` picks `options[0]` and sacrifices it);
+the Rust mirror sacrifices the first eligible victim
+deterministically. Burgeoning's
+`OptionalPutLandFromHandOntoBattlefield` defaults to "DECLINE"
+when no agent (the explicit `chosen_id = None` else-branch); the
+Rust mirror silently no-ops. Both are byte-equal under the no-
+agent probe convention — the divergence is the no-agent default,
+not the substrate. Same shape as the Boilerbilges Ripper Cycle 1
+"DECLINE" precedent.
+
+**PLAYS_LAND trigger-fire path not 1-cycle accessible (honest-
+stop).** Rust has no `Event::PlaysLand` chokepoint today — the
+Python event `Event.PLAYS_LAND` fires via
+`fire_opponent_plays_land_triggers` in `turn.py:622`, with no Rust
+analog. The Effect substrate ships portable independent of the
+trigger-fire dispatch — the classifier-bypass per-card probe
+pattern (cf. Boilerbilges Ripper / Hemosymbic Mite / The Endstone /
+Ouroboroid) covers the PROBED tier flip directly on the Effect
+class without needing the upstream event dispatch. The PLAYS_LAND
+event substrate bridge is a separate cycle and is honest-stopped
+today.
+
+**Multi-gated card; classifier multi-gate state stays True after
+the cycle.** Per the round-58 subsystem-attribution classifier,
+Burgeoning is multi-gated on
+`effect_uncovered + nonsafe_triggered_ability`. The cycle closes
+the `effect_uncovered` gate (the
+`OptionalPutLandFromHandOntoBattlefield` Python class flips from
+`missing_effect_classes` to covered). The
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit
+set, a distinct concern from per-card real-EoE parity probes.
+**The card DOES move to PROBED tier through the dedicated per-card
+real-EoE byte-equal cross-engine probe**
+(`tests/test_burgeoning_parity.py`), the same precedent as
+Boilerbilges Ripper / Comet Crawler / Mutinous Massacre /
+Dyadrine Attack / Fanatic of the Harrowing / Terrapact
+Intimidator / Attack-in-the-Box / Hemosymbic Mite established.
+
+**Documented residual — yes-agent put-land path honest-stopped.**
+Cycle 1 lands ONLY the `effect_uncovered` gate closure + the
+no-agent byte-equal mirror. The yes-agent path
+(`effects/combinators.py:269-291` — `chosen_id = agent.choose_card_
+from_library(...)` plus the hand→bf zone move + `tapped =
+enters_tapped` + landfall fire) is honest-stopped on the Rust side
+today; the agent surface for Rust's `apply_effect` is the
+campaign-wide blocker (cf. Boilerbilges Ripper / Optional-Sac /
+Optional-Mana-Cost agent-driven arms — all share the same
+deferred-Cycle-2+ pattern). The cross-engine probe convention
+drives both engines no-agent so the byte-equal observable holds
+on the decline path; the agent-yes path is unreachable from the
+probe today.
+
 ## Hemosymbic Mite Cycle 1 LANDED — `Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` (unit) X-source single-target +X/+X UEOT Effect shipped byte-equal; becomes-tapped trigger reads X = effective_power(source) at resolve time and applies +X/+X UEOT to another target creature you control
 
 **Single-cycle landing (2026-05-23,

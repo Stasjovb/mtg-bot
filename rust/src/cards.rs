@@ -3486,6 +3486,71 @@ pub enum Effect {
     /// printed state; the picker asymmetry is the same documented
     /// residual the bare `PumpTargetCreatureUntilEOT` arm carries.
     PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    /// **Burgeoning Cycle 1 (2026-05-23) —
+    /// `Effect::OptionalPutLandFromHandOntoBattlefield`.** "You may put
+    /// a land card from your hand onto the battlefield." Mirrors Python's
+    /// `OptionalPutLandFromHandOntoBattlefield()` field-free dataclass at
+    /// `effects/combinators.py:247-294`. Real EoE consumer: Burgeoning
+    /// `{G}` Enchantment (Special Guest reprint, SPG/EoE 126) — printed
+    /// trigger body: "Whenever an opponent plays a land, you may put a
+    /// land card from your hand onto the battlefield."
+    ///
+    /// **Field-free unit variant.** The "may" choice + land-card target
+    /// shape is intrinsic — no static fields. Sibling of the
+    /// `BoilerbilgesRipperETBEffect` field-free unit variant (round-72
+    /// pattern: optional-choice effect class with no static fields; the
+    /// agent surface controls DO-vs-DECLINE).
+    ///
+    /// **No-agent decline default — silent no-op.** Python's
+    /// `OptionalPutLandFromHandOntoBattlefield.resolve`
+    /// (`effects/combinators.py:258-291`) walks:
+    ///   1. Build `options = [c for c in p.hand if c.printing.is_land]`.
+    ///   2. Empty options → silent return.
+    ///   3. `if p.agent is not None: chosen_id = p.agent.
+    ///      choose_card_from_library(...)` else `chosen_id = None`.
+    ///   4. `if chosen_id is None: return` (DECLINE silent no-op).
+    ///   5. Otherwise: move the chosen land hand→bf, set
+    ///      `tapped = printing.enters_tapped`, fire landfall triggers.
+    ///
+    /// Under the cross-engine no-agent probe convention (both engines
+    /// driven with no agent), Python takes gate-4 silent return (the
+    /// `chosen_id is None` short-circuit fires when `p.agent is None`).
+    /// Rust's `apply_effect` has no agent surface — the resolve arm is
+    /// an empty no-op. Both engines therefore agree byte-equal on the
+    /// full field view: no hand→bf zone move, no landfall trigger, no
+    /// observable delta. **DISTINCTION from
+    /// `OptionalSacAnotherForPumpSelfUEOT`** which defaults to "DO"
+    /// when no agent (`combinators.py:461-462` picks `options[0]`);
+    /// `OptionalPutLandFromHandOntoBattlefield` defaults to "DECLINE"
+    /// (the explicit `chosen_id = None` else-branch).
+    ///
+    /// **Cycle 2+ agent-surface widening.** A future cycle landing a
+    /// Rust agent surface will widen the resolve arm to gates 3-5:
+    /// ask the agent to pick a land id from the hand, move that
+    /// `GameObject` from `hand` to `battlefield` with CR 400.7 reset +
+    /// `tapped = enters_tapped`, then dispatch
+    /// `Event::EntersTheBattlefield` (which fires `landfall` on the
+    /// active landfall watchers). Cycle 1 lands ONLY the
+    /// `effect_uncovered` gate closure + the no-agent byte-equal
+    /// mirror; the yes-agent put-land path is honest-stopped today.
+    ///
+    /// **PLAYS_LAND trigger-fire path not 1-cycle accessible.** Rust
+    /// has no `Event::PlaysLand` chokepoint today (the Python event
+    /// `Event.PLAYS_LAND` fires via `fire_opponent_plays_land_triggers`
+    /// in `turn.py:622`; no Rust analog). The Effect substrate is
+    /// portable independent of the trigger-fire dispatch — the
+    /// classifier-bypass per-card probe pattern (cf. Boilerbilges
+    /// Ripper / Hemosymbic Mite / The Endstone) covers the PROBED tier
+    /// flip directly on the Effect class without needing the
+    /// upstream event dispatch.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "optional_put_land_from_hand_onto_battlefield"}` (only `kind`
+    /// emitted). The bridge `_ta_dict_to_python_effect` arm at
+    /// `cross_engine.py` reconstructs
+    /// `OptionalPutLandFromHandOntoBattlefield()`.
+    OptionalPutLandFromHandOntoBattlefield,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on a target creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnCreatureYouControl(amount: int = 1)`
@@ -11236,6 +11301,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
             )
         }
+        "optional_put_land_from_hand_onto_battlefield" => {
+            // **Burgeoning Cycle 1 (2026-05-23).** Field-free unit
+            // variant — the "may" choice + land-card target shape is
+            // intrinsic; no static fields. Mirrors Python's
+            // `OptionalPutLandFromHandOntoBattlefield()` parameterless
+            // dataclass at `effects/combinators.py:247-294`. Extra dict
+            // keys are silently ignored for round-trip dict-shape
+            // consistency (round-49 unit-variant precedent;
+            // `BoilerbilgesRipperETBEffect` sibling).
+            Ok(Effect::OptionalPutLandFromHandOntoBattlefield)
+        }
         "put_card_from_graveyard_on_bottom_of_library" => {
             // Unit variant; no fields.
             Ok(Effect::PutCardFromGraveyardOnBottomOfLibrary)
@@ -15603,6 +15679,18 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "pump_target_other_creature_by_x_over_x_where_x_is_source_power",
+            )?;
+        }
+        Effect::OptionalPutLandFromHandOntoBattlefield => {
+            // **Burgeoning Cycle 1 (2026-05-23).** Unit variant; no
+            // payload fields beyond `kind`. The "may" choice + land-
+            // card target shape is intrinsic. Mirrors Python's
+            // `OptionalPutLandFromHandOntoBattlefield` parameterless
+            // dataclass dict shape. No other keys emitted — same
+            // unit-variant convention as `BoilerbilgesRipperETBEffect`.
+            d.set_item(
+                "kind",
+                "optional_put_land_from_hand_onto_battlefield",
             )?;
         }
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
