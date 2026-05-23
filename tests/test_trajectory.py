@@ -6235,6 +6235,12 @@ _R60_NONBASIC_DECLINE_18 = [
     "Evendo, Waking Haven",
     "Uthros, Titanic Godcore",
     "Secluded Starforge",
+    # Cathedral of War — admitted by Cathedral-cycle-1's
+    # ``_printing_is_bridge_keyword_colorless_tapped_mana_land`` as of
+    # 2026-05-23. The round-60 predicate still rejects it (Cathedral
+    # has empty ``produces``; the round-60 predicate requires 1-2
+    # produce colors), so it remains in this list as a round-60-only
+    # decline pin.
     "Cathedral of War",
     "Echoing Deeps",
     "Abandoned Campground",
@@ -6407,22 +6413,30 @@ def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
     predicate (Phase 2 closure: the parser-flattened mono-color tapped
     Planet land is bit-equal cross-engine — the bridge carries no
     ``enters_tapped`` field, both engines materialize an untapped
-    single-color land, symmetric drop). The PRESERVED §2 trap is
-    Secluded Starforge (7,570 decks, ``produces=frozenset()`` after the
-    parser drops its three activated abilities — the bridge would not
-    even produce a usable land + the activated-ability §2 decline).
-    Cathedral of War (Exalted static + empty produces) and Echoing
-    Deeps (clone replacement) also stay declined, as do the 10
-    Duskmourn conditional painlands.
+    single-color land, symmetric drop).
+
+    **Cathedral of War cycle 1 update (2026-05-23):** Cathedral of War
+    is now admitted by the new sub-shape E predicate
+    ``_printing_is_bridge_keyword_colorless_tapped_mana_land``. The
+    triple symmetric drop (Exalted + enters_tapped + parser-flattened
+    empty-``produces`` → bridge-synthesized ``mana_produced=("C",)``)
+    makes Cathedral bit-equal cross-engine as a vanilla untapped
+    colorless land (see
+    ``tests/test_cathedral_of_war_parity.py``).
+
+    The PRESERVED §2 traps are now Secluded Starforge (7,570 decks,
+    ``produces=frozenset()`` after the parser drops its three
+    activated abilities — the bridge would not even produce a usable
+    land + the activated-ability §2 decline) and Echoing Deeps (clone
+    replacement), plus the 10 Duskmourn conditional painlands.
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
     by = OracleParserCardSource().get_printings()
-    deck = ["Secluded Starforge", "Cathedral of War", "Echoing Deeps", "Forest"]
+    deck = ["Secluded Starforge", "Echoing Deeps", "Forest"]
     filtered, _ = _filter_deck_to_bridge_supported(deck, by)
     assert "Secluded Starforge" not in filtered
-    assert "Cathedral of War" not in filtered
     assert "Echoing Deeps" not in filtered
     assert "Forest" in filtered  # control: a real basic still admits
 

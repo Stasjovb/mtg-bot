@@ -6681,6 +6681,152 @@ def _printing_is_bridge_simple_tapped_mana_land(printing) -> bool:
     return True
 
 
+# Non-basic land substrate — sub-shape E (Cathedral of War cycle 1,
+# 2026-05-23). The set of static-keyword whitelist members the parser's
+# ``_try_build_keyword_colorless_utility_land``
+# (``cards/parser/land_builder.py:1541-1581``) admits today —
+# ``Exalted`` for Cathedral of War. ``Hexproof`` is the sibling
+# whitelist member for Lotus Field's paid-fancy-mana shape (different
+# parser path — ``_try_build_keyword_paid_fancy_mana_land``); only
+# ``exalted`` reaches the keyword-colorless utility-land profile
+# this predicate guards. ``Indestructible`` is also in
+# ``_LAND_KEYWORD_WHITELIST`` but no EoE-pool printing carries the
+# colorless-tapped-keyword shape with it today (verified 2026-05-23
+# against the merged parser pool — see the exactly-one-pool-wide pin
+# below).
+#
+# Each keyword listed here is a §2-declined static (the bridge has no
+# static-abilities path for non-creature card types — campaign-wide
+# decline tracked in ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``).
+# The predicate drops the keyword symmetrically on both engines (round-39
+# Ward / round-60 shockland / round-85 Planet land symmetric-drop
+# precedent).
+_CATHEDRAL_KEYWORD_WHITELIST = frozenset({"exalted"})
+
+
+def _printing_is_bridge_keyword_colorless_tapped_mana_land(printing) -> bool:
+    """True if a CardPrinting is a static-keyword colorless tapped
+    mana-only land the bridge can round-trip byte-equal across both
+    engines.
+
+    **Non-basic land substrate sub-shape E (Cathedral of War cycle 1,
+    2026-05-23; spec at ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §1.E).**
+    The motivating set is **Cathedral of War** (1,205 17lands decks) —
+    the live ``OracleParserCardSource`` flattens its printed
+    ``This land enters tapped. Exalted. {T}: Add {C}.`` to
+    ``produces=frozenset()`` + ``enters_tapped=True`` + ``keywords=
+    frozenset({'exalted'})`` + no abilities (the parser's
+    ``_try_build_keyword_colorless_utility_land``
+    (``cards/parser/land_builder.py:1541-1581``) intentionally drops
+    the ``{T}: Add {C}`` line — the static side's
+    ``make_utility_land(enters_tapped=True, keywords=...)`` shape leaves
+    ``produces`` empty and the Python engine's
+    ``auto_tap_for_cost`` (``actions.py:919-986``) covers generic
+    payments from any untapped land regardless of ``produces``).
+
+    **Why bit-equal cross-engine.** The Rust ``can_pay_cost``
+    (``rust/src/state_ops_mana.rs:618-655``) explicitly SKIPS lands with
+    empty ``mana_produced`` (``if symbols.is_empty() { continue; }``),
+    so a parser-flattened Cathedral with empty produces would be a
+    real divergence — Python's auto-tap-for-cost would count it toward
+    generic payments, Rust would skip it entirely. The fix routes
+    Cathedral's CardDef with ``mana_produced=("C",)`` so BOTH engines
+    materialize an untapped colorless land that taps for ``{C}`` (the
+    same shape basic Wastes emits). The CardDef bridge has no
+    ``enters_tapped`` field and Rust's ``register_printing`` has no
+    land tapped-entry path, so the parser's ``enters_tapped=True`` is
+    dropped symmetrically on both engines. The static-keyword Exalted
+    is dropped symmetrically as well — the bridge has no static-
+    abilities path for Land card-types and Rust's land registry path
+    has no keyword-static slot. Net: Cathedral is modeled as a vanilla
+    untapped colorless land on BOTH engines — no Exalted, no tapped-
+    entry, ever.
+
+    This is the round-60 shockland / round-85 Planet land symmetric-drop
+    precedent applied to a keyword-bearing colorless land: a parser-
+    structured rider the bridge drops symmetrically on both engines,
+    bit-equal under the bench play strategy, shipped blocked-at-fidelity
+    rather than as a latent inter-engine divergence. See
+    ``docs/SEARCH_LIMITATIONS.md`` for the deliberate-simplification
+    entry (Exalted as a Land-printed static, the tapped-entry rider,
+    and the printed ``{T}: Add {C}`` re-synthesized as the bridge auto-
+    wired colorless mana ability).
+
+    The predicate POSITIVELY asserts the parser-flattened
+    keyword-colorless-tapped profile: non-basic Land, EMPTY ``produces``
+    (the parser drops the colorless mana ability on this path), EXACTLY
+    ONE keyword from :data:`_CATHEDRAL_KEYWORD_WHITELIST`,
+    ``enters_tapped=True``, NO activated/triggered/static abilities, NO
+    conditional-tapped, NO clone. It MUST reject every sibling
+    sub-shape:
+
+      * **The 5 shocklands / 5 Planet lands** — the existing untapped
+        and tapped mana-only predicates own those; this predicate's
+        positive-empty-``produces`` guard makes the three predicate
+        sets disjoint (the shocklands have dual produces, the Planet
+        lands have mono produces, Cathedral has empty produces).
+      * **Secluded Starforge** — empty ``produces`` BUT carries 3
+        activated abilities (not on this profile); rejected by the
+        ``activated_abilities`` ban.
+      * **Echoing Deeps** — empty ``produces`` BUT
+        ``optional_copy_land_from_graveyard=True``; rejected by the
+        clone-field guard.
+      * **Duskmourn painlands** — dual ``produces`` (not empty); already
+        rejected by the empty-produces guard.
+
+    **Keyword whitelist tooth.** The predicate accepts ONLY keywords on
+    :data:`_CATHEDRAL_KEYWORD_WHITELIST` (today: ``exalted``). The
+    parser's ``_LAND_KEYWORD_WHITELIST``
+    (``cards/parser/land_builder.py:1451``) also contains
+    ``indestructible`` and ``hexproof``; if a future EoE-pool printing
+    parses through ``_try_build_keyword_colorless_utility_land`` with a
+    keyword outside this bridge whitelist, the exactly-one-pool-wide
+    pin (``test_cathedral_of_war_keyword_colorless_land_exactly_one_
+    pool_wide``) fails loudly so the bridge author can decide whether
+    to extend the whitelist or decline the new printing.
+    """
+    if "Land" not in printing.card_types:
+        return False
+    if "Basic" in printing.supertypes:
+        return False  # basic path owns these
+    # Empty ``produces`` is the keyword-colorless-tapped signature; the
+    # parser drops the ``{T}: Add {C}`` line on this profile per the
+    # static side's ``make_utility_land(enters_tapped=True, keywords=...)``
+    # shape. Non-empty produces means the printing is one of the other
+    # admitted sub-shapes (shockland / Planet land) — those are owned by
+    # their own predicates.
+    if printing.produces:
+        return False
+    if not getattr(printing, "enters_tapped", False):
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    # int field; 0 (or absent) disables the conditional-tapped
+    # replacement (cards/base.py:733). A positive threshold is a
+    # parser-structured tapped-entry Python honors and Rust ignores
+    # — declined for this sub-shape.
+    if getattr(printing, "enters_tapped_unless_any_player_life_at_most", 0):
+        return False
+    if getattr(printing, "enters_as_copy_of_creature", False):
+        return False
+    if getattr(printing, "optional_copy_land_from_graveyard", False):
+        return False
+    # Keyword vocabulary check — exactly one keyword from the
+    # bridge-whitelist set; zero or multiple keywords fail loudly so a
+    # future printing with a different keyword vocabulary doesn't
+    # silently slip through.
+    keywords = getattr(printing, "keywords", frozenset())
+    if len(keywords) != 1:
+        return False
+    if not keywords <= _CATHEDRAL_KEYWORD_WHITELIST:
+        return False
+    return True
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -7375,10 +7521,12 @@ def _printing_to_card_def(printing) -> CardDef:
 
     Pre-condition: printing must pass
     :func:`_printing_is_bridge_simple_creature`,
-    :func:`_printing_is_bridge_basic_land`, or
-    :func:`_printing_is_bridge_nonbasic_mana_land`. Otherwise the
-    conversion drops fields the bridge can't carry, producing a
-    printing that silently disagrees across engines.
+    :func:`_printing_is_bridge_basic_land`,
+    :func:`_printing_is_bridge_nonbasic_mana_land`,
+    :func:`_printing_is_bridge_simple_tapped_mana_land`, or
+    :func:`_printing_is_bridge_keyword_colorless_tapped_mana_land`.
+    Otherwise the conversion drops fields the bridge can't carry,
+    producing a printing that silently disagrees across engines.
     """
     if _printing_is_bridge_basic_land(printing):
         produces = next(iter(printing.produces))
@@ -7426,6 +7574,38 @@ def _printing_to_card_def(printing) -> CardDef:
             name=printing.name,
             card_type="Land",
             mana_produced=tuple(sorted(printing.produces)),
+        )
+    if _printing_is_bridge_keyword_colorless_tapped_mana_land(printing):
+        # Non-basic land substrate sub-shape E (Cathedral of War cycle 1,
+        # 2026-05-23): a keyword-colorless tapped land flattens to a
+        # vanilla untapped colorless Land CardDef — the same shape basic
+        # Wastes emits, with ``mana_produced=("C",)`` re-synthesizing the
+        # parser-dropped ``{T}: Add {C}`` line. The bridge carries no
+        # ``enters_tapped`` field and no static-keyword field for Land
+        # card-types, so both the tapped-entry rider AND the keyword
+        # (Exalted) are dropped symmetrically on both engines — Python's
+        # ``_card_def_to_python_printing`` builds a printing with
+        # ``enters_tapped=False`` + ``keywords=frozenset()`` from the
+        # CardDef defaults, and Rust's ``register_printing`` has no
+        # land-tapped-entry or static-keyword path. Both engines
+        # therefore materialize Cathedral of War as a vanilla untapped
+        # colorless land that taps for ``{C}`` — bit-equal cross-engine,
+        # CR-incomplete (a real Cathedral enters tapped and grants
+        # +1/+1 to a lone attacker via Exalted). Symmetric triple-drop:
+        # tapped-entry + Exalted + the parser's empty-produces flatten,
+        # all carried identically on BOTH bridge sides; the round-60
+        # shockland / round-85 Planet land symmetric-drop precedent
+        # extended to a keyword-bearing colorless land (see
+        # ``SEARCH_LIMITATIONS.md`` ``_printing_is_bridge_keyword_
+        # colorless_tapped_mana_land`` entry). No CardDef field change,
+        # no Rust change — the mana-ability auto-wire from
+        # ``mana_produced=("C",)`` materializes a ``{T}: Add {C}``
+        # activated ability on Python AND a 1-element ``mana_produced``
+        # Vec on Rust, byte-equal.
+        return CardDef(
+            name=printing.name,
+            card_type="Land",
+            mana_produced=("C",),
         )
     if _printing_is_bridge_pure_warp_creature(printing):
         # Phase-1 warp substrate (round-63): a pure fixed-cost warp
@@ -8763,6 +8943,36 @@ def _filter_deck_to_bridge_supported(
             # Cathedral/Starforge/Echoing Deeps on the produces / clone
             # guards).
             or _printing_is_bridge_simple_tapped_mana_land(printing)
+            # Non-basic land substrate — sub-shape E (Cathedral of War
+            # cycle 1, 2026-05-23): the 11th disjunct admits a static-
+            # keyword colorless tapped mana-only non-basic land. The
+            # SOLE EoE carrier is **Cathedral of War** (1,205 17lands
+            # decks; sub-shape E in
+            # ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §1.E) — parser-
+            # flattened to ``produces=frozenset()`` + ``enters_tapped=
+            # True`` + ``keywords={'exalted'}``. The bridge carries no
+            # ``enters_tapped`` field, no static-abilities field for
+            # Land card-types, and Rust's ``register_printing`` has no
+            # corresponding land-tapped or static-keyword paths. The
+            # CardDef admit synthesizes ``mana_produced=("C",)`` so the
+            # bridge auto-wire materializes the parser-dropped ``{T}:
+            # Add {C}`` colorless mana ability on both engines, while
+            # the tapped-entry rider AND Exalted are dropped
+            # symmetrically. Net: Cathedral materializes as a vanilla
+            # untapped colorless land that taps for ``{C}`` on BOTH
+            # engines — bit-equal cross-engine, CR-incomplete (round-60
+            # shockland / round-85 Planet land symmetric-drop precedent
+            # extended; SEARCH_LIMITATIONS.md). Without this admit, the
+            # parser's empty-``produces`` shape would diverge between
+            # engines today — Python's ``auto_tap_for_cost`` counts an
+            # empty-``produces`` land for generic payments while Rust's
+            # ``can_pay_cost`` skips it (``rust/src/state_ops_mana.rs:
+            # 618-655``: ``if symbols.is_empty() { continue; }``). The
+            # synthesized ``mana_produced=("C",)`` resolves that latent
+            # divergence in addition to closing the parser drop.
+            or _printing_is_bridge_keyword_colorless_tapped_mana_land(
+                printing,
+            )
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

@@ -1268,7 +1268,7 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through. Mirrors all 10 disjuncts
+    EXACT gate the bench corpus runs through. Mirrors all 11 disjuncts
     of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
 
     1. ``_printing_is_bridge_basic_land``
@@ -1286,6 +1286,16 @@ def loader_admits(printing) -> bool:
        ``enters_tapped=True`` mono-color shape; the bridge drops
        ``enters_tapped`` on both engines; round-39 Ward / round-60
        shockland symmetric-drop precedent).
+   11. ``_printing_is_bridge_keyword_colorless_tapped_mana_land`` —
+       non-basic land substrate sub-shape E (Cathedral of War cycle 1,
+       2026-05-23; admits Cathedral of War as an untapped colorless
+       land — the parser-flattened ``produces=frozenset()`` +
+       ``enters_tapped=True`` + ``keywords={'exalted'}`` shape; the
+       CardDef synthesizes ``mana_produced=("C",)`` to re-add the
+       parser-dropped ``{T}: Add {C}`` line on both engines, and the
+       bridge drops ``enters_tapped`` + Exalted on both engines;
+       round-60 shockland / round-85 Planet land symmetric-drop
+       precedent extended to a keyword-bearing colorless land).
 
     Reused, not reimplemented, so the bench tier and the real bench can
     never disagree on what "admitted" means.
@@ -1385,6 +1395,18 @@ def loader_admits(printing) -> bool:
             # the companion lane move them all the way to PROBED via
             # the slug-keyed ``_smoke_probed_cards`` scanner.
             or traj._printing_is_bridge_simple_tapped_mana_land(printing)
+            # Non-basic land substrate — sub-shape E (Cathedral of War
+            # cycle 1, 2026-05-23): the 11th admit arm of the real
+            # loader; mirrors ``_filter_deck_to_bridge_supported``.
+            # Cathedral of War (1,205 17lands decks) flips from BLOCKED
+            # -> COVERED here (0-Effect, admit-arm fires, ``not
+            # eff_classes and admitted`` arm of ``covered_ok``); the
+            # dedicated per-card bench probe in
+            # ``tests/test_cathedral_of_war_parity.py`` moves it to
+            # PROBED.
+            or traj._printing_is_bridge_keyword_colorless_tapped_mana_land(
+                printing,
+            )
         )
     except Exception:
         return False

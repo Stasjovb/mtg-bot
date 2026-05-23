@@ -4250,6 +4250,170 @@ behind THIS predicate.
 
 ---
 
+## Cathedral of War admitted as a plain untapped colorless land — `enters_tapped` + Exalted dropped on BOTH engines, parser-dropped `{T}: Add {C}` re-synthesized at the bridge (Cathedral cycle 1; sub-shape E, 2026-05-23)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_keyword_colorless_tapped_mana_land`
+(the new predicate, wired into `_filter_deck_to_bridge_supported` +
+`_printing_to_card_def` + `loader_admits` in
+`scripts/measure_pool_parity.py`). Companions: the round-60
+`_printing_is_bridge_nonbasic_mana_land` predicate (untapped duals;
+shocklands) and the round-85 `_printing_is_bridge_simple_tapped_mana_land`
+predicate (tapped mono-color; Planet lands). The three non-basic-
+mana-land predicates are positively disjoint by the produces-arity +
+enters_tapped + keyword guards.
+
+**What the shortcut is**: the production-deck trajectory-parity
+loader now admits **Cathedral of War** (1,205 17lands decks; sole EoE
+carrier of sub-shape E per `docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`
+§1.E) as a plain untapped COLORLESS land (a `CardDef(card_type="Land",
+mana_produced=("C",))` — the same shape basic Wastes uses). The real
+Magic card prints "This land enters tapped. Exalted. {T}: Add {C}.".
+The live `OracleParserCardSource` flattens Cathedral to
+`produces=frozenset()` + `enters_tapped=True` + `keywords={'exalted'}`
++ no abilities (the parser's `_try_build_keyword_colorless_utility_land`
+at `cards/parser/land_builder.py:1541-1581` intentionally drops the
+`{T}: Add {C}` line — the static side's `make_utility_land(enters_tapped=
+True, keywords=...)` shape leaves `produces` empty). The CardDef
+bridge has NO `enters_tapped` field, NO static-abilities field for
+Land card-types, and Rust's `register_printing` has no corresponding
+land-tapped or static-keyword paths. The CardDef admit synthesizes
+`mana_produced=("C",)` so the bridge auto-wire materializes the
+parser-dropped `{T}: Add {C}` colorless mana ability on both engines.
+Net: Cathedral is modeled as a vanilla untapped colorless land that
+taps for `{C}` on BOTH engines — no Exalted, no tapped-entry, ever.
+
+**Why it's OK**: the drop is **symmetric** at the bridge layer.
+Without this admit, the parser-flattened shape ships a real cross-
+engine divergence today — Python's `auto_tap_for_cost`
+(`actions.py:919-986`) counts an empty-`produces` land for generic
+payments (any untapped land can tap for {1}), while Rust's
+`can_pay_cost_set_based` (`rust/src/state_ops_mana.rs:618-655`)
+explicitly skips lands with empty `mana_produced` (`if symbols.is_
+empty() { continue; }`). The synthesized `mana_produced=("C",)`
+resolves that latent divergence AND closes the parser drop in the
+same move. The `enters_tapped=True` rider and Exalted keyword are
+dropped identically on both engines (the bridge carries no field for
+either), composing a triple symmetric drop the bridge carries
+bit-equal across both sides.
+
+The symmetric drop is verified at multiple levels (see
+`tests/test_cathedral_of_war_parity.py`):
+(1) **parser SoT pin** — the live parser flattens Cathedral to the
+exact shape the new predicate gates on;
+(2) **predicate admit + decline pins** — the predicate accepts
+Cathedral and rejects every other non-basic-land-gated card (the §2
+teeth's negative set is exhaustive — 22 declined siblings +
+exactly-one-pool-wide pin);
+(3) **disjointness pin** — the three non-basic-mana-land predicates
+are positively disjoint;
+(4) **bridge round-trip pins** — Python's `_card_def_to_python_
+printing` builds a CardPrinting with `mana_produced=("C",)` + one
+auto-wired mana ability + no enters_tapped + no keywords; Rust's
+`register_printing` builds the equivalent registry entry;
+(5) **dynamic byte-equal probe** — the Cathedral cycle 1 real-EoE
+bench probe (`test_cathedral_genuine_real_eoe_byte_equal_through_bench`)
+drives a real Cathedral-bearing 17lands archetype through
+`setup_matched_game_from_real_decks` with the `attack_all` strategy
+on BOTH engines for ~10 turns and asserts divergence-free play.
+
+This is the **round-60 shockland / round-85 Planet land symmetric-
+drop precedent** extended to a keyword-bearing colorless land: a
+parser-structured rider the bridge drops symmetrically on both
+engines, bit-equal under the bench play strategy, shipped blocked-
+at-fidelity rather than as a latent inter-engine divergence. The
+round-39 Ward grandparent applies as well.
+
+**Plan-doc verdict supersession**: `docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`
+§2 Class 3 (round-59 N2) predicted Cathedral of War would ship as a
+`DECLINE — enters_tapped divergence + Exalted §2 + no mana` —
+multi-substrate, untouchable in one slice. The Cathedral cycle 1
+empirical re-walk (2026-05-23) found that ALL THREE blockers are
+either symmetric-drop-able at the bridge or addressable by routing
+the CardDef through a different `mana_produced` shape:
+
+  * The `enters_tapped` divergence is the same one the round-85
+    Planet land slice already showed to be a non-issue — the CardDef
+    bridge has no `enters_tapped` field, so the parser's `True` flag
+    is dropped on Python's bridged side AND Rust never had a land-
+    tapped path, so the dropped-fields shape is bit-equal across
+    engines.
+  * Exalted is a §2-declined static the bridge has no field for; the
+    keyword drops symmetrically (Python's bridged printing carries
+    `keywords=frozenset()` from the CardDef default, Rust's registry
+    has no static-keyword path on Land card-types).
+  * "No mana" was the most cryptic blocker — empty `produces` would
+    indeed produce a do-nothing land on Python (`auto_tap_for_cost`'s
+    fallback can tap any untapped land for generic) AND a real
+    cross-engine divergence (Rust's `can_pay_cost_set_based` skips
+    empty-`mana_produced` lands). The fix routes Cathedral through a
+    NEW bridge predicate that emits `mana_produced=("C",)` —
+    re-synthesizing the parser-dropped colorless mana ability at the
+    bridge layer. The CardDef shape is the same one basic Wastes
+    uses; no new CardDef field, no Rust schema change.
+
+The plan-doc's "decline pending three substrates" verdict is hereby
+SUPERSEDED for the single-card sub-shape E by the same empirical
+re-walk pattern that round-85 used for sub-shape B's single-color
+profile. The fuller-fidelity full closure (Exalted on a Land, the
+tapped-entry rider, a parser-structured `{T}: Add {C}` line) still
+requires three separate substrates and is correctly out of scope.
+
+**Option-decision rationale (Option A vs B)**: chose Option A
+(silent-simplification admit). Exalted on a Land is the §2-declined
+static-abilities subsystem; the bench's `attack_all` strategy does
+drive solo attackers (which would observably exercise Exalted on a
+real Cathedral) but since the bridge drops Exalted on BOTH engines,
+the solo-attack behaves identically across engines — no inter-engine
+divergence, only a CR-incompleteness both sides share. Option B
+(honest-stop pending a separate Exalted-on-land substrate cycle)
+would defer +1 card / +1,205 decks of bench coverage with zero
+observable strength cost on the current bench, so Option A wins by
+the same logic the shockland (pay-life drop) and Planet land
+(Station/AA drop) precedents used.
+
+**Failure mode**: a future probe (or a smarter bench strategy) that
+DRIVES Cathedral's solo-attacker Exalted trigger would observe Python
+and Rust **agree with each other** (both omit the pump) but
+**disagree with the Comprehensive Rules** (a real Cathedral pumps a
+lone attacker +1/+1). It is a shared CR-incompleteness, NOT a cross-
+engine divergence — the bench cannot surface it because neither
+engine sees the Exalted keyword on the bridged Cathedral printing.
+Honest risk is that this masks the absence of the static-abilities-
+on-non-creature-printings substrate (a §2 decline at the bridge
+layer — `CardDef` carries no `static_abilities` field).
+
+**Fix-scope estimate**: the full-fidelity closure requires THREE
+separate substrates: (1) a `CardDef.enters_tapped: bool` field + Rust
+`register_printing` land-tapped path (the Phase-3 §3 work estimated
+4-6h in the shockland/Planet land entries above); (2) the campaign-
+wide **static-abilities-on-non-creature-printings** substrate (the
+CardDef bridge has no static-abilities field for Lands today —
+multi-week scope); (3) a parser-structured `{T}: Add {C}` line as an
+explicit activated ability the bridge auto-wires identically to the
+synthesized one (versus the current shape, which materializes the
+mana ability from `mana_produced`). The third sub-piece is the
+smallest — it would let the parser ship Cathedral with `produces=
+frozenset({"C"})` instead of the empty-produces shape, simplifying
+this admit predicate's positive-empty-produces guard. All three are
+out of scope for near-term rounds.
+
+**Impact estimate**: **+1 card / +1,205 cumulative 17lands decks**
+(Cathedral of War) unblocked into the production-deck bench. **0
+strength cost** (no engine behavior changes; this is a bench-coverage
+admit, not a rules change). The non-basic-land substrate now stands
+at **+11 cards / +26,887 cumulative decks** between round-60 (5
+shocklands) + round-85 (5 Planet lands) + this slice (Cathedral). The
+roadmap's remaining ~7,688-deck tail (12 cards: Secluded Starforge
+7,570 + Echoing Deeps 118 + 10 zero-deck Duskmourn painlands) is
+gated behind the deferred conditional-tapped substrate (the
+painlands' real Python-vs-Rust divergence on
+`enters_tapped_unless_any_player_life_at_most`), the clone-land
+substrate (Echoing Deeps' graveyard-copy replacement), and the
+activated-ability substrate (Secluded Starforge's three AAs) — not
+behind THIS predicate.
+
+---
+
 ## Perigee Beckoner — `PumpTargetCreatureUntilEotGrantDiesReturnTapped` Effect half shipped byte-equal; full card stays loader-gated (general nested-trigger-grant subsystem + warp_cost)
 
 **Location**: `rust/src/state.rs`

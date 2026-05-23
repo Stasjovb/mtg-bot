@@ -127,20 +127,59 @@ Highest single-gate deck-count of the 23 (7,570) but the LEAST
 bridge-tractable — this is the campaign-wide activated-ability §2
 decline wearing a land type line.
 
-### Sub-shape E — Static-keyword land (1 card, 1,205 decks) — Stellar Sights
+### Sub-shape E — Static-keyword land (1 card, 1,205 decks) — Stellar Sights — **LANDED Cathedral cycle 1 (2026-05-23)**
 
 | Card | Produces | 17lands decks | Shape |
 |---|---|---:|---|
 | Cathedral of War | C | 1,205 | enters tapped; **Exalted** (static); `{T}: Add {C}` |
 
-Parser view: `produces=None`, `enters_tapped=True`,
-`static_abilities` not materialized for Exalted on this path
-(parses as a bare tapped colorless land; Exalted dropped). **Python
-model:** tapped colorless land, Exalted NOT modeled (parser drop),
-no `produces` so no auto-wired mana. **Rust model:** untapped, no
-mana. **Bridge round-trips IDENTICALLY today?** NO —
-`enters_tapped` divergence + no usable mana ability + Exalted is a
-§2-declined static. Decline.
+Parser view: `produces=frozenset()`, `enters_tapped=True`,
+`keywords=frozenset({'exalted'})` (the parser DOES materialize the
+keyword via `_LAND_KEYWORD_WHITELIST` per `cards/parser/land_builder.
+py:1451-1581`, but the static_abilities field stays empty — the
+keyword rides on `printing.keywords`, not `printing.static_abilities`).
+`static_abilities` is NOT materialized.
+
+**LANDED status (2026-05-23, Cathedral cycle 1)**: the round-59 N2
+verdict ("DECLINE — `enters_tapped` divergence + Exalted §2 + no
+mana") is **SUPERSEDED**. The empirical re-walk found that all three
+predicted blockers symmetric-drop cleanly at the bridge layer (the
+same pattern round-85 used for sub-shape B's single-color profile),
+and the "no usable mana" blocker is addressable by routing
+Cathedral's CardDef through `mana_produced=("C",)` — re-synthesizing
+the parser-dropped `{T}: Add {C}` colorless mana ability at the
+bridge auto-wire layer. Without this synthesis the parser-flattened
+empty-`produces` shape ships a real cross-engine divergence today
+(Python's `auto_tap_for_cost` counts any untapped land for generic,
+Rust's `can_pay_cost_set_based` skips empty-`mana_produced` lands —
+verified 2026-05-23 against `rust/src/state_ops_mana.rs:618-655`).
+
+**Bridge round-trips IDENTICALLY today?** **YES** post Cathedral
+cycle 1 — via the new
+`_printing_is_bridge_keyword_colorless_tapped_mana_land` predicate
+(`src/mtg_bot/parity/trajectory.py`) → CardDef `mana_produced=("C",)`
+→ both engines materialize a vanilla untapped colorless land that
+taps for `{C}`. Triple symmetric drop: Exalted, `enters_tapped`, and
+the parser-dropped `{T}: Add {C}` line (re-synthesized at the bridge
+via `mana_produced`). See `docs/SEARCH_LIMITATIONS.md` (Cathedral of
+War entry, 2026-05-23) for the full deliberate-simplification
+rationale + the §2 / failure-mode / fix-scope breakdown, and
+`tests/test_cathedral_of_war_parity.py` for the parser SoT pin +
+predicate admit/decline pins + disjointness pin + bridge round-trip
+pins (Python + Rust sides) + loader-admit pin + dynamic real-EoE
+byte-equal probe.
+
+**Exalted-on-land carve-out**: the full-fidelity Exalted-on-Land
+substrate (parser-materialized `static_abilities` field + Rust
+static-keyword path on Land card-types + bridge round-trip + combat-
+phase Exalted hook reading the bridged Cathedral's static-abilities)
+remains DEFERRED. The bench's `attack_all` strategy drives solo
+attackers (which would observably exercise Exalted on a real
+Cathedral), but since the bridge drops Exalted on BOTH engines, the
+solo-attack behaves identically across engines — no inter-engine
+divergence, only a CR-incompleteness both sides share. This is a
+deliberate Phase 3.5-style decline tracked in
+`SEARCH_LIMITATIONS.md`'s Cathedral entry.
 
 ### Sub-shape F — Clone land (1 card, 118 decks) — Stellar Sights
 
@@ -163,13 +202,13 @@ substrate, well beyond this slice).
 
 | Sub-shape | #cards | 17lands decks | Bridge-correct today? |
 |---|---:|---:|---|
-| A. Pay-life shockland | 5 | 18,065 | Equal-but-rules-wrong (shared simplification) |
-| B. Planet enters-tapped + Station + AA | 5 | 7,617 | NO (inter-engine `enters_tapped` divergence) |
+| A. Pay-life shockland | 5 | 18,065 | **LANDED round-60** (shared simplification) |
+| B. Planet enters-tapped + Station + AA | 5 | 7,617 | **LANDED round-85** (shared simplification — symmetric `enters_tapped` drop) |
 | C. Duskmourn conditional painland | 9 | 0 | NO (inter-engine divergence; 0 signal) |
 | D. Activated-ability land | 1 | 7,570 | NO (no usable mana + §2 activated) |
-| E. Static-keyword land | 1 | 1,205 | NO (divergence + §2 static) |
+| E. Static-keyword land | 1 | 1,205 | **LANDED Cathedral cycle 1 (2026-05-23)** (shared simplification — symmetric Exalted + `enters_tapped` drop, parser-dropped `{T}: Add {C}` re-synthesized via `mana_produced=("C",)`) |
 | F. Clone land | 1 | 118 | NO (replacement effect) |
-| **Total** | **23** | **34,575** | — |
+| **Total** | **23** | **34,575** | **LANDED: 11 cards / 26,887 decks** |
 
 Reconciles exactly with the roadmap's non-basic-land row (23 cards /
 34,575 decks / all single-gated). See §5.
@@ -263,21 +302,28 @@ This splits the 23 into three honest classes:
 
 | Sub-shape | Cards | Decks | §2 verdict |
 |---|---:|---:|---|
-| A. Pay-life shockland | 5 | 18,065 | **ADMIT** as documented deliberate simplification (untapped dual; pay-life/tapped dropped symmetrically — bit-equal, CR-incomplete; SEARCH_LIMITATIONS entry mandatory) |
-| B. Planet tapped+Station+AA | 5 | 7,617 | DECLINE — inter-engine `enters_tapped` divergence **and** Station/AA §2 decline |
+| A. Pay-life shockland | 5 | 18,065 | **LANDED round-60** — documented deliberate simplification (untapped dual; pay-life/tapped dropped symmetrically — bit-equal, CR-incomplete; see SEARCH_LIMITATIONS.md) |
+| B. Planet tapped+Station+AA | 5 | 7,617 | **LANDED round-85** — same shared-simplification pattern (parser-flattened tapped+Station+AA → untapped mono-color land; bit-equal, CR-incomplete; see SEARCH_LIMITATIONS.md) |
 | C. Duskmourn painland | 9 | 0 | DECLINE — inter-engine conditional-tapped divergence; 0 signal anyway |
 | D. Activated-ability land | 1 | 7,570 | DECLINE — no usable mana + activated-ability §2 decline |
-| E. Static-keyword land | 1 | 1,205 | DECLINE — `enters_tapped` divergence + Exalted §2 + no mana |
+| E. Static-keyword land | 1 | 1,205 | **LANDED Cathedral cycle 1 (2026-05-23)** — shared-simplification pattern extended to a keyword-bearing colorless land (Exalted + tapped-entry dropped symmetrically; parser-dropped `{T}: Add {C}` re-synthesized via `mana_produced=("C",)`; see SEARCH_LIMITATIONS.md) |
 | F. Clone land | 1 | 118 | DECLINE — replacement-effect clone, no registry path |
 
-**Honest bottom line:** the roadmap's "23 single-gated, 34,575 decks,
-fully realized in one closure" is the *attribution* truth (all 23 are
-single-gated by the supertype gate), but the *bridge-correct*
-realizable yield in one clean slice is **5 cards / 18,065 decks**
-(sub-shape A, as a documented simplification). The remaining 18 need
-an `enters_tapped` substrate (B/C/E partial), an activated-ability
-substrate (B/D), or a replacement substrate (F) — none of which is
-"widen the supertype gate".
+**Honest bottom line (2026-05-23 update):** the empirical re-walks of
+sub-shapes B and E found that the round-59 N2 "decline" verdicts
+underestimated what was reachable via the shared-simplification
+pattern — both `enters_tapped` and Exalted symmetric-drop cleanly at
+the bridge layer (the CardDef carries no field for either), and
+sub-shape E's "no usable mana" blocker is closable by routing the
+CardDef through `mana_produced=("C",)`. The non-basic-land substrate
+now stands at **11 cards / 26,887 cumulative 17lands decks** between
+round-60 (5 shocklands) + round-85 (5 Planet lands) + Cathedral cycle
+1 (Cathedral of War). The remaining 12-card tail (sub-shapes C / D /
+F: Duskmourn painlands 9 × 0 decks + Secluded Starforge 7,570 +
+Echoing Deeps 118) stays gated behind the conditional-tapped
+substrate (C), the activated-ability substrate (D), and the
+replacement-effect clone substrate (F) — none of which is "widen the
+supertype gate".
 
 ## 3. Phased implementation plan
 
