@@ -4,6 +4,31 @@ read-only scout only). The per-card enumeration + sub-shape rollup are
 regenerable: `PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe
 scripts/scout_r59_nonbasic_land_shapes.py`.
 
+> **Phase 2 LANDED (2026-05-23,
+> `feature/nonbasic-land-phase-2-p1`).** Sub-shape C (Duskmourn
+> conditional painlands, 9 cards) flipped from BLOCKED to
+> PROBED — both engines now honor
+> `CardPrinting.enters_tapped_unless_any_player_life_at_most` on
+> play-land. The round-59 §2 Class-2 verdict ("inter-engine
+> conditional-tapped divergence") for sub-shape C is **closed**,
+> not by symmetric drop, but by mirroring the field end-to-end
+> through the bridge + Rust `register_printing` +
+> `state_ops_cast::play_land` conditional routing. Predicate
+> `_printing_is_bridge_nonbasic_painland_conditional`
+> (`trajectory.py`); Rust accessor
+> `Registry.get_printing_enters_tapped_unless_any_player_life_at_most`.
+> Strangled Cemetery (the 10th cycle member the round-59 audit
+> missed) is also admitted by the predicate — same shape, same
+> threshold. **+9 cards (10 with Strangled Cemetery) / +0 EoE
+> 17lands decks** (all off-set Duskmourn cards in the merged
+> pool); the substrate is reusable for any future EoE printing
+> with the same shape. Sub-shapes D (Secluded Starforge),
+> E (Cathedral of War), and F (Echoing Deeps) STAY DECLINED —
+> each needs its own substrate cycle (the activated-ability,
+> Exalted-static, and graveyard-clone replacement substrates
+> respectively, all gated behind the campaign-wide subsystem
+> work the roadmap already defers).
+
 # Non-basic land substrate — implementation + scoping plan
 
 ## 0. Why this doc exists
@@ -204,11 +229,11 @@ substrate, well beyond this slice).
 |---|---:|---:|---|
 | A. Pay-life shockland | 5 | 18,065 | **LANDED round-60** (shared simplification) |
 | B. Planet enters-tapped + Station + AA | 5 | 7,617 | **LANDED round-85** (shared simplification — symmetric `enters_tapped` drop) |
-| C. Duskmourn conditional painland | 9 | 0 | NO (inter-engine divergence; 0 signal) |
+| C. Duskmourn conditional painland | 9 (+ Strangled Cemetery as 10th) | 0 | **LANDED Phase 2 (2026-05-23)** (`enters_tapped_unless_any_player_life_at_most` mirrored end-to-end through bridge + Rust `register_printing` + `state_ops_cast::play_land`; closes the round-59 §2 Class-2 conditional-tapped divergence) |
 | D. Activated-ability land | 1 | 7,570 | NO (no usable mana + §2 activated) |
 | E. Static-keyword land | 1 | 1,205 | **LANDED Cathedral cycle 1 (2026-05-23)** (shared simplification — symmetric Exalted + `enters_tapped` drop, parser-dropped `{T}: Add {C}` re-synthesized via `mana_produced=("C",)`) |
 | F. Clone land | 1 | 118 | NO (replacement effect) |
-| **Total** | **23** | **34,575** | **LANDED: 11 cards / 26,887 decks** |
+| **Total** | **23** | **34,575** | **LANDED: 21 cards (incl. Strangled Cemetery as 10th of sub-shape C) / 26,887 EoE 17lands decks** |
 
 Reconciles exactly with the roadmap's non-basic-land row (23 cards /
 34,575 decks / all single-gated). See §5.
@@ -304,7 +329,7 @@ This splits the 23 into three honest classes:
 |---|---:|---:|---|
 | A. Pay-life shockland | 5 | 18,065 | **LANDED round-60** — documented deliberate simplification (untapped dual; pay-life/tapped dropped symmetrically — bit-equal, CR-incomplete; see SEARCH_LIMITATIONS.md) |
 | B. Planet tapped+Station+AA | 5 | 7,617 | **LANDED round-85** — same shared-simplification pattern (parser-flattened tapped+Station+AA → untapped mono-color land; bit-equal, CR-incomplete; see SEARCH_LIMITATIONS.md) |
-| C. Duskmourn painland | 9 | 0 | DECLINE — inter-engine conditional-tapped divergence; 0 signal anyway |
+| C. Duskmourn painland | 9 (+ Strangled Cemetery as 10th) | 0 | **LANDED Phase 2 (2026-05-23)** — conditional-tapped divergence closed by mirroring `enters_tapped_unless_any_player_life_at_most` end-to-end through CardDef + Rust `CardPrinting` + `state_ops_cast::play_land`; 0 EoE bench signal (substrate reusable for future EoE printings with the same shape) |
 | D. Activated-ability land | 1 | 7,570 | DECLINE — no usable mana + activated-ability §2 decline |
 | E. Static-keyword land | 1 | 1,205 | **LANDED Cathedral cycle 1 (2026-05-23)** — shared-simplification pattern extended to a keyword-bearing colorless land (Exalted + tapped-entry dropped symmetrically; parser-dropped `{T}: Add {C}` re-synthesized via `mana_produced=("C",)`; see SEARCH_LIMITATIONS.md) |
 | F. Clone land | 1 | 118 | DECLINE — replacement-effect clone, no registry path |

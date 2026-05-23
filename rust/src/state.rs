@@ -3619,6 +3619,13 @@ pub fn make_synthetic_state(
         // `restricts_noncreature_spells_to_one_per_turn` key, parser
         // maps the absence to false.
         restricts_noncreature_spells_to_one_per_turn: false,
+        // Non-basic land substrate — Phase 2 painland conditional
+        // (2026-05-23): synthetic-state printings have no
+        // conditional-tapped threshold. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `enters_tapped_unless_any_player_life_at_most` key, parser
+        // maps the absence to 0 (the disabled sentinel).
+        enters_tapped_unless_any_player_life_at_most: 0,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -3709,6 +3716,13 @@ pub fn make_synthetic_state(
         // `restricts_noncreature_spells_to_one_per_turn` key, parser
         // maps the absence to false.
         restricts_noncreature_spells_to_one_per_turn: false,
+        // Non-basic land substrate — Phase 2 painland conditional
+        // (2026-05-23): synthetic-state printings have no
+        // conditional-tapped threshold. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `enters_tapped_unless_any_player_life_at_most` key, parser
+        // maps the absence to 0 (the disabled sentinel).
+        enters_tapped_unless_any_player_life_at_most: 0,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -3812,6 +3826,13 @@ pub fn make_synthetic_state(
         // `restricts_noncreature_spells_to_one_per_turn` key, parser
         // maps the absence to false.
         restricts_noncreature_spells_to_one_per_turn: false,
+        // Non-basic land substrate — Phase 2 painland conditional
+        // (2026-05-23): synthetic-state printings have no
+        // conditional-tapped threshold. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `enters_tapped_unless_any_player_life_at_most` key, parser
+        // maps the absence to 0 (the disabled sentinel).
+        enters_tapped_unless_any_player_life_at_most: 0,
     });
     let registry = builder.snapshot();
 

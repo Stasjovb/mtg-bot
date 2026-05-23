@@ -4239,14 +4239,106 @@ not a rules change). The non-basic-land substrate is now at
 **+10 cards / +25,682 cumulative decks** between round-60 (5
 shocklands) and round-85 (5 Planet lands). The roadmap's remaining
 ~8,893-deck tail (13 cards: Secluded Starforge 7,570 + Cathedral of
-War 1,205 + Echoing Deeps 118 + 10 zero-deck Duskmourn painlands) is
-gated behind the deferred conditional-tapped substrate (the
-painlands' real Python-vs-Rust divergence on
+War 1,205 + Echoing Deeps 118 + 10 zero-deck Duskmourn painlands)
+was *previously* gated behind the deferred conditional-tapped
+substrate (the painlands' real Python-vs-Rust divergence on
 `enters_tapped_unless_any_player_life_at_most`), the clone-land
 substrate (Echoing Deeps' graveyard-copy replacement), the
 static-abilities substrate (Cathedral of War's Exalted), and the
-activated-ability substrate (Secluded Starforge's three AAs) — not
-behind THIS predicate.
+activated-ability substrate (Secluded Starforge's three AAs); the
+painlands' branch is now CLOSED by the Phase 2 conditional-painland
+substrate (2026-05-23; see the next entry).
+
+---
+
+## 9 (10) Duskmourn conditional painlands admitted via end-to-end conditional-tapped substrate — `enters_tapped_unless_any_player_life_at_most` mirrored on BOTH engines (2026-05-23 Phase 2)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_nonbasic_painland_conditional`
+(the new predicate, wired into `_filter_deck_to_bridge_supported` +
+`_printing_to_card_def` + `loader_admits` in
+`scripts/measure_pool_parity.py`). Spec:
+`docs/NONBASIC_LAND_SUBSTRATE_PLAN.md` §3 Phase 2 (round-59 N2; landed
+2026-05-23). Substrate landed alongside: Rust
+`CardPrinting.enters_tapped_unless_any_player_life_at_most: i32`
+(`rust/src/cards.rs`); parser arm; Rust play-land conditional routing
+(`rust/src/state_ops_cast.rs:play_land` + helper
+`move_from_hand_to_battlefield_with_tapped`); bridge round-trip in
+`cross_engine.py` (CardDef field, registry-dict emit, Python-printing
+materialization); Rust accessor
+`Registry.get_printing_enters_tapped_unless_any_player_life_at_most`.
+
+**What landed (NOT a shortcut — this is a real substrate closure)**:
+the production-deck trajectory-parity loader now admits the 9
+Duskmourn conditional painlands — **Abandoned Campground, Bleeding
+Woods, Etched Cornfield, Lakeside Shack, Murky Sewer, Neglected Manor,
+Peculiar Lighthouse, Raucous Carnival, Razortrap Gorge** (+ Strangled
+Cemetery, the 10th cycle member the round-59 audit missed) — with the
+oracle text "This land enters tapped unless a player has 13 or less
+life." faithfully modeled on **BOTH** engines. The CardDef now
+carries `enters_tapped_unless_any_player_life_at_most: int = 0`; the
+bridge emits the registry-dict key when set; the Rust parser reads
+it; Rust's `play_land` consults the threshold and sets the freshly-
+pushed object's `tapped` flag BEFORE `drain_pending_etb_dispatches`
+fires (mirrors Python's `actions.py:1096-1101` exactly). The two
+sibling non-basic-land predicates (round-60 untapped shockland,
+round-85 mono-color tapped Planet land) remain positively disjoint
+on the conditional-tapped guard — the three predicates partition the
+non-basic-land admit space.
+
+**Why this is NOT a deliberate simplification**: the round-59 §2
+Class-2 verdict ("inter-engine `enters_tapped` divergence" for
+sub-shape C) is **closed end-to-end**, not papered over with a
+symmetric drop. Python's `actions._play_land` already honored the
+conditional-tapped replacement (pre-substrate, on `main`); the
+divergence was purely on the Rust side. With the substrate landed,
+the engines agree on every life-total seed:
+
+  * `life_p0 = 10, life_p1 = 20` → some player ≤ 13 → BOTH engines:
+    untapped.
+  * `life_p0 = 20, life_p1 = 20` → no player ≤ 13 → BOTH engines:
+    tapped.
+  * `life_p0 = 20, life_p1 = 13` (boundary) → some player ≤ 13 →
+    BOTH engines: untapped.
+  * `life_p0 = 20, life_p1 = 14` (boundary + 1) → no player ≤ 13 →
+    BOTH engines: tapped.
+
+Pinned at three levels: (1) parser SoT per card (parametrized over
+the 9 painlands + Strangled Cemetery), (2) bridge round-trip
+(Python → registry-dict → Python; CardDef → Rust `Registry` accessor
+read-back), (3) cross-engine byte-equal play-land probe
+(`test_cross_engine_painland_play_byte_equal_tapped_state`,
+parametrized over 5 life-total seeds; both engines drive `play_land`
+and assert matching `tapped` state).
+
+**Failure mode**: none for the admitted shape. The predicate's exact-
+13 threshold guard positively rejects any future Duskmourn-style
+cycle with a different threshold — a substrate widen would land that
+cycle by its own admit predicate (the Rust play-land routing already
+handles any positive threshold). The `enters_tapped` flag for the
+plain "this land enters tapped" rider remains UN-honored on Rust (a
+separate substrate; the round-85 mono-color Planet lands are bridged
+as untapped on BOTH engines symmetrically — see the previous
+SEARCH_LIMITATIONS entry).
+
+**Fix-scope estimate**: 0 — this substrate IS the fix. The 4
+remaining single-gate non-basic-land cards (Secluded Starforge,
+Cathedral of War, Echoing Deeps) stay declined; each needs its own
+substrate cycle (activated-ability, Exalted-static, graveyard-clone
+replacement — all gated behind already-deferred sprawling
+subsystems).
+
+**Impact estimate**: **+9 cards (10 with Strangled Cemetery) / +0
+cumulative 17lands EoE decks** (all 9 (10) are off-set Duskmourn
+cards in the merged pool — card-count fidelity only, no real bench-
+signal yield this round). The substrate is reusable for any future
+EoE printing with the same shape; the predicate keys off the field,
+not the card name. The non-basic-land substrate is now at **+19
+cards (20 with Strangled Cemetery) / +25,682 cumulative decks**
+between round-60 (5 shocklands), round-85 (5 Planet lands), and
+2026-05-23 Phase 2 (9 (10) painlands). The remaining ~8,893-deck
+single-gate tail collapses to **3 cards / 8,893 decks**: Secluded
+Starforge 7,570 + Cathedral of War 1,205 + Echoing Deeps 118; each
+gated behind its own deferred subsystem.
 
 ---
 

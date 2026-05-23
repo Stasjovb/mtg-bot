@@ -528,6 +528,25 @@ class CardDef:
     # maps the absent key to ``false`` per the back-compat pattern
     # every other optional flag uses.
     restricts_noncreature_spells_to_one_per_turn: bool = False
+    # Non-basic land substrate — Phase 2 painland conditional
+    # (2026-05-23). Threshold for the Duskmourn-style "This land
+    # enters tapped unless a player has N or less life." conditional-
+    # tapped replacement (CR 614 — ETB replacement). When ``> 0``, on
+    # ``play_land`` the land enters TAPPED iff NO player has
+    # ``life <= threshold``; otherwise it enters UNTAPPED. ``0`` is
+    # the disabled sentinel (the back-compat default — every
+    # pre-substrate CardDef omits it; the registry-dict emitter
+    # skips the ``enters_tapped_unless_any_player_life_at_most`` key
+    # and the Rust parser maps the absence to ``0``). Mirrors
+    # Python's ``CardPrinting.enters_tapped_unless_any_player_life_at_
+    # most: int = 0`` at ``src/mtg_bot/cards/base.py:733``. The Rust
+    # mirror is the ``enters_tapped_unless_any_player_life_at_most``
+    # field on ``CardPrinting`` (added 2026-05-23). The 9 Duskmourn
+    # painlands (Abandoned Campground / Bleeding Woods / Etched
+    # Cornfield / Lakeside Shack / Murky Sewer / Neglected Manor /
+    # Peculiar Lighthouse / Raucous Carnival / Razortrap Gorge) all
+    # print ``threshold = 13``.
+    enters_tapped_unless_any_player_life_at_most: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -12845,6 +12864,17 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # turn`` (`cards/base.py:844`).
     if card.restricts_noncreature_spells_to_one_per_turn:
         printing_dict["restricts_noncreature_spells_to_one_per_turn"] = True
+    # Non-basic land substrate — Phase 2 painland conditional
+    # (2026-05-23). Emit the conditional-tapped threshold only when
+    # positive so every pre-substrate CardDef registry dict is
+    # byte-identical to before this slice landed. The Rust parser
+    # maps the absent key to ``0`` (the disabled sentinel) per the
+    # back-compat pattern every other optional int flag uses. The 9
+    # Duskmourn painlands ship ``threshold = 13``.
+    if card.enters_tapped_unless_any_player_life_at_most > 0:
+        printing_dict["enters_tapped_unless_any_player_life_at_most"] = (
+            card.enters_tapped_unless_any_player_life_at_most
+        )
     if card.static_self_bonuses:
         bonus_entries: list[dict] = []
         for (
@@ -13580,6 +13610,16 @@ def _card_def_to_python_printing(card: "CardDef"):
         # post-filter at `legal.py:880-893`.
         restricts_noncreature_spells_to_one_per_turn=(
             card.restricts_noncreature_spells_to_one_per_turn
+        ),
+        # Non-basic land substrate — Phase 2 painland conditional
+        # (2026-05-23). Threads the Duskmourn-painland conditional-
+        # tapped threshold through to the Python CardPrinting.
+        # Default ``0`` (the disabled sentinel) keeps every pre-
+        # substrate CardDef bit-identical to before this slice
+        # landed. Read by Python's ``actions._play_land``
+        # (`actions.py:1096-1101`) at ETB time.
+        enters_tapped_unless_any_player_life_at_most=(
+            card.enters_tapped_unless_any_player_life_at_most
         ),
     )
 

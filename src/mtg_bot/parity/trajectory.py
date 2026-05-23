@@ -6874,6 +6874,121 @@ def _printing_is_bridge_keyword_colorless_tapped_mana_land(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
+    """True if a CardPrinting is a Duskmourn-style conditional painland
+    the bridge can now round-trip byte-equal across both engines.
+
+    **Non-basic land substrate — Phase 2 (2026-05-23; spec at
+    ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §3 Phase 2.)** Closes
+    sub-shape C — the 9 Duskmourn painlands: Abandoned Campground /
+    Bleeding Woods / Etched Cornfield / Lakeside Shack / Murky Sewer
+    / Neglected Manor / Peculiar Lighthouse / Raucous Carnival /
+    Razortrap Gorge (+ Strangled Cemetery, the 10th member of the
+    parser-claimed cycle the round-59 audit missed — all 10 share the
+    same parser-emitted shape and all 10 pass this predicate).
+
+    **Substrate that landed alongside this predicate.** Pre-Phase-2,
+    the bridge had NO ``enters_tapped_unless_any_player_life_at_most``
+    field, and Rust's ``register_printing`` had no painland-style
+    play-land routing — Python honored the conditional-tapped
+    replacement at ``actions.py:1096-1101``; Rust silently entered
+    every painland UNTAPPED. The round-59 plan doc's §2 Class-2
+    verdict ("inter-engine conditional-tapped divergence") was
+    correct, and this slice closes the divergence by mirroring the
+    field through both engines:
+
+      * **CardDef** carries
+        ``enters_tapped_unless_any_player_life_at_most: int = 0``.
+      * **Bridge** emits the registry-dict key when ``> 0``;
+        ``_card_def_to_python_printing`` threads the int through.
+      * **Rust** ``CardPrinting`` carries
+        ``enters_tapped_unless_any_player_life_at_most: i32``;
+        ``parse_printing`` reads the key.
+      * **Rust play-land** routes the conditional-tapped check in
+        ``state_ops_cast::play_land`` BEFORE the move (the freshly-
+        pushed object lands with the correct tapped state before
+        ``drain_pending_etb_dispatches`` fires).
+
+    The predicate's §2 teeth admit ONLY the parser-flattened
+    conditional-painland profile: non-basic Land, 2 produce colors,
+    ``enters_tapped=False``, a positive
+    ``enters_tapped_unless_any_player_life_at_most`` threshold (the
+    Duskmourn cycle prints 13), NO triggered/activated/static
+    abilities, NO keywords, NO clone fields. The two sibling
+    non-basic-land predicates (round-60 untapped shockland,
+    round-85 mono-color tapped Planet land) stay positively disjoint
+    on the conditional-tapped guard:
+
+      * **Round-60** rejects a positive threshold → cannot admit a
+        painland. **Round-85** rejects a positive threshold → cannot
+        admit a painland. **This predicate** REQUIRES a positive
+        threshold → cannot admit a shockland or a Planet land. The
+        three predicates partition the non-basic-land admit space.
+
+    The remaining 4 of the original 23 non-basic-land cards stay
+    DECLINED in this phase: Secluded Starforge (sub-shape D — three
+    activated abilities, ``produces=()``), Cathedral of War (sub-
+    shape E — Exalted static + ``produces=()``), Echoing Deeps
+    (sub-shape F — graveyard-clone replacement). Each needs its own
+    substrate cycle.
+
+    **Real bench signal:** 0 EoE deck-count (all 9 are off-set
+    Duskmourn cards in the merged pool, not EoE draftables), so this
+    Phase-2 yield is **+9 cards / +0 cumulative 17lands EoE decks**
+    — card-count fidelity only, NOT bench-signal yield. The substrate
+    that landed here is reusable for any future EoE printing with the
+    same shape (the predicate keys off the field, not the card name).
+    """
+    if "Land" not in printing.card_types:
+        return False
+    if "Basic" in printing.supertypes:
+        return False  # basic path owns these
+    if not printing.produces or not (1 <= len(printing.produces) <= 2):
+        return False
+    # The painland cycle is dual-colored — defends against any future
+    # mono-color or 3+ color carrier slipping through.
+    if printing.activated_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    # The conditional-tapped replacement IS the load-bearing rider —
+    # we admit ONLY printings that carry it. The round-60 + round-85
+    # sibling predicates reject it; this one positively requires it.
+    threshold = getattr(
+        printing, "enters_tapped_unless_any_player_life_at_most", 0,
+    )
+    if threshold <= 0:
+        return False
+    # The Duskmourn cycle's canonical threshold is 13. The check is
+    # written as an exact-match so a future cycle with a different
+    # threshold falls into a SEPARATE admit predicate (whose Rust
+    # play-land routing already handles any positive threshold — but
+    # the loader keeps the strict gate so the substrate widening
+    # decision is explicit, not silent).
+    if threshold != 13:
+        return False
+    # The plain `enters_tapped` flag is honored by Python's
+    # `_play_land` (`actions.py:1087`) but NOT YET by Rust's
+    # `play_land` (separate substrate — see SEARCH_LIMITATIONS.md
+    # `_printing_is_bridge_simple_tapped_mana_land` entry; Planet
+    # lands are bridged as untapped on BOTH engines symmetrically).
+    # The painlands all carry `enters_tapped=False` (the parser
+    # structures the conditional INSTEAD of the plain enters_tapped),
+    # but we defensively reject `enters_tapped=True` so a future
+    # parser change can't slip a tapped+conditional shape through.
+    if getattr(printing, "enters_tapped", False):
+        return False
+    if getattr(printing, "enters_as_copy_of_creature", False):
+        return False
+    if getattr(printing, "optional_copy_land_from_graveyard", False):
+        return False
+    if getattr(printing, "keywords", frozenset()):
+        return False
+    return True
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -7653,6 +7768,28 @@ def _printing_to_card_def(printing) -> CardDef:
             name=printing.name,
             card_type="Land",
             mana_produced=("C",),
+        )
+    if _printing_is_bridge_nonbasic_painland_conditional(printing):
+        # Non-basic land substrate phase 2 painland conditional
+        # (2026-05-23): a dual-color Duskmourn-style conditional
+        # painland flattens to a CardDef carrying the
+        # ``enters_tapped_unless_any_player_life_at_most`` threshold.
+        # The bridge round-trips the field both ways (registry dict
+        # ``enters_tapped_unless_any_player_life_at_most`` key);
+        # Python's ``_play_land`` consults
+        # ``printing.enters_tapped_unless_any_player_life_at_most``;
+        # Rust's ``play_land`` consults
+        # ``CardPrinting.enters_tapped_unless_any_player_life_at_most``
+        # via the same threshold check (see ``state_ops_cast.rs``).
+        # Threshold 13 is the only value any of the 9 Duskmourn
+        # painlands carries; the predicate's exact-13 guard
+        # positively rejects any future cycle with a different
+        # threshold so the substrate widening is explicit.
+        return CardDef(
+            name=printing.name,
+            card_type="Land",
+            mana_produced=tuple(sorted(printing.produces)),
+            enters_tapped_unless_any_player_life_at_most=13,
         )
     if _printing_is_bridge_pure_warp_creature(printing):
         # Phase-1 warp substrate (round-63): a pure fixed-cost warp
@@ -9018,6 +9155,31 @@ def _filter_deck_to_bridge_supported(
             # synthesized ``mana_produced=("C",)`` resolves that latent
             # divergence in addition to closing the parser drop.
             or _printing_is_bridge_keyword_colorless_tapped_mana_land(
+                printing,
+            )
+            # Non-basic land substrate — phase 2 painland conditional
+            # (2026-05-23; spec at
+            # ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §3 Phase 2). The
+            # 12th disjunct admits a Duskmourn-style dual-color
+            # conditional painland: ``enters_tapped_unless_any_player_
+            # life_at_most == 13``, no other riders. The 9 Duskmourn
+            # painlands (Abandoned Campground / Bleeding Woods / Etched
+            # Cornfield / Lakeside Shack / Murky Sewer / Neglected
+            # Manor / Peculiar Lighthouse / Raucous Carnival /
+            # Razortrap Gorge) — plus Strangled Cemetery as the
+            # round-59 audit's missed 10th member — flip from BLOCKED
+            # to PROBED here. Rust-side gate rides the new
+            # ``CardPrinting.enters_tapped_unless_any_player_life_at_
+            # most`` field consulted in ``state_ops_cast::play_land``
+            # before the move to the battlefield. The bridge round-
+            # trips the int through the registry dict's
+            # ``enters_tapped_unless_any_player_life_at_most`` key
+            # both ways (no symmetric drop — the divergence the
+            # round-59 plan flagged for sub-shape C is closed, not
+            # papered over). 0 EoE bench signal (all are off-set
+            # Duskmourn cards) but the substrate is reusable for any
+            # future EoE printing with the same shape.
+            or _printing_is_bridge_nonbasic_painland_conditional(
                 printing,
             )
         ):

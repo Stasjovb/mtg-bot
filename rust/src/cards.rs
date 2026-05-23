@@ -9565,6 +9565,30 @@ pub struct CardPrinting {
     /// counters. Symmetric to Python's
     /// `actions.py:1782` increment + `turn.py:1106` reset.
     pub restricts_noncreature_spells_to_one_per_turn: bool,
+    /// **Non-basic land substrate — Phase 2 painland conditional
+    /// (2026-05-23).** When `> 0`, the printing is a Duskmourn-style
+    /// conditional painland — "This land enters tapped unless a
+    /// player has N or less life." At ETB on `play_land`, the land
+    /// enters UNTAPPED iff any player's `life <= threshold`;
+    /// otherwise it enters TAPPED. `0` is the disabled sentinel
+    /// (the back-compat default — every pre-substrate registry dict
+    /// omits the `enters_tapped_unless_any_player_life_at_most` key,
+    /// which the parser maps to `0`, identical to the
+    /// `warp_additional_life_cost` / `starting_loyalty` Option-or-
+    /// zero parse shape). Mirrors Python's
+    /// `CardPrinting.enters_tapped_unless_any_player_life_at_most:
+    /// int = 0` at `src/mtg_bot/cards/base.py:733`.
+    ///
+    /// **Reader site.** `state_ops_cast::play_land` consults this
+    /// field after the move to battlefield. The 9 Duskmourn painlands
+    /// (Abandoned Campground / Bleeding Woods / Etched Cornfield /
+    /// Lakeside Shack / Murky Sewer / Neglected Manor / Peculiar
+    /// Lighthouse / Raucous Carnival / Razortrap Gorge) all print
+    /// `threshold = 13`. Pre-substrate Rust would silently enter
+    /// these UNTAPPED on every life total — a real cross-engine
+    /// divergence vs Python's `actions.py:1099-1101`. Closing that
+    /// gap is this slice's whole point.
+    pub enters_tapped_unless_any_player_life_at_most: i32,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -13867,6 +13891,26 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         })?,
         None => false,
     };
+    // **Non-basic land substrate — Phase 2 painland conditional
+    // (2026-05-23).** Printing-level int (0 = disabled — the
+    // back-compat default; positive = conditional-tapped threshold,
+    // typically 13 for the Duskmourn painland cycle). Missing key
+    // maps to 0 per the back-compat pattern every other optional
+    // int flag uses. Mirrors Python's
+    // `CardPrinting.enters_tapped_unless_any_player_life_at_most:
+    // int = 0` at `src/mtg_bot/cards/base.py:733`.
+    let enters_tapped_unless_any_player_life_at_most = match dict
+        .get_item("enters_tapped_unless_any_player_life_at_most")?
+    {
+        Some(v) => v.extract::<i32>().map_err(|_| {
+            PyValueError::new_err(
+                "enters_tapped_unless_any_player_life_at_most must be an int \
+                 (the Duskmourn-painland conditional-tapped threshold; 0 \
+                 disables, positive enables)",
+            )
+        })?,
+        None => 0,
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -13905,6 +13949,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         static_self_bonuses,
         dynamic_pt_formula,
         restricts_noncreature_spells_to_one_per_turn,
+        enters_tapped_unless_any_player_life_at_most,
     })
 }
 
@@ -16331,6 +16376,19 @@ impl Registry {
         id: u32,
     ) -> PyResult<bool> {
         Ok(self.lookup(id)?.restricts_noncreature_spells_to_one_per_turn)
+    }
+
+    /// **Non-basic land substrate — Phase 2 painland conditional
+    /// (2026-05-23).** Returns the Duskmourn-style conditional-tapped
+    /// threshold. `> 0` means the printing IS a conditional painland
+    /// (the cycle prints 13); `0` is the disabled sentinel (every
+    /// pre-substrate printing). Mirrors Python's
+    /// `CardPrinting.enters_tapped_unless_any_player_life_at_most`.
+    fn get_printing_enters_tapped_unless_any_player_life_at_most(
+        &self,
+        id: u32,
+    ) -> PyResult<i32> {
+        Ok(self.lookup(id)?.enters_tapped_unless_any_player_life_at_most)
     }
 
     /// **Static / layered abilities substrate — Phase 3 (round-81,

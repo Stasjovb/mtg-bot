@@ -616,10 +616,29 @@ pub(crate) fn auto_tap_pay_for_cost(
 /// counter by 1, saturating). This is THE canonical bf-entry helper
 /// for play_land + cast_creature; future helpers that fold spell
 /// resolution into the same primitive should route through here.
+#[allow(dead_code)]
 fn move_from_hand_to_battlefield(
     state: &mut GameState,
     idx: usize,
     obj_id: u32,
+) -> PyResult<Option<GameObject>> {
+    move_from_hand_to_battlefield_with_tapped(state, idx, obj_id, None)
+}
+
+/// Sibling of `move_from_hand_to_battlefield` that takes an optional
+/// `tapped_override`. When `Some(t)`, the freshly-pushed battlefield
+/// object's `tapped` field is set to `t` BEFORE
+/// `drain_pending_etb_dispatches` fires — used by `play_land` to
+/// honor `CardPrinting.enters_tapped_unless_any_player_life_at_most`
+/// (the Duskmourn painland cycle; see the call site in `play_land`
+/// for the spec mirror). `None` is the back-compat default — the
+/// move runs exactly as before, with the object entering untapped
+/// (the implicit GameObject default), bit-identical to pre-substrate.
+fn move_from_hand_to_battlefield_with_tapped(
+    state: &mut GameState,
+    idx: usize,
+    obj_id: u32,
+    tapped_override: Option<bool>,
 ) -> PyResult<Option<GameObject>> {
     let Some(pos) = state.players[idx].hand.iter().position(|o| o.id == obj_id) else {
         return Ok(None);
@@ -655,6 +674,20 @@ fn move_from_hand_to_battlefield(
     // value (also 0 — the default from make_object).
     if starting_loyalty != 0 {
         obj.loyalty_counters = starting_loyalty;
+    }
+    // **Non-basic land substrate — Phase 2 painland conditional
+    // (2026-05-23).** Apply the caller-supplied tapped override
+    // BEFORE the snapshot clone + battlefield push, so both the
+    // returned snapshot and the freshly-pushed object carry the
+    // correct `tapped` flag when `drain_pending_etb_dispatches`
+    // fires. The bridge filter
+    // `_printing_is_bridge_nonbasic_painland_conditional` rejects
+    // any printing with triggered_abilities, so the drain is inert
+    // for the 9 admitted Duskmourn painlands today; the ordering is
+    // forward-correct for any future substrate that drives an ETB
+    // trigger from a conditional-tapped land.
+    if let Some(tapped) = tapped_override {
+        obj.tapped = tapped;
     }
     let snapshot = obj.clone();
     let entered_id = obj.id;
@@ -933,11 +966,48 @@ impl GameState {
             crate::state_ops_resolve::drain_pending_etb_dispatches(self)?;
             return Ok(true);
         }
+        // **Non-basic land substrate — Phase 2 painland conditional
+        // (2026-05-23).** When the printing carries a positive
+        // `enters_tapped_unless_any_player_life_at_most` threshold
+        // (the Duskmourn painland cycle prints `threshold = 13`),
+        // the land enters TAPPED iff NO player has `life <=
+        // threshold`. This mirrors Python `actions.py:1096-1101`:
+        //
+        //     low_life_threshold = (
+        //         card.printing.enters_tapped_unless_any_player_life_at_most
+        //     )
+        //     if low_life_threshold > 0:
+        //         any_low = any(pl.life <= low_life_threshold for pl in state.players)
+        //         card.tapped = not any_low
+        //
+        // Computed BEFORE the move so the freshly-pushed object lands
+        // with the correct `tapped` state before
+        // `drain_pending_etb_dispatches` fires (the bridge filter
+        // requires `triggered_abilities=()` so the drain is inert for
+        // admitted painlands today, but the ordering is the right one
+        // for forward-correctness). The default `enters_tapped` flag
+        // is NOT YET threaded through Rust for non-painland lands (a
+        // separate substrate; see SEARCH_LIMITATIONS.md
+        // `_printing_is_bridge_simple_tapped_mana_land` entry —
+        // Planet lands are bridged as untapped on BOTH engines).
+        let conditional_tapped_threshold =
+            printing.enters_tapped_unless_any_player_life_at_most;
+        let conditional_tapped: Option<bool> = if conditional_tapped_threshold > 0 {
+            let any_low = self.players.iter().any(|p| p.life <= conditional_tapped_threshold);
+            Some(!any_low)
+        } else {
+            None
+        };
         // Commit the move. The hand search re-runs inside
         // `move_from_hand_to_battlefield`; that's fine — the cost is
         // a single second linear scan we already know will hit, and
         // it keeps the helper self-contained.
-        let moved = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        let moved = move_from_hand_to_battlefield_with_tapped(
+            self,
+            idx,
+            obj_id,
+            conditional_tapped,
+        )?;
         Ok(moved.is_some())
     }
 

@@ -907,16 +907,21 @@ def test_known_card_subsystem_attribution(scout, attr):
     only remaining ``unclassified`` residual is Leyline of Mutation
     (the parser does not recognise either of its mechanics today)."""
     cards = attr["cards"]
-    # Abandoned Campground: zero-Effect non-basic land — single-gated
-    # on the non-basic-land substrate. (Previously Breeding Pool, which
-    # moved to PROBED post-loader_admits-attribution-sweep on 2026-05-21
-    # — the 5 shocklands now ride
-    # ``_printing_is_bridge_nonbasic_mana_land`` through the metric
-    # helper and a ``_parity`` delegator probe in
-    # ``tests/test_parity_smoke.py``; Abandoned Campground stays
-    # BLOCKED under the non-basic-land substrate, the surviving
-    # single-gate non-basic-land carrier.)
-    bp = cards["Abandoned Campground"]
+    # Secluded Starforge: zero-Effect non-basic land — single-gated on
+    # the non-basic-land substrate. Sub-shape D carrier (sub-shape F
+    # Echoing Deeps is the only other surviving single-gate non-basic-
+    # land carrier; D requires its own activated-ability substrate,
+    # F its own graveyard-clone replacement substrate). (Previously
+    # Abandoned Campground was the pin, which moved to PROBED post
+    # non-basic-land Phase-2 (2026-05-23) — the 9 (10) Duskmourn
+    # painlands now ride
+    # ``_printing_is_bridge_nonbasic_painland_conditional`` end-to-
+    # end on both engines. Cathedral of War (the intermediate
+    # re-pin candidate) also moved to PROBED via Cathedral cycle 1
+    # (2026-05-23) — leaving Secluded Starforge as the surviving
+    # single-gate non-basic-land carrier with the cleanest
+    # admit-shape pin.)
+    bp = cards["Secluded Starforge"]
     assert bp["gates"] == [scout.SUB_NONBASIC_LAND]
     assert bp["last_mile"] == scout.SUB_NONBASIC_LAND
     assert bp["multi_gated"] is False

@@ -1407,6 +1407,19 @@ def loader_admits(printing) -> bool:
             or traj._printing_is_bridge_keyword_colorless_tapped_mana_land(
                 printing,
             )
+            # Non-basic land substrate — phase 2 painland conditional
+            # (2026-05-23). Mirrors the real loader's new admit arm
+            # in ``_filter_deck_to_bridge_supported``. The 9 Duskmourn
+            # painlands (Abandoned Campground / Bleeding Woods /
+            # Etched Cornfield / Lakeside Shack / Murky Sewer /
+            # Neglected Manor / Peculiar Lighthouse / Raucous Carnival
+            # / Razortrap Gorge) flip from BLOCKED -> COVERED here
+            # (0-Effect, admit-arm fires) plus Strangled Cemetery as
+            # the 10th cycle member the round-59 audit missed. 0 EoE
+            # bench signal (all are off-set DSK cards).
+            or traj._printing_is_bridge_nonbasic_painland_conditional(
+                printing,
+            )
         )
     except Exception:
         return False
