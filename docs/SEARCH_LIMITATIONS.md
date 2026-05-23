@@ -15350,6 +15350,219 @@ stopped on Rust (multi-cycle agent-surface ratchet; see "Fix scope"
 above). Delirium state-predicate deliberately honest-stopped on
 Rust (multi-cycle state-predicate ratchet; see "Fix scope" above).
 
+
+## Swarm Culler Cycle 1 LANDED — `Effect::OptionalSacAnotherForEffect { inner_effect: Box<Effect> }` (recursive) general optional-sac wrapper Effect shipped byte-equal; becomes-tapped trigger sacrifices the first eligible other-creature-or-artifact then recursively applies the parameterized inner Effect
+
+**Single-cycle landing (2026-05-23,
+`feature/swarm-culler-cycle-1-p1`).** Swarm Culler — `{3}{B}`
+Creature — Insect Warrior, 2/4, Flying (sourced from EoE
+`data/edge_of_eternities.json` via the active
+`OracleParserCardSource`). Becomes-tapped trigger: "Whenever this
+creature becomes tapped, you may sacrifice another creature or
+artifact. If you do, draw a card." The parser maps the oracle line
+(`cards/parser/effects.py:_OPTIONAL_SAC_ANOTHER_FOR_EFFECT`) to
+`OptionalSacAnotherForEffect(inner_effect=DrawCards(amount=1))`.
+Mirrors Python's `OptionalSacAnotherForEffect(inner_effect: Effect)`
+(`effects/combinators.py:371`) — the **general** version of the
+Comet Crawler Cycle 1 sibling `OptionalSacAnotherForPumpSelfUEOT`
+(which is +P/+T-specific; this variant carries a parameterized
+`Box<Effect>` inner consequence instead of a baked-in pump rider).
+
+The single cycle composed:
+
+  1. **Rust `Effect::OptionalSacAnotherForEffect { inner_effect:
+     Box<Effect> }`** — recursive variant (`rust/src/cards.rs`),
+     parse arm (`parse_effect` dispatcher; recursively calls
+     `parse_effect` on the `inner_effect` field, mirroring the
+     sibling `optional_sac_artifact_for_effect` parse arm exactly),
+     `to_pydict` arm (emits the two-key dict shape `{"kind",
+     "inner_effect"}` with the recursive inner dict via
+     `effect_to_pydict(py, inner_effect)`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — the **production mint
+     site**: scan the source's controller's bf in insertion order
+     for the FIRST eligible other-creature-or-artifact (mirrors
+     Python's `[o for o in state.battlefield if
+     o.controller_id == controller_id and o.id != source.id and
+     (printing.is_creature or printing.is_artifact)]` filter +
+     no-agent default `options[0]` pick at
+     `combinators.py:398-399`), sacrifice via CR 400.7 reset +
+     LEAVES/DIES/token-cease deferred-queue dispatches (mirrors the
+     Comet Crawler sibling), then `apply_effect(state,
+     inner_effect, source_obj_id)` to recursively resolve the inner
+     under the OUTER source's id. **summoning_sick NOT reset** on
+     the sacrificed object — Mutinous-Massacre-aligned + Comet
+     Crawler sibling precedent (documented departure from the
+     older `OptionalSacArtifactForEffect` arm's stale "r28 CE1
+     universal default" comment).
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `OptionalSacAnotherForEffect` class
+     from the two-key dict shape, recursively translating the
+     `inner_effect` dict via `_ta_dict_to_python_effect` itself.
+     Same recursive shape as the sibling
+     `optional_sac_artifact_for_effect` bridge arm — the
+     field name (`inner_effect`) matches Python's class attribute
+     name on both engines, so no rename is needed.
+  3. **Reverse-serializer leaf**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_
+     dict::_leaf`) emits the same two-key dict from a Python
+     `OptionalSacAnotherForEffect` instance with the recursive
+     inner emitted via `_leaf(eff.inner_effect)`. Recurse-or-bail
+     discipline preserved (a genuinely-unseatable inner means the
+     wrapper is also unseatable; the call-site round-trip-or-bail
+     clause then declines the parent shape).
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `OptionalSacAnotherForEffect` with no
+     `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` edit needed —
+     the §2 covered-set tooth (parity-doc / coverage-script
+     "covered" alignment) fires positively, AND the classifier's
+     `effect_uncovered` gate closes for Swarm Culler.
+
+**Multi-gated card; classifier stays multi-gated.** Per the
+round-58 subsystem-attribution classifier, Swarm Culler is
+multi-gated `(effect_uncovered + becomes_tapped_event +
+nonsafe_triggered_ability)`. The first two gates BOTH close in
+this cycle:
+
+  * `effect_uncovered` — closed here via the new Rust variant +
+    1:1 identity-mapping coverage rule.
+  * `becomes_tapped_event` — **already** closed campaign-wide by
+    round-58 N1 (BECOMES_TAPPED event substrate bridge —
+    `Event::BecomesTapped` variant + the canonical
+    `turn.tap_permanent` dispatch sites in `state_ops_resolve.rs`
+    / `state_ops_actions.rs` / `state_ops_mana.rs` /
+    `state_ops_combat.rs` / `state_ops_decisions.rs` /
+    `state_ops_cast.rs` fire `dispatch_event(Event::BecomesTapped,
+    obj_id)` at every Python-side `Event.BECOMES_TAPPED`
+    chokepoint). Same BECOMES_TAPPED substrate that unblocked
+    Hemosymbic Mite Cycle 1 also unblocks Swarm Culler here — NO
+    fresh Rust event-bridge work this cycle.
+  * `nonsafe_triggered_ability` — **STAYS active**. The trajectory
+    safe-trigger admit gate
+    (`parity/trajectory.py::_python_ta_to_safe_dict`) is
+    INTENTIONALLY NOT widened — the
+    `("becomes_tapped","source_is_self",
+    "optional_sac_another_for_effect")` triple is not added to
+    `_SAFE_TRIGGERS`. Same per-card real-EoE probe precedent as
+    Comet Crawler / Hemosymbic Mite / Ouroboroid / Boilerbilges
+    Ripper / Fanatic of the Harrowing / Terrapact Intimidator: the
+    trajectory-side bench admit set is a distinct concern from
+    per-card real-EoE parity probes.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Swarm Culler is a creature with a BECOMES_TAPPED triggered ability;
+the spell-card-bridge admit set + auto-grow §2 teeth gate spell
+cards only. The cross-engine probe lives in
+`tests/test_swarm_culler_parity.py` and uses the per-card dedicated
+parity-test module convention (cf. `test_hemosymbic_mite_parity.py`,
+`test_comet_crawler_parity.py`, `test_dyadrine_attack.py`,
+`test_mutinous_massacre_parity.py`), driving the parsed Swarm
+Culler printing through both engines's round-trip + Rust resolve
+surfaces on a shared shape. The trajectory.py safe-trigger admit
+gate (`_python_ta_to_safe_dict`) is NOT widened by this cycle.
+
+**No-agent default = "do" — deterministic-yes mirror.** Python's
+`OptionalSacAnotherForEffect.resolve` no-agent default
+(`combinators.py:398-399`) picks `options[0]` and sacrifices it;
+the Rust resolve arm picks the FIRST eligible victim in bf
+insertion order. The cross-engine harness keeps Rust bf insertion
+order in lockstep with Python (the harness's standard contract via
+`register_and_inject_object` matching `new_object` ordering), so
+the SAME object is sacrificed on BOTH engines. Cross-engine probes
+drive both sides with `agent=None` on the source's controller;
+introducing a real strategic agent at the bench loader (the
+campaign-wide "no-callback first-legal-target" gap) is the same
+fix-scope as the Comet Crawler sibling.
+
+**Sac-first-then-inner flow.** Python's
+`OptionalSacAnotherForEffect.resolve` flow at
+`combinators.py:386-419` is sac-first-then-inner: the inner
+`Effect.resolve` is invoked ONLY after a successful sacrifice (if
+`options` is empty the function returns early BEFORE the inner is
+touched). Rust mirrors with an early return BEFORE
+`apply_effect(state, inner_effect, source_obj_id)`, so a no-fodder
+trigger is a complete silent no-op on both engines — no inner
+draw, no sacrifice. This is the byte-equal-observable contract
+pinned by the no-fodder unit test.
+
+**Failure mode**: a strategically *better* fodder pick is never
+chosen, AND in genuine real-game-trajectory play a yes-or-no
+strategic choice (decline the optional cost when the inner draw
+isn't worth a creature loss) is forced to "always yes" on the no-
+agent path. Irrelevant to parity (the bench / cross-engine harness
+has no strategic agent at all on the no-agent path); relevant to
+NN strength which is a separate axis.
+
+**Fix scope estimate**: seat a real strategic agent in the bench
+loader (a much larger, separate effort — the campaign-wide
+"no-callback first-legal-target convention" gap; same fix-scope as
+the Comet Crawler sibling and the spell-target /
+resolution-decision-vocab entries).
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Swarm Culler from Effect-uncovered (BLOCKED) to Effect-covered
+(COVERED) at the Rust-Effect-coverage layer; PROBED at the
+per-card cross-engine parity layer via the dedicated probe module.
+The multi-gated `(effect_uncovered + becomes_tapped_event)` pair
+BOTH close (becomes_tapped_event was pre-closed at round-58 N1 +
+Hemosymbic Mite Cycle 1 — no fresh event-substrate work needed).
+Pool reach: 1 card (Swarm Culler). The Comet Crawler sibling
+`OptionalSacAnotherForPumpSelfUEOT` (specialized +P/+T-rider
+variant) stays distinct from this general wrapper; no consolidation
+required because both already exist on the Python side and the
+Rust enum variants 1:1 mirror the Python classes.
+
+**Honest-stops noted (NOT in this cycle's scope):**
+
+  * **`_SAFE_TRIGGERS` widen / bench-admit set landing.** The
+    trajectory.py safe-trigger gate
+    (`_python_ta_to_safe_dict`) widening to admit Swarm Culler
+    into the bench-admit set requires:
+      - widening `_SAFE_TRIGGERS` with the
+        `("becomes_tapped","source_is_self",
+        "optional_sac_another_for_effect")` triple, AND
+      - landing the seat-time fodder pick on Rust's
+        `push_triggered_ability` (the trigger has no `target` slot
+        on the stack today; the no-agent pick is at resolve time,
+        which works for the per-card probe but a bench-side push
+        may want a different shape). Out of scope for this single-
+        cycle per-card probe; a future bench-admit cycle ships
+        those widens together with their own bench-admit pin
+        (admit set N → N+1). Same precedent as Comet Crawler /
+        Hemosymbic Mite.
+
+  * **Full real-EoE BECOMES_TAPPED trigger-fan-out probe.** The
+    full real-EoE byte-equal probe through BOTH engines's
+    `turn.tap_permanent` machinery (driving the trigger-pushed-
+    onto-stack timing per engine) requires per-engine coordination
+    of the trigger-fan-out — that broader probe is honest-stopped
+    at Cycle 1; the substrate-level round-trip + the Rust
+    resolve-arm unit pins carry the PROBED tier flip per the
+    Hemosymbic Mite / Ouroboroid / Terrapact Intimidator /
+    Boilerbilges Ripper / Fanatic of the Harrowing classifier-
+    bypass precedent.
+
+  * **Strategic agent for the optional decline.** A real
+    strategic agent at the bench loader that can decline the
+    optional cost (don't sac a 4-cost bear for one card draw)
+    is the campaign-wide "no-callback first-legal-target
+    convention" gap. Out of scope for the per-card parity probe;
+    the harness drives no-agent → "yes" on both engines so the
+    byte-equal mirror still holds.
+
+**Coverage**: 5 unit pins + 3 round-trip pins + 1 covered-set pin +
+1 GENUINE real-EoE cross-engine probe = 10 tests at
+`tests/test_swarm_culler_parity.py`. All pass on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (reverse-serializer leaf),
+`tests/test_swarm_culler_parity.py` (probes). Per-card cycle
+LANDED; Swarm Culler is now PROBED at the per-card parity layer.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

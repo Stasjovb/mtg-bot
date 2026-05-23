@@ -11001,6 +11001,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=power_bonus,
             toughness_bonus=toughness_bonus,
         )
+    if kind == "optional_sac_another_for_effect":
+        # **Swarm Culler Cycle 1 (2026-05-23).** Python's
+        # ``OptionalSacAnotherForEffect(inner_effect: Effect)``
+        # (``effects/combinators.py:371``) — the GENERAL version of
+        # ``OptionalSacAnotherForPumpSelfUEOT`` (which is +P/+T
+        # specific). The lone EoE consumer today is Swarm Culler's
+        # BECOMES_TAPPED trigger (inner = ``DrawCards(amount=1)``):
+        # "Flying. Whenever this creature becomes tapped, you may
+        # sacrifice another creature or artifact. If you do, draw
+        # a card."
+        #
+        # **Structural sibling of ``optional_sac_artifact_for_effect``.**
+        # Same recursive ``inner_effect: Box<Effect>`` shape at the
+        # Rust enum layer; this bridge arm has the same recursive
+        # construction as the artifact-only sibling at line ~4487.
+        # The field name (``inner_effect``) matches Python's class
+        # attribute name on both engines, so no rename is needed.
+        #
+        # **Resolve semantics — byte-equal no-agent default.** Both
+        # engines pick ``options[0]`` (Python's no-agent default at
+        # ``combinators.py:398-399``; Rust's deterministic-yes
+        # resolve at ``state_ops_resolve.rs``). Cross-engine probes
+        # drive both engines with no agent on the source's
+        # controller so the mirror is byte-equal.
+        #
+        # **Inner application.** Both engines invoke the inner
+        # effect AFTER the sacrifice (Python:
+        # ``self.inner_effect.resolve(state, controller_id, ())``;
+        # Rust: ``apply_effect(state, inner_effect, source_obj_id)``).
+        # If no eligible fodder, the inner is NOT invoked (sac-
+        # first-then-inner flow, mirrored on both engines).
+        #
+        # **Recursive translation.** ``inner_effect`` is itself an
+        # effect dict; recurse into ``_ta_dict_to_python_effect`` for
+        # it. Unlocks composer-recurse for any inner Effect already
+        # on the bridge — Swarm Culler's ``DrawCards(amount=1)``,
+        # but the recursion is shape-general.
+        #
+        # **Real EoE consumer** unblocked: 1 EoE card — Swarm
+        # Culler (`{3}{B}` Creature — Insect Warrior, 2/4, Flying;
+        # BECOMES_TAPPED trigger).
+        #
+        # Dict shape: ``{"kind": "optional_sac_another_for_effect",
+        # "inner_effect": <effect_dict>}``.
+        from mtg_bot.effects.combinators import (
+            OptionalSacAnotherForEffect,
+        )
+        inner_dict = eff_dict["inner_effect"]
+        inner = _ta_dict_to_python_effect(inner_dict)
+        return OptionalSacAnotherForEffect(inner_effect=inner)
     if kind == "dyadrine_attack_effect":
         # **AAA Pin 1 — DyadrineAttackEffect zero-field bespoke dataclass.**
         # Python's ``DyadrineAttackEffect()`` (``effects/bespoke.py``) is a

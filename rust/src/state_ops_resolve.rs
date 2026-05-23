@@ -20130,6 +20130,158 @@ fn apply_effect(
                 }
             }
         }
+        // **Swarm Culler Cycle 1 (2026-05-23).** "You may sacrifice
+        // another creature or artifact. If you do, [inner_effect]."
+        // Mirrors Python's `OptionalSacAnotherForEffect.resolve`
+        // (`effects/combinators.py:382-419`). The **general** version
+        // of the Comet-Crawler-shape sibling — same eligibility filter
+        // and "another" exclusion, but the consequence is a
+        // parameterized inner Effect (recursive `apply_effect` instead
+        // of a baked-in UEOT pump).
+        //
+        // **No-agent default = "do".** Python's no-agent default
+        // (`combinators.py:398-399`) picks `options[0]` and sacrifices
+        // it; the cross-engine probe drives both engines with no agent
+        // so the byte-equal mirror is "scan source-controller's bf in
+        // insertion order, sacrifice the FIRST other-creature-or-
+        // artifact, then call `apply_effect(state, inner_effect,
+        // source_obj_id)`."
+        //
+        // **Eligibility.** Mirrors Python's filter at
+        // `combinators.py:389-394`:
+        //   * `o.controller_id == controller_id` (source's controller)
+        //   * `o.id != source.id` ("another" — self-exclusion)
+        //   * `printing.is_creature or printing.is_artifact`
+        //
+        // **No eligible target.** Python's `if not options: return`
+        // at `combinators.py:395-396` — silent no-op, AND IMPORTANTLY
+        // the inner effect is NOT invoked (Python's flow is sac-
+        // first-then-inner; no sac means no inner). Rust mirrors with
+        // an early return BEFORE the recursive `apply_effect` call.
+        //
+        // **Sacrifice path.** Same CR 400.7 reset shape as the Comet
+        // Crawler sibling — remove from bf, push to controller's
+        // graveyard with `tapped=false`, `damage=0`,
+        // `attached_to=None`, `exiled_with_source=None`. Counters
+        // NOT cleared (R77-CFI1 invariant). `summoning_sick` NOT
+        // reset (Python's `move_off_battlefield` / `sacrifice`
+        // preserve pre-leave value; documented departure from the
+        // older `OptionalSacArtifactForEffect` sibling — same
+        // Mutinous-Massacre-aligned contract as the Comet Crawler
+        // arm). LEAVES + DIES + token-cease queues all dispatched.
+        //
+        // **Inner application.** `apply_effect(state, inner_effect,
+        // source_obj_id)` — the inner runs under the OUTER source's
+        // id (the Swarm Culler), not the dead fodder. Mirrors
+        // Python's `self.inner_effect.resolve(state, controller_id,
+        // ())`: same controller, no targets forwarded (the bare
+        // `targets=()` Python call). If the inner is a targeted
+        // effect (e.g. PutPlusOneCounterOnTargetCreature), it
+        // refetches its own target at resolve time inside
+        // `apply_effect` — the outer wrapper doesn't pre-bind.
+        Effect::OptionalSacAnotherForEffect { inner_effect } => {
+            // Locate source controller (mirrors the Comet Crawler
+            // sibling's source-resolve ladder: walk all five zones
+            // first, fall back to the stack).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                // Source untrackable — Python's
+                // `if source is None: return` early-return
+                // (`combinators.py:386-388`).
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // Find the FIRST eligible victim (another creature or
+            // artifact controlled by the source's controller). Same
+            // insertion-order iteration as the Comet Crawler arm.
+            let victim_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if obj.id == source_obj_id {
+                        return None; // "another"
+                    }
+                    let printing =
+                        registry.printings.get(obj.printing_id as usize)?;
+                    let is_creature = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature");
+                    let is_artifact = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact");
+                    if is_creature || is_artifact {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(victim_id) = victim_id else {
+                // No eligible fodder — silent no-op (Python's
+                // `if not options: return`). The inner is NOT
+                // invoked (sac-first-then-inner flow).
+                return Ok(());
+            };
+            // Sacrifice the victim — CR 400.7 reset; mirrors the
+            // Comet Crawler sibling's shape exactly.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == victim_id)
+                .expect(
+                    "victim_id was just found in bf but not on re-scan",
+                );
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.damage = 0;
+            // R77-CFI1: counters intact on the dead object.
+            // `summoning_sick` NOT reset — Python's
+            // `move_off_battlefield` / `sacrifice` preserve the
+            // pre-leave value. Mutinous-Massacre-aligned + Comet
+            // Crawler sibling precedent.
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
+            // LEAVES + DIES + token-cease dispatches.
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            state.pending_dies_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            // Now recursively apply the inner effect under the
+            // OUTER source's id (so any inner reading the resolving
+            // source sees the Swarm Culler, not the dead fodder).
+            apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
+        }
         // Bare-shape "exile target creature" resolve arm — Cycle 1
         // substrate for Archenemy's Charm Mode 0 and the bare-spell-
         // effect consumers Gravkill / Final Vengeance. Sibling of the

@@ -4294,7 +4294,12 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         PumpTargetArtifactOrCreatureUntilEOT,
         ThreatenTargetCreatureUEOT,
     )
-    from mtg_bot.effects.combinators import IfNot, IfYouDo, MayDo
+    from mtg_bot.effects.combinators import (
+        IfNot,
+        IfYouDo,
+        MayDo,
+        OptionalSacAnotherForEffect,
+    )
     from mtg_bot.effects.conditions import (
         ControlsAnotherCreatureWithPowerAtMost,
     )
@@ -4848,6 +4853,43 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": "may_do",
                 "inner_effect": inner_dict,
                 "prompt": str(eff.prompt),
+            }
+        # **Swarm Culler Cycle 1 — ``OptionalSacAnotherForEffect``
+        # reverse-serializer leaf (2026-05-23).** Mirror of the new
+        # Rust ``Effect::OptionalSacAnotherForEffect { inner_effect:
+        # Box<Effect> }`` payload at ``rust/src/cards.rs``. Emits the
+        # dict shape consumed by ``cross_engine._ta_dict_to_python_
+        # effect``'s ``optional_sac_another_for_effect`` arm and the
+        # Rust ``parse_effect`` ``optional_sac_another_for_effect``
+        # arm.
+        #
+        # **Recursive ``inner_effect`` field.** Recurses via
+        # ``_leaf`` on the inner Effect (sibling of ``may_do``'s
+        # ``inner_effect`` recursion). If the inner leaf returns
+        # ``None`` the whole shape bails — recurse-or-bail
+        # discipline preserves the no-fallback-hybrid teeth (a
+        # genuinely-unseatable inner means the wrapper is also
+        # unseatable; the round-trip-or-bail clause at the call
+        # site declines the parent shape).
+        #
+        # **Substrate-only landing.** Swarm Culler is a Creature
+        # with a BECOMES_TAPPED triggered ability — NOT a Spell.
+        # The spell-card-bridge admit set / safe-trigger admit gate
+        # is unchanged by this cycle (per the Comet Crawler /
+        # Mutinous Massacre / Dyadrine Attack / Boilerbilges
+        # Ripper / Hemosymbic Mite precedent — per-card cross-
+        # engine parity probe lives in
+        # ``tests/test_swarm_culler_parity.py``). The reverse
+        # serializer leaf lands the substrate so a future cycle
+        # widening the bench-admit set picks it up for free; it
+        # does NOT widen any admit set today.
+        if isinstance(eff, OptionalSacAnotherForEffect):
+            inner_dict = _leaf(eff.inner_effect)
+            if inner_dict is None:
+                return None  # recurse-or-bail
+            return {
+                "kind": "optional_sac_another_for_effect",
+                "inner_effect": inner_dict,
             }
         if isinstance(eff, IfYouDo):
             do_dict = _leaf(eff.do_action)
