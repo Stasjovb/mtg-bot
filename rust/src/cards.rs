@@ -6228,6 +6228,52 @@ pub enum Effect {
     /// `SacrificeSourceDelayed` — override-mapping it elsewhere in
     /// the covered-class set would be wrong.
     DealSelfMVDamageToEachCreature,
+    /// **Comet Crawler Cycle 1 (2026-05-22).** "You may sacrifice
+    /// another creature or artifact. If you do, this creature gets
+    /// +P/+T until end of turn." Mirrors Python's
+    /// `OptionalSacAnotherForPumpSelfUEOT(power_bonus, toughness_bonus,
+    /// granted_keywords)` (`effects/combinators.py:430`). The lone EoE
+    /// consumer today is Comet Crawler's ATTACKS trigger
+    /// (power_bonus=2, toughness_bonus=0, granted_keywords=frozenset()).
+    ///
+    /// **First-slice deterministic-yes.** Python's no-agent default
+    /// (`combinators.py:461-462`) picks `options[0]` and sacrifices
+    /// it — the cross-engine probe drives both engines with no agent
+    /// so this is the byte-equal mirror. If the source controller
+    /// controls no other creature-or-artifact on the battlefield,
+    /// Python's `if not options: return` fires (silent no-op); Rust
+    /// mirrors with the same no-op.
+    ///
+    /// **Pump path.** Sacrifice the first eligible other-creature-or-
+    /// artifact on the source's controller's battlefield (CR 400.7
+    /// reset on the dead object — same shape as
+    /// `OptionalSacArtifactForEffect`), then push a UEOT
+    /// `PowerToughnessBonus` modifier onto the source object's
+    /// `ueot_modifiers` Vec. Python's write-through is
+    /// `source.temp_power_bonus += self.power_bonus`; the Rust
+    /// `ueot_modifiers` Vec is the registry analog and produces the
+    /// SAME `effective_power` view (see the cross-engine harness's
+    /// `expire_continuous_effects("cleanup")` + `temp_*` zeroing pair
+    /// for the byte-equal cleanup mapping pinned by Biosynthic Burst
+    /// / GrantKeywordsToTargetCreatureUntilEOT).
+    ///
+    /// **Granted-keywords field deferred.** Python carries a
+    /// `granted_keywords: frozenset[str]` rider that no EoE printing
+    /// currently uses (Comet Crawler emits an empty frozenset); a
+    /// future printing pairing the self-sac pump with an inner keyword
+    /// grant lands the field on the Rust side at that time. The
+    /// dict-shape parse arm tolerates missing rider gracefully.
+    ///
+    /// **Sibling.** Distinct from `OptionalSacArtifactForEffect`
+    /// (artifact-only subject, generic inner effect, recursive
+    /// `apply_effect`) — this variant is the specialized self-pump
+    /// shape (creature OR artifact subject, dedicated UEOT push;
+    /// matches the more-specific-first parser ordering at
+    /// `cards/parser/effects.py:6530-6538`).
+    OptionalSacAnotherForPumpSelfUEOT {
+        power_bonus: i32,
+        toughness_bonus: i32,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -11138,8 +11184,44 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "deal_self_mv_damage_to_each_creature" => {
             Ok(Effect::DealSelfMVDamageToEachCreature)
         }
+        // **Comet Crawler Cycle 1 (2026-05-22).** Two-int variant —
+        // `power_bonus` and `toughness_bonus`. Comet Crawler's ATTACKS
+        // trigger emits +2/+0 today; the parser at
+        // `cards/parser/effects.py:_OPTIONAL_SAC_ANOTHER_FOR_PUMP_SELF_
+        // UEOT` captures both ints from the printed `[+-]N/[+-]M`
+        // surface so the dict shape carries both. Defense-in-depth:
+        // negative bonuses are ACCEPTED (Python's class signature
+        // allows any int — combinators.py:430) but no EoE consumer
+        // emits negatives today. Missing-field defaults to 0 (the
+        // Python class default) so a future printing emitting only one
+        // axis (e.g. pure +X/+0) survives even if the parser emits a
+        // partial dict.
+        "optional_sac_another_for_pump_self_ueot" => {
+            let power_bonus = match dict.get_item("power_bonus")? {
+                Some(v) => v.extract::<i32>().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "optional_sac_another_for_pump_self_ueot.power_bonus \
+                         must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus = match dict.get_item("toughness_bonus")? {
+                Some(v) => v.extract::<i32>().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "optional_sac_another_for_pump_self_ueot.toughness_bonus \
+                         must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::OptionalSacAnotherForPumpSelfUEOT {
+                power_bonus,
+                toughness_bonus,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot"
         ))),
     }
 }
@@ -14054,6 +14136,20 @@ pub(crate) fn effect_to_pydict<'py>(
         // walker as a static printing trigger).
         Effect::DealSelfMVDamageToEachCreature => {
             d.set_item("kind", "deal_self_mv_damage_to_each_creature")?;
+        }
+        // **Comet Crawler Cycle 1 (2026-05-22).** Two-int variant.
+        // Mirrors the parse arm at line ~10905. Round-trip emits both
+        // fields explicitly so the bridge dict→Python arm in
+        // `cross_engine.py` can reconstruct the Python class with the
+        // SAME (power_bonus, toughness_bonus) pair the parser captured
+        // from oracle text.
+        Effect::OptionalSacAnotherForPumpSelfUEOT {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            d.set_item("kind", "optional_sac_another_for_pump_self_ueot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
         }
     }
     Ok(d)

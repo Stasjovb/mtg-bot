@@ -18973,6 +18973,218 @@ fn apply_effect(
                 apply_damage_marker(state, victim_id, mv);
             }
         }
+        // **Comet Crawler Cycle 1 (2026-05-22).** "You may sacrifice
+        // another creature or artifact. If you do, this creature gets
+        // +P/+T until end of turn." Mirrors Python's
+        // `OptionalSacAnotherForPumpSelfUEOT.resolve`
+        // (`effects/combinators.py:444-486`).
+        //
+        // **No-agent default = "do".** Python's no-agent default
+        // (`combinators.py:461-462`) picks `options[0]` and sacrifices
+        // it; the cross-engine harness drives BOTH engines with no
+        // agent so the byte-equal mirror is "scan source-controller's
+        // bf in insertion order, sacrifice the FIRST other-creature-
+        // or-artifact, push UEOT P/T modifier onto source."
+        //
+        // **Eligibility.** Mirrors Python's filter at
+        // `combinators.py:451-456`:
+        //   * `o.controller_id == controller_id` (source controller)
+        //   * `o.id != source.id` ("another")
+        //   * `printing.is_creature or printing.is_artifact` (the
+        //     creature/artifact subject)
+        //
+        // **No eligible target.** Python's `if not options: return`
+        // (`combinators.py:457-458`) is a silent no-op — NO pump
+        // applied. Rust mirrors with an early return BEFORE the
+        // UEOT push so a Comet Crawler attacking on an empty
+        // controller-bf (no fodder) does NOT get the +2/+0.
+        //
+        // **Sacrifice path.** Same CR 400.7 reset shape as
+        // `OptionalSacArtifactForEffect` (the immediately preceding
+        // arm at line ~13401) — remove from bf, push to controller's
+        // graveyard with `tapped=false`, `damage=0`, `attached_to=None`,
+        // `exiled_with_source=None`. Counters NOT cleared per the
+        // R77-CFI1 invariant (move_off_battlefield doesn't zero
+        // counters; same byte-equal contract as the sibling
+        // `OptionalSacArtifactForEffect` and `SacrificeSourceDelayed`).
+        // LEAVES + DIES + token-cease queues all dispatched.
+        //
+        // **Pump path.** Source's `ueot_modifiers` Vec gets a
+        // `PowerToughnessBonus { power, toughness }` push (the
+        // registry analog of Python's
+        // `source.temp_power_bonus += self.power_bonus` write-through
+        // cache). The harness cleanup arm
+        // (`expire_continuous_effects("cleanup")` +
+        // `temp_*` zeroing on Python; `ueot_modifiers.clear()` on
+        // Rust) drains both at the same phase boundary, preserving
+        // the round-74 R74-3 byte-equal cleanup mapping.
+        //
+        // **0/0 short-circuit.** A defense-in-depth no-op for a
+        // future printing that emits `+0/+0` (does NOT exist in EoE
+        // today; Comet Crawler is +2/+0). Skipping the Vec push when
+        // both bonuses are zero keeps the warm path allocation-free —
+        // same precedent as the `PumpSelfUntilEOT` arm at line ~10554.
+        Effect::OptionalSacAnotherForPumpSelfUEOT {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            // Locate source controller (the resolving source's
+            // controller, which owns the "you may" decision and the
+            // self-pump recipient). Source could be on bf (Comet
+            // Crawler attacking) or, defensively, elsewhere (the
+            // resolver's source-lookup convention).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                // Final fallback: scan the stack for an item carrying
+                // the source.
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                // Source untrackable — Python's
+                // `if source is None: return` early-return
+                // (`combinators.py:448-450`).
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // Find the FIRST eligible victim (another creature or
+            // artifact controlled by the source's controller).
+            // Insertion-order iteration mirrors Python's
+            // `[o for o in state.battlefield if ...]` which preserves
+            // append order (the cross-engine harness keeps Rust bf
+            // insertion order in lockstep with Python via the
+            // register_and_inject_object ordering).
+            let victim_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if obj.id == source_obj_id {
+                        return None; // "another"
+                    }
+                    let printing =
+                        registry.printings.get(obj.printing_id as usize)?;
+                    let is_creature = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature");
+                    let is_artifact = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact");
+                    if is_creature || is_artifact {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(victim_id) = victim_id else {
+                // No eligible target — silent no-op (Python's
+                // `if not options: return`). NO pump applied.
+                return Ok(());
+            };
+            // Sacrifice the victim — CR 400.7 reset; mirrors the
+            // sibling `OptionalSacArtifactForEffect` arm's shape
+            // exactly.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == victim_id)
+                .expect(
+                    "victim_id was just found in bf but not on re-scan",
+                );
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            obj.damage = 0;
+            // R77-CFI1: counters intact on the dead object — same
+            // byte-equal contract as the sibling
+            // `MutinousMassacreEffect` destroy arm
+            // (`state_ops_resolve.rs:~10000`) and
+            // `SacrificeSourceDelayed`.
+            //
+            // **summoning_sick NOT reset.** Python's
+            // `move_off_battlefield` / `sacrifice` preserve the
+            // pre-leave summoning_sick value; the MM destroy arm
+            // mirrors that contract (no `summoning_sick = true`
+            // line). The earlier `OptionalSacArtifactForEffect`
+            // sibling arm (line ~13457) sets `summoning_sick = true`
+            // per a "r28 CE1 universal default" comment but that
+            // diverges from Python's sacrifice semantics on the
+            // graveyard's snapshot (Python preserves whatever it
+            // was). Following the MM precedent here so a fresh-
+            // entered (sb=true) bear stays sb=true on the way to gy
+            // AND a battle-ready (sb=false) bear stays sb=false on
+            // the way to gy — byte-equal cross-engine on the
+            // ``_zone_signature`` summoning_sick slot.
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
+            // LEAVES + DIES + token-cease dispatches (same precedent
+            // as `OptionalSacArtifactForEffect`).
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            state.pending_dies_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+
+            // Now push the UEOT pump onto the source object. `0/0`
+            // is a legal no-op (skip the Vec push to keep the warm
+            // path allocation-free — mirrors `PumpSelfUntilEOT`'s
+            // early return).
+            if *power_bonus != 0 || *toughness_bonus != 0 {
+                // Walk both battlefields to find the source object.
+                // The source could already have left the bf between
+                // trigger fire and resolve (CR 603.10) — silent no-op
+                // for the pump leg in that case (mirrors
+                // `PumpSelfUntilEOT`'s for-loop with no else arm).
+                for pidx in 0..state.players.len() {
+                    if state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .any(|o| o.id == source_obj_id)
+                    {
+                        let zone: &mut Vec<GameObject> = Arc::make_mut(
+                            &mut state.players[pidx].battlefield,
+                        );
+                        for obj in zone.iter_mut() {
+                            if obj.id == source_obj_id {
+                                obj.ueot_modifiers.push(
+                                    UeotModifier::PowerToughnessBonus {
+                                        power: *power_bonus,
+                                        toughness: *toughness_bonus,
+                                    },
+                                );
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -11688,6 +11688,215 @@ across `rust/src/cards.rs::Effect` (no
 
 ---
 
+## Comet Crawler Cycle 1 LANDED — `Effect::OptionalSacAnotherForPumpSelfUEOT` (two-int) Effect half shipped byte-equal; ATTACKS-trigger sac+pump fires deterministic-yes (no-agent default = `options[0]`) on Comet Crawler
+
+**Single-cycle landing (2026-05-22,
+`feature/comet-crawler-cycle-1-p1`).** Comet Crawler — `{2}{B}`
+Creature — Insect Horror, 2/3, Lifelink. ATTACKS trigger: "Whenever
+this creature attacks, you may sacrifice another creature or
+artifact. If you do, this creature gets +2/+0 until end of turn."
+(~9,732 17lands decks; the Tier-C
+``OptionalSacAnotherForPumpSelfUEOT`` slot per
+``docs/EFFECT_UNCOVERED_TIERC_CLOSEST_TO_A.md`` row 4.) Mirrors
+Python's ``OptionalSacAnotherForPumpSelfUEOT(power_bonus=2,
+toughness_bonus=0, granted_keywords=frozenset())``
+(``effects/combinators.py:430``).
+
+The single cycle composed:
+
+  1. **Rust ``Effect::OptionalSacAnotherForPumpSelfUEOT { power_bonus,
+     toughness_bonus }``** — two-int variant (`rust/src/cards.rs`),
+     parse arm (`parse_effect` dispatcher; defaults missing fields to
+     0 mirroring the Python class defaults), `to_pydict` arm (emits
+     the three-key dict shape `{"kind", "power_bonus",
+     "toughness_bonus"}`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — the **production mint
+     site**: scan the source's controller's bf in insertion order for
+     the FIRST eligible other-creature-or-artifact (mirrors Python's
+     `[o for o in state.battlefield if o.controller_id ==
+     controller_id and o.id != source.id and (printing.is_creature or
+     printing.is_artifact)]` + the no-agent default's `options[0]`
+     pick at `combinators.py:461-462`), sacrifice via CR 400.7 reset
+     + LEAVES/DIES/token-cease deferred-queue dispatches (mirrors the
+     sibling `OptionalSacArtifactForEffect` arm), then push a UEOT
+     `PowerToughnessBonus` modifier onto the source's
+     `ueot_modifiers` Vec. **summoning_sick NOT reset** on the
+     sacrificed object — mirrors Python's `move_off_battlefield` /
+     `sacrifice` semantics (which preserve the pre-leave value)
+     AND the byte-equal-on-graveyard contract pinned by the
+     Mutinous Massacre destroy arm precedent
+     (`state_ops_resolve.rs:~10000`); this is the documented
+     departure from the older `OptionalSacArtifactForEffect`
+     sibling, which sets `summoning_sick = true` per a stale "r28
+     CE1 universal default" comment that diverges on the
+     `_zone_signature` summoning_sick slot in cross-engine compares.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python ``OptionalSacAnotherForPumpSelfUEOT``
+     class from the two-int dict shape. The Python class's
+     ``granted_keywords: frozenset[str]`` rider is INTENTIONALLY
+     dropped at the bridge — no EoE printing today pairs the self-sac
+     pump with an inner keyword grant, and the Rust variant has no
+     rider field; a future printing with the rider lands the field
+     on both sides together. Missing dict fields default to 0
+     symmetrically with the Rust parse arm.
+  3. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `OptionalSacAnotherForPumpSelfUEOT` with no
+     `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` edit needed —
+     the §2 covered-set tooth (parity-doc / coverage-script
+     "covered" alignment) fires positively.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Comet Crawler is a creature with an ATTACKS triggered ability; the
+spell-card-bridge admit set + auto-grow §2 teeth gate spell cards
+only. The cross-engine probe lives in
+`tests/test_comet_crawler_parity.py` and uses the per-card
+dedicated parity-test module convention (cf. `test_dyadrine_attack
+.py`, `test_mutinous_massacre_parity.py`), driving the parsed
+Comet Crawler printing through both engines on a shared shape and
+pinning byte-equal observables. The trajectory.py safe-trigger
+admit gate (`_python_ta_to_safe_dict`) is NOT widened by this
+cycle — that gate is about the production-deck bench admit set
+for full-card cross-engine bench play, a distinct concern;
+landing Comet Crawler there is a follow-up cycle (the bench
+widen requires additional substrate the per-card probe doesn't).
+
+**Observable byte-equality scope.** The harness's
+`_build_field_view` 8-tuple per zone object is `(printing_name,
+tapped, summoning_sick, damage, net_counters, attached_to,
+controller_id, id)` — the UEOT P/T bonus is NOT in the byte-equal
+slot set (Python carries it on the `temp_power_bonus` write-
+through field + the registry's `expires_at="cleanup"` entry; Rust
+carries it on `ueot_modifiers`). The byte-equal compare therefore
+covers the sacrifice path (the victim moves bf → graveyard on
+both engines) + zone-level shape; the pump path is pinned by a
+separate `effective_power` readback on both engines (the
+round-74 R74-3 byte-equal cleanup-mapping precedent — same
+pattern as Biosynthic Burst /
+GrantKeywordsToTargetCreatureUntilEOT probes).
+
+**No-agent default = "do" — deterministic-yes mirror.** Python's
+`OptionalSacAnotherForPumpSelfUEOT.resolve` no-agent default
+(`combinators.py:461-462`) picks `options[0]` and sacrifices it;
+the Rust resolve arm picks the FIRST eligible victim in bf
+insertion order. The cross-engine harness keeps Rust bf
+insertion order in lockstep with Python (the harness's standard
+contract via `register_and_inject_object` matching `new_object`
+ordering), so the SAME object is sacrificed on BOTH engines.
+Cross-engine probes drive both sides with `agent=None` on the
+source's controller; introducing a real strategic agent at the
+bench loader (the campaign-wide "no-callback first-legal-target"
+gap) is the same fix-scope as the existing
+`OptionalSacArtifactForEffect` / Tier-C target-seating
+sub-substrate.
+
+**Failure mode**: a strategically *better* fodder pick is never
+chosen (irrelevant to parity; the bench / cross-engine harness has
+no strategic agent at all on the no-agent path).
+
+**Fix scope estimate**: seat a real strategic agent in the bench
+loader (a much larger, separate effort — the campaign-wide
+"no-callback first-legal-target convention" gap; same fix-scope
+as the spell-target / resolution-decision-vocab entries and the
+Tier-C target-seating sub-substrate).
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Comet Crawler from Effect-uncovered (BLOCKED) to Effect-covered
+(COVERED) at the Rust-Effect-coverage layer; PROBED at the
+per-card cross-engine parity layer via the dedicated probe
+module. Pool reach: 1 card / ~9,732 17lands decks (the Tier-C
+``OptionalSacAnotherForPumpSelfUEOT`` slot per
+``docs/EFFECT_UNCOVERED_TIERC_CLOSEST_TO_A.md`` row 4 — the
+single largest deck-count "optional sac + UEOT self-pump"
+consumer in the EoE pool). The general
+``OptionalSacAnotherForEffect`` sibling (Swarm Culler at ~few-k
+decks, the generic optional-sac wrapper with a parsed inner
+effect) is **NOT** wired in this cycle — that's a separate Rust
+variant on the more-general shape; an explicit honest-stop
+documented as a follow-up.
+
+**Honest-stops noted (NOT in this cycle's scope):**
+
+  * **General `OptionalSacAnotherForEffect` (parameterized inner
+    effect) sibling.** The general optional-sac wrapper with a
+    parsed inner consequence (used by Swarm Culler's
+    BECOMES_TAPPED trigger; ``effects/combinators.py``) has its
+    own Python class and its own parser regex but NO Rust
+    `Effect::OptionalSacAnotherForEffect` variant. Wiring it
+    requires the same five-arm split (enum + parse + to_pydict +
+    resolve + bridge) on the generalized
+    `Box<Effect>`-inner-effect shape (mirrors
+    `OptionalSacArtifactForEffect`'s structure, which is the
+    artifact-only sibling). Deferred to a separate per-card cycle
+    keyed on whichever Swarm-Culler-shape card has the next-
+    largest deck-count payoff; no shared substrate dependency
+    with this cycle.
+
+  * **``granted_keywords`` rider on
+    `OptionalSacAnotherForPumpSelfUEOT`.** Python's class carries
+    a `granted_keywords: frozenset[str]` field (parameterized
+    keyword grant alongside the P/T pump). No EoE printing
+    instantiates the rider today (Comet Crawler emits an empty
+    frozenset). When a future printing pairs the self-sac pump
+    with an inner keyword grant, the Rust variant gains a
+    `granted_keywords: Vec<String>` field and the bridge arm
+    threads it through (mirrors the sibling
+    `GrantKeywordToTargetCreatureUntilEOT` shape's keyword-list
+    payload).
+
+  * **`OptionalSacArtifactForEffect` sibling
+    `summoning_sick = true` divergence.** The older sibling arm
+    at `rust/src/state_ops_resolve.rs:13457` sets
+    `obj.summoning_sick = true` on the sacrificed object per a
+    "r28 CE1 universal default" comment. That diverges from
+    Python's `move_off_battlefield` /
+    `sacrifice` semantics (which preserve the pre-leave
+    summoning_sick value) AND from the byte-equal-on-graveyard
+    contract pinned by the Mutinous Massacre destroy arm. The
+    Comet Crawler arm follows the MM precedent (no
+    summoning_sick reset) and pins the byte-equal probe against
+    it. Aligning the older
+    `OptionalSacArtifactForEffect` arm is a separate one-line
+    fix gated on a per-card probe for whichever
+    `OptionalSacArtifactForEffect` consumer has the largest
+    deck-count payoff (Lithobraking / Selfcraft Mechan / etc.) —
+    deferred so it gets its own parity probe rather than landing
+    silently here.
+
+  * **Production-deck bench admit set (full-card cross-engine
+    bench play).** The trajectory.py safe-trigger gate
+    (`_python_ta_to_safe_dict`) widening to admit Comet Crawler
+    into the bench-admit set requires:
+      - widening `_SAFE_TRIGGERS` with the
+        `(attacks, source_is_self,
+        optional_sac_another_for_pump_self_ueot)` triple, AND
+      - widening the `safe_effect_kinds` tuple for ATTACKS +
+        IsSelf to include
+        `"optional_sac_another_for_pump_self_ueot"`, AND
+      - landing the seat-time fodder pick on Rust's
+        `push_triggered_ability` (the trigger has no `target` slot
+        on the stack today; the no-agent pick is at resolve time,
+        which works for the per-card probe but a bench-side push
+        may want a different shape).
+    Out of scope for this single-cycle per-card probe; a future
+    bench-admit cycle ships those widens together with their own
+    bench-admit pin (admit set N → N+1).
+
+**Coverage**: 8 unit pins + 1 round-trip pin + 1 covered-set pin +
+1 GENUINE real-EoE cross-engine probe = 11 tests at
+`tests/test_comet_crawler_parity.py`. All pass on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_comet_crawler_parity.py` (probes). Per-card cycle
+LANDED; Comet Crawler is now PROBED at the per-card parity
+layer.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

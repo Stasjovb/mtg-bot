@@ -10294,6 +10294,49 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         nested_key = "effect" if "effect" in eff_dict else "inner"
         inner_effect = _ta_dict_to_python_effect(eff_dict[nested_key])
         return ConditionalIfSourcePowerAtLeast(effect=inner_effect, threshold=threshold)
+    if kind == "optional_sac_another_for_pump_self_ueot":
+        # **Comet Crawler Cycle 1 (2026-05-22).** Python's
+        # ``OptionalSacAnotherForPumpSelfUEOT(power_bonus, toughness_bonus,
+        # granted_keywords)`` (``effects/combinators.py:430``) encodes
+        # the "you may sacrifice another creature or artifact. If you
+        # do, this creature gets +P/+T until end of turn." attack-
+        # trigger surface — Comet Crawler is the lone EoE consumer
+        # today (power_bonus=2, toughness_bonus=0,
+        # granted_keywords=frozenset()).
+        #
+        # **Field shape.** Two ints carried in the dict; bridge
+        # reconstructs the Python class with the matching ints. The
+        # ``granted_keywords`` rider is INTENTIONALLY DROPPED at the
+        # bridge — no EoE printing pairs the self-sac pump with an
+        # inner keyword grant today, and the Rust ``Effect`` variant
+        # has no rider field. A future printing with the rider lands
+        # the field on both the Rust variant and this bridge arm
+        # together.
+        #
+        # **Resolve semantics — byte-equal no-agent default.** Both
+        # engines pick ``options[0]`` (Python's no-agent default at
+        # ``combinators.py:461-462``; Rust's deterministic-yes resolve
+        # at ``state_ops_resolve.rs`` arm). Cross-engine probes drive
+        # both engines with no agent on the source's controller so the
+        # mirror is byte-equal.
+        #
+        # **Real EoE consumer** unblocked: 1 EoE card — Comet Crawler
+        # (~9,732 17lands decks; the Tier-C target-seating ladder's
+        # ``OptionalSacAnotherForPumpSelfUEOT`` slot per
+        # ``docs/EFFECT_UNCOVERED_TIERC_CLOSEST_TO_A.md`` row 4).
+        #
+        # Dict shape: ``{"kind": "optional_sac_another_for_pump_self_ueot",
+        # "power_bonus": N, "toughness_bonus": M}``. Missing fields
+        # default to 0 (matches the Python class default).
+        from mtg_bot.effects.combinators import (
+            OptionalSacAnotherForPumpSelfUEOT,
+        )
+        power_bonus = int(eff_dict.get("power_bonus", 0))
+        toughness_bonus = int(eff_dict.get("toughness_bonus", 0))
+        return OptionalSacAnotherForPumpSelfUEOT(
+            power_bonus=power_bonus,
+            toughness_bonus=toughness_bonus,
+        )
     if kind == "dyadrine_attack_effect":
         # **AAA Pin 1 — DyadrineAttackEffect zero-field bespoke dataclass.**
         # Python's ``DyadrineAttackEffect()`` (``effects/bespoke.py``) is a
