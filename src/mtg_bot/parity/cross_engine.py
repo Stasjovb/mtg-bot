@@ -11069,6 +11069,90 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # pool gate.
         from mtg_bot.effects.bespoke import FanaticOfTheHarrowingETBEffect
         return FanaticOfTheHarrowingETBEffect()
+    if kind == "terrapact_intimidator_etb_effect":
+        # **Terrapact Intimidator Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::TerrapactIntimidatorETBEffect`` (cards.rs field-free
+        # UNIT variant; parser ``"terrapact_intimidator_etb_effect"``;
+        # resolve in state_ops_resolve.rs as a no-agent decline silent
+        # no-op).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "terrapact_intimidator_etb_effect"}``. Python's
+        # ``TerrapactIntimidatorETBEffect`` (effects/bespoke.py:912) is
+        # a frozen dataclass with no constructor parameters. The target
+        # opponent rides through the standard
+        # ``current_resolve_payload_target_id`` substrate (the ETB's
+        # ``requires_target() = True`` binds the target slot at
+        # cast-time the same way every other targeted ETB does).
+        #
+        # **Resolve semantics — no-agent decline byte-equal.** Python's
+        # ``TerrapactIntimidatorETBEffect.resolve`` (effects/bespoke.py:
+        # 935-972) walks five conditional gates:
+        #   1. Read ``state.resolving_source``.
+        #   2. If no targets → silent return.
+        #   3. If target kind != "player" → silent return.
+        #   4. ``opponent.has_lost`` OR ``opponent.agent is None`` →
+        #      silent return (no Lander tokens, no +1/+1 counters).
+        #      The ``opponent.agent is None`` arm of the ``or`` short-
+        #      circuits whenever no agent is configured on the TARGET
+        #      OPPONENT — i.e. every cross-engine probe path that
+        #      drives both engines with no agent surface takes gate 4.
+        #   5. (Only with a yes-agent on the opponent.) Modal
+        #      ``choose_mode`` over
+        #      ``["have controller create two Lander tokens",
+        #         "decline"]``. Choice 0 → create two Landers under
+        #      controller; choice 1 → put two +1/+1 counters on source.
+        #
+        # The cross-engine probe drives BOTH engines with no agent on
+        # the TARGET OPPONENT, so both take gate 4 — silent no-op,
+        # byte-equal across engines (no Lander tokens created, no
+        # +1/+1 counters added).
+        #
+        # **DISTINCTION from ``BoilerbilgesRipperETBEffect``.** Identical
+        # no-agent decline pattern (silent no-op), BUT the no-agent
+        # gate is on a DIFFERENT player: Boilerbilges Ripper checks
+        # ``controller.agent``; Terrapact Intimidator checks the
+        # TARGET OPPONENT's agent. The substrate-shape distinction
+        # (controller-decides vs opponent-decides) is semantic; the
+        # cross-engine probe drives ALL players' agents = None so both
+        # produce the same observable.
+        #
+        # **DISTINCTION from ``FanaticOfTheHarrowingETBEffect``.**
+        # Fanatic's discard is MANDATORY (no decline gate); Terrapact's
+        # mode pick IS optional via the target opponent's choice but
+        # ALSO short-circuits to silent return when the agent is None.
+        # Net: Fanatic's no-agent path REQUIRES a deterministic agent
+        # surface to drive the probe; Terrapact's no-agent path
+        # silently no-ops.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Terrapact
+        # Intimidator as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``TerrapactIntimidatorETBEffect`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-gated
+        # at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened —
+        # ``TerrapactIntimidatorETBEffect`` is explicitly negative-
+        # pinned in the safe-trigger admit set at trajectory.py:1620-
+        # 1628; the per-card real-EoE probe in
+        # ``tests/test_terrapact_intimidator_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Real test-pool consumer**: Terrapact Intimidator — Creature
+        # — Kavu Scout ({1}{R}, 2/1) with the ETB trigger "When this
+        # creature enters, target opponent may have you create two
+        # Lander tokens. If they don't, put two +1/+1 counters on this
+        # creature." Sourced from EoE
+        # (data/edge_of_eternities.json:21227); admitted into the
+        # active ``OracleParserCardSource`` printings without any pool
+        # gate.
+        from mtg_bot.effects.bespoke import TerrapactIntimidatorETBEffect
+        return TerrapactIntimidatorETBEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

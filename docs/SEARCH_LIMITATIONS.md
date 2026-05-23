@@ -12266,6 +12266,208 @@ to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
 LANDED; Comet Crawler is now PROBED at the per-card parity
 layer.
 
+## Terrapact Intimidator Cycle 1 LANDED — `Effect::TerrapactIntimidatorETBEffect` (unit) Effect half shipped byte-equal; ETB trigger no-agent decline path is silent no-op on BOTH engines
+
+**Single-cycle landing (2026-05-23,
+`feature/terrapact-intimidator-cycle-1-p1`).** Terrapact Intimidator —
+`{1}{R}` Creature — Kavu Scout, 2/1 (sourced from EoE
+`data/edge_of_eternities.json:21227` via the active
+`OracleParserCardSource`). ETB trigger: "When this creature enters,
+target opponent may have you create two Lander tokens. If they don't,
+put two +1/+1 counters on this creature." Mirrors Python's
+`TerrapactIntimidatorETBEffect` (parameterless frozen dataclass at
+`effects/bespoke.py:912`).
+
+The single cycle composed:
+
+  1. **Rust `Effect::TerrapactIntimidatorETBEffect`** — field-free unit
+     variant (`rust/src/cards.rs`, the `MutinousMassacreEffect` /
+     `ExileTargetCreature` / `BoilerbilgesRipperETBEffect` /
+     `FanaticOfTheHarrowingETBEffect` Tier-A unit-variant idiom), parse
+     arm (`parse_effect` dispatcher; round-trips the bare `{"kind":
+     "terrapact_intimidator_etb_effect"}` dict shape), `to_pydict` arm
+     (emits only `kind`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — an honest **silent no-op**
+     mirroring Python's no-agent gate-4 short-circuit
+     (`effects/bespoke.py:935-972`'s `opponent.has_lost or
+     opponent.agent is None → silent return`).
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `TerrapactIntimidatorETBEffect()` from
+     the one-key dict shape.
+  3. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `TerrapactIntimidatorETBEffect` — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier, Terrapact
+Intimidator is multi-gated on `effect_uncovered +
+nonsafe_triggered_ability`. The cycle closes the `effect_uncovered`
+gate (the `TerrapactIntimidatorETBEffect` Python class flips from
+`missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — `TerrapactIntimidatorETBEffect` is explicitly negative-
+pinned in the safe-trigger admit set at trajectory.py:1620-1628
+because the substrate seats a *target* but the resolve is a modal
+`opponent.agent.choose_mode` (the substrate seats a target, not a
+mode). **The card DOES move to PROBED tier through the dedicated
+per-card real-EoE byte-equal cross-engine probe**
+(`tests/test_terrapact_intimidator_parity.py`), the same precedent as
+Comet Crawler / Mutinous Massacre / Dyadrine Attack / Boilerbilges
+Ripper / Fanatic of the Harrowing established.
+
+NB: once the `effect_uncovered` gate is closed at the
+`covered_python_class_set()` level AND no loader gate fires, the card
+no longer appears in the
+`scout_r58_subsystem_attribution.subsystem_attribution()` output
+(the classifier only enumerates cards in the BLOCKED_SUBSYSTEM
+tier). The dedicated parity test's classifier-gate assertion skips
+with that reason; the substrate work itself is unaffected — the
+load-bearing signal is `covered_python_class_set()` membership,
+pinned directly by
+`test_terrapact_intimidator_class_covered_by_rust`.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Terrapact Intimidator is a Creature, not a non-creature spell; the
+spell-card-bridge admit set (`trajectory.py::
+_python_spell_effect_to_dict` + its §2 teeth) gates non-creature
+spells only. The cross-engine probe lives in
+`tests/test_terrapact_intimidator_parity.py` and uses the per-card
+dedicated parity-test module convention (cf.
+`test_boilerbilges_ripper_parity.py`,
+`test_fanatic_of_the_harrowing_parity.py`,
+`test_comet_crawler_parity.py`, `test_dyadrine_attack.py`,
+`test_mutinous_massacre_parity.py`), driving the parsed Terrapact
+Intimidator printing through both engines on a shared shape and
+pinning the byte-equal no-agent decline observable.
+
+**No-agent decline byte-equal mirror.** Python's
+`TerrapactIntimidatorETBEffect.resolve` (`effects/bespoke.py:935-972`)
+walks five conditional gates:
+
+  1. Read `state.resolving_source`.
+  2. `if not targets: return` — empty targets → silent return.
+  3. `if kind != "player": return` — non-player target → silent return.
+  4. `if opponent.has_lost or opponent.agent is None: return` — the
+     no-agent decline short-circuit. Silent return (no Lander tokens,
+     no +1/+1 counters).
+  5. (Only reachable with a yes-agent on the opponent.) Modal
+     `choose_mode` over `["have controller create two Lander tokens",
+     "decline"]`.
+
+The cross-engine probe drives BOTH engines with no agent on any
+player. Python's `push_triggered_ability` (`actions.py:3260`) breaks
+at target-pick time because the SOURCE'S CONTROLLER agent is None
+and the trigger is NOT in `_SAFE_TRIGGERS` — the trigger fizzles at
+push time (`len(chosen_list) < min_t` → False return); no stack item
+is queued, no resolve body runs. Rust has no agent surface in
+`apply_effect` so the resolve arm is an empty no-op. The two engines
+therefore agree byte-equal on the WHOLE field view (no Lander
+tokens, no +1/+1 counters).
+
+**DISTINCTION from Boilerbilges Ripper.** Identical no-agent decline
+empty-arm shape (silent no-op), BUT the no-agent gate is on a
+DIFFERENT player in Python's resolve: Boilerbilges Ripper checks
+`controller.agent is None`; Terrapact Intimidator checks the TARGET
+OPPONENT's agent (`opponent.agent is None`). At the
+`push_triggered_ability` site both fizzle for the SAME reason
+(source controller's agent is None → can't pick a target), so both
+probes take the same fizzle path. The semantic distinction is on
+which player's choice the resolve depends; the observable
+byte-equality holds either way when no agent surfaces exist.
+
+**DISTINCTION from Fanatic of the Harrowing.** Fanatic's discard is
+MANDATORY (no decline gate in the resolve body); Terrapact's mode
+pick IS optional via the target opponent's choice but ALSO short-
+circuits to silent return when the agent is None. Net: Fanatic's
+no-agent path REQUIRES a deterministic agent surface to drive the
+probe; Terrapact's no-agent path silently no-ops.
+
+**Cycle 2+ agent-surface widening.** A future cycle landing a Rust
+agent surface (the analog of Python's `Agent` interface) will widen
+this resolve arm to gate 5: ask the target opponent's agent
+`choose_mode`, then EITHER call the proven `Effect::CreateToken` /
+`SeedshipImpactEffect` lander-create block TWICE under the
+controller (registry-bounds check, fresh-id allocator, source-
+controller seat, fresh etb_timestamp, ENTERS dispatch queue) OR put
+two +1/+1 counters on `state.resolving_source` via the established
++1/+1 counter substrate. Cycle 1 lands ONLY the `effect_uncovered`
+gate closure + the byte-equal no-agent mirror; the yes-agent gate-5
+path is honest-stopped today.
+
+**Failure mode (no honest-stop on the byte-equal path)**: none — the
+no-agent decline semantics are fully mirrored on the Rust side. The
+yes-agent modal-choice path is honest-stopped at Cycle 2+; the
+cross-engine probe does NOT exercise that path (no agent surface
+exists on either engine in this probe convention).
+
+**Fix scope estimate**: zero for the no-agent path. Cycle 2+ widening
+will add ~80 lines of Rust resolve-arm body (mirror the modal
+choose_mode, then either call the Lander-create block twice or apply
+two +1/+1 counters) plus a corresponding ~30-line probe test driving
+the yes-agent paths through both engines.
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Terrapact Intimidator from Effect-uncovered (BLOCKED at the covered-
+set layer) to Effect-covered (COVERED) at the Rust-Effect-coverage
+layer; PROBED at the per-card cross-engine parity layer via the
+dedicated probe module. Pool reach: 1 EoE card (Terrapact Intimidator
+itself) — the parity-doc covered/PROBED tier counts grow by one
+Python class; the pool-parity headline reads +1 over Fanatic of the
+Harrowing's prior at the Effect+bridge level.
+
+**Honest-stops noted (NOT in this cycle's scope):**
+
+  * **Yes-agent modal `choose_mode` path on Rust.** Rust's
+    `apply_effect` has no agent surface; Python's gate-5 modal
+    choose_mode (option 0 → create two Lander tokens; option 1 →
+    put two +1/+1 counters on source) is not mirrored on Rust today.
+    The no-agent decline path IS mirrored byte-equal; the yes-agent
+    paths are honest-stopped at Cycle 2+.
+
+  * **`has_lost` divergence on Rust.** Rust's player struct has no
+    `has_lost` field today; Python's `if opponent.has_lost or
+    opponent.agent is None: return` gate's `has_lost` arm is not
+    modeled. In a 2-player cross-engine probe both players are alive
+    so the divergence is not exercised; a future cycle adding an
+    explicit `has_lost` gate on Rust would widen the resolve arm
+    here.
+
+  * **Production-deck bench admit set (full-card cross-engine bench
+    play).** The trajectory safe-trigger gate
+    (`_python_ta_to_safe_dict`) widening to admit Terrapact
+    Intimidator into the bench-admit set is INTENTIONALLY NOT done
+    this cycle — that gate is about the production-deck bench admit
+    set, a distinct concern from per-card real-EoE parity probes.
+    The nonsafe_triggered_ability gate stays open at the classifier
+    after this cycle; the negative-pin at trajectory.py:1620-1628
+    explicitly EXCLUDES `TerrapactIntimidatorETBEffect` from the
+    `_SAFE_TRIGGERS` set even though it shares the
+    `(ENTERS, source_is_self, targeted)` shape with admitted
+    siblings — because the substrate seats a target but the resolve
+    is a modal opponent choose_mode.
+
+**Coverage**: 2 Rust resolve-arm unit pins + 1 parser SoT pin +
+2 serializer round-trip pins + 1 covered-set pin + 1 classifier
+skip-or-pin + 1 GENUINE real-EoE cross-engine probe = 8 tests at
+`tests/test_terrapact_intimidator_parity.py`. 7 pass + 1
+informative skip (the classifier no longer surfaces the card once
+gates are closed) on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state_ops_resolve.rs` (silent-no-op resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_terrapact_intimidator_parity.py` (probes). Per-card cycle
+LANDED; Terrapact Intimidator is now PROBED at the per-card parity
+layer (despite the classifier multi-gate state staying True on
+`nonsafe_triggered_ability`).
+
+
 ## Fanatic of the Harrowing Cycle 1 LANDED — `Effect::FanaticOfTheHarrowingETBEffect` (unit) Effect half shipped byte-equal; mandatory-discard each-player + controller-draw rider mirrors Python's resolve byte-equal under the hand[0] deterministic-pick convention
 
 **Single-cycle landing (2026-05-23,

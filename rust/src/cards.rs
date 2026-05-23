@@ -6796,6 +6796,99 @@ pub enum Effect {
     /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
     /// reconstructs `FanaticOfTheHarrowingETBEffect()`.
     FanaticOfTheHarrowingETBEffect,
+    /// **Terrapact Intimidator Cycle 1 (2026-05-23).** Terrapact
+    /// Intimidator `{1}{R}` 2/1 Creature — Kavu Scout (EoE). ETB
+    /// trigger body: "When this creature enters, target opponent may
+    /// have you create two Lander tokens. If they don't, put two +1/+1
+    /// counters on this creature." Mirrors Python's
+    /// `TerrapactIntimidatorETBEffect` (parameterless frozen dataclass
+    /// at `effects/bespoke.py:912`).
+    ///
+    /// **Multi-gated card (effect_uncovered + nonsafe_triggered_
+    /// ability).** Per the round-58 subsystem-attribution classifier,
+    /// Terrapact Intimidator is multi-gated: this Rust variant closes
+    /// the `effect_uncovered` gate (`TerrapactIntimidatorETBEffect`
+    /// moves from `missing_effect_classes` to covered via the 1:1
+    /// identity-mapping rule in `effect_coverage.map_rust_to_python`),
+    /// but the `nonsafe_triggered_ability` gate KEEPS the card multi-
+    /// gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is deliberately
+    /// NOT widened — the `TerrapactIntimidatorETBEffect` leaf is
+    /// explicitly negative-pinned at trajectory.py:1620-1628 because
+    /// the substrate seats a *target* but the resolve is a modal
+    /// `opponent.agent.choose_mode`; the safe-trigger admit set is a
+    /// distinct concern from per-card real-EoE parity probes —
+    /// Comet Crawler / Dyadrine Attack / Mutinous Massacre /
+    /// Boilerbilges Ripper / Fanatic of the Harrowing precedent). The
+    /// card still flips to PROBED tier through the dedicated per-card
+    /// real-EoE byte-equal cross-engine probe
+    /// (`tests/test_terrapact_intimidator_parity.py`).
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `ExorciseEffect` / `BoilerbilgesRipperETBEffect` /
+    /// `FanaticOfTheHarrowingETBEffect` Tier-A unit-variant idiom).
+    /// The Python class is a parameterless frozen dataclass; no
+    /// constructor args. The target opponent rides through the
+    /// standard `current_resolve_payload_target_id` substrate
+    /// (Terrapact Intimidator's ETB `requires_target() = True`, so the
+    /// target slot is bound at cast-time the same way every other
+    /// targeted ETB trigger does).
+    ///
+    /// **Resolve semantics (mirrors `TerrapactIntimidatorETBEffect.
+    /// resolve` at `effects/bespoke.py:935-972` byte-equal).** The
+    /// Python class walks:
+    ///   1. Read `state.resolving_source`.
+    ///   2. If no targets → silent return.
+    ///   3. If target kind != "player" → silent return.
+    ///   4. Resolve target opponent. If opponent has lost OR
+    ///      `opponent.agent is None` → silent return (the no-agent
+    ///      decline short-circuit — same gate-3 shape as Boilerbilges
+    ///      Ripper).
+    ///   5. Otherwise: opponent's agent picks `choose_mode` over
+    ///      `["have controller create two Lander tokens", "decline"]`.
+    ///      Choice 0 → controller creates two Lander tokens. Choice 1
+    ///      → put two +1/+1 counters on source.
+    ///
+    /// **No-agent decline default (the cross-engine probe path).**
+    /// Both engines are driven with NO agent on the target opponent;
+    /// Python's gate-4 short-circuits to "decline" because
+    /// `opponent.agent is None` makes the resolve return silently
+    /// (NO Lander tokens, NO +1/+1 counters). The byte-equal mirror on
+    /// the Rust side is "always decline when no agent surface exists"
+    /// — and since Rust's `apply_effect` has no agent surface, this
+    /// collapses to a silent no-op resolve arm. Identical no-agent
+    /// pattern as `BoilerbilgesRipperETBEffect`: both Python classes
+    /// short-circuit when `agent is None`; both Rust mirrors silently
+    /// no-op. Both are byte-equal under the no-agent probe convention.
+    ///
+    /// **Agent surface = Cycle 2+ work.** A future cycle landing a
+    /// Rust agent surface (the analog of Python's `Agent` interface)
+    /// will widen this resolve arm to the modal body: ask the target
+    /// opponent's agent `choose_mode`, then EITHER create two Lander
+    /// tokens via the proven `Effect::CreateToken` / `SeedshipImpact
+    /// Effect` lander-create block (registry-bounds check, fresh-id
+    /// allocator, source-controller seat, fresh etb_timestamp, ENTERS
+    /// dispatch queue) OR put two +1/+1 counters on the source via the
+    /// established `+1/+1 counter` substrate. This Cycle 1 lands ONLY
+    /// the effect_uncovered gate closure + the byte-equal no-agent
+    /// mirror; the agent path is honest-stopped today and pinned at
+    /// the test surface (decline path observable on BOTH engines).
+    ///
+    /// **DISTINCTION from `BoilerbilgesRipperETBEffect`.** The no-agent
+    /// check is on a DIFFERENT player: Boilerbilges Ripper checks
+    /// `controller.agent is None`; Terrapact Intimidator checks the
+    /// TARGET OPPONENT's agent. Functionally identical in the no-agent
+    /// cross-engine probe (no player has an agent on the synthetic
+    /// state), but semantically the gate decides whether the
+    /// CONTROLLER's choice (BR) or the TARGET OPPONENT's choice (TI)
+    /// proceeds.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "terrapact_intimidator_etb_effect"}` (only `kind` emitted).
+    /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
+    /// reconstructs `TerrapactIntimidatorETBEffect()`.
+    TerrapactIntimidatorETBEffect,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10373,6 +10466,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "fanatic_of_the_harrowing_etb_effect" => {
             Ok(Effect::FanaticOfTheHarrowingETBEffect)
         }
+        // **Terrapact Intimidator Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's `TerrapactIntimidatorETBEffect`
+        // (`effects/bespoke.py:912`) is a parameterless frozen
+        // dataclass. Round-trip dict shape: `{"kind":
+        // "terrapact_intimidator_etb_effect"}` (no other fields).
+        // Sibling of the `MutinousMassacreEffect` /
+        // `ExileTargetCreature` / `BoilerbilgesRipperETBEffect` /
+        // `FanaticOfTheHarrowingETBEffect` field-free unit-variant
+        // idiom.
+        "terrapact_intimidator_etb_effect" => {
+            Ok(Effect::TerrapactIntimidatorETBEffect)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -12021,7 +12126,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect"
         ))),
     }
 }
@@ -15062,6 +15167,14 @@ pub(crate) fn effect_to_pydict<'py>(
         // one-key shape.
         Effect::FanaticOfTheHarrowingETBEffect => {
             d.set_item("kind", "fanatic_of_the_harrowing_etb_effect")?;
+        }
+        // **Terrapact Intimidator Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `TerrapactIntimidatorETBEffect` dict
+        // shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape.
+        Effect::TerrapactIntimidatorETBEffect => {
+            d.set_item("kind", "terrapact_intimidator_etb_effect")?;
         }
     }
     Ok(d)

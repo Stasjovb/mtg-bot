@@ -20139,6 +20139,71 @@ fn apply_effect(
                 }
             }
         }
+        // **Terrapact Intimidator Cycle 1 (2026-05-23).** No-agent
+        // decline path — byte-equal mirror of Python's
+        // `TerrapactIntimidatorETBEffect.resolve` no-agent gate-4
+        // short-circuit (`effects/bespoke.py:935-972`).
+        //
+        // **Why this collapses to a silent no-op.** Python's resolve
+        // walks four gates in order:
+        //   1. Read `state.resolving_source`.
+        //   2. `if not targets: return` — empty targets → silent return.
+        //   3. `if kind != "player": return` — non-player target → silent
+        //      return.
+        //   4. `if opponent.has_lost or opponent.agent is None: return`
+        //      — the no-agent decline short-circuit. The `opponent.agent
+        //      is None` arm of the `or` short-circuits whenever no agent
+        //      is configured on the TARGET OPPONENT — i.e. every
+        //      cross-engine probe path that drives BOTH engines with no
+        //      agent surface takes gate 4 silent return.
+        //   5. (Only reachable with a yes-agent on the opponent.) Modal
+        //      `choose_mode` over `["have controller create two Lander
+        //      tokens", "decline"]`. Choice 0 → create two Landers under
+        //      controller; choice 1 → put two +1/+1 counters on source.
+        //
+        // Since Rust's `apply_effect` has no agent surface (the modal
+        // `choose_mode` path is honest-stopped for Cycle 2+ — see the
+        // enum docstring), Rust ALWAYS takes the decline path.
+        // Observable parity vs Python's no-agent probe path: same (no
+        // Lander tokens created, no +1/+1 counters added). Log strings
+        // differ between engines but are NOT in the harness's
+        // `_build_field_view` byte-equal slot set — they're a soft
+        // observable the cross-engine probe doesn't pin (the round-74
+        // R74-3 byte-equal cleanup mapping precedent).
+        //
+        // **Cycle 2+ agent-surface widening.** When a future cycle lands
+        // a Rust agent surface, the body grows to mirror gate 5: ask
+        // the target opponent's agent `choose_mode`, then EITHER call
+        // the proven `Effect::CreateToken` / `SeedshipImpactEffect`
+        // lander-create block twice under the controller (registry-
+        // bounds check, fresh-id allocator, source-controller seat,
+        // fresh etb_timestamp, ENTERS dispatch queue) OR put two +1/+1
+        // counters on `state.resolving_source` via the established
+        // `+1/+1 counter` substrate. Cycle 1 lands ONLY the
+        // effect_uncovered gate closure + the no-agent byte-equal
+        // mirror; gate 5 is honest-stopped today.
+        //
+        // **Gate-2/3 defense-in-depth (informational only).** The
+        // Python class also short-circuits at gate 2 (no targets) and
+        // gate 3 (non-player target kind) — both converge to the same
+        // observable as gate 4 ("silent no-op"). The cross-engine
+        // probe doesn't exercise the empty-targets path because the
+        // ETB substrate's `requires_target() == True` /
+        // `target_count_range() == (1, 1)` always seats exactly one
+        // player target before this arm fires; this empty arm produces
+        // the right observable regardless. Adding explicit
+        // empty-targets / wrong-kind scans here would be dead code.
+        //
+        // **DISTINCTION from `BoilerbilgesRipperETBEffect`.** Identical
+        // empty-arm shape (silent no-op on the no-agent decline path),
+        // BUT the no-agent gate is on a DIFFERENT player: Boilerbilges
+        // Ripper checks `controller.agent`; Terrapact Intimidator
+        // checks the TARGET OPPONENT's agent. Both probes drive ALL
+        // players' agents = None on the synthetic state, so the
+        // observable byte-equality holds either way.
+        Effect::TerrapactIntimidatorETBEffect => {
+            // Honest-stopped no-op — see docstring.
+        }
     }
     Ok(())
 }
