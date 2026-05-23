@@ -5053,6 +5053,51 @@ pub enum Effect {
         do_action: Box<Effect>,
         then_action: Box<Effect>,
     },
+    /// **Splitskin Doll Cycle 1 — `IfNot` combinator (2026-05-23).**
+    /// Run `then` only when `condition` is FALSE at resolve time.
+    /// Mirrors Python's `IfNot(condition: Condition, then: Effect)`
+    /// at `combinators.py:628` — the "unless <condition>" inversion
+    /// of an `if <condition>, do X` rider. Reads the condition
+    /// synchronously against the resolving source's controller (the
+    /// viewer for the gate's `Condition.matches` call); if TRUE the
+    /// inner is skipped (no-op, logged), if FALSE the inner fires
+    /// via recursive `apply_effect`.
+    ///
+    /// **Condition vocabulary (tag + args, lockstep with Python's
+    /// `effects/conditions.py` Condition subclasses).** Mirrors the
+    /// `StaticSelfBonus.condition_tag` / `condition_args` precedent
+    /// at `cards.rs:9569` — a stringly-typed dispatch table rather
+    /// than a full `Condition` enum widening (deferred). One tag in
+    /// scope for Cycle 1:
+    ///
+    ///   * `"controls_another_creature_with_power_at_most"`
+    ///     (args=`(threshold,)`) — viewer controls at least one
+    ///     creature OTHER than the resolving source whose
+    ///     `effective_power(state, obj) <= threshold`. Mirrors
+    ///     Python's `ControlsAnotherCreatureWithPowerAtMost(
+    ///     threshold)` at `conditions.py:161`. The "another"
+    ///     qualifier excludes `state.resolving_source` (the
+    ///     2/1 Splitskin Doll itself).
+    ///
+    /// **Recursive `then` field.** `then` is another boxed
+    /// `Effect`; parse + to_pydict recurse via `parse_effect` /
+    /// `effect_to_pydict` (sibling of `Effect::IfYouDo`'s recursive
+    /// fields). The resolve arm calls `apply_effect(state, then,
+    /// source_obj_id)` on condition-FALSE — full effect composition
+    /// in scope for free.
+    ///
+    /// **Cycle 1 scope teeth.** Unknown `condition_tag` raises at
+    /// parse time (whitelist of one entry); future condition
+    /// vocabulary additions land tag-by-tag with their own resolve-
+    /// arm dispatch + Python-side parity probe. No `Condition` enum
+    /// widening; no `AndCondition` / `OrCondition` / `NotCondition`
+    /// composition (Splitskin Doll's printed surface is a single
+    /// flat predicate).
+    IfNot {
+        condition_tag: String,
+        condition_args: Vec<i32>,
+        then: Box<Effect>,
+    },
     /// Each opponent of the source's controller mills `count` cards
     /// (CR 701.13b — the per-opponent variant of `Mill`). Mirrors
     /// Python's `EachOpponentMillsCards(count: int = 1)` (3+ EoE
@@ -11912,6 +11957,80 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 then_action: Box::new(then_action),
             })
         }
+        "if_not" => {
+            // Splitskin Doll Cycle 1 — `IfNot` combinator parse arm.
+            // Mirrors Python's `IfNot(condition: Condition, then:
+            // Effect)` at `combinators.py:628`. Dict shape:
+            //   {"kind": "if_not",
+            //    "condition_tag": <str>,
+            //    "condition_args": [int, ...] (optional, default []),
+            //    "then": <effect_dict>}
+            //
+            // Whitelist: only the
+            // `controls_another_creature_with_power_at_most`
+            // tag in scope for Cycle 1 (Splitskin Doll's printed
+            // surface). Unknown tags raise — same closure shape as
+            // the `StaticSelfBonus.condition_tag` whitelist at
+            // cards.rs:13545.
+            let tag_raw = dict.get_item("condition_tag")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "if_not: missing required 'condition_tag' field",
+                )
+            })?;
+            let condition_tag: String =
+                tag_raw.extract().map_err(|_| {
+                    PyValueError::new_err(
+                        "if_not.condition_tag must be a string",
+                    )
+                })?;
+            if condition_tag != "controls_another_creature_with_power_at_most" {
+                return Err(PyValueError::new_err(format!(
+                    "if_not.condition_tag must be one of \
+                     {{controls_another_creature_with_power_at_most}}, \
+                     got '{condition_tag}'"
+                )));
+            }
+            let condition_args: Vec<i32> = match dict
+                .get_item("condition_args")?
+            {
+                Some(args_raw) => args_raw.extract().map_err(|_| {
+                    PyValueError::new_err(
+                        "if_not.condition_args must be a list of \
+                         integers",
+                    )
+                })?,
+                None => Vec::new(),
+            };
+            // The `controls_another_creature_with_power_at_most` tag
+            // requires exactly one i32 arg (threshold). Defensive
+            // arity check mirrors the
+            // `at_least_n_spells_cast_this_turn` arg-count guard.
+            if condition_args.len() != 1 {
+                return Err(PyValueError::new_err(format!(
+                    "if_not.condition_args for tag \
+                     'controls_another_creature_with_power_at_most' \
+                     must have exactly 1 entry (threshold); got \
+                     {}",
+                    condition_args.len()
+                )));
+            }
+            let then_raw = dict.get_item("then")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "if_not: missing required 'then' field",
+                )
+            })?;
+            let then_dict = then_raw.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "if_not.then must be a dict (effect-shape)",
+                )
+            })?;
+            let then = parse_effect(then_dict)?;
+            Ok(Effect::IfNot {
+                condition_tag,
+                condition_args,
+                then: Box::new(then),
+            })
+        }
         "choose_one_mode" => {
             // Round-28 ModalChooseOne first-slice: resolve-time pick
             // only. Required nested 'modes' field is a list of effect
@@ -15485,6 +15604,22 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "if_you_do")?;
             d.set_item("do_action", effect_to_pydict(py, do_action)?)?;
             d.set_item("then_action", effect_to_pydict(py, then_action)?)?;
+        }
+        Effect::IfNot {
+            condition_tag,
+            condition_args,
+            then,
+        } => {
+            // Splitskin Doll Cycle 1 — `IfNot` to_pydict.
+            // Emits the dict shape consumed by the `if_not` parse
+            // arm above. `then` recurses via `effect_to_pydict` —
+            // the recursive sibling of `if_you_do`'s
+            // `do_action` / `then_action` recursion.
+            d.set_item("kind", "if_not")?;
+            d.set_item("condition_tag", condition_tag.as_str())?;
+            let args_list: Vec<i32> = condition_args.clone();
+            d.set_item("condition_args", args_list)?;
+            d.set_item("then", effect_to_pydict(py, then)?)?;
         }
         Effect::EachOpponentMillsCards { count } => {
             d.set_item("kind", "each_opponent_mills_cards")?;

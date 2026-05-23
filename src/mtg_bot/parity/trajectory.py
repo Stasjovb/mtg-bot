@@ -4294,7 +4294,10 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         PumpTargetArtifactOrCreatureUntilEOT,
         ThreatenTargetCreatureUEOT,
     )
-    from mtg_bot.effects.combinators import IfYouDo, MayDo
+    from mtg_bot.effects.combinators import IfNot, IfYouDo, MayDo
+    from mtg_bot.effects.conditions import (
+        ControlsAnotherCreatureWithPowerAtMost,
+    )
     from mtg_bot.effects.generic.discard import DiscardSelf
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.counters import (
@@ -4844,6 +4847,50 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": "if_you_do",
                 "do_action": do_dict,
                 "then_action": then_dict,
+            }
+        # **Splitskin Doll Cycle 1 — `IfNot` reverse-serializer leaf
+        # (2026-05-23).** Mirror of the Rust ``Effect::IfNot {
+        # condition_tag: String, condition_args: Vec<i32>, then:
+        # Box<Effect> }`` payload at ``rust/src/cards.rs``. Emits the
+        # dict shape consumed by ``cross_engine._ta_dict_to_python_
+        # effect``'s ``if_not`` arm and the Rust ``parse_effect``
+        # ``if_not`` arm — both whitelist
+        # ``controls_another_creature_with_power_at_most`` as the
+        # only condition tag in scope for Cycle 1.
+        #
+        # **Field-name translation.** Python's
+        # ``IfNot(condition: Condition, then: Effect)`` carries a
+        # whole ``Condition`` value object (here:
+        # ``ControlsAnotherCreatureWithPowerAtMost(threshold=2)``);
+        # Rust's payload is the flattened ``condition_tag`` /
+        # ``condition_args`` stringly-typed dispatch table (same
+        # precedent as ``StaticSelfBonus.condition_tag``). The leaf
+        # walks the condition's class to pick the tag, then reads
+        # its dataclass fields for the args list.
+        #
+        # **Recursive ``then`` field.** Recurses via ``_leaf`` on
+        # the inner Effect (sibling of ``if_you_do``'s ``do_action``
+        # / ``then_action`` recursion). Unknown condition class →
+        # recurse-or-bail return ``None`` so the parent composer
+        # stays consistent with the no-fallback-hybrid teeth.
+        if isinstance(eff, IfNot):
+            then_dict = _leaf(eff.then)
+            if then_dict is None:
+                return None  # recurse-or-bail
+            cond = eff.condition
+            if isinstance(cond, ControlsAnotherCreatureWithPowerAtMost):
+                condition_tag = (
+                    "controls_another_creature_with_power_at_most"
+                )
+                condition_args = [int(cond.threshold)]
+            else:
+                # Unknown condition class for Cycle 1; bail.
+                return None
+            return {
+                "kind": "if_not",
+                "condition_tag": condition_tag,
+                "condition_args": condition_args,
+                "then": then_dict,
             }
         # **Control-change-UEOT subsystem — Cycle 5 delayed-trigger
         # complement (2026-05-22).** Single-field

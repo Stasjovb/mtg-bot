@@ -12792,6 +12792,151 @@ LANDED; Terrasymbiosis is now PROBED at the per-card parity layer
 `nonsafe_triggered_ability`).
 
 
+## Splitskin Doll Cycle 1 LANDED — `Effect::IfNot` combinator (recursive) "unless <condition>" gate shipped byte-equal; resolves by evaluating a stringly-typed `condition_tag` against the source's controller and firing the inner Effect on FALSE, no-op on TRUE
+
+**Single-cycle landing (2026-05-23,
+`feature/splitskin-doll-cycle-1-p1`).** Splitskin Doll — `{1}{W}`
+Artifact Creature — Toy, 2/1 (sourced from DSK
+`data/duskmourn.json` via the active `OracleParserCardSource`). ETB
+trigger body: "When this creature enters, draw a card. Then discard a
+card unless you control another creature with power 2 or less." The
+parser maps the literal ETB body at `cards/parser/effects.py:3661-3673`
+to
+`Sequence((DrawCards(amount=1),
+IfNot(condition=ControlsAnotherCreatureWithPowerAtMost(threshold=2),
+then=DiscardSelf(amount=1))))`. The "another" qualifier excludes the
+resolving Splitskin Doll itself (printed 2/1) so the gate doesn't
+trivially satisfy on the Doll's own power.
+
+The single cycle composed:
+
+  1. **Rust `Effect::IfNot` combinator variant** (`rust/src/cards.rs`)
+     with the
+     `{condition_tag: String, condition_args: Vec<i32>, then:
+     Box<Effect>}` payload — mirroring the `StaticSelfBonus.
+     condition_tag` precedent's stringly-typed condition dispatch
+     rather than a full `Condition` enum widening (deferred). Parse
+     arm + `to_pydict` arm in `cards.rs`; resolve arm in
+     `state_ops_resolve.rs`. The resolve arm evaluates the condition
+     against the resolving source's controller via the
+     `current_resolve_source_controller` transient + the 5-zone source-
+     finder + stack scan fallback; if FALSE fires `then` via recursive
+     `apply_effect`, if TRUE silently no-ops (matches Python's
+     `IfNot.resolve` at `combinators.py:672-682`).
+  2. **Condition-tag whitelist** for Cycle 1:
+     `"controls_another_creature_with_power_at_most"` (single i32 arg
+     = threshold). Maps to Python's
+     `ControlsAnotherCreatureWithPowerAtMost(threshold)` at
+     `conditions.py:161`. Walks the viewer's battlefield, excludes the
+     resolving source (the "another" qualifier), filters to printed
+     creatures (`card_types contains "Creature"`), reads effective
+     power via `state_ops_combat::predicate_subject_effective_power`
+     (counters + UEOT, matches Python's `effective_power`). Unknown
+     tags raise at parse time (closed whitelist of one entry).
+  3. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `IfNot` from the dict shape,
+     instantiating the `ControlsAnotherCreatureWithPowerAtMost`
+     condition from the tag + args; recursive on `then`.
+  4. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the `{"kind": "if_not", "condition_tag": str,
+     "condition_args": [int, ...], "then": <eff_dict>}` shape for
+     `IfNot` instances; recursive on `then` (sibling of the existing
+     `if_you_do` reverse-serializer leaf, recurse-or-bail).
+  5. **Coverage 1:1 identity mapping.** The new Rust variant name
+     `IfNot` matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()` auto-
+     includes `IfNot` — closes the `effect_uncovered` classifier gate
+     at the covered-set level.
+
+**Combinator with recursive `then`, not a flat leaf.** Unlike the
+unit-variant Effects (Terrasymbiosis / Ouroboroid), `IfNot` is a
+combinator: its `then` field is another Effect that resolves via
+recursive `apply_effect`. The recursion-on-`then` substrate is in
+scope for Cycle 1 — sibling of `Effect::Sequence`'s child recursion
+and `Effect::IfYouDo`'s `do_action` / `then_action` recursion. Future
+condition vocabulary additions land tag-by-tag with their own
+resolve-arm dispatch + Python-side parity probe; the substrate's
+condition-tag whitelist stays explicit (no
+``AndCondition`` / ``OrCondition`` / ``NotCondition`` composition
+today — Splitskin Doll's printed surface is a single flat predicate).
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier, Splitskin
+Doll is multi-gated on `effect_uncovered + nonsafe_triggered_ability`.
+The cycle closes the `effect_uncovered` gate (the `IfNot` Python class
+flips from `missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY NOT
+widened — that gate is about the production-deck bench admit set, a
+distinct concern from per-card real-EoE parity probes. **The card DOES
+move to PROBED tier through the dedicated per-card real-EoE byte-equal
+cross-engine probe** (`tests/test_splitskin_doll_parity.py`), the same
+precedent as Friendly Teddy / Endstone / Terrapact / Vaultguard /
+Arabella / Attack-in-the-Box / Wickerfolk Thresher / Territorial
+Bruntar / Enduring Curiosity / Terrasymbiosis / Ouroboroid
+established.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Splitskin Doll is an Artifact Creature, not a non-creature spell with
+a spell-card-bridge resolve. The spell-card-bridge admit set
+(`trajectory.py::_python_spell_effect_to_dict` + its §2 teeth) gates
+non-creature spells only. The cross-engine probe lives in
+`tests/test_splitskin_doll_parity.py` and uses the per-card dedicated
+parity-test module convention.
+
+**Documented residual — ETB-trigger dispatch path.** Cycle 1 does NOT
+drive the production ETB-trigger fan-out on Rust to invoke the IfNot
+through the real ETB-observer mechanism — the byte-equal observable
+is exercised directly via push-to-stack + resolve-top-of-stack on a
+synthetic `IfNot`-bearing printing (same Cycle 1 honest-stop shape as
+Terrasymbiosis's COUNTERS_ADDED-dispatch boundary and Ouroboroid's
+beginning-of-combat trigger-fan-out boundary). The substrate ships so
+a future cycle wiring the ETB-trigger dispatch can flip the byte-
+equal probe atomically through the trigger pipeline.
+
+**No `Condition` enum widening.** The stringly-typed
+`condition_tag` / `condition_args` payload (lockstep with Python's
+condition vocabulary by class-name → tag mapping) sidesteps a full
+`Condition` enum widening, mirroring the `StaticSelfBonus.condition_
+tag` precedent. Single tag in scope for Cycle 1; future cards
+introducing new condition shapes land their own tag dispatch entry +
+Python-side parity test.
+
+**No admit-set change; no trajectory.py admit-gate widen.** Splitskin
+Doll is a Creature (no spell-card-bridge admit-set change applies);
+the trajectory safe-trigger admit gate is INTENTIONALLY NOT widened
+per the multi-gated-classifier-bypass precedent.
+
+**Resolve semantics byte-equal.** Both engines: resolve source's
+controller (the viewer); evaluate
+`ControlsAnotherCreatureWithPowerAtMost(threshold).matches(state,
+viewer_id)`; if TRUE silent no-op (the unless-clause "dodges" the
+inner); if FALSE fire the inner Effect with the original
+`source_obj_id`. Synthetic Rust unit pins exercise the resolve arm
+directly via push-to-stack + resolve-top-of-stack on the
+condition-TRUE / condition-FALSE / source-itself-exclusion shapes.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm —
+viewer-finder + condition-tag dispatch + recursive `apply_effect` on
+inner),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (per-leaf Python→dict serializer
+arm + narrow imports for `IfNot` /
+`ControlsAnotherCreatureWithPowerAtMost`),
+`tests/test_splitskin_doll_parity.py` (probes — parser SoT pin,
+trajectory serializer round-trip, Rust to_pydict round-trip, covered-
+set membership, Rust resolve condition-TRUE no-op pin, Rust resolve
+condition-FALSE inner-fires pin, Rust resolve source-itself-exclusion
+pin, real-EoE byte-equal cross-engine probe). Per-card cycle LANDED;
+Splitskin Doll is now PROBED at the per-card parity layer (despite
+the classifier multi-gate state staying True on
+`nonsafe_triggered_ability`).
+
+
 ## Ouroboroid Cycle 1 LANDED — `Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower` (unit) X-source mass-counter Effect shipped byte-equal; beginning-of-combat-on-your-turn trigger reads X = effective_power(source) at resolve time and spreads +X counters to each controlled creature
 
 **Single-cycle landing (2026-05-23,

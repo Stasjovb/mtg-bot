@@ -2188,6 +2188,77 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         do_action = _ta_dict_to_python_effect(eff_dict["do_action"])
         then_action = _ta_dict_to_python_effect(eff_dict["then_action"])
         return IfYouDo(do_action=do_action, then_action=then_action)
+    if kind == "if_not":
+        # **Splitskin Doll Cycle 1 composer bridge arm (if_not).**
+        # Mirrors Rust's ``Effect::IfNot { condition_tag: String,
+        # condition_args: Vec<i32>, then: Box<Effect> }``
+        # (cards.rs). The parse_effect arm accepts the dict shape
+        # ``{"kind": "if_not", "condition_tag": <str>,
+        # "condition_args": [int, ...], "then": <effect_dict>}``
+        # with a whitelist of one condition tag for Cycle 1:
+        # ``controls_another_creature_with_power_at_most`` (single
+        # i32 arg = threshold).
+        #
+        # Python's
+        # ``IfNot(condition: Condition, then: Effect)`` from
+        # ``effects/combinators.py:628`` carries the same shape:
+        # evaluates ``condition.matches(state, controller_id)``
+        # synchronously; if FALSE fires ``then.resolve(...)``, if
+        # TRUE silently no-ops (the unless-clause "dodges" the
+        # inner). ``ControlsAnotherCreatureWithPowerAtMost(
+        # threshold)`` at ``conditions.py:161`` is the Python
+        # mirror — read the source's controller's battlefield for
+        # any "another" creature (excluding state.resolving_source)
+        # whose effective_power <= threshold.
+        #
+        # **Condition-tag dispatch.** The single supported tag
+        # ``controls_another_creature_with_power_at_most`` maps to
+        # the Python ``ControlsAnotherCreatureWithPowerAtMost(
+        # threshold=condition_args[0])`` constructor. Future tag
+        # vocabulary widens this dispatch table; unknown tags
+        # raise (the Rust parse arm already whitelisted, so
+        # encountering an unknown here means Rust-side and Python-
+        # side dispatch tables drifted).
+        #
+        # **Recursive ``then``.** The ``then`` field is an effect
+        # dict; recurse via ``_ta_dict_to_python_effect`` (same
+        # sibling pattern as ``if_you_do``'s ``do_action`` /
+        # ``then_action`` recursion). Composer nesting (IfNot
+        # inside Sequence, Sequence inside IfNot.then, ...) is
+        # unlocked for free.
+        #
+        # **Real EoE consumer** unblocked by this arm:
+        # - Splitskin Doll: Sequence{[DrawCards{1},
+        #   IfNot{condition_tag="controls_another_creature_with_
+        #   power_at_most", condition_args=[2],
+        #   then=DiscardSelf{1}}]} -- "Draw a card. Then discard
+        #   a card unless you control another creature with power
+        #   2 or less."
+        from mtg_bot.effects.combinators import IfNot
+        from mtg_bot.effects.conditions import (
+            ControlsAnotherCreatureWithPowerAtMost,
+        )
+        condition_tag = eff_dict["condition_tag"]
+        condition_args = eff_dict.get("condition_args", [])
+        if condition_tag == "controls_another_creature_with_power_at_most":
+            if len(condition_args) != 1:
+                raise ValueError(
+                    "if_not.condition_args for tag "
+                    "'controls_another_creature_with_power_at_most' "
+                    "must have exactly 1 entry (threshold); got "
+                    f"{len(condition_args)}"
+                )
+            condition = ControlsAnotherCreatureWithPowerAtMost(
+                threshold=int(condition_args[0]),
+            )
+        else:
+            raise ValueError(
+                "if_not.condition_tag must be one of "
+                "{controls_another_creature_with_power_at_most}, "
+                f"got '{condition_tag}'"
+            )
+        then = _ta_dict_to_python_effect(eff_dict["then"])
+        return IfNot(condition=condition, then=then)
     if kind == "may_do":
         # **Phase 5 composer bridge arm (may_do).**
         # Mirrors Rust's ``Effect::MayDo { inner_effect: Box<Effect>,

@@ -16502,6 +16502,146 @@ fn apply_effect(
                 then_action: then_action.clone(),
             });
         }
+        // **Splitskin Doll Cycle 1 — `IfNot` resolve arm (2026-05-23).**
+        // Synchronous "unless <condition>" gate: evaluate the condition
+        // against the resolving source's controller; if FALSE the inner
+        // `then` fires via recursive `apply_effect`, if TRUE the arm
+        // is a silent no-op (matches Python's `IfNot.resolve` at
+        // `combinators.py:672-682` — same controller-as-viewer
+        // semantics, same recursive then-firing).
+        //
+        // **Controller resolution.** Mirrors the existing
+        // `DiscardSelf` / `IfYouDo` source-controller finder:
+        // prefer the `current_resolve_source_controller` transient
+        // (set by the stack resolver for spell-cast resolution),
+        // fall back to a 5-zone walk for the source obj, then the
+        // stack scan, then `state.active_player`. The viewer for the
+        // condition is the source's controller.
+        //
+        // **Condition dispatch.** Lockstep with the parse-arm
+        // whitelist: only the
+        // `controls_another_creature_with_power_at_most` tag in
+        // scope for Cycle 1. The "another" exclusion drops the
+        // resolving source itself (matches Python's
+        // `ControlsAnotherCreatureWithPowerAtMost.matches` at
+        // `conditions.py:186-203`); effective power is read via the
+        // `predicate_subject_effective_power` helper (counters-
+        // inclusive, UEOT-inclusive — same SoT the
+        // `Predicate::HasPowerAtMost` reader uses). Unknown tag is
+        // unreachable (parse-arm whitelist already rejected it), but
+        // defensively treats as no-match (condition FALSE → inner
+        // fires).
+        Effect::IfNot {
+            condition_tag,
+            condition_args,
+            then,
+        } => {
+            // Resolve source's controller.
+            let viewer: u8 = if let Some(c) =
+                state.current_resolve_source_controller
+            {
+                c
+            } else {
+                let mut found: Option<u8> = None;
+                'outer: for player in state.players.iter() {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                        &player.exile,
+                    ] {
+                        if let Some(obj) =
+                            zone.iter().find(|o| o.id == source_obj_id)
+                        {
+                            found = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+                if found.is_none() {
+                    if let Some(item) = state
+                        .stack
+                        .iter()
+                        .find(|i| i.source_obj_id == source_obj_id)
+                    {
+                        found = Some(item.controller);
+                    }
+                }
+                found.unwrap_or(state.active_player)
+            };
+            // Evaluate the condition.
+            let condition_matches: bool = match condition_tag.as_str() {
+                "controls_another_creature_with_power_at_most" => {
+                    let threshold: i32 =
+                        *condition_args.first().unwrap_or(&0);
+                    let viewer_idx = viewer as usize;
+                    let mut matched = false;
+                    if let Some(player) = state.players.get(viewer_idx) {
+                        // Collect battlefield obj ids first to avoid
+                        // borrow conflicts with the predicate helper
+                        // (which immutably borrows state.players).
+                        let mut bf_ids: Vec<u32> = Vec::new();
+                        let mut bf_printings: Vec<u32> = Vec::new();
+                        for obj in player.battlefield.iter() {
+                            bf_ids.push(obj.id);
+                            bf_printings.push(obj.printing_id);
+                        }
+                        for (i, obj_id) in bf_ids.iter().enumerate() {
+                            // Skip the resolving source itself
+                            // ("another" qualifier).
+                            if *obj_id == source_obj_id {
+                                continue;
+                            }
+                            // Filter to creatures (printed Creature
+                            // type) — mirrors Python's
+                            // `obj.printing.is_creature` gate.
+                            let printing_id = bf_printings[i];
+                            let is_creature = state
+                                .registry
+                                .lookup(printing_id)
+                                .map(|p| {
+                                    p.card_types
+                                        .iter()
+                                        .any(|t| t == "Creature")
+                                })
+                                .unwrap_or(false);
+                            if !is_creature {
+                                continue;
+                            }
+                            // Read effective power via the shared
+                            // predicate helper (counters + UEOT,
+                            // matches Python's `effective_power`).
+                            let power = crate::state_ops_combat::
+                                predicate_subject_effective_power(
+                                    state, *obj_id,
+                                )
+                                .unwrap_or(0);
+                            if power <= threshold {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    matched
+                }
+                _ => {
+                    // Parse-arm whitelist already rejected unknown
+                    // tags; defensively treat as no-match so the
+                    // inner fires (least-surprising fallback).
+                    false
+                }
+            };
+            if condition_matches {
+                // Condition met → unless-clause "dodges" the inner.
+                // Silent no-op (matches Python's logged skip).
+                return Ok(());
+            }
+            // Condition FALSE → fire the inner effect via recursive
+            // apply_effect. Same `source_obj_id` carries through —
+            // the inner inherits the resolving source's identity.
+            apply_effect(state, then, source_obj_id)?;
+        }
         // Round-28 EachOpponentMillsCards (3+ EoE cards). Mirrors the
         // round-24 EachOpponentDiscards / EachOpponentLosesLife
         // source-finder shape: 5-zone walk + stack scan to recover
