@@ -7346,6 +7346,103 @@ pub enum Effect {
     /// `cross_engine.py` reconstructs
     /// `TerritorialBruntarLandfallEffect()`.
     TerritorialBruntarLandfallEffect,
+    /// **Possibility Technician Cycle 1 (2026-05-23).** Possibility
+    /// Technician `{2}{R}` 3/3 Creature — Kavu Artificer (EoE — sourced
+    /// from `data/edge_of_eternities.json`). ETB+observer body:
+    /// "Whenever this creature or another Kavu you control enters,
+    /// exile the top card of your library. For as long as that card
+    /// remains exiled, you may play it if you control a Kavu." Mirrors
+    /// Python's `PossibilityTechnicianETBEffect` (parameterless frozen
+    /// dataclass at `effects/bespoke.py:586`).
+    ///
+    /// **Multi-gated card (effect_uncovered + warp_cost +
+    /// nonsafe_triggered_ability).** Per the round-58 subsystem-
+    /// attribution classifier, Possibility Technician is multi-gated
+    /// across THREE gates: this Rust variant closes the
+    /// `effect_uncovered` gate (`PossibilityTechnicianETBEffect` moves
+    /// from `missing_effect_classes` to covered via the 1:1 identity-
+    /// mapping rule in `effect_coverage.map_rust_to_python`), but the
+    /// `warp_cost` gate STAYS open (Warp keyword is genuinely multi-
+    /// cycle substrate — the cast-from-hand-for-warp-cost +
+    /// exile-at-next-end-step + cast-from-exile-on-later-turn pipeline
+    /// is its own substrate landing, deferred) AND the
+    /// `nonsafe_triggered_ability` gate KEEPS the card multi-gated at
+    /// the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is deliberately
+    /// NOT widened — see the safe-trigger-vs-per-card distinction the
+    /// Boilerbilges Ripper / Fanatic of the Harrowing / Terrapact
+    /// Intimidator / Territorial Bruntar precedent established). The
+    /// card still flips to PROBED tier through the dedicated per-card
+    /// real-EoE byte-equal cross-engine probe
+    /// (`tests/test_possibility_technician_parity.py`) — same
+    /// classifier-bypass precedent that closed Splitskin Doll /
+    /// Boilerbilges Ripper / Territorial Bruntar / Endstone etc.
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `ExorciseEffect` / `BoilerbilgesRipperETBEffect` /
+    /// `FanaticOfTheHarrowingETBEffect` / `TerritorialBruntarLandfall
+    /// Effect` Tier-A unit-variant idiom). The Python class is a
+    /// parameterless frozen dataclass; no constructor args.
+    ///
+    /// **Two trigger arms — same effect, one Rust variant.** The parser
+    /// emits TWO `TriggeredAbility` entries on `Event::ENTERS` for
+    /// Possibility Technician (the round-58 `_COMPOUND_PREDICATE_TRIGGER
+    /// _PHRASES` two-arm layout for "this creature or another Kavu you
+    /// control enters"): arm-1 = `IsSelf()`, arm-2 = `Subject(None,
+    /// HasSubtype("Kavu")) & Controlled(YOU) & ~IsSelf()`. Both arms
+    /// dispatch the SAME `PossibilityTechnicianETBEffect()` — the
+    /// effect itself is field-free; both arms share this single Rust
+    /// variant. (Cross-engine probe drives the self-ETB arm; the
+    /// Kavu-observer arm rides the same resolve substrate.)
+    ///
+    /// **Resolve semantics (mirrors `PossibilityTechnicianETBEffect.
+    /// resolve` at `effects/bespoke.py:602-619` byte-equal on the
+    /// OBSERVABLE zone-change half).** The Python class walks:
+    ///   1. Resolve source-controller; if its library is empty,
+    ///      silent return.
+    ///   2. Pop `library[0]` (top of library).
+    ///   3. Set zone = ZONE_EXILE.
+    ///   4. Set `top.play_from_exile_requires_kavu = True` (the
+    ///      persistent cast-from-exile permission flag).
+    ///   5. Push to controller's exile.
+    ///   6. Append a log entry.
+    ///
+    /// **HONEST-STOP: `play_from_exile_requires_kavu` flag NOT mirrored
+    /// on Rust.** Python's `GameObject.play_from_exile_requires_kavu`
+    /// (`game.py:480`) is a persistent flag that gates a CastSpell
+    /// surface in `legal_actions` whenever the controller currently
+    /// controls at least one Kavu. Rust has NO such field on
+    /// `GameObject` and NO cast-from-exile-with-Kavu-gate substrate in
+    /// the legal-actions / cast-resolution pipelines. The Rust resolve
+    /// arm therefore mirrors the OBSERVABLE zone-change half byte-
+    /// equal (top card exiled, library shrinks by 1) but does NOT
+    /// flag the exiled card as castable. The cross-engine probe
+    /// normalises the flag symmetric on the Python side before the
+    /// whole-view compare (mirroring the Territorial Bruntar /
+    /// `playable_from_exile_this_turn` honest-stop precedent).
+    /// Documented as a deliberate divergence in `docs/SEARCH_
+    /// LIMITATIONS.md`.
+    ///
+    /// **HONEST-STOP: `warp_cost` gate NOT closed this cycle.** The
+    /// `warp_cost` gate is genuinely multi-cycle substrate — the cast-
+    /// from-hand-for-warp-cost path through the cost-substitution
+    /// pipeline, the exile-at-next-end-step delayed trigger, and the
+    /// cast-from-exile-on-later-turn legal-actions surface together
+    /// form a substrate the engine simply lacks today. Closing
+    /// `warp_cost` is its own cycle (the same status as Boilerbilges
+    /// Ripper / Codecracker Hound — both Warp-keyword cards have their
+    /// warp_cost gates open). The probe path AVOIDS the warp_cost gate
+    /// by seating the source printing directly on the battlefield
+    /// (NOT via the warp-cast path) and firing the ETB trigger from
+    /// the battlefield carrier — exactly the Boilerbilges Ripper
+    /// precedent.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "possibility_technician_etb_effect"}` (only `kind` emitted). The
+    /// bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
+    /// reconstructs `PossibilityTechnicianETBEffect()`.
+    PossibilityTechnicianETBEffect,
     /// **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedules a delayed
     /// `Effect::SacrificeSourceDelayed` trigger keyed at the current
     /// turn so the source is sacrificed at the next end step. Mirrors
@@ -11200,6 +11297,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // field-free unit-variant idiom.
         "territorial_bruntar_landfall_effect" => {
             Ok(Effect::TerritorialBruntarLandfallEffect)
+        }
+        // **Possibility Technician Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's `PossibilityTechnicianETBEffect`
+        // (`effects/bespoke.py:586`) is a parameterless frozen
+        // dataclass. Round-trip dict shape: `{"kind":
+        // "possibility_technician_etb_effect"}` (no other fields).
+        // Sibling of the `MutinousMassacreEffect` /
+        // `BoilerbilgesRipperETBEffect` /
+        // `FanaticOfTheHarrowingETBEffect` /
+        // `TerritorialBruntarLandfallEffect` field-free unit-variant
+        // idiom.
+        "possibility_technician_etb_effect" => {
+            Ok(Effect::PossibilityTechnicianETBEffect)
         }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Unit-variant
         // parse arm — Python's `ScheduleSelfSacAtNextEndStep`
@@ -16116,6 +16226,14 @@ pub(crate) fn effect_to_pydict<'py>(
         // consumes the same one-key shape.
         Effect::TerritorialBruntarLandfallEffect => {
             d.set_item("kind", "territorial_bruntar_landfall_effect")?;
+        }
+        // **Possibility Technician Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `PossibilityTechnicianETBEffect`
+        // dict shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape.
+        Effect::PossibilityTechnicianETBEffect => {
+            d.set_item("kind", "possibility_technician_etb_effect")?;
         }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Field-free
         // unit-variant to_pydict arm — only `kind` emitted. Mirrors

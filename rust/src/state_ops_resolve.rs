@@ -20677,6 +20677,108 @@ fn apply_effect(
                 }
             }
         }
+        // **Possibility Technician Cycle 1 (2026-05-23).** Mirrors
+        // Python's `PossibilityTechnicianETBEffect.resolve`
+        // (`effects/bespoke.py:602-619`) on the OBSERVABLE zone-change
+        // half — the `play_from_exile_requires_kavu` flag is honest-
+        // stopped (Rust has no such field on `GameObject`, no cast-
+        // from-exile-with-Kavu-gate substrate; documented in
+        // SEARCH_LIMITATIONS.md). Same shape as Territorial Bruntar's
+        // `playable_from_exile_this_turn` honest-stop.
+        //
+        // **Resolve steps (mirror Python).**
+        //   1. Source-controller resolution: 5-zone walk + stack scan
+        //      (same shape as `FanaticOfTheHarrowingETBEffect` /
+        //      `TerritorialBruntarLandfallEffect` /
+        //      `PeekTopMayBattlefieldIfLandElseHand` source-finder).
+        //      Source not found anywhere = silent fizzle.
+        //   2. If the source-controller's library is empty: silent
+        //      no-op (Python: `if not p.library: return`).
+        //   3. Pop `library[0]` (top of library); CR 400.7 zone-change
+        //      reset on the popped object (tapped / summoning_sick /
+        //      damage / counters / attached_to / exiled_with_source
+        //      all cleared).
+        //   4. Set zone = ZONE_EXILE.
+        //   5. Push to controller's exile zone.
+        //
+        // **`play_from_exile_requires_kavu` flag — HONEST-STOPPED.**
+        // Python sets `top.play_from_exile_requires_kavu = True` on
+        // the exiled card so `legal_actions` will surface a
+        // CastSpell / PlayLand for it whenever the controller
+        // currently controls at least one Kavu. Rust has no such
+        // field on `GameObject` and no cast-from-exile-with-Kavu-gate
+        // substrate in the legal-actions / cast-resolution pipelines.
+        // The Rust resolve arm therefore mirrors the OBSERVABLE
+        // zone-change half byte-equal (top card exiled, library
+        // shrinks by 1) but does NOT flag the exiled card as castable.
+        // The cross-engine probe normalises the flag symmetric on the
+        // Python side before the whole-view compare (mirroring the
+        // Territorial Bruntar / `playable_from_exile_this_turn`
+        // honest-stop precedent). Documented as a deliberate
+        // divergence in `docs/SEARCH_LIMITATIONS.md`.
+        //
+        // **CR 400.7 zone-change reset.** The popped card gets
+        // tapped / summoning_sick / damage / counters / attached_to /
+        // exiled_with_source all cleared on the move to exile
+        // (mirrors the `TerritorialBruntarLandfallEffect` /
+        // `FanaticOfTheHarrowingETBEffect` / Mill / DestroyTarget
+        // reset shape). Python's `PossibilityTechnicianETBEffect`
+        // also resets these by virtue of moving through the engine's
+        // standard zone-move pipeline (sets `top.zone = Zone.EXILE`
+        // directly; the engine's enter-zone reset happens at the next
+        // SBA pass).
+        Effect::PossibilityTechnicianETBEffect => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'pt_outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'pt_outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // 2. Library-empty: silent no-op.
+            if state.players[controller_idx].library.is_empty() {
+                return Ok(());
+            }
+            // 3. Pop library[0]; CR 400.7 zone-change reset.
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].library);
+            let mut obj = lib_mut.remove(0);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            // 4 + 5. Push to exile (the `play_from_exile_requires_kavu`
+            // flag is honest-stopped — see docstring).
+            Arc::make_mut(&mut state.players[controller_idx].exile)
+                .push(obj);
+        }
         // **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedule a
         // delayed `SacrificeSourceDelayed` trigger keyed at the
         // current turn so the source is sacrificed at the next end

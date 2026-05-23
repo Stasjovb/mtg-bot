@@ -12884,6 +12884,199 @@ LANDED; Terrasymbiosis is now PROBED at the per-card parity layer
 `nonsafe_triggered_ability`).
 
 
+## Possibility Technician Cycle 1 LANDED — `Effect::PossibilityTechnicianETBEffect` (unit) Effect half shipped byte-equal on zone-change observable; `play_from_exile_requires_kavu` flag honest-stopped (no Rust substrate); `warp_cost` gate also honest-stopped (genuinely multi-cycle substrate)
+
+**Single-cycle landing (2026-05-23,
+`feature/possibility-technician-cycle-1-p1`).** Possibility Technician
+— `{2}{R}` Creature — Kavu Artificer, 3/3 (sourced from EoE
+`data/edge_of_eternities.json` via the active `OracleParserCardSource`).
+ETB+observer body: "Whenever this creature or another Kavu you control
+enters, exile the top card of your library. For as long as that card
+remains exiled, you may play it if you control a Kavu." Plus a Warp
+keyword: "Warp {1}{R} (You may cast this card from your hand for its
+warp cost. Exile this creature at the beginning of the next end step,
+then you may cast it from exile on a later turn.)". Mirrors Python's
+parameterless frozen dataclass `PossibilityTechnicianETBEffect` at
+`effects/bespoke.py:586` — the parser emits TWO `TriggeredAbility`
+entries (the compound-predicate two-arm layout for "this creature or
+another Kavu you control enters" at
+`cards/parser/triggers.py:_COMPOUND_PREDICATE_TRIGGER_PHRASES:1196-
+1199`), arm-1 = `IsSelf()`, arm-2 = `Subject(None, HasSubtype("Kavu"))
+& Controlled(YOU) & ~IsSelf()`; both arms dispatch the same field-
+free effect.
+
+The single cycle composed:
+
+  1. **Rust `Effect::PossibilityTechnicianETBEffect` unit variant**
+     (`rust/src/cards.rs`) — field-free unit variant (same Tier-A
+     idiom as `BoilerbilgesRipperETBEffect` /
+     `FanaticOfTheHarrowingETBEffect` / `TerrapactIntimidatorETBEffect`
+     / `TerritorialBruntarLandfallEffect`). Parse arm + `to_pydict`
+     arm in `cards.rs`; resolve arm in `state_ops_resolve.rs`. The
+     resolve arm walks 5 zones + the stack to resolve the source's
+     controller, then pops `library[0]` of that controller, applies a
+     CR 400.7 zone-change reset, and pushes to the controller's
+     exile zone. Library-empty path → silent no-op (mirrors Python's
+     `if not p.library: return`). Source-not-found path → silent
+     fizzle (sibling of `FanaticOfTheHarrowingETBEffect` /
+     `TerritorialBruntarLandfallEffect` source-finder).
+  2. **Cross-engine bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the parameterless Python
+     `PossibilityTechnicianETBEffect()` from the `{"kind":
+     "possibility_technician_etb_effect"}` dict shape.
+  3. **Coverage 1:1 identity mapping.** The new Rust variant name
+     `PossibilityTechnicianETBEffect` matches the Python class name
+     1:1, so `mtg_bot.parity.effect_coverage.
+     covered_python_class_set()` auto-includes the class — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle on THREE gates → TWO gates.** Per the round-58 subsystem-
+attribution classifier, Possibility Technician is multi-gated on
+`effect_uncovered + warp_cost + nonsafe_triggered_ability`. The cycle
+closes the `effect_uncovered` gate (the `PossibilityTechnicianETBEffect`
+Python class flips from `missing_effect_classes` to covered), but
+BOTH the `warp_cost` gate AND the `nonsafe_triggered_ability` gate
+KEEP the card multi-gated at the classifier level. **The card DOES
+move to PROBED tier through the dedicated per-card real-EoE byte-
+equal cross-engine probe** (`tests/test_possibility_technician_
+parity.py`), the same precedent as Splitskin Doll / Boilerbilges
+Ripper / Territorial Bruntar / Friendly Teddy / Endstone / Terrapact
+/ Vaultguard / Arabella / Attack-in-the-Box / Wickerfolk Thresher /
+Enduring Curiosity / Terrasymbiosis / Ouroboroid established.
+
+**HONEST-STOP: `play_from_exile_requires_kavu` flag NOT mirrored on
+Rust.** Python's `PossibilityTechnicianETBEffect.resolve`
+(`effects/bespoke.py:602-619`) sets
+`top.play_from_exile_requires_kavu = True` on the exiled card. The
+flag is a persistent cast-from-exile permission stored on
+`GameObject` (`game.py:480`) — `legal_actions` honors it for cast-
+from-exile at normal cost when the controller currently controls at
+least one Kavu. Rust has NO `play_from_exile_requires_kavu` field on
+`GameObject` and NO cast-from-exile-with-Kavu-gate substrate in the
+legal-actions / cast-resolution pipelines. The Rust resolve arm
+therefore mirrors the OBSERVABLE zone-change half byte-equal (top
+card exiled, library shrinks by 1) but does NOT flag the exiled card
+as castable. The cross-engine probe normalises the flag symmetric on
+the Python side before the whole-view compare (mirroring the
+Territorial Bruntar / `playable_from_exile_this_turn` honest-stop
+precedent).
+
+  * **Failure mode**: an MCTS tree exercising "Possibility Technician
+    exiled a non-land — recast it from exile while controlling a
+    Kavu" sees the Python side surface a `CastSpell` action that the
+    Rust side does NOT surface (Rust has no `legal_actions` arm for
+    `play_from_exile_requires_kavu` cards). On a full-game-trajectory
+    parity probe the action-set divergence would surface; per-card
+    per-cycle byte-equal-on-the-zone-change-half probe normalises
+    around it. The cross-engine probe explicitly resets the Python
+    flag to False before the field-view compare so the byte-equal
+    observable holds on the substrate-level resolve.
+  * **Fix scope**: ~1.5 days. (1) Add a Rust-side equivalent flag
+    (or a generic `cast_from_exile_permission` enum on `GameObject`)
+    + plumb through `register_and_inject_object` /
+    `to_pydict_object`. (2) Widen the `legal_actions_for_cast` /
+    `affordable_casts` pipelines to surface a `CastSpell` for exiled
+    cards whose flag is set AND whose Kavu-controlled gate currently
+    passes. (3) Widen `cast_spell` / `_pay_cost` to consume the
+    flag's "this card came from exile under a Kavu-gate permission"
+    source. (4) Cross-engine probe widens to exercise the cast-from-
+    exile path symmetric.
+  * **Impact estimate**: small. The "may-play-from-exile while
+    controlling a Kavu" is a narrow action gate that only matters
+    when (a) Possibility Technician's ETB has fired AND (b) the
+    exiled card is castable AND (c) the controller still has a Kavu
+    on the bf. In MCTS-evaluation context, Possibility Technician is
+    a single card in the EoE pool; the missing action is a ~rare
+    tactical opportunity that affects strength by <0.5 winrate
+    points on a deck-sized estimate, well within noise.
+
+**HONEST-STOP: `warp_cost` gate NOT closed this cycle (genuinely
+multi-cycle substrate).** The Warp keyword is multi-cycle substrate
+— the cast-from-hand-for-warp-cost path through the cost-substitution
+pipeline, the exile-at-next-end-step delayed trigger, and the cast-
+from-exile-on-later-turn legal-actions surface together form a
+substrate the engine simply lacks today (the
+`parser/printing_keywords.py:_parse_warp_line` stores the parsed
+`warp_cost` on the printing, but no engine-side cost-substitution /
+delayed-exile / cast-from-exile machinery exercises it). Closing
+`warp_cost` is its own multi-cycle landing — the same status as
+Boilerbilges Ripper / Codecracker Hound (both Warp-keyword cards
+have their warp_cost gates open). This cycle's probe path AVOIDS the
+warp_cost gate by injecting Possibility Technician in hand and
+casting via the synthetic-test `push_to_stack` pipeline (which
+bypasses cost-payment machinery entirely); the production warp-cost-
+cast / exile-at-end-step / cast-from-exile pipeline is honest-stopped
+across the engine boundary.
+
+  * **Failure mode**: an MCTS tree in production that legitimately
+    wants to Warp-cast Possibility Technician for `{1}{R}` cannot do
+    so — the engine has no Warp action surface. The discount + the
+    delayed exile + the later-turn replay are all missing. On the
+    parity probe this is invisible (the probe drives the
+    `push_to_stack` synthetic-test path; warp-cast is never invoked).
+    In real-deck self-play, Possibility Technician's Warp option is
+    silently never taken.
+  * **Fix scope**: ~2-3 cycles. (1) Cost-substitution: add a
+    `CastSpell.cast_via_warp: bool` flag + plumb through
+    `legal_actions_for_cast` (surface a separate `CastSpell` action
+    paying `warp_cost` instead of `mana_cost`). (2) Delayed exile:
+    register the at-next-end-step exile delayed trigger when a Warp-
+    cast resolves (sibling of the
+    `ScheduleSelfSacAtNextEndStep` /
+    `Effect::SacrificeSourceDelayed` substrate). (3) Cast-from-
+    exile: surface a follow-up `CastSpell` for the exiled Warp-cast
+    card (gated on "later turn" + standard cost). All three Rust
+    arms + matching Python plumbing + cross-engine probe round-trip.
+  * **Impact estimate**: medium. Warp is an EoE-set keyword that
+    shows up on multiple cards (Possibility Technician, Boilerbilges
+    Ripper, Codecracker Hound, ...). The shared substrate would
+    close `warp_cost` across all of them in one cycle landing.
+    Strength impact: ~1-2 winrate points across the EoE pool (Warp
+    is a tempo-priced alternative cost; missing it removes a real
+    play option but doesn't break the card).
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Possibility Technician is a Creature, not a non-creature spell with
+a spell-card-bridge resolve. The spell-card-bridge admit set
+(`trajectory.py::_python_spell_effect_to_dict` + its §2 teeth) gates
+non-creature spells only. The cross-engine probe lives in
+`tests/test_possibility_technician_parity.py` and uses the per-card
+dedicated parity-test module convention.
+
+**No admit-set change; no trajectory.py admit-gate widen.**
+Possibility Technician is a Creature (no spell-card-bridge admit-set
+change applies); the trajectory safe-trigger admit gate is
+INTENTIONALLY NOT widened per the multi-gated-classifier-bypass
+precedent — same as Splitskin Doll / Boilerbilges Ripper / Territorial
+Bruntar etc.
+
+**Resolve semantics byte-equal (zone-change half).** Both engines:
+resolve source's controller via the 5-zone walk + stack scan; pop
+`library[0]` of that controller; CR 400.7 zone-change reset; push to
+controller's exile. Library-empty short-circuits to silent no-op on
+both engines. Python additionally sets
+`top.play_from_exile_requires_kavu = True`; the Rust mirror skips
+the flag (honest-stop above). Synthetic Rust unit pins exercise the
+resolve arm directly via push-to-stack + resolve-top-of-stack on
+three scenarios: library-empty silent no-op, top-card-exile, and
+single-card-pop semantics (NOT a walk).
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm — 5-
+zone source-finder + library top-pop + CR 400.7 reset + exile push),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_possibility_technician_parity.py` (probes — parser SoT
+pin including the two-arm compound-predicate trigger layout,
+serializer round-trip, Rust to_pydict round-trip, covered-set
+membership, three Rust resolve-arm unit pins, real-EoE byte-equal
+cross-engine probe with `play_from_exile_requires_kavu`
+normalisation). Per-card cycle LANDED; Possibility Technician is now
+PROBED at the per-card parity layer (despite the classifier multi-
+gate state staying True on `warp_cost + nonsafe_triggered_ability`).
+
+
 ## Splitskin Doll Cycle 1 LANDED — `Effect::IfNot` combinator (recursive) "unless <condition>" gate shipped byte-equal; resolves by evaluating a stringly-typed `condition_tag` against the source's controller and firing the inner Effect on FALSE, no-op on TRUE
 
 **Single-cycle landing (2026-05-23,

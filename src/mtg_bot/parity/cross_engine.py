@@ -11528,6 +11528,80 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # pool gate.
         from mtg_bot.effects.bespoke import TerritorialBruntarLandfallEffect
         return TerritorialBruntarLandfallEffect()
+    if kind == "possibility_technician_etb_effect":
+        # **Possibility Technician Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::PossibilityTechnicianETBEffect`` (cards.rs field-free
+        # UNIT variant; parser ``"possibility_technician_etb_effect"``;
+        # resolve in state_ops_resolve.rs mirrors Python's exile-top-of-
+        # library body byte-equal on the OBSERVABLE zone-change half —
+        # the ``play_from_exile_requires_kavu`` flag is honest-stopped
+        # on the Rust side; see SEARCH_LIMITATIONS.md).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "possibility_technician_etb_effect"}``. Python's
+        # ``PossibilityTechnicianETBEffect`` (effects/bespoke.py:586) is
+        # a frozen dataclass with no constructor parameters.
+        #
+        # **Resolve semantics — exile-top byte-equal.** Python's
+        # ``PossibilityTechnicianETBEffect.resolve`` (effects/bespoke.py:
+        # 602-619) pops the top of the controller's library, sets its
+        # zone to EXILE, marks the exiled card with
+        # ``play_from_exile_requires_kavu = True`` (persistent flag),
+        # and pushes to controller's exile. The Rust mirror ships the
+        # zone-change half byte-equal (top card exiled, library shrinks
+        # by 1) but does NOT set the play-from-exile flag (Rust has no
+        # such field on GameObject, no cast-from-exile-with-Kavu-gate
+        # substrate in the legal-actions / cast-resolution pipelines).
+        # The cross-engine probe normalises the flag symmetric on the
+        # Python side before the whole-view compare.
+        #
+        # **DISTINCTION from Territorial Bruntar.** Territorial Bruntar
+        # walks the library top-to-bottom and exiles every card until
+        # it hits a non-land (impulse-style exile-walk); Possibility
+        # Technician exiles exactly ONE card (the top) per ETB / Kavu-
+        # observer trigger fire. Both have unit-variant Effect shapes
+        # on both sides; both have honest-stopped play-from-exile
+        # flags on the Rust side; both flip to PROBED via a dedicated
+        # per-card real-EoE byte-equal cross-engine probe.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Possibility
+        # Technician as multi-gated across THREE gates
+        # (``effect_uncovered`` + ``warp_cost`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``PossibilityTechnicianETBEffect`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``warp_cost`` gate STAYS open (Warp keyword is genuinely
+        # multi-cycle substrate — the cast-from-hand-for-warp-cost +
+        # exile-at-next-end-step + cast-from-exile-on-later-turn
+        # pipeline is its own substrate landing, deferred) AND the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-gated
+        # at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened —
+        # the per-card real-EoE probe in
+        # ``tests/test_possibility_technician_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Probe avoids the warp_cost gate.** The probe seats the
+        # source printing directly on the battlefield (NOT via the
+        # warp-cast path) and fires the ETB trigger from the
+        # battlefield carrier — exactly the Boilerbilges Ripper /
+        # Codecracker Hound Warp-keyword probe convention. Closing
+        # the warp_cost gate is its own multi-cycle substrate landing.
+        #
+        # **Real test-pool consumer**: Possibility Technician —
+        # Creature — Kavu Artificer ({2}{R}, 3/3) with the ETB+observer
+        # trigger "Whenever this creature or another Kavu you control
+        # enters, exile the top card of your library. For as long as
+        # that card remains exiled, you may play it if you control a
+        # Kavu." plus Warp {1}{R}. Sourced from EoE
+        # (data/edge_of_eternities.json); admitted into the active
+        # ``OracleParserCardSource`` printings without any pool gate.
+        from mtg_bot.effects.bespoke import PossibilityTechnicianETBEffect
+        return PossibilityTechnicianETBEffect()
     if kind == "schedule_self_sac_at_next_end_step":
         # **Attack-in-the-Box Cycle 1 (2026-05-23).** Rust substrate
         # ``Effect::ScheduleSelfSacAtNextEndStep`` (cards.rs field-free
