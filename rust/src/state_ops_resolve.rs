@@ -19800,6 +19800,165 @@ fn apply_effect(
         Effect::BoilerbilgesRipperETBEffect => {
             // Honest-stopped no-op — see docstring.
         }
+        // **Fanatic of the Harrowing Cycle 1 (2026-05-23).** Mirrors
+        // Python's `FanaticOfTheHarrowingETBEffect.resolve`
+        // (`effects/bespoke.py:2848-2881`) byte-equal.
+        //
+        // **Resolve steps (mirror Python).**
+        //   1. Source-controller resolution — 5-zone walk + stack scan
+        //      (mirrors the round-24 `DiscardSelf` /
+        //      `EachOpponentDiscards` source-finder pattern). Source-
+        //      not-found = silent fizzle.
+        //   2. Iterate all players starting from the controller (in
+        //      seat order: controller, then (controller + 1) %
+        //      n_players, ...). Mirrors Python's turn-order walk
+        //      (`effects/bespoke.py:2859-2863`).
+        //   3. For each player: empty hand → silent skip (Python:
+        //      `if p.has_lost or not p.hand: continue`). Players
+        //      without a hand simply skip — they had no card to
+        //      discard. (The `has_lost` gate is not modeled on the
+        //      Rust state today; in the 2-player cross-engine probe
+        //      every player has `has_lost == False` so the gate is a
+        //      no-op divergence. See honest-stop in SEARCH_
+        //      LIMITATIONS.md.)
+        //   4. Pop `hand[0]` of that player (deterministic first-
+        //      slice convention; mirrors `EachOpponentDiscards` /
+        //      `DiscardSelf` `hand[0]`-pop; the cross-engine probe
+        //      drives Python with a `choose_discard` agent that
+        //      returns `hand_card_ids[0]` for byte-equal alignment).
+        //   5. CR 400.7 zone-change reset on the moved object:
+        //      tapped / summoning_sick / damage / counters /
+        //      attached_to / exiled_with_source all cleared; zone =
+        //      ZONE_GRAVEYARD.
+        //   6. Push the object to that player's graveyard.
+        //   7. Dispatch `Event::DiscardsCard` on the discarding
+        //      player (subject = `PLAYER_SUBJECT_OFFSET + pidx`).
+        //      Mirrors Python's `fire_opponent_discards_triggers` +
+        //      the standard per-card firing convention (`DiscardSelf`
+        //      / `EachOpponentDiscards` / `EachOpponentExilesCard...`
+        //      precedent).
+        //   8. After the walk: if the controller actually discarded
+        //      (i.e. their hand was non-empty at iteration time),
+        //      draw 1 card for the controller. Mirrors Python's
+        //      `controller_discarded` flag at
+        //      `effects/bespoke.py:2855`.
+        //
+        // **No agent surface required for byte-equal.** Unlike
+        // Boilerbilges Ripper (which has an optional yes/no gate that
+        // requires an agent to make the "do" choice), Fanatic of the
+        // Harrowing's discard is MANDATORY — each player MUST discard
+        // a card from their non-empty hand. The card pick uses the
+        // established `hand[0]` deterministic-first-slice convention;
+        // the cross-engine probe drives Python with a deterministic
+        // `choose_discard` agent that returns `hand_card_ids[0]` so
+        // both engines pick the same card byte-equal.
+        //
+        // **`has_lost` divergence (honest-stopped).** Rust's
+        // `state.players[i]` has no `has_lost` field today. The
+        // `state.lost_players` set tracks who has lost via SBA. In
+        // a 2-player cross-engine probe both players are alive
+        // (`has_lost == False` on Python; both seats are NOT in
+        // `state.lost_players` on Rust). The byte-equal probe path
+        // never exercises the divergence. A future cycle adding an
+        // explicit `has_lost` gate on Rust would widen the resolve
+        // arm here to mirror Python's `if p.has_lost or not p.hand:
+        // continue` exactly.
+        Effect::FanaticOfTheHarrowingETBEffect => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2. Iterate all players starting from the controller in
+            // seat order. In the 2-player engine: [controller,
+            // 1 - controller]. The N-player loop is written
+            // explicitly to mirror Python's `for i in range(n): ...`.
+            let n_players = state.players.len();
+            let controller_idx = controller as usize;
+            let mut controller_discarded = false;
+            for i in 0..n_players {
+                let pidx = (controller_idx + i) % n_players;
+                // 3. Empty hand: silent skip (Python parity with
+                // `if p.has_lost or not p.hand: continue`).
+                if state.players[pidx].hand.is_empty() {
+                    continue;
+                }
+                // 4. Pop hand[0] of this player (deterministic
+                // first-slice convention).
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].hand);
+                let mut obj = hand_mut.remove(0);
+                // 5. CR 400.7 zone-change reset.
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                // 6. Push to that player's graveyard.
+                Arc::make_mut(&mut state.players[pidx].graveyard)
+                    .push(obj);
+                // 7. Dispatch `Event::DiscardsCard` on the discarding
+                // player. Subject = PLAYER_SUBJECT_OFFSET + pidx.
+                // Mirrors `EachOpponentDiscards` / `DiscardSelf`
+                // per-card firing convention.
+                let discarding_player_subject =
+                    crate::cards::PLAYER_SUBJECT_OFFSET + pidx as u32;
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DiscardsCard,
+                    discarding_player_subject,
+                )?;
+                // Track if the controller actually discarded (for
+                // the gate-8 controller-draw rider).
+                if pidx == controller_idx {
+                    controller_discarded = true;
+                }
+            }
+            // 8. Controller-draw gate: if the controller actually
+            // discarded, draw 1 card. Mirrors Python's
+            // `if controller_discarded: draw_n_cards(state,
+            // controller_id, 1)` at `effects/bespoke.py:2880-2881`.
+            if controller_discarded {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    // CR 704.5b — empty-library draw flags the player.
+                    player.attempted_draw_on_empty = true;
+                } else {
+                    // Post-CE3: top of library = lib[0].
+                    let mut drawn = lib.remove(0);
+                    drawn.zone = ZONE_HAND;
+                    Arc::make_mut(&mut player.hand).push(drawn);
+                }
+            }
+        }
     }
     Ok(())
 }

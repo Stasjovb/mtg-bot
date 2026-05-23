@@ -6617,6 +6617,79 @@ pub enum Effect {
     /// bridge `_ta_dict_to_python_effect` arm at
     /// `cross_engine.py` reconstructs `BoilerbilgesRipperETBEffect()`.
     BoilerbilgesRipperETBEffect,
+    /// **Fanatic of the Harrowing Cycle 1 (2026-05-23).** Fanatic of
+    /// the Harrowing `{3}{B}` 2/2 Creature — Human Cleric (DSK). ETB
+    /// trigger body: "When this creature enters, each player discards
+    /// a card. If you discarded a card this way, draw a card." Mirrors
+    /// Python's `FanaticOfTheHarrowingETBEffect` (parameterless frozen
+    /// dataclass at `effects/bespoke.py:2830`).
+    ///
+    /// **Multi-gated card (effect_uncovered + nonsafe_triggered_
+    /// ability).** Per the round-58 subsystem-attribution classifier,
+    /// Fanatic of the Harrowing is multi-gated: this Rust variant
+    /// closes the `effect_uncovered` gate
+    /// (`FanaticOfTheHarrowingETBEffect` moves from
+    /// `missing_effect_classes` to covered via the 1:1 identity-
+    /// mapping rule in `effect_coverage.map_rust_to_python`), but
+    /// the `nonsafe_triggered_ability` gate KEEPS the card multi-
+    /// gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is
+    /// deliberately NOT widened — see the safe-trigger-vs-per-card
+    /// distinction the Comet Crawler / Dyadrine Attack /
+    /// Mutinous Massacre / Boilerbilges Ripper precedent established).
+    /// The card still flips to PROBED tier through the dedicated
+    /// per-card real-EoE byte-equal cross-engine probe
+    /// (`tests/test_fanatic_of_the_harrowing_parity.py`).
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `ExorciseEffect` / `BoilerbilgesRipperETBEffect` Tier-A unit-
+    /// variant idiom). The Python class is a parameterless frozen
+    /// dataclass; no constructor args.
+    ///
+    /// **Resolve semantics (mirrors `FanaticOfTheHarrowingETBEffect.
+    /// resolve` at `effects/bespoke.py:2848-2881` byte-equal).** The
+    /// Python class walks:
+    ///   1. Compute turn-order iteration starting from the source's
+    ///      controller, proceeding to other players in seat order.
+    ///   2. For each player: if `has_lost` or hand is empty, skip
+    ///      (Python: `continue`).
+    ///   3. Otherwise: the player's agent picks a card via
+    ///      `choose_discard(state, p.id, hand_ids)`; that card moves
+    ///      to graveyard; `fire_opponent_discards_triggers` fires.
+    ///   4. If the controller actually discarded (i.e. had a
+    ///      non-empty hand), `draw_n_cards(state, controller_id, 1)`.
+    ///
+    /// **Deterministic hand[0] discard convention.** Rust has no
+    /// agent surface in `apply_effect`; the byte-equal mirror uses
+    /// the established `EachOpponentDiscards` /
+    /// `EachOpponentExilesCardFromHandWithCastPermission` /
+    /// `DiscardSelf` `hand[0]`-pop convention. The cross-engine probe
+    /// drives the Python side with a deterministic `choose_discard`
+    /// agent that returns `hand_card_ids[0]` so both engines pick the
+    /// same card byte-equal.
+    ///
+    /// **Source-controller resolution** uses the standard 5-zone walk
+    /// + stack scan pattern (mirrors round-24 `EachOpponentDiscards` /
+    /// `EachOpponentLosesLife` source-finder). Source-not-found =
+    /// silent fizzle.
+    ///
+    /// **Per-card `Event::DiscardsCard` dispatch** on each
+    /// discarding player (subject = `PLAYER_SUBJECT_OFFSET + pidx`).
+    /// Mirrors Python's `fire_opponent_discards_triggers`. Per CR
+    /// 701.8a "each card discarded" semantics.
+    ///
+    /// **Controller-draw gate.** After the discard walk, draw 1 card
+    /// for the source's controller IF and ONLY IF the controller had
+    /// a non-empty hand at iteration time (i.e. actually discarded).
+    /// Mirrors Python's `controller_discarded` flag at
+    /// `effects/bespoke.py:2855`.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "fanatic_of_the_harrowing_etb_effect"}` (only `kind` emitted).
+    /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
+    /// reconstructs `FanaticOfTheHarrowingETBEffect()`.
+    FanaticOfTheHarrowingETBEffect,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10156,6 +10229,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "boilerbilges_ripper_etb_effect" => {
             Ok(Effect::BoilerbilgesRipperETBEffect)
         }
+        // **Fanatic of the Harrowing Cycle 1 (2026-05-23).** Unit-
+        // variant parse arm — Python's
+        // `FanaticOfTheHarrowingETBEffect` (`effects/bespoke.py:2830`)
+        // is a parameterless frozen dataclass. Round-trip dict shape:
+        // `{"kind": "fanatic_of_the_harrowing_etb_effect"}` (no other
+        // fields). Sibling of the `MutinousMassacreEffect` /
+        // `ExileTargetCreature` / `BoilerbilgesRipperETBEffect`
+        // field-free unit-variant idiom.
+        "fanatic_of_the_harrowing_etb_effect" => {
+            Ok(Effect::FanaticOfTheHarrowingETBEffect)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -11798,7 +11882,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, fanatic_of_the_harrowing_etb_effect"
         ))),
     }
 }
@@ -14823,6 +14907,15 @@ pub(crate) fn effect_to_pydict<'py>(
         // consumes the same one-key shape.
         Effect::BoilerbilgesRipperETBEffect => {
             d.set_item("kind", "boilerbilges_ripper_etb_effect")?;
+        }
+        // **Fanatic of the Harrowing Cycle 1 (2026-05-23).** Field-
+        // free unit-variant to_pydict arm — only `kind` emitted.
+        // Mirrors Python's parameterless
+        // `FanaticOfTheHarrowingETBEffect` dict shape; the bridge
+        // dict→Python arm in `cross_engine.py` consumes the same
+        // one-key shape.
+        Effect::FanaticOfTheHarrowingETBEffect => {
+            d.set_item("kind", "fanatic_of_the_harrowing_etb_effect")?;
         }
     }
     Ok(d)

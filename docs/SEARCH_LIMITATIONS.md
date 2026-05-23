@@ -12266,6 +12266,201 @@ to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
 LANDED; Comet Crawler is now PROBED at the per-card parity
 layer.
 
+## Fanatic of the Harrowing Cycle 1 LANDED — `Effect::FanaticOfTheHarrowingETBEffect` (unit) Effect half shipped byte-equal; mandatory-discard each-player + controller-draw rider mirrors Python's resolve byte-equal under the hand[0] deterministic-pick convention
+
+**Single-cycle landing (2026-05-23,
+`feature/fanatic-of-the-harrowing-cycle-1-p1`).** Fanatic of the
+Harrowing — `{3}{B}` Creature — Human Cleric, 2/2 (sourced from DSK
+`data/duskmourn.json:13266` via the active `OracleParserCardSource`).
+ETB trigger: "When this creature enters, each player discards a card.
+If you discarded a card this way, draw a card." Mirrors Python's
+`FanaticOfTheHarrowingETBEffect` (parameterless frozen dataclass at
+`effects/bespoke.py:2830`).
+
+The single cycle composed:
+
+  1. **Rust `Effect::FanaticOfTheHarrowingETBEffect`** — field-free
+     unit variant (`rust/src/cards.rs`, the `MutinousMassacreEffect` /
+     `ExileTargetCreature` / `BoilerbilgesRipperETBEffect` Tier-A
+     unit-variant idiom), parse arm (`parse_effect` dispatcher;
+     round-trips the bare `{"kind":
+     "fanatic_of_the_harrowing_etb_effect"}` dict shape), `to_pydict`
+     arm (emits only `kind`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — mirrors Python's mandatory-
+     discard + controller-draw body byte-equal under the established
+     `hand[0]` deterministic-pick convention (the
+     `EachOpponentDiscards` / `DiscardSelf` /
+     `EachOpponentExilesCardFromHandWithCastPermission` precedent).
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `FanaticOfTheHarrowingETBEffect()` from
+     the one-key dict shape.
+  3. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `FanaticOfTheHarrowingETBEffect` — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier, Fanatic of
+the Harrowing is multi-gated on `effect_uncovered +
+nonsafe_triggered_ability`. The cycle closes the `effect_uncovered`
+gate (the `FanaticOfTheHarrowingETBEffect` Python class flips from
+`missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit set,
+a distinct concern from per-card real-EoE parity probes. **The card
+DOES move to PROBED tier through the dedicated per-card real-EoE
+byte-equal cross-engine probe**
+(`tests/test_fanatic_of_the_harrowing_parity.py`), the same
+precedent as Comet Crawler / Mutinous Massacre / Dyadrine Attack /
+Boilerbilges Ripper established.
+
+NB: the EoE-pool-scoped classifier scout doesn't surface DSK cards
+(the 17lands pool data only carries EoE printings), so
+`scout_r58_subsystem_attribution.subsystem_attribution()` doesn't list
+Fanatic of the Harrowing in its output dict — the dedicated parity
+test's classifier-gate assertion skips with that reason. The substrate
+work itself is unaffected; the load-bearing signal is
+`covered_python_class_set()` membership, pinned directly by
+`test_fanatic_of_the_harrowing_class_covered_by_rust`.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Fanatic of the Harrowing is a Creature, not a non-creature spell; the
+spell-card-bridge admit set (`trajectory.py::
+_python_spell_effect_to_dict` + its §2 teeth) gates non-creature
+spells only. The cross-engine probe lives in
+`tests/test_fanatic_of_the_harrowing_parity.py` and uses the per-card
+dedicated parity-test module convention (cf.
+`test_boilerbilges_ripper_parity.py`, `test_comet_crawler_parity.py`,
+`test_dyadrine_attack.py`, `test_mutinous_massacre_parity.py`),
+driving the parsed Fanatic of the Harrowing printing through both
+engines on a shared shape and pinning the byte-equal mandatory-
+discard + controller-draw observable.
+
+**Mandatory-discard byte-equal mirror (NOT a no-agent decline).**
+Python's `FanaticOfTheHarrowingETBEffect.resolve` (`effects/bespoke.py:
+2848-2881`):
+
+  1. Walk all players in turn order starting from the controller.
+  2. For each player: if `has_lost` or hand is empty → skip.
+  3. Otherwise: agent picks via `choose_discard(state, p.id,
+     hand_ids)`; card moves to graveyard;
+     `fire_opponent_discards_triggers` fires.
+  4. After the walk: if controller actually discarded → draw 1 card.
+
+The cross-engine probe drives Python with a deterministic
+`_FirstHandIdDiscardAgent` whose `choose_discard` returns
+`hand_card_ids[0]` on BOTH seats. The Rust resolve pops `hand[0]`
+deterministically by the established `EachOpponentDiscards` /
+`DiscardSelf` / `EachOpponentExilesCardFromHandWithCastPermission`
+convention. Both engines pick the same card byte-equal; the
+controller-draw rider fires on both engines when the controller
+actually discarded.
+
+**DISTINCTION from Boilerbilges Ripper.** Boilerbilges Ripper's
+`BoilerbilgesRipperETBEffect` has an optional yes/no gate that
+requires an agent to make the "do" choice; without an agent the
+Python resolve short-circuits to "decline" (silent no-op) and the
+Rust mirror is empty. Fanatic of the Harrowing's discard is
+MANDATORY — each player MUST discard a card from their non-empty
+hand. No yes/no gate; no agent decline path. The cross-engine probe
+MUST drive Python with a `choose_discard` agent (or the Python
+resolve crashes on `None.choose_discard`).
+
+**`has_lost` divergence (honest-stopped, gameplay-irrelevant in
+2-player byte-equal probe).** Python's resolve has an `if p.has_lost
+or not p.hand: continue` gate. Rust's `state.players[i]` has no
+`has_lost` field today; the `state.lost_players` set tracks who has
+lost via SBA. In a 2-player cross-engine probe both players are alive
+(`has_lost == False` on Python; both seats are NOT in
+`state.lost_players` on Rust). The byte-equal probe path never
+exercises the divergence. A future cycle adding an explicit
+`has_lost` gate on Rust would widen the resolve arm here to mirror
+Python's gate exactly.
+
+**Observable byte-equality scope.** The harness's `_build_field_view`
+8-tuple per zone object is `(printing_name, tapped, summoning_sick,
+damage, net_counters, attached_to, controller_id, id)`. The
+gameplay-irrelevant `summoning_sick` default on Python's new-in-hand
+objects (True by default) vs Rust's hand-zone default (False) means
+the probe explicitly sets `summoning_sick = False` on the Python
+filler/library objects to maintain byte-equality (the same convention
+as Comet Crawler / Boilerbilges Ripper / Darkness etc. parity tests).
+
+**Failure mode (no honest-stop on the byte-equal path)**: none — the
+mandatory-discard semantics are fully mirrored on the Rust side
+under the deterministic-hand[0] convention; the controller-draw
+rider is mirrored byte-equal. Pre-existing agent surface gap on
+Rust does NOT block this card because Python+Rust both pick hand[0]
+deterministically.
+
+**Fix scope estimate**: zero — the mandatory-discard substrate ships
+complete in this cycle. A future agent-surface cycle on Rust would
+allow the Python side to use real strategic agents and the probe
+convention to drop the deterministic-hand[0] alignment; the resolve
+arm itself doesn't need to widen.
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Fanatic of the Harrowing from Effect-uncovered (BLOCKED at the
+covered-set layer) to Effect-covered (COVERED) at the Rust-Effect-
+coverage layer; PROBED at the per-card cross-engine parity layer via
+the dedicated probe module. Pool reach: 1 DSK card (Fanatic of the
+Harrowing itself) — not in the EoE-pool classifier's count, so the
+roadmap doc's pool-parity headline counts are unaffected; the
+parity-doc covered/PROBED tier counts grow by one Python class
+(141 → 142 of 228 covered after this cycle; 174 Rust variants; the
+pool-parity headline reads 379/475 EoE cards byte-equal at
+Effect+bridge level — +1 over Boilerbilges Ripper's prior 378
+because Fanatic is a DSK card and only DSK printings shift through
+this gate; the EoE-card delta itself is 0).
+
+**Honest-stops noted (NOT in this cycle's scope):**
+
+  * **`has_lost` divergence on Rust.** Rust's player struct has no
+    `has_lost` field today; Python's `if p.has_lost or not p.hand:
+    continue` gate's `has_lost` arm is not modeled. In a 2-player
+    cross-engine probe both players are alive so the divergence is
+    not exercised; a future cycle adding an explicit `has_lost`
+    gate on Rust would widen the resolve arm here.
+
+  * **Production-deck bench admit set (full-card cross-engine bench
+    play).** The trajectory safe-trigger gate
+    (`_python_ta_to_safe_dict`) widening to admit Fanatic of the
+    Harrowing into the bench-admit set is INTENTIONALLY NOT done
+    this cycle — that gate is about the production-deck bench admit
+    set, a distinct concern from per-card real-EoE parity probes.
+    The nonsafe_triggered_ability gate stays open at the classifier
+    after this cycle.
+
+  * **Fanatic of the Harrowing itself is a DSK card (not EoE).** The
+    EoE-pool-scoped classifier doesn't surface DSK cards (the
+    17lands pool data is EoE-only). The `effect_uncovered` gate
+    closure for `FanaticOfTheHarrowingETBEffect` IS the substrate
+    deliverable — pinned by `covered_python_class_set()`
+    membership; the classifier's `missing_effect_classes` empty-
+    array signal is observable only if a future cycle extends the
+    classifier to walk a broader pool than EoE.
+
+**Coverage**: 3 Rust resolve-arm unit pins + 1 parser SoT pin +
+2 serializer round-trip pins + 1 covered-set pin + 1 classifier
+skip-or-pin + 1 GENUINE real-EoE cross-engine probe = 9 tests at
+`tests/test_fanatic_of_the_harrowing_parity.py`. 8 pass + 1
+informative skip (the classifier doesn't surface DSK cards) on the
+lane's HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state_ops_resolve.rs` (mandatory-discard + controller-draw
+resolve arm), `src/mtg_bot/parity/cross_engine.py` (dict→Python
+bridge arm), `tests/test_fanatic_of_the_harrowing_parity.py`
+(probes). Per-card cycle LANDED; Fanatic of the Harrowing is now
+PROBED at the per-card parity layer (despite the classifier multi-
+gate state staying True on `nonsafe_triggered_ability`).
+
+
 ## Boilerbilges Ripper Cycle 1 LANDED — `Effect::BoilerbilgesRipperETBEffect` (unit) Effect half shipped byte-equal; ETB trigger no-agent decline path is silent no-op on BOTH engines
 
 **Single-cycle landing (2026-05-22,

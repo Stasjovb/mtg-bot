@@ -10926,6 +10926,66 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # gate.
         from mtg_bot.effects.bespoke import BoilerbilgesRipperETBEffect
         return BoilerbilgesRipperETBEffect()
+    if kind == "fanatic_of_the_harrowing_etb_effect":
+        # **Fanatic of the Harrowing Cycle 1 (2026-05-23).** Rust
+        # substrate ``Effect::FanaticOfTheHarrowingETBEffect`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"fanatic_of_the_harrowing_etb_effect"``; resolve in
+        # state_ops_resolve.rs mirrors Python's mandatory-discard +
+        # controller-draw body byte-equal).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "fanatic_of_the_harrowing_etb_effect"}``. Python's
+        # ``FanaticOfTheHarrowingETBEffect`` (effects/bespoke.py:2830)
+        # is a frozen dataclass with no constructor parameters.
+        #
+        # **Resolve semantics — mandatory-discard byte-equal.** Python's
+        # ``FanaticOfTheHarrowingETBEffect.resolve`` (effects/bespoke.py:
+        # 2848-2881) walks all players in turn order starting from the
+        # source's controller; each player with a non-empty hand
+        # discards one card via ``agent.choose_discard``. After the
+        # walk, if the controller actually discarded (i.e. had a
+        # non-empty hand), the controller draws 1 card. The cross-
+        # engine probe drives the Python side with a deterministic
+        # ``choose_discard`` agent that returns ``hand_card_ids[0]``
+        # so both engines pick the same card byte-equal.
+        #
+        # **DISTINCTION from Boilerbilges Ripper.** Boilerbilges
+        # Ripper's resolve has an optional yes/no gate that requires
+        # an agent to make the "do" choice; without an agent the
+        # Python resolve short-circuits to "decline" (silent no-op)
+        # and the Rust mirror is empty. Fanatic of the Harrowing's
+        # discard is MANDATORY — each player MUST discard a card
+        # from their non-empty hand. No yes/no gate; no agent
+        # decline path. The cross-engine probe MUST drive Python
+        # with a ``choose_discard`` agent (or the Python resolve
+        # crashes on ``None.choose_discard``).
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Fanatic of
+        # the Harrowing as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``FanaticOfTheHarrowingETBEffect`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-
+        # gated at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened —
+        # the per-card real-EoE probe in
+        # ``tests/test_fanatic_of_the_harrowing_parity.py`` carries
+        # the tier-flip work, not the safe-trigger admit set).
+        #
+        # **Real test-pool consumer**: Fanatic of the Harrowing —
+        # Creature — Human Cleric ({3}{B}, 2/2) with the ETB trigger
+        # "When this creature enters, each player discards a card.
+        # If you discarded a card this way, draw a card." Sourced
+        # from DSK (data/duskmourn.json:13266); admitted into the
+        # active ``OracleParserCardSource`` printings without any
+        # pool gate.
+        from mtg_bot.effects.bespoke import FanaticOfTheHarrowingETBEffect
+        return FanaticOfTheHarrowingETBEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
