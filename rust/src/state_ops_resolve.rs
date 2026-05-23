@@ -12264,6 +12264,100 @@ fn apply_effect(
                 }
             }
         }
+        // **Ouroboroid Cycle 1 (2026-05-23) — X +1/+1 counters on
+        // each creature you control, where X is the source's effective
+        // power.** Mirrors Python's
+        // `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower.
+        // resolve` (`effects/generic/counters.py:145`) STEP-FOR-STEP:
+        //   source = state.resolving_source            (Rust: source_obj_id)
+        //   if source is None: return                  (read returns 0 → x<=0 no-op)
+        //   x = effective_power(state, source)         (read_famished_source_power)
+        //   if x <= 0: return
+        //   for obj in state.battlefield:
+        //     if obj.controller_id != controller_id: continue
+        //     if not obj.printing.is_creature: continue
+        //     add_plus_one_counters(state, obj, x)
+        // The X-source read uses `read_famished_source_power` — the
+        // existing helper composing `base + ueot_power_bonus +
+        // obj.counters`, byte-equal to Python's `effective_power` =
+        // `_compute_effective_pt`. Source off-battlefield → 0 (matches
+        // Python's `if source is None: return` short-circuit chained
+        // with `if x <= 0: return`). The per-creature counter
+        // application mirrors the sibling
+        // `PutPlusOneCounterOnEachCreatureYouControl` arm — direct
+        // `obj.counters` mutation, no Loading Zone doubling or
+        // Terrasymbiosis observer trigger (documented residual,
+        // SEARCH_LIMITATIONS Ouroboroid Cycle 1 entry).
+        Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower => {
+            // Read X = source's CURRENT effective power. Source off-bf
+            // → 0 (the helper returns 0 when the object isn't on any
+            // battlefield, matching Python's `if source is None` short-
+            // circuit chained with `if x <= 0`). x <= 0 → silent no-op.
+            let x = read_famished_source_power(state, source_obj_id);
+            if x <= 0 {
+                return Ok(());
+            }
+            // Locate source controller via the 5-zone scan (mirrors
+            // `PutPlusOneCounterOnEachCreatureYouControl` — CR 119.5 /
+            // 608.2). Stack fallback for in-flight resolves where the
+            // source already moved off bf.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // Snapshot creature ids on the controller's battlefield
+            // before the mutating borrow (mirrors the sibling arm's
+            // borrow split).
+            let creature_ids: Vec<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter_map(|obj| {
+                        let printing = registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if creature_ids.is_empty() {
+                return Ok(());
+            }
+            let delta = x;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if creature_ids.contains(&obj.id) {
+                    obj.counters = obj.counters.saturating_add(delta);
+                }
+            }
+        }
         // Round-28 single-target counter add. Rayblade-Trooper-shape:
         // pick the FIRST creature on source-controller's bf and add
         // `amount` to its `counters` scalar. Empty bf or no eligible

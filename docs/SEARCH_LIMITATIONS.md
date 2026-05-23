@@ -12468,6 +12468,164 @@ layer (despite the classifier multi-gate state staying True on
 `nonsafe_triggered_ability`).
 
 
+## Ouroboroid Cycle 1 LANDED — `Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower` (unit) X-source mass-counter Effect shipped byte-equal; beginning-of-combat-on-your-turn trigger reads X = effective_power(source) at resolve time and spreads +X counters to each controlled creature
+
+**Single-cycle landing (2026-05-23,
+`feature/ouroboroid-cycle-1-p1`).** Ouroboroid — `{2}{G}{G}` Creature
+— Plant Wurm, 1/3 (sourced from EoE `data/edge_of_eternities.json`
+via the active `OracleParserCardSource`). Beginning-of-combat-on-
+your-turn trigger: "At the beginning of combat on your turn, put X
++1/+1 counters on each creature you control, where X is this
+creature's power." The parser maps the literal oracle line
+(`cards/parser/effects.py:4886-4889`) to
+`PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()`.
+Mirrors Python's parameterless frozen dataclass at
+`effects/generic/counters.py:136`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower`**
+     — field-free unit variant (`rust/src/cards.rs`, the
+     `FamishedWorldsireLookTopXByPowerPutLandsTapped` /
+     `AstelliReclaimerETBEffect` / `ScheduleSelfSacAtNextEndStep`
+     Tier-A unit-variant idiom for X-source-from-effective-power
+     and field-free composer effects), parse arm
+     (`parse_effect` dispatcher; round-trips the bare `{"kind":
+     "put_plus_one_counters_on_each_creature_you_control_equal_to_
+     source_power"}` dict shape), `to_pydict` arm (emits only `kind`),
+     and resolve arm (`rust/src/state_ops_resolve.rs`). On resolve,
+     reads X via the existing `read_famished_source_power` helper
+     (`base + ueot_power_bonus + obj.counters` — byte-equal to
+     Python's `effective_power` = `_compute_effective_pt`), then
+     iterates the source-controller's battlefield creatures and
+     applies +X to each via direct `obj.counters` mutation. Mirrors
+     the sibling `Effect::PutPlusOneCounterOnEachCreatureYouControl`
+     arm exactly — same 5-zone source-controller walk +
+     stack-fallback location dance, same creature-id snapshot +
+     borrow-split counter mutation, same controller-side
+     battlefield filter. The only delta vs the sibling: X is dynamic
+     (`read_famished_source_power(state, source_obj_id)`) instead of
+     the constant `amount` field.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python
+     `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()`
+     from the one-key dict shape.
+  3. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind": "put_plus_one_counters_on_each_
+     creature_you_control_equal_to_source_power"}` for
+     `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower`
+     instances — sibling of the `ScheduleSelfSacAtNextEndStep` /
+     `SacrificeSourceDelayed` unit-variant leaf serializers.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes
+     `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower`
+     — closes the `effect_uncovered` classifier gate at the
+     covered-set level.
+
+**X-source effect, not a static-amount sibling.** Where
+`PutPlusOneCounterOnEachCreatureYouControl(amount: int = 1)` carries
+the counter count as a parsed field, the Ouroboroid variant reads X
+dynamically from the source's effective power AT RESOLVE TIME. The
+existing `read_famished_source_power` helper composes
+`base + ueot_power_bonus + obj.counters` — exactly the same
+composition Python's `_compute_effective_pt` builds at
+`game.py:2138-2251`, including the `obj.counters` fold-in (the
+round-53 Mightform fix's established §2 contract — folding the
+signed +1/+1 net into the read avoids the BASE-vs-EFFECTIVE
+mistranslation class that surfaces on counter-carrying sources).
+Source off-battlefield → 0 (matches Python's `if source is None:
+return` short-circuit chained with `if x <= 0: return`). x <= 0 →
+silent no-op.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier,
+Ouroboroid is multi-gated on `effect_uncovered +
+nonsafe_triggered_ability`. The cycle closes the `effect_uncovered`
+gate (the `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower`
+Python class flips from `missing_effect_classes` to covered), but
+the `nonsafe_triggered_ability` gate KEEPS the card multi-gated at
+the classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit
+set, a distinct concern from per-card real-EoE parity probes. **The
+card DOES move to PROBED tier through the dedicated per-card real-
+EoE byte-equal cross-engine probe**
+(`tests/test_ouroboroid_parity.py`), the same precedent as Comet
+Crawler / Mutinous Massacre / Dyadrine Attack / Boilerbilges Ripper
+/ Fanatic of the Harrowing / Terrapact Intimidator / Attack-in-the-
+Box established.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Ouroboroid is a Creature, not a non-creature spell; the spell-card-
+bridge admit set (`trajectory.py::_python_spell_effect_to_dict` +
+its §2 teeth) gates non-creature spells only. The cross-engine
+probe lives in `tests/test_ouroboroid_parity.py` and uses the per-
+card dedicated parity-test module convention (cf.
+`test_boilerbilges_ripper_parity.py`,
+`test_fanatic_of_the_harrowing_parity.py`,
+`test_terrapact_intimidator_parity.py`,
+`test_comet_crawler_parity.py`, `test_dyadrine_attack.py`,
+`test_mutinous_massacre_parity.py`,
+`test_attack_in_the_box_parity.py`), driving the parsed Ouroboroid
+printing through both engines on the substrate-level round-trip
+(parser leaf → trajectory dict → cross-engine bridge ↔ Rust resolve
+arm) and pinning the byte-equal observable for the per-creature
+counter delta.
+
+**Documented residual.** Loading Zone-style doubling replacement
+effects and Terrasymbiosis "whenever counters added" observer
+triggers are NOT folded into the Rust arm — Python's
+`add_plus_one_counters` helper applies the doubling + fires the
+observer triggers; the Rust arm uses direct `obj.counters` scalar
+mutation (same established asymmetry as the sibling
+`PutPlusOneCounterOnEachCreatureYouControl` arm — same scope, same
+no-in-pool-consumer pinning). A future cycle landing the doubling
++ observer-trigger composition in Rust would close both arms in
+lockstep.
+
+**Schedule + resolve composition byte-equal.** Both engines: read
+x = effective_power(source) at resolve time; if x <= 0 silent no-
+op; otherwise iterate the source-controller's bf creatures and
+apply +x to each creature's per-object `counters` scalar (Rust) /
+`plus_one_counters` field (Python). Synthetic Rust unit pins drive
+the resolve arm directly (the BEGINNING_OF_COMBAT trigger-fan-out
+through both engines's phase-transition machinery is honest-stopped
+at Cycle 1 — agent-coordination of the trigger-pushed-onto-stack
+timing is Cycle 2+ work, sibling of the Attack-in-the-Box agent-
+surface gates).
+
+**Cycle 2+ trigger-fan-out probe.** A future cycle driving both
+engines through the BEGINNING_OF_COMBAT phase-transition trigger
+fan-out will let the cross-engine probe pin a byte-equal field-view
+diff over the whole printed-trigger pipeline (declare combat phase
+→ trigger pushed onto stack → resolve → per-creature counter delta).
+Cycle 1 lands ONLY the substrate (Rust variant + parse + to_pydict
++ resolve + cross-engine bridge + per-leaf serializer + unit pins
+for X=0 no-op and X=N spread); the trigger-fan-out byte-equal probe
+is honest-stopped today and pinned at the dedicated per-card test
+surface.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state_ops_resolve.rs` (resolve arm that reads
+`read_famished_source_power(source_obj_id)` and applies the per-
+creature spread via direct `obj.counters` mutation under the 5-zone
+source-controller walk),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (per-leaf Python→dict serializer
+arm + narrow import), `tests/test_ouroboroid_parity.py` (probes —
+parser SoT pin, trajectory serializer round-trip, Rust to_pydict
+round-trip, covered-set membership, Rust resolve X=0 no-op pin,
+Rust resolve X=N per-creature spread pin, real-EoE byte-equal
+cross-engine probe). Per-card cycle LANDED; Ouroboroid is now
+PROBED at the per-card parity layer (despite the classifier multi-
+gate state staying True on `nonsafe_triggered_ability`).
+
+
 ## Attack-in-the-Box Cycle 1 LANDED — `Effect::ScheduleSelfSacAtNextEndStep` (unit) composer Effect shipped byte-equal; attack-trigger schedules a `SacrificeSourceDelayed` delayed trigger at the current turn that drains at PHASE_END_STEP entry to sacrifice the source
 
 **Single-cycle landing (2026-05-23,

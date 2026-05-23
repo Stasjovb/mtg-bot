@@ -2635,6 +2635,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutPlusOneCounterOnEachCreatureYouControl(
             amount=eff_dict.get("amount", 1),
         )
+    if kind == "put_plus_one_counters_on_each_creature_you_control_equal_to_source_power":
+        # **Ouroboroid Cycle 1 (2026-05-23).** Rust's field-free
+        # ``Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower``
+        # round-trips to Python's
+        # ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()``
+        # parameterless dataclass at
+        # ``effects/generic/counters.py:136``. Unit variant — no fields;
+        # extra dict keys are silently ignored (round-49 unit-variant
+        # convention; sibling of the ``famished_worldsire_look_top_x_by_
+        # power_put_lands_tapped`` / ``astelli_reclaimer_etb_effect``
+        # bridge arms — all X-source field-free variants where X is
+        # read at resolve time from the source's effective power).
+        #
+        # **Real EoE consumer.** Ouroboroid ``{2}{G}{G}`` Creature —
+        # Plant Wurm, 1/3 (EoE 201). At-beginning-of-combat-on-your-turn
+        # trigger body: "put X +1/+1 counters on each creature you
+        # control, where X is this creature's power." The parser at
+        # ``cards/parser/effects.py:4886-4889`` maps the literal oracle
+        # line to ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()``.
+        #
+        # **Schedule + drain composition.** Both engines: read x =
+        # effective_power(source) at resolve time; if x <= 0 silent
+        # no-op; otherwise iterate the source-controller's bf
+        # creatures and apply +x to each creature's per-object
+        # ``counters`` scalar (Rust) / ``plus_one_counters`` field
+        # (Python). The Rust arm uses direct ``obj.counters`` mutation
+        # (the established sibling
+        # ``PutPlusOneCounterOnEachCreatureYouControl`` pattern); the
+        # Python arm uses ``add_plus_one_counters`` which folds in
+        # Loading Zone doubling + Terrasymbiosis observer triggers —
+        # the established documented asymmetry (no in-pool Ouroboroid
+        # game has those secondary mechanics present in the probed
+        # shapes).
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
+        )
+        return PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
     if kind == "return_creature_from_your_graveyard_to_battlefield":
         # "Return target creature card from your graveyard to the
         # battlefield." Sister-arm to

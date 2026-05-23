@@ -4319,6 +4319,15 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         SacrificeSourceDelayed,
         ScheduleSelfSacAtNextEndStep,
     )
+    # **Ouroboroid Cycle 1 (2026-05-23).** Per-leaf serializer for
+    # ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()``
+    # — the field-free dataclass for Ouroboroid's mass-counter trigger
+    # body. Unit-variant sibling of ``ScheduleSelfSacAtNextEndStep`` /
+    # ``SacrificeSourceDelayed``. Strictly for the round-trip dict-
+    # shape surface.
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
+    )
     # **Terminal Velocity — Cycle 1 (2026-05-22).** Two new leaves for
     # the Terminal Velocity Sorcery + the LTB damage-equal-to-MV-
     # each-creature trigger body. Both are field-free dataclasses;
@@ -5221,6 +5230,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # (``cards/parser/effects.py:3903-3912``).
         if isinstance(eff, ScheduleSelfSacAtNextEndStep):
             return {"kind": "schedule_self_sac_at_next_end_step"}
+        # **Ouroboroid Cycle 1 (2026-05-23).** Per-leaf serializer for
+        # ``PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()``
+        # — the field-free counter-spread body for Ouroboroid's
+        # beginning-of-combat-on-your-turn trigger. Unit-variant —
+        # emits the bare ``{"kind": "put_plus_one_counters_on_each_
+        # creature_you_control_equal_to_source_power"}``. X is dynamic
+        # (read at resolve time from the source's effective power), so
+        # there are no static fields to thread; both engines compose
+        # the X-read into their resolve arms (Rust:
+        # ``read_famished_source_power``; Python: ``effective_power``).
+        if isinstance(
+            eff, PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower
+        ):
+            return {
+                "kind": (
+                    "put_plus_one_counters_on_each_creature_you_"
+                    "control_equal_to_source_power"
+                ),
+            }
         # **Terminal Velocity — Cycle 1 (2026-05-22).** Per-leaf
         # serializer for ``TerminalVelocityEffect()`` — the field-free
         # bespoke Sorcery body at ``effects/bespoke.py:3043``. The
