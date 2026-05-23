@@ -2543,6 +2543,45 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return EachPlayerDraws(
             amount=eff_dict.get("count", 1),
         )
+    if kind == "discard_hand_then_draw_n":
+        # **Vaultguard Trooper Cycle 1 bridge arm (2026-05-23).**
+        # "You may discard your hand. If you do, draw N cards." Mirrors
+        # Python's ``DiscardHandThenDrawN(amount: int = 2)`` class
+        # (``effects/generic/discard.py:74``). Vaultguard Trooper
+        # ({4}{R} 5/5 Creature -- Kavu Soldier, EoE) is the unique EoE
+        # consumer today; the at-beginning-of-end-step trigger body
+        # wraps this effect inside
+        # ``ConditionalOnTappedCreatures(effect=DiscardHandThenDrawN(
+        # amount=2), min_count=2)``.
+        #
+        # **Field-name translation: count -> amount.** Rust uses
+        # ``count`` (the convention shared with ``draw_cards`` /
+        # ``each_opponent_mills_cards`` / ``mill`` /
+        # ``each_player_draws``); Python's ``DiscardHandThenDrawN``
+        # class uses ``amount``. The bridge does the rename inline.
+        # The ``count`` default of 2 mirrors the Rust parse default
+        # AND matches Vaultguard Trooper's printed shape "draw two
+        # cards" (the unique EoE consumer emits exactly
+        # ``DiscardHandThenDrawN(amount=2)``).
+        #
+        # **No-agent default = DO** (both engines). When the source-
+        # controller's ``Player.agent is None``, Python's
+        # ``DiscardHandThenDrawN.resolve`` short-circuits the
+        # ``and not p.agent.choose_yes_no(...)`` clause to False on
+        # the first conjunct and PROCEEDS with the discard+draw. The
+        # Rust resolve arm at ``state_ops_resolve.rs`` mirrors this
+        # by always-discarding (the ``choose_yes_no`` callback is not
+        # plumbed at the apply_effect site; same precedent as the
+        # Sothera / ``MayHaveSourceDealDamageToTarget`` Requiem
+        # honest-stop). The agent-Some DECLINE divergence is the
+        # documented deliberate divergence (see
+        # ``docs/SEARCH_LIMITATIONS.md``).
+        from mtg_bot.effects.generic.discard import (
+            DiscardHandThenDrawN,
+        )
+        return DiscardHandThenDrawN(
+            amount=eff_dict.get("count", 2),
+        )
     if kind == "put_plus_one_counter_on_each_creature_you_control":
         # **Phase 5 mass-counter bridge arm.**
         # Mirrors Rust's

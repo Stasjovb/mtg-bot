@@ -17640,6 +17640,143 @@ fn apply_effect(
                 }
             }
         }
+        Effect::DiscardHandThenDrawN { count } => {
+            // **Vaultguard Trooper Cycle 1 — `DiscardHandThenDrawN`
+            // resolve.** Mirrors Python's
+            // `effects/generic/discard.py:86-124` no-agent path:
+            //
+            // ```python
+            // if p.agent is not None and not p.agent.choose_yes_no(
+            //     state, controller_id,
+            //     f"Discard your hand to draw {self.amount}?",
+            // ):
+            //     # decline path — untouched
+            //     return
+            // # discard every card
+            // while p.hand:
+            //     card = p.hand.pop(0)
+            //     card.zone = Zone.GRAVEYARD
+            //     p.graveyard.append(card)
+            // # draw N
+            // for _ in range(self.amount):
+            //     if not p.library:
+            //         break
+            //     ...
+            // ```
+            //
+            // **No-agent default = DO.** When `p.agent is None`,
+            // Python's `and` short-circuits to False on the first
+            // clause and the discard PROCEEDS unconditionally. The
+            // Rust mirror always proceeds — the `choose_yes_no`
+            // callback substrate is not plumbed at this apply_effect
+            // site (same precedent as the Sothera /
+            // `MayHaveSourceDealDamageToTarget` Requiem honest-stop
+            // at state_ops_resolve.rs:16037). The agent-Some
+            // DECLINE-path divergence is documented in
+            // `docs/SEARCH_LIMITATIONS.md`.
+            //
+            // **Two-step body.** (1) Bulk-move the source-controller's
+            // entire hand to their graveyard, in hand[0..] order, with
+            // CR 400.7 zone-change reset on each card. (2) Source-
+            // controller draws `count` cards via the
+            // `Effect::DrawCards`-shape library-top pop (sets
+            // `attempted_draw_on_empty` on empty draw per CR 704.5b).
+            // Order matters: discard FIRST then draw (the discarded
+            // cards are NOT drawn back — they go to graveyard then
+            // the draw pops the LIBRARY top, not the graveyard top).
+            //
+            // **Source-finder dispatch (mirrors `DiscardSelf`).**
+            // Walks both players' five tracked zones (hand / library /
+            // battlefield / graveyard / exile) + the stack fallback
+            // to find the source's controller. Source not found
+            // anywhere = silent fizzle (mirrors `DiscardSelf`'s
+            // lost-track-of-source tolerance).
+            //
+            // **`count == 0` is a legal no-op for the DRAW step** —
+            // the discard still happens (Python's `range(0)` only
+            // short-circuits the draw loop). Negative `count` raises.
+            //
+            // **Per-card discard event NOT dispatched** (deliberate
+            // divergence from `DiscardSelf`). Python's resolve does
+            // NOT call `fire_opponent_discards_triggers` per discarded
+            // card (the resolve at `effects/generic/discard.py:103-112`
+            // bulk-moves cards from hand to graveyard without firing
+            // the per-card trigger). The Rust mirror skips the
+            // dispatch to byte-equal-match Python.
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DiscardHandThenDrawN count must be non-negative, got {count}"
+                )));
+            }
+            // Locate the source's controller (mirrors `DiscardSelf`).
+            let mut source_controller: Option<u8> = None;
+            'outer_dhd: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_dhd;
+                        }
+                    }
+                }
+            }
+            // Stack fallback for sources that are still resolving.
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found anywhere: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // Step 1: bulk-discard the entire hand. Drain hand[0..]
+            // in order, CR 400.7 zone-change reset on each card,
+            // push to graveyard.
+            loop {
+                if state.players[controller_idx].hand.is_empty() {
+                    break;
+                }
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                Arc::make_mut(&mut state.players[controller_idx].graveyard)
+                    .push(obj);
+            }
+            // Step 2: draw `count` cards (same shape as
+            // `Effect::DrawCards` resolve above).
+            let n = *count as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    // CR 704.5b — empty-library draw flags the player.
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                // Post-CE3: top of library = lib[0].
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
         Effect::ExileEachOpponentsGraveyard => {
             // Structural twin of EachOpponentMillsCards: same
             // source-controller finder (battlefield/hand/library/

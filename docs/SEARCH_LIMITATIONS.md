@@ -12962,6 +12962,187 @@ layer.
 
 ---
 
+## Vaultguard Trooper Cycle 1 LANDED — `Effect::DiscardHandThenDrawN` (single-int) Effect half shipped byte-equal; end-step "may discard hand, draw two" fires no-agent default-DO on Vaultguard Trooper
+
+**Single-cycle landing (2026-05-23,
+`feature/vaultguard-trooper-cycle-1-p1`).** Vaultguard Trooper —
+`{4}{R}` Creature — Kavu Soldier, 5/5 (Edge of Eternities — EoE,
+in the active CardSource). At-beginning-of-end-step trigger: "At
+the beginning of your end step, if you control two or more
+tapped creatures, you may discard your hand. If you do, draw two
+cards." Parsed live as
+`TriggeredAbility(event=BEGINNING_OF_END_STEP,
+predicate=Controlled(by=YOU, subject=None),
+effect=ConditionalOnTappedCreatures(effect=
+DiscardHandThenDrawN(amount=2), min_count=2))`. The
+`effect_uncovered` + `nonsafe_triggered_ability` multi-gate
+classifier blocker — the missing Effect class is
+`DiscardHandThenDrawN`
+(`effects/generic/discard.py:74`). Multi-gated card flipped to
+PROBED tier via the dedicated per-card cross-engine parity probe
+(precedent: Friendly Teddy / Boilerbilges Ripper / Comet Crawler
+/ Fanatic of the Harrowing).
+
+The single cycle composed:
+
+  1. **Rust `Effect::DiscardHandThenDrawN { count }`** — single-int
+     variant (`rust/src/cards.rs`), parse arm (`parse_effect`
+     dispatcher; defaults missing `count` to **2** mirroring the
+     Python class's `amount: int = 2` default AND Vaultguard
+     Trooper's printed shape "draw two cards"; rejects negative
+     `count`), `to_pydict` arm (emits the two-key dict shape
+     `{"kind", "count"}`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — the **production mint
+     site**. Two-step body:
+     * **Step 1: bulk-discard.** Drain source-controller's
+       `hand[0..]` in order, CR 400.7 zone-change reset on each
+       card, push to graveyard. Mirrors Python's
+       `while p.hand: card = p.hand.pop(0); ...` at
+       `effects/generic/discard.py:104-109`.
+     * **Step 2: draw `count`.** Same `Effect::DrawCards`-shape
+       library-top pop with `attempted_draw_on_empty` CR 704.5b
+       signal on empty. Mirrors Python's
+       `for _ in range(self.amount): if not p.library: break;
+       ...` at `effects/generic/discard.py:115-121`.
+
+     Source-controller location dance mirrors `DiscardSelf` —
+     walk both players' five tracked zones + the stack fallback;
+     source not found anywhere = silent fizzle.
+
+  2. **No-agent default = DO** (the cross-engine byte-equal mirror).
+     Python's `DiscardHandThenDrawN.resolve` short-circuits the
+     `if p.agent is not None and not p.agent.choose_yes_no(...)`
+     clause to False on the first conjunct when `agent is None`,
+     and PROCEEDS unconditionally with the discard+draw. The Rust
+     resolve arm always proceeds — the `choose_yes_no` callback
+     substrate is not plumbed at the apply_effect site (same
+     precedent as `MayHaveSourceDealDamageToTarget` / Sothera /
+     Requiem Monolith honest-stop at
+     `state_ops_resolve.rs:16037`). The agent-Some DECLINE-path
+     divergence is the documented deliberate divergence (see
+     below).
+
+  3. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `DiscardHandThenDrawN` class from the
+     single-int dict shape with the field-name translation
+     `count -> amount` (sibling of the `each_player_draws` /
+     `draw_cards` / `each_opponent_mills_cards` / `mill` bridge
+     arms — same Rust `count` / Python `amount` spelling
+     discrepancy local to the bridge translation). Missing
+     `count` defaults to 2 symmetrically with the Rust parse arm.
+
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `DiscardHandThenDrawN` with no
+     `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` edit
+     needed — the §2 covered-set tooth fires positively.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set,
+NOT `_python_ta_to_safe_dict` widen).** Vaultguard Trooper is a
+Creature with a `BEGINNING_OF_END_STEP` triggered ability whose
+predicate is `Controlled(by=YOU)` (NOT `IsSelf`) and whose effect
+is wrapped in `ConditionalOnTappedCreatures` (NOT the bare effect
+class). The trigger event + predicate + wrapper composition is
+NOT in `_SAFE_TRIGGERS` and is INTENTIONALLY NOT widened this
+cycle — that gate is about the production-deck bench admit set, a
+distinct concern from per-card real-EoE parity probes. The
+classifier's multi-gate state therefore reads
+`{'gates': ['effect_uncovered', 'nonsafe_triggered_ability'],
+   'multi_gated': True, 'missing_effect_classes': []}`
+after this cycle (the effect-class list is empty; the trigger
+leaf shape is still not in the safe set). Same precedent as
+Boilerbilges Ripper Cycle 1 — per-card probe carries the PROBED
+flip while the safe-trigger bench admit set stays separate.
+
+**Distinction from Friendly Teddy.** Friendly Teddy's DIES trigger
++ `IsSelf` predicate + bare `EachPlayerDraws` effect was admit-set
+eligible and DID widen `_SAFE_TRIGGERS`. Vaultguard Trooper's
+trigger event (`BEGINNING_OF_END_STEP`), predicate
+(`Controlled(by=YOU)`), and effect wrapper
+(`ConditionalOnTappedCreatures`) are each individually outside
+the existing safe-set shapes — widening would require
+substantially more substrate (the end-step event leaf, the
+controlled-by-you predicate leaf, the conditional-on-tapped-
+creatures wrapper recognizer) than Cycle 1 scope admits. Cycle 1
+lands ONLY the `effect_uncovered` gate closure + the no-agent
+byte-equal mirror; the safe-trigger admit set widen is deferred.
+
+**Cycle 2+ agent-surface widening (deliberate divergence).** A
+future cycle landing a Rust agent surface (the analog of Python's
+`Agent` interface) will widen the Rust resolve arm to ask the
+controller via `choose_yes_no` before proceeding. Today the Rust
+arm OVER-DISCARDS when an agent-Some player would have declined
+— this is byte-equal in the no-agent probe convention used by the
+dedicated parity test (both engines have `agent=None` and both
+DO the discard), but diverges in production self-play where the
+NN agent is wired and might prefer to decline (e.g. when the hand
+contains better-than-the-top-of-library cards). The divergence is
+deliberate Cycle 1 scope and the right Cycle 2 closure is the
+`choose_yes_no` PendingDecision substrate plumb.
+
+**Observable byte-equality scope.** The full `compare_fields`
+over the harness's per-zone signature is empty post-resolve on
+the no-agent default-DO path — including the per-player hand /
+library / graveyard / battlefield signatures. The DISCARD (every
+card in the source-controller's hand → graveyard) AND the DRAW
+(`count` cards library → hand) are both byte-equal across engines
+on the deterministic-DO path.
+
+**Failure mode**: an agent-Some player who would have declined
+the discard sees Rust over-discard (the no-callback Rust arm
+discards anyway). Documented; per-game strength cost is bounded
+by the number of times a Vaultguard Trooper would fire its
+trigger AND the controller would prefer to decline — probably
+a small fraction of fires in practice. Pinned by inspection of
+the resolve arms; closes when the `choose_yes_no` substrate
+lands.
+
+**Per-card discard event NOT dispatched (deliberate divergence
+from `DiscardSelf`).** Python's `DiscardHandThenDrawN.resolve`
+does NOT call `fire_opponent_discards_triggers` per discarded
+card (it bulk-moves the hand to graveyard without the per-card
+trigger). The Rust mirror skips the dispatch to byte-equal-match
+Python. Cards triggering on "whenever an opponent discards a card"
+(if any are ever printed alongside Vaultguard Trooper) would not
+fire on this effect's discards on either engine. Same divergence
+shape as Python — no parity gap.
+
+**Fix scope estimate**: agent-surface plumb (Cycle 2+); discard
+trigger fan-out is a deliberate Python-side choice mirrored
+faithfully.
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Vaultguard Trooper from Effect-uncovered (BLOCKED, multi-gated)
+to Effect-covered (COVERED) at the Rust-Effect-coverage layer;
+PROBED at the per-card cross-engine parity layer via the
+dedicated probe module. The other Vaultguard Trooper gate
+(`nonsafe_triggered_ability`) STAYS active by deliberate Cycle 1
+scope. Pool reach: 1 card (Vaultguard Trooper, EoE); broadly
+pre-positioned substrate for any future EoE / standard-format
+printing carrying the bare `DiscardHandThenDrawN` shape (e.g. a
+discard-and-redraw rider on a triggered ability).
+
+**Coverage**: tests at `tests/test_vaultguard_trooper_parity.py`:
+parser SoT pin, bridge dict↔Python round-trip pins, Rust
+parse/to_pydict round-trip pins, covered-set membership pin,
+classifier `missing_effect_classes == []` pin, Rust resolve-arm
+unit pins (empty-hand-no-op, hand-with-N-cards full-discard +
+N-draw, library-shorter-than-N empty-library signal), and a
+GENUINE real-EoE cross-engine byte-equal probe driving the trigger.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_vaultguard_trooper_parity.py` (probes). Per-card cycle
+LANDED; Vaultguard Trooper is now PROBED at the per-card parity
+layer despite the multi-gated classifier status. `_SAFE_TRIGGERS`
+deliberately NOT widened (separate concern; precedent:
+Boilerbilges Ripper).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
