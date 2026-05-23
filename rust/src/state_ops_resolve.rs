@@ -20204,6 +20204,119 @@ fn apply_effect(
         Effect::TerrapactIntimidatorETBEffect => {
             // Honest-stopped no-op — see docstring.
         }
+        // **Territorial Bruntar Cycle 1 (2026-05-23).** Mirrors Python's
+        // `TerritorialBruntarLandfallEffect.resolve`
+        // (`effects/bespoke.py:321-340`) on the OBSERVABLE zone-change
+        // half — the `playable_from_exile_this_turn` flag is honest-
+        // stopped (Rust has no such field on `GameObject`, no cast-
+        // from-exile substrate; documented in SEARCH_LIMITATIONS.md).
+        //
+        // **Resolve steps (mirror Python).**
+        //   1. Source-controller resolution: 5-zone walk + stack scan
+        //      (same shape as `FanaticOfTheHarrowingETBEffect` /
+        //      `DiscardSelf` / `EachOpponentDiscards` source-finder).
+        //      Source not found anywhere = silent fizzle.
+        //   2. While the source-controller's library is non-empty:
+        //      pop `library[0]` (top), set its zone to `ZONE_EXILE`,
+        //      push it to that player's exile zone. Library empty
+        //      mid-loop: silent stop (mirrors Python's `while
+        //      p.library:` short-circuit when the library empties).
+        //   3. Look up the popped card's `printing` via the registry
+        //      and check whether `card_types` contains `"Land"`.
+        //      Python's `top.printing.is_land` reads `"Land" in
+        //      card_types` (`cards/base.py:1021`). Registry lookup
+        //      failure on a popped card is treated as non-land
+        //      (defense-in-depth — the loop terminates loudly rather
+        //      than continuing forever).
+        //   4. If NOT a land: STOP — the loop terminates at the
+        //      first non-land (Python: `if not top.printing.is_land:
+        //      top.playable_from_exile_this_turn = True; return`).
+        //      The Rust mirror does NOT set the playable flag (see
+        //      honest-stop above); only the zone-change observable
+        //      is byte-equal.
+        //   5. Otherwise (the card IS a land): continue the loop.
+        //      The land stays exiled — Python's oracle doesn't
+        //      return revealed lands, just exiles until non-land.
+        //
+        // **CR 400.7 zone-change reset.** Each exiled card gets
+        // tapped/summoning_sick/damage/counters/attached_to/
+        // exiled_with_source cleared on the move (mirrors the
+        // `FanaticOfTheHarrowingETBEffect` / Mill / DestroyTarget
+        // reset shape). Python's `TerritorialBruntarLandfallEffect`
+        // also resets these by virtue of moving through the engine's
+        // standard zone-move pipeline.
+        Effect::TerritorialBruntarLandfallEffect => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // 2. Exile-walk loop. Pop library[0] (top), exile it,
+            // check is_land. Stop on first non-land OR empty library.
+            loop {
+                let lib_empty =
+                    state.players[controller_idx].library.is_empty();
+                if lib_empty {
+                    break; // Library exhausted: silent stop.
+                }
+                let lib_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].library);
+                let mut obj = lib_mut.remove(0);
+                // CR 400.7 zone-change reset on the move.
+                obj.zone = ZONE_EXILE;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                // Check is_land BEFORE pushing — the Vec move is
+                // independent of the printing lookup.
+                let is_land = match state
+                    .registry
+                    .lookup(obj.printing_id)
+                {
+                    Some(printing) => {
+                        printing.card_types.iter().any(|t| t == "Land")
+                    }
+                    None => false,
+                };
+                // Push to exile.
+                Arc::make_mut(&mut state.players[controller_idx].exile)
+                    .push(obj);
+                // Stop at first non-land. Lands stay exiled and the
+                // loop continues to the next library card.
+                if !is_land {
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }

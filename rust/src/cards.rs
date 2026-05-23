@@ -6889,6 +6889,94 @@ pub enum Effect {
     /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
     /// reconstructs `TerrapactIntimidatorETBEffect()`.
     TerrapactIntimidatorETBEffect,
+    /// **Territorial Bruntar Cycle 1 closure (2026-05-23).** Mirrors
+    /// Python's `TerritorialBruntarLandfallEffect` (parameterless
+    /// frozen dataclass at `effects/bespoke.py:310`). Territorial
+    /// Bruntar (`{4}{R}{R}` Creature — Beast, 6/6, EoE) carries the
+    /// landfall trigger body: "Whenever a land you control enters,
+    /// exile cards from the top of your library until you exile a
+    /// nonland card. You may cast that card this turn."
+    ///
+    /// **Multi-gated card (effect_uncovered +
+    /// nonsafe_triggered_ability).** Per the round-58 subsystem-
+    /// attribution classifier, Territorial Bruntar is multi-gated:
+    /// this Rust variant closes the `effect_uncovered` gate
+    /// (`TerritorialBruntarLandfallEffect` moves from
+    /// `missing_effect_classes` to covered via the 1:1 identity-
+    /// mapping rule in `effect_coverage.map_rust_to_python`), but
+    /// the `nonsafe_triggered_ability` gate KEEPS the card multi-
+    /// gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is
+    /// deliberately NOT widened — see the safe-trigger-vs-per-card
+    /// distinction the Genemorph Imago / Fanatic of the Harrowing /
+    /// Boilerbilges Ripper / Comet Crawler precedent established).
+    /// The card still flips to PROBED tier through the dedicated
+    /// per-card real-EoE byte-equal cross-engine probe
+    /// (`tests/test_territorial_bruntar_parity.py`).
+    ///
+    /// **Field-free unit variant** (the `FanaticOfTheHarrowingETB
+    /// Effect` / `BoilerbilgesRipperETBEffect` / `MutinousMassacre
+    /// Effect` Tier-A unit-variant idiom). The Python class is a
+    /// parameterless frozen dataclass; no constructor args.
+    ///
+    /// **Resolve semantics (mirrors `TerritorialBruntarLandfallEffect.
+    /// resolve` at `effects/bespoke.py:321-340`).** The Python class
+    /// walks:
+    ///   1. Source-controller resolution (this Rust mirror uses the
+    ///      5-zone walk + stack scan pattern; Python's landfall
+    ///      dispatch already passes `controller_id` directly).
+    ///   2. While the source-controller's library is non-empty: pop
+    ///      `library[0]` (top), set its zone to `ZONE_EXILE`, push it
+    ///      to that player's exile zone. Library empty mid-loop:
+    ///      silent stop (no card to flag for cast).
+    ///   3. If the popped card is NOT a land (`card_types` does NOT
+    ///      contain `"Land"`): STOP — the loop terminates at the
+    ///      first non-land. (Python: `if not top.printing.is_land:
+    ///      ... return`.)
+    ///   4. Otherwise the card is a land — it stays exiled; continue
+    ///      to the next library card.
+    ///
+    /// **`playable_from_exile_this_turn` flag — HONEST-STOPPED.**
+    /// Python sets `top.playable_from_exile_this_turn = True` on the
+    /// terminating non-land card so `legal_actions` will surface a
+    /// CastSpell decision for it. **Rust has no
+    /// `playable_from_exile_this_turn` field** on `GameObject` today
+    /// and **no cast-from-exile substrate** in the legal-actions /
+    /// cast-resolution pipelines. The Rust resolve arm therefore
+    /// mirrors the OBSERVABLE zone-change half byte-equal (cards
+    /// exiled, non-land terminator stops at top of exile) but does
+    /// NOT flag the non-land as castable. Documented as a deliberate
+    /// divergence in `docs/SEARCH_LIMITATIONS.md`; the cross-engine
+    /// probe normalises the flag symmetric on the Python side before
+    /// the whole-view compare (mirroring the established summoning-
+    /// sick normalisation precedent).
+    ///
+    /// **Source-finder dispatch (5-zone walk + stack scan).** Mirrors
+    /// the `FanaticOfTheHarrowingETBEffect` / `DiscardSelf` /
+    /// `EachOpponentDiscards` source-finder convention; the landfall
+    /// trigger dispatch already routes the source's controller, but
+    /// the 5-zone walk is defense-in-depth for the synthetic carrier
+    /// probe path. Source not found anywhere = silent fizzle.
+    ///
+    /// **Library-empty path.** Mirrors `Effect::Mill` — if the
+    /// library is empty at any point during the walk, the loop
+    /// silently stops. CR 704.5b "draw from empty library" does NOT
+    /// apply here — the effect is an exile-walk, not a draw. The
+    /// loop simply terminates when there are no more cards to exile.
+    ///
+    /// **No per-card event dispatch.** Python's `state.log.append`
+    /// is text-only observability — no event fan-out. The Rust
+    /// mirror skips `dispatch_event` (no `Event::ExilesCard` or
+    /// `Event::LandfallExileWalk` exists in the engine today;
+    /// adding one is out of scope for this per-card cycle).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// no fields. Round-trip dict-shape: `{"kind":
+    /// "territorial_bruntar_landfall_effect"}` (only `kind`
+    /// emitted). The bridge `_ta_dict_to_python_effect` arm at
+    /// `cross_engine.py` reconstructs
+    /// `TerritorialBruntarLandfallEffect()`.
+    TerritorialBruntarLandfallEffect,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10478,6 +10566,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "terrapact_intimidator_etb_effect" => {
             Ok(Effect::TerrapactIntimidatorETBEffect)
         }
+        // **Territorial Bruntar Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's `TerritorialBruntarLandfallEffect`
+        // (`effects/bespoke.py:310`) is a parameterless frozen
+        // dataclass. Round-trip dict shape: `{"kind":
+        // "territorial_bruntar_landfall_effect"}` (no other fields).
+        // Sibling of the `FanaticOfTheHarrowingETBEffect` /
+        // `MutinousMassacreEffect` / `BoilerbilgesRipperETBEffect`
+        // field-free unit-variant idiom.
+        "territorial_bruntar_landfall_effect" => {
+            Ok(Effect::TerritorialBruntarLandfallEffect)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -12126,7 +12225,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect"
         ))),
     }
 }
@@ -15175,6 +15274,14 @@ pub(crate) fn effect_to_pydict<'py>(
         // consumes the same one-key shape.
         Effect::TerrapactIntimidatorETBEffect => {
             d.set_item("kind", "terrapact_intimidator_etb_effect")?;
+        }
+        // **Territorial Bruntar Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `TerritorialBruntarLandfallEffect`
+        // dict shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape.
+        Effect::TerritorialBruntarLandfallEffect => {
+            d.set_item("kind", "territorial_bruntar_landfall_effect")?;
         }
     }
     Ok(d)

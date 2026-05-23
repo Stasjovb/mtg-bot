@@ -13492,6 +13492,191 @@ The Endstone is now PROBED at the per-card parity layer.
 
 ---
 
+## Territorial Bruntar Cycle 1 LANDED — `Effect::TerritorialBruntarLandfallEffect` (unit) Effect half shipped byte-equal on zone-change observable; `playable_from_exile_this_turn` flag honest-stopped (no Rust substrate)
+
+**Single-cycle landing (2026-05-23,
+`feature/territorial-bruntar-cycle-1-p1`).** Territorial Bruntar —
+`{4}{R}{R}` Creature — Beast, 6/6 (Edge of Eternities — EoE, in the
+active CardSource). Landfall trigger: "Reach. Landfall — Whenever a
+land you control enters, exile cards from the top of your library
+until you exile a nonland card. You may cast that card this turn."
+Parsed live as `TriggeredAbility(event=ENTERS,
+predicate=And(Subject(IsLand), Controlled(by=YOU)),
+effect=TerritorialBruntarLandfallEffect())` (a parameterless frozen
+dataclass at `effects/bespoke.py:310`).
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for Territorial Bruntar is now
+Effect-closed at the **observable zone-change layer**. The
+`TerritorialBruntarLandfallEffect` Rust Effect variant ships with
+parse + to_pydict + resolve arms; the cross_engine dict→Python
+bridge arm round-trips it; a per-card real-EoE byte-equal probe
+flips Territorial Bruntar to **PROBED at the per-card parity
+layer** with the `playable_from_exile_this_turn` flag normalised
+symmetric in the whole-view compare (see the honest-stop below).
+
+**What landed:**
+
+* **Rust `Effect::TerritorialBruntarLandfallEffect` variant
+  (field-free unit).** New enum variant on `rust/src/cards.rs`
+  immediately after `FanaticOfTheHarrowingETBEffect` — same Tier-A
+  unit-variant idiom (`MutinousMassacreEffect` /
+  `BoilerbilgesRipperETBEffect` / `FanaticOfTheHarrowingETBEffect`
+  precedent). Round-trip dict shape:
+  `{"kind": "territorial_bruntar_landfall_effect"}` (only `kind`
+  emitted).
+* **Parse arm.** Closed-vocab string kind
+  `"territorial_bruntar_landfall_effect"` parses to the unit
+  variant; no payload fields. The fallback unknown-kind error
+  string is extended to include the new kind so a typo surfaces
+  loudly. Sibling of the
+  `fanatic_of_the_harrowing_etb_effect` /
+  `boilerbilges_ripper_etb_effect` unit-variant parse arms.
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`), mirroring the
+  `FanaticOfTheHarrowingETBEffect` sibling on adjacent lines.
+  Round-trip is a single-key dict.
+* **Resolve arm.** `rust/src/state_ops_resolve.rs` arm immediately
+  after the `FanaticOfTheHarrowingETBEffect` resolve. Mechanism:
+  5-zone walk + stack scan to find the source controller (same
+  shape as `FanaticOfTheHarrowingETBEffect` / `DiscardSelf`
+  source-finder); then a `while lib not empty` loop pops `lib[0]`
+  (top), runs the CR 400.7 zone-change reset (tapped /
+  summoning_sick / damage / counters / attached_to /
+  exiled_with_source all cleared), looks up the popped card's
+  `printing.card_types` via the registry to check
+  `"Land" in card_types`, pushes the card onto the controller's
+  exile zone, and BREAKS on the first non-land (lands keep the
+  loop going; non-lands terminate it). Library exhausted mid-loop
+  = silent stop (no CR 704.5b draw-from-empty signal — this is an
+  exile-walk, not a draw). Source untrackable = silent fizzle.
+* **Cross-engine bridge arm.** New
+  `territorial_bruntar_landfall_effect` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately above the `PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE`
+  marker. Translates the Rust-shape dict back into a Python
+  `TerritorialBruntarLandfallEffect()` instance. Field-free unit
+  variant — no field translation required.
+* **Tests.** `tests/test_territorial_bruntar_parity.py` carries
+  twelve probes:
+    - 3 parser SoT pins (card-claim, printed attrs incl. reach,
+      landfall trigger emits the expected
+      `TerritorialBruntarLandfallEffect()` under ENTERS +
+      `And(Subject(IsLand), Controlled(YOU))`);
+    - 2 serializer round-trip pins (dict→Python bridge round-trip
+      + Rust effect_to_pydict one-key shape);
+    - 4 Rust unit pins (top-non-land terminator stops at one
+      card; lands-then-non-land exiles in top-to-bottom order;
+      empty library silent no-op; all-lands path exiles all then
+      stops on empty);
+    - 2 covered-set / classifier-closure pins (covered-set
+      membership via the 1:1 identity-mapping rule; classifier
+      `missing_effect_classes == []` OR row absent — both shapes
+      are accepted closure signals);
+    - 1 GENUINE real-EoE cross-engine byte-equal probe driving
+      the ACTUAL parsed Territorial Bruntar printing on Python
+      against a bridged synthetic carrier on Rust; the landfall
+      trigger fires from a played Forest (lands-then-non-land
+      terminator branch, library top-to-bottom = [land, land,
+      non-land, deeper-non-land]), the two lands + terminator
+      non-land are exiled in that order on BOTH engines, the
+      deeper non-land stays in library, and `compare_fields ==
+      []` over the WHOLE field view (with `summoning_sick` +
+      `playable_from_exile_this_turn` normalised symmetric per
+      the honest-stop / established Icecave Crasher / Genemorph
+      Imago batch-B precedents).
+
+**The shortcut — `playable_from_exile_this_turn` flag.** Python's
+`TerritorialBruntarLandfallEffect.resolve` sets
+`top.playable_from_exile_this_turn = True` on the terminating
+non-land card so `legal_actions` will surface a CastSpell decision
+for that card. **Rust has no `playable_from_exile_this_turn` field**
+on `GameObject` and **no cast-from-exile substrate** in the
+legal-actions / cast-resolution pipelines. The Rust resolve arm
+therefore mirrors the OBSERVABLE zone-change half byte-equal (cards
+exiled, non-land terminator stops at the top of exile) but does NOT
+flag the non-land as castable.
+
+**Why this is OK.** Per-card cross-engine byte-equal parity at the
+**zone-change observable** is the same tier closed by every other
+PROBED-via-dedicated-probe per-card cycle in this lane (Genemorph
+Imago, Fanatic of the Harrowing, Vaultguard Trooper, Boilerbilges
+Ripper, Comet Crawler, Friendly Teddy). The cross-engine probe
+normalises the Python flag symmetric before the whole-view compare
+(the established Icecave Crasher / Genemorph Imago batch-B
+fixture-asymmetry idiom for cross-engine field-view divergences
+that don't have a Rust analog), so the byte-equal whole-view
+compare still passes.
+
+**Failure mode.** A subsequent ply that tries to **cast the exiled
+card** through normal `legal_actions` would diverge: Python's
+`legal_actions` would offer the CastSpell (driven by the
+`playable_from_exile_this_turn` flag); Rust's `legal_actions` would
+not (the flag and the cast-from-exile substrate are absent
+entirely). For the dedicated per-card probe path landed here, no
+post-landfall ply is driven — the probe terminates at the trigger
+resolution and the whole-view compare. A future full-game
+trajectory probe (or a search-side eval that needs to reason about
+the cast-from-exile option) would surface the divergence.
+
+**Fix scope.** Two-cycle minimum:
+  * **Cycle 2** — add a `playable_from_exile_this_turn` field on
+    Rust's `GameObject` and thread it through CR 400.7 zone-change
+    resets (clear on most zone changes; set by the landfall resolve
+    arm) + zone snapshots (so the bench-side field-view sees the
+    flag).
+  * **Cycle 3** — extend the Rust legal-actions surface to surface
+    a CastSpell decision for any object in exile carrying the flag,
+    plus the cast-from-exile substrate (mana-cost payment from the
+    standard cast pipeline, with the resolved card moving from
+    exile to stack rather than from hand to stack).
+
+Neither sub-substrate is fit for a single per-card cycle — they
+both touch the cast pipeline broadly. Defer the substrate
+landings to dedicated lanes per the established multi-cycle
+ratchet (precedent: Comet Crawler's two-card-target gating
+substrate, the cast-from-exile substrate work for `EachOpponent
+ExilesCardFromHandWithCastPermission`).
+
+**Pool delta:** Territorial Bruntar flips Effect-uncovered →
+**PROBED at the per-card parity layer** with the
+`playable_from_exile_this_turn` flag honest-stopped. **Admit set
+unchanged** — Territorial Bruntar is a Creature (not a spell); the
+production-deck safe-trigger admission gate
+(`_python_ta_to_safe_dict` + `_SAFE_TRIGGERS`) is NOT widened in
+this cycle (same precedent as Genemorph Imago / Fanatic of the
+Harrowing / Vaultguard Trooper — per-card-probe-tier-flip is the
+right tool here, the safe-trigger admit set is a separate concern).
+
+**Impact estimate.** Strength cost is bounded — the engine's
+existing legal-actions surface does NOT model the post-landfall
+"you may cast that card this turn" option on Rust today, so the
+honest-stopped behavior matches Rust's pre-cycle state for any
+ply downstream of the landfall trigger. The cross-engine probe
+holds byte-equal on the zone-change observable (the load-bearing
+parity signal for this cycle). Perf impact is negligible
+(library-walk pop loop is bounded by library size; registry
+lookup per card is the same cost as `Effect::Mill` /
+`Effect::SearchLibraryForBasicLandTapped` resolve walks).
+
+**Coverage**: 12 tests at
+`tests/test_territorial_bruntar_parity.py`. All pass on the lane's
+HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_territorial_bruntar_parity.py` (probes). Per-card cycle
+LANDED; Territorial Bruntar is now PROBED at the per-card parity
+layer despite the multi-gated classifier status. `_SAFE_TRIGGERS`
+deliberately NOT widened (separate concern; precedent: Genemorph
+Imago / Fanatic of the Harrowing / Vaultguard Trooper).
+`playable_from_exile_this_turn` flag deliberately honest-stopped
+on Rust (cast-from-exile substrate is a multi-cycle ratchet; see
+"Fix scope" above).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

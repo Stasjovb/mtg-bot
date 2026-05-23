@@ -11153,6 +11153,69 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # gate.
         from mtg_bot.effects.bespoke import TerrapactIntimidatorETBEffect
         return TerrapactIntimidatorETBEffect()
+    if kind == "territorial_bruntar_landfall_effect":
+        # **Territorial Bruntar Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::TerritorialBruntarLandfallEffect`` (cards.rs field-
+        # free UNIT variant; parser
+        # ``"territorial_bruntar_landfall_effect"``; resolve in
+        # state_ops_resolve.rs mirrors Python's exile-until-non-land
+        # body byte-equal on the OBSERVABLE zone-change half — the
+        # ``playable_from_exile_this_turn`` flag is honest-stopped on
+        # the Rust side; see SEARCH_LIMITATIONS.md).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "territorial_bruntar_landfall_effect"}``. Python's
+        # ``TerritorialBruntarLandfallEffect`` (effects/bespoke.py:310)
+        # is a frozen dataclass with no constructor parameters.
+        #
+        # **Resolve semantics — exile-walk byte-equal.** Python's
+        # ``TerritorialBruntarLandfallEffect.resolve`` (effects/bespoke
+        # .py:321-340) walks the controller's library top-to-bottom,
+        # exiling each card, and stops at the FIRST non-land card. The
+        # terminating non-land gets ``playable_from_exile_this_turn =
+        # True`` so ``legal_actions`` will surface a CastSpell for it.
+        # The Rust mirror ships the zone-change half byte-equal (cards
+        # are exiled, the loop stops at the first non-land) but does
+        # NOT set the playable flag (Rust has no such field on
+        # GameObject, no cast-from-exile substrate). The cross-engine
+        # probe normalises the flag symmetric on the Python side
+        # before the whole-view compare.
+        #
+        # **DISTINCTION from Genemorph Imago.** Genemorph Imago's
+        # landfall trigger pushes a layer-7b UEOT modifier onto a
+        # creature; the observable is base-P/T. Territorial Bruntar's
+        # landfall walks the library and exiles cards; the observable
+        # is the zone-change footprint (library shrinkage + exile
+        # additions). Both are landfall triggers; both have unit-
+        # variant Effect shapes on both sides; both flip to PROBED via
+        # a dedicated per-card real-EoE byte-equal cross-engine probe.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Territorial
+        # Bruntar as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``TerritorialBruntarLandfallEffect`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-
+        # gated at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened —
+        # the per-card real-EoE probe in
+        # ``tests/test_territorial_bruntar_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Real test-pool consumer**: Territorial Bruntar — Creature
+        # — Beast ({4}{R}{R}, 6/6) with the landfall trigger "Reach.
+        # Landfall — Whenever a land you control enters, exile cards
+        # from the top of your library until you exile a nonland
+        # card. You may cast that card this turn." Sourced from EoE
+        # (data/edge_of_eternities.json:21374); admitted into the
+        # active ``OracleParserCardSource`` printings without any
+        # pool gate.
+        from mtg_bot.effects.bespoke import TerritorialBruntarLandfallEffect
+        return TerritorialBruntarLandfallEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
