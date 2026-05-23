@@ -20317,6 +20317,61 @@ fn apply_effect(
                 }
             }
         }
+        // **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedule a
+        // delayed `SacrificeSourceDelayed` trigger keyed at the
+        // current turn so the source is sacrificed at the next end
+        // step. Mirrors Python's `ScheduleSelfSacAtNextEndStep.
+        // resolve` (`effects/generic/delayed_actions.py:92-109`).
+        //
+        // **Composer, not a leaf.** Composes the existing
+        // `Effect::SacrificeSourceDelayed` substrate (landed in
+        // Devastating Onslaught Cycle 1). On resolve, append a
+        // `DelayedTrigger { fire_at_turn: state.turn_number,
+        // controller_id, source_id: source_obj_id, effect:
+        // SacrificeSourceDelayed }` onto `state.delayed_triggers`.
+        // The standard `run_delayed_end_step_triggers`
+        // (`state_ops_steps.rs:465`) machinery fires the sac at the
+        // upcoming PHASE_END_STEP of the current turn.
+        //
+        // **Controller resolution.** Use the transient
+        // `current_resolve_source_controller` slot maintained by
+        // `resolve_top_of_stack`; fall back to `state.active_player`
+        // when unset (sibling of every other `apply_effect` arm that
+        // consults this slot — `IfYouDo` arm at line ~16399 reads
+        // exactly the same slot). This is the source's controller
+        // at resolve time — the same player whose end step will
+        // fire the sacrifice.
+        //
+        // **No defensive resolving-source check needed.** Python's
+        // `ScheduleSelfSacAtNextEndStep.resolve` checks
+        // `state.resolving_source is None` and returns False as a
+        // defensive no-op. Rust's `source_obj_id` parameter is
+        // always populated by the call site (the caller branches
+        // into `apply_effect` with the bound resolving source's
+        // id), so the defensive Python no-op isn't reachable here.
+        // Mirrors the same "the caller bound the source-id slot"
+        // assumption that `Effect::SacrificeSourceDelayed`'s resolve
+        // arm makes (it walks both battlefields for `source_obj_id`
+        // without first checking that the id is non-zero).
+        //
+        // **`fire_at_turn = state.turn_number`** — the same "next
+        // end step on the current turn" interpretation Devastating
+        // Onslaught uses for its per-token sac scheduling at
+        // `state_ops_resolve.rs:19105-19115`. The drain in
+        // `run_delayed_end_step_triggers` fires the trigger when
+        // `entry.fire_at_turn == turn && entry.controller_id ==
+        // active`.
+        Effect::ScheduleSelfSacAtNextEndStep => {
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            state.delayed_triggers.push(crate::cards::DelayedTrigger {
+                fire_at_turn: state.turn_number,
+                controller_id: controller,
+                source_id: source_obj_id,
+                effect: Effect::SacrificeSourceDelayed,
+            });
+        }
     }
     Ok(())
 }

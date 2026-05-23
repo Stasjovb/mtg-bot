@@ -6977,6 +6977,114 @@ pub enum Effect {
     /// `cross_engine.py` reconstructs
     /// `TerritorialBruntarLandfallEffect()`.
     TerritorialBruntarLandfallEffect,
+    /// **Attack-in-the-Box Cycle 1 (2026-05-23).** Schedules a delayed
+    /// `Effect::SacrificeSourceDelayed` trigger keyed at the current
+    /// turn so the source is sacrificed at the next end step. Mirrors
+    /// Python's `ScheduleSelfSacAtNextEndStep` (parameterless frozen
+    /// dataclass at `effects/generic/delayed_actions.py:69`).
+    ///
+    /// **Composer, not a leaf.** This variant composes the existing
+    /// `Effect::SacrificeSourceDelayed` substrate (landed in
+    /// Devastating Onslaught Cycle 1 at `cards.rs:6328`) — its
+    /// resolve appends a `DelayedTrigger { effect:
+    /// SacrificeSourceDelayed, source_id: <source>,
+    /// fire_at_turn: state.turn_number, controller_id:
+    /// <controller> }` onto `state.delayed_triggers`. The standard
+    /// `run_delayed_end_step_triggers` (`state_ops_steps.rs:465`)
+    /// machinery then fires the sac at the upcoming PHASE_END_STEP
+    /// of the current turn. Same end-step-on-current-turn
+    /// interpretation Devastating Onslaught uses for its per-token
+    /// sac scheduling.
+    ///
+    /// **Real test-pool consumer**: Attack-in-the-Box — Artifact
+    /// Creature — Toy ({3}, 2/4) with the attack trigger "Whenever
+    /// this creature attacks, you may have it get +4/+0 until end of
+    /// turn. If you do, sacrifice it at the beginning of the next end
+    /// step." (DSK — `data/duskmourn.json`). Composed in the parser
+    /// (`cards/parser/effects.py:3903-3912`) as
+    /// `IfYouDo(MayDo(PumpSelfUntilEOT(+4/+0)),
+    /// ScheduleSelfSacAtNextEndStep())`: `MayDo` gates the pump on
+    /// the controller's `choose_yes_no`, `IfYouDo` fires the sac
+    /// schedule only when the pump landed, and this Effect schedules
+    /// the delayed sac.
+    ///
+    /// **Multi-gated card (effect_uncovered + nonsafe_triggered_
+    /// ability).** Per the round-58 subsystem-attribution classifier,
+    /// Attack-in-the-Box is multi-gated: this Rust variant closes the
+    /// `effect_uncovered` gate (`ScheduleSelfSacAtNextEndStep` moves
+    /// from `missing_effect_classes` to covered via the 1:1
+    /// identity-mapping rule in `effect_coverage.map_rust_to_python`),
+    /// but the `nonsafe_triggered_ability` gate KEEPS the card multi-
+    /// gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is deliberately
+    /// NOT widened — same per-card probe precedent as Boilerbilges
+    /// Ripper / Friendly Teddy / Genemorph Phantom / Fanatic of the
+    /// Harrowing / Endstone Eel / Terrapact Intimidator). The card
+    /// still flips to PROBED tier through the dedicated per-card
+    /// real-EoE byte-equal cross-engine probe
+    /// (`tests/test_attack_in_the_box_parity.py`).
+    ///
+    /// **Field-free unit variant** — Python's class is a
+    /// parameterless frozen dataclass with no constructor args. Same
+    /// idiom as `SacrificeSourceDelayed` /
+    /// `BoilerbilgesRipperETBEffect` /
+    /// `FanaticOfTheHarrowingETBEffect` /
+    /// `TerrapactIntimidatorETBEffect`.
+    ///
+    /// **Resolve semantics (mirrors `ScheduleSelfSacAtNextEndStep.
+    /// resolve` at `effects/generic/delayed_actions.py:92-109`).**
+    /// 1. Read `state.current_resolve_source_controller` (the
+    ///    transient source-controller slot maintained by
+    ///    `resolve_top_of_stack`). Falls back to `state.active_player`
+    ///    when unset (sibling of every other `apply_effect` arm that
+    ///    consults this slot — `IfYouDo` / `Mill` /
+    ///    `DealDamage`/etc).
+    /// 2. Append a `DelayedTrigger { fire_at_turn: state.turn_number,
+    ///    controller_id, source_id: source_obj_id, effect:
+    ///    SacrificeSourceDelayed }` onto `state.delayed_triggers`.
+    ///    The source-id check is implicit at fire time (the drain in
+    ///    `run_delayed_end_step_triggers` re-walks all zones for the
+    ///    source; CR 603.6c — missing source silently drops the
+    ///    fire). Python's `ScheduleSelfSacAtNextEndStep.resolve`
+    ///    additionally checks `state.resolving_source is None` and
+    ///    returns False in that defensive case; Rust's
+    ///    `source_obj_id` parameter is always populated by the call
+    ///    site (the caller branches into `apply_effect` with the
+    ///    bound resolving source's id), so the defensive Python no-op
+    ///    isn't reachable — Rust schedules unconditionally with the
+    ///    supplied `source_obj_id`.
+    ///
+    /// **Composer Effect, source-id by closure.** Unlike the static
+    /// printing-trigger leaves, this Effect is INVOKED at resolve
+    /// time by the parser composition (the `IfYouDo`'s `then_action`
+    /// arm). The `source_obj_id` flows through `apply_effect`'s
+    /// per-call argument — same plumbing the parser uses for every
+    /// other resolve-time-scheduled delayed trigger.
+    ///
+    /// **No-agent harness compatibility.** Under the cross-engine
+    /// no-agent harness, the parent `MayDo(PumpSelfUntilEOT)` decides
+    /// "yes/no" via the agent-driven `choose_yes_no`. Both engines
+    /// must take the SAME branch under a deterministic harness:
+    ///   * `MayDo` no-agent default → `choose_yes_no` returns the
+    ///     deterministic auto-resolve default (sibling of
+    ///     `Effect::MayDo` arm; in Rust the
+    ///     `PendingDecision::MayDoChoice` defers to
+    ///     `auto_resolve_pending_decisions`'s default policy).
+    ///   * `IfYouDo` then-action fires iff the MayDo landed.
+    /// This Cycle 1 lands ONLY the substrate (schedule the sac when
+    /// `apply_effect` reaches this arm); the cross-engine parent-
+    /// composition byte-equal probe through the agent-driven
+    /// `IfYouDo(MayDo(...))` cluster requires the full
+    /// `submit_may_do_decision` + `submit_if_you_do_decision`
+    /// pipeline and is honest-stopped today (see `docs/
+    /// SEARCH_LIMITATIONS.md` — Attack-in-the-Box Cycle 1 entry).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "schedule_self_sac_at_next_end_step"}` (only `kind` emitted).
+    /// The bridge `_ta_dict_to_python_effect` arm at `cross_engine.py`
+    /// reconstructs `ScheduleSelfSacAtNextEndStep()`.
+    ScheduleSelfSacAtNextEndStep,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -10577,6 +10685,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "territorial_bruntar_landfall_effect" => {
             Ok(Effect::TerritorialBruntarLandfallEffect)
         }
+        // **Attack-in-the-Box Cycle 1 (2026-05-23).** Unit-variant
+        // parse arm — Python's `ScheduleSelfSacAtNextEndStep`
+        // (`effects/generic/delayed_actions.py:69`) is a parameterless
+        // frozen dataclass. Round-trip dict shape: `{"kind":
+        // "schedule_self_sac_at_next_end_step"}` (no other fields).
+        // Sibling of the `SacrificeSourceDelayed` /
+        // `BoilerbilgesRipperETBEffect` /
+        // `FanaticOfTheHarrowingETBEffect` /
+        // `TerrapactIntimidatorETBEffect` field-free unit-variant
+        // idiom.
+        "schedule_self_sac_at_next_end_step" => {
+            Ok(Effect::ScheduleSelfSacAtNextEndStep)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -12225,7 +12346,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step"
         ))),
     }
 }
@@ -15282,6 +15403,18 @@ pub(crate) fn effect_to_pydict<'py>(
         // consumes the same one-key shape.
         Effect::TerritorialBruntarLandfallEffect => {
             d.set_item("kind", "territorial_bruntar_landfall_effect")?;
+        }
+        // **Attack-in-the-Box Cycle 1 (2026-05-23).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `ScheduleSelfSacAtNextEndStep` dict
+        // shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape. The delayed-trigger
+        // effect this Effect SCHEDULES (`SacrificeSourceDelayed`) is
+        // a separate variant with its own `sacrifice_source_delayed`
+        // round-trip kind — this Effect emits only its own scheduler
+        // kind.
+        Effect::ScheduleSelfSacAtNextEndStep => {
+            d.set_item("kind", "schedule_self_sac_at_next_end_step")?;
         }
     }
     Ok(d)

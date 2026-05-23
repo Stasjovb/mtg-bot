@@ -11216,6 +11216,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # pool gate.
         from mtg_bot.effects.bespoke import TerritorialBruntarLandfallEffect
         return TerritorialBruntarLandfallEffect()
+    if kind == "schedule_self_sac_at_next_end_step":
+        # **Attack-in-the-Box Cycle 1 (2026-05-23).** Rust substrate
+        # ``Effect::ScheduleSelfSacAtNextEndStep`` (cards.rs field-free
+        # UNIT variant; parser ``"schedule_self_sac_at_next_end_step"``;
+        # resolve in state_ops_resolve.rs appends a delayed
+        # ``SacrificeSourceDelayed`` trigger onto
+        # ``state.delayed_triggers`` keyed at the current turn).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "schedule_self_sac_at_next_end_step"}``. Python's
+        # ``ScheduleSelfSacAtNextEndStep`` (effects/generic/
+        # delayed_actions.py:69) is a frozen dataclass with no
+        # constructor parameters.
+        #
+        # **Composer, not a leaf.** This Effect is a composer that
+        # SCHEDULES a delayed ``SacrificeSourceDelayed`` (the leaf is
+        # already covered+bridged from Devastating Onslaught Cycle 1).
+        # The two share the substrate one step removed: ``Schedule*``
+        # appends the delayed trigger; ``Sacrifice*`` is the trigger's
+        # body that fires at end step.
+        #
+        # **Resolve semantics.** Python's
+        # ``ScheduleSelfSacAtNextEndStep.resolve`` (effects/generic/
+        # delayed_actions.py:92-109) reads ``state.resolving_source``
+        # and appends ``state.delayed_triggers`` with a dict shape
+        # ``{"fire_at_turn": state.turn_number, "controller_id":
+        # controller_id, "source_id": source.id, "effect":
+        # SacrificeSourceDelayed()}``. Rust's resolve arm in
+        # ``state_ops_resolve.rs`` mirrors byte-equal: reads
+        # ``state.current_resolve_source_controller`` (with active-
+        # player fallback), then pushes a
+        # ``DelayedTrigger {fire_at_turn: state.turn_number,
+        # controller_id, source_id: source_obj_id, effect:
+        # Effect::SacrificeSourceDelayed}``. Both schedule for the
+        # current turn's upcoming end step — same "next end step"
+        # interpretation as Devastating Onslaught.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Attack-in-
+        # the-Box as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``ScheduleSelfSacAtNextEndStep`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-
+        # gated at the classifier level — the trajectory safe-trigger
+        # admit gate (``parity/trajectory.py::_python_ta_to_safe_dict``)
+        # is INTENTIONALLY NOT widened (per-card real-EoE probe path
+        # vs the production-deck bench admit set; same precedent as
+        # Comet Crawler / Dyadrine Attack / Mutinous Massacre /
+        # Boilerbilges Ripper / Fanatic of the Harrowing /
+        # Terrapact Intimidator).
+        #
+        # **Real test-pool consumer**: Attack-in-the-Box — Artifact
+        # Creature — Toy ({3}, 2/4) with the attack trigger "Whenever
+        # this creature attacks, you may have it get +4/+0 until end
+        # of turn. If you do, sacrifice it at the beginning of the
+        # next end step." Sourced from DSK (``data/duskmourn.json``);
+        # admitted into the active ``OracleParserCardSource``
+        # printings without any pool gate.
+        from mtg_bot.effects.generic.delayed_actions import (
+            ScheduleSelfSacAtNextEndStep,
+        )
+        return ScheduleSelfSacAtNextEndStep()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

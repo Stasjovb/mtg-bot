@@ -12468,6 +12468,147 @@ layer (despite the classifier multi-gate state staying True on
 `nonsafe_triggered_ability`).
 
 
+## Attack-in-the-Box Cycle 1 LANDED — `Effect::ScheduleSelfSacAtNextEndStep` (unit) composer Effect shipped byte-equal; attack-trigger schedules a `SacrificeSourceDelayed` delayed trigger at the current turn that drains at PHASE_END_STEP entry to sacrifice the source
+
+**Single-cycle landing (2026-05-23,
+`feature/attack-in-the-box-cycle-1-p1`).** Attack-in-the-Box — `{3}`
+Artifact Creature — Toy, 2/4 (sourced from DSK
+`data/duskmourn.json` via the active `OracleParserCardSource`). Attack
+trigger: "Whenever this creature attacks, you may have it get +4/+0
+until end of turn. If you do, sacrifice it at the beginning of the
+next end step." The parser composes the body
+(`cards/parser/effects.py:3903-3912`) as
+`IfYouDo(MayDo(PumpSelfUntilEOT(+4/+0)),
+ScheduleSelfSacAtNextEndStep())`. Mirrors Python's
+`ScheduleSelfSacAtNextEndStep` (parameterless frozen dataclass at
+`effects/generic/delayed_actions.py:69`).
+
+The single cycle composed:
+
+  1. **Rust `Effect::ScheduleSelfSacAtNextEndStep`** — field-free unit
+     variant (`rust/src/cards.rs`, the `SacrificeSourceDelayed` /
+     `BoilerbilgesRipperETBEffect` / `FanaticOfTheHarrowingETBEffect`
+     / `TerrapactIntimidatorETBEffect` Tier-A unit-variant idiom),
+     parse arm (`parse_effect` dispatcher; round-trips the bare
+     `{"kind": "schedule_self_sac_at_next_end_step"}` dict shape),
+     `to_pydict` arm (emits only `kind`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`). On resolve, append a
+     `DelayedTrigger {fire_at_turn: state.turn_number,
+     controller_id, source_id: source_obj_id, effect:
+     Effect::SacrificeSourceDelayed}` onto `state.delayed_triggers`.
+     The standard `run_delayed_end_step_triggers` machinery
+     (`state_ops_steps.rs:465`) fires the trigger at the upcoming
+     PHASE_END_STEP, which resolves into the existing
+     `Effect::SacrificeSourceDelayed` arm (landed in Devastating
+     Onslaught Cycle 1) — the source moves from battlefield to
+     controller's graveyard via the CR 400.7 reset path.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `ScheduleSelfSacAtNextEndStep()` from
+     the one-key dict shape.
+  3. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind": "schedule_self_sac_at_next_end_step"}`
+     for `ScheduleSelfSacAtNextEndStep` instances — sibling of the
+     `SacrificeSourceDelayed` leaf serializer added in Devastating
+     Onslaught Cycle 1.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `ScheduleSelfSacAtNextEndStep` — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Composer Effect, not a leaf.** The variant SCHEDULES a delayed
+`SacrificeSourceDelayed` trigger — composing the existing
+`SacrificeSourceDelayed` substrate one step removed. Same composition
+pattern Devastating Onslaught uses at
+`state_ops_resolve.rs:19105-19115` for its per-token sac scheduling.
+The leaf substrate (`SacrificeSourceDelayed`) was landed in
+Devastating Onslaught Cycle 1; Attack-in-the-Box Cycle 1 lands the
+scheduler wrapper that lets parser-composed
+`IfYouDo(MayDo(PumpSelfUntilEOT), ScheduleSelfSac...)` shapes round-
+trip through the Rust apply_effect surface.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier,
+Attack-in-the-Box is multi-gated on `effect_uncovered +
+nonsafe_triggered_ability`. The cycle closes the `effect_uncovered`
+gate (the `ScheduleSelfSacAtNextEndStep` Python class flips from
+`missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — the parent `IfYouDo(MayDo(...))` composition's
+agent-driven branching has no deterministic agent surface on Rust
+today (`submit_may_do_decision` + `submit_if_you_do_decision` are
+agent-bound), so the production-deck safe-trigger admit set has a
+separate concern from per-card real-EoE parity probes. **The card
+DOES move to PROBED tier through the dedicated per-card real-EoE
+byte-equal cross-engine probe**
+(`tests/test_attack_in_the_box_parity.py`), the same precedent as
+Comet Crawler / Mutinous Massacre / Dyadrine Attack / Boilerbilges
+Ripper / Fanatic of the Harrowing / Terrapact Intimidator
+established.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Attack-in-the-Box is an Artifact Creature, not a non-creature spell;
+the spell-card-bridge admit set (`trajectory.py::
+_python_spell_effect_to_dict` + its §2 teeth) gates non-creature
+spells only. The cross-engine probe lives in
+`tests/test_attack_in_the_box_parity.py` and uses the per-card
+dedicated parity-test module convention (cf.
+`test_boilerbilges_ripper_parity.py`,
+`test_fanatic_of_the_harrowing_parity.py`,
+`test_terrapact_intimidator_parity.py`,
+`test_comet_crawler_parity.py`, `test_dyadrine_attack.py`,
+`test_mutinous_massacre_parity.py`), driving the parsed
+Attack-in-the-Box printing through both engines on the substrate-level
+round-trip (parser leaf → trajectory dict → cross-engine bridge ↔ Rust
+schedule arm) and pinning the byte-equal observable for the schedule
++ end-step drain pipeline.
+
+**Schedule + drain composition byte-equal.** Both engines schedule a
+`SacrificeSourceDelayed` delayed trigger at resolve time keyed at the
+current turn; both engines fire that trigger at PHASE_END_STEP entry
+via the existing run_delayed_end_step_triggers machinery; both
+engines sacrifice the source from battlefield → controller's
+graveyard via the same CR 400.7 reset path. The two engines agree
+byte-equal on the WHOLE pipeline. Synthetic Rust unit pins drive the
+schedule arm directly (the parent `IfYouDo(MayDo(...))` agent-driven
+composition is honest-stopped at Cycle 1 — agent-surface widening is
+Cycle 2+ work, sibling of Boilerbilges Ripper / Terrapact
+Intimidator's no-agent gate-4 paths).
+
+**Cycle 2+ agent-surface widening.** A future cycle landing a
+deterministic auto-resolve default for Rust's
+`submit_may_do_decision` + `submit_if_you_do_decision` (the
+`PendingDecision::MayDoChoice` + `PendingDecision::IfYouDoChoice`
+arms today require explicit submit calls) will let the cross-engine
+probe drive the full parent composition through both engines and
+pin a byte-equal field-view diff over the WHOLE
+`IfYouDo(MayDo(PumpSelfUntilEOT(+4/+0)),
+ScheduleSelfSacAtNextEndStep())` body. Cycle 1 lands ONLY the
+substrate (Rust variant + parse + to_pydict + resolve + cross-engine
+bridge + per-leaf serializer + unit pins for schedule + end-step
+drain); the parent-composition byte-equal probe through the agent-
+driven cluster is honest-stopped today and pinned at the dedicated
+per-card test surface.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state_ops_resolve.rs` (resolve arm that pushes a
+`DelayedTrigger` onto `state.delayed_triggers`),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (per-leaf Python→dict serializer
+arm + narrow import), `tests/test_attack_in_the_box_parity.py`
+(probes — parser SoT pin, trajectory serializer round-trip, Rust
+to_pydict round-trip, covered-set membership, Rust schedule unit
+pin, Rust end-step drain unit pin, real-EoE byte-equal cross-engine
+probe). Per-card cycle LANDED; Attack-in-the-Box is now PROBED at
+the per-card parity layer (despite the classifier multi-gate state
+staying True on `nonsafe_triggered_ability`).
+
+
 ## Fanatic of the Harrowing Cycle 1 LANDED — `Effect::FanaticOfTheHarrowingETBEffect` (unit) Effect half shipped byte-equal; mandatory-discard each-player + controller-draw rider mirrors Python's resolve byte-equal under the hand[0] deterministic-pick convention
 
 **Single-cycle landing (2026-05-23,

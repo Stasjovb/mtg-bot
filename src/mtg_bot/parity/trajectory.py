@@ -4317,6 +4317,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.delayed_actions import (
         SacrificeSourceDelayed,
+        ScheduleSelfSacAtNextEndStep,
     )
     # **Terminal Velocity — Cycle 1 (2026-05-22).** Two new leaves for
     # the Terminal Velocity Sorcery + the LTB damage-equal-to-MV-
@@ -5206,6 +5207,20 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # leaf the pool walker observes.
         if isinstance(eff, SacrificeSourceDelayed):
             return {"kind": "sacrifice_source_delayed"}
+        # **Attack-in-the-Box Cycle 1 (2026-05-23).** Per-leaf
+        # serializer for ``ScheduleSelfSacAtNextEndStep()`` — the
+        # field-free composer dataclass at
+        # ``effects/generic/delayed_actions.py:69``. Unit-variant —
+        # emits bare ``{"kind": "schedule_self_sac_at_next_end_step"}``.
+        # Composer that SCHEDULES a ``SacrificeSourceDelayed`` delayed
+        # trigger at resolve time; the leaf already covered+bridged
+        # from Devastating Onslaught Cycle 1. Strictly for the round-
+        # trip dict-shape surface; the parser composes this into
+        # ``IfYouDo(MayDo(PumpSelfUntilEOT), ScheduleSelfSac...)`` for
+        # Attack-in-the-Box's attack trigger body
+        # (``cards/parser/effects.py:3903-3912``).
+        if isinstance(eff, ScheduleSelfSacAtNextEndStep):
+            return {"kind": "schedule_self_sac_at_next_end_step"}
         # **Terminal Velocity — Cycle 1 (2026-05-22).** Per-leaf
         # serializer for ``TerminalVelocityEffect()`` — the field-free
         # bespoke Sorcery body at ``effects/bespoke.py:3043``. The
