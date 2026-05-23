@@ -19577,6 +19577,61 @@ fn apply_effect(
                 );
             }
         }
+        // **Boilerbilges Ripper Cycle 1 (2026-05-22).** No-agent
+        // decline path — byte-equal mirror of Python's
+        // `BoilerbilgesRipperETBEffect.resolve` no-agent gate-3
+        // short-circuit (`effects/bespoke.py:2797-2805`).
+        //
+        // **Why this collapses to a silent no-op.** Python's resolve
+        // walks four gates in order:
+        //   1. Build `candidates` = other-creature-or-enchantment on
+        //      controller's bf.
+        //   2. Empty candidates → silent return (no sacrifice, no
+        //      damage).
+        //   3. `p.agent is None OR agent.choose_yes_no(...) is False`
+        //      → silent return (no sacrifice, no damage). The
+        //      `p.agent is None` arm of the `or` short-circuits FIRST
+        //      when no agent is configured — i.e. every cross-engine
+        //      probe path that drives BOTH engines with no agent
+        //      surface takes gate 3.
+        //   4. (Only reachable with a yes-agent.) Sacrifice + apply
+        //      2 damage to bound target.
+        //
+        // Since Rust's `apply_effect` has no agent surface (the
+        // agent-driven yes/no + sac-pick path is honest-stopped for
+        // Cycle 2+ — see the enum docstring), Rust ALWAYS takes the
+        // decline path. Observable parity vs Python's no-agent
+        // probe path: same (no bf change, no graveyard delta, no
+        // damage). Log strings differ between engines but are NOT in
+        // the harness's `_build_field_view` byte-equal slot set —
+        // they're a soft observable the cross-engine probe doesn't
+        // pin (the round-74 R74-3 byte-equal cleanup mapping
+        // precedent).
+        //
+        // **Cycle 2+ agent-surface widening.** When a future cycle
+        // lands a Rust agent surface, the body grows to mirror gates
+        // 3-4: ask the agent yes/no on the source's controller,
+        // pick a victim id from the eligibility-filtered list,
+        // sacrifice via the proven `OptionalSacAnotherForPumpSelfUEOT`
+        // CR 400.7 reset shape (bf-remove + zone=ZONE_GRAVEYARD +
+        // damage=0 + attached_to=None + exiled_with_source=None +
+        // LEAVES/DIES/token-cease fan-out), then apply 2 damage to
+        // `current_resolve_payload_target_id` via the proven
+        // `apply_damage_marker` substrate. Cycle 1 lands ONLY the
+        // effect_uncovered gate closure + the no-agent byte-equal
+        // mirror; gate 4 is honest-stopped today.
+        //
+        // **Gate-2 defense-in-depth (informational only).** The
+        // Python class also short-circuits at gate 2 when no
+        // candidates exist — same observable as gate 3. Both
+        // converge to "silent no-op" on the cross-engine probe,
+        // which is exactly what this empty arm produces. Adding a
+        // candidates-empty scan here would be dead code (gate 3
+        // already fires for the no-agent probe regardless of gate
+        // 2's state).
+        Effect::BoilerbilgesRipperETBEffect => {
+            // Honest-stopped no-op — see docstring.
+        }
     }
     Ok(())
 }

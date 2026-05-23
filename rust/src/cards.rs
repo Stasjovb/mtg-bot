@@ -6442,6 +6442,87 @@ pub enum Effect {
     /// Creature` per-leaf precedent for the spell-card-bridge admit
     /// flow.
     ExileTargetCreature,
+    /// **Boilerbilges Ripper Cycle 1 (2026-05-22).** Boilerbilges
+    /// Ripper `{4}{R}` 4/4 Creature — Human Assassin (DSK). ETB
+    /// trigger body: "When this creature enters, you may sacrifice
+    /// another creature or enchantment. When you do, this creature
+    /// deals 2 damage to any target." Mirrors Python's
+    /// `BoilerbilgesRipperETBEffect` (`effects/bespoke.py:2738`).
+    ///
+    /// **Multi-gated card (effect_uncovered + nonsafe_triggered_
+    /// ability).** Per the round-58 subsystem-attribution classifier,
+    /// Boilerbilges Ripper is multi-gated: this Rust variant closes
+    /// the `effect_uncovered` gate (`BoilerbilgesRipperETBEffect`
+    /// moves from `missing_effect_classes` to covered via the 1:1
+    /// identity-mapping rule in `effect_coverage.map_rust_to_python`),
+    /// but the `nonsafe_triggered_ability` gate KEEPS the card
+    /// multi-gated at the classifier level (the recognizer in
+    /// `parity/trajectory.py::_python_ta_to_safe_dict` is deliberately
+    /// NOT widened — see the safe-trigger-vs-per-card distinction the
+    /// Comet Crawler / Dyadrine Attack / Mutinous Massacre precedent
+    /// established). The card still flips to PROBED tier through the
+    /// dedicated per-card real-EoE byte-equal cross-engine probe
+    /// (`tests/test_boilerbilges_ripper_parity.py`).
+    ///
+    /// **Field-free unit variant** (the `MutinousMassacreEffect` /
+    /// `ExorciseEffect` Tier-A unit-variant idiom). The Python class
+    /// is a parameterless frozen dataclass; no constructor args. The
+    /// damage target rides through the standard
+    /// `current_resolve_payload_target_id` substrate (Boilerbilges
+    /// Ripper's ETB `requires_target() = True`, so the target slot
+    /// is bound at cast-time the same way every other targeted ETB
+    /// trigger does).
+    ///
+    /// **Resolve semantics (mirrors `BoilerbilgesRipperETBEffect.
+    /// resolve` at `effects/bespoke.py:2776-2819` byte-equal).** The
+    /// Python class walks four conditional gates:
+    ///   1. Build `candidates` = other-creature-or-enchantment on
+    ///      controller's bf (the "another" exclusion uses object id).
+    ///   2. If `candidates` is empty → log "no legal sacrifice
+    ///      candidate" → silent return (no sacrifice, no damage).
+    ///   3. If `p.agent is None OR agent.choose_yes_no(...) is False`
+    ///      → log "P{n} declines to sacrifice" → silent return (no
+    ///      sacrifice, no damage).
+    ///   4. Otherwise: agent picks a victim, `_sacrifice` it; if a
+    ///      target was bound, `_apply_damage(..., 2)` to it; else
+    ///      silent no-op on the damage leg only.
+    ///
+    /// **No-agent decline default (the cross-engine probe path).**
+    /// Both engines are driven with NO agent on the source's
+    /// controller; Python's gate-3 short-circuits to "decline" because
+    /// `p.agent is None` makes the `or` clause's left arm True. The
+    /// byte-equal mirror on the Rust side is "always decline when no
+    /// agent surface exists" — and since Rust's `apply_effect` has
+    /// no agent surface, this collapses to a silent no-op resolve arm
+    /// (gates 2+3 both produce the same observable: no bf change, no
+    /// damage). The DISTINCTION from Comet Crawler's
+    /// `OptionalSacAnotherForPumpSelfUEOT` is that Comet Crawler's
+    /// Python class defaults to "DO" when no agent (`combinators.py:
+    /// 461-462` picks `options[0]`), so its Rust mirror sacrifices the
+    /// first eligible victim deterministically; Boilerbilges Ripper's
+    /// Python class defaults to "DECLINE" when no agent, so its Rust
+    /// mirror silently no-ops. Both are byte-equal under the
+    /// no-agent probe convention.
+    ///
+    /// **Agent surface = Cycle 2+ work.** A future cycle landing a
+    /// Rust agent surface (the analog of Python's `Agent` interface)
+    /// will widen this resolve arm to the four-gate body: ask the
+    /// agent yes/no, pick a victim, sacrifice it via the CR 400.7
+    /// reset shape (the `OptionalSacAnotherForPumpSelfUEOT` sibling
+    /// arm at line ~19237 is the proven template — same bf-remove +
+    /// zone-set + LEAVES/DIES/token-cease fan-out), then apply 2
+    /// damage to the payload target id via the proven
+    /// `apply_damage_marker` substrate. This Cycle 1 lands ONLY the
+    /// effect_uncovered gate closure + the byte-equal no-agent mirror;
+    /// the agent path is honest-stopped today and pinned at the test
+    /// surface (decline path observable on BOTH engines).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "boilerbilges_ripper_etb_effect"}` (only `kind` emitted). The
+    /// bridge `_ta_dict_to_python_effect` arm at
+    /// `cross_engine.py` reconstructs `BoilerbilgesRipperETBEffect()`.
+    BoilerbilgesRipperETBEffect,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -9971,6 +10052,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // consistency convention: dict carries only `kind`.
             Ok(Effect::ExileTargetCreature)
         }
+        // **Boilerbilges Ripper Cycle 1 (2026-05-22).** Unit-variant
+        // parse arm — Python's `BoilerbilgesRipperETBEffect`
+        // (`effects/bespoke.py:2738`) is a parameterless frozen
+        // dataclass. Round-trip dict shape: `{"kind":
+        // "boilerbilges_ripper_etb_effect"}` (no other fields).
+        // Sibling of the `MutinousMassacreEffect` /
+        // `ExileTargetCreature` field-free unit-variant idiom.
+        "boilerbilges_ripper_etb_effect" => {
+            Ok(Effect::BoilerbilgesRipperETBEffect)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -11507,7 +11598,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect"
         ))),
     }
 }
@@ -14506,6 +14597,14 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "optional_sac_another_for_pump_self_ueot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        // **Boilerbilges Ripper Cycle 1 (2026-05-22).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `BoilerbilgesRipperETBEffect` dict
+        // shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape.
+        Effect::BoilerbilgesRipperETBEffect => {
+            d.set_item("kind", "boilerbilges_ripper_etb_effect")?;
         }
     }
     Ok(d)

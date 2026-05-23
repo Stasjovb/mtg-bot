@@ -10735,6 +10735,79 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             else None
         )
         return ExileTopXOfLibraryMayPlayThisTurn(amount=amount)
+    if kind == "boilerbilges_ripper_etb_effect":
+        # **Boilerbilges Ripper Cycle 1 (2026-05-22).** Rust substrate
+        # ``Effect::BoilerbilgesRipperETBEffect`` (cards.rs field-free
+        # UNIT variant; parser ``"boilerbilges_ripper_etb_effect"``;
+        # resolve in state_ops_resolve.rs as a no-agent decline silent
+        # no-op).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "boilerbilges_ripper_etb_effect"}``. Python's
+        # ``BoilerbilgesRipperETBEffect`` (effects/bespoke.py:2738) is
+        # a frozen dataclass with no constructor parameters. The
+        # damage target rides through the standard
+        # ``current_resolve_payload_target_id`` substrate (the ETB's
+        # ``requires_target() = True`` binds the target slot at
+        # cast-time the same way every other targeted ETB does).
+        #
+        # **Resolve semantics — no-agent decline byte-equal.** Python's
+        # ``BoilerbilgesRipperETBEffect.resolve`` (effects/bespoke.py:
+        # 2776-2819) walks four conditional gates:
+        #   1. Build ``candidates`` = other-creature-or-enchantment on
+        #      controller's bf.
+        #   2. Empty candidates → silent return (no sacrifice, no
+        #      damage).
+        #   3. ``p.agent is None`` OR ``agent.choose_yes_no(...)`` is
+        #      False → silent return (no sacrifice, no damage). The
+        #      ``p.agent is None`` short-circuits FIRST whenever no
+        #      agent is configured — i.e. every cross-engine probe
+        #      path that drives both engines with no agent surface
+        #      takes gate 3.
+        #   4. (Only with a yes-agent.) Sacrifice + apply 2 damage to
+        #      bound target.
+        #
+        # The cross-engine probe drives BOTH engines with no agent on
+        # the source's controller, so both take gate 3 — silent
+        # no-op, byte-equal across engines (no bf change, no
+        # graveyard delta, no damage).
+        #
+        # **DISTINCTION from Comet Crawler's
+        # ``OptionalSacAnotherForPumpSelfUEOT``.** Comet Crawler's
+        # Python class defaults to "DO" when no agent
+        # (combinators.py:461-462 picks ``options[0]``), so its Rust
+        # mirror sacrifices the first eligible victim deterministically.
+        # Boilerbilges Ripper's Python class defaults to "DECLINE"
+        # when no agent, so its Rust mirror silently no-ops. Both are
+        # byte-equal under the no-agent probe convention; the
+        # divergence is the no-agent default, not the substrate.
+        #
+        # **Multi-gated card; classifier stays multi-gated.** The
+        # round-58 subsystem-attribution classifier marks Boilerbilges
+        # Ripper as multi-gated (``effect_uncovered`` +
+        # ``nonsafe_triggered_ability``). This bridge arm closes the
+        # ``effect_uncovered`` gate at the covered-set level
+        # (``BoilerbilgesRipperETBEffect`` flips from
+        # ``missing_effect_classes`` to covered via the 1:1
+        # identity-mapping rule in
+        # ``effect_coverage.map_rust_to_python``), but the
+        # ``nonsafe_triggered_ability`` gate keeps the card multi-gated
+        # at the classifier level (``parity/trajectory.py::
+        # _python_ta_to_safe_dict`` is INTENTIONALLY NOT widened — the
+        # per-card real-EoE probe in
+        # ``tests/test_boilerbilges_ripper_parity.py`` carries the
+        # tier-flip work, not the safe-trigger admit set).
+        #
+        # **Real test-pool consumer**: Boilerbilges Ripper — Creature
+        # — Human Assassin ({4}{R}, 4/4) with the ETB trigger "When
+        # this creature enters, you may sacrifice another creature or
+        # enchantment. When you do, this creature deals 2 damage to
+        # any target." Sourced from DSK
+        # (data/duskmourn.json:17480-17502); admitted into the active
+        # ``OracleParserCardSource`` printings without any pool
+        # gate.
+        from mtg_bot.effects.bespoke import BoilerbilgesRipperETBEffect
+        return BoilerbilgesRipperETBEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

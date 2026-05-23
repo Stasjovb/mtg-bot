@@ -12266,6 +12266,206 @@ to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
 LANDED; Comet Crawler is now PROBED at the per-card parity
 layer.
 
+## Boilerbilges Ripper Cycle 1 LANDED — `Effect::BoilerbilgesRipperETBEffect` (unit) Effect half shipped byte-equal; ETB trigger no-agent decline path is silent no-op on BOTH engines
+
+**Single-cycle landing (2026-05-22,
+`feature/boilerbilges-ripper-cycle-1-p1`).** Boilerbilges Ripper —
+`{4}{R}` Creature — Human Assassin, 4/4 (sourced from DSK
+`data/duskmourn.json:17480-17502` via the active
+`OracleParserCardSource`). ETB trigger: "When this creature enters,
+you may sacrifice another creature or enchantment. When you do, this
+creature deals 2 damage to any target." Mirrors Python's
+`BoilerbilgesRipperETBEffect` (parameterless frozen dataclass at
+`effects/bespoke.py:2738`).
+
+The single cycle composed:
+
+  1. **Rust `Effect::BoilerbilgesRipperETBEffect`** — field-free unit
+     variant (`rust/src/cards.rs`, the `MutinousMassacreEffect` /
+     `ExileTargetCreature` Tier-A unit-variant idiom), parse arm
+     (`parse_effect` dispatcher; round-trips the bare `{"kind":
+     "boilerbilges_ripper_etb_effect"}` dict shape), `to_pydict`
+     arm (emits only `kind`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — an honest **silent no-op**
+     mirroring Python's no-agent gate-3 short-circuit
+     (`effects/bespoke.py:2797-2805`'s `p.agent is None OR
+     agent.choose_yes_no(...) is False → silent return`).
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `BoilerbilgesRipperETBEffect()` from
+     the one-key dict shape.
+  3. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `BoilerbilgesRipperETBEffect` — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier, Boilerbilges
+Ripper is multi-gated on `effect_uncovered + nonsafe_triggered_ability`.
+The cycle closes the `effect_uncovered` gate (the
+`BoilerbilgesRipperETBEffect` Python class flips from
+`missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit set,
+a distinct concern from per-card real-EoE parity probes. **The card
+DOES move to PROBED tier through the dedicated per-card real-EoE
+byte-equal cross-engine probe**
+(`tests/test_boilerbilges_ripper_parity.py`), the same precedent as
+Comet Crawler / Mutinous Massacre / Dyadrine Attack established.
+
+NB: the EoE-pool-scoped classifier scout doesn't surface DSK cards (the
+17lands pool data only carries EoE printings), so
+`scout_r58_subsystem_attribution.subsystem_attribution()` doesn't list
+Boilerbilges Ripper in its output dict — the dedicated parity test's
+classifier-gate assertion skips with that reason. The substrate work
+itself is unaffected; the load-bearing signal is
+`covered_python_class_set()` membership, pinned directly by
+`test_boilerbilges_ripper_class_covered_by_rust`.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Boilerbilges Ripper is a Creature, not a non-creature spell; the
+spell-card-bridge admit set (`trajectory.py::
+_python_spell_effect_to_dict` + its §2 teeth) gates non-creature
+spells only. The cross-engine probe lives in
+`tests/test_boilerbilges_ripper_parity.py` and uses the per-card
+dedicated parity-test module convention (cf. `test_comet_crawler_
+parity.py`, `test_dyadrine_attack.py`, `test_mutinous_massacre_
+parity.py`), driving the parsed Boilerbilges Ripper printing through
+both engines on a shared shape and pinning the byte-equal silent-
+decline observable.
+
+**No-agent decline default — byte-equal silent no-op mirror.**
+Python's `BoilerbilgesRipperETBEffect.resolve` (`effects/bespoke.py:
+2776-2819`) walks four conditional gates:
+
+  1. Build `candidates` = other-creature-or-enchantment on
+     controller's bf.
+  2. Empty `candidates` → silent return (no sacrifice, no damage).
+  3. `p.agent is None OR agent.choose_yes_no(...) is False` →
+     silent return (no sacrifice, no damage). The
+     `p.agent is None` arm of the `or` short-circuits FIRST whenever
+     no agent is configured.
+  4. (Only with a yes-agent.) Sacrifice victim + apply 2 damage to
+     bound target.
+
+The cross-engine probe drives BOTH engines with no agent on the
+source's controller. Python takes gate 3 (`p.agent is None` short-
+circuits); Rust's `apply_effect` has no agent surface so the resolve
+arm is an empty no-op (gates 2+3 both produce the same observable: no
+bf change, no damage). The full `compare_fields` over the harness's
+field-view tuple is empty.
+
+**DISTINCTION from Comet Crawler.** Comet Crawler's
+`OptionalSacAnotherForPumpSelfUEOT` defaults to "DO" when no agent
+(`combinators.py:461-462` picks `options[0]` and sacrifices it); its
+Rust mirror sacrifices the first eligible victim deterministically.
+Boilerbilges Ripper's `BoilerbilgesRipperETBEffect` defaults to
+"DECLINE" when no agent (gate-3 short-circuit); its Rust mirror
+silently no-ops. Both are byte-equal under the no-agent probe
+convention — the divergence is the no-agent default, not the
+substrate.
+
+**Python-side no-agent fizzle vs. Rust-side push-and-no-op.** Python's
+`push_triggered_ability` short-circuits at `controller.agent is None`
+when the effect has `min_t > 0` (BoilerbilgesRipperETBEffect's
+`requires_target() == True` → `target_count_range() == (1, 1)`). The
+trigger NEVER lands on the Python stack — it fizzles at the push site.
+Rust's `push_triggered_ability` does NOT classify
+`BoilerbilgesRipperETBEffect` as a lever (it's not in
+`lever_trigger_requires_target`'s match), so Rust pushes the trigger
+WITHOUT a target and the resolve arm fires the silent no-op. **Both
+paths produce the SAME final field-view**: Ripper on bf, fodder still
+on bf, no damage. The probe pins this end-state equivalence; the
+intermediate "stack state during play" difference is NOT in the
+byte-equal slot set (the harness's field view is positional state +
+counters, not stack-trace history).
+
+**Observable byte-equality scope.** The harness's `_build_field_view`
+8-tuple per zone object is `(printing_name, tapped, summoning_sick,
+damage, net_counters, attached_to, controller_id, id)`. The Rust
+cast-pipeline's default `summoning_sick = true` is mirrored by the
+probe's explicit `py_ripper.summoning_sick = True` on the Python side,
+preserving byte-equality. The empty-effect resolve has no other axes
+to diverge on.
+
+**Failure mode (no-agent decline)**: the optional sacrifice never
+fires, so the 2-damage rider never fires. Strategy-wise the trigger
+"does nothing" on the no-agent probe path; this is acceptable for
+parity (both engines do nothing identically) but a strategic agent
+would want to weigh whether to sacrifice fodder for damage.
+
+**Fix scope estimate**: seat a real strategic agent surface on Rust
+(the same campaign-wide "no-callback first-legal-target convention"
+gap as Comet Crawler / Tier-C target-seating). Cycle 2+ work; widens
+the resolve arm to mirror gates 3-4 — ask the agent yes/no, pick a
+victim, sacrifice via the proven `OptionalSacAnotherForPumpSelfUEOT`
+CR 400.7 reset shape, then apply 2 damage to
+`current_resolve_payload_target_id` via the proven
+`apply_damage_marker` substrate.
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Boilerbilges Ripper from Effect-uncovered (BLOCKED at the
+covered-set layer) to Effect-covered (COVERED) at the Rust-Effect-
+coverage layer; PROBED at the per-card cross-engine parity layer via
+the dedicated probe module. Pool reach: 1 DSK card (Boilerbilges
+Ripper itself) — not in the EoE-pool classifier's count, so the
+roadmap doc's pool-parity headline counts are unaffected; the
+parity-doc covered/PROBED tier counts grow by one Python class.
+
+**Honest-stops noted (NOT in this cycle's scope):**
+
+  * **Rust agent surface (gate-4 sacrifice + damage path).** The
+    Cycle 1 resolve arm is a silent no-op; the yes-agent
+    sacrifice-and-damage path (Python's gate 4) is honest-stopped
+    pending a Rust agent surface (the same broader "first-legal-
+    target convention" gap). A Cycle 2+ agent landing widens the
+    Rust arm to the four-gate body using the proven
+    `OptionalSacAnotherForPumpSelfUEOT` sacrifice shape +
+    `apply_damage_marker` target-damage substrate.
+
+  * **Production-deck bench admit set (full-card cross-engine bench
+    play).** The trajectory safe-trigger gate
+    (`_python_ta_to_safe_dict`) widening to admit Boilerbilges
+    Ripper into the bench-admit set requires:
+      - a recognizer arm for the optional-sac-then-damage shape (no
+        EoE printing emits a sibling today — Boilerbilges Ripper
+        is the lone shape carrier), AND
+      - a seat-time fodder pick + a seat-time damage-target pick
+        on Rust's `push_triggered_ability` (TWO seat-time decisions
+        — distinct from Comet Crawler's single first-eligible
+        fodder pick), AND
+      - bridge arms for any sibling effects (today there are none).
+    Out of scope for this single-cycle per-card probe; the
+    nonsafe_triggered_ability gate stays open at the classifier
+    after this cycle.
+
+  * **Boilerbilges Ripper itself is a DSK card (not EoE).** The
+    EoE-pool-scoped classifier doesn't surface DSK cards (the
+    17lands pool data is EoE-only). The `effect_uncovered` gate
+    closure for `BoilerbilgesRipperETBEffect` IS the substrate
+    deliverable — pinned by `covered_python_class_set()`
+    membership; the classifier's `missing_effect_classes` empty-
+    array signal is observable only if a future cycle extends the
+    classifier to walk a broader pool than EoE.
+
+**Coverage**: 3 Rust resolve-arm unit pins + 1 parser SoT pin +
+2 serializer round-trip pins + 1 covered-set pin + 1 classifier
+skip-or-pin + 1 GENUINE real-EoE cross-engine probe = 9 tests at
+`tests/test_boilerbilges_ripper_parity.py`. 8 pass + 1 informative
+skip (the classifier doesn't surface DSK cards) on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state_ops_resolve.rs` (silent-no-op resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`tests/test_boilerbilges_ripper_parity.py` (probes). Per-card cycle
+LANDED; Boilerbilges Ripper is now PROBED at the per-card parity
+layer (despite the classifier multi-gate state staying True on
+`nonsafe_triggered_ability`).
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,
