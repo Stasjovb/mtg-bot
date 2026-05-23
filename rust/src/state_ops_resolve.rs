@@ -12462,6 +12462,119 @@ fn apply_effect(
         Effect::OptionalPutLandFromHandOntoBattlefield => {
             // Honest-stopped no-op — see docstring.
         }
+        // **Osseous Sticktwister Cycle 1 (2026-05-23).** Mirrors Python's
+        // `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage.resolve`
+        // (`effects/generic/opponent_punishers.py:254-336`) on the no-
+        // agent default — every non-controller, non-`has_lost` opponent
+        // is treated as non-compliant ("decline") and takes damage
+        // equal to `effective_power(source)`.
+        //
+        // **Why the no-agent default is byte-equal-trivially-
+        // determinable.** Python's loop short-circuits at line 270-273
+        // with `if opp.agent is None: non_compliant.append(opp.id);
+        // continue`. Rust has no agent surface in `apply_effect`, so
+        // every opponent is on the non-compliant path. The damage
+        // delivery on the non-compliant set is the entire observable —
+        // no zone moves (sac would mint a graveyard add; discard would
+        // do the same), no `fire_opponent_discards_triggers` fan-out.
+        // Mirrors the established `OptionalPutLandFromHandOntoBattle-
+        // field` / `Burgeoning` no-agent decline precedent, with a
+        // damage write on the non-compliant side rather than a silent
+        // no-op.
+        //
+        // **Resolve steps (mirror Python no-agent default).**
+        //   1. Source-controller resolution: 5-zone walk + stack scan
+        //      (same source-finder shape as `ArabellaAttackEffect` /
+        //      `OptionalPutLandFromHandOntoBattlefield` /
+        //      `FanaticOfTheHarrowingETBEffect`). Source not found
+        //      anywhere = silent fizzle (mirrors Python's
+        //      `state.resolving_source is None: return`).
+        //   2. Read `x = read_famished_source_power(source_obj_id)` —
+        //      the same X-source helper Hemosymbic Mite + Ouroboroid
+        //      use. Returns the source's effective power; non-creature
+        //      / source-untrackable → 0.
+        //   3. If `x <= 0`, silent return (mirrors Python's
+        //      `damage = max(0, effective_power(state, source)); if
+        //      damage <= 0: return` short-circuit at line 328-330).
+        //   4. For each player whose index != source-controller AND
+        //      `!has_lost`, subtract `x` from their `life`. Mirrors
+        //      Python's `_apply_damage(state, ("player", opp.id),
+        //      damage)` on the "player" kind which resolves to a
+        //      `life -= damage` write on the `Player` slot.
+        //      Direct `life -= x` matches the sibling
+        //      `Effect::DamageEachOpponent` / `Effect::DealDamage` /
+        //      `Effect::ArabellaAttackEffect` shape (no fan-out
+        //      through a damage-trigger observer; the harness byte-
+        //      equal compare is on life deltas + zone state, not the
+        //      soft trigger chain).
+        //
+        // **No agent surface required for byte-equal under the cross-
+        // engine no-agent probe convention.** Both engines drive the
+        // resolve with no agent → both apply the same non-compliant
+        // damage write to every opponent. Fully deterministic — no
+        // target pick, no `PendingDecision`, no RNG.
+        //
+        // **Cycle 2+ widening.** When Rust grows an `apply_effect`
+        // agent surface, the body extends to mirror Python's full
+        // resolve: per-opponent build the legal-modes list from sac
+        // candidates (`battlefield where controller == opp && !land`)
+        // + hand cards, call `agent.choose_mode`, branch into sac /
+        // discard / decline. Cycle 1 ships ONLY the no-agent default
+        // — same honest-stop pattern as Boilerbilges Ripper /
+        // Burgeoning agent-driven branches.
+        Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage => {
+            // 1. Source-controller resolution: 5-zone walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'osseous_src: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'osseous_src;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // 2. Read X = source's CURRENT effective power.
+            let x = read_famished_source_power(state, source_obj_id);
+            // 3. x <= 0 → silent return (no damage applied).
+            if x <= 0 {
+                return Ok(());
+            }
+            // 4. For each non-controller, non-has_lost player → take x
+            //    damage. Direct `life -= x` mirrors the sibling
+            //    `Effect::ArabellaAttackEffect` / `Effect::DamageEach-
+            //    Opponent` / `Effect::DealDamage` shape.
+            let n_players = state.players.len();
+            for opp_idx in 0..n_players {
+                if opp_idx == controller_idx {
+                    continue;
+                }
+                if state.players[opp_idx].has_lost {
+                    continue;
+                }
+                state.players[opp_idx].life -= x;
+            }
+        }
         // Round-28 single-target counter add. Rayblade-Trooper-shape:
         // pick the FIRST creature on source-controller's bf and add
         // `amount` to its `counters` scalar. Empty bf or no eligible

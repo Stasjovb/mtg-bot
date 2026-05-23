@@ -2841,6 +2841,70 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             OptionalPutLandFromHandOntoBattlefield,
         )
         return OptionalPutLandFromHandOntoBattlefield()
+    if kind == "each_opponent_sacs_or_discards_or_takes_source_power_damage":
+        # **Osseous Sticktwister Cycle 1 (2026-05-23).** Rust's field-free
+        # ``Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage``
+        # round-trips to Python's
+        # ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()``
+        # parameterless dataclass at
+        # ``effects/generic/opponent_punishers.py:221``. Unit variant —
+        # no fields; extra dict keys are silently ignored (round-49
+        # unit-variant convention; sibling of the
+        # ``optional_put_land_from_hand_onto_battlefield`` /
+        # ``pump_target_other_creature_by_x_over_x_where_x_is_source_power``
+        # / ``arabella_attack_effect`` bridge arms — all four are field-
+        # free dataclasses where any dynamic surface (target choice,
+        # X-source read, per-opponent decline default) is intrinsic to
+        # the class).
+        #
+        # **Real EoE/DSK consumer.** Osseous Sticktwister ``{1}{B}``
+        # Artifact Creature — Scarecrow, 2/2 (DSK 112). Lifelink +
+        # Delirium-gated end-step triggered ability body: "At the
+        # beginning of your end step, if there are four or more card
+        # types among cards in your graveyard, each opponent may
+        # sacrifice a nonland permanent of their choice or discard a
+        # card. Then this creature deals damage equal to its power to
+        # each opponent who didn't sacrifice a permanent or discard a
+        # card this way." The parser at
+        # ``cards/parser/effects.py:3956-3962`` maps the literal post-
+        # Delirium-strip body to
+        # ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()``.
+        #
+        # **No-agent default = byte-equal "decline" damage write.**
+        # Both engines: walk per-opponent in turn order; under the
+        # cross-engine no-agent probe convention, Python's
+        # ``if opp.agent is None: non_compliant.append(opp.id);
+        # continue`` short-circuit (line 270-273) treats every opponent
+        # as decline; the post-loop damage step writes
+        # ``effective_power(source)`` damage to each non-compliant
+        # opponent's life. Rust's apply_effect arm walks the same set
+        # and writes the same ``life -= x`` per opponent. Both
+        # observably match (zero opp-side zone moves, byte-identical
+        # life deltas). **DISTINCTION from ``optional_put_land_from_
+        # hand_onto_battlefield`` (Burgeoning)**: Burgeoning's no-agent
+        # default is silent no-op; Osseous Sticktwister's no-agent
+        # default is "decline" → take source-power damage. Both bridge
+        # dict→Python arms hand the engine a parameterless dataclass;
+        # the divergence is the no-agent observable, not the
+        # substrate.
+        #
+        # **Per-card probe path.** Osseous Sticktwister's parsed
+        # trigger event is ``BEGINNING_OF_END_STEP`` — NOT in
+        # ``_python_ta_to_safe_dict``'s ENTERS/DIES/ATTACKS/
+        # BECOMES_TAPPED safe set. The card therefore does NOT admit
+        # through the production-deck bench's safe-trigger gate; per-
+        # card byte-equal cross-engine parity is exercised via the
+        # dedicated probe in ``tests/test_osseous_sticktwister_parity
+        # .py`` (the PROBED tier flip anchor). Same precedent as
+        # Burgeoning / Hemosymbic Mite / The Endstone / Boilerbilges
+        # Ripper / Arabella Abandoned Doll — multi-gated card;
+        # classifier's ``effect_uncovered`` gate closes via the new
+        # Rust variant + this bridge arm;
+        # ``nonsafe_triggered_ability`` stays True intentionally.
+        from mtg_bot.effects.generic.opponent_punishers import (
+            EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,
+        )
+        return EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()
     if kind == "return_creature_from_your_graveyard_to_battlefield":
         # "Return target creature card from your graveyard to the
         # battlefield." Sister-arm to

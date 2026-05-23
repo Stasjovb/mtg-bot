@@ -3551,6 +3551,101 @@ pub enum Effect {
     /// `cross_engine.py` reconstructs
     /// `OptionalPutLandFromHandOntoBattlefield()`.
     OptionalPutLandFromHandOntoBattlefield,
+    /// **Osseous Sticktwister Cycle 1 (2026-05-23) —
+    /// `Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`.**
+    /// Per-opponent independent-choice primitive: each opponent picks
+    /// among (sacrifice a nonland permanent, discard a card, decline);
+    /// opponents who declined OR had no legal sac/discard option take
+    /// damage equal to the source's effective power. Mirrors Python's
+    /// `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()`
+    /// parameterless frozen dataclass at
+    /// `effects/generic/opponent_punishers.py:221`. Real EoE/DSK consumer:
+    /// Osseous Sticktwister `{1}{B}` Artifact Creature — Scarecrow 2/2
+    /// (DSK 112). Printed trigger body (post-Delirium-gate-strip):
+    /// "each opponent may sacrifice a nonland permanent of their choice
+    /// or discard a card. Then this creature deals damage equal to its
+    /// power to each opponent who didn't sacrifice a permanent or
+    /// discard a card this way."
+    ///
+    /// **Field-free unit variant.** The per-opponent three-mode shape
+    /// + source-power damage formula is intrinsic — no static fields.
+    /// Sibling of `OptionalPutLandFromHandOntoBattlefield` /
+    /// `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` /
+    /// `ArabellaAttackEffect` (round-72+ pattern: parameterless
+    /// dataclass on the Python side; field-free Rust unit variant).
+    ///
+    /// **No-agent default — "decline" → takes source-power damage.**
+    /// Python's `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage.
+    /// resolve` (`effects/generic/opponent_punishers.py:254-336`) walks
+    /// per-opponent in `state.players` order. For each non-controller,
+    /// non-`has_lost` opponent: if `opp.agent is None`, the opponent
+    /// is recorded as non-compliant ("decline" path) and takes damage
+    /// equal to `effective_power(source)` at the end of the loop
+    /// (line 270-273: `if opp.agent is None: non_compliant.append(
+    /// opp.id); continue`). This is the byte-equal-trivially-
+    /// determinable no-agent default: same shape as
+    /// `OptionalPutLandFromHandOntoBattlefield`'s explicit
+    /// `chosen_id = None` else-branch + gate-4 return, but with a
+    /// damage delivery on the non-compliant side rather than a
+    /// silent no-op.
+    ///
+    /// **Resolve semantics (Rust mirror of Python no-agent default).**
+    ///   1. Source-controller resolution: 5-zone walk + stack scan
+    ///      (same source-finder shape as `ArabellaAttackEffect` /
+    ///      `OptionalPutLandFromHandOntoBattlefield`). Source not
+    ///      found anywhere = silent fizzle.
+    ///   2. Read `x = effective_power(source)` via
+    ///      `read_famished_source_power` (same X-source helper the
+    ///      sibling Hemosymbic Mite / Ouroboroid arms use). For
+    ///      Osseous Sticktwister this is the printed `power: 2`
+    ///      unless layered to a different value.
+    ///   3. For each player whose index != source-controller, skip
+    ///      `has_lost` players, then:
+    ///        - On Rust (no agent surface), every opponent takes the
+    ///          "decline" path → subtract `x` from `life` (mirrors
+    ///          Python's `_apply_damage(state, ("player", opp.id), x)`
+    ///          which on the "player" kind resolves to
+    ///          `state.players[idx].life -= x` modulo replacement
+    ///          effects; the Rust mirror writes `life` directly,
+    ///          matching the established `Effect::DamageEachOpponent`
+    ///          / `Effect::DealDamage` / `ArabellaAttackEffect`
+    ///          precedent).
+    ///   4. If `x <= 0` (e.g. layered to 0 power), no damage applied
+    ///      (mirrors Python's `if damage <= 0: return` short-circuit
+    ///      at line 329).
+    ///
+    /// **Cycle 2+ agent-surface widening.** When a future cycle lands
+    /// a Rust agent surface, the body grows to mirror Python's full
+    /// resolve: per-opponent `choose_mode` → branch into sac /
+    /// discard / decline; on sac, `choose_sacrifice` picks a victim
+    /// from controller's nonland permanents and the standard sac
+    /// pipeline fires; on discard, `choose_discard` picks a hand
+    /// card and `fire_opponent_discards_triggers` runs. Cycle 1
+    /// lands ONLY the `effect_uncovered` gate closure + the no-agent
+    /// byte-equal mirror; the yes-agent sac/discard branches are
+    /// honest-stopped today. Same shape as Boilerbilges Ripper /
+    /// Burgeoning / Optional-Sac agent-driven arms — campaign-wide
+    /// blocker is the missing Rust `apply_effect` agent surface.
+    ///
+    /// **Delirium gate-fire path not 1-cycle accessible.** Osseous
+    /// Sticktwister's actual trigger fires "At the beginning of your
+    /// end step, if there are four or more card types among cards in
+    /// your graveyard, ...". The Delirium predicate
+    /// (`StateBound(Delirium())`) and the BEGINNING_OF_END_STEP event
+    /// are not in Rust's `Event` enum + `Predicate` registry today;
+    /// the Effect substrate ships portable independent of the trigger-
+    /// fire dispatch (the classifier-bypass per-card probe pattern,
+    /// cf. Burgeoning / Hemosymbic Mite / The Endstone / Boilerbilges
+    /// Ripper, covers the PROBED tier flip directly on the Effect
+    /// class).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. Round-trip dict-shape: `{"kind":
+    /// "each_opponent_sacs_or_discards_or_takes_source_power_damage"}`
+    /// (only `kind` emitted). The bridge `_ta_dict_to_python_effect`
+    /// arm at `cross_engine.py` reconstructs
+    /// `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()`.
+    EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on a target creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnCreatureYouControl(amount: int = 1)`
@@ -11312,6 +11407,21 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // `BoilerbilgesRipperETBEffect` sibling).
             Ok(Effect::OptionalPutLandFromHandOntoBattlefield)
         }
+        "each_opponent_sacs_or_discards_or_takes_source_power_damage" => {
+            // **Osseous Sticktwister Cycle 1 (2026-05-23).** Field-free
+            // unit variant — the per-opponent three-mode shape +
+            // source-power damage formula is intrinsic; no static
+            // fields. Mirrors Python's
+            // `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()`
+            // parameterless dataclass at
+            // `effects/generic/opponent_punishers.py:221`. Extra dict
+            // keys are silently ignored for round-trip dict-shape
+            // consistency (round-49 unit-variant precedent;
+            // `OptionalPutLandFromHandOntoBattlefield` /
+            // `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` /
+            // `ArabellaAttackEffect` siblings).
+            Ok(Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage)
+        }
         "put_card_from_graveyard_on_bottom_of_library" => {
             // Unit variant; no fields.
             Ok(Effect::PutCardFromGraveyardOnBottomOfLibrary)
@@ -15691,6 +15801,22 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "optional_put_land_from_hand_onto_battlefield",
+            )?;
+        }
+        Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage => {
+            // **Osseous Sticktwister Cycle 1 (2026-05-23).** Unit
+            // variant; no payload fields beyond `kind`. The per-
+            // opponent three-mode shape + source-power damage formula
+            // is intrinsic. Mirrors Python's
+            // `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`
+            // parameterless dataclass dict shape. No other keys
+            // emitted — same unit-variant convention as
+            // `OptionalPutLandFromHandOntoBattlefield` /
+            // `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` /
+            // `ArabellaAttackEffect`.
+            d.set_item(
+                "kind",
+                "each_opponent_sacs_or_discards_or_takes_source_power_damage",
             )?;
         }
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {

@@ -13342,6 +13342,140 @@ drives both engines no-agent so the byte-equal observable holds
 on the decline path; the agent-yes path is unreachable from the
 probe today.
 
+## Osseous Sticktwister Cycle 1 LANDED — `Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage` (unit) per-opponent three-mode-choice + conditional source-power damage Effect class shipped byte-equal at the no-agent decline-default surface; agent-driven sac/discard branches honest-stopped for Cycle 2+
+
+**Single-cycle landing (2026-05-23,
+`feature/osseous-sticktwister-cycle-1-p1`).** Osseous Sticktwister —
+`{1}{B}` Artifact Creature — Scarecrow, 2/2 (DSK 112; sourced from
+`data/duskmourn.json` via the active `OracleParserCardSource`).
+Printed Delirium-gated end-step trigger body (post-gate-strip):
+"each opponent may sacrifice a nonland permanent of their choice or
+discard a card. Then this creature deals damage equal to its power
+to each opponent who didn't sacrifice a permanent or discard a card
+this way." The parser maps the literal post-gate-strip body
+(`cards/parser/effects.py:3956-3962`) to
+`EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()`. Mirrors
+Python's parameterless frozen dataclass at
+`effects/generic/opponent_punishers.py:221`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`**
+     — field-free unit variant (`rust/src/cards.rs`), parse arm
+     (`parse_effect` dispatcher; round-trips the bare
+     `{"kind": "each_opponent_sacs_or_discards_or_takes_source_
+     power_damage"}` dict shape), `to_pydict` arm (emits only
+     `kind`), and resolve arm in `rust/src/state_ops_resolve.rs`
+     that is a byte-equal mirror of Python's no-agent default —
+     every non-controller, non-`has_lost` opponent takes
+     `effective_power(source)` damage via a direct `life -= x`
+     write. Mirrors Python's `if opp.agent is None:
+     non_compliant.append(opp.id); continue` short-circuit at
+     `effects/generic/opponent_punishers.py:270-273` chained with
+     the post-loop `_apply_damage(state, ("player", opp.id),
+     damage)` step at line 331-335.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python
+     `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()` from
+     the one-key dict shape.
+  3. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind":
+     "each_opponent_sacs_or_discards_or_takes_source_power_damage"}`
+     for `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`
+     instances — sibling of the Burgeoning / Hemosymbic Mite /
+     Arabella field-free unit-variant leaf serializers.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `EachOpponentSacsOrDiscardsOrTakesSourcePower-
+     Damage` — closes the `effect_uncovered` classifier gate at
+     the covered-set level.
+
+**No-agent default = "decline" → source-power damage write.**
+Python's `EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage.resolve`
+walks per-opponent in turn order. For each non-controller,
+non-`has_lost` opponent:
+
+  1. `if opp.agent is None: non_compliant.append(opp.id); continue`
+     (line 270-273). This is the no-agent default short-circuit.
+  2. Else (yes-agent path; honest-stopped on Rust for Cycle 1):
+     build modes list (sac / discard / decline based on legality),
+     call `opp.agent.choose_mode`, branch into `sac` / `discard` /
+     `decline`. On sac, `choose_sacrifice` picks a victim from
+     controller's nonland permanents and the standard sac pipeline
+     fires; on discard, `choose_discard` picks a hand card and
+     `fire_opponent_discards_triggers` runs; on decline, the
+     opponent is added to `non_compliant`.
+  3. After the loop, for each player in `non_compliant`:
+     `damage = max(0, effective_power(state, source)); if damage
+     <= 0: return; _apply_damage(state, ("player", opp.id),
+     damage)`.
+
+**DISTINCTION from `OptionalPutLandFromHandOntoBattlefield`
+(Burgeoning).** Burgeoning's no-agent default is silent no-op
+(gate-4 `chosen_id is None` return);
+`EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage`'s no-agent
+default is "decline" → take source-power damage. Both effect
+substrates are field-free unit variants — the observable
+divergence is the no-agent default, not the schema. Same shape as
+the Comet Crawler `OptionalSacAnotherForPumpSelfUEOT` no-agent
+"DO" default precedent (each unit variant has its own no-agent
+contract — silent / decline-with-damage / DO).
+
+**BEGINNING_OF_END_STEP trigger-fire + Delirium-predicate paths
+not 1-cycle accessible (honest-stop).** Rust has no
+`Event::BeginningOfEndStep` chokepoint and no Delirium-predicate
+registry today — the Python event `Event.BEGINNING_OF_END_STEP`
+fires through the end-step dispatch in `turn.py` with no Rust
+analog; the `StateBound(Delirium())` predicate is anded onto the
+trigger at parse time and gates the trigger-fire (CR 702.xx
+"Delirium — Four or more card types..."). The Effect substrate
+ships portable independent of the trigger-fire + predicate-gate
+dispatch — the classifier-bypass per-card probe pattern (cf.
+Burgeoning / Hemosymbic Mite / The Endstone / Arabella Abandoned
+Doll) covers the PROBED tier flip directly on the Effect class
+without needing the upstream event dispatch or predicate
+registry. Both the BEGINNING_OF_END_STEP event substrate and the
+Delirium predicate substrate are separate cycles and are
+honest-stopped today.
+
+**Multi-gated card; classifier multi-gate state stays True after
+the cycle.** Per the round-58 subsystem-attribution classifier,
+Osseous Sticktwister is multi-gated on
+`effect_uncovered + nonsafe_triggered_ability`. The cycle closes
+the `effect_uncovered` gate (the
+`EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage` Python class
+flips from `missing_effect_classes` to covered). The
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit
+set, a distinct concern from per-card real-EoE parity probes (the
+BEGINNING_OF_END_STEP event is not in the ENTERS/DIES/ATTACKS/
+BECOMES_TAPPED safe set anyway). **The card DOES move to PROBED
+tier through the dedicated per-card real-EoE byte-equal cross-
+engine probe** (`tests/test_osseous_sticktwister_parity.py`), the
+same precedent as Burgeoning / Comet Crawler / Mutinous Massacre /
+Dyadrine Attack / Fanatic of the Harrowing / Terrapact Intimidator
+/ Attack-in-the-Box / Hemosymbic Mite / Arabella Abandoned Doll /
+The Endstone established.
+
+**Documented residual — agent-driven sac / discard branches
+honest-stopped.** Cycle 1 lands ONLY the `effect_uncovered` gate
+closure + the no-agent byte-equal mirror. The yes-agent path
+(`effects/generic/opponent_punishers.py:274-323` — `choose_mode`,
+`choose_sacrifice`, `choose_discard`, the sac + discard pipelines,
+the `fire_opponent_discards_triggers` fan-out) is honest-stopped
+on the Rust side today; the agent surface for Rust's `apply_effect`
+is the campaign-wide blocker (cf. Burgeoning / Boilerbilges
+Ripper / Optional-Sac / Optional-Mana-Cost agent-driven arms —
+all share the same deferred-Cycle-2+ pattern). The cross-engine
+probe convention drives both engines no-agent so the byte-equal
+observable holds on the decline+damage path; the agent-yes sac /
+discard branches are unreachable from the probe today.
+
 ## Hemosymbic Mite Cycle 1 LANDED — `Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` (unit) X-source single-target +X/+X UEOT Effect shipped byte-equal; becomes-tapped trigger reads X = effective_power(source) at resolve time and applies +X/+X UEOT to another target creature you control
 
 **Single-cycle landing (2026-05-23,

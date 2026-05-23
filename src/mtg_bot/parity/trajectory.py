@@ -4358,6 +4358,19 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.combinators import (
         OptionalPutLandFromHandOntoBattlefield,
     )
+    # **Osseous Sticktwister Cycle 1 (2026-05-23).** Per-leaf serializer
+    # import for ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()``
+    # — the field-free per-opponent three-mode-choice + conditional
+    # source-power damage primitive for Osseous Sticktwister's
+    # Delirium-gated end-step trigger. Unit-variant sibling of the
+    # ``OptionalPutLandFromHandOntoBattlefield`` /
+    # ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`` /
+    # ``ArabellaAttackEffect`` field-free serializers — the per-
+    # opponent loop + sac/discard/decline branching + source-power
+    # damage formula is intrinsic; no static fields to thread.
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,
+    )
     # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer for
     # ``DrawCardsEqualToResolvingCounterAmount()`` — the field-free
     # counter-amount sibling of
@@ -5403,6 +5416,28 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         ):
             return {
                 "kind": "optional_put_land_from_hand_onto_battlefield",
+            }
+        # **Osseous Sticktwister Cycle 1 (2026-05-23).** Per-leaf
+        # serializer for
+        # ``EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage()`` — the
+        # field-free per-opponent three-mode-choice + conditional
+        # source-power damage primitive for Osseous Sticktwister's
+        # Delirium-gated end-step trigger. Unit-variant — emits the
+        # bare ``{"kind": "each_opponent_sacs_or_discards_or_takes_
+        # source_power_damage"}`` (no static fields; the per-opponent
+        # loop + sac/discard/decline branching + source-power damage
+        # formula is intrinsic). Sibling of
+        # ``OptionalPutLandFromHandOntoBattlefield`` /
+        # ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`` /
+        # ``ArabellaAttackEffect`` field-free serializers.
+        if isinstance(
+            eff, EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage
+        ):
+            return {
+                "kind": (
+                    "each_opponent_sacs_or_discards_or_takes_"
+                    "source_power_damage"
+                ),
             }
         # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer
         # for ``DrawCardsEqualToResolvingCounterAmount()`` — the
