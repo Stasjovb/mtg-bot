@@ -12358,6 +12358,57 @@ fn apply_effect(
                 }
             }
         }
+        // **Hemosymbic Mite Cycle 1 (2026-05-23) — +X/+X UEOT to
+        // ANOTHER target creature you control, where X is the source's
+        // effective power.** Mirrors Python's
+        // `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower.resolve`
+        // (`effects/generic/pump.py:152`) STEP-FOR-STEP:
+        //   source = state.resolving_source           (Rust: source_obj_id)
+        //   if source is None: return                  (read returns 0 → x<=0 no-op)
+        //   x = effective_power(state, source)         (read_famished_source_power)
+        //   if x <= 0: return
+        //   target = pick from controller's bf where id != source.id
+        //   if no target: return
+        //   grant_pt_pump_ueot(power=x, toughness=x)   (UeotModifier::PowerToughnessBonus)
+        // The X-source read uses `read_famished_source_power` — same
+        // helper as the sibling Ouroboroid arm + the documented byte-
+        // equality with Python's `effective_power`. The target pick
+        // uses `perigee_pick_another_own_creature` — the established
+        // "ANOTHER target creature you control" first-eligible-on-
+        // controller's-bf helper from the Perigee Beckoner ETB
+        // (round-60 substrate). UEOT pump is the same
+        // `UeotModifier::PowerToughnessBonus { power: x, toughness: x }`
+        // shape `PumpTargetCreatureUntilEOT` uses.
+        Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower => {
+            // Read X = source's CURRENT effective power. Source off-bf
+            // → 0 (matches Python's `if source is None: return` short-
+            // circuit chained with `if x <= 0: return`).
+            let x = read_famished_source_power(state, source_obj_id);
+            if x <= 0 {
+                return Ok(());
+            }
+            // Pick ANOTHER creature on the source-controller's bf
+            // (CR 115.4 "another" — exclude source.id). Empty / only-
+            // self own-bf → silent fizzle (Python's non-optional
+            // `if not targets: return`).
+            let Some((cidx, target_id)) =
+                perigee_pick_another_own_creature(state, source_obj_id)
+            else {
+                return Ok(());
+            };
+            // Push the +X/+X UEOT pump onto the chosen target.
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: x,
+                        toughness: x,
+                    });
+                    break;
+                }
+            }
+        }
         // Round-28 single-target counter add. Rayblade-Trooper-shape:
         // pick the FIRST creature on source-controller's bf and add
         // `amount` to its `counters` scalar. Empty bf or no eligible

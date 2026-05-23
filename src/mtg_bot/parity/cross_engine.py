@@ -2762,6 +2762,46 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
         )
         return PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower()
+    if kind == "pump_target_other_creature_by_x_over_x_where_x_is_source_power":
+        # **Hemosymbic Mite Cycle 1 (2026-05-23).** Rust's field-free
+        # ``Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower``
+        # round-trips to Python's
+        # ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()``
+        # parameterless dataclass at
+        # ``effects/generic/pump.py:127``. Unit variant — no fields;
+        # extra dict keys are silently ignored (round-49 unit-variant
+        # convention; sibling of the Ouroboroid
+        # ``put_plus_one_counters_on_each_creature_you_control_equal_
+        # to_source_power`` bridge arm — both are field-free X-source
+        # variants where X is read at resolve time from the source's
+        # effective power).
+        #
+        # **Real EoE consumer.** Hemosymbic Mite ``{G}`` Creature —
+        # Mite, 1/1 (EoE 190). Becomes-tapped triggered ability body:
+        # "Whenever this creature becomes tapped, another target
+        # creature you control gets +X/+X until end of turn, where X
+        # is this creature's power." The parser at
+        # ``cards/parser/effects.py:6248-6251`` maps the literal oracle
+        # line to ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()``.
+        #
+        # **Schedule + resolve composition.** Both engines: read x =
+        # effective_power(source) at resolve time; if x <= 0 silent
+        # no-op; otherwise pick a creature the source's controller
+        # controls (excluding the source itself — CR 115.4
+        # "another") and apply a +X/+X UEOT pump (Rust:
+        # ``UeotModifier::PowerToughnessBonus``; Python:
+        # ``grant_pt_pump_ueot``). The Rust arm's first-eligible-on-
+        # controller's-bf target pick mirrors the established
+        # ``PumpTargetCreatureUntilEOT`` / Perigee Beckoner shape; the
+        # Python arm uses the targets tuple from
+        # ``state.resolving_targets``. Both observably match in 2-
+        # player games where each engine builds its determinization
+        # from the same printed state (the documented picker
+        # asymmetry inherited from ``PumpTargetCreatureUntilEOT``).
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+        )
+        return PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()
     if kind == "return_creature_from_your_graveyard_to_battlefield":
         # "Return target creature card from your graveyard to the
         # battlefield." Sister-arm to

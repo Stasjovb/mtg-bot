@@ -3439,6 +3439,53 @@ pub enum Effect {
     /// Ouroboroid has a Loading Zone or Terrasymbiosis on the
     /// battlefield in the probed shapes.
     PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
+    /// **Hemosymbic Mite Cycle 1 (2026-05-23) —
+    /// `Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`.**
+    /// Another target creature the source's controller controls gets
+    /// +X/+X until end of turn, where X is the source's effective power.
+    /// Mirrors Python's `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower
+    /// ()` field-free dataclass at `effects/generic/pump.py:127`. Real
+    /// EoE consumer: Hemosymbic Mite `{G}` Creature — Mite, 1/1
+    /// (EoE 190). Becomes-tapped trigger body: "Whenever this creature
+    /// becomes tapped, another target creature you control gets +X/+X
+    /// until end of turn, where X is this creature's power."
+    ///
+    /// **Field-free unit variant.** X is dynamic (read at resolve time
+    /// from the source's effective power) and the "another target
+    /// creature you control" target-shape is the variant's intrinsic
+    /// shape. Sibling of the Ouroboroid `PutPlusOneCountersOnEachCreature
+    /// YouControlEqualToSourcePower` field-free X-source variant — same
+    /// pattern: X-read composed into the resolve arm; no static fields.
+    ///
+    /// **Mechanism.** Read `x = read_famished_source_power(state,
+    /// source_obj_id)` (the existing helper composing
+    /// `base + ueot_power_bonus + obj.counters` — byte-equal to Python's
+    /// `effective_power` = `_compute_effective_pt`). If `x <= 0` silent
+    /// no-op (mirrors Python's `if x <= 0: return`). Pick the FIRST
+    /// creature on the source-controller's battlefield whose id is NOT
+    /// `source_obj_id` (CR 115.4 "another" — exclude self; mirrors
+    /// Python's `legal_targets` excluding `state.resolving_source`).
+    /// Push `UeotModifier::PowerToughnessBonus { power: x, toughness: x
+    /// }` onto the chosen target's `ueot_modifiers` Vec — the same
+    /// UEOT pump representation `PumpTargetCreatureUntilEOT` /
+    /// `PumpTargetCreatureUntilEotGrantDiesReturnTapped` use.
+    ///
+    /// **Source-controller resolution.** Mirrors
+    /// `Effect::PumpTargetCreatureUntilEOT` and the Perigee Beckoner
+    /// "another"-target helper `perigee_pick_another_own_creature` —
+    /// 5-zone scan for `source_obj_id` returning the source's
+    /// `controller`. Source untrackable → silent fizzle (Python's
+    /// `if source is None: return`).
+    ///
+    /// **Documented residual (SEARCH_LIMITATIONS).** First-creature-on-
+    /// the-controller's-bf target pick (deterministic insertion order)
+    /// vs. Python's `targets[0]` from a target picker that depends on
+    /// the seated agent's `choose_target`. Both observably match the
+    /// "another target creature you control" surface in 2-player games
+    /// where each engine builds its determinization from the same
+    /// printed state; the picker asymmetry is the same documented
+    /// residual the bare `PumpTargetCreatureUntilEOT` arm carries.
+    PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on a target creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnCreatureYouControl(amount: int = 1)`
@@ -11023,6 +11070,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
             )
         }
+        "pump_target_other_creature_by_x_over_x_where_x_is_source_power" => {
+            // **Hemosymbic Mite Cycle 1 (2026-05-23).** Field-free unit
+            // variant — X is read at resolve time from the source's
+            // effective power; no static fields. Mirrors Python's
+            // `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()`
+            // parameterless dataclass at `effects/generic/pump.py:127`.
+            // Extra dict keys are silently ignored for round-trip
+            // dict-shape consistency (round-49 unit-variant precedent).
+            Ok(
+                Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+            )
+        }
         "put_card_from_graveyard_on_bottom_of_library" => {
             // Unit variant; no fields.
             Ok(Effect::PutCardFromGraveyardOnBottomOfLibrary)
@@ -15339,6 +15398,21 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "put_plus_one_counters_on_each_creature_you_control_equal_to_source_power",
+            )?;
+        }
+        Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower => {
+            // **Hemosymbic Mite Cycle 1 (2026-05-23).** Unit variant;
+            // no payload fields beyond `kind`. X is dynamic — read at
+            // resolve time from the source's effective power; the
+            // "another target creature you control" target shape is
+            // intrinsic. Mirrors Python's
+            // `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`
+            // parameterless dataclass dict shape. No other keys
+            // emitted — same unit-variant convention as Ouroboroid's
+            // mass-counter sibling.
+            d.set_item(
+                "kind",
+                "pump_target_other_creature_by_x_over_x_where_x_is_source_power",
             )?;
         }
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {

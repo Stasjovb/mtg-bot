@@ -13029,6 +13029,123 @@ the classifier multi-gate state staying True on
 `nonsafe_triggered_ability`).
 
 
+## Hemosymbic Mite Cycle 1 LANDED — `Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` (unit) X-source single-target +X/+X UEOT Effect shipped byte-equal; becomes-tapped trigger reads X = effective_power(source) at resolve time and applies +X/+X UEOT to another target creature you control
+
+**Single-cycle landing (2026-05-23,
+`feature/hemosymbic-mite-cycle-1-p1`).** Hemosymbic Mite — `{G}`
+Creature — Mite, 1/1 (sourced from EoE `data/edge_of_eternities.json`
+via the active `OracleParserCardSource`). Becomes-tapped trigger:
+"Whenever this creature becomes tapped, another target creature you
+control gets +X/+X until end of turn, where X is this creature's
+power." The parser maps the literal oracle line
+(`cards/parser/effects.py:6248-6251`) to
+`PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()`. Mirrors
+Python's parameterless frozen dataclass at
+`effects/generic/pump.py:127`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`**
+     — field-free unit variant (`rust/src/cards.rs`), parse arm
+     (`parse_effect` dispatcher; round-trips the bare
+     `{"kind": "pump_target_other_creature_by_x_over_x_where_x_is_
+     source_power"}` dict shape), `to_pydict` arm (emits only `kind`),
+     and resolve arm (`rust/src/state_ops_resolve.rs`). On resolve,
+     reads X via the existing `read_famished_source_power` helper
+     (the same `base + ueot_power_bonus + obj.counters` composition
+     the Ouroboroid Cycle 1 sibling uses, byte-equal to Python's
+     `effective_power`), picks another own creature via the
+     established `perigee_pick_another_own_creature` helper (CR 115.4
+     "another" — exclude `source_obj_id`; first-eligible-on-
+     controller's-bf), then pushes a
+     `UeotModifier::PowerToughnessBonus { power: x, toughness: x }`
+     onto the chosen target's `ueot_modifiers` Vec — the same UEOT
+     pump representation `PumpTargetCreatureUntilEOT` /
+     `PumpTargetCreatureUntilEotGrantDiesReturnTapped` use.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python
+     `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()` from the
+     one-key dict shape.
+  3. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind": "pump_target_other_creature_by_x_over_
+     x_where_x_is_source_power"}` for
+     `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` instances —
+     sibling of the Ouroboroid mass-counter unit-variant leaf
+     serializer.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `PumpTargetOtherCreatureByXOverXWhereXIsSourcePower`
+     — closes the `effect_uncovered` classifier gate at the covered-
+     set level.
+
+**X-source effect, not a static-amount sibling.** Where
+`PumpTargetCreatureUntilEOT(power_bonus, toughness_bonus)` carries
+the +P/+T bonuses as parsed fields, the Hemosymbic Mite variant reads
+X dynamically from the source's effective power AT RESOLVE TIME via
+the established `read_famished_source_power` helper. Source off-
+battlefield → 0 (matches Python's `if source is None: return` short-
+circuit chained with `if x <= 0: return`). x <= 0 → silent no-op. The
+pump is symmetric (+X/+X — same X on both power and toughness),
+which is what the printed oracle text says.
+
+**BECOMES_TAPPED event substrate — already-landed campaign-wide
+closure.** The cycle's effect substrate composes ON TOP of the
+already-landed BECOMES_TAPPED event bridge (round-58 N1). Rust's
+`Event::BecomesTapped` variant + the canonical `turn.tap_permanent`
+dispatch sites in `state_ops_resolve.rs` / `state_ops_actions.rs` /
+`state_ops_mana.rs` / `state_ops_combat.rs` / `state_ops_decisions.rs`
+/ `state_ops_cast.rs` fire `dispatch_event(Event::BecomesTapped,
+obj_id)` at every Python-side `Event.BECOMES_TAPPED` chokepoint —
+no new event-substrate plumbing was required. Closing this card
+also closes one of the two BECOMES_TAPPED-gated effect substrates in
+the EoE pool (the other being Swarm Culler).
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier,
+Hemosymbic Mite is multi-gated on `effect_uncovered +
+becomes_tapped_event + nonsafe_triggered_ability`. The cycle closes
+the `effect_uncovered` gate (the
+`PumpTargetOtherCreatureByXOverXWhereXIsSourcePower` Python class
+flips from `missing_effect_classes` to covered) and the
+`becomes_tapped_event` gate was already closed campaign-wide by
+round-58 N1. The `nonsafe_triggered_ability` gate KEEPS the card
+multi-gated at the classifier level. The trajectory safe-trigger
+admit gate (`parity/trajectory.py::_python_ta_to_safe_dict`) is
+INTENTIONALLY NOT widened — that gate is about the production-deck
+bench admit set, a distinct concern from per-card real-EoE parity
+probes. **The card DOES move to PROBED tier through the dedicated
+per-card real-EoE byte-equal cross-engine probe**
+(`tests/test_hemosymbic_mite_parity.py`), the same precedent as
+Ouroboroid / Comet Crawler / Mutinous Massacre / Dyadrine Attack /
+Boilerbilges Ripper / Fanatic of the Harrowing / Terrapact
+Intimidator / Attack-in-the-Box established.
+
+**Documented residual — first-eligible target pick.** The Rust arm
+picks the FIRST creature (smallest battlefield Vec index) on the
+source-controller's bf whose id is not `source_obj_id`. Python's
+resolve consumes a `targets` tuple set up by the seated agent's
+`choose_target` against `legal_targets`. In 2-player games where
+each engine builds its determinization from the same printed state,
+both observably match. This is the same picker-asymmetry residual
+the bare `PumpTargetCreatureUntilEOT` arm carries (round-17 slice
+established convention).
+
+**Cycle 1 scope caveat — full trigger-fan-out probe deferred.** The
+substrate cycle lands the Effect class + parse / resolve / bridge /
+serializer surface. The full real-EoE BECOMES_TAPPED trigger-fan-out
+byte-equal probe through both engines' `turn.tap_permanent`
+machinery (Python fires the trigger via the priority loop's TA-
+dispatch; Rust fires via the `dispatch_event` chokepoint + the
+pushed-onto-stack trigger) requires per-engine coordination of the
+trigger-pushed-onto-stack timing for target seating — that broader
+probe is honest-stopped at Cycle 1; the substrate-level dict round-
+trip + the Rust resolve-arm unit pins carry the byte-equal observable
+directly. Same scope as Ouroboroid Cycle 1's beginning-of-combat-on-
+your-turn trigger.
+
 ## Ouroboroid Cycle 1 LANDED — `Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower` (unit) X-source mass-counter Effect shipped byte-equal; beginning-of-combat-on-your-turn trigger reads X = effective_power(source) at resolve time and spreads +X counters to each controlled creature
 
 **Single-cycle landing (2026-05-23,

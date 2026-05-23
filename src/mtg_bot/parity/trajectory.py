@@ -4331,6 +4331,17 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.counters import (
         PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     )
+    # **Hemosymbic Mite Cycle 1 (2026-05-23).** Per-leaf serializer for
+    # ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()`` — the
+    # field-free X-source pump for Hemosymbic Mite's becomes-tapped
+    # trigger body ("another target creature you control gets +X/+X
+    # until end of turn, where X is this creature's power"). Unit-
+    # variant sibling of the Ouroboroid mass-counter equivalent — both
+    # are field-free X-source variants where X is read at resolve time
+    # from the source's effective power.
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetOtherCreatureByXOverXWhereXIsSourcePower,
+    )
     # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer for
     # ``DrawCardsEqualToResolvingCounterAmount()`` — the field-free
     # counter-amount sibling of
@@ -5305,6 +5316,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": (
                     "put_plus_one_counters_on_each_creature_you_"
                     "control_equal_to_source_power"
+                ),
+            }
+        # **Hemosymbic Mite Cycle 1 (2026-05-23).** Per-leaf serializer
+        # for ``PumpTargetOtherCreatureByXOverXWhereXIsSourcePower()``
+        # — the field-free +X/+X UEOT pump body for Hemosymbic Mite's
+        # becomes-tapped trigger. Unit-variant — emits the bare
+        # ``{"kind": "pump_target_other_creature_by_x_over_x_where_x_
+        # is_source_power"}``. X is dynamic (read at resolve time from
+        # the source's effective power), so there are no static fields
+        # to thread; both engines compose the X-read into their
+        # resolve arms (Rust: ``read_famished_source_power``; Python:
+        # ``effective_power``).
+        if isinstance(
+            eff, PumpTargetOtherCreatureByXOverXWhereXIsSourcePower
+        ):
+            return {
+                "kind": (
+                    "pump_target_other_creature_by_x_over_x_where_"
+                    "x_is_source_power"
                 ),
             }
         # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer
