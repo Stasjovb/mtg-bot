@@ -11257,6 +11257,88 @@ This honest-stop documents the verify-first findings + revised
 knows what was already walked and can skip the inventory-
 mismatch surprise.
 
+#### Re-dispatch verify-first (2026-05-23, `feature/singularity-rupture-cycle-1-p2`)
+
+A re-dispatch lane on a fresh worktree off main HEAD `3e9eb260`
+walked the codebase a second time to confirm whether the C1
+substrate gap closed in the meantime or whether the C2-only path
+could ship anything measurable. Findings:
+
+* **`StackItem.target_player_ids` field — STILL ABSENT.** Verify-
+  first grep (`target_player_ids|current_resolve_target_player
+  _ids`) across `rust/src/` returns zero hits on
+  `3e9eb260`. The only existing multi-pick precedent on the
+  StackItem is `chosen_mode_idxs: Option<Vec<u8>>` (modal
+  spell mode-set carrier, Scour-for-Scrap or_both substrate at
+  `rust/src/state.rs:1286`); the player-target-list field the
+  Singularity Rupture closure needs has not been added.
+* **`GameState.current_resolve_target_player_ids` transient —
+  STILL ABSENT.** Same verify-first grep on
+  `rust/src/state.rs` returns zero hits. The cast-time
+  multi-pick arm in `cast_spell_noncreature` (the analog of
+  the `is_seedship_impact` / `is_emergency_eject` / `is_focus_
+  fire` Effect-shape-discriminator branches at
+  `rust/src/state_ops_cast.rs:2086-2147`) is also absent.
+* **Phase-3 admit predicate — UNCHANGED.** The wrath admit shape
+  at `src/mtg_bot/parity/trajectory.py:5954` still gates on
+  `(min_t, max_t) == (0, 0) and not slot_kinds and not
+  getattr(printing, "targets", ())`. Singularity Rupture's
+  live `(0, 8)` shape (constant 8 per
+  `src/mtg_bot/effects/bespoke.py:1616-1621`'s explicit
+  "We pick 8 to cover any plausible multiplayer pod size"
+  comment) does not fit Phase 3, 4, or 5 — every existing
+  phase positively declines it.
+* **Python `SingularityRuptureEffect` class — UNCHANGED.** The
+  live class at `src/mtg_bot/effects/bespoke.py:1599-1673` is
+  byte-identical to the C1 verify-first inspection: bespoke
+  unified wrath+mill (NOT a `Sequence` composition), `(0, 8)`
+  shape, controller-inclusive `legal_targets`, floor-divide
+  mill direction.
+
+**C2-only path is not 1-cycle accessible.** Adding
+`Effect::SingularityRuptureEffect` Rust variant + parse +
+to_pydict + bridge + resolve arm without the C1 substrate would:
+
+1. Compile and pass Rust unit pins that drive resolve directly
+   (synthetic-test harness, no cross-engine path).
+2. Round-trip the dict through serializer + bridge (the unit-
+   variant pattern is well-trodden — `ZeroPointBalladEffect` /
+   `MutinousMassacreEffect` / `BeyondTheQuietEffect` precedents).
+3. **Stay DECLINED at the spell-card-bridge admit gate** because
+   `(0, 8)` shape ≠ any existing phase. The cross-engine probe
+   would never reach the resolve arm via a Python-cast → Rust-
+   replay trajectory — there is no covered+bridged path for a
+   `(0, 8)` player-target spell.
+4. Yield **zero PROBED count change** (Singularity Rupture stays
+   in the DECLINED set; no other EoE card has this shape).
+
+The brief explicitly authorized this honest-stop escape valve:
+"if it has a different target shape (e.g. up-to-K players
+targeted), it may need a new admit-set arm OR honest-stop on
+the admit side." The `(0, 8)` shape is exactly that case.
+
+**Re-dispatch lane decision (`feature/singularity-rupture-
+cycle-1-p2`, 2026-05-23)**: HONEST-STOP, docs-only re-
+confirmation; no Rust changes, no test additions, no PROBED
+flip. The C1-substrate-first ordering (per the cycle-1-p1
+honest-stop) is the only sequence that lands measurable
+progress. Future lanes attempting Singularity Rupture should
+land C1 (the StackItem.target_player_ids field + GameState
+transient + cast-time multi-pick arm + every `new_spell_*`
+constructor signature widened — ~200-300 LoC of pure substrate)
+as a named dedicated lane FIRST. The C2 (Effect variant) and C3
+(Phase-6 admit widen + bridge + serializer leaf + probe) land
+on top of that substrate; both produce measurable progress only
+after C1 ships.
+
+**Concurrent-agent coordination check.** Two sibling closure
+agents were running concurrently at re-dispatch time (Blade of
+the Swarm + Archenemy's Charm). The Singularity Rupture
+cycle-1-p2 work touched no Rust Effect variants, no cross-engine
+bridge arms, no serializer leaves, no parser recognizers — the
+docs-only honest-stop is conflict-free with both sibling lanes
+by construction.
+
 ### Lane decision
 
 All 3 candidates require multi-cycle subsystem work — none is a
