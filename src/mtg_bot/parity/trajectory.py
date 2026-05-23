@@ -1970,6 +1970,53 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # creature``), which this slice CONVERTS from reject to admit —
     # the exact round-37 DDDD / round-44 sister-precedent pattern.
     ("dies", "source_is_self", "draw_cards"),
+    # **Friendly Teddy Cycle 1 (2026-05-22)** — DIES+IsSelf+
+    # ``each_player_draws``. Admits **Friendly Teddy** (Duskmourn —
+    # Artifact Creature — Bear Toy, ``{2}``, 2/2: "When this creature
+    # dies, each player draws a card."). The bridge round-trips the
+    # ``EachPlayerDraws(amount=1)`` leaf via the new
+    # ``each_player_draws`` cross_engine bridge arm + Rust
+    # ``Effect::EachPlayerDraws { count }`` variant. The cross-engine
+    # contract:
+    #
+    #   * DIES event dispatch: already proven byte-equal under
+    #     ``draw_cards`` (round-47 sister) / ``gain_life`` (round-47)
+    #     / ``surveil`` (round-42) leaves. Both engines fire the
+    #     DIES-event triggered ability after the bf -> graveyard
+    #     move; the resolve runs deterministically with no
+    #     PendingDecision / agent setup (every player draws
+    #     unconditionally — no per-player choice).
+    #   * ``each_player_draws`` leaf: bridge arm at
+    #     ``cross_engine._ta_dict_to_python_effect``
+    #     ("each_player_draws") + Python ``EachPlayerDraws(amount:
+    #     int)`` (``effects/generic/draw_mill.py:230``). Rust
+    #     ``Effect::EachPlayerDraws { count: i32 }`` resolves
+    #     deterministically on both engines via APNAP iteration
+    #     (active player FIRST, then mod-wraparound) skipping
+    #     ``has_lost`` players, drawing ``count`` cards per non-lost
+    #     player. NO source-controller lookup needed (every player
+    #     draws regardless of who controls the source).
+    #
+    # **Cross-engine default-strategy contract.** Identical to the
+    # sibling DIES+IsSelf+draw_cards / gain_life entries: no agent
+    # setup needed for the trajectory walk. The post-triggered-
+    # ability path drains the deterministic EachPlayerDraws resolve
+    # in lockstep on both engines because the effect mutates state
+    # via pure library-top pops with no PendingDecision queue
+    # interaction.
+    #
+    # **Friendly Teddy is from Duskmourn (DSK), not EoE.** The
+    # admit-flip lands the bench-substrate for any future EoE
+    # printing carrying the DIES+IsSelf+each_player_draws shape
+    # (the "When ~ dies, each player draws a card" oracle pattern
+    # is broadly used across MTG history — Howling Mine-style
+    # symmetric draw effects); no EoE consumer is admitted on this
+    # leaf today, but the per-card cross-engine probe at
+    # ``tests/test_friendly_teddy_parity.py`` drives the real
+    # Friendly Teddy DSK printing through both engines end-to-end,
+    # mirroring the Comet Crawler / Mutinous Massacre per-card
+    # parity-test module convention.
+    ("dies", "source_is_self", "each_player_draws"),
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
@@ -2525,6 +2572,24 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # ``granted_keywords``). The recognizer in
     # :func:`_python_ta_to_safe_dict` gates this whitelist.
     "mill": frozenset({"kind", "count"}),
+    # **Friendly Teddy Cycle 1 (2026-05-22)** — ``each_player_draws``
+    # bare-shape: single ``count`` payload key. Rust's
+    # ``Effect::EachPlayerDraws { count: i32 }``
+    # (rust/src/cards.rs) is bare: every non-lost player draws
+    # ``count`` cards in APNAP order. Python's
+    # ``EachPlayerDraws(amount: int)``
+    # (``effects/generic/draw_mill.py:230``) is the matched class;
+    # its single ``amount`` field round-trips to Rust's ``count``
+    # spelling via the new ``each_player_draws`` bridge arm
+    # (``cross_engine.py``, this slice — same ``count``/``amount``
+    # spelling discrepancy as the established ``draw_cards`` /
+    # ``each_opponent_mills_cards`` / ``mill`` arms). The bare
+    # ``count`` payload is the only field on either side — no
+    # rider the bridge would silently drop (unlike Surveil's
+    # ``use_artifact_count`` or PumpSelf's ``granted_keywords``).
+    # The recognizer in :func:`_python_ta_to_safe_dict` gates this
+    # whitelist.
+    "each_player_draws": frozenset({"kind", "count"}),
     # PutPlusOneCounterOnSelf — single ``amount`` payload key
     # (round-59 N1, the sole remaining Seedship Agrarian blocker).
     # Rust's ``Effect::PutPlusOneCounterOnSelf { amount: i32 }``
@@ -3058,7 +3123,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         PutPlusOneCounterOnOpponentsCreature,
         PutPlusOneCounterOnSelf,
     )
-    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.draw_mill import DrawCards, EachPlayerDraws
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import (
         Scry,
@@ -3223,9 +3288,25 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # under any event), so this is a single-line widen + the
             # paired ``("dies","source_is_self","create_token")``
             # ``_SAFE_TRIGGERS`` entry.
+            # Friendly Teddy Cycle 1 (2026-05-22) extends the
+            # DIES+IsSelf leaf set with ``each_player_draws`` — the
+            # bare-shape "When ~ dies, each player draws a card"
+            # oracle pattern. Friendly Teddy (DSK) is the first
+            # admitted carrier; broadly pre-positions the substrate
+            # for any future EoE / standard-format printing carrying
+            # the same dies+each-player-draws shape. The bridge arm
+            # at ``cross_engine._ta_dict_to_python_effect``
+            # ("each_player_draws") + Rust
+            # ``Effect::EachPlayerDraws { count }`` (this slice) +
+            # the dict-shape gate
+            # (``_SAFE_EFFECT_KEYS["each_player_draws"] =
+            # {"kind","count"}`` above) close the cross-engine
+            # round-trip, so this leaf composes deterministically
+            # under DIES with no PendingDecision setup.
             safe_effect_kinds = (
                 "surveil", "gain_life", "draw_cards",
                 "create_token", "create_token_tapped",
+                "each_player_draws",
             )
         else:
             # Event.BECOMES_TAPPED (round-58 N1 — the BECOMES_TAPPED
@@ -3309,6 +3390,26 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     if isinstance(eff, DrawCards):
         eff_kind = "draw_cards"
         eff_dict: dict = {"kind": "draw_cards", "count": int(eff.amount)}
+    elif isinstance(eff, EachPlayerDraws):
+        # **Friendly Teddy Cycle 1 (2026-05-22)** — bare-shape
+        # ``EachPlayerDraws``. Python's class
+        # (``effects/generic/draw_mill.py:230``) carries a SINGLE
+        # ``amount`` field — no rider the bridge would silently drop
+        # (contrast Surveil's ``use_artifact_count`` or PumpSelf's
+        # ``granted_keywords``). The dict shape uses Rust's spelling
+        # ``count`` per the ``each_player_draws`` cross_engine
+        # bridge arm convention (sibling of ``draw_cards`` /
+        # ``each_opponent_mills_cards`` / ``mill`` — same
+        # ``amount``/``count`` field-name discrepancy local to the
+        # bridge translation). The recipient is ALWAYS every
+        # non-lost player (no target picker on either side; the
+        # APNAP iteration order is structural to the resolve arm,
+        # not a payload field). Negative amount is rejected by the
+        # Rust parse arm (mirrors the variant invariant); amount==0
+        # is a silent no-op on both engines (inner draw loop runs
+        # zero times per player).
+        eff_kind = "each_player_draws"
+        eff_dict = {"kind": "each_player_draws", "count": int(eff.amount)}
     elif isinstance(eff, GainLife):
         eff_kind = "gain_life"
         eff_dict = {"kind": "gain_life", "amount": int(eff.amount)}

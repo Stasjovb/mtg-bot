@@ -5072,6 +5072,59 @@ pub enum Effect {
     /// **Source not found anywhere** → silent fizzle (mirrors
     /// EachOpponentDiscards / EachOpponentMillsCards).
     EachOpponentSacrificesCreature,
+    /// **Friendly Teddy Cycle 1 Effect half (2026-05-22).** Each player
+    /// (including the source's controller) draws `count` card(s).
+    /// Mirrors Python's `EachPlayerDraws(amount: int)`
+    /// (`effects/generic/draw_mill.py:230`) — the "each player draws a
+    /// card" oracle shape on Friendly Teddy ("When this creature
+    /// dies, each player draws a card.", Duskmourn — Artifact Creature
+    /// — Bear Toy, ~9k+ 17lands decks across DSK).
+    ///
+    /// **Iteration order (byte-equality-critical).** Python's resolve
+    /// walks `state.players` starting at `state.active_player_idx` and
+    /// wrapping mod `len(state.players)`:
+    ///
+    /// ```python
+    /// for i in range(len(state.players)):
+    ///     idx = (state.active_player_idx + i) % len(state.players)
+    ///     p = state.players[idx]
+    ///     if p.has_lost:
+    ///         continue
+    ///     draw_n_cards(state, p.id, self.amount)
+    /// ```
+    ///
+    /// The Rust resolve arm mirrors this exact APNAP-style order
+    /// (`state.active_player + 0`, then `+ 1` mod 2 in the two-player
+    /// engine), drawing `count` cards from each non-lost player's
+    /// library top in turn. This matters for byte-equality when an
+    /// intermediate empty-library event would flag one player before
+    /// the other draws.
+    ///
+    /// **Empty library.** Python's `draw_card` sets `has_lost = True`
+    /// on the drawing player and stops popping; the Rust resolve arm
+    /// mirrors this via the existing `attempted_draw_on_empty` flag
+    /// (same flag the bare `Effect::DrawCards` arm sets — CR 704.5b).
+    /// In the cross-engine probe both libraries are sized large
+    /// enough that this gate is a structural no-op; pinned by the
+    /// unit-test reserved for the empty-library subcase.
+    ///
+    /// **`has_lost` skip.** A player whose `has_lost` flag is true
+    /// (already-conceded / poisoned-out / decked) does NOT draw — the
+    /// loop continues to the next player. Two-player engine: a lost
+    /// player ends the game, so in practice the gate fires only
+    /// transiently inside a single resolve under exotic state setups.
+    ///
+    /// **Negative `count` raises.** `count=0` is a legal no-op (every
+    /// player "draws zero cards" — the resolve loop runs but each
+    /// inner `n` is 0). Missing `count` defaults to 1 (Python class
+    /// default).
+    ///
+    /// **Source-controller independence.** Unlike `EachOpponent*`
+    /// siblings the resolve does NOT need to find the source's
+    /// controller — every player draws regardless, so the source-
+    /// untrackable case never fizzles. The arm reads only
+    /// `state.active_player` for ordering.
+    EachPlayerDraws { count: i32 },
     /// **Round 28 grant-keyword-UEOT family.** Target creature gains a
     /// keyword until end of turn. Mirrors Python's
     /// `GrantUnblockableUEOT` (3+ EoE cards) and forward-compatibly
@@ -10707,6 +10760,33 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentMillsCards { count })
         }
+        "each_player_draws" => {
+            // Python's `EachPlayerDraws(amount: int)` dataclass
+            // (`effects/generic/draw_mill.py:230`). Field-name
+            // translation `count` <-> `amount` lives at the bridge
+            // arm; here we read the Rust-side spelling `count` per
+            // the convention shared with `each_opponent_mills_cards`
+            // / `mill` / `draw_cards`. Missing `count` defaults to 1
+            // (mirrors `EachOpponentMillsCards` default and matches
+            // Python's `EachPlayerDraws` "amount=1 is the only
+            // printed shape today" semantics — Friendly Teddy emits
+            // `EachPlayerDraws(amount=1)` exactly). Negative count
+            // raises.
+            let count: i32 = match dict.get_item("count")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "each_player_draws.count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "each_player_draws: count must be non-negative, got {count}"
+                )));
+            }
+            Ok(Effect::EachPlayerDraws { count })
+        }
         "exile_each_opponents_graveyard" => {
             // Python's `ExileEachOpponentsGraveyard` dataclass —
             // field-free unit effect (exile.py:260). No keys to read.
@@ -14293,6 +14373,10 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::EachOpponentMillsCards { count } => {
             d.set_item("kind", "each_opponent_mills_cards")?;
+            d.set_item("count", *count)?;
+        }
+        Effect::EachPlayerDraws { count } => {
+            d.set_item("kind", "each_player_draws")?;
             d.set_item("count", *count)?;
         }
         Effect::ExileEachOpponentsGraveyard => {

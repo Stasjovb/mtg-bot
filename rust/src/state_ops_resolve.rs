@@ -17472,6 +17472,87 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             }
         }
+        Effect::EachPlayerDraws { count } => {
+            // **Friendly Teddy Cycle 1 — `EachPlayerDraws` resolve.**
+            // Mirrors Python's
+            // `effects/generic/draw_mill.py:233-248`:
+            //
+            // ```python
+            // for i in range(len(state.players)):
+            //     idx = (state.active_player_idx + i) % len(state.players)
+            //     p = state.players[idx]
+            //     if p.has_lost:
+            //         continue
+            //     draw_n_cards(state, p.id, self.amount)
+            // ```
+            //
+            // Iteration order is byte-equality-critical: active player
+            // FIRST, then mod-wraparound. The two-player engine
+            // collapses this to `state.active_player` then
+            // `1 - state.active_player`. NO source-controller lookup
+            // is needed (unlike the `EachOpponent*` siblings) — every
+            // player draws regardless of who controls the source, so
+            // the source-untrackable fizzle case never fires.
+            //
+            // **Empty library:** mirrors Python's `draw_card` (which
+            // sets `has_lost=True` on empty draw and stops) AND the
+            // bare `Effect::DrawCards` arm (which sets
+            // `attempted_draw_on_empty=true`). The
+            // `attempted_draw_on_empty` flag is the Rust-side
+            // canonical CR 704.5b signal — same flag the bare
+            // `Effect::DrawCards` resolve at state_ops_resolve.rs:2274
+            // sets; the SBA pass / `losers()` reader picks it up
+            // identically for both arms.
+            //
+            // **`has_lost` skip:** a previously-conceded player does
+            // not draw — the loop continues to the next player.
+            // Two-player engine: a lost player ends the game, so the
+            // gate fires only transiently inside a single resolve
+            // under exotic state setups.
+            //
+            // **`count < 0` is a defensive guard** (parse arm
+            // rejects negative; the variant invariant matches but the
+            // defensive raise keeps the resolve arm self-contained).
+            // **`count == 0` is a no-op** (the inner draw loop runs
+            // zero times for each player).
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachPlayerDraws count must be non-negative, got {count}"
+                )));
+            }
+            let n_players = state.players.len();
+            let active = state.active_player as usize;
+            let n = *count as usize;
+            for i in 0..n_players {
+                let idx = (active + i) % n_players;
+                // Skip already-lost players (mirrors Python's
+                // `if p.has_lost: continue`).
+                if state.players[idx].has_lost {
+                    continue;
+                }
+                // Inline draw loop — same shape as
+                // `Effect::DrawCards` resolve above. Reads each
+                // player's library by index instead of via the
+                // current_resolve_source_controller fallback because
+                // EACH player draws regardless of which one is the
+                // source's controller.
+                for _ in 0..n {
+                    let player = &mut state.players[idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    if lib.is_empty() {
+                        // CR 704.5b — empty-library draw flags the
+                        // player. Same signal the bare DrawCards arm
+                        // sets so SBA / `losers()` observes parity.
+                        player.attempted_draw_on_empty = true;
+                        break;
+                    }
+                    // Post-CE3: top of library = lib[0].
+                    let mut obj = lib.remove(0);
+                    obj.zone = ZONE_HAND;
+                    Arc::make_mut(&mut player.hand).push(obj);
+                }
+            }
+        }
         Effect::ExileEachOpponentsGraveyard => {
             // Structural twin of EachOpponentMillsCards: same
             // source-controller finder (battlefield/hand/library/

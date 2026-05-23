@@ -2425,6 +2425,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return EachOpponentMillsCards(
             amount=eff_dict.get("count", 1),
         )
+    if kind == "each_player_draws":
+        # **Friendly Teddy Cycle 1 bridge arm (2026-05-22).** "Each
+        # player draws N cards." Sister arm to
+        # ``each_opponent_mills_cards`` -- untargeted, per-player
+        # loop, but INCLUDES the source's controller (unlike the
+        # ``each_opponent_*`` family that only walks opponents).
+        # Rust's ``Effect::EachPlayerDraws { count }`` (cards.rs)
+        # carries one ``count: i32`` field; the parse arm requires
+        # a non-negative integer and defaults missing ``count`` to
+        # 1. The resolve arm at ``state_ops_resolve.rs`` mirrors
+        # Python's APNAP-style iteration: walk
+        # ``range(len(state.players))`` starting at
+        # ``state.active_player_idx`` mod-wrapping, skip
+        # ``has_lost`` players, draw ``count`` cards per non-lost
+        # player via the ``Effect::DrawCards``-shape library-top
+        # pop. NO source-controller lookup is needed (every player
+        # draws regardless of who controls the source).
+        #
+        # **Field-name translation: count -> amount.** Rust uses
+        # ``count`` (the convention shared with ``draw_cards`` /
+        # ``each_opponent_mills_cards`` / ``mill``); Python's
+        # ``EachPlayerDraws`` class
+        # (``effects/generic/draw_mill.py:230``) uses ``amount``.
+        # The bridge does the rename inline. The ``count`` default
+        # of 1 mirrors the Rust parse default AND the Python
+        # class's "amount=1 is the only printed shape today"
+        # semantics (Friendly Teddy emits exactly
+        # ``EachPlayerDraws(amount=1)``).
+        #
+        # **Untargeted -- no agent shim required.** Both engines
+        # silently iterate over every player. No discard / target
+        # pick is made; the inner draw is a pure library-top pop
+        # with no per-card decision. The harness's default Player
+        # has ``agent=None`` and that's fine -- the resolve walks
+        # all players purely on the active-player index.
+        #
+        # **EoE consumer note (substrate-side).** Friendly Teddy is
+        # from Duskmourn (DSK), NOT Edge of Eternities -- this
+        # bridge arm is positioned for any future EoE printing
+        # carrying the bare ``EachPlayerDraws`` shape on a
+        # triggered ability. The dedicated per-card probe at
+        # ``tests/test_friendly_teddy_parity.py`` exercises the
+        # bare-arm end-to-end via the Friendly Teddy DSK printing.
+        from mtg_bot.effects.generic.draw_mill import (
+            EachPlayerDraws,
+        )
+        return EachPlayerDraws(
+            amount=eff_dict.get("count", 1),
+        )
     if kind == "put_plus_one_counter_on_each_creature_you_control":
         # **Phase 5 mass-counter bridge arm.**
         # Mirrors Rust's

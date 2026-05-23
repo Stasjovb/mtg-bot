@@ -12468,6 +12468,158 @@ layer (despite the classifier multi-gate state staying True on
 
 ---
 
+## Friendly Teddy Cycle 1 LANDED — `Effect::EachPlayerDraws` (single-int) Effect half shipped byte-equal; DIES-trigger "each player draws a card" fires deterministic-yes on Friendly Teddy
+
+**Single-cycle landing (2026-05-22,
+`feature/friendly-teddy-cycle-1-p1`).** Friendly Teddy — `{2}`
+Artifact Creature — Bear Toy, 2/2 (Duskmourn — DSK, present in the
+active multi-set CardSource). DIES trigger: "When this creature
+dies, each player draws a card." The `effect_uncovered` +
+`nonsafe_triggered_ability` multi-gate classifier blocker — the
+missing Effect class is `EachPlayerDraws`
+(`effects/generic/draw_mill.py:230`). Multi-gated card flipped to
+PROBED tier via the dedicated per-card cross-engine parity probe
+(precedent: Comet Crawler, this commit batch).
+
+The single cycle composed:
+
+  1. **Rust `Effect::EachPlayerDraws { count }`** — single-int
+     variant (`rust/src/cards.rs`), parse arm (`parse_effect`
+     dispatcher; defaults missing `count` to 1 mirroring the Python
+     class semantics and the `EachOpponentMillsCards` sibling
+     default; rejects negative `count`), `to_pydict` arm (emits the
+     two-key dict shape `{"kind", "count"}`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`) — the **production mint
+     site**: APNAP-iterate `state.players` starting at
+     `state.active_player` and mod-wrapping (mirrors Python's
+     `(state.active_player_idx + i) % len(state.players)` loop at
+     `effects/generic/draw_mill.py:239-244`), skip `has_lost`
+     players, draw `count` cards per non-lost player via the
+     `Effect::DrawCards`-shape library-top pop with the
+     `attempted_draw_on_empty` CR 704.5b signal on empty (same
+     flag the bare `Effect::DrawCards` arm sets).
+     **Source-controller independence:** unlike the
+     `EachOpponent*` siblings the resolve does NOT need to find
+     the source's controller — every player draws regardless of
+     who controls the source, so the source-untrackable fizzle
+     case never fires; the arm reads only `state.active_player`
+     for the APNAP ordering.
+  2. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `EachPlayerDraws` class from the
+     single-int dict shape with the field-name translation
+     `count -> amount` (sibling of the `draw_cards` /
+     `each_opponent_mills_cards` / `mill` bridge arms — same
+     Rust `count` / Python `amount` spelling discrepancy local
+     to the bridge translation). Missing `count` defaults to 1
+     symmetrically with the Rust parse arm.
+  3. **Trajectory reverse-serializer leaf**
+     (`src/mtg_bot/parity/trajectory.py::_python_ta_to_safe_dict`)
+     recognizes the bare `EachPlayerDraws` Python class and emits
+     the canonical dict `{"kind": "each_player_draws",
+     "count": int}`. Paired with:
+     * `("dies", "source_is_self", "each_player_draws")` entry
+       in `_SAFE_TRIGGERS`.
+     * `"each_player_draws": frozenset({"kind", "count"})`
+       entry in `_SAFE_EFFECT_KEYS` (the payload-key whitelist
+       backstop on `_is_safe_trigger_dict`).
+     * `each_player_draws` added to the DIES+IsSelf
+       `safe_effect_kinds` tuple, widening the DIES leaf set
+       from `{surveil, gain_life, draw_cards, create_token,
+       create_token_tapped}` to also include `each_player_draws`.
+  4. **Coverage 1:1 identity mapping.** The new Rust variant
+     name matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()`
+     auto-includes `EachPlayerDraws` with no
+     `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` edit
+     needed — the §2 covered-set tooth (parity-doc / coverage-
+     script "covered" alignment) fires positively.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Friendly Teddy is a creature with a DIES triggered ability; the
+spell-card-bridge admit set + auto-grow §2 teeth gate spell cards
+only. The cross-engine probe lives in
+`tests/test_friendly_teddy_parity.py` and uses the per-card
+dedicated parity-test module convention (cf.
+`test_comet_crawler_parity.py`, `test_mutinous_massacre_parity.py`),
+driving the parsed Friendly Teddy printing through both engines on
+a shared shape and pinning byte-equal observables — including the
+APNAP iteration order via the per-player hand contents pin (each
+player draws ITS OWN library top, not the source-controller's
+twice).
+
+**Observable byte-equality scope.** The full `compare_fields`
+over the harness's per-zone signature is empty post-resolve —
+including the per-player hand / library / graveyard / battlefield
+signatures. The DIES move (Friendly Teddy bf → p0's graveyard via
+SBA destroy) AND the per-player draw (one library card → hand
+per player) are both byte-equal across engines on the
+deterministic-yes path (no agent setup needed; the resolve has no
+PendingDecision queue interaction).
+
+**No-agent default = "every player draws unconditionally".** The
+`EachPlayerDraws.resolve` has NO target picker / NO decision
+point — both engines iterate every non-lost player and draw
+`count` cards per player purely on the active-player index. The
+harness's default Player has `agent=None` and that's fine for
+this leaf; introducing a strategic agent (the campaign-wide
+"no-callback first-legal-target convention" gap) is irrelevant
+here — there's nothing to pick.
+
+**Failure mode**: a future printing carrying
+`EachPlayerDraws(amount > 1)` with an intermediate empty-library
+mid-resolve might surface a CR 704.5b parity gap (Python's
+`draw_card` sets `has_lost=True` on empty and stops the inner
+loop; Rust's resolve arm sets `attempted_draw_on_empty=true` and
+breaks). Both engines should reach the same has_lost state via
+the post-resolve SBA pass, but byte-equality of intermediate
+counts hasn't been pinned by a multi-card-draw probe (no real
+EoE / DSK printing exercises `EachPlayerDraws(amount > 1)`
+today — Friendly Teddy is the sole admitted carrier and it
+draws `amount=1`).
+
+**Fix scope estimate**: pinned by inspection of the resolve arms
+on both sides — same flag, same loop break semantics. Direct
+multi-card-draw probe is a follow-up cycle when a real card
+demands it.
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Friendly Teddy from Effect-uncovered (BLOCKED, multi-gated) to
+Effect-covered (COVERED) at the Rust-Effect-coverage layer;
+PROBED at the per-card cross-engine parity layer via the
+dedicated probe module. The other Friendly Teddy gate
+(`nonsafe_triggered_ability`) was simultaneously closed via the
+trajectory.py safe-trigger admit-gate widen (`("dies",
+"source_is_self", "each_player_draws")` entry + recognizer arm
++ `_SAFE_EFFECT_KEYS` entry). Pool reach: 1 card (Friendly Teddy,
+DSK — outside the EoE 17lands deck pool count; broadly
+pre-positioned substrate for any future EoE / standard-format
+printing carrying the bare `EachPlayerDraws` shape on a triggered
+ability, such as Howling Mine-adjacent symmetric draw effects).
+
+**Coverage**: 12 tests at `tests/test_friendly_teddy_parity.py`,
+all passing: 1 parser SoT pin, 3 bridge dict↔Python round-trip
+pins (positive translation, missing-count default-to-1, negative
+reject), 2 Rust parse/to_pydict round-trip pins (default
+count=1, count=3 explicit), 1 covered-set pin, 1 trajectory
+recognizer + admit-gate round-trip pin, 3 Rust resolve-arm unit
+pins (active-player-first APNAP iteration with per-player hand
+contents pin, count==0 silent no-op, Python `has_lost` skip via
+direct `EachPlayerDraws.resolve` driver), 1 GENUINE real cross-
+engine byte-equal probe.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (recognizer arm +
+`_SAFE_EFFECT_KEYS` whitelist + `_SAFE_TRIGGERS` entry + DIES
+`safe_effect_kinds` widen),
+`tests/test_friendly_teddy_parity.py` (probes). Per-card cycle
+LANDED; Friendly Teddy is now PROBED at the per-card parity
+layer despite the multi-gated classifier status.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
