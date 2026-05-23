@@ -3969,6 +3969,57 @@ pub enum Effect {
     /// intentionally minimal, additive widenings get separate
     /// variants per the round-12 / round-13 / this-round precedent.
     ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv: i32 },
+    /// **Warping Wail Cycle 1a substrate (2026-05-22).** "Exile target
+    /// creature with power or toughness `max_value` or less." Mirrors
+    /// Python's `ExileTargetCreatureWithPowerOrToughnessAtMost`
+    /// (`effects/generic/exile.py:733`) — the Warping Wail mode 1
+    /// shape (Scryfall-updated oracle).
+    ///
+    /// **Substrate-only landing.** This variant ships as a reusable
+    /// Effect lever for the (1, 1) single-target exile-with-P-or-T
+    /// threshold shape. Warping Wail itself stays DECLINED at the
+    /// admit gate this cycle — its Mode 2 (CounterTargetSpell.filter_
+    /// types, the colorless-or-Spacecraft counter clause) and Mode 3
+    /// (the colorless-creature-token mint with mana ability) each need
+    /// their own Effect substrate before the spell-card-bridge admit
+    /// predicate flips. See `docs/SEARCH_LIMITATIONS.md`'s
+    /// "Warping Wail Cycle 1a substrate LANDED" block for the 4-cycle
+    /// decomposition rationale.
+    ///
+    /// **Phase-1 single-target shape.** `target_count_range == (1, 1)`,
+    /// `target_slot_kinds == ()`, intrinsic filter
+    /// `IsCreature() & (HasPowerAtMost(N) | HasToughnessAtMost(N))`.
+    /// Mirrors the established `FocusFireEffect` / `CutPropulsionEffect`
+    /// single-target shape — the cast-time bind reads
+    /// `current_resolve_payload_target_id` per the Phase-1 substrate.
+    ///
+    /// **Resolve semantics (mirrors `exile.py:733-762` byte-equal to
+    /// the SoT):**
+    /// 1. Read the cast-time-bound target via
+    ///    `current_resolve_payload_target_id`. None → silent fizzle.
+    /// 2. Re-validate per CR 608.2b: target must still be on a
+    ///    battlefield AND must still be a Creature AND must have
+    ///    `effective_power ≤ max_value` OR
+    ///    `effective_toughness ≤ max_value`. Fail any check → silent
+    ///    fizzle (Python's `_slot_target_still_legal` short-circuits
+    ///    on stale targets the same way).
+    /// 3. Pop from owner's bf with CR 400.7 zone-change reset
+    ///    (tapped, damage, counters, attached_to), push onto owner's
+    ///    exile zone, queue LEAVES + token-cease dispatches via the
+    ///    established `pending_leaves_dispatches` + `queue_token_cease`
+    ///    queues. NO DIES dispatch (exile bypasses dies per CR 700.4).
+    ///    Indestructible is NOT a guard (exile bypasses CR 702.12 —
+    ///    matches the established `Effect::ExileTarget { AnyCreature }`
+    ///    arm precedent).
+    ///
+    /// **Effective P/T computation.** Inlined per the established
+    /// per-file isolation rule — `state_ops_combat::battlefield_-
+    /// creature_power` / `_toughness` are module-private. The inline
+    /// recipe folds `printed P/T + ueot_base_pt_override + counters +
+    /// ueot_power_bonus / ueot_toughness_bonus` matching the
+    /// `ZeroPointBalladEffect` inline-effective-toughness shape at
+    /// `state_ops_resolve.rs:18311-18318`.
+    ExileTargetCreatureWithPowerOrToughnessAtMost { max_value: i32 },
     /// **Round 28 may-do decision wrapper.** "You may [inner effect]."
     /// Mirrors Python's `MayDo(Effect, prompt)` family (the
     /// `effects/generic/may_do.py` umbrella — "you may sacrifice a
@@ -9842,6 +9893,36 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv })
         }
+        "exile_target_creature_with_power_or_toughness_at_most" => {
+            // **Warping Wail Cycle 1a substrate (2026-05-22).** Carries
+            // `max_value: i32` (required, non-negative). Mirrors
+            // Python's `ExileTargetCreatureWithPowerOrToughnessAtMost(
+            // max_value=N)` (`effects/generic/exile.py:733`). Single-
+            // i32-field shape — mirrors the
+            // `exile_opponents_nonland_permanent_with_max_mv_until_leaves`
+            // single-int parse-arm idiom right above. Negative
+            // `max_value` is rejected loudly per the sibling raise-on-
+            // negative pattern (CR 107.1b — threshold N is non-
+            // negative).
+            let max_value: i32 = match dict.get_item("max_value")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "exile_target_creature_with_power_or_toughness_at_most.max_value must be an integer (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "exile_target_creature_with_power_or_toughness_at_most: missing required 'max_value' field",
+                    ));
+                }
+            };
+            if max_value < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "exile_target_creature_with_power_or_toughness_at_most: max_value must be non-negative, got {max_value}"
+                )));
+            }
+            Ok(Effect::ExileTargetCreatureWithPowerOrToughnessAtMost { max_value })
+        }
         "may_do" => {
             let nested = dict.get_item("inner_effect")?.ok_or_else(|| {
                 PyValueError::new_err(
@@ -11291,7 +11372,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most"
         ))),
     }
 }
@@ -13774,6 +13855,20 @@ pub(crate) fn effect_to_pydict<'py>(
                 "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
             )?;
             d.set_item("max_mv", *max_mv)?;
+        }
+        Effect::ExileTargetCreatureWithPowerOrToughnessAtMost { max_value } => {
+            // **Warping Wail Cycle 1a substrate (2026-05-22).** Single-
+            // i32 payload (`max_value`). Mirrors Python's
+            // `ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=N)`
+            // dict shape. Sibling round-trip of the `exile_opponents_-
+            // nonland_permanent_with_max_mv_until_leaves` arm above
+            // (single-int `max_mv`); the field name is `max_value` here
+            // to mirror the Python class's constructor arg name exactly.
+            d.set_item(
+                "kind",
+                "exile_target_creature_with_power_or_toughness_at_most",
+            )?;
+            d.set_item("max_value", *max_value)?;
         }
         Effect::MayDo { inner_effect, prompt } => {
             d.set_item("kind", "may_do")?;

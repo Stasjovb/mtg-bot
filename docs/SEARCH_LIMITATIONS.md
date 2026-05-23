@@ -10632,6 +10632,100 @@ the X-tracking C1 substrate.
   (29 → 30) and `tests/test_probe_spell_card_bridge_admitted.py`
   (29 → 30).
 
+- **Warping Wail Cycle 1a substrate LANDED (2026-05-22,
+  `feature/warping-wail-substrate-cycle-1a`).** **Substrate-only
+  closure** for the first of Warping Wail's three modes. Adds the
+  `Effect::ExileTargetCreatureWithPowerOrToughnessAtMost { max_value:
+  i32 }` Rust variant (parse arm + `to_pydict` arm + resolve arm) +
+  matching cross-engine bridge arm
+  (`cross_engine._ta_dict_to_python_effect`) + reverse-serializer
+  leaf (`trajectory._python_spell_effect_to_dict`) + cast-time
+  target-binding detector + branch in `state_ops_cast.rs::cast_-
+  spell_noncreature` (deterministic-first scan over both bfs for a
+  creature whose effective_power ≤ max_value OR effective_toughness
+  ≤ max_value). Mirrors Python's
+  `ExileTargetCreatureWithPowerOrToughnessAtMost` class at
+  `effects/generic/exile.py:733` byte-equal to the SoT.
+
+  **Substrate-only — NO admit-gate flip.** Warping Wail has **three
+  modes**:
+    - Mode 1 (this cycle, max_value=1):
+      `ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=1)`.
+      Lands as a reusable Effect lever.
+    - Mode 2 (future Cycle 2): `CounterTargetSpell.filter_types` —
+      the colorless-or-Spacecraft counter clause's spell-type-
+      filter axis. Rust's `Effect::CounterTargetSpell` has no
+      `filter_types` field today; landing it requires a Rust
+      schema widen + bridge arm + admit-time legal-targets
+      enumeration.
+    - Mode 3 (future Cycle 3): the colorless-creature-token mint
+      with mana ability — Warping Wail's "Create a 1/1 colorless
+      Eldrazi Scion creature token. It has '{T}, Sacrifice this
+      token: Add {C}.'" mode. The existing token-bridge infra
+      admits creatures + activated abilities, but admitting a
+      creature TOKEN that ALSO carries a mana ability needs the
+      token-AA bridge to widen to support sacrificing-self mana
+      activations.
+    - Cycle 4: admit-gate widen for the `(0, 1) + or_both=False`
+      Phase-6 modal shape (Warping Wail's `target_count_range ==
+      (0, 1)` and ChooseOneMode shape doesn't fit any existing
+      admit-predicate arm), per-mode binders, and the real-EoE
+      cross-engine probe. Only Cycle 4 flips Warping Wail into the
+      §2 admit set.
+
+  Substrate-only closures do **not** flip the admit gate — the
+  `_printing_is_bridge_simple_spell` predicate continues to decline
+  Warping Wail because Modes 2 + 3 still gap. The
+  `test_warping_wail_stays_declined_at_admit_gate_post_cycle_1a` pin
+  in `tests/test_warping_wail_substrate_cycle_1a.py` catches any
+  accidental early-flip.
+
+  **Resolve arm semantics (byte-equal to Python's `exile.py:733-762`):**
+    1. Read cast-time-bound target via
+       `current_resolve_payload_target_id`. None → silent fizzle.
+    2. Re-validate per CR 608.2b: target must still be on a
+       battlefield AND must still be a Creature AND must have
+       `effective_power ≤ max_value` OR `effective_toughness ≤
+       max_value`. Fail any check → silent fizzle.
+    3. Pop from owner's bf with CR 400.7 zone-change reset, push
+       onto owner's exile zone, dispatch LEAVES + token-cease via
+       the established `pending_leaves_dispatches` +
+       `queue_token_cease` queues. NO DIES dispatch (exile bypasses
+       dies per CR 700.4). NO indestructible guard (exile bypasses
+       CR 702.12 — matches the established `Effect::ExileTarget {
+       AnyCreature }` arm precedent).
+
+  Effective-P/T computation inlined per the established per-file
+  isolation rule (`state_ops_combat`'s helpers are module-private);
+  the recipe (printed + `ueot_base_pt_override` + `counters` +
+  `ueot_(power|toughness)_bonus`) mirrors `ZeroPointBalladEffect`'s
+  inline shape at `state_ops_resolve.rs:18311-18318` exactly.
+  Counters-inclusive (Python SoT view; matches
+  `_compute_effective_pt`).
+
+  **Tests.** `tests/test_warping_wail_substrate_cycle_1a.py` (22
+  pins): parser SoT (Python class exists with expected filter
+  shape + single TargetSpec + describe-matches-oracle); covered-set
+  membership via bridge arm; bridge arm rejects missing
+  `max_value`; serializer round-trip at max_value=1 + max_value=3;
+  serializer bails on negative max_value; Rust variant parses;
+  Rust parser rejects negative + missing `max_value`; resolve
+  exiles P ≤ N target; resolve exiles T ≤ N target; resolve
+  fizzles on P > N AND T > N target; resolve fizzles on target no
+  longer on bf; resolve fizzles on non-creature target; resolve
+  scans cross-battlefield (self-exile legal); indestructible
+  target IS exiled (CR 702.12 bypass); no-bound-target silent
+  fizzle; counters-pumped above threshold fizzles; counters-minus
+  below threshold exiles; Rust to_pydict round-trip
+  end-to-end-via-resolve; **`test_warping_wail_stays_declined_at_
+  admit_gate_post_cycle_1a` substrate-only invariant pin**.
+
+  Admit-set pin tests
+  (`tests/test_cross_engine_etb_triggers.py::test_spell_card_-
+  lever_phase1_negative_pins_decline_set` +
+  `tests/test_probe_spell_card_bridge_admitted.py`) STILL PASS
+  unchanged (no admit drift — substrate-only landing).
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any

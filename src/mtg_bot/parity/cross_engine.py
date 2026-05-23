@@ -2937,6 +2937,62 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # this arm is field-free).
         from mtg_bot.effects.generic.exile import ExileTargetCreature
         return ExileTargetCreature()
+    if kind == "exile_target_creature_with_power_or_toughness_at_most":
+        # **Warping Wail Cycle 1a substrate (2026-05-22).** "Exile
+        # target creature with power or toughness `max_value` or less."
+        # Rust's ``Effect::ExileTargetCreatureWithPowerOrToughnessAtMost
+        # { max_value: i32 }`` (cards.rs) is the (1, 1)-shape single-
+        # target exile-with-P-or-T-threshold variant; mirrors Python's
+        # ``ExileTargetCreatureWithPowerOrToughnessAtMost(max_value=N)``
+        # (`effects/generic/exile.py:733`). Its ``parse_effect`` arm
+        # requires ``max_value: i32`` and rejects negatives at register
+        # time. The resolve arm reads ``current_resolve_payload_target_
+        # id`` (the established Phase-1 single-target pattern; sibling
+        # to FocusFire / CutPropulsion / DiplomaticRelations) and re-
+        # validates per CR 608.2b: target must still be on a battle-
+        # field AND must still be a Creature AND must have effective_
+        # power <= max_value OR effective_toughness <= max_value.
+        # Fizzles silently on any validation fail. Exile via the
+        # established LEAVES + token-cease dispatch route.
+        #
+        # **Substrate-only bridge arm.** Warping Wail itself (Mode 1
+        # uses this Effect) stays DECLINED at the spell-card-bridge
+        # admit gate this cycle — Mode 2 (CounterTargetSpell.filter_
+        # types) and Mode 3 (colorless-creature-token mint with mana
+        # ability) each need their own Effect substrate before the
+        # admit predicate flips. See ``docs/SEARCH_LIMITATIONS.md``'s
+        # "Warping Wail Cycle 1a substrate LANDED" block for the
+        # 4-cycle decomposition rationale.
+        #
+        # **Filter shape.** Python's
+        # ``ExileTargetCreatureWithPowerOrToughnessAtMost.__post_init__``
+        # builds ``IsCreature() & (HasPowerAtMost(max_value) |
+        # HasToughnessAtMost(max_value))``. Both predicates read
+        # ``effective_power`` / ``effective_toughness`` so temp buffs
+        # and static anthems are respected at both targeting AND the
+        # at-resolve recheck — byte-equal with Rust's counters-
+        # inclusive inline-effective-PT recipe.
+        #
+        # Mirrors Rust's ``parse_effect`` arm
+        # ("exile_target_creature_with_power_or_toughness_at_most"
+        # branch in cards.rs); the bridge requires ``max_value``
+        # mirroring Rust's required-field contract. Missing
+        # ``max_value`` raises loudly via the dict.get(...) KeyError
+        # path — same convention as the
+        # ``exile_opponents_nonland_permanent_with_max_mv_until_leaves``
+        # arm above.
+        from mtg_bot.effects.generic.exile import (
+            ExileTargetCreatureWithPowerOrToughnessAtMost,
+        )
+        max_value = eff_dict.get("max_value")
+        if max_value is None:
+            raise ValueError(
+                "exile_target_creature_with_power_or_toughness_at_most: "
+                "missing required 'max_value' field"
+            )
+        return ExileTargetCreatureWithPowerOrToughnessAtMost(
+            max_value=int(max_value),
+        )
     if kind == "discard_card":
         # "Target player discards a card." Rust's
         # ``Effect::DiscardCard { target: TargetFilter }`` is the

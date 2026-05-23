@@ -4166,6 +4166,15 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.exile import (
         ExileAllArtifactsWithManaValueAtMost,
     )
+    # **Warping Wail Cycle 1a substrate (2026-05-22).** Reverse-
+    # serializer leaf for the new
+    # ``ExileTargetCreatureWithPowerOrToughnessAtMost`` Rust variant.
+    # Substrate-only — Warping Wail itself stays DECLINED at the admit
+    # gate this cycle (Mode 2 + Mode 3 still gap). Import kept narrow
+    # per the established convention.
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetCreatureWithPowerOrToughnessAtMost,
+    )
     from mtg_bot.effects.generic.pump import (
         PumpTargetArtifactOrCreatureUntilEOT,
         ThreatenTargetCreatureUEOT,
@@ -4870,6 +4879,28 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             return {
                 "kind": "exile_all_artifacts_with_mana_value_at_most",
                 "max_mv": int(eff.max_mv),
+            }
+        # **Warping Wail Cycle 1a substrate (2026-05-22).** Single-
+        # `max_value` round-trip leaf for the (1, 1)-shape single-
+        # target exile-with-P-or-T-threshold variant. Sibling shape to
+        # the `exile_all_artifacts_with_mana_value_at_most` leaf above
+        # (single-int payload; non-negative invariant). Substrate-only
+        # leaf — Warping Wail itself stays DECLINED at the admit gate
+        # this cycle (Mode 2 + Mode 3 still gap; see
+        # `docs/SEARCH_LIMITATIONS.md`'s "Warping Wail Cycle 1a
+        # substrate LANDED" block for the 4-cycle decomposition
+        # rationale). Adding this leaf does NOT by itself flip any
+        # printing into the spell-card-bridge admit set — Warping Wail
+        # has additional uncovered modes; once Cycles 2 + 3 land their
+        # substrates AND Cycle 4 widens the admit predicate, Warping
+        # Wail will auto-join the §2 admit set via the same auto-grow
+        # teeth that flipped Focus Fire / Cut Propulsion / etc.
+        if isinstance(eff, ExileTargetCreatureWithPowerOrToughnessAtMost):
+            if eff.max_value < 0:
+                return None
+            return {
+                "kind": "exile_target_creature_with_power_or_toughness_at_most",
+                "max_value": int(eff.max_value),
             }
         # **Reroute Systems closure (2026-05-21).** ModalChooseOne
         # envelope **Cycle 6** per-leaf serializer for Reroute Systems

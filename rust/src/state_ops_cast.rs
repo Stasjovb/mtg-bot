@@ -1876,6 +1876,29 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
+        // **Warping Wail Cycle 1a substrate (2026-05-22).** Top-level
+        // `ExileTargetCreatureWithPowerOrToughnessAtMost { max_value }`
+        // (no Sequence wrapper). Filter mirrors the resolve arm +
+        // Python's `legal_targets` exactly: `IsCreature() &
+        // (HasPowerAtMost(N) | HasToughnessAtMost(N))`. Substrate-only
+        // wiring — Warping Wail itself stays DECLINED at the admit
+        // gate this cycle (Mode 2 + Mode 3 still gap; see
+        // `docs/SEARCH_LIMITATIONS.md`). This detector is forward-
+        // looking: it ensures a Phase-1-shape card that lands on this
+        // Effect in a future cycle binds the cast-time target through
+        // the matching filter directly, rather than falling through to
+        // the default-first-creature scan.
+        let is_exile_creature_with_pt_at_most: Option<i32> = self
+            .registry
+            .lookup(printing_id)
+            .and_then(|p| match p.effects.first() {
+                Some(
+                    crate::cards::Effect::ExileTargetCreatureWithPowerOrToughnessAtMost {
+                        max_value,
+                    },
+                ) => Some(*max_value),
+                _ => None,
+            });
         let (bound_target, bound_target_2): (Option<u32>, Option<u32>) =
             if is_two_slot {
                 // 2-slot: slot 0 = first caster-controlled creature,
@@ -2038,6 +2061,53 @@ impl GameState {
                             return None;
                         }
                         Some(o.id)
+                    });
+                (t, None)
+            } else if let Some(max_value) = is_exile_creature_with_pt_at_most {
+                // **Warping Wail Cycle 1a substrate (2026-05-22).**
+                // First creature on EITHER bf in `bf_iter_etb_sorted`
+                // order whose effective power OR effective toughness
+                // is <= max_value. Filter mirrors the resolve arm's
+                // re-validation + Python's `legal_targets` filter
+                // (`IsCreature() & (HasPowerAtMost(N) | HasToughnessAt
+                // Most(N))`). The deterministic-first pick mirrors
+                // the `_PickFirstLegalTargetAgent` bake-in convention
+                // the Python SoT uses for `choose_target`. None →
+                // resolve-time fizzle (CR 608.2b — Python's
+                // `_slot_target_still_legal` returns early the same
+                // way).
+                //
+                // **Effective P/T inline.** Same recipe as the
+                // resolve arm (counters-inclusive, ueot-aware).
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        if !printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            return None;
+                        }
+                        let printed_p = printing.power.unwrap_or(0) as i32;
+                        let printed_t = printing.toughness.unwrap_or(0) as i32;
+                        let (base_p, base_t) = o
+                            .ueot_base_pt_override()
+                            .map(|(p, t)| (p, t))
+                            .unwrap_or((printed_p, printed_t));
+                        let eff_p = base_p
+                            + o.counters
+                            + o.ueot_power_bonus();
+                        let eff_t = base_t
+                            + o.counters
+                            + o.ueot_toughness_bonus();
+                        if eff_p <= max_value || eff_t <= max_value {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
                     });
                 (t, None)
             } else {

@@ -14496,6 +14496,140 @@ fn apply_effect(
             // in drain_pending_token_cease (CR 111.7 / 704.5d).
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
+        // **Warping Wail Cycle 1a substrate (2026-05-22).** Mirrors
+        // Python's `ExileTargetCreatureWithPowerOrToughnessAtMost.
+        // resolve` (`effects/generic/exile.py:733-762`) byte-equal to
+        // the SoT. Reads the cast-time-bound target via
+        // `current_resolve_payload_target_id` (the established Phase-1
+        // single-target pattern — sibling to FocusFire /
+        // CutPropulsion / DiplomaticRelations). Re-validates per CR
+        // 608.2b: target must still be on a battlefield AND still be a
+        // Creature AND have `effective_power <= max_value` OR
+        // `effective_toughness <= max_value`. Fizzle silently on any
+        // validation fail. Exile via the established `pending_leaves_
+        // dispatches` + `queue_token_cease` route (matches the
+        // `ExileTarget { AnyCreature }` arm precedent at line 2796 +
+        // the `ExileTargetCreatureUntilSourceLeaves` arm precedent at
+        // line 14164). NO DIES dispatch (exile bypasses dies per CR
+        // 700.4 / 700.4 cite the `Effect::ExileTarget` arm's comment
+        // chain). NO indestructible guard (exile bypasses CR 702.12).
+        //
+        // **Effective P/T computation.** Inlined per the established
+        // per-file isolation rule — `state_ops_combat::battlefield_-
+        // creature_power` / `_toughness` are module-private. The
+        // recipe mirrors `ZeroPointBalladEffect`'s inline-effective-
+        // toughness at lines 18311-18318 (printed + ueot_base_pt_-
+        // override + counters + ueot_(power|toughness)_bonus). The
+        // counters-inclusive shape matches Python's
+        // `_compute_effective_pt` (the source-of-truth `effective_-
+        // power` / `effective_toughness` view used by both the legal-
+        // target picker AND the at-resolve recheck on the Python
+        // side).
+        Effect::ExileTargetCreatureWithPowerOrToughnessAtMost { max_value } => {
+            let _ = source_obj_id;
+            let max_val_local: i32 = *max_value;
+            // Step 1: read the cast-time-bound target. No bound target
+            // → silent fizzle (only the synthetic-test push_to_stack
+            // API can leave this slot None; production cast-time bind
+            // always seats it for a (1, 1) targeted spell, OR seats
+            // None and the spell never resolves because no legal
+            // target exists at cast time — but defensively handle the
+            // synthetic-test path as a no-op too).
+            let Some(payload_target) = state.current_resolve_payload_target_id else {
+                return Ok(());
+            };
+            // Step 2: locate the bound target on EITHER bf and snap
+            // its owner-controller + effective P/T for the re-validate
+            // check. Walking both bfs mirrors the FocusFire arm's
+            // both-bfs scan (the bound target is any creature on
+            // either battlefield — no defender-swap; the filter is
+            // intrinsic). Done in a read-only pass so we don't lock
+            // the &mut state borrow until we're committed to the
+            // exile mutation.
+            let resolved: Option<(usize, u32)> = {
+                let mut found: Option<(usize, u32)> = None;
+                'outer: for (pidx, player) in state.players.iter().enumerate() {
+                    for obj in player.battlefield.iter() {
+                        if obj.id != payload_target {
+                            continue;
+                        }
+                        let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        else {
+                            break 'outer;
+                        };
+                        // Re-validate "is a creature" (CR 608.2b
+                        // typed-filter recheck). Same predicate as
+                        // FocusFire arm's bound-target leg.
+                        if !printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            break 'outer;
+                        }
+                        // Re-validate "effective_power <= max_value
+                        // OR effective_toughness <= max_value".
+                        // Inline-effective-PT recipe (counters-
+                        // inclusive — Python SoT view; matches the
+                        // `ZeroPointBalladEffect` inline shape at
+                        // `state_ops_resolve.rs:18311-18318`).
+                        let printed_p = printing.power.unwrap_or(0) as i32;
+                        let printed_t = printing.toughness.unwrap_or(0) as i32;
+                        let (base_p, base_t) = obj
+                            .ueot_base_pt_override()
+                            .map(|(p, t)| (p, t))
+                            .unwrap_or((printed_p, printed_t));
+                        let eff_p = base_p
+                            + obj.counters
+                            + obj.ueot_power_bonus();
+                        let eff_t = base_t
+                            + obj.counters
+                            + obj.ueot_toughness_bonus();
+                        if eff_p > max_val_local && eff_t > max_val_local {
+                            break 'outer;
+                        }
+                        found = Some((pidx, obj.id));
+                        break 'outer;
+                    }
+                }
+                found
+            };
+            let Some((owner_idx, target_id)) = resolved else {
+                return Ok(()); // CR 608.2b fizzle (stale / illegal target)
+            };
+            // Step 3: pop from owner's bf with CR 400.7 zone-change
+            // reset. Matches the `ExileTarget { AnyCreature }` arm's
+            // reset shape at line 2761-2776 (zone, tapped, damage,
+            // counters, attached_to, exiled_with_source). NB:
+            // `summoning_sick` is NOT reset per the CE13 closure
+            // (`turn.move_off_battlefield` preserves the field).
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[owner_idx].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just located in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+            // Round-29 Void LTB: exile is a bf-exit; target is a
+            // Creature by re-validation → nonland → flag flips.
+            mark_left_battlefield_if_nonland(state, printing_id);
+            // LTB fan-out at the Effect arm. Mirrors the established
+            // pattern (Slice 10) — bf-exit bypasses move_object so
+            // the LEAVES dispatch is wired here.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling. is_token gate lives in
+            // drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+        }
         // Round-28 may-do decision wrapper. "You may [inner_effect]."
         // Pushes a PendingDecision::MayDoChoice onto the queue and
         // short-circuits. The controller drains via
