@@ -21510,14 +21510,15 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # the matching cross-engine bridge thread (was silent-drop pre-
     # closure) + the ``_python_spell_effect_to_dict`` reverse-
     # serializer leaf (was MISSING — confirmed by the prior verify-
-    # first walk). Seven real-EoE counterspells AUTO-JOIN the admit
+    # first walk). Six real-EoE counterspells AUTO-JOIN the admit
     # set as the round-trip-or-bail teeth now positively close on
-    # ``CounterTargetSpell`` constructions:
+    # ``CounterTargetSpell`` constructions (note: Break Down the
+    # Door was ALREADY in the admit set at branch-base via a
+    # different path — the §2 auto-grow teeth flip only the
+    # remaining six counterspells here):
     #
     #   * ``Annul`` — ``filter_types=frozenset({"Artifact",
     #     "Enchantment"})``.
-    #   * ``Break Down the Door`` — bare ``CounterTargetSpell()``
-    #     (modal counterspell + token).
     #   * ``Divert Disaster`` — ``filter_types=frozenset({"Instant",
     #     "Sorcery"})``.
     #   * ``Don't Make a Sound`` — bare ``CounterTargetSpell()``
@@ -21532,7 +21533,7 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # (Warping Wail mode 2 is ALSO ``filter_types=frozenset(
     # {"Sorcery"})`` but the printing's other modes still gap, so
     # the card stays DECLINED until Cycle 3 + Cycle 4 close.)
-    # Admit set 33 → 40.
+    # Admit set 33 → 39.
     assert admitted == [
         "Annul",
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
@@ -21554,11 +21555,10 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 40 covered+bridged Tier-A spells: the 33 "
-        f"prior + 7 counterspells (Annul / Break Down the Door / "
-        f"Divert Disaster / Don't Make a Sound / Get Out / "
-        f"Twist Reality / Unravel) flipped by the Warping Wail "
-        f"Cycle 2 substrate "
+        f"exactly the 39 covered+bridged Tier-A spells: the 33 "
+        f"prior + 6 counterspells (Annul / Divert Disaster / "
+        f"Don't Make a Sound / Get Out / Twist Reality / Unravel) "
+        f"flipped by the Warping Wail Cycle 2 substrate "
         f"(``CounterTargetSpell.filter_types`` Rust schema widening + "
         f"bridge thread + reverse-serializer leaf via "
         f"warping-wail-substrate-cycle-2). Warping Wail itself stays "

@@ -10795,15 +10795,17 @@ the X-tracking C1 substrate.
       Phase-6 modal shape, per-mode binders, and the real-EoE
       cross-engine probe.
 
-  **PROBED side-effects: seven real-EoE counterspells AUTO-JOINED
+  **PROBED side-effects: six real-EoE counterspells AUTO-JOINED
   the spell-card-bridge admit set** as the §2 round-trip-or-bail
   teeth now positively close on `CounterTargetSpell` constructions
   with non-empty `filter_types` (and the previously-missing
   reverse-serializer leaf closes the bare-`CounterTargetSpell()`
-  round-trip for cards whose other effects were already covered):
+  round-trip for cards whose other effects were already covered).
+  (Break Down the Door was ALREADY in the admit set at branch-base
+  via a different path — landed via prior cycles before this
+  substrate; only the six listed below are flipped by this cycle's
+  §2 auto-grow teeth.)
     - `Annul` — `filter_types=frozenset({"Artifact", "Enchantment"})`.
-    - `Break Down the Door` — bare `CounterTargetSpell()` (modal
-      counterspell + token, other modes already bridged).
     - `Divert Disaster` — `filter_types=frozenset({"Instant",
       "Sorcery"})`.
     - `Don't Make a Sound` — bare `CounterTargetSpell()` (counter
@@ -10813,7 +10815,7 @@ the X-tracking C1 substrate.
     - `Twist Reality` — bare `CounterTargetSpell()` + scry-2 rider.
     - `Unravel` — `filter_types=frozenset({"Instant", "Sorcery"})`.
 
-  Admit set 33 → 40 (the pinned set tests in
+  Admit set 33 → 39 (the pinned set tests in
   `tests/test_cross_engine_etb_triggers.py::test_spell_card_-
   lever_phase1_negative_pins_decline_set` and
   `tests/test_probe_spell_card_bridge_admitted.py` are updated

@@ -276,11 +276,13 @@ pytestmark = pytest.mark.skipif(
 # auto-grow teeth.
 # **warping-wail-substrate-cycle-2 (2026-05-22):** The
 # ``CounterTargetSpell.filter_types`` Rust schema widening + bridge
-# thread + reverse-serializer leaf flip seven counterspells
+# thread + reverse-serializer leaf flip six counterspells
 # DECLINE→ADMITTED via the §2 auto-grow teeth:
-# Annul / Break Down the Door / Divert Disaster / Don't Make a Sound
-# / Get Out / Twist Reality / Unravel. Warping Wail itself stays
-# DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-gate widen).
+# Annul / Divert Disaster / Don't Make a Sound / Get Out /
+# Twist Reality / Unravel. (Break Down the Door was already in the
+# admit set at branch-base via a different path.) Warping Wail
+# itself stays DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-
+# gate widen).
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Annul",
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
