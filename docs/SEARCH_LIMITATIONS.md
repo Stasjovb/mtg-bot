@@ -11544,6 +11544,150 @@ Cycle 3). The 3-cycle subsystem is LANDED; Darkness is now PROBED.
 
 ---
 
+## Atomic Microsizer Cycle 1 LANDED (honest-stop — multi-cycle substrate scope; 2026-05-22, `feature/atomic-microsizer-cycle-1-p1`)
+
+Oracle: `{U}` Artifact — Equipment (EoE, ~14 17lands decks). "Equipped
+creature gets +1/+0.\nWhenever equipped creature attacks, choose up to
+one target creature. That creature can't be blocked this turn and has
+base power and toughness 1/1 until end of turn.\nEquip {2}"
+
+**Verify-first walk (2026-05-22).** The pool-parity attribution scout
+(`scripts/scout_r58_subsystem_attribution.py`) reports Atomic Microsizer
+in the `blocked_subsystem_gated` tier with THREE gates tripped:
+
+  - `effect_uncovered` (the bespoke `AtomicMicrosizerAttackEffect`
+    Python class — no Rust counterpart)
+  - `carrier_activated_abilities` (the Equip {2} ability — Rust CardDef
+    carries NO `activated_abilities` field at all; round-42 §2-decline,
+    campaign-wide)
+  - `nonsafe_triggered_ability` (the `equipped_creature_attacks` trigger
+    shape — `IsHost(subject="attacker")` + `AtomicMicrosizerAttackEffect`
+    fails `_python_ta_to_safe_dict` because the effect isn't covered)
+
+**No sibling Equipment with an ATTACKS trigger is PROBED.** The three
+PROBED Equipment in EoE — Glimmerlight, Hylderblade, Meltstrider's Gear
+— all carry `ENTERS` or `BEGINNING_OF_END_STEP` triggers (never
+`ATTACKS`); the six COVERED-BY-CONSTRUCTION Equipment (Conductive
+Machete, Cursed Windbreaker, Illvoi Light Jammer, Killer's Mask,
+Squire's Lightblade, The Dominion Bracelet) all have ENTERS triggers
+too. The three Equipment that ARE ATTACKS-triggered — Saw, Baseball Bat,
+Auxiliary Boosters — are ALL in `blocked_subsystem_gated` alongside
+Atomic Microsizer, with identical three-gate attribution
+(`effect_uncovered + carrier_activated_abilities + nonsafe_triggered_ability`).
+That's strong evidence the gap is NOT a single per-card slice; it is the
+ATTACKS-triggered-Equipment substrate as a whole.
+
+**Python side is fully wired:**
+
+- `AtomicMicrosizerAttackEffect` at
+  `src/mtg_bot/effects/bespoke.py:723` — `@dataclass(frozen=True)
+  Effect`; `requires_target=True`, `target_count_range=(0, 1)`,
+  `legal_targets` returns ALL bf creatures (any controller). Resolve
+  composes `ApplyEffect(GrantUnblockable(), EndOfTurn())` +
+  `ApplyEffect(BecomeType(base_pt=(1, 1)), EndOfTurn())` against the
+  chosen target.
+- Parser claim at
+  `src/mtg_bot/cards/parser/equipment_builder.py:466` — literal-line
+  recognizer maps the verbatim oracle sentence to
+  `AtomicMicrosizerAttackEffect()` with predicate
+  `IsHost(subject="attacker")` on the `Event.ATTACKS` trigger; the
+  per-line literal is deferred-generalized in the recognizer's docstring
+  (parser CLAUDE.md acceptable-literal pattern).
+- `tests/test_atomic_microsizer.py` covers effect-target-count,
+  unblockable + base-PT-1/1 resolve, cleanup drain, the
+  `equipped_creature_attacks` trigger firing path, and the printing
+  shape (1 ATTACKS trigger, `equipment_bonuses=(1, 0, frozenset())`).
+
+**Gaps on Rust side (verify-first walk, 2026-05-22):**
+
+1. **Effect variant missing.** No
+   `Effect::AtomicMicrosizerAttackEffect` parse / resolve / `to_pydict`
+   arms exist; the existing `GrantKeywordToTargetCreatureUntilEOT` and
+   `SetBasePTUntilEOT` arms both use **first-slice deterministic**
+   target selection ("pick the FIRST creature on source-controller's
+   battlefield") and don't accept an explicit target id — they cannot
+   compose into Atomic Microsizer's "choose up to one target creature
+   (any controller)" surface without first growing a target-id-binding
+   substrate.
+2. **Target-binding plumbing.** The Rust side has no
+   `current_resolve_payload_target_id` slot for threading a
+   choose-up-to-one creature target into a triggered ability's resolve
+   arm (the existing pattern, e.g. `PutPoisonCountersOnTargetPlayer`,
+   reads `current_resolve_payload_target_player_id` — a player-targeted
+   variant, not a creature-targeted one). A creature-target variant
+   would be its own substrate slice.
+3. **Equip activated-ability substrate is a campaign-wide decline.**
+   Rust `CardDef` carries no `activated_abilities` field
+   (`scripts/scout_r58_subsystem_attribution.py:219` documents the
+   round-42 §2-decline: "the broad activated-ability substrate is a
+   campaign-wide decline"). With no Equip activation on Rust, the
+   Equipment can only be auto-attached via `rs.attach(aura_id, target)`
+   in tests (the `attach` foundation from round-28); a real cast path
+   that pays Equip {2} on Rust does not exist.
+4. **ATTACKS-trigger event substrate IS present.**
+   `state_ops_combat.rs::declare_attacker:1431` dispatches
+   `Event::Attacks` with `subject_id = attacker_id` after setting
+   `attacking = true`; the `Predicate::IsHost { subject }` arm at
+   `cards.rs:6855` checks `attached_to == subject_id` and would fire
+   the trigger naturally IF the Equipment's `attached_to` slot is
+   stamped and the effect variant exists. So the EVENT dispatch path
+   IS there — only the EFFECT-arm half is missing.
+
+**The Hylderblade-pattern PROBED path is NOT applicable.** Hylderblade
+gets PROBED via inject-onto-bf + manual-trigger-fire + bridged TA dict
+(`tests/test_probe_remaining_lll.py:412`) — but its effect
+(`AttachToTargetCreatureYouControl`) has a Rust bridge arm; Atomic
+Microsizer's `AtomicMicrosizerAttackEffect` does NOT. A Hylderblade-style
+probe would fail at the registry round-trip the moment the Rust
+`register_and_inject_object` parser hits the unknown effect dict.
+
+**Estimated substrate cost**: a multi-cycle subsystem lane, NOT a
+1-cycle close like Darkness:
+
+- **C1 (substrate)**: Rust `current_resolve_payload_target_id: Option<u32>`
+  slot + setter / getter / cleanup drain, sibling of the existing
+  `_target_player_id` slot. CoW + fingerprint considerations same as
+  the player-id sibling.
+- **C2 (target-binding)**: a new `Effect::CantBeBlockedAndSetBasePTUntilEOT
+  { power, toughness }` (or a `Sequence` admitting an explicit
+  target-id) that READS the target slot instead of first-slice-picking,
+  applying `GrantKeyword("unblockable")` + `SetBasePT { power, toughness }`
+  to that specific creature. Parse + resolve + to_pydict + bridge.
+- **C3 (mint site)**: parse-and-resolve the
+  `Effect::AtomicMicrosizerAttackEffect` arm + bridge round-trip arms;
+  serializer leaf in `trajectory.py::_python_spell_effect_to_dict`;
+  the cross-engine probe drives the parsed Python printing and a
+  bridged synthetic Rust carrier through `Event::Attacks` dispatch with
+  the Equipment already `rs.attach`-stamped to the attacker on bf, no
+  Equip activation needed for the probe (mirroring Hylderblade's
+  ETB-bypassing inject pattern).
+
+Each cycle is a substrate-only landing with its own pin tests; no half-
+shipped wrapper. The full subsystem closes 4 EoE cards if generalized
+(Atomic Microsizer + Saw + Baseball Bat + Auxiliary Boosters — all
+ATTACKS-triggered Equipment in the EoE pool).
+
+**No code change shipped this branch.** Per the honest-stop discipline
+(`feedback_no_fallback_hybrids` — "when replacing a working system
+incrementally, don't add dev-time wrappers that fall back to the old
+version; honest failure count is the real progress signal"), this is a
+verify-first close with intel only: the subsystem boundary is
+documented, the multi-cycle scope is acknowledged, and the per-card
+slice is NOT manufactured as a half-shipped wrapper.
+
+**Location**: Atomic Microsizer's Python implementation lives at
+`src/mtg_bot/effects/bespoke.py:723` (Effect),
+`src/mtg_bot/cards/parser/equipment_builder.py:466` (parser claim),
+`tests/test_atomic_microsizer.py` (Python pins). The Rust gap surfaces
+across `rust/src/cards.rs::Effect` (no
+`AtomicMicrosizerAttackEffect` variant), `rust/src/state.rs` (no
+`current_resolve_payload_target_id` slot),
+`rust/src/state_ops_resolve.rs` (no resolve arm), and
+`src/mtg_bot/parity/cross_engine.py` /
+`src/mtg_bot/parity/trajectory.py` (no bridge round-trip arms).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
