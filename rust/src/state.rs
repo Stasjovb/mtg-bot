@@ -2387,6 +2387,30 @@ pub struct GameState {
     /// post-resolve must produce the same digest regardless of the
     /// intermediate amount.
     pub resolving_combat_damage_amount: i32,
+    /// **Terrasymbiosis Cycle 1 — resolving counter amount substrate.**
+    /// Bookkeeping slot read by
+    /// `Effect::DrawCardsEqualToResolvingCounterAmount` (Terrasymbiosis)
+    /// at trigger-resolve time to find out "that many cards" — N is
+    /// the number of +1/+1 counters added in the firing
+    /// COUNTERS_ADDED-observer event. Mirrors Python's
+    /// `GameState.resolving_counter_amount` (game.py:2675).
+    ///
+    /// **Substrate scope.** Cycle 1 lands the slot + the test setter
+    /// `set_resolving_counter_amount`. The production write site
+    /// (mirroring Python's `actions.py:2688/2701` — set to
+    /// `item.counter_amount` before each trigger resolve, reset to 0
+    /// after) is honest-stopped: no in-pool Rust trajectory fires a
+    /// COUNTERS_ADDED-observer trigger today because the
+    /// `nonsafe_triggered_ability` admit gate stays closed for
+    /// Terrasymbiosis. Tests inject the value directly via the test
+    /// setter, exactly as
+    /// `set_resolving_combat_damage_amount` was used pre-CE9.
+    ///
+    /// Not serialized into the fingerprint — like other transient
+    /// resolve-time slots, the same observable game state pre- and
+    /// post-resolve must produce the same digest regardless of the
+    /// intermediate amount.
+    pub resolving_counter_amount: i32,
     /// **EEE downstream complement — 8th Rust slice (JJJ Pin 2).**
     /// The player id (0 or 1) that was the TARGET of the most recently
     /// dispatched combat-damage-to-player event.  Written by
@@ -2975,6 +2999,13 @@ impl Clone for GameState {
             // `clone()` copying `state.next_object_id` (game.py:3322).
             next_object_id: self.next_object_id,
             resolving_combat_damage_amount: self.resolving_combat_damage_amount,
+            // Terrasymbiosis Cycle 1 — preserve the resolving-counter-
+            // amount slot across clones for consistency with the
+            // combat-damage sibling. Like that field, the value is
+            // transient (set/reset across a single resolve boundary)
+            // but the clone copies it byte-equal for fingerprint
+            // safety on mid-resolution clones.
+            resolving_counter_amount: self.resolving_counter_amount,
             resolving_combat_damage_target_player_id: self.resolving_combat_damage_target_player_id,
             winner_id_sticky: self.winner_id_sticky,
             rng,
@@ -3252,6 +3283,26 @@ impl GameState {
     #[getter]
     fn resolving_combat_damage_amount(&self) -> i32 {
         self.resolving_combat_damage_amount
+    }
+
+    /// Test-only setter for the resolving-counter-amount slot.
+    /// Mirrors Python's `state.resolving_counter_amount`. The
+    /// production COUNTERS_ADDED-observer dispatch path that would
+    /// write this in Rust is honest-stopped (Terrasymbiosis Cycle 1
+    /// lands the substrate; the dispatch wiring is a later cycle);
+    /// for now tests inject the value directly to exercise the read
+    /// side (`Effect::DrawCardsEqualToResolvingCounterAmount`),
+    /// mirroring how `set_resolving_combat_damage_amount` was used
+    /// pre-CE9 closure.
+    fn set_resolving_counter_amount(&mut self, amount: i32) {
+        self.resolving_counter_amount = amount;
+    }
+
+    /// Read-only getter for the resolving-counter-amount slot.
+    /// Mirrors Python's `state.resolving_counter_amount`.
+    #[getter]
+    fn resolving_counter_amount(&self) -> i32 {
+        self.resolving_counter_amount
     }
 
     /// Read-only getter for the LTB half of the Void predicate.
@@ -3823,6 +3874,12 @@ pub fn make_synthetic_state(
         // equivalent population via `new_object`.
         next_object_id: id_offset.saturating_mul(2),
         resolving_combat_damage_amount: 0,
+        // Terrasymbiosis Cycle 1 — substrate slot for the counter-
+        // amount sibling Effect arm. 0 at construction; set/reset by
+        // the resolver around COUNTERS_ADDED-observer trigger
+        // resolution (production write site honest-stopped today; test
+        // setter is the entry point until the dispatch path lands).
+        resolving_counter_amount: 0,
         resolving_combat_damage_target_player_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine

@@ -12468,6 +12468,166 @@ layer (despite the classifier multi-gate state staying True on
 `nonsafe_triggered_ability`).
 
 
+## Terrasymbiosis Cycle 1 LANDED — `Effect::DrawCardsEqualToResolvingCounterAmount` (unit) counter-amount sibling of `DrawCardsEqualToResolvingCombatDamage` shipped byte-equal; resolves by reading `state.resolving_counter_amount` and drawing that many cards for the source controller
+
+**Single-cycle landing (2026-05-23,
+`feature/terrasymbiosis-cycle-1-p1`).** Terrasymbiosis — `{2}{G}`
+Enchantment (sourced from EoE `data/edge_of_eternities.json` via the
+active `OracleParserCardSource`). Counters-added observer trigger:
+"Whenever you put one or more +1/+1 counters on a creature you control,
+you may draw that many cards. Do this only once each turn." The parser
+maps the body through the COUNTERS_ADDED context-dependent rewrite at
+`cards/parser/triggers.py:2150-2170` to
+`DrawCardsEqualToResolvingCounterAmount()`. Mirrors Python's
+parameterless frozen dataclass at `effects/generic/draw_mill.py:63`.
+
+The single cycle composed:
+
+  1. **Rust `Effect::DrawCardsEqualToResolvingCounterAmount`** — field-
+     free unit variant (`rust/src/cards.rs`, the
+     `DrawCardsEqualToResolvingCombatDamage` Tier-A unit-variant idiom
+     for "reads a transient carrier scalar at resolve time and draws
+     that many cards"), parse arm (`parse_effect` dispatcher; round-
+     trips the bare `{"kind":
+     "draw_cards_equal_to_resolving_counter_amount"}` dict shape),
+     `to_pydict` arm (emits only `kind`), and resolve arm
+     (`rust/src/state_ops_resolve.rs`). On resolve, reads
+     `state.resolving_counter_amount` (the new substrate slot), and
+     for `amount > 0` draws `amount` cards onto the source-controller's
+     hand via the standard library-top pop + CR 704.5b
+     `attempted_draw_on_empty` flag on empty.
+  2. **New `GameState.resolving_counter_amount: i32` slot** mirrors
+     Python's `GameState.resolving_counter_amount` at `game.py:2675`.
+     Slot initialized to 0 at fresh-state construction (both
+     `make_state` and `make_synthetic_state`) and preserved across
+     clones. Test setter `set_resolving_counter_amount(amount)`
+     mirrors the pre-CE9 `set_resolving_combat_damage_amount`
+     convention; production COUNTERS_ADDED-observer dispatch-time
+     write site is HONEST-STOPPED (Cycle 1 scope).
+  3. **Bridge dict→Python arm**
+     (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`)
+     reconstructs the Python `DrawCardsEqualToResolvingCounterAmount()`
+     from the one-key dict shape.
+  4. **Per-leaf Python→dict serializer**
+     (`src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`)
+     emits the bare `{"kind":
+     "draw_cards_equal_to_resolving_counter_amount"}` for
+     `DrawCardsEqualToResolvingCounterAmount` instances — sibling of
+     the `PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower`
+     and `ScheduleSelfSacAtNextEndStep` unit-variant leaves.
+  5. **Coverage 1:1 identity mapping.** The new Rust variant name
+     matches the Python class name 1:1, so
+     `mtg_bot.parity.effect_coverage.covered_python_class_set()` auto-
+     includes `DrawCardsEqualToResolvingCounterAmount` — closes the
+     `effect_uncovered` classifier gate at the covered-set level.
+
+**Carrier-scalar effect, not a static-amount sibling.** Where
+`DrawCards(amount: int)` carries the count as a parsed field, the
+Terrasymbiosis variant reads the count dynamically from
+`state.resolving_counter_amount` at resolve time. The slot is the
+exact byte-equal mirror of Python's `GameState.resolving_counter_amount`
+— `actions.py:2688` sets it from `item.counter_amount` before the
+trigger resolves, and `actions.py:2701` resets it to 0 after. Cycle 1
+lands the slot + the test setter; the production write site (the
+COUNTERS_ADDED-observer dispatch path that would emit a stack item
+with the right `counter_amount` rider) is honest-stopped — no in-pool
+Rust trajectory fires this trigger today because the
+`nonsafe_triggered_ability` admit gate stays closed for Terrasymbiosis.
+
+**Multi-gated card; classifier multi-gate state stays True after the
+cycle.** Per the round-58 subsystem-attribution classifier,
+Terrasymbiosis is multi-gated on `effect_uncovered +
+nonsafe_triggered_ability`. The cycle closes the `effect_uncovered`
+gate (the `DrawCardsEqualToResolvingCounterAmount` Python class flips
+from `missing_effect_classes` to covered), but the
+`nonsafe_triggered_ability` gate KEEPS the card multi-gated at the
+classifier level. The trajectory safe-trigger admit gate
+(`parity/trajectory.py::_python_ta_to_safe_dict`) is INTENTIONALLY
+NOT widened — that gate is about the production-deck bench admit set,
+a distinct concern from per-card real-EoE parity probes. **The card
+DOES move to PROBED tier through the dedicated per-card real-EoE
+byte-equal cross-engine probe** (`tests/test_terrasymbiosis_parity.py`),
+the same precedent as Comet Crawler / Mutinous Massacre / Dyadrine
+Attack / Boilerbilges Ripper / Fanatic of the Harrowing / Terrapact
+Intimidator / Attack-in-the-Box / Ouroboroid established.
+
+**Per-card parity probe path (NOT spell-card-bridge admit set).**
+Terrasymbiosis is an Enchantment, not a non-creature spell with a
+spell-card-bridge resolve. The spell-card-bridge admit set
+(`trajectory.py::_python_spell_effect_to_dict` + its §2 teeth) gates
+non-creature spells only. The cross-engine probe lives in
+`tests/test_terrasymbiosis_parity.py` and uses the per-card
+dedicated parity-test module convention (cf.
+`test_ouroboroid_parity.py`,
+`test_attack_in_the_box_parity.py`,
+`test_boilerbilges_ripper_parity.py`,
+`test_fanatic_of_the_harrowing_parity.py`,
+`test_terrapact_intimidator_parity.py`,
+`test_comet_crawler_parity.py`, `test_dyadrine_attack.py`,
+`test_mutinous_massacre_parity.py`), driving the parsed Terrasymbiosis
+printing through both engines on the substrate-level round-trip
+(parser leaf → trajectory dict → cross-engine bridge ↔ Rust resolve
+arm) and pinning the byte-equal observable for the hand/library draw
+delta.
+
+**Documented residual — COUNTERS_ADDED-observer dispatch path.** Cycle
+1 does NOT plumb the production write site on Rust: the
+COUNTERS_ADDED-observer trigger fan-out (mirroring Python's
+`add_plus_one_counters` helper + the `actions.py:2688/2701` set/reset
+boundary around trigger resolve) is honest-stopped. No in-pool Rust
+trajectory fires the Terrasymbiosis observer trigger today because
+the safe-trigger admit gate keeps the card declined; the Cycle 1
+substrate ships so a future cycle landing the dispatch wiring can
+flip the gate atomically. Tests inject the slot via the test setter
+`set_resolving_counter_amount` to exercise the resolve arm's byte-
+equal observable directly.
+
+**Schedule + resolve composition byte-equal.** Both engines: read
+amount = state.resolving_counter_amount at resolve time; if
+amount <= 0 silent no-op; otherwise draw `amount` cards onto the
+source-controller's hand from the top of their library, flipping
+attempted_draw_on_empty on under-library overrun (CR 704.5b).
+Synthetic Rust unit pins drive the resolve arm directly via the test
+setter substrate (the COUNTERS_ADDED-observer trigger-fan-out through
+both engines's counter-mutation dispatch machinery is honest-stopped
+at Cycle 1 — agent-coordination of the trigger-pushed-onto-stack
+timing is Cycle 2+ work, sibling of the Ouroboroid combat-trigger
+agent-surface gates).
+
+**Cycle 2+ trigger-fan-out probe.** A future cycle driving both
+engines through the COUNTERS_ADDED-observer event dispatch will let
+the cross-engine probe pin a byte-equal field-view diff over the
+whole printed-trigger pipeline (add +1/+1 counters via
+`add_plus_one_counters` → COUNTERS_ADDED event dispatch → observer
+trigger pushed onto stack → resolve → controller draws `count` cards).
+Cycle 1 lands ONLY the substrate (Rust variant + parse + to_pydict +
+resolve + cross-engine bridge + per-leaf serializer +
+`resolving_counter_amount` slot + test setter + unit pins for
+amount=0 no-op, amount=N draw, and amount > library); the
+trigger-fan-out byte-equal probe is honest-stopped today and pinned
+at the dedicated per-card test surface.
+
+**Location**: `rust/src/cards.rs` (enum variant + parse arm +
+to_pydict arm + error-message kind list extension),
+`rust/src/state.rs` (new `resolving_counter_amount: i32` field on
+GameState + clone preservation + test setter
+`set_resolving_counter_amount` + getter),
+`rust/src/state_ops_setup.rs` (slot init to 0 in `make_state`),
+`rust/src/state_ops_resolve.rs` (resolve arm that reads
+`state.resolving_counter_amount` and draws via the library-top pop
++ CR 704.5b path under the 5-zone source-controller walk),
+`src/mtg_bot/parity/cross_engine.py` (dict→Python bridge arm),
+`src/mtg_bot/parity/trajectory.py` (per-leaf Python→dict serializer
+arm + narrow import), `tests/test_terrasymbiosis_parity.py` (probes —
+parser SoT pin, trajectory serializer round-trip, Rust to_pydict
+round-trip, covered-set membership, Rust resolve amount=0 no-op pin,
+Rust resolve amount=N draw pin, Rust resolve amount-exceeds-library
+boundary pin, real-EoE byte-equal cross-engine probe). Per-card cycle
+LANDED; Terrasymbiosis is now PROBED at the per-card parity layer
+(despite the classifier multi-gate state staying True on
+`nonsafe_triggered_ability`).
+
+
 ## Ouroboroid Cycle 1 LANDED — `Effect::PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower` (unit) X-source mass-counter Effect shipped byte-equal; beginning-of-combat-on-your-turn trigger reads X = effective_power(source) at resolve time and spreads +X counters to each controlled creature
 
 **Single-cycle landing (2026-05-23,

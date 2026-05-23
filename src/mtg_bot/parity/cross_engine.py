@@ -6769,6 +6769,41 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DrawCardsEqualToResolvingCombatDamage,
         )
         return DrawCardsEqualToResolvingCombatDamage()
+    if kind == "draw_cards_equal_to_resolving_counter_amount":
+        # **Terrasymbiosis Cycle 1 — counter-amount sibling of the
+        # combat-damage bridge arm above.** Rust substrate
+        # ``Effect::DrawCardsEqualToResolvingCounterAmount`` (unit
+        # variant; parser at cards.rs, resolve reads
+        # ``state.resolving_counter_amount``, to_pydict at cards.rs)
+        # ships in this cycle. Mirrors the combat-damage bridge arm
+        # exactly — unit variant, no fields to thread, Python's
+        # ``DrawCardsEqualToResolvingCounterAmount``
+        # (``effects/generic/draw_mill.py:63``) is a frozen
+        # dataclass with no fields; the bridge constructs it bare.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines read
+        # ``state.resolving_counter_amount`` at resolve time — the
+        # implicit "that many" carrier value pushed by the
+        # COUNTERS_ADDED-observer event handler before firing the
+        # trigger. Python's class at draw_mill.py:69-81 calls
+        # ``draw_n_cards(state, controller_id, amount)`` and no-ops
+        # when amount <= 0 (defensive against accidental invocation
+        # outside a counters-added trigger). Rust's resolve mirrors
+        # the same read + bounded draw semantics. The "may" in oracle
+        # text is simplified to always-yes per the OptionalXyz
+        # precedent documented on the Python class docstring.
+        #
+        # **Real EoE consumer** unblocked: 1 EoE card (Terrasymbiosis).
+        # Cross-engine end-to-end probe through the COUNTERS_ADDED-
+        # observer dispatch path is honest-stopped today
+        # (substrate-only landing); the dedicated per-card probe at
+        # ``tests/test_terrasymbiosis_parity.py`` carries the PROBED
+        # tier flip via the classifier-bypass precedent (Ouroboroid /
+        # Attack-in-the-Box / Friendly Teddy).
+        from mtg_bot.effects.generic.draw_mill import (
+            DrawCardsEqualToResolvingCounterAmount,
+        )
+        return DrawCardsEqualToResolvingCounterAmount()
     if kind == "deal_damage_equal_to_source_power_any_target":
         # **Round-26 BLOCKED-BRIDGE-ARM slice -- "this creature deals
         # damage equal to its power to any target"

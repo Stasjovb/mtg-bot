@@ -442,6 +442,12 @@ pub fn make_state(
         // p0-then-p1 order (see cross_engine.build_python_state).
         next_object_id: next_id,
         resolving_combat_damage_amount: 0,
+        // Terrasymbiosis Cycle 1 — counter-amount substrate slot.
+        // Set to 0 at fresh-state construction; production write site
+        // (COUNTERS_ADDED-observer dispatch path) is honest-stopped
+        // pending the wider trigger-fan-out cycle; test setter is the
+        // entry point until then.
+        resolving_counter_amount: 0,
         resolving_combat_damage_target_player_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine

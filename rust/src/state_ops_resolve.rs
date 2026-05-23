@@ -18192,6 +18192,81 @@ fn apply_effect(
                 Arc::make_mut(&mut player.hand).push(obj);
             }
         }
+        // **Terrasymbiosis Cycle 1 — `Effect::DrawCardsEqualToResolving
+        // CounterAmount` resolve arm.** Counter-amount sibling of the
+        // combat-damage arm above; mirrors Python's
+        // `DrawCardsEqualToResolvingCounterAmount.resolve`
+        // (`effects/generic/draw_mill.py:69-81`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal under matching inputs.
+        //
+        // 1. Read `state.resolving_counter_amount`. If <= 0 -> silent
+        //    no-op (Python parity: `if amount <= 0: return`).
+        // 2. Locate the source's controller (zone-scan first, stack-
+        //    fallback) — same pattern as the combat-damage sibling.
+        // 3. Inline draw loop drawing `amount` cards onto the source-
+        //    controller's hand. CR 704.5b empty-library handling
+        //    flips `attempted_draw_on_empty` so the SBA pass converts
+        //    it to `has_lost`.
+        //
+        // **Substrate scope.** The slot is read here; the production
+        // write site (the COUNTERS_ADDED-observer dispatch path) is
+        // honest-stopped for Cycle 1 — tests inject the slot via
+        // `set_resolving_counter_amount`. See SEARCH_LIMITATIONS.md
+        // "Terrasymbiosis Cycle 1 LANDED".
+        Effect::DrawCardsEqualToResolvingCounterAmount => {
+            let amount = state.resolving_counter_amount;
+            if amount <= 0 {
+                return Ok(());
+            }
+            // Locate source controller (zone-scan first, stack scan
+            // fallback). Same pattern as the combat-damage sibling.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found anywhere: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // Inline draw loop — same pattern as Effect::DrawCards /
+            // the combat-damage sibling. CR 704.5b empty-library
+            // handling flips attempted_draw_on_empty so the SBA pass
+            // converts it to has_lost.
+            let n = amount as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
         // **G7 Class-C delayed-trigger port (round-78).** The
         // `WarpExileSelf` delayed triggered ability resolves: re-look
         // up the warp creature on the battlefield by `source_obj_id`

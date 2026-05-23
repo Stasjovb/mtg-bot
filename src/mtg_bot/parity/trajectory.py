@@ -4328,6 +4328,17 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.counters import (
         PutPlusOneCountersOnEachCreatureYouControlEqualToSourcePower,
     )
+    # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer for
+    # ``DrawCardsEqualToResolvingCounterAmount()`` — the field-free
+    # counter-amount sibling of
+    # ``DrawCardsEqualToResolvingCombatDamage``. Unit-variant —
+    # strictly for the round-trip dict-shape surface; the production
+    # COUNTERS_ADDED-observer write site that mints
+    # ``state.resolving_counter_amount`` is honest-stopped at the
+    # cross-engine level (substrate-only landing).
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsEqualToResolvingCounterAmount,
+    )
     # **Terminal Velocity — Cycle 1 (2026-05-22).** Two new leaves for
     # the Terminal Velocity Sorcery + the LTB damage-equal-to-MV-
     # each-creature trigger body. Both are field-free dataclasses;
@@ -5249,6 +5260,18 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                     "control_equal_to_source_power"
                 ),
             }
+        # **Terrasymbiosis Cycle 1 (2026-05-23).** Per-leaf serializer
+        # for ``DrawCardsEqualToResolvingCounterAmount()`` — the
+        # field-free counter-amount sibling of
+        # ``DrawCardsEqualToResolvingCombatDamage``. Unit-variant —
+        # emits the bare ``{"kind":
+        # "draw_cards_equal_to_resolving_counter_amount"}``. The
+        # carrier scalar (``state.resolving_counter_amount``) is
+        # populated at COUNTERS_ADDED-observer dispatch time on Python
+        # (production wire) and at test-injection time on Rust
+        # (Cycle 1 substrate; production dispatch honest-stopped).
+        if isinstance(eff, DrawCardsEqualToResolvingCounterAmount):
+            return {"kind": "draw_cards_equal_to_resolving_counter_amount"}
         # **Terminal Velocity — Cycle 1 (2026-05-22).** Per-leaf
         # serializer for ``TerminalVelocityEffect()`` — the field-free
         # bespoke Sorcery body at ``effects/bespoke.py:3043``. The
