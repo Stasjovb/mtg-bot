@@ -6288,6 +6288,58 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             SetLifeToHalfStartingRoundedUp,
         )
         return SetLifeToHalfStartingRoundedUp()
+    if kind == "arabella_attack_effect":
+        # **Arabella, Abandoned Doll Cycle 1 BLOCKED-BRIDGE-ARM slice
+        # -- "deals X damage to each opponent and you gain X life,
+        # where X is the number of creatures you control with power 2
+        # or less" (ArabellaAttackEffect family).** Rust substrate
+        # ``Effect::ArabellaAttackEffect`` (unit variant; parser,
+        # resolve, and to_pydict arms land alongside this bridge arm
+        # in this cycle). The Python class ``ArabellaAttackEffect``
+        # (``effects/bespoke.py:2904``) is a frozen dataclass with no
+        # fields; the bridge constructs it bare.
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # ``parse_effect`` silent-drop convention for unrecognized
+        # keys (extra dict fields are ignored).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines locate
+        # the source-controller (5-zone walk on Rust;
+        # ``state.player_by_id(controller_id)`` on Python), compute
+        # ``X = count of source-controller's creatures with
+        # effective_power <= 2`` (the source itself counts when its
+        # own effective power is <= 2 -- no "other" exclusion), and:
+        # if X <= 0 silently return; else deal X damage to each
+        # non-controller non-has_lost player AND gain X life on the
+        # source-controller. The damage path is direct
+        # ``life -= X`` on Rust (matches the sibling
+        # ``Effect::DamageEachOpponent`` / ``Effect::DealDamage``
+        # arms); Python routes through ``_apply_damage`` which on
+        # the "player" kind also resolves to ``life -= X``. The
+        # cross-engine probe's byte-equal compare is over the
+        # harness's ``_build_field_view`` zone slot tuple (life
+        # totals pinned directly outside the 8-tuple, same as the
+        # The Endstone probe precedent).
+        #
+        # **Per-card probe path.** Arabella's parsed trigger event is
+        # ``Event.ATTACKS`` -- IS in
+        # ``_python_ta_to_safe_dict``'s
+        # ENTERS/DIES/ATTACKS/BECOMES_TAPPED safe set as an event,
+        # BUT the ``ArabellaAttackEffect`` effect leaf is not in the
+        # safe-trigger leaf-effect whitelist that gate consults, so
+        # the card does NOT admit through the production-deck bench
+        # admit set. Per-card byte-equal cross-engine parity is
+        # exercised via the dedicated probe in
+        # ``tests/test_arabella_abandoned_doll_parity.py`` (the
+        # PROBED tier flip anchor). Same precedent as Boilerbilges
+        # Ripper / Comet Crawler / Friendly Teddy / Genemorph Imago
+        # / Fanatic of the Harrowing / Vaultguard Trooper / Endstone
+        # / Terrapact Intimidator -- multi-gated card; classifier's
+        # ``effect_uncovered`` gate closes via the new Rust variant
+        # + this bridge arm; ``nonsafe_triggered_ability`` stays
+        # True intentionally.
+        from mtg_bot.effects.bespoke import ArabellaAttackEffect
+        return ArabellaAttackEffect()
     if kind == "create_token_copy_of_target_creature_you_control":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "create a token
         # that's a copy of target creature you control"

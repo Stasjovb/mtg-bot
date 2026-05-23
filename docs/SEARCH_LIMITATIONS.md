@@ -13631,6 +13631,158 @@ to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm —
 `tests/test_endstone_parity.py` (probes). Per-card cycle LANDED;
 The Endstone is now PROBED at the per-card parity layer.
 
+## Arabella, Abandoned Doll Cycle 1 LANDED — `ArabellaAttackEffect` Rust Effect substrate closed (2026-05-23, `feature/arabella-abandoned-doll-cycle-1-p1`)
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for Arabella, Abandoned Doll
+(`{R}{W}` Legendary Artifact Creature — Toy, 1/3, Duskmourn pool)
+is now Effect-closed. The `ArabellaAttackEffect` Rust Effect
+variant ships with parse + to_pydict + resolve arms; the
+cross_engine dict→Python bridge arm round-trips it; a per-card
+real-EoE byte-equal probe flips Arabella to **PROBED at the
+per-card parity layer**.
+
+**Oracle text** (per-attacker `Event.ATTACKS` triggered ability):
+
+> "Whenever Arabella attacks, it deals X damage to each opponent
+> and you gain X life, where X is the number of creatures you
+> control with power 2 or less."
+
+**What landed:**
+
+* **Rust `Effect::ArabellaAttackEffect` variant.** New field-free
+  unit variant on `rust/src/cards.rs` (the
+  `SetLifeToHalfStartingRoundedUp` / `FanaticOfTheHarrowingETBEffect`
+  / `BoilerbilgesRipperETBEffect` / `TerrapactIntimidatorETBEffect`
+  unit-variant idiom). Mirrors Python's `ArabellaAttackEffect`
+  frozen dataclass (`effects/bespoke.py:2904`) field-for-field —
+  both sides are parameterless.
+* **Parse arm.** Closed-vocab string kind
+  `"arabella_attack_effect"` parsed via the existing dict-key
+  extraction pattern (cards.rs `parse_effect`). No fields consumed;
+  extra dict keys silently dropped (the standard unit-variant
+  contract).
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`); the round-trip is the bare one-key
+  payload `{"kind": "arabella_attack_effect"}`.
+* **Resolve arm.** `rust/src/state_ops_resolve.rs` arm immediately
+  after the `TerrapactIntimidatorETBEffect` resolve. Mechanism:
+  5-zone walk + stack-fallback to find the source controller, count
+  `X = |{ o in controller.battlefield : o.is_creature AND
+  effective_power(o) <= 2 }|` (the source itself counts when its own
+  effective power is `<= 2` — no "other" exclusion; mirrors Python's
+  no-source-exclusion clause). If `X <= 0`, silent return (matches
+  Python's `if x <= 0: return`). Otherwise, for every player whose
+  index `!= controller_idx` AND `!has_lost`, subtract `X` from
+  their `life` (direct subtraction matching the sibling
+  `Effect::DamageEachOpponent` / `Effect::DealDamage` arms); then
+  add `X` to the source-controller's `life`. Animated land-creatures
+  via the round-28 UEOT `BecomesLandCreature` framework DO count
+  (the inline reader matches the `effective_power` getter shape at
+  `state_ops_combat.rs:1252`). Source untrackable = silent fizzle.
+  SBAs run AFTER the effect to surface observable life-delta
+  consequences (e.g. lethal life loss).
+* **Cross-engine bridge arm.** New `arabella_attack_effect` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately after the `set_life_to_half_starting_rounded_up`
+  sibling unit-variant arm. Translates the Rust-shape dict back
+  into a Python `ArabellaAttackEffect()` instance; field-free on
+  both sides (no rename).
+* **Tests.** `tests/test_arabella_abandoned_doll_parity.py` carries:
+    - 1 parser SoT pin (card-claim + cost + supertype + types +
+      P/T + the single ATTACKS triggered ability + the
+      `ArabellaAttackEffect()` effect + `IsSelf(subject=None)`
+      predicate);
+    - 2 serializer round-trip pins (dict→Python via the bridge arm,
+      Rust register_printing → to_pydict via the etb_effects
+      readback);
+    - 5 Rust resolve-arm unit pins (X = 1 self-only, X = 2 with
+      bear, power-filter excludes 4/4 ogre, opponent-creature
+      excluded from controller-only filter, X = 0 silent no-op via
+      non-creature carrier direct-apply path);
+    - 1 covered-set membership pin (the new Rust variant pairs 1:1
+      with the parser-claimed Python class — no override or
+      `RUST_AHEAD_OF_POOL` allowlist needed) + 1 classifier
+      `effect_uncovered` gate-closure pin (skips informationally
+      when the closed gate moves the card out of the classifier's
+      blocked-subsystem tier);
+    - 1 GENUINE real-EoE cross-engine byte-equal probe driving the
+      ACTUAL parsed Arabella, Abandoned Doll printing on Python
+      against a bridged synthetic carrier on Rust; both engines
+      seeded with Arabella + a 2/2 bear on p0's bf so X = 2; both
+      engines drive `declare_attacker` (Rust) /
+      `combat.declare_attackers` (Python); post-resolve
+      p0.life == 22 + p1.life == 18 on BOTH; `compare_fields == []`
+      over the WHOLE field view.
+
+**Pool delta:** Arabella, Abandoned Doll flips Effect-uncovered →
+**PROBED at the per-card parity layer**. **Admit set unchanged** —
+Arabella is a creature with an ATTACKS triggered ability, NOT a
+non-creature spell admitted through the spell-card-bridge admit
+set (`trajectory.py::_python_spell_effect_to_dict` + its §2 teeth).
+Its triggered-ability event (`ATTACKS`) IS in the production-deck
+safe-trigger admission gate's recognized event set, but the
+`ArabellaAttackEffect` leaf is not in the gate's leaf-effect
+whitelist (`_python_ta_to_safe_dict`), so this cycle does NOT widen
+the production-deck bench admit set.
+
+**`has_lost` parity.** Both engines carry a per-player
+`has_lost: bool` flag. The resolve arm reads
+`state.players[opp_idx].has_lost` to skip-equiv Python's
+`opp.has_lost` filter. In the 2-player cross-engine probe both
+players are alive (`has_lost == False` on both engines) so the
+gate is a no-op divergence today; pinning it here keeps future
+N-player / pre-killed-opponent fixtures correct.
+
+**Out of scope of this cycle (honest-stops):**
+
+* **No `_SAFE_TRIGGERS` admission widen.** Adding an entry for
+  Arabella's ATTACKS + `ArabellaAttackEffect` leaf to
+  `_SAFE_TRIGGERS` + a matching reverse-serializer leaf in
+  `_python_ta_to_safe_dict` is the production-deck bench-admit
+  half. The `_python_ta_to_safe_dict` gate's whitelist already
+  recognizes ATTACKS as an event but does not whitelist the
+  `ArabellaAttackEffect` effect leaf. The per-card probe BYPASSES
+  safe-trigger admission entirely by driving a real cross-engine
+  state directly, so the per-card PROBED tier closes without the
+  bench-admit widen. A future bench-admit cycle ships the
+  admit-set widen alongside the new effect-leaf arm.
+
+* **No production-deck full-card bench play.** Same reason as
+  above — without the safe-trigger admission widen, Arabella
+  cannot ride into the full-card bench-side cross-engine harness.
+  Per-card probe parity is the strongest tier closed here
+  (Effect + bridge-level byte-equality on a *controlled*
+  cross-engine state, NOT full-game-trajectory parity).
+
+* **No damage-trigger observer fan-out.** Rust's resolve arm
+  applies damage via direct `life -= X` (matching the sibling
+  `Effect::DamageEachOpponent` / `Effect::DealDamage` shape).
+  Python routes through `_apply_damage`, which on the "player"
+  damage kind reduces to the same `life -= X` plus optional
+  enchanted-creature-dealt-damage trigger fan-out (Cryoshatter /
+  Pain for All); none of those auras are in the active card pool
+  alongside Arabella, so the divergence isn't observable on the
+  current pool. A future cycle landing a damage-trigger observer
+  in Rust + the matching aura sub-pool would close the soft
+  divergence.
+
+**Coverage**: 11 tests at `tests/test_arabella_abandoned_doll_parity.py`
+(10 pass + 1 informative skip — the classifier closing the gate
+moves Arabella out of the blocked-subsystem tier, so the
+classifier gate-closure assertion skips with that reason). All
+pass on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs`
+(`Effect::ArabellaAttackEffect` variant + parse arm + to_pydict
+arm), `rust/src/state_ops_resolve.rs` (resolve arm — 5-zone source
+locator + X-from-count battlefield walk + per-opponent damage +
+gain-X-life), `src/mtg_bot/parity/cross_engine.py`
+(`arabella_attack_effect` dict→Python bridge arm),
+`tests/test_arabella_abandoned_doll_parity.py` (probes). Per-card
+cycle LANDED; Arabella, Abandoned Doll is now PROBED at the
+per-card parity layer.
+
 ---
 
 ## Territorial Bruntar Cycle 1 LANDED — `Effect::TerritorialBruntarLandfallEffect` (unit) Effect half shipped byte-equal on zone-change observable; `playable_from_exile_this_turn` flag honest-stopped (no Rust substrate)

@@ -5326,6 +5326,97 @@ pub enum Effect {
     /// with a per-player `starting_life` field; not in scope for
     /// Cycle 1.
     SetLifeToHalfStartingRoundedUp,
+    /// **Arabella, Abandoned Doll — ATTACKS-trigger "deals X damage
+    /// to each opponent and you gain X life, where X is the number
+    /// of creatures you control with power 2 or less".** Mirrors
+    /// Python's `ArabellaAttackEffect` (parameterless frozen
+    /// dataclass at `effects/bespoke.py:2904`).
+    ///
+    /// **Arabella oracle text (full):** "Whenever Arabella attacks,
+    /// it deals X damage to each opponent and you gain X life, where
+    /// X is the number of creatures you control with power 2 or
+    /// less." In the active EoE+DSK pool, this is Arabella, Abandoned
+    /// Doll's `Event::Attacks` triggered ability with predicate
+    /// `Predicate::SourceIsSelf` ("whenever this creature attacks").
+    /// The trigger is per-attacker per-attack — fires once each time
+    /// Arabella is declared as an attacker.
+    ///
+    /// **Resolve semantics (mirrors Python's
+    /// `ArabellaAttackEffect.resolve`).** Compute X at resolve time:
+    ///   1. Walk the source-controller's battlefield slice (NOT both
+    ///      bfs — the printed clause says "creatures you control").
+    ///   2. For each object on that slice whose printing has the
+    ///      "Creature" card type AND whose `effective_power` is
+    ///      `<= 2`, increment X. The source itself counts when its
+    ///      own effective power is `<= 2` (the printed clause has no
+    ///      "other" exclusion). Non-creatures (artifacts, lands,
+    ///      enchantments not animated this turn) don't count.
+    ///      Animated land-creatures via the round-28 UEOT
+    ///      `BecomesLandCreature` framework DO count (the
+    ///      `effective_power` getter returns `Some(p)` for them — see
+    ///      the docstring on the public getter at
+    ///      `state_ops_combat.rs:1252`). Lookup failure on a printing
+    ///      (`registry.lookup` returns None) is silently skipped to
+    ///      mirror Python's `try/except` around `effective_power`.
+    ///   3. If X is 0, return silently (mirrors Python's
+    ///      `if x <= 0: return` short-circuit — no damage dealt, no
+    ///      life gained, no log emitted on the damage/life lines).
+    ///   4. Otherwise: for each OTHER player (every player whose
+    ///      index != source-controller's index — the per-player
+    ///      `state.players[i].has_lost` flag is checked too,
+    ///      mirroring Python's `opp.has_lost` skip), deal X damage
+    ///      to the player via the standard damage path. In the
+    ///      2-player engine this fires exactly once on the opponent.
+    ///   5. Gain X life on the source-controller.
+    ///
+    /// **Damage path note.** Python routes through `_apply_damage` so
+    /// "when ~ is dealt damage" replacement effects and lifelink-on-
+    /// source riders cohabit cleanly with the trigger. Rust's
+    /// equivalent is direct `state.players[opp].life -= x` (the same
+    /// shape used by `Effect::DamageEachOpponent` /
+    /// `Effect::DealDamage` arms in this module). Cross-engine
+    /// observable parity is on `life` deltas + the
+    /// `Player.has_lost` SBA outcome; the soft damage-trigger
+    /// observer chain is not in the harness's
+    /// `_build_field_view` byte-equal slot set (same precedent as the
+    /// round-17 DamageEachOpponent / round-18 DamageEachCreature
+    /// arms — both write damage marks / life deltas directly without
+    /// the trigger fan-out).
+    ///
+    /// **Unit variant — no fields.** Same shape as the other
+    /// parameterless bespoke variants
+    /// (`FanaticOfTheHarrowingETBEffect`,
+    /// `BoilerbilgesRipperETBEffect`,
+    /// `TerrapactIntimidatorETBEffect`,
+    /// `SetLifeToHalfStartingRoundedUp`). The Python class is a
+    /// frozen `@dataclass` with no fields; the canonical dict shape
+    /// is `{"kind": "arabella_attack_effect"}` with no other keys.
+    /// The `parse_effect` arm silently drops extra dict keys (unit-
+    /// variant contract).
+    ///
+    /// **Source-controller resolution — 5-zone walk.** Mirrors the
+    /// `FanaticOfTheHarrowingETBEffect` / `SetLifeToHalfStartingRoundedUp`
+    /// arm: walk every player's `hand`/`library`/`battlefield`/
+    /// `graveyard`/`exile` for the `source_obj_id`. Source untrackable
+    /// = silent fizzle (the upstream trigger dispatcher would have
+    /// filtered an unfindable source out already; this is the
+    /// defense-in-depth path matching the sibling arms).
+    ///
+    /// **`has_lost` parity.** Both engines carry a per-player
+    /// `has_lost: bool` flag (`Player.has_lost` on Python;
+    /// `state.players[i].has_lost` on Rust). The arm reads
+    /// `state.players[opp_idx].has_lost` to skip-equiv Python's
+    /// `opp.has_lost` filter. In the 2-player cross-engine probe both
+    /// players are alive (`has_lost == False` on both engines) so
+    /// the gate is a no-op divergence today; pinning it here keeps
+    /// future N-player / pre-killed-opponent fixtures correct.
+    ///
+    /// **No targeting decision — fully deterministic.** No target
+    /// pick, no agent, no `PendingDecision`. The X-from-count walk +
+    /// per-opponent damage + scalar life-gain is the whole behavior.
+    /// Same Tier-A leaf shape as the round-44 X-from-count damage
+    /// family.
+    ArabellaAttackEffect,
     /// **Round 28 "tap another target creature".** Mirrors Python's
     /// `TapAnotherTargetCreature` (Starport-Security activated-ability
     /// family, 2+ EoE cards). Distinct from the existing
@@ -11096,6 +11187,15 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // dataclass.
             Ok(Effect::SetLifeToHalfStartingRoundedUp)
         }
+        "arabella_attack_effect" => {
+            // Arabella, Abandoned Doll — unit variant; no fields.
+            // Mirrors Python's `ArabellaAttackEffect()` frozen
+            // dataclass (`effects/bespoke.py:2904`). Extra dict keys
+            // silently dropped (unit-variant contract; matches
+            // `SetLifeToHalfStartingRoundedUp` /
+            // `FanaticOfTheHarrowingETBEffect` siblings).
+            Ok(Effect::ArabellaAttackEffect)
+        }
         "tap_another_target_creature" => {
             Ok(Effect::TapAnotherTargetCreature)
         }
@@ -15097,6 +15197,11 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::SetLifeToHalfStartingRoundedUp => {
             d.set_item("kind", "set_life_to_half_starting_rounded_up")?;
+        }
+        Effect::ArabellaAttackEffect => {
+            // Arabella, Abandoned Doll — unit variant, no payload
+            // fields beyond the `kind` discriminator.
+            d.set_item("kind", "arabella_attack_effect")?;
         }
         Effect::TapAnotherTargetCreature => {
             d.set_item("kind", "tap_another_target_creature")?;

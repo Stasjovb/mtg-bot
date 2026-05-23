@@ -20372,6 +20372,180 @@ fn apply_effect(
                 effect: Effect::SacrificeSourceDelayed,
             });
         }
+        // **Arabella, Abandoned Doll Cycle 1 (2026-05-23).** Mirrors
+        // Python's `ArabellaAttackEffect.resolve`
+        // (`effects/bespoke.py:2919-2954`) byte-equal on observable life
+        // deltas.
+        //
+        // **Resolve steps (mirror Python).**
+        //   1. Source-controller resolution — 5-zone walk (mirrors the
+        //      `FanaticOfTheHarrowingETBEffect` /
+        //      `SetLifeToHalfStartingRoundedUp` siblings). Source not
+        //      found = silent fizzle.
+        //   2. Walk the source-controller's `battlefield` slice (NOT
+        //      `state.battlefield` cross-player walk — Python's
+        //      `for o in state.battlefield: if o.controller_id !=
+        //      controller_id: continue` short-circuits identical to
+        //      iterating only the controller's bf). For each object:
+        //        - skip if printing not a creature
+        //          (`printing.card_types` doesn't contain "Creature");
+        //        - read `effective_power` via the public getter on
+        //          `GameState` (`state_ops_combat.rs:1252`). Returns
+        //          `None` for non-creatures / unanimated lands → skip
+        //          (mirrors Python's `try/except` around
+        //          `effective_power`); for animated land-creatures
+        //          (round-28 UEOT `BecomesLandCreature`) returns the
+        //          effective P, which counts. We re-borrow the
+        //          printing through the registry here rather than
+        //          relying on the borrow from `effective_power`.
+        //        - increment `x` if effective power `<= 2`.
+        //      Saturating cast: the count fits in `i32` because the
+        //      battlefield Vec length is bounded by usize → cast via
+        //      `as i32` (in practice the EoE pool has at most ~20
+        //      permanents per player).
+        //   3. If `x <= 0`, silent return — mirrors Python's
+        //      `if x <= 0: return` short-circuit before the
+        //      damage/life-gain block.
+        //   4. For every player whose index != source-controller AND
+        //      `!has_lost`, subtract `x` from their `life`. Mirrors
+        //      Python's `for opp in state.players: if opp.id ==
+        //      controller_id or opp.has_lost: continue;
+        //      _apply_damage(state, ("player", opp.id), x)`. Direct
+        //      `life -= x` matches the sibling `Effect::DamageEach-
+        //      Opponent` / `Effect::DealDamage` shape (no fan-out
+        //      through a damage-trigger observer; the harness
+        //      byte-equal compare is on life deltas + zone state, not
+        //      the soft trigger chain).
+        //   5. Add `x` to the source-controller's `life` (the gain-X
+        //      half).
+        //
+        // **No agent surface required for byte-equal.** Fully
+        // deterministic — no target pick, no `PendingDecision`, no
+        // RNG.
+        //
+        // **Source-controller mutable-borrow ordering.** Inline the
+        // `effective_power` recomputation per object rather than
+        // calling the public getter inside the controller-bf walk
+        // (the getter takes `&self`, but we already hold a shared
+        // borrow on the bf slice — the borrow-checker is happy). The
+        // life-mutation block (steps 4 + 5) happens AFTER the count
+        // walk completes so the borrow lifetimes don't overlap.
+        Effect::ArabellaAttackEffect => {
+            // 1. Source-controller resolution: 5-zone walk.
+            let mut source_controller: Option<u8> = None;
+            'arabella_src: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'arabella_src;
+                        }
+                    }
+                }
+            }
+            // Stack fallback (mirrors the FanaticOfTheHarrowing arm's
+            // defense-in-depth source-finder for resolving-stack
+            // items whose source has already moved out of a tracked
+            // zone before the resolve arm runs).
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            // 2. Count X = source-controller's creatures with
+            //    effective_power <= 2. Walk just that controller's bf
+            //    (Python's `for o in state.battlefield ... if
+            //    o.controller_id == controller_id` is identical to a
+            //    per-controller slice walk).
+            //
+            // Collect ids first so we can read printings + call the
+            // power getter without a long-lived bf-slice borrow.
+            let candidate_ids: Vec<u32> = state.players[controller_idx]
+                .battlefield
+                .iter()
+                .map(|o| o.id)
+                .collect();
+            let mut x: i32 = 0;
+            for obj_id in &candidate_ids {
+                // Lookup printing; skip on missing-printing
+                // (mirrors Python's `try/except` around the power
+                // read — non-creature printings produce `None` /
+                // raise, both silently skip).
+                let obj = state.players[controller_idx]
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == *obj_id);
+                let Some(obj) = obj else { continue };
+                let Some(printing) = state.registry.lookup(obj.printing_id) else {
+                    continue;
+                };
+                // Creature predicate: printed `power` present OR
+                // UEOT BecomesLandCreature animation flag set
+                // (mirrors the `effective_power` getter shape at
+                // `state_ops_combat.rs:1252`). Non-creatures
+                // (artifacts, lands not animated, enchantments,
+                // planeswalkers) get `None` from the power getter →
+                // skip.
+                let printed_is_creature = printing.power.is_some();
+                let animated = obj.ueot_is_creature_via_become();
+                if !printed_is_creature && !animated {
+                    continue;
+                }
+                // Read effective power via the inline reader (same
+                // shape the public getter uses). Saturates to i16
+                // → widen to i32 for the `<= 2` compare.
+                let p_val: i32 = crate::state_ops_combat::predicate_subject_effective_power(
+                    state,
+                    *obj_id,
+                )
+                .unwrap_or(0); // non-creature / missing → 0; the
+                               // creature-gate above already filtered
+                               // non-creatures, so this branch only
+                               // fires on edge-case registry misses.
+                if p_val <= 2 {
+                    x += 1;
+                }
+            }
+            // 3. x <= 0 → silent return (no damage, no life gain).
+            //    The "x <= 0" form matches Python's check; in practice
+            //    x can't go negative (counts are non-negative), but
+            //    the spelling stays for byte-equal mirror.
+            if x <= 0 {
+                return Ok(());
+            }
+            // 4. Damage each non-controller, non-`has_lost` player.
+            //    Mirrors Python's `for opp in state.players: if opp.id
+            //    == controller_id or opp.has_lost: continue;
+            //    _apply_damage(state, ("player", opp.id), x)`. Direct
+            //    `life -= x` matches the sibling `Effect::DamageEach-
+            //    Opponent` / `Effect::DealDamage` shape.
+            let n_players = state.players.len();
+            for opp_idx in 0..n_players {
+                if opp_idx == controller_idx {
+                    continue;
+                }
+                if state.players[opp_idx].has_lost {
+                    continue;
+                }
+                state.players[opp_idx].life -= x;
+            }
+            // 5. Gain X life on the source-controller.
+            state.players[controller_idx].life += x;
+        }
     }
     Ok(())
 }
