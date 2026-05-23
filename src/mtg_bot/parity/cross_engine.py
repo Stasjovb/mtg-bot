@@ -4702,58 +4702,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
     if kind == "counter_target_spell":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "counter target spell"
         # (CounterTargetSpell family).** Rust substrate
-        # ``Effect::CounterTargetSpell`` (cards.rs:625-style unit
-        # variant; parser at cards.rs:3361-3370, resolve at
-        # state_ops_resolve.rs counter-target-spell arm) has been on
-        # main since round 28 (the round-7 counterspell-primitive
-        # consolidation slice). This slice closes the cross-engine
-        # bridge gap. Discovered by the round-22 fresh discovery walk
-        # (Rust kind emitted by to_dict but no matching
-        # ``_ta_dict_to_python_effect`` arm).
+        # ``Effect::CounterTargetSpell`` has been on main since round
+        # 28; this arm closes the cross-engine bridge gap.
         #
-        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
-        # parse_effect arm at cards.rs:3361-3370 -- silent-drop
-        # convention for unrecognized keys (extra dict fields are
-        # ignored). Python's ``CounterTargetSpell.filter_types``
-        # (frozenset[str], default frozenset() = "any spell") is
-        # intentionally dropped in the Rust first slice (per the
-        # variant's docstring). Bridge translates bare
-        # ``{"kind": "counter_target_spell"}`` to
-        # ``CounterTargetSpell()`` with default empty filter_types.
-        # Rider-widened variants ("counter target creature spell",
-        # "counter target noncreature spell") would surface as
-        # SEPARATE Rust Effect variants and re-enter the bridge as
-        # new arms -- out of scope for this bare-shape slice.
+        # **Warping Wail Cycle 2 substrate (2026-05-22).**
+        # ``filter_types`` is now threaded through the bridge. Rust's
+        # ``Effect::CounterTargetSpell { filter_types: Vec<String> }``
+        # carries the same allow-list Python's ``CounterTargetSpell.
+        # filter_types: frozenset[str]`` carries; missing /
+        # null / empty list all map to the empty-frozenset "any spell"
+        # shape (back-compat with every pre-closure construction).
+        # Each entry must be a non-empty string (mirrors Rust parse-
+        # arm validation). The bridge dict-side surface uses a list-
+        # of-strings (JSON-friendly); Python's frozenset constructor
+        # is order-insensitive, so list-vs-set on the wire is a
+        # cosmetic difference.
         #
         # **Resolve semantics (parity-relevant).** Both engines
         # target a stack item. Rust picks the TOP stack item that
         # isn't this Effect's own source via source_obj_id self-
-        # exclusion; Python's ``legal_targets`` walks state.stack and
-        # yields one ``("stack", i)`` per spell-kind item that isn't
-        # already countered or uncounterable. Empty stack / no legal
-        # target -> silent fizzle on both engines (Python's
-        # ``if not targets: return`` early-exit at stack_control.py:
-        # 198-199 mirrors Rust's empty-stack short-circuit).
+        # exclusion AND satisfies the ``filter_types`` allow-list
+        # (when non-empty); Python's ``legal_targets`` walks
+        # state.stack and yields one ``("stack", i)`` per spell-kind
+        # item that isn't already countered or uncounterable AND
+        # passes the same filter. Empty stack / no legal target ->
+        # silent fizzle on both engines.
         #
-        # **Uncounterable enforcement (Python-only first slice).**
-        # Python re-checks ``_is_uncounterable`` at resolve time
-        # (stack_control.py:211-216) for spells that gained
-        # protection between targeting and resolution. The Rust
-        # variant intentionally does not enforce ``cant_be_countered``
-        # in the first slice (no Rust ``spell_is_uncounterable`` flag
-        # today). Cross-engine divergence: a probe asserting a
-        # counterspell fizzles against an uncounterable spell would
-        # pass on Python and fail on Rust until the substrate lands.
-        # Out of scope for this bridge-arm slice.
+        # **Uncounterable enforcement.** Both engines now enforce
+        # ``spell_is_uncounterable`` + ``grants_creature_spells_un-
+        # counterable`` (Phase-2 round-80) along with the new
+        # ``filter_types`` gate (Cycle 2 this slice).
         #
         # **Real EoE consumers** unblocked: 2 EoE cards via oracle
-        # scan -- Divert Disaster, Unravel. Cross-engine end-to-end
-        # probe deferred per round-17/18/19 synthetic-only-when-
-        # riders-cascade precedent (the stack-target Decision
-        # pipeline is its own surface beyond the bare bridge-arm
-        # slice).
+        # scan -- Divert Disaster (``filter_types={"Instant",
+        # "Sorcery"}``), Unravel (same shape). Warping Wail mode 2
+        # (``filter_types={"Sorcery"}``) is the third Cycle 2
+        # consumer; Warping Wail itself stays DECLINED until Cycle 4
+        # closes Mode 3 + admit gate.
         from mtg_bot.effects.generic.stack_control import CounterTargetSpell
-        return CounterTargetSpell()
+        ft_raw = eff_dict.get("filter_types") or ()
+        # Validate: each entry must be a non-empty string. Mirrors
+        # Rust parse-arm contract.
+        filter_types: list[str] = []
+        for t in ft_raw:
+            if not isinstance(t, str) or not t:
+                raise ValueError(
+                    "counter_target_spell.filter_types entries must "
+                    f"be non-empty strings (got: {t!r})"
+                )
+            filter_types.append(t)
+        return CounterTargetSpell(filter_types=frozenset(filter_types))
     if kind == "target_opponent_loses_life":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "target opponent
         # loses N life" (TargetOpponentLosesLife family).** Rust

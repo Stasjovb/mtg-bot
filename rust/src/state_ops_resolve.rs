@@ -4887,7 +4887,7 @@ fn apply_effect(
         // follow-up consolidation slice can collapse onto the shared
         // `counter_spell` primitive once cross-file private-fn calls
         // re-open.
-        Effect::CounterTargetSpell => {
+        Effect::CounterTargetSpell { filter_types } => {
             // Find the topmost stack item whose source isn't this
             // effect's own source. iter().rev() walks top-to-bottom;
             // capture both the Vec index (for stack removal) and the
@@ -4908,8 +4908,17 @@ fn apply_effect(
             //      Frenzied Baloth on the battlefield granting the
             //      same protection to your other creature spells).
             //
+            // **Warping Wail Cycle 2 substrate (2026-05-22).** Apply
+            // `filter_types` ON TOP of the uncounterability gates.
+            // When non-empty, only admit a stack item whose source
+            // printing's `card_types` intersects `filter_types`
+            // (Python parity with `CounterTargetSpell.legal_targets`
+            // at `effects/generic/stack_control.py:188-190`). Empty
+            // `filter_types` means "any spell" — back-compat with
+            // every pre-closure construction.
+            //
             // Both checks scan from top-of-stack down, skipping any
-            // item that hits either gate. If no admissible target
+            // item that hits any gate. If no admissible target
             // remains, silent fizzle (matches Python's `if not legal_
             // targets: return` short-circuit at resolve time).
             let target: Option<(usize, u32, u8)> = (|| {
@@ -4984,13 +4993,31 @@ fn apply_effect(
                             }
                         }
                     }
+                    // **Warping Wail Cycle 2 substrate (2026-05-22):
+                    // filter_types gate.** When `filter_types` is
+                    // non-empty, the stack item's source printing's
+                    // `card_types` must intersect `filter_types` —
+                    // otherwise this item is ineligible (Python parity
+                    // with `CounterTargetSpell.legal_targets`
+                    // `effects/generic/stack_control.py:188-190`).
+                    // Empty `filter_types` means "any spell" (skip
+                    // gate entirely — back-compat with the pre-
+                    // closure unit-variant shape).
+                    if !filter_types.is_empty() {
+                        let any_match = printing.card_types.iter().any(|ct| {
+                            filter_types.iter().any(|ft| ft == ct)
+                        });
+                        if !any_match {
+                            continue;
+                        }
+                    }
                     return Some((i, item.source_obj_id, item.controller));
                 }
                 None
             })();
             let (stack_pos, target_obj_id, target_controller) = match target {
                 Some(t) => t,
-                None => return Ok(()), // empty / only-self / all-uncounterable: silent fizzle
+                None => return Ok(()), // empty / only-self / all-uncounterable / no-filter-match: silent fizzle
             };
             // Remove the matched stack item (inlines round-7's
             // `counter_spell` stack-removal step).

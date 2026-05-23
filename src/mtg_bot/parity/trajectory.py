@@ -4175,6 +4175,20 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.exile import (
         ExileTargetCreatureWithPowerOrToughnessAtMost,
     )
+    # **Warping Wail Cycle 2 substrate (2026-05-22).** Reverse-
+    # serializer leaf for ``CounterTargetSpell`` — closes the gap
+    # where the Python dataclass's ``filter_types: frozenset[str]``
+    # field had NO matching ``_python_spell_effect_to_dict`` arm
+    # (verify-first confirmed at HEAD ``7ad85ea9``: no
+    # ``CounterTargetSpell`` leaf existed). Substrate-only — Warping
+    # Wail itself stays DECLINED at the admit gate this cycle (Mode 3
+    # token-AA still gap, Cycle 4 admit-gate widen still pending).
+    # Real-EoE consumers Divert Disaster / Unravel
+    # (``filter_types=frozenset({"Instant", "Sorcery"})``) flip
+    # automatically once the rest of their bridge surface aligns.
+    from mtg_bot.effects.generic.stack_control import (
+        CounterTargetSpell,
+    )
     from mtg_bot.effects.generic.pump import (
         PumpTargetArtifactOrCreatureUntilEOT,
         ThreatenTargetCreatureUEOT,
@@ -4903,6 +4917,31 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": "exile_target_creature_with_power_or_toughness_at_most",
                 "max_value": int(eff.max_value),
             }
+        # **Warping Wail Cycle 2 substrate (2026-05-22).** Reverse-
+        # serializer leaf for ``CounterTargetSpell`` — closes the
+        # previously-deferred gap (the cycle-1a docstring noted
+        # ``CounterTargetSpell.filter_types`` as a Mode 2 cycle-2
+        # deliverable). Bridge surface is symmetric:
+        #
+        #   * empty filter_types → emit bare ``{"kind":
+        #     "counter_target_spell"}`` (byte-identical to every pre-
+        #     closure round-trip — back-compat preserved).
+        #   * non-empty filter_types → emit sorted list-of-strings
+        #     (frozenset iteration is unstable; sort for byte-equal
+        #     round-trip determinism, mirrors the established
+        #     ``granted_keywords`` emit shape).
+        #
+        # Empty entries (``""`` in the frozenset) are rejected by
+        # returning ``None`` — mirrors the Rust parse-arm contract
+        # (each entry must be a non-empty string).
+        if isinstance(eff, CounterTargetSpell):
+            ft = eff.filter_types
+            if any((not isinstance(t, str)) or not t for t in ft):
+                return None
+            out: dict = {"kind": "counter_target_spell"}
+            if ft:
+                out["filter_types"] = sorted(ft)
+            return out
         # **Reroute Systems closure (2026-05-21).** ModalChooseOne
         # envelope **Cycle 6** per-leaf serializer for Reroute Systems
         # mode 0: ``PumpTargetArtifactOrCreatureUntilEOT``. The Rust

@@ -10744,6 +10744,102 @@ the X-tracking C1 substrate.
   `tests/test_probe_spell_card_bridge_admitted.py`) STILL PASS
   unchanged (no admit drift — substrate-only landing).
 
+- **Warping Wail Cycle 2 substrate LANDED (2026-05-22,
+  `feature/warping-wail-substrate-cycle-2`).** **Substrate-only
+  closure** for the second of Warping Wail's three modes
+  (`CounterTargetSpell.filter_types`). Widens the existing Rust
+  `Effect::CounterTargetSpell` from a unit variant to
+  `{ filter_types: Vec<String> }`, mirroring Python's
+  `CounterTargetSpell.filter_types: frozenset[str] = frozenset()`.
+
+  **Changes shipped:**
+    - `rust/src/cards.rs::Effect::CounterTargetSpell` — schema widen
+      (unit variant → `{ filter_types: Vec<String> }`).
+    - `rust/src/cards.rs::parse_effect "counter_target_spell"` arm —
+      accept optional `filter_types` list-of-strings; missing /
+      null / empty → empty-Vec back-compat; non-empty-string-only
+      entries validated at parse time.
+    - `rust/src/cards.rs::to_pydict` arm — emit `filter_types` ONLY
+      when non-empty (back-compat: existing round-trips that omit
+      the field stay byte-identical; mirrors the established
+      `granted_keywords` emit pattern).
+    - `rust/src/state_ops_resolve.rs::CounterTargetSpell` resolve arm —
+      apply the `filter_types` allow-list ON TOP of the Phase-2
+      uncounterability gates: a stack item must pass both
+      uncounterability AND filter_types intersection to be a legal
+      target (CR 101.2 + CR 115.1a, byte-equal to Python's
+      `CounterTargetSpell.legal_targets` at
+      `effects/generic/stack_control.py:188-190`).
+    - `src/mtg_bot/parity/cross_engine.py` bridge arm — thread
+      `filter_types` from dict-side list-of-strings → Python
+      `CounterTargetSpell(filter_types=frozenset(...))`. Non-string
+      / empty-string entries surface as `ValueError`.
+    - `src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict`
+      — **new** `CounterTargetSpell` leaf (was MISSING entirely
+      pre-cycle; the prior verify-first agent confirmed no such
+      leaf existed). Empty filter_types → bare unit-variant dict;
+      non-empty → sorted list-of-strings (mirrors `granted_keywords`
+      sort-on-emit determinism convention).
+
+  **Substrate-only — Warping Wail itself stays DECLINED at the
+  admit gate this cycle.** Warping Wail mode 2 is exactly
+  `CounterTargetSpell(filter_types=frozenset({"Sorcery"}))`, but
+  the printing's other modes still gap:
+    - Mode 1 (Cycle 1a, landed): exile-target-creature-with-P-or-T-
+      at-most.
+    - Mode 2 (THIS cycle, landed): `CounterTargetSpell.filter_types`
+      schema widen.
+    - Mode 3 (future Cycle 3): the colorless-creature-token mint
+      with mana ability — needs token-AA bridge widen.
+    - Cycle 4: admit-gate widen for the `(0, 1) + or_both=False`
+      Phase-6 modal shape, per-mode binders, and the real-EoE
+      cross-engine probe.
+
+  **PROBED side-effects: seven real-EoE counterspells AUTO-JOINED
+  the spell-card-bridge admit set** as the §2 round-trip-or-bail
+  teeth now positively close on `CounterTargetSpell` constructions
+  with non-empty `filter_types` (and the previously-missing
+  reverse-serializer leaf closes the bare-`CounterTargetSpell()`
+  round-trip for cards whose other effects were already covered):
+    - `Annul` — `filter_types=frozenset({"Artifact", "Enchantment"})`.
+    - `Break Down the Door` — bare `CounterTargetSpell()` (modal
+      counterspell + token, other modes already bridged).
+    - `Divert Disaster` — `filter_types=frozenset({"Instant",
+      "Sorcery"})`.
+    - `Don't Make a Sound` — bare `CounterTargetSpell()` (counter
+      unless pays N, schema drop on the unless-pays).
+    - `Get Out` — bare `CounterTargetSpell()` + small rider already
+      bridged.
+    - `Twist Reality` — bare `CounterTargetSpell()` + scry-2 rider.
+    - `Unravel` — `filter_types=frozenset({"Instant", "Sorcery"})`.
+
+  Admit set 33 → 40 (the pinned set tests in
+  `tests/test_cross_engine_etb_triggers.py::test_spell_card_-
+  lever_phase1_negative_pins_decline_set` and
+  `tests/test_probe_spell_card_bridge_admitted.py` are updated
+  in-cycle to reflect the new growth).
+
+  **Pinned-bug closure (Pin 1, `test_divergence_pins_gg.py`).** The
+  prior "bridge drops filter_types" divergence pin (a deliberate
+  documented-mistranslation pin) flips from divergence-pin to
+  parity-pin (`..._CLOSED_parity`), mirroring the established
+  Vanish-from-Sight `..._FIXED_parity` pattern.
+
+  **Tests.**
+  `tests/test_counter_target_spell_filter_types_substrate.py` (19
+  pins): Python class SoT pin; bridge dict→Python round-trip for
+  empty + nonempty filter_types (and missing field default);
+  bridge rejects non-string / empty-string entries loudly; reverse-
+  serializer round-trip for empty + Warping Wail mode 2 +
+  Divert Disaster shapes (with sorted-determinism check);
+  serializer bails on empty-string entry; Rust parser pins (parses
+  with filter_types, with omitted, with empty; rejects non-list
+  and empty-string entry); Rust resolve arm pins (Sorcery-filter
+  counters a Sorcery; Sorcery-filter declines an Instant; disjunctive
+  Instant-or-Sorcery counters both legs; empty filter_types counters
+  any spell; uncounterability gate composes cleanly with
+  filter_types).
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any

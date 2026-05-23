@@ -9,46 +9,35 @@ Pinned bugs
 -----------
 
 Pin 1 — ``CounterTargetSpell`` bridge drops ``filter_types`` parameter
-(``parity/cross_engine.py:4039-4093``).
+(``parity/cross_engine.py``).
+**CLOSED by ``feature/warping-wail-substrate-cycle-2`` (2026-05-22):**
+the Rust ``Effect::CounterTargetSpell`` variant widened from a unit
+variant to ``{ filter_types: Vec<String> }`` (mirroring Python's
+``frozenset[str]``); ``parse_effect`` / ``to_pydict`` / the resolve
+arm thread the field through; ``cross_engine.py``'s bridge arm
+propagates the dict-side list-of-strings into Python's
+``CounterTargetSpell(filter_types=frozenset(...))``; and
+``trajectory.py::_python_spell_effect_to_dict`` gains a matching
+reverse-serializer leaf (which was MISSING entirely pre-cycle — a
+separate prior gap surfaced by this same closure).  This Pin's test
+is renamed ``..._CLOSED_parity`` with the assertion inverted (both
+paths now produce the SAME filter_types value).
 
+    Prior bug (now FIXED):
     The cross-engine bridge arm for the Rust dict kind
-    ``counter_target_spell`` always constructs Python's
+    ``counter_target_spell`` always constructed Python's
     ``CounterTargetSpell()`` with its default ``filter_types=frozenset()``
     (meaning "counter any spell"), regardless of any ``filter_types`` or
-    equivalent restriction present in the source effect dict.  Rust's
-    ``Effect::CounterTargetSpell`` is currently a unit variant with no
-    fields; the bridge arm documents this as intentional for the bare
-    (unfiltered) first slice.  However cards that carry a type-restricted
-    counterspell effect (e.g. "counter target creature spell") would
-    surface a SEPARATE Rust effect kind — not a bare
-    ``counter_target_spell`` with a filter_types key.  The bug is that
-    the bridge arm is documented to accept (and silently drop) extra dict
-    keys such as ``filter_types``, meaning a hypothetical dict
+    equivalent restriction present in the source effect dict.  The bridge
+    arm was documented to silently drop extra dict keys such as
+    ``filter_types``, so a dict
     ``{"kind": "counter_target_spell", "filter_types": ["Creature"]}``
-    is translated to an UNFILTERED ``CounterTargetSpell()`` rather than
+    was translated to an UNFILTERED ``CounterTargetSpell()`` rather than
     ``CounterTargetSpell(filter_types=frozenset({"Creature"}))``.
-
-    The observable consequence: ``CounterTargetSpell.legal_targets`` at
-    ``effects/generic/stack_control.py:188-190`` checks
-    ``self.filter_types`` to restrict targetable spells.  With
-    ``filter_types=frozenset()`` all spells are legal targets (no
-    restriction).  With ``filter_types=frozenset({"Creature"})`` only
-    Creature spells are legal — a Sorcery on the stack is NOT included.
-    After bridge translation, the Sorcery is included (unintended).
 
     CR reference: CR 115.1a (legal targets are determined at cast time;
     if a spell has a type restriction on its target, the restriction
     applies to legal target selection).
-
-    Verified observable divergence (bridge dict with filter_types=["Creature"]
-    and a Sorcery on the stack):
-      * ``CounterTargetSpell(filter_types=frozenset({"Creature"}))``
-          ``.legal_targets(state)`` → [] (Sorcery excluded).
-      * Bridge output ``CounterTargetSpell(filter_types=frozenset())``
-          ``.legal_targets(state)`` → [("stack", 0)] (Sorcery included).
-
-    This pin does not require the Rust PyO3 extension; it exercises the
-    Python bridge translation layer only.
 
 Pin 2 — ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
 Rust resolve arm reset ``summoning_sick = True`` on library bounce
@@ -264,66 +253,59 @@ def _put_on_bf(state, printing, owner_id):
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_counterspell_bridge_drops_filter_types_divergence_pin():
-    """Pin the bridge mistranslation for ``CounterTargetSpell`` with a
-    type-restricted filter dict.
+def test_cross_engine_real_eoe_counterspell_bridge_propagates_filter_types_CLOSED_parity():
+    """**Warping Wail Cycle 2 substrate closure (2026-05-22).** The
+    bridge mistranslation pinned here is now CLOSED — Pin 1 flips from
+    divergence-pin to parity-pin (mirrors the established pattern for
+    other former-divergence pins in this file, e.g. Vanish from Sight
+    summoning_sick reset).
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:4039-4093`` — the bridge arm
-      for Rust dict kind ``counter_target_spell`` constructs Python's
-      ``CounterTargetSpell()`` with its default ``filter_types=frozenset()``
-      regardless of any additional dict keys.  The arm documents this as
-      intentional for the bare (unfiltered) unit-variant slice, but a
-      hypothetical dict with ``filter_types`` present would be silently
-      dropped, resulting in an UNFILTERED counterspell instead of a
-      type-restricted one.
+    Prior bug (now FIXED):
+      ``src/mtg_bot/parity/cross_engine.py`` — the bridge arm for Rust
+      dict kind ``counter_target_spell`` constructed Python's
+      ``CounterTargetSpell()`` with its default ``filter_types=
+      frozenset()`` regardless of any ``filter_types`` value on the
+      dict.  A hypothetical dict with ``filter_types`` present would
+      have been silently dropped, resulting in an UNFILTERED
+      counterspell instead of a type-restricted one.
 
-    What's wrong:
-      ``CounterTargetSpell.legal_targets``
-      (``effects/generic/stack_control.py:188-190``) only includes stack
-      items whose ``source.printing.card_types`` intersects
-      ``self.filter_types`` when ``filter_types`` is non-empty.  With the
-      bridge's forced ``filter_types=frozenset()`` all spells become
-      legal targets — the type restriction is completely dropped.
+    Fix (this slice, ``feature/warping-wail-substrate-cycle-2``):
+      * Rust ``Effect::CounterTargetSpell`` widened from unit variant
+        to ``{ filter_types: Vec<String> }`` (mirroring Python's
+        ``frozenset[str]``).
+      * Rust ``parse_effect`` accepts optional ``filter_types`` list-
+        of-strings; missing / null / empty → empty-Vec back-compat.
+      * Rust ``to_pydict`` emits the field only when non-empty (byte-
+        identical to pre-Cycle-2 round-trip for the empty case).
+      * Rust resolve arm intersects the stack item's
+        ``card_types`` with ``filter_types`` (when non-empty) on top
+        of the Phase-2 uncounterability gates.
+      * ``cross_engine.py`` bridge arm threads ``filter_types`` from
+        dict → ``frozenset[str]`` on the Python class.
+      * ``trajectory.py::_python_spell_effect_to_dict`` adds the
+        ``CounterTargetSpell`` leaf (was MISSING entirely pre-cycle —
+        a separate prior gap surfaced by this same closure).
 
-    What's right:
-      The bridge arm should propagate ``filter_types`` from the dict when
-      present, constructing
-      ``CounterTargetSpell(filter_types=frozenset(dict_value))``.  Rust's
-      current unit variant emits no ``filter_types`` key (the bare-slice
-      docstring notes this explicitly), so existing round-trip probes are
-      not affected — only a future rider-widened Rust variant that adds
-      ``filter_types`` to the dict would be silently broken.
+    What's right (CR 115.1a): if a spell has a type restriction on
+    its target ("counter target Creature spell"), only legal targets
+    matching that type restriction may be chosen.  The bridge now
+    propagates ``filter_types`` so the type restriction round-trips
+    Rust → Python without loss.
 
-    CR reference: CR 115.1a — if a spell has a type restriction on its
-    target ("counter target Creature spell"), only legal targets matching
-    that type restriction may be chosen at cast time.  Dropping the
-    restriction allows an illegally broad target pool.
-
-    Verified observable divergence (dict with filter_types=["Creature"];
-    a Sorcery is on the stack):
-      * ``CounterTargetSpell(filter_types=frozenset({"Creature"}))``
-          ``.legal_targets(state)`` → [] (Sorcery not a Creature spell).
-      * Bridge ``_ta_dict_to_python_effect({"kind": "counter_target_spell",
-          "filter_types": ["Creature"]})`` returns
-          ``CounterTargetSpell(filter_types=frozenset())`` →
-          ``.legal_targets(state)`` → [("stack", 0)] (Sorcery included,
-          type restriction absent).
-
-    Probe shape:
+    Probe shape (CLOSED parity — both paths agree):
       1. Build a minimal Python state.
-      2. Place a Sorcery object on the stack (via a FakeStackItem shim —
-         no need to go through the full cast pipeline since we are testing
-         the legal_targets filter, not cast mechanics).
+      2. Place a Sorcery object on the stack.
       3. Path A: instantiate
          ``CounterTargetSpell(filter_types=frozenset({"Creature"}))``
-         directly; call legal_targets; assert the Sorcery is NOT included.
+         directly; call legal_targets; assert the Sorcery is NOT
+         included.
       4. Path B: call ``_ta_dict_to_python_effect`` with
-         ``{"kind": "counter_target_spell", "filter_types": ["Creature"]}``;
-         assert the returned object is ``CounterTargetSpell`` with
-         ``filter_types=frozenset()``; call legal_targets; assert the
-         Sorcery IS included (wrong).
-      5. Assert Path A and Path B diverge.
+         ``{"kind": "counter_target_spell", "filter_types":
+         ["Creature"]}``; assert the returned class carries the
+         propagated ``filter_types=frozenset({"Creature"})``; call
+         legal_targets; assert the Sorcery is NOT included
+         (CLOSED — matches Path A).
+      5. Assert Path A and Path B AGREE — the divergence is closed.
 
     This pin does not require the Rust PyO3 extension.
     """
@@ -333,9 +315,6 @@ def test_cross_engine_real_eoe_counterspell_bridge_drops_filter_types_divergence
 
     state = _new_base_state()
 
-    # Build a Sorcery object and place it on the stack via a minimal shim.
-    # StackItem.ability=None marks it as a spell (not an ability), which
-    # CounterTargetSpell.legal_targets requires.
     sorcery_printing = _make_sorcery_printing("Test Sorcery")
     sorcery_obj = state.new_object(sorcery_printing, owner_id=1, zone=Zone.HAND)
 
@@ -369,8 +348,9 @@ def test_cross_engine_real_eoe_counterspell_bridge_drops_filter_types_divergence
 
     # ------------------------------------------------------------------
     # Path B: bridge translation of a type-restricted counter dict.
-    # The bridge drops filter_types → returns CounterTargetSpell() with
-    # filter_types=frozenset() → the Sorcery IS included (wrong).
+    # **POST-CYCLE-2 (CLOSED):** the bridge propagates filter_types →
+    # returns CounterTargetSpell(filter_types=frozenset({"Creature"}))
+    # → the Sorcery is NOT included (matches Path A).
     # ------------------------------------------------------------------
     effect_dict = {
         "kind": "counter_target_spell",
@@ -378,40 +358,38 @@ def test_cross_engine_real_eoe_counterspell_bridge_drops_filter_types_divergence
     }
     bridge_effect = _ta_dict_to_python_effect(effect_dict)
 
-    # Pin the bridge's returned filter_types (should be empty — the bug).
     assert isinstance(bridge_effect, CounterTargetSpell), (
         "Bridge: _ta_dict_to_python_effect for counter_target_spell "
         f"should return CounterTargetSpell; got {type(bridge_effect).__name__}"
     )
-    assert bridge_effect.filter_types == frozenset(), (
-        "Bridge class pin: bridge drops filter_types — returned instance "
-        "should have filter_types=frozenset() (the current WRONG value). "
+    # **CLOSED — Cycle 2 substrate landed:** the bridge now
+    # propagates filter_types.
+    assert bridge_effect.filter_types == frozenset({"Creature"}), (
+        "Bridge class pin (CLOSED): post-Cycle-2 the bridge propagates "
+        "filter_types; returned instance should have "
+        "filter_types=frozenset({'Creature'}). "
         f"Got: {bridge_effect.filter_types}. "
-        "If this assertion fails, the bridge was fixed to propagate "
-        "filter_types; update this pin."
-    )
-    assert bridge_effect.filter_types != frozenset({"Creature"}), (
-        "Bridge class pin: bridge should NOT propagate filter_types={'Creature'} "
-        "(that would mean the bug is fixed); update this pin when fixed."
+        "If this assertion fails, the Cycle-2 substrate landing has "
+        "regressed; do NOT 'fix' the test — fix the regression."
     )
 
     legal_b = bridge_effect.legal_targets(state, controller_id=0)
 
-    assert len(legal_b) == 1 and legal_b[0] == ("stack", 0), (
-        "Path B (bridge, filter_types dropped → frozenset()): the Sorcery "
-        "IS a legal target when filter_types is empty (no restriction). "
-        "Pinned wrong behavior — fix lands when bridge propagates filter_types "
-        "and this assertion fails. "
+    assert legal_b == [], (
+        "Path B (bridge, CLOSED): the Sorcery is NOT a legal target — "
+        "filter_types={'Creature'} now propagates through the bridge "
+        "(Cycle-2 substrate landing). "
         f"Got: {legal_b}"
     )
 
     # ------------------------------------------------------------------
-    # Cross-path non-parity: the two paths must disagree on legality.
+    # Cross-path parity: the two paths now AGREE on legality.
     # ------------------------------------------------------------------
-    assert legal_a != legal_b, (
-        "Cross-path divergence: CounterTargetSpell with filter_types={'Creature'} "
-        "([] targets) vs. bridge output with filter_types=frozenset() "
-        "(Sorcery included) must differ until the bridge is fixed. "
+    assert legal_a == legal_b, (
+        "Cross-path parity (CLOSED): CounterTargetSpell with "
+        "filter_types={'Creature'} directly ([] targets) and the "
+        "bridge output (also [] targets) must agree now that the "
+        "bridge propagates filter_types. "
         f"legal_a={legal_a}, legal_b={legal_b}"
     )
 

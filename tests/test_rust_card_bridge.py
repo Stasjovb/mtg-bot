@@ -937,12 +937,12 @@ def test_round_trip_counter_target_spell_effect():
     assert effects[0] == {"kind": "counter_target_spell"}
 
 
-def test_round_trip_counter_target_spell_ignores_extra_keys():
-    """Python's `CounterTargetSpell.filter_types` is intentionally NOT
-    mirrored in the Rust first slice — extra keys on the dict are
-    silently ignored, matching the silent-drop convention elsewhere in
-    the parser. Confirms the unit-variant shape doesn't accidentally
-    require fields."""
+def test_round_trip_counter_target_spell_preserves_filter_types():
+    """**Warping Wail Cycle 2 substrate (2026-05-22).** Rust
+    ``Effect::CounterTargetSpell { filter_types: Vec<String> }`` now
+    carries the filter_types allow-list mirroring Python's
+    ``CounterTargetSpell.filter_types: frozenset[str]``. The round-
+    trip preserves the field byte-equal."""
     reg = mtg_bot_engine.Registry()
     pid = reg.register_printing(
         {
@@ -958,8 +958,35 @@ def test_round_trip_counter_target_spell_ignores_extra_keys():
         }
     )
     effects = [dict(e) for e in reg.get_printing_effects(pid)]
-    # Round-trip drops the unrecognized field — first slice doesn't
-    # model filter_types, the round-trip is the unit-variant shape.
+    # Round-trip preserves filter_types; the variant is no longer a
+    # unit shape post-Cycle-2.
+    assert effects[0] == {
+        "kind": "counter_target_spell",
+        "filter_types": ["Artifact", "Enchantment"],
+    }
+
+
+def test_round_trip_counter_target_spell_empty_filter_types_omits_field():
+    """Empty filter_types serializes to the bare unit-variant shape —
+    byte-identical to every pre-Cycle-2 round-trip (back-compat
+    preserved). Mirrors the ``granted_keywords`` emit-only-when-non-
+    empty convention."""
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Test Counter Empty Filter",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {
+                    "kind": "counter_target_spell",
+                    "filter_types": [],
+                }
+            ],
+        }
+    )
+    effects = [dict(e) for e in reg.get_printing_effects(pid)]
+    # Empty list → bare unit-variant shape (no filter_types key).
     assert effects[0] == {"kind": "counter_target_spell"}
 
 

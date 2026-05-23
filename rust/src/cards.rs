@@ -543,28 +543,29 @@ pub enum Effect {
     /// Counter target spell on the stack (CR 701.5). Powers Annul,
     /// Cancel, etc. — 7 cards in the EoE pool per round-20 measurement.
     ///
-    /// **Python schema simplification.** Python's `CounterTargetSpell`
-    /// dataclass carries a `filter_types: frozenset[str] = frozenset()`
-    /// field — an empty set means "any spell", non-empty restricts what
-    /// card types are legal targets (e.g. `frozenset({"Artifact",
-    /// "Enchantment"})` for Annul). The Rust first slice does NOT
-    /// carry that field — assumes target is "any spell". Refined-target
-    /// variants (counter creature spell only, counter non-creature,
-    /// etc.) wait for richer target plumbing on the Rust side, the
-    /// same deferral shape as TargetFilter for the rest of the variant
-    /// family.
+    /// **Warping Wail Cycle 2 substrate (2026-05-22).** `filter_types`
+    /// mirrors Python's `CounterTargetSpell.filter_types:
+    /// frozenset[str] = frozenset()` — empty set means "any spell",
+    /// non-empty restricts what card types are legal targets (e.g.
+    /// `["Sorcery"]` for Warping Wail mode 2, `["Instant",
+    /// "Sorcery"]` for Divert Disaster / Unravel, etc.). On the Rust
+    /// schema this is a `Vec<String>` (mirroring `granted_keywords`'
+    /// established schema-payload style); the resolve arm intersects
+    /// it with the stack item's printing `card_types`. Empty vec
+    /// keeps the round-7 / round-23 "counter any" behavior byte-
+    /// identical for existing call sites.
     ///
     /// **First-slice deterministic choice: pick the TOP stack item
-    /// that isn't this Effect's own source.** Mirrors the "first-
-    /// eligible" convention from existing Effect arms (DealDamage
-    /// picks defender's battlefield[0], AddCounters likewise). The
-    /// self-exclusion guard uses the round-23 `source_obj_id`
-    /// parameter threaded through `apply_effect`: a counter-spell
-    /// resolving on the stack shouldn't counter itself before it
-    /// resolves. If the stack is empty (or only contains self), the
-    /// effect fizzles silently — Python parity with the
-    /// `if not targets: return` short-circuit in
-    /// `CounterTargetSpell.resolve`.
+    /// that isn't this Effect's own source AND passes the filter.**
+    /// Mirrors the "first-eligible" convention from existing Effect
+    /// arms (DealDamage picks defender's battlefield[0], AddCounters
+    /// likewise). The self-exclusion guard uses the round-23
+    /// `source_obj_id` parameter threaded through `apply_effect`: a
+    /// counter-spell resolving on the stack shouldn't counter itself
+    /// before it resolves. If the stack is empty (or only contains
+    /// self / all uncounterable / all filter-failing), the effect
+    /// fizzles silently — Python parity with the `if not targets:
+    /// return` short-circuit in `CounterTargetSpell.resolve`.
     ///
     /// **Composition with round-7 counter_spell primitive.** The
     /// round-7 `state_ops_counterspell.rs::counter_spell(target_obj_id)`
@@ -579,14 +580,26 @@ pub enum Effect {
     /// collapse onto the shared primitive once cross-file private-fn
     /// calls re-open.
     ///
-    /// **No "can't be countered" enforcement.** Python's
-    /// `_is_uncounterable` checks `spell_is_uncounterable` on the
-    /// printing and `grants_creature_spells_uncounterable` on
-    /// battlefield static abilities. The Rust bridge has neither
-    /// flag today — deferred along with the rest of the
-    /// `cant_be_countered` shape (mirrors the round-7 counter_spell
-    /// primitive's same deferral).
-    CounterTargetSpell,
+    /// **Uncounterability enforcement.** Phase-2 round-80 added
+    /// `spell_is_uncounterable` + `grants_creature_spells_uncounterable`
+    /// gates to the resolve arm (CR 101.2). This Cycle 2 widening
+    /// adds `filter_types` on TOP of those gates — both fire in the
+    /// same top-to-bottom scan; an item must pass BOTH gates to be a
+    /// legal target.
+    CounterTargetSpell {
+        /// Allow-list of card_types — empty means "any spell". When
+        /// non-empty, only stack items whose source printing's
+        /// `card_types` intersects this set are admissible targets.
+        /// Mirrors Python's `filter_types: frozenset[str]`. Stored as
+        /// a `Vec<String>` (rather than e.g. `HashSet<String>`) to
+        /// match the established `granted_keywords` schema-payload
+        /// style — list-of-strings on the dict surface,
+        /// intersection-by-iteration at resolve time. Cardinality is
+        /// tiny in practice (Warping Wail mode 2: 1 entry; Divert
+        /// Disaster / Unravel: 2 entries; Annul-style hypothetical:
+        /// 2 entries), so the O(n*m) intersection is fine.
+        filter_types: Vec<String>,
+    },
     /// Return a creature card from your graveyard to the battlefield
     /// (CR 400.7 + 302.1 — reanimation). Powers Emerge from the Cocoon,
     /// Reanimate-style sugar, etc. — 8 cards in the EoE pool per
@@ -8933,13 +8946,32 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Surveil { count })
         }
         "counter_target_spell" => {
-            // Unit variant — no required fields. Python's
-            // `CounterTargetSpell.filter_types` is intentionally
-            // dropped from the Rust first slice (see the variant's
-            // docstring). Any extra keys on the dict are ignored,
-            // matching the silent-drop convention for unrecognized
-            // keys elsewhere in the parser.
-            Ok(Effect::CounterTargetSpell)
+            // **Warping Wail Cycle 2 substrate (2026-05-22).** Optional
+            // `filter_types` field (list-of-strings, default empty)
+            // mirrors Python's `CounterTargetSpell.filter_types:
+            // frozenset[str] = frozenset()`. Missing / null / empty
+            // list all parse to the empty-Vec "any spell" shape — back-
+            // compat with every existing dict round-trip (the pre-
+            // closure unit-variant shape is byte-equivalent to a dict
+            // that omits the field). Each entry must be a non-empty
+            // string. Mirrors the `pump_target_artifact_or_creature_
+            // until_eot.granted_keywords` parse pattern.
+            let filter_types: Vec<String> = match dict.get_item("filter_types")? {
+                Some(ft) => ft.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "counter_target_spell.filter_types must be a list of strings (got: {e})"
+                    ))
+                })?,
+                None => Vec::new(),
+            };
+            for t in &filter_types {
+                if t.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "counter_target_spell.filter_types entries must be non-empty strings",
+                    ));
+                }
+            }
+            Ok(Effect::CounterTargetSpell { filter_types })
         }
         "return_creature_from_your_graveyard_to_battlefield" => {
             // Unit variant — no required fields. Python's unified
@@ -13326,8 +13358,20 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "surveil")?;
             d.set_item("count", *count)?;
         }
-        Effect::CounterTargetSpell => {
+        Effect::CounterTargetSpell { filter_types } => {
             d.set_item("kind", "counter_target_spell")?;
+            // **Warping Wail Cycle 2 substrate (2026-05-22).** Emit
+            // `filter_types` ONLY when non-empty so existing round-
+            // trips (every pre-closure dict that omits the field)
+            // stay byte-identical. Mirrors the
+            // `pump_target_artifact_or_creature_until_eot.granted_
+            // keywords` emit shape (Vec<String> → Python list-of-
+            // strings).
+            if !filter_types.is_empty() {
+                let ft_list: Vec<&str> =
+                    filter_types.iter().map(|s| s.as_str()).collect();
+                d.set_item("filter_types", ft_list)?;
+            }
         }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             d.set_item("kind", "return_creature_from_your_graveyard_to_battlefield")?;

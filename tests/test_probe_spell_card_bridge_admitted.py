@@ -274,12 +274,23 @@ pytestmark = pytest.mark.skipif(
 # the small bare-spell-effect pool Gravkill / Final Vengeance and the
 # Archenemy's Charm Mode 0 substrate. Gravkill AUTO-JOINS via the §2
 # auto-grow teeth.
+# **warping-wail-substrate-cycle-2 (2026-05-22):** The
+# ``CounterTargetSpell.filter_types`` Rust schema widening + bridge
+# thread + reverse-serializer leaf flip seven counterspells
+# DECLINE→ADMITTED via the §2 auto-grow teeth:
+# Annul / Break Down the Door / Divert Disaster / Don't Make a Sound
+# / Get Out / Twist Reality / Unravel. Warping Wail itself stays
+# DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-gate widen).
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
+    "Annul",
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
     "Devastating Onslaught",
-    "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
-    "Exorcise", "Focus Fire", "Gravkill", "Invasive Maneuvers",
+    "Diplomatic Relations", "Divert Disaster",
+    "Don't Make a Sound",
+    "Drill Too Deep", "Emergency Eject",
+    "Exorcise", "Focus Fire", "Get Out", "Gravkill",
+    "Invasive Maneuvers",
     "Manifest Dread",
     "Mutinous Massacre", "Orbital Plunge", "Pull Through the Weft",
     "Pyroclasm",
@@ -287,7 +298,8 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
     "Shattered Wings", "Systems Override",
     "Terminal Velocity",
-    "Under the Skin",
+    "Twist Reality",
+    "Under the Skin", "Unravel",
     "Untimely Malfunction", "Vengeful Possession",
     "Zero Point Ballad",
 ]

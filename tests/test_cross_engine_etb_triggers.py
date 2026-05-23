@@ -5641,13 +5641,13 @@ def test_bridge_counter_target_spell_basic_translation():
     assert e.filter_types == frozenset()
 
 
-def test_bridge_counter_target_spell_extra_keys_ignored():
-    """Round-trip pin: extra keys on the dict are silently ignored
-    (the Rust variant is a unit type with no fields). Mirrors the
-    Rust parse_effect arm's silent-drop convention for unrecognized
-    keys (cards.rs:3361-3370 docstring). Forward-compatible with
-    future rider-widened Rust variants -- those would land as
-    separate ``kind`` arms on this translator.
+def test_bridge_counter_target_spell_threads_filter_types():
+    """**Warping Wail Cycle 2 substrate (2026-05-22).** Rust
+    ``Effect::CounterTargetSpell { filter_types: Vec<String> }`` now
+    carries the filter_types allow-list. The bridge threads it
+    through dict → Python frozenset (mirroring the
+    ``granted_keywords`` bridge pattern). Extra unrecognized keys
+    on the dict still silently ignored.
     """
     from mtg_bot.effects.generic.stack_control import CounterTargetSpell
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
@@ -5655,14 +5655,32 @@ def test_bridge_counter_target_spell_extra_keys_ignored():
     e = _ta_dict_to_python_effect(
         {
             "kind": "counter_target_spell",
-            "filter_types": ["Artifact"],  # ignored on Rust side
+            "filter_types": ["Artifact", "Enchantment"],
             "ignored_extra_field": "noise",
         }
     )
     assert isinstance(e, CounterTargetSpell)
-    # filter_types stays at default empty -- bridge does NOT pass
-    # the ignored key through, mirroring Rust's first-slice drop.
-    assert e.filter_types == frozenset()
+    # filter_types now threads through — frozenset matches the
+    # input set (order-insensitive on Python side).
+    assert e.filter_types == frozenset({"Artifact", "Enchantment"})
+
+
+def test_bridge_counter_target_spell_empty_filter_types_default():
+    """Missing / null / empty-list ``filter_types`` all map to the
+    empty-frozenset "any spell" shape — back-compat with every pre-
+    Cycle-2 dict construction (the bare unit-variant shape)."""
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e_missing = _ta_dict_to_python_effect({"kind": "counter_target_spell"})
+    assert isinstance(e_missing, CounterTargetSpell)
+    assert e_missing.filter_types == frozenset()
+
+    e_empty = _ta_dict_to_python_effect(
+        {"kind": "counter_target_spell", "filter_types": []}
+    )
+    assert isinstance(e_empty, CounterTargetSpell)
+    assert e_empty.filter_types == frozenset()
 
 
 def test_bridge_counter_target_spell_equality_with_default_constructor():
@@ -21485,37 +21503,68 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # Terminal Velocity AUTO-JOINS via the §2 auto-grow teeth. Admit
     # set 31 → 32. Gravkill closure (effect-exile-target-creature-p1)
     # adds bare ``Effect::ExileTargetCreature`` arm; admit set 32 → 33.
+    # **warping-wail-substrate-cycle-2 (2026-05-22):** Widens the
+    # Rust ``Effect::CounterTargetSpell`` schema to carry
+    # ``filter_types: Vec<String>`` (mirroring Python's frozenset[str]
+    # — empty = "any spell", non-empty = card-types allow-list). Adds
+    # the matching cross-engine bridge thread (was silent-drop pre-
+    # closure) + the ``_python_spell_effect_to_dict`` reverse-
+    # serializer leaf (was MISSING — confirmed by the prior verify-
+    # first walk). Seven real-EoE counterspells AUTO-JOIN the admit
+    # set as the round-trip-or-bail teeth now positively close on
+    # ``CounterTargetSpell`` constructions:
+    #
+    #   * ``Annul`` — ``filter_types=frozenset({"Artifact",
+    #     "Enchantment"})``.
+    #   * ``Break Down the Door`` — bare ``CounterTargetSpell()``
+    #     (modal counterspell + token).
+    #   * ``Divert Disaster`` — ``filter_types=frozenset({"Instant",
+    #     "Sorcery"})``.
+    #   * ``Don't Make a Sound`` — bare ``CounterTargetSpell()``
+    #     (counter unless pays N, schema drop on the unless-pays).
+    #   * ``Get Out`` — bare ``CounterTargetSpell()`` (counter +
+    #     small rider, already bridge-covered).
+    #   * ``Twist Reality`` — bare ``CounterTargetSpell()`` +
+    #     scry-2 rider.
+    #   * ``Unravel`` — ``filter_types=frozenset({"Instant",
+    #     "Sorcery"})``.
+    #
+    # (Warping Wail mode 2 is ALSO ``filter_types=frozenset(
+    # {"Sorcery"})`` but the printing's other modes still gap, so
+    # the card stays DECLINED until Cycle 3 + Cycle 4 close.)
+    # Admit set 33 → 40.
     assert admitted == [
+        "Annul",
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
         "Devastating Onslaught",
-        "Diplomatic Relations", "Drill Too Deep", "Emergency Eject",
-        "Exorcise", "Focus Fire", "Gravkill", "Invasive Maneuvers",
+        "Diplomatic Relations", "Divert Disaster",
+        "Don't Make a Sound",
+        "Drill Too Deep", "Emergency Eject",
+        "Exorcise", "Focus Fire", "Get Out", "Gravkill",
+        "Invasive Maneuvers",
         "Manifest Dread", "Mutinous Massacre", "Orbital Plunge",
         "Pull Through the Weft",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
         "Seedship Impact", "Shattered Wings", "Systems Override",
         "Terminal Velocity",
-        "Under the Skin", "Untimely Malfunction",
+        "Twist Reality",
+        "Under the Skin", "Unravel", "Untimely Malfunction",
         "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 33 covered+bridged Tier-A spells: the 26 "
-        f"prior + 2 control-change-UEOT closures (Mutinous Massacre "
-        f"via control-change-ueot-cycle-4-p1 + Systems Override via "
-        f"control-change-ueot-cycle-5-p1) + 1 X-cost single-target "
-        f"closure (Devastating Onslaught via "
-        f"devastating-onslaught-cycle-1) + 1 multi-target "
-        f"nonland-permanent graveyard-to-hand admit (Pull Through "
-        f"the Weft via pull-through-the-weft-cycle-1) + 1 "
-        f"control-change-UEOT non-EoE consumer (Vengeful Possession "
-        f"via vengeful-possession-cycle-1-p1) + 1 Phase-3 "
-        f"wrath-shape closure (Terminal Velocity via "
-        f"terminal-velocity-cycle-1) + 1 bare-exile-target-creature "
-        f"closure (Gravkill via effect-exile-target-creature-p1) — "
-        f"auto-grows further as the remaining Tier-A and per-mode-"
-        f"target modal spells close)")
+        f"exactly the 40 covered+bridged Tier-A spells: the 33 "
+        f"prior + 7 counterspells (Annul / Break Down the Door / "
+        f"Divert Disaster / Don't Make a Sound / Get Out / "
+        f"Twist Reality / Unravel) flipped by the Warping Wail "
+        f"Cycle 2 substrate "
+        f"(``CounterTargetSpell.filter_types`` Rust schema widening + "
+        f"bridge thread + reverse-serializer leaf via "
+        f"warping-wail-substrate-cycle-2). Warping Wail itself stays "
+        f"DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-gate "
+        f"widen) close. Auto-grows further as the remaining Tier-A "
+        f"and per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
