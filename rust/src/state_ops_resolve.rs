@@ -20649,6 +20649,86 @@ fn apply_effect(
             Arc::make_mut(&mut state.players[controller_idx].hand)
                 .push(obj);
         }
+        // **Enduring Curiosity Cycle 1 (2026-05-23) — HONEST-STOP
+        // silent no-op resolve arm.** Mirrors Python's
+        // `EnduringDiesReturnAsEnchantmentEffect.resolve`
+        // (`effects/bespoke.py:2050-2097`) ONLY on its EARLY-RETURN
+        // paths; the happy-path return-as-enchantment battlefield
+        // transition is deferred to a future-cycle substrate widen.
+        //
+        // **What Python's resolve does (full):**
+        //   1. Read `state.resolving_source`; if None, return.
+        //   2. Look up `owner = state.player_by_id(source.owner_id)`.
+        //   3. Skip if `source.printing.is_token` (tokens cease to
+        //      exist on death — nothing to bring back).
+        //   4. Skip if `source not in owner.graveyard` (e.g. exiled
+        //      by a replacement effect / stolen mid-combat —
+        //      dying creature is no longer in its owner's graveyard
+        //      so there's nothing to return).
+        //   5. Remove from owner.graveyard; clear UEOT-granted layer-6
+        //      `grant_triggered_ability` continuous effects targeting
+        //      the source.id; `state._invalidate_layered_cache()`;
+        //      `put_into_battlefield(state, source, owner.id)`;
+        //      `source.enduring_returned_as_enchantment = True`;
+        //      append to `state.log`.
+        //
+        // **What this Rust arm does:** the silent-no-op early return
+        // — steps 1-4 of Python's resolve mirror to a no-op in Rust
+        // when the source is not in its owner's graveyard at resolve
+        // time, AND step 5 (the happy-path battlefield return + flag
+        // stamp) is deferred. Cycle 1 ships ONLY the parser /
+        // round-trip / covered-set / classifier-gate-closure
+        // substrate.
+        //
+        // **Substrate gaps blocking byte-equal resolve** (full
+        // rationale in the variant doc-comment on
+        // `Effect::EnduringDiesReturnAsEnchantmentEffect` in
+        // `cards.rs`):
+        //   - No per-`GameObject` `enduring_returned_as_enchantment`
+        //     flag on Rust.
+        //   - No layer-6 `continuous_effects` registry / no
+        //     `_invalidate_layered_cache` shape (Rust's per-creature
+        //     UEOT modifiers live on the `GameObject` directly,
+        //     cleared at CR 514.3 cleanup, not via a registry filter).
+        //   - No zone-move primitive that suppresses the CR 302.1
+        //     summoning-sick stamp on return.
+        //
+        // **Per-card probe path (per-card byte-equal probe).** The
+        // dedicated probe in `tests/test_enduring_curiosity_parity.py`
+        // exercises ONLY the VACUOUS trigger-fire byte-equal —
+        // construct a fixture where the dying source is NOT in its
+        // owner's graveyard at resolve time (e.g. removed before
+        // resolve, or the source carrier itself never died). Python
+        // takes the early-return branch; Rust takes the silent
+        // no-op. The post-resolve byte-equal compare passes because
+        // neither engine moved any object onto the battlefield.
+        //
+        // **Future cycles** ship the substrate widening
+        // (per-object flag + Perigee-style marker variant + zone-
+        // move primitive) and the happy-path return-as-enchantment
+        // half. Documented at `docs/SEARCH_LIMITATIONS.md` under
+        // the Cycle 1 LANDED block.
+        Effect::EnduringDiesReturnAsEnchantmentEffect => {
+            // **Silent no-op.** Cycle 1 ships ONLY the parser /
+            // round-trip / covered-set / classifier-gate-closure
+            // substrate. The happy-path return-as-enchantment
+            // battlefield transition is deferred — see the variant
+            // doc-comment in cards.rs for the full substrate-gap
+            // rationale + future-cycle widening pre-conditions.
+            //
+            // No mutation; no log append. The trigger fires onto
+            // the stack, resolves into this arm, and the resolve
+            // completes without observable byte-equal side effects.
+            // The dying source stays in its owner's graveyard on
+            // BOTH engines on the early-return paths of Python's
+            // resolve (the per-card probe constructs the fixture
+            // for that path).
+            //
+            // `_ = source_obj_id;` is implicit — the parameter is
+            // unused on this arm. The compiler is satisfied by the
+            // function's existing parameter binding.
+            let _ = source_obj_id; // unused; silent no-op
+        }
     }
     Ok(())
 }

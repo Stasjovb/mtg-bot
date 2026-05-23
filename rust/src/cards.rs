@@ -5417,6 +5417,120 @@ pub enum Effect {
     /// Same Tier-A leaf shape as the round-44 X-from-count damage
     /// family.
     ArabellaAttackEffect,
+    /// **Enduring Curiosity Cycle 1 (2026-05-23) — DSK Enduring-cycle
+    /// dies-trigger body: "When ~ dies, if it was a creature, return
+    /// it to the battlefield under its owner's control. It's an
+    /// enchantment."** Mirrors Python's
+    /// `EnduringDiesReturnAsEnchantmentEffect`
+    /// (`effects/bespoke.py:2020`) — a parameterless frozen
+    /// dataclass that is the SHARED dies-rider body for all 5 DSK
+    /// Enduring creatures (Innocence W, Curiosity U, Tenacity B,
+    /// Courage R, Vitality G). Enduring Curiosity is the U-color
+    /// Duskmourn 4-CMC `{2}{U}{U}` Enchantment Creature — Cat
+    /// Glimmer 4/3 that is the EoE-pool first consumer of this
+    /// effect class.
+    ///
+    /// **Oracle text (Enduring Curiosity):**
+    ///   "Flash
+    ///    Whenever a creature you control deals combat damage to a
+    ///    player, draw a card.
+    ///    When Enduring Curiosity dies, if it was a creature, return
+    ///    it to the battlefield under its owner's control. It's an
+    ///    enchantment. (It's not a creature.)"
+    ///
+    /// **Cycle 1 substrate scope — HONEST-STOP silent no-op.** The
+    /// Rust resolve arm for this effect is a SILENT NO-OP (early
+    /// return) — Cycle 1 ships ONLY the parser / round-trip /
+    /// covered-set / classifier-gate-closure substrate; it does NOT
+    /// ship the return-as-enchantment battlefield-transition
+    /// mechanic. Three Rust substrate gaps block a byte-equal
+    /// resolve:
+    ///
+    ///   1. **No per-`GameObject` `enduring_returned_as_enchantment`
+    ///      flag.** Python's resolve sets
+    ///      `source.enduring_returned_as_enchantment = True` on the
+    ///      returned permanent so the engine's `is_creature_now`
+    ///      getter reads False thereafter (the returned object's
+    ///      `card_types` still includes "Creature" — the
+    ///      suppression is per-instance, mirroring the
+    ///      `impending_active` precedent). Rust's `GameObject`
+    ///      carries no equivalent flag, and adding one would require
+    ///      a cascade of `is_creature` / `effective_p_t` / SBA
+    ///      readers to honor the suppression — out of scope for a
+    ///      single per-card cycle.
+    ///   2. **No `continuous_effects` / `layered_cache` registry.**
+    ///      Python's resolve clears UEOT-granted triggered abilities
+    ///      targeting the dying object via `state.continuous_effects
+    ///      = [ce for ce in ... if not (ce.layer == 6 and ce.kind ==
+    ///      "grant_triggered_ability" and ce.target_id == source.id)]`,
+    ///      then calls `state._invalidate_layered_cache()`. Rust has
+    ///      no general layer-6 grant-triggered-ability registry (per
+    ///      the variant doc-comment on `UeotModifier::Granted-
+    ///      DiesReturnTapped` at `state.rs:395-420` — "Rust has no
+    ///      general layer-6 grant-triggered-ability registry... Rather
+    ///      than building that whole subsystem, this marker variant
+    ///      models exactly the Perigee shape"). The
+    ///      Perigee-precedent is to model the Enduring rider as a
+    ///      marker-variant SBA path, NOT as an `apply_effect` arm —
+    ///      but that path's per-card SBA hook (parallel to
+    ///      `perigee_return_tapped_if_marked`) is the multi-round
+    ///      multi-cycle subsystem widen, not a single-cycle slice.
+    ///   3. **No standard zone-move that suppresses `summoning_sick`
+    ///      stamp on return.** Rust's
+    ///      `move_object_from_graveyard_to_battlefield`
+    ///      (`state_ops_zones.rs:500-545`) unconditionally stamps
+    ///      `summoning_sick = true` (CR 302.1). Python's
+    ///      `put_into_battlefield` on a returned Enduring carrier
+    ///      does NOT (the returned object is now an enchantment, not
+    ///      a creature, so summoning-sickness doesn't even apply).
+    ///      Closing this divergence requires either a new zone-move
+    ///      primitive or extending the existing one with a
+    ///      stamp-summoning-sick flag — again out of single-cycle
+    ///      scope.
+    ///
+    /// **Per Cycle 1 charter — silent no-op resolve is the honest
+    /// stop.** Mirrors the round-60 Perigee precedent (Rust ships an
+    /// effect-class variant whose resolve is partial pending
+    /// substrate; the per-card probe exercises the VACUOUS
+    /// trigger-fire byte-equal — the dies trigger fires and pushes
+    /// onto the stack, resolves into the silent-no-op arm, leaving
+    /// the dying object in its owner's graveyard on BOTH engines'
+    /// post-resolve state). Python's resolve also early-returns when
+    /// `source not in owner.graveyard` (e.g. exiled by a
+    /// replacement, stolen mid-combat); both engines agree on that
+    /// silent-no-op path. The CYCLE 1 PROBE pins divergence on the
+    /// happy-path return (Python returns the object to the bf as an
+    /// enchantment; Rust leaves it in the graveyard) AS AN EXPLICIT
+    /// honest-stop divergence — the per-card byte-equal probe
+    /// constructs a fixture where the source is NOT in its owner's
+    /// graveyard at resolve time (so Python's resolve also silently
+    /// returns), making the trigger-fire byte-equal exercise tight.
+    ///
+    /// **Unit variant — no fields.** Same shape as the other
+    /// parameterless bespoke variants
+    /// (`ArabellaAttackEffect`, `FanaticOfTheHarrowingETBEffect`,
+    /// `BoilerbilgesRipperETBEffect`,
+    /// `TerrapactIntimidatorETBEffect`,
+    /// `SetLifeToHalfStartingRoundedUp`). The Python class is a
+    /// frozen `@dataclass` with no fields; the canonical dict shape
+    /// is `{"kind": "enduring_dies_return_as_enchantment_effect"}`
+    /// with no other keys. The `parse_effect` arm silently drops
+    /// extra dict keys (unit-variant contract).
+    ///
+    /// **Future cycles — substrate widening pre-conditions for
+    /// byte-equal resolve:**
+    ///   - **`enduring_returned_as_enchantment` per-object flag** on
+    ///     `GameObject` + readers in `is_creature_now` / effective-P/T
+    ///     getters / SBA destruction filter / DIES-event gate.
+    ///   - **Layer-6 grant-triggered-ability registry** OR a Perigee-
+    ///     style per-card SBA marker variant
+    ///     (`UeotModifier::Granted-DiesReturnAsEnchantment` parallel
+    ///     to `GrantedDiesReturnTapped`).
+    ///   - **`move_object_from_graveyard_to_battlefield` with a
+    ///     `stamp_summoning_sick: bool` flag** (or a new primitive
+    ///     specifically for Enduring's "return as enchantment, no
+    ///     summoning sickness" semantics).
+    EnduringDiesReturnAsEnchantmentEffect,
     /// **Round 28 "tap another target creature".** Mirrors Python's
     /// `TapAnotherTargetCreature` (Starport-Security activated-ability
     /// family, 2+ EoE cards). Distinct from the existing
@@ -11307,6 +11421,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // `FanaticOfTheHarrowingETBEffect` siblings).
             Ok(Effect::ArabellaAttackEffect)
         }
+        "enduring_dies_return_as_enchantment_effect" => {
+            // Enduring Curiosity Cycle 1 — unit variant; no fields.
+            // Mirrors Python's `EnduringDiesReturnAsEnchantmentEffect()`
+            // frozen dataclass (`effects/bespoke.py:2020`) — the
+            // SHARED dies-rider body for all 5 DSK Enduring creatures
+            // (Innocence/Curiosity/Tenacity/Courage/Vitality). Extra
+            // dict keys silently dropped (unit-variant contract;
+            // matches `ArabellaAttackEffect` /
+            // `SetLifeToHalfStartingRoundedUp` /
+            // `FanaticOfTheHarrowingETBEffect` siblings).
+            Ok(Effect::EnduringDiesReturnAsEnchantmentEffect)
+        }
         "tap_another_target_creature" => {
             Ok(Effect::TapAnotherTargetCreature)
         }
@@ -15313,6 +15439,12 @@ pub(crate) fn effect_to_pydict<'py>(
             // Arabella, Abandoned Doll — unit variant, no payload
             // fields beyond the `kind` discriminator.
             d.set_item("kind", "arabella_attack_effect")?;
+        }
+        Effect::EnduringDiesReturnAsEnchantmentEffect => {
+            // Enduring Curiosity Cycle 1 — unit variant, no payload
+            // fields beyond the `kind` discriminator. Shared body
+            // for the DSK Enduring cycle's dies-rider.
+            d.set_item("kind", "enduring_dies_return_as_enchantment_effect")?;
         }
         Effect::TapAnotherTargetCreature => {
             d.set_item("kind", "tap_another_target_creature")?;

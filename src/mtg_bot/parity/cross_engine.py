@@ -6340,6 +6340,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # True intentionally.
         from mtg_bot.effects.bespoke import ArabellaAttackEffect
         return ArabellaAttackEffect()
+    if kind == "enduring_dies_return_as_enchantment_effect":
+        # **Enduring Curiosity Cycle 1 BLOCKED-BRIDGE-ARM slice
+        # -- "When ~ dies, if it was a creature, return it to the
+        # battlefield under its owner's control. It's an
+        # enchantment." (EnduringDiesReturnAsEnchantmentEffect
+        # family).** Rust substrate
+        # ``Effect::EnduringDiesReturnAsEnchantmentEffect`` (unit
+        # variant; parser, resolve, and to_pydict arms land
+        # alongside this bridge arm in this cycle). The Python
+        # class ``EnduringDiesReturnAsEnchantmentEffect``
+        # (``effects/bespoke.py:2020``) is a frozen dataclass with
+        # no fields; the bridge constructs it bare.
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors
+        # Rust's ``parse_effect`` silent-drop convention for
+        # unrecognized keys (extra dict fields are ignored).
+        #
+        # **Resolve semantics (parity-relevant).** The Rust resolve
+        # arm is a HONEST-STOP silent no-op (Cycle 1 ships only
+        # parser / round-trip / covered-set / classifier-gate
+        # substrate; the happy-path return-as-enchantment
+        # battlefield transition is deferred to a future-cycle
+        # substrate widen — no per-object
+        # ``enduring_returned_as_enchantment`` flag on Rust, no
+        # layer-6 ``continuous_effects`` registry, no
+        # summoning-sick-suppressed zone-move primitive). Python's
+        # resolve does the full transition (move from
+        # owner.graveyard back to bf as enchantment; stamp
+        # ``enduring_returned_as_enchantment = True``; clear
+        # layer-6 grant-triggered-ability continuous effects on
+        # source.id). The per-card byte-equal probe in
+        # ``tests/test_enduring_curiosity_parity.py`` constructs
+        # a fixture exercising ONLY the early-return path (source
+        # not in owner's graveyard at resolve time) so BOTH
+        # engines agree on the silent no-op — the trigger-fire
+        # byte-equal half is what closes the PROBED tier.
+        #
+        # **Per-card probe path.** Enduring Curiosity's parsed
+        # trigger event is ``Event.DIES`` -- IS in
+        # ``_python_ta_to_safe_dict``'s safe-event set as an
+        # event, BUT the
+        # ``EnduringDiesReturnAsEnchantmentEffect`` effect leaf is
+        # not in the safe-trigger leaf-effect whitelist that
+        # gate consults, so the card does NOT admit through the
+        # production-deck bench admit set. Per-card byte-equal
+        # cross-engine parity is exercised via the dedicated
+        # probe (the PROBED tier flip anchor). Same precedent as
+        # Arabella, Abandoned Doll / Boilerbilges Ripper / Comet
+        # Crawler / Friendly Teddy / Genemorph Imago / Fanatic of
+        # the Harrowing / Vaultguard Trooper / Endstone /
+        # Terrapact Intimidator -- multi-gated card; classifier's
+        # ``effect_uncovered`` gate closes via the new Rust
+        # variant + this bridge arm; ``nonsafe_triggered_ability``
+        # stays True intentionally.
+        from mtg_bot.effects.bespoke import (
+            EnduringDiesReturnAsEnchantmentEffect,
+        )
+        return EnduringDiesReturnAsEnchantmentEffect()
     if kind == "create_token_copy_of_target_creature_you_control":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "create a token
         # that's a copy of target creature you control"

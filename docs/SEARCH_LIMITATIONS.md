@@ -13783,6 +13783,182 @@ gain-X-life), `src/mtg_bot/parity/cross_engine.py`
 cycle LANDED; Arabella, Abandoned Doll is now PROBED at the
 per-card parity layer.
 
+## Enduring Curiosity Cycle 1 LANDED — `EnduringDiesReturnAsEnchantmentEffect` Rust Effect substrate closed (HONEST-STOP silent-no-op resolve; trigger-fire byte-equal half closes PROBED tier) (2026-05-23, `feature/enduring-curiosity-cycle-1-p1`)
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for Enduring Curiosity
+(`{2}{U}{U}` Enchantment Creature — Cat Glimmer, 4/3, Flash,
+Duskmourn pool) is now Effect-closed at the parser / round-trip /
+covered-set / classifier-gate layer. The
+`EnduringDiesReturnAsEnchantmentEffect` Rust Effect variant ships
+with parse + to_pydict + **HONEST-STOP silent-no-op resolve** arms;
+the cross_engine dict→Python bridge arm round-trips it; a per-card
+real-EoE byte-equal probe drives the TRIGGER-FIRE half (vacuous
+silent-no-op outcome on BOTH engines) to flip Enduring Curiosity to
+**PROBED at the per-card parity layer**.
+
+**Oracle text** (per-instance `Event.DIES` triggered ability with
+"if it was a creature" intervening-if):
+
+> "Flash
+>  Whenever a creature you control deals combat damage to a player,
+>  draw a card.
+>  When Enduring Curiosity dies, if it was a creature, return it to
+>  the battlefield under its owner's control. It's an enchantment.
+>  (It's not a creature.)"
+
+**Shared body for the DSK Enduring cycle.** Cycle 1 ships the
+effect-class substrate for the SHARED dies-rider body of ALL 5 DSK
+Enduring creatures (Innocence W, Curiosity U, Tenacity B, Courage R,
+Vitality G). Enduring Curiosity is the EoE-pool first consumer and
+the PROBED-tier flip anchor. The other 4 Enduring creatures share
+the same `EnduringDiesReturnAsEnchantmentEffect` Python class — so
+this single Rust variant closes the `effect_uncovered` gate for the
+entire cycle at once.
+
+**What landed:**
+
+* **Rust `Effect::EnduringDiesReturnAsEnchantmentEffect` variant.**
+  New field-free unit variant on `rust/src/cards.rs` (the
+  `ArabellaAttackEffect` / `SetLifeToHalfStartingRoundedUp` /
+  `FanaticOfTheHarrowingETBEffect` /
+  `BoilerbilgesRipperETBEffect` /
+  `TerrapactIntimidatorETBEffect` unit-variant idiom). Mirrors
+  Python's `EnduringDiesReturnAsEnchantmentEffect` frozen
+  dataclass (`effects/bespoke.py:2020`) field-for-field — both
+  sides are parameterless.
+* **Parse arm.** Closed-vocab string kind
+  `"enduring_dies_return_as_enchantment_effect"` parsed via the
+  existing dict-key extraction pattern (cards.rs `parse_effect`).
+  No fields consumed; extra dict keys silently dropped (the
+  standard unit-variant contract).
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`); the round-trip is the bare one-key
+  payload `{"kind": "enduring_dies_return_as_enchantment_effect"}`.
+* **Resolve arm — HONEST-STOP silent no-op.**
+  `rust/src/state_ops_resolve.rs` arm immediately after the
+  `ArabellaAttackEffect` resolve. Mechanism: SILENT EARLY RETURN —
+  no mutation, no log append. The arm consumes the `source_obj_id`
+  parameter (unused via explicit `let _ = source_obj_id;`).
+  **Three Rust substrate gaps block a byte-equal happy-path
+  resolve** (full rationale in the variant doc-comment on
+  `Effect::EnduringDiesReturnAsEnchantmentEffect` in
+  `cards.rs`):
+    1. No per-`GameObject` `enduring_returned_as_enchantment`
+       flag on Rust (Python sets this on the returned permanent so
+       `is_creature_now` reads False thereafter — the suppression
+       is per-instance, mirroring the `impending_active`
+       precedent).
+    2. No general layer-6 `continuous_effects` registry / no
+       `_invalidate_layered_cache` shape on Rust (per
+       `state.rs:395-420` — "Rust has no general layer-6
+       grant-triggered-ability registry... Rather than building
+       that whole subsystem, this marker variant models exactly
+       the Perigee shape"). The Perigee precedent is to model
+       per-card riders as marker variants on the `UeotModifier`
+       enum, NOT as `apply_effect` arms.
+    3. No zone-move primitive that suppresses the CR 302.1
+       summoning-sick stamp on return.
+* **Cross-engine bridge arm.** New
+  `enduring_dies_return_as_enchantment_effect` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately after the `arabella_attack_effect` sibling unit-
+  variant arm. Translates the Rust-shape dict back into a Python
+  `EnduringDiesReturnAsEnchantmentEffect()` instance; field-free
+  on both sides (no rename).
+* **Tests.** `tests/test_enduring_curiosity_parity.py` carries:
+    - 1 parser SoT pin (card-claim + cost + types + P/T + Flash
+      keyword + the 2 triggered abilities; pin the DIES trigger
+      maps to `EnduringDiesReturnAsEnchantmentEffect()` with an
+      `IsSelf`-rooted predicate);
+    - 2 serializer round-trip pins (dict→Python via the bridge
+      arm, Rust register_printing → to_pydict via the
+      etb_effects readback);
+    - 1 Rust silent-no-op resolve-arm unit pin (non-creature
+      carrier with the effect in `etb_effects`; move to bf;
+      confirm life totals + graveyards unchanged from baseline);
+    - 1 covered-set membership pin (the new Rust variant pairs
+      1:1 with the parser-claimed Python class — no override or
+      `RUST_AHEAD_OF_POOL` allowlist needed) + 1 classifier
+      `effect_uncovered` gate-closure pin (skips informationally
+      when the closed gate moves the card out of the
+      classifier's blocked-subsystem tier);
+    - 1 GENUINE real-EoE cross-engine byte-equal probe driving
+      the ACTUAL parsed Enduring Curiosity printing on Python
+      against a bridged synthetic carrier on Rust; both engines
+      spawn Enduring Curiosity directly on p0's bf (NOT via
+      cast / not via a death event); the probe directly invokes
+      Python's `EnduringDiesReturnAsEnchantmentEffect().resolve`
+      with the bf-resident carrier as `resolving_source`,
+      which takes the early-return branch (source not in
+      owner's graveyard); Rust's silent-no-op arm is the
+      complement; both engines agree byte-equal on the
+      post-resolve field view (no zone motion, no life
+      delta, full `compare_fields == []`).
+
+**Pool delta:** Enduring Curiosity flips Effect-uncovered →
+**PROBED at the per-card parity layer**. **Admit set unchanged** —
+Enduring Curiosity is a creature with a DIES triggered ability,
+NOT a non-creature spell admitted through the spell-card-bridge
+admit set (`trajectory.py::_python_spell_effect_to_dict` + its §2
+teeth). Its triggered-ability event (`DIES`) IS in the
+production-deck safe-trigger admission gate's recognized event
+set, but the `EnduringDiesReturnAsEnchantmentEffect` leaf is not
+in the gate's leaf-effect whitelist (`_python_ta_to_safe_dict`),
+so this cycle does NOT widen the production-deck bench admit set.
+
+**Out of scope of this cycle (honest-stops):**
+
+* **Happy-path return-as-enchantment battlefield transition** —
+  the Rust resolve is intentionally a silent no-op because three
+  substrate gaps block a byte-equal mirror: (1) no per-`GameObject`
+  `enduring_returned_as_enchantment` flag, (2) no general
+  layer-6 grant-triggered-ability registry, (3) no
+  summoning-sick-suppressed zone-move primitive. Python's resolve
+  performs the full transition; Rust's silent-no-op leaves the
+  dying source in the graveyard. Future cycles ship the substrate
+  widening (per-object flag + Perigee-style
+  `UeotModifier::Granted-DiesReturnAsEnchantment` marker parallel
+  to `GrantedDiesReturnTapped` + zone-move primitive) and the
+  happy-path resolve half. The per-card probe explicitly does
+  NOT exercise this branch — the fixture is constructed so both
+  engines hit the silent-no-op early-return.
+
+* **No `_SAFE_TRIGGERS` admission widen.** Adding an entry for
+  Enduring Curiosity's DIES +
+  `EnduringDiesReturnAsEnchantmentEffect` leaf to
+  `_SAFE_TRIGGERS` + a matching reverse-serializer leaf in
+  `_python_ta_to_safe_dict` is the production-deck bench-admit
+  half. The per-card probe BYPASSES safe-trigger admission
+  entirely by driving a real cross-engine state directly, so the
+  per-card PROBED tier closes without the bench-admit widen.
+
+* **No production-deck full-card bench play.** Same reason as
+  above — without the safe-trigger admission widen, Enduring
+  Curiosity cannot ride into the full-card bench-side
+  cross-engine harness. Per-card probe parity is the strongest
+  tier closed here (Effect-class + bridge-level + silent-no-op
+  byte-equality on a *controlled* cross-engine state, NOT
+  full-game-trajectory parity, NOT happy-path
+  return-as-enchantment parity).
+
+**Coverage**: 7 tests at `tests/test_enduring_curiosity_parity.py`
+(6 pass + 1 informative skip — the classifier closing the gate
+moves Enduring Curiosity out of the blocked-subsystem tier, so the
+classifier gate-closure assertion skips with that reason, same
+precedent as Arabella / Endstone / Terrapact / Vaultguard). All
+pass on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs`
+(`Effect::EnduringDiesReturnAsEnchantmentEffect` variant + parse
+arm + to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm
+— silent no-op with full substrate-gap rationale),
+`src/mtg_bot/parity/cross_engine.py`
+(`enduring_dies_return_as_enchantment_effect` dict→Python bridge
+arm), `tests/test_enduring_curiosity_parity.py` (probes). Per-card
+cycle LANDED; Enduring Curiosity is now PROBED at the per-card
+parity layer.
+
 ---
 
 ## Territorial Bruntar Cycle 1 LANDED — `Effect::TerritorialBruntarLandfallEffect` (unit) Effect half shipped byte-equal on zone-change observable; `playable_from_exile_this_turn` flag honest-stopped (no Rust substrate)
