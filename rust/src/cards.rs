@@ -5283,6 +5283,49 @@ pub enum Effect {
     /// **No eligible permanent** (everything untapped, or only the
     /// source itself is tapped) → silent fizzle.
     UntapTargetOtherPermanent,
+    /// **The Endstone — set the source-controller's life total to half
+    /// their starting life total, rounded up.** Mirrors Python's
+    /// `SetLifeToHalfStartingRoundedUp` (parameterless frozen dataclass
+    /// at `effects/generic/life.py:51`).
+    ///
+    /// **The Endstone oracle text (end-step trigger body):** "your
+    /// life total becomes half your starting life total, rounded up."
+    /// In the EoE pool, this is The Endstone's BEGINNING_OF_END_STEP
+    /// trigger (the card is a `{7}` Legendary Artifact). The trigger
+    /// dispatches via `Controlled(YOU)` so it fires only when the end
+    /// step belongs to the source-controller (the active player at
+    /// that point).
+    ///
+    /// **Resolve semantics.** Locate the source-controller via the
+    /// 5-zone walk shared with the other ETB-family arms, then set
+    /// `state.players[cidx].life = (STARTING_LIFE + 1) / 2`. The
+    /// `STARTING_LIFE` constant is 20 (matches Python's
+    /// `Player.starting_life: int = 20` default), so the new life
+    /// total is 10. The +1 before integer division mirrors Python's
+    /// `(p.starting_life + 1) // 2` round-up form. No fizzle path —
+    /// even a 0-life player has their life set to 10 (the effect is
+    /// unconditional). SBAs run AFTER the effect to surface the
+    /// observable life delta.
+    ///
+    /// **Unit variant — no fields.** Same shape as the other 1:1
+    /// identity-mapped unit variants (`UntapTargetOtherPermanent`,
+    /// `TapAnotherTargetCreature`,
+    /// `ReturnAllCreaturesFromYourGraveyardToBattlefield`). The
+    /// Python class is a frozen `@dataclass` with no fields; the
+    /// canonical dict shape is `{"kind":
+    /// "set_life_to_half_starting_rounded_up"}` with no other keys.
+    ///
+    /// **`starting_life` divergence note.** Rust's `STARTING_LIFE` is
+    /// a `const i32 = 20` in `state_ops_setup.rs:85` (no per-player
+    /// field on the Rust `Player` struct). Python's `Player.starting_
+    /// life: int = 20` is a per-player field that defaults to 20.
+    /// Both engines today produce the same observable (life → 10
+    /// after resolve) for every cross-engine probe. A future cycle
+    /// landing alternate starting-life formats (Two-Headed Giant,
+    /// Vanguard, Commander 40-life) will need to widen the Rust side
+    /// with a per-player `starting_life` field; not in scope for
+    /// Cycle 1.
+    SetLifeToHalfStartingRoundedUp,
     /// **Round 28 "tap another target creature".** Mirrors Python's
     /// `TapAnotherTargetCreature` (Starport-Security activated-ability
     /// family, 2+ EoE cards). Distinct from the existing
@@ -10722,6 +10765,12 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "untap_target_other_permanent" => {
             Ok(Effect::UntapTargetOtherPermanent)
         }
+        "set_life_to_half_starting_rounded_up" => {
+            // The Endstone — unit variant; no fields. Mirrors
+            // Python's `SetLifeToHalfStartingRoundedUp()` frozen
+            // dataclass.
+            Ok(Effect::SetLifeToHalfStartingRoundedUp)
+        }
         "tap_another_target_creature" => {
             Ok(Effect::TapAnotherTargetCreature)
         }
@@ -14720,6 +14769,9 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::UntapTargetOtherPermanent => {
             d.set_item("kind", "untap_target_other_permanent")?;
+        }
+        Effect::SetLifeToHalfStartingRoundedUp => {
+            d.set_item("kind", "set_life_to_half_starting_rounded_up")?;
         }
         Effect::TapAnotherTargetCreature => {
             d.set_item("kind", "tap_another_target_creature")?;

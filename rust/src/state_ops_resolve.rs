@@ -17248,6 +17248,49 @@ fn apply_effect(
             }
             // else: no eligible permanent → silent fizzle.
         }
+        // The Endstone — set source-controller's life total to half
+        // their starting life total, rounded up. Mirrors Python's
+        // `SetLifeToHalfStartingRoundedUp.resolve`
+        // (`effects/generic/life.py:59`): `p.life =
+        // (p.starting_life + 1) // 2`. Rust's `STARTING_LIFE` is the
+        // const-20 from `state_ops_setup.rs:85`; no per-player
+        // starting-life field today (see the variant doc-comment in
+        // `cards.rs` for the future-cycle widening note). For the
+        // standard 20-life format, `(20 + 1) / 2 == 10`.
+        Effect::SetLifeToHalfStartingRoundedUp => {
+            // Source-controller resolution (5-zone walk) — same
+            // shape as the other ETB-family arms in this module.
+            let mut src_controller: Option<u8> = None;
+            'outer_endstone: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer_endstone;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                // Source untrackable → silent fizzle (mirrors
+                // Python's `state.player_by_id(controller_id)`
+                // raising path which the upstream trigger
+                // dispatcher would have already filtered out).
+                return Ok(());
+            };
+            let cidx = controller as usize;
+            // `STARTING_LIFE` is private to `state_ops_setup`; inline
+            // the canonical 20 here. Future Two-Headed-Giant /
+            // Vanguard / Commander-40 widening will add a per-player
+            // `starting_life` field and read it here.
+            let starting_life: i32 = 20;
+            let new_life: i32 = (starting_life + 1) / 2;
+            state.players[cidx].life = new_life;
+        }
         // Round-28 GrantKeywordToTargetCreatureUntilEOT
         // (GrantUnblockable family, 3+ EoE cards; generalized to any
         // keyword). Same shape as PumpTargetCreatureUntilEOT but

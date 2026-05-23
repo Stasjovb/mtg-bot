@@ -6244,6 +6244,50 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # the bare bridge-arm slice).
         from mtg_bot.effects.generic.tap import UntapTargetOtherPermanent
         return UntapTargetOtherPermanent()
+    if kind == "set_life_to_half_starting_rounded_up":
+        # **The Endstone Cycle 1 BLOCKED-BRIDGE-ARM slice -- "your
+        # life total becomes half your starting life total, rounded
+        # up" (SetLifeToHalfStartingRoundedUp family).** Rust
+        # substrate ``Effect::SetLifeToHalfStartingRoundedUp`` (unit
+        # variant; parser, resolve, and to_pydict arms land alongside
+        # this bridge arm in this cycle). The Python class
+        # ``SetLifeToHalfStartingRoundedUp``
+        # (``effects/generic/life.py:51``) is a frozen dataclass with
+        # no fields; the bridge constructs it bare.
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # ``parse_effect`` silent-drop convention for unrecognized
+        # keys (extra dict fields are ignored).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines locate
+        # the source-controller (5-zone walk on Rust;
+        # ``state.player_by_id(controller_id)`` on Python) and set
+        # that player's ``life`` to ``(starting_life + 1) // 2``.
+        # Python reads ``Player.starting_life`` (default 20). Rust
+        # inlines the canonical 20 (no per-player starting-life field
+        # today; see the variant doc-comment in ``cards.rs`` for the
+        # future-cycle Two-Headed-Giant / Vanguard / Commander-40
+        # widening note). For the standard 20-life format, both
+        # engines produce ``life == 10`` post-resolve.
+        #
+        # **Per-card probe path.** The Endstone's parsed trigger
+        # event is ``BEGINNING_OF_END_STEP`` — NOT in
+        # ``_python_ta_to_safe_dict``'s
+        # ENTERS/DIES/ATTACKS/BECOMES_TAPPED safe set. The card
+        # therefore does NOT admit through the production-deck
+        # bench's safe-trigger gate; per-card byte-equal cross-engine
+        # parity is exercised via the dedicated probe in
+        # ``tests/test_endstone_parity.py`` (the PROBED tier flip
+        # anchor). Same precedent as Boilerbilges Ripper / Comet
+        # Crawler / Friendly Teddy / Genemorph Imago / Fanatic of
+        # the Harrowing — multi-gated card; classifier's
+        # ``effect_uncovered`` gate closes via the new Rust variant
+        # + this bridge arm; ``nonsafe_triggered_ability`` stays
+        # True intentionally.
+        from mtg_bot.effects.generic.life import (
+            SetLifeToHalfStartingRoundedUp,
+        )
+        return SetLifeToHalfStartingRoundedUp()
     if kind == "create_token_copy_of_target_creature_you_control":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "create a token
         # that's a copy of target creature you control"

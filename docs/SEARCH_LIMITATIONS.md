@@ -13143,6 +13143,153 @@ Boilerbilges Ripper).
 
 ---
 
+## The Endstone Cycle 1 LANDED — `SetLifeToHalfStartingRoundedUp` Rust Effect substrate closed (2026-05-23, `feature/endstone-cycle-1-p1`)
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for The Endstone (`{7}` Legendary
+Artifact, EoE pool) is now Effect-closed. The
+`SetLifeToHalfStartingRoundedUp` Rust Effect variant ships with parse
++ to_pydict + resolve arms; the cross_engine dict→Python bridge arm
+round-trips it; a per-card real-EoE byte-equal probe flips The
+Endstone to **PROBED at the per-card parity layer**.
+
+**Oracle text** (CR phase-step BEGINNING_OF_END_STEP + life-set):
+
+> "Whenever you play a land or cast a spell, draw a card.
+> At the beginning of your end step, your life total becomes half
+> your starting life total, rounded up."
+
+**What landed:**
+
+* **Rust `Effect::SetLifeToHalfStartingRoundedUp` variant.** New
+  field-free unit variant on `rust/src/cards.rs` (the
+  `UntapTargetOtherPermanent` / `TapAnotherTargetCreature` /
+  `ReturnAllCreaturesFromYourGraveyardToBattlefield` unit-variant
+  idiom). Mirrors Python's `SetLifeToHalfStartingRoundedUp` frozen
+  dataclass (`effects/generic/life.py:51`) field-for-field — both
+  sides are parameterless.
+* **Parse arm.** Closed-vocab string kind
+  `"set_life_to_half_starting_rounded_up"` parsed via the existing
+  dict-key extraction pattern (cards.rs `parse_effect`). No fields
+  consumed; extra dict keys silently dropped (the standard unit-
+  variant contract).
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`); the round-trip is the bare
+  one-key payload `{"kind": "set_life_to_half_starting_rounded_up"}`.
+* **Resolve arm.** `rust/src/state_ops_resolve.rs` arm immediately
+  after the `UntapTargetOtherPermanent` resolve. Mechanism: 5-zone
+  walk to find the source controller, then set that player's
+  `life` to `(STARTING_LIFE + 1) / 2`. The `STARTING_LIFE` constant
+  is `20` (mirrors `state_ops_setup.rs:85`, mirroring Python's
+  `Player.starting_life: int = 20` default); the standard 20-life
+  format produces `life == 10` post-resolve. No fizzle path — even
+  a 0-life player has their life set to 10 (the effect is
+  unconditional). Source untrackable = silent fizzle (5-zone walk
+  found nothing). SBAs run AFTER the effect to surface the
+  observable life delta.
+* **Cross-engine bridge arm.** New
+  `set_life_to_half_starting_rounded_up` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately after the `untap_target_other_permanent` sibling
+  unit-variant arm. Translates the Rust-shape dict back into a
+  Python `SetLifeToHalfStartingRoundedUp()` instance; field-free
+  on both sides (no rename).
+* **Tests.** `tests/test_endstone_parity.py` carries:
+    - 1 parser SoT pin (card-claim + cost + supertype + the THREE
+      triggered abilities total + the BEGINNING_OF_END_STEP trigger
+      emits the expected `SetLifeToHalfStartingRoundedUp()`);
+    - 2 serializer round-trip pins (dict→Python via the bridge arm,
+      Rust register_printing → to_pydict via the etb_effects
+      readback);
+    - 3 Rust resolve-arm unit pins (life set from below-half 5 → 10,
+      life lowered from above-half 18 → 10, source-controller p1
+      via direct etb-effects apply path — pins the 5-zone walk
+      source-locator);
+    - 1 covered-set membership pin (the new Rust variant pairs 1:1
+      with the parser-claimed Python class — no override or
+      `RUST_AHEAD_OF_POOL` allowlist needed) + 1 classifier
+      `effect_uncovered` gate-closure pin (skips informationally
+      when the closed gate moves the card out of the classifier's
+      blocked-subsystem tier);
+    - 1 GENUINE real-EoE cross-engine byte-equal probe driving the
+      ACTUAL parsed The Endstone printing on Python against a
+      bridged synthetic carrier on Rust; both engines pre-seated at
+      p0.life=5/p1.life=5; both engines advance to PHASE_END_STEP
+      via the canonical phase-advance path that fires the
+      `BEGINNING_OF_END_STEP` event dispatch; post-resolve
+      p0.life==10 + p1.life==5 on BOTH; `compare_fields == []`
+      over the WHOLE field view.
+
+**Pool delta:** The Endstone flips Effect-uncovered → **PROBED at
+the per-card parity layer**. **Admit set unchanged** — The Endstone
+is an Artifact (not a non-creature spell admitted through the
+spell-card-bridge admit set); its triggered-ability events
+(`PLAYS_LAND` / `IS_CAST` / `BEGINNING_OF_END_STEP`) are NOT in the
+production-deck safe-trigger admission gate's
+ENTERS/DIES/ATTACKS/BECOMES_TAPPED whitelist
+(`_python_ta_to_safe_dict`), so this cycle does NOT widen the
+production-deck bench admit set.
+
+**`starting_life` divergence note.** Rust's `STARTING_LIFE` is a
+`const i32 = 20` in `state_ops_setup.rs:85` (no per-player field on
+the Rust `Player` struct). Python's `Player.starting_life: int =
+20` is a per-player field that defaults to 20. Both engines today
+produce the same observable (life → 10 after resolve) for every
+cross-engine probe. A future cycle landing alternate starting-life
+formats (Two-Headed Giant, Vanguard, Commander 40-life) will need
+to widen the Rust side with a per-player `starting_life` field;
+not in scope for this cycle.
+
+**Out of scope of this cycle (honest-stops):**
+
+* **No `_SAFE_TRIGGERS` admission widen.** Adding entries for The
+  Endstone's three triggers (`("plays_land", ...,
+  "draw_cards")`, `("is_cast", ..., "draw_cards")`,
+  `("beginning_of_end_step", ...,
+  "set_life_to_half_starting_rounded_up")`) to `_SAFE_TRIGGERS`
+  + matching reverse-serializer leaves in `_python_ta_to_safe_dict`
+  is the production-deck bench-admit half. The
+  `_python_ta_to_safe_dict` gate's event whitelist would need
+  three new events (PLAYS_LAND / IS_CAST / BEGINNING_OF_END_STEP),
+  plus the matching predicate arms (`Controlled(YOU)` is already
+  a recognized shape on other branches). The per-card probe
+  BYPASSES safe-trigger admission entirely by driving a real
+  cross-engine state directly, so the per-card PROBED tier closes
+  without the bench-admit widen. A future bench-admit cycle ships
+  the admit-set widen alongside the three new event arms.
+
+* **No production-deck full-card bench play.** Same reason as above
+  — without the safe-trigger admission widen, The Endstone cannot
+  ride into the full-card bench-side cross-engine harness. Per-card
+  probe parity is the strongest tier closed here (Effect + bridge-
+  level byte-equality on a *controlled* cross-engine state, NOT
+  full-game-trajectory parity).
+
+* **No `starting_life` per-player widen.** The Rust resolve arm
+  inlines `STARTING_LIFE = 20`. Alternate-starting-life formats
+  (Two-Headed Giant, Vanguard, Commander 40-life) would observe a
+  silent divergence — Python would read the format-specific value
+  off `Player.starting_life`; Rust would hardcode 20. Today the
+  EoE pool is 1v1 20-life only, so the divergence isn't reachable;
+  a future format-widening cycle adds the per-player field.
+
+**Coverage**: 9 tests at `tests/test_endstone_parity.py` (8 pass +
+1 informative skip — the classifier closing the gate moves The
+Endstone out of the blocked-subsystem tier, so the classifier
+gate-closure assertion skips with that reason). All pass on the
+lane's HEAD.
+
+**Location**: `rust/src/cards.rs`
+(`Effect::SetLifeToHalfStartingRoundedUp` variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm —
+5-zone source locator + `(STARTING_LIFE + 1) / 2` life set),
+`src/mtg_bot/parity/cross_engine.py`
+(`set_life_to_half_starting_rounded_up` dict→Python bridge arm),
+`tests/test_endstone_parity.py` (probes). Per-card cycle LANDED;
+The Endstone is now PROBED at the per-card parity layer.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
