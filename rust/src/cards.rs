@@ -5274,6 +5274,47 @@ pub enum Effect {
     /// **Negative values are legal.** "Has base 0/0" is meaningful
     /// (the creature dies to SBA toughness <= 0). No guard.
     SetBasePTUntilEOT { power: i32, toughness: i32 },
+    /// **Genemorph Imago — landfall conditional base-P/T UEOT (CR
+    /// 613.4 layer 7b).** Sibling of `SetBasePTUntilEOT` parameterized
+    /// over a controller-controls-N-or-more-lands threshold and TWO
+    /// P/T pairs. Mirrors Python's
+    /// `SetBasePTConditionalUntilEOT(default_power, default_toughness,
+    /// land_threshold, upgrade_power, upgrade_toughness)`
+    /// (`effects/generic/pump.py:530`).
+    ///
+    /// **Genemorph Imago oracle text:** "Landfall — Whenever a land
+    /// you control enters, target creature has base power and
+    /// toughness 3/3 until end of turn. If you control six or more
+    /// lands, that creature has base power and toughness 6/6 until
+    /// end of turn instead." Parameterized over all four stat values
+    /// and the threshold so a future printing with different numbers
+    /// claims via the same variant (parser-side recognizer
+    /// `_SET_BASE_PT_CONDITIONAL_UEOT` is already template-shape).
+    ///
+    /// **Mechanism.** At resolve time, count the source controller's
+    /// lands on battlefield. If the count >= `land_threshold`, push
+    /// a `UeotModifier::SetBasePT { power: upgrade_power,
+    /// toughness: upgrade_toughness }`; otherwise push the default
+    /// pair. ONLY ONE modifier is pushed (the winning branch) so the
+    /// CR 613.7b most-recent-timestamp reader sees a single clean
+    /// entry. Layer-7c additive bonuses still stack on top (CR 613.7c).
+    ///
+    /// **Target semantics.** Same first-slice deterministic pattern
+    /// as `SetBasePTUntilEOT`: pick the FIRST creature on source-
+    /// controller's battlefield. No eligible creature → silent
+    /// fizzle (dead-target == lands-not-counted, mirror of Python's
+    /// `if obj is None: return`).
+    ///
+    /// **Negative values are legal.** Mirrors `SetBasePTUntilEOT`'s
+    /// no-guard contract; Python's dataclass has no raise-on-negative
+    /// either.
+    SetBasePTConditionalUntilEOT {
+        default_power: i32,
+        default_toughness: i32,
+        land_threshold: i32,
+        upgrade_power: i32,
+        upgrade_toughness: i32,
+    },
     /// **Round 28 manifest-dread first-slice.** CR 701.55 — "Look at
     /// the top two cards of your library, manifest one of them, then
     /// put the other into your graveyard." Mirrors Python's
@@ -10625,6 +10666,85 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 })?;
             Ok(Effect::SetBasePTUntilEOT { power, toughness })
         }
+        "set_base_pt_conditional_until_eot" => {
+            // Genemorph Imago landfall arm. Five required integer
+            // fields — every Python emission of
+            // `SetBasePTConditionalUntilEOT` spells all five out.
+            // Negative values are legal (no parse-time guard); the
+            // Python dataclass has no raise-on-negative either.
+            let default_power: i32 = dict
+                .get_item("default_power")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_conditional_until_eot: missing required 'default_power' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_conditional_until_eot.default_power must be an integer (got: {e})"
+                    ))
+                })?;
+            let default_toughness: i32 = dict
+                .get_item("default_toughness")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_conditional_until_eot: missing required 'default_toughness' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_conditional_until_eot.default_toughness must be an integer (got: {e})"
+                    ))
+                })?;
+            let land_threshold: i32 = dict
+                .get_item("land_threshold")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_conditional_until_eot: missing required 'land_threshold' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_conditional_until_eot.land_threshold must be an integer (got: {e})"
+                    ))
+                })?;
+            let upgrade_power: i32 = dict
+                .get_item("upgrade_power")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_conditional_until_eot: missing required 'upgrade_power' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_conditional_until_eot.upgrade_power must be an integer (got: {e})"
+                    ))
+                })?;
+            let upgrade_toughness: i32 = dict
+                .get_item("upgrade_toughness")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "set_base_pt_conditional_until_eot: missing required 'upgrade_toughness' field",
+                    )
+                })?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "set_base_pt_conditional_until_eot.upgrade_toughness must be an integer (got: {e})"
+                    ))
+                })?;
+            Ok(Effect::SetBasePTConditionalUntilEOT {
+                default_power,
+                default_toughness,
+                land_threshold,
+                upgrade_power,
+                upgrade_toughness,
+            })
+        }
         "become_land_creature_ueot" => {
             // Round-28 manland animation. Required `power` and
             // `toughness` integer fields — every Python emission of
@@ -14433,6 +14553,20 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "set_base_pt_until_eot")?;
             d.set_item("power", *power)?;
             d.set_item("toughness", *toughness)?;
+        }
+        Effect::SetBasePTConditionalUntilEOT {
+            default_power,
+            default_toughness,
+            land_threshold,
+            upgrade_power,
+            upgrade_toughness,
+        } => {
+            d.set_item("kind", "set_base_pt_conditional_until_eot")?;
+            d.set_item("default_power", *default_power)?;
+            d.set_item("default_toughness", *default_toughness)?;
+            d.set_item("land_threshold", *land_threshold)?;
+            d.set_item("upgrade_power", *upgrade_power)?;
+            d.set_item("upgrade_toughness", *upgrade_toughness)?;
         }
         Effect::ManifestDread { count } => {
             d.set_item("kind", "manifest_dread")?;

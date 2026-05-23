@@ -16729,6 +16729,93 @@ fn apply_effect(
                 }
             }
         }
+        // Genemorph Imago — landfall conditional SetBasePT UEOT.
+        // Same first-slice + source-controller-bf-first-creature pick
+        // as SetBasePTUntilEOT, but the (P, T) pair is selected at
+        // resolve time from a controller-controls-N-or-more-lands
+        // condition. Pushes ONE UeotModifier::SetBasePT (the winning
+        // branch) so the CR 613.7b most-recent-timestamp reader sees a
+        // single clean entry. Mirrors Python's
+        // `SetBasePTConditionalUntilEOT._land_count` →
+        // `if lands >= land_threshold` branch.
+        Effect::SetBasePTConditionalUntilEOT {
+            default_power,
+            default_toughness,
+            land_threshold,
+            upgrade_power,
+            upgrade_toughness,
+        } => {
+            // Source-controller resolution (5-zone walk).
+            let mut src_controller: Option<u8> = None;
+            'outer_sbpc: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer_sbpc;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Count controller's lands on the battlefield. Mirrors
+            // Python's `sum(1 for o in state.battlefield if
+            // o.controller_id == controller_id and o.printing.is_land)`.
+            let land_count: i32 = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter(|obj| {
+                        registry
+                            .printings
+                            .get(obj.printing_id as usize)
+                            .map(|p| p.card_types.iter().any(|t| t == "Land"))
+                            .unwrap_or(false)
+                    })
+                    .count() as i32
+            };
+            let (power, toughness) = if land_count >= *land_threshold {
+                (*upgrade_power, *upgrade_toughness)
+            } else {
+                (*default_power, *default_toughness)
+            };
+            // Pick first creature on controller's bf (mirror of
+            // SetBasePTUntilEOT — Genemorph's source is on the same
+            // controller's bf, so a no-bait scenario fizzles silently).
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::SetBasePT {
+                        power,
+                        toughness,
+                    });
+                    break;
+                }
+            }
+        }
         // Round-28 ManifestDread first-slice. CR 701.55 — pop top
         // min(2, library_len) cards into a ManifestDreadChoice and
         // short-circuit. Substrate-aligned with LookTopN: same pop-

@@ -12620,6 +12620,153 @@ layer despite the multi-gated classifier status.
 
 ---
 
+## Genemorph Imago Cycle 1 LANDED — `SetBasePTConditionalUntilEOT` Rust Effect substrate closed (2026-05-23, `feature/genemorph-imago-cycle-1-p1`)
+
+**Substrate landed.** The earlier multi-gated `effect_uncovered` +
+`nonsafe_triggered_ability` row for Genemorph Imago ({G}{U} Creature
+— Insect Druid, ~6,588 17lands decks) is now Effect-closed. The
+`SetBasePTConditionalUntilEOT` Rust Effect variant ships with parse +
+to_pydict + resolve arms; the cross_engine dict→Python bridge arm
+round-trips it; a per-card real-EoE byte-equal probe flips Genemorph
+Imago to **PROBED at the per-card parity layer**.
+
+**Oracle text** (CR layer 7b conditional base-P/T UEOT):
+
+> "Flying. Landfall — Whenever a land you control enters, target
+> creature has base power and toughness 3/3 until end of turn. If
+> you control six or more lands, that creature has base power and
+> toughness 6/6 until end of turn instead."
+
+**What landed:**
+
+* **Rust `Effect::SetBasePTConditionalUntilEOT` variant.** New enum
+  variant on `rust/src/cards.rs` with five `i32` fields:
+  `default_power`, `default_toughness`, `land_threshold`,
+  `upgrade_power`, `upgrade_toughness`. Sibling of the
+  `SetBasePTUntilEOT` variant (cards.rs:5223, shipped round 18 +
+  in `RUST_AHEAD_OF_POOL`) parameterized over a controller-
+  controls-N-or-more-lands threshold and TWO P/T pairs. Mirrors
+  Python's `SetBasePTConditionalUntilEOT` dataclass
+  (`effects/generic/pump.py:530`) field-for-field; no condition-
+  enum substrate needed because the threshold is a simple int.
+* **Parse arm.** Closed-vocab string kind
+  `"set_base_pt_conditional_until_eot"` parsed via the existing
+  dict-key extraction pattern (cards.rs `parse_effect`). All five
+  integer fields are REQUIRED — no defaults — every Python card
+  emission spells them out. Missing field surfaces as a clear
+  `PyValueError` at parse time; negative values are legal (no
+  parse-time guard, mirroring `SetBasePTUntilEOT`'s contract).
+* **to_pydict arm.** Round-trip dict emitter for the new variant
+  (cards.rs `effect_to_pydict`), mirroring the
+  `SetBasePTUntilEOT` siblings on adjacent lines. Round-trip is
+  the exact five-field payload.
+* **Resolve arm.** `rust/src/state_ops_resolve.rs` arm immediately
+  after the `SetBasePTUntilEOT` resolve. Mechanism: 5-zone walk
+  to find the source controller, count the source-controller's
+  Land permanents on the battlefield (`card_types` contains
+  `"Land"`), pick the (`default_power`, `default_toughness`) pair
+  if `land_count < land_threshold` else the (`upgrade_power`,
+  `upgrade_toughness`) pair, scan the source-controller's bf for
+  the FIRST `Creature` permanent (same first-slice deterministic
+  pattern as `SetBasePTUntilEOT`), and push a single
+  `UeotModifier::SetBasePT { power, toughness }` onto its
+  modifier list. Empty bf / no creatures = silent fizzle (mirror
+  of Python's `if obj is None: return`); source untrackable =
+  silent fizzle (5-zone walk found nothing). Only ONE modifier
+  is pushed (the winning branch) so the CR 613.7b most-recent-
+  timestamp reader sees a single clean entry; layer-7c additive
+  bonuses still stack on top.
+* **Cross-engine bridge arm.** New
+  `set_base_pt_conditional_until_eot` arm in
+  `src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`
+  immediately after the `set_base_pt_until_eot` sibling arm.
+  Translates the Rust-shape dict back into a Python
+  `SetBasePTConditionalUntilEOT(default_power=..., ...)`
+  instance; field names agree on both sides (no rename).
+  Missing required fields raise `KeyError` (mirrors the Rust
+  parse-time no-defaults contract).
+* **Tests.** `tests/test_genemorph_imago_parity.py` carries:
+    - 3 parser SoT pins (card-claim, printed attrs incl. flying,
+      landfall trigger emits the expected
+      `SetBasePTConditionalUntilEOT(3, 3, 6, 6, 6)` under
+      ENTERS + `And(Subject(IsLand), Controlled(YOU))`);
+    - 2 serializer round-trip pins (canonical Genemorph payload
+      + alternate-numbers payload, missing-field KeyError
+      surfaces);
+    - 3 Rust unit pins (sub-threshold 3/3 path with
+      `land_count=3 < 6`; at-threshold 6/6 path with
+      `land_count=6 >= 6`; no-eligible-creature silent fizzle);
+    - 1 covered-set membership pin (the new Rust variant pairs
+      1:1 with the parser-claimed Python class — no override or
+      `RUST_AHEAD_OF_POOL` allowlist needed);
+    - 1 GENUINE real-EoE cross-engine byte-equal probe driving
+      the ACTUAL parsed Genemorph Imago printing on Python
+      against a bridged synthetic carrier on Rust; the landfall
+      trigger fires from a played Forest (sub-threshold branch,
+      `land_count=1 < 6`), the picked Bear's base goes 2/2 →
+      3/3 on BOTH engines, and `compare_fields == []` over the
+      WHOLE field view.
+
+**Pool delta:** Genemorph Imago flips Effect-uncovered →
+**PROBED at the per-card parity layer** (~6,588 17lands decks).
+**Admit set unchanged** — Genemorph Imago is a Creature (not a
+spell); the production-deck safe-trigger admission gate
+(`_python_ta_to_safe_dict` + `_SAFE_TRIGGERS`) is NOT widened in
+this cycle (see "Out of scope" below).
+
+**Effect-class context (RUST_AHEAD_OF_POOL pairing):** the bare
+`SetBasePTUntilEOT` Rust variant (`rust/src/cards.rs:5223`)
+remains in `RUST_AHEAD_OF_POOL` — its only EoE consumer
+(Genemorph Imago) actually emits `SetBasePTConditionalUntilEOT`,
+not the bare shape. A future EoE printing with a non-conditional
+"target creature has base P/T N/N UEOT" surface would lift the
+bare variant out of `RUST_AHEAD_OF_POOL`; that's a future per-
+card cycle, not this one.
+
+**Out of scope of this cycle (honest-stops):**
+
+* **No `_SAFE_TRIGGERS` admission widen.** Adding the
+  `("enters", "land_enters_controlled_by_you",
+  "set_base_pt_conditional_until_eot")` triple to
+  `_SAFE_TRIGGERS` (and the matching reverse-serializer leaf in
+  `_python_ta_to_safe_dict`) is the production-deck bench-admit
+  half. The `SetBasePTConditionalUntilEOT` Python class uses the
+  legacy `requires_target`/`legal_targets` interface (NOT the
+  `TargetSpec` slot framework the Tier-C target-seating sub-
+  substrate expects), so admitting Genemorph Imago into the
+  bench-side safe-trigger set requires either (a) migrating the
+  effect class to `TargetSpec` slots, or (b) a new target-
+  bearing-trigger admission path that handles the legacy
+  interface. Both are bigger lifts than fit this per-card cycle;
+  Genemorph Imago's per-card byte-equal probe BYPASSES safe-
+  trigger admission entirely by driving a synthetic Rust carrier
+  directly (mirroring the Sunstar Expansionist precedent at
+  `tests/test_probe_covered_unprobed_l.py`), so the per-card
+  PROBED tier closes without the bench-admit widen. A future
+  bench-admit cycle ships the admit-set widen alongside whichever
+  approach (a) or (b) is chosen.
+* **No production-deck full-card bench play.** Same reason as
+  above — without the safe-trigger admission widen, Genemorph
+  Imago cannot ride into the full-card bench-side cross-engine
+  harness. Per-card probe parity is the strongest tier closed
+  here (Effect + bridge-level byte-equality on a *controlled*
+  cross-engine state, NOT full-game-trajectory parity).
+
+**Coverage**: 10 tests at `tests/test_genemorph_imago_parity.py`.
+All pass on the lane's HEAD.
+
+**Location**: `rust/src/cards.rs`
+(`Effect::SetBasePTConditionalUntilEOT` variant + parse arm +
+to_pydict arm), `rust/src/state_ops_resolve.rs` (resolve arm —
+land-count + branch + first-creature pick + UEOT push),
+`src/mtg_bot/parity/cross_engine.py`
+(`set_base_pt_conditional_until_eot` dict→Python bridge arm),
+`tests/test_genemorph_imago_parity.py` (probes). Per-card cycle
+LANDED; Genemorph Imago is now PROBED at the per-card parity
+layer.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

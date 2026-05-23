@@ -1722,6 +1722,75 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power=eff_dict["power"],
             toughness=eff_dict["toughness"],
         )
+    if kind == "set_base_pt_conditional_until_eot":
+        # Genemorph Imago — landfall conditional base-P/T UEOT (CR
+        # 613.4 layer 7b). Sibling of ``set_base_pt_until_eot``
+        # parameterized over a controller-controls-N-or-more-lands
+        # threshold and TWO P/T pairs. Rust's
+        # ``Effect::SetBasePTConditionalUntilEOT {
+        # default_power: i32, default_toughness: i32,
+        # land_threshold: i32, upgrade_power: i32,
+        # upgrade_toughness: i32 }`` (cards.rs
+        # SetBasePTConditionalUntilEOT variant) selects (P, T) at
+        # resolve time based on the source-controller's land count
+        # and pushes a single ``UeotModifier::SetBasePT`` (the
+        # winning branch) onto the target creature's modifier list.
+        # The composer (``battlefield_creature_power`` /
+        # ``_toughness``) reads the LAST SetBasePT modifier as the
+        # new base; layer-7c additive bonuses still stack on top
+        # (CR 613.7c).
+        #
+        # **Genemorph Imago oracle text.** "Landfall — Whenever a
+        # land you control enters, target creature has base power
+        # and toughness 3/3 until end of turn. If you control six
+        # or more lands, that creature has base power and toughness
+        # 6/6 until end of turn instead." Parameterized over all
+        # four stat values + the threshold so a future printing
+        # with different numbers claims via the same Rust variant.
+        #
+        # **Filter direction = SOURCE-controller's bf.** Same shape
+        # as ``set_base_pt_until_eot`` -- the
+        # ``_PickFirstControlledCreatureAgent`` shim from
+        # ``tests/parity/_picker_shims.py`` picks the first own-side
+        # creature on Python; matches Rust's at-apply-time scan in
+        # 2-player games.
+        #
+        # **Land count semantics.** Rust counts the source-
+        # controller's land permanents at the time the trigger
+        # resolves (``card_types.iter().any(|t| t == "Land")``).
+        # Python's ``_land_count`` (effects/generic/pump.py:573-577)
+        # filters on ``o.controller_id == controller_id and
+        # o.printing.is_land`` over ``state.battlefield``. Both
+        # count the SAME set: the source-controller's lands on the
+        # battlefield at resolve time (NOT the play-land event that
+        # triggered the ability; if a land entered and then was
+        # bounced before the trigger resolved, neither engine
+        # counts it). The threshold comparison is ``>=`` on both
+        # sides.
+        #
+        # **Field-name agreement.** Python's
+        # ``SetBasePTConditionalUntilEOT(default_power: int,
+        # default_toughness: int, land_threshold: int,
+        # upgrade_power: int, upgrade_toughness: int)``
+        # (effects/generic/pump.py:530) carries the SAME field
+        # names; no rename in the bridge. Negative values are legal
+        # on both engines (no parse-time guards on either side).
+        #
+        # Mirrors Rust's ``parse_effect`` arm which REQUIRES all
+        # five integer fields (no defaults — every Python card
+        # emission spells all five out). The bridge enforces the
+        # same contract: missing fields raise ``KeyError`` at
+        # translation time so a typo surfaces immediately.
+        from mtg_bot.effects.generic.pump import (
+            SetBasePTConditionalUntilEOT,
+        )
+        return SetBasePTConditionalUntilEOT(
+            default_power=eff_dict["default_power"],
+            default_toughness=eff_dict["default_toughness"],
+            land_threshold=eff_dict["land_threshold"],
+            upgrade_power=eff_dict["upgrade_power"],
+            upgrade_toughness=eff_dict["upgrade_toughness"],
+        )
     if kind == "fight_target_creature_with_target_creature":
         # BLOCKED-RUST-EFFECT slice -- Fight effect arm (CR 701.12).
         # Bilateral fight: source-controller's first creature fights
