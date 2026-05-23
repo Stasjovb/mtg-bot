@@ -2142,6 +2142,42 @@ impl GameState {
             && (self.phase == PHASE_MAIN1 || self.phase == PHASE_MAIN2)
             && self.stack.is_empty();
 
+        // **Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22).** Compute the per-player noncreature-cast
+        // gate ONCE for use by every CastSpell emit branch below.
+        // `noncreature_cast_blocked == true` iff:
+        //   1. ANY battlefield permanent (either controller) carries
+        //      `printing.restricts_noncreature_spells_to_one_per_turn
+        //      == true` (Deafening Silence is symmetric — any
+        //      copy on either side locks both players); AND
+        //   2. the casting player has already cast a noncreature
+        //      spell this turn (counter >= 1).
+        // When set, every noncreature CastSpell emission in this
+        // priority window is suppressed for the casting player.
+        // Mirrors Python's post-filter at `src/mtg_bot/legal.py:880-893`
+        // (the Python side filters after-the-fact; Rust gates at
+        // emit time — semantically identical because both paths
+        // produce the same set of emitted CastSpell actions).
+        //
+        // **Note on scope.** The walk crosses BOTH players'
+        // battlefields. `bf_iter_etb_sorted` returns the merged
+        // canonical-ordered view that every legal-decision battle-
+        // field scan uses; reusing it here keeps the gate cheap and
+        // mirrors Python's `for o in state.battlefield` walk
+        // (Python's battlefield is centralized on GameState; the
+        // walk semantically covers both sides too).
+        let noncreature_cast_blocked: bool = self.players[idx]
+            .noncreature_spells_cast_this_turn
+            >= 1
+            && crate::bf_iter::bf_iter_etb_sorted(self)
+                .into_iter()
+                .any(|o| {
+                    self.registry
+                        .lookup(o.printing_id)
+                        .map(|p| p.restricts_noncreature_spells_to_one_per_turn)
+                        .unwrap_or(false)
+                });
+
         // **CastSpell emission — instant-speed window first**
         // (Python `legal.py:217-301`). Walk the hand and emit a
         // CastSpell for any printed Instant or any card with the
@@ -2190,6 +2226,26 @@ impl GameState {
                 .any(|t| t == "Instant");
             let has_flash = printing.keywords.iter().any(|k| k == "flash");
             if !(is_instant || has_flash) {
+                continue;
+            }
+            // **Static rule-text substrate — Deafening Silence Cycle 1
+            // (2026-05-22).** Suppress noncreature CastSpell emits
+            // for the casting player when the gate is locked. A
+            // flash-keyword Creature passes the noncreature gate
+            // (it IS a Creature, so it's exempt from the Deafening-
+            // Silence restriction). The dedup-slot semantics match
+            // Python's add-on-emit ordering (`legal.py:880-893` is a
+            // post-filter that removes already-emitted noncreature
+            // CastSpells; Rust gates BEFORE the emit + dedup, which
+            // is byte-equivalent because the post-filter would have
+            // dropped any noncreature CastSpell unconditionally).
+            // The skip does NOT mark the name seen — same shape as
+            // the `!base_payable && !warp_payable` skip below
+            // (Python's `_emit_hand_cast` add-on-emit `seen_instant`
+            // discipline).
+            let is_creature_card =
+                printing.card_types.iter().any(|t| t == "Creature");
+            if noncreature_cast_blocked && !is_creature_card {
                 continue;
             }
             let name: &str = printing.name.as_ref();
@@ -2404,6 +2460,18 @@ impl GameState {
                 .any(|t| t == "Instant");
             let has_flash = printing.keywords.iter().any(|k| k == "flash");
             if is_instant || has_flash {
+                continue;
+            }
+            // **Static rule-text substrate — Deafening Silence Cycle 1
+            // (2026-05-22).** Same gate as the instant-speed pass
+            // above. The sorcery-speed pass covers Sorceries +
+            // non-flash Creatures + non-flash non-Instant permanents
+            // (Enchantments, Artifacts, Planeswalkers). Creatures
+            // emit through this branch normally; non-Creature sorcery-
+            // speed casts are suppressed when the gate is locked.
+            let is_creature_card =
+                printing.card_types.iter().any(|t| t == "Creature");
+            if noncreature_cast_blocked && !is_creature_card {
                 continue;
             }
             let name: &str = printing.name.as_ref();
@@ -2728,6 +2796,18 @@ impl GameState {
             // faithful Python mirror + the single named extension
             // point.
             if !additional_costs_payable(self, obj.printing_id, idx) {
+                continue;
+            }
+            // **Static rule-text substrate — Deafening Silence Cycle 1
+            // (2026-05-22).** Same noncreature-cast gate as the
+            // hand-cast loops. The Lightstall exile-cast path can
+            // emit non-Creature spells (Lightstall exiles a chosen
+            // hand card whose type is arbitrary), so the gate
+            // applies here too. Lands take the `play_land_dict`
+            // branch above and aren't affected.
+            let is_creature_card =
+                printing.card_types.iter().any(|t| t == "Creature");
+            if noncreature_cast_blocked && !is_creature_card {
                 continue;
             }
             actions.push(cast_spell_dict(py, obj.id)?);

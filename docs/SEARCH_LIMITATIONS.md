@@ -9344,95 +9344,113 @@ broader Phase-4 follow-ups are untouched.
 
 ---
 
-## Deafening Silence — Rust does not mirror the noncreature-cast restriction (HONEST-STOP, 2026-05-21)
+## Deafening Silence Cycle 1 LANDED — noncreature-cast restriction substrate closed (2026-05-22, `feature/deafening-silence-cycle-1-p1`)
+
+**Substrate landed.** The earlier honest-stop ("Rust does not mirror
+the noncreature-cast restriction", 2026-05-21) is now closed. The
+contained-medium ``static_rule_text`` substrate per
+``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`` §5 has shipped in one
+cycle.
+
+**What landed:**
+
+* **Rust `CardPrinting` mirror.** New
+  ``restricts_noncreature_spells_to_one_per_turn: bool`` slot on
+  ``CardPrinting`` (`rust/src/cards.rs`), parsed from the
+  registry-dict key of the same name; default `false` for every
+  pre-substrate registry dict (back-compat byte-equal). Symmetric
+  read accessor `get_printing_restricts_noncreature_spells_to_one_per_turn`
+  exposed to Python.
+* **Rust `Player` counter mirror.** New
+  ``noncreature_spells_cast_this_turn: i32`` field on `Player`
+  (`rust/src/state.rs`); default 0; read/write accessors
+  `get_noncreature_spells_cast_this_turn` /
+  `set_noncreature_spells_cast_this_turn` exposed to Python
+  symmetric with Python's attribute access.
+* **Per-cast increment hooks.** Bumped by `+1` in
+  ``state_ops_cast.rs::cast_spell_noncreature`` and
+  ``state_ops_cast.rs::cast_aura`` immediately after the
+  `spells_cast_this_turn` bump. Mirrors Python's
+  `actions.py:1782` increment under the
+  `if not card.printing.is_creature` guard. `cast_creature` and
+  `cast_creature_warp` do NOT increment (type-specific gate).
+* **Cleanup-step reset.** Added per-player counter zeroing in
+  ``state_ops_steps.rs``'s cleanup-step block alongside the
+  existing `spells_cast_this_turn` /
+  `artifacts_entered_under_your_control_this_turn` resets.
+  Mirrors Python's `turn.py:1106`.
+* **Cast-time legal-decisions gate.** Added a `noncreature_cast_
+  blocked` precomputed predicate at the top of
+  `state_ops_legal::legal_decisions` (one `bf_iter_etb_sorted` walk
+  + counter check), and a per-CastSpell type-specific filter in
+  each of the three emit branches: instant-speed hand pass,
+  sorcery-speed hand pass, Lightstall cast-from-exile pass.
+  Creature casts (including Flash creatures) stay legal — the gate
+  is type-specific. The exile-recast and graveyard-warp loops
+  already filter to creature shapes, so no extra gate there.
+  Mirrors Python's post-filter at `legal.py:880-893` byte-
+  equivalently (Python filters after the action list is built;
+  Rust gates at emit time).
+* **Bridge round-trip.** `src/mtg_bot/parity/cross_engine.py`'s
+  `CardDef` carries a new
+  `restricts_noncreature_spells_to_one_per_turn: bool = False`
+  slot; `_spec_card_to_printing_dict` emits the registry-dict key
+  only when True (back-compat byte-equal omission); the Python
+  CardPrinting materializer threads the field through to the
+  Python CardPrinting.
+* **Loader admit gate.** New
+  `_printing_is_bridge_simple_cast_restriction_enchantment`
+  disjunct in `src/mtg_bot/parity/trajectory.py` admits a vanilla
+  Enchantment carrying ONLY the new bool slot with every other
+  rider at its zero default. Wired into
+  `_filter_deck_to_bridge_supported` (the production deck-loader
+  filter) and into `scripts/measure_pool_parity.py::loader_admits`
+  (the metric-truthfulness helper).
+* **Tests.** `tests/test_deafening_silence_parity.py` carries: 1
+  parser SoT pin; 3 Rust unit pins (noncreature increment,
+  creature-no-increment, cleanup reset); 3 Rust legal-gate pins
+  (block on counter ≥1 with bf carrier present, no-block without
+  carrier, symmetric block from opponent-side Silence); 3 bridge
+  round-trip pins (printing bool C→R→Py, Python materialization,
+  per-Player counter round-trip); 2 admit-gate flip pins
+  (`_printing_is_bridge_simple_cast_restriction_enchantment`
+  + `_filter_deck_to_bridge_supported` + `loader_admits`); 1
+  GENUINE real-EoE cross-engine byte-equal probe (creature cast
+  NOT blocked, first noncreature cast allowed, second noncreature
+  cast blocked symmetrically on both engines, with counter
+  byte-equality verified at each step).
+
+**Pool delta:** Deafening Silence flips BLOCKED →
+PROBED (12 17lands decks; the only EoE single-gated carrier of
+the `restricts_noncreature_spells_to_one_per_turn` flag). Admit
+set grows by one.
+
+**Symmetry note:** Deafening Silence is symmetric in CR — its
+restriction applies to BOTH players regardless of which side
+controls the permanent. The Rust gate walks BOTH players'
+battlefields via `bf_iter_etb_sorted` and reads each printing's
+flag, mirroring Python's `for o in state.battlefield` walk (Python's
+battlefield is centralized on `GameState`). Test
+`test_rust_legal_decisions_silence_on_opponent_side_blocks_both`
+pins this.
 
 **Location:**
-
-* Python parser: `src/mtg_bot/cards/parser/enchantment_builder.py:867`
-  (sets the bool on the printing).
-* Python `CardPrinting` slot:
-  `src/mtg_bot/cards/base.py:843`
-  (``restricts_noncreature_spells_to_one_per_turn: bool = False``).
-* Python `Player` counter:
-  `src/mtg_bot/game.py:2401`
-  (``noncreature_spells_cast_this_turn: int = 0``).
-* Python increment: `src/mtg_bot/actions.py:1782`
-  (incremented in `_cast_spell` for every noncreature cast).
-* Python cleanup reset: `src/mtg_bot/turn.py:1106`.
-* Python legal-action gate: `src/mtg_bot/legal.py:880-893`
-  (post-filter — drops noncreature `CastSpell` actions when any
-  printing on the battlefield carries the bool and the controller's
-  counter is ≥1).
-* Rust acknowledgement (not implementation):
-  `rust/src/state.rs:972`
-  (explicit comment: "Rust does NOT mirror that yet").
-* Bridge: no carrier for the printing bool today
-  (`src/mtg_bot/parity/trajectory.py`'s `_printing_to_card_def` /
-  `_card_def_to_python_printing` / Rust `register_printing` chain
-  carries no field for it).
-* Loader: none of the 10 admit disjuncts in
-  `_filter_deck_to_bridge_supported`
-  (`src/mtg_bot/parity/trajectory.py:6970-7086`) recognise the
-  printing shape, so Deafening Silence never enters a cross-engine
-  parity run.
-
-**What we do today:** Python alone models "Each player can't cast more
-than one noncreature spell each turn." Rust has no mirroring counter,
-no per-cast increment, no cleanup-step reset, and no cast-time gate;
-the printing's parser-set bool round-trips ONLY within Python and is
-not in the bridge codec. Production cross-engine parity runs do not
-admit this printing (no loader disjunct matches), so the divergence
-never surfaces in a bench probe today — but if a future widen ever
-admitted the printing without Rust closing first, it would surface as
-a `legal_decisions` divergence the moment a controller's second
-noncreature cast appears in the cast set.
-
-**Why it's OK today:** The card has 12 17lands appearances (the only
-EoE printing carrying the bool), and the loader doesn't admit it, so
-the parity surface is empty. The Python-engine side is fully wired
-and pinned by `tests/test_deafening_silence.py` (the engine half is
-correct under CR for the in-Python game-loop path that the bot's
-self-play uses).
-
-**Failure mode:** if a future lane widens the loader to admit this
-printing without first closing the Rust side, ``legal_decisions``
-would diverge cross-engine the moment any controller has
-``noncreature_spells_cast_this_turn ≥ 1`` with this printing on the
-battlefield (Python drops the second noncreature `CastSpell`; Rust
-still emits it).
-
-**Fix scope when prioritised (contained-medium):**
-
-* Add `restricts_noncreature_spells_to_one_per_turn: bool` to Rust
-  `CardPrinting` and the bridge codec.
-* Add `noncreature_spells_cast_this_turn: i32` to Rust's `Player`,
-  mirror Python's `actions.py:1782` per-cast increment (only on
-  noncreature spells) in Rust's `cast_spell_noncreature` /
-  `cast_spell_modal` / spell-stack-completion primitives that fire
-  IS_CAST, mirror Python's cleanup-step reset
-  (`turn.py:1106`).
-* Add a Rust legal-action gate in `state_ops_legal.rs`'s emitter at
-  the priority-spell-cast site, mirroring Python's `legal.py:880`
-  post-filter — drop noncreature `CastSpell` legal decisions when
-  any battlefield printing carries the bool and the controller's
-  counter is ≥1.
-* Add the bridge round-trip + a new
-  `_printing_is_bridge_simple_cast_restriction_enchantment` admit
-  disjunct.
-* Add a real-EoE byte-equal probe driving the second-noncreature-
-  drop in `tests/test_parity_smoke.py`.
-
-**Impact estimate:** ~12 17lands decks of single-gated leverage
-(below the §4 sequencing thresholds). Engine strength delta is
-negligible — Deafening Silence is rare in EoE drafts and the
-Python side already plays it correctly.
-
-**Pinned by:** the metric attribution helper at
-`scripts/scout_r58_subsystem_attribution.py:_gates_for_loader_card`
-attributes Deafening Silence to the new `static_rule_text` row
-(2026-05-21 unclassified-residual lane); see
-`docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md` §5 for the substrate
-cost summary.
+`rust/src/cards.rs` (`CardPrinting` field + parser arm + getter —
+this cycle), `rust/src/state.rs` (`Player` counter + 3 synthetic-
+state constructors — this cycle), `rust/src/state_ops_setup.rs`
+(`make_state` constructor — this cycle), `rust/src/state_ops_cast.rs`
+(per-cast increment in `cast_spell_noncreature` + `cast_aura` —
+this cycle), `rust/src/state_ops_steps.rs` (cleanup-step reset —
+this cycle), `rust/src/state_ops_legal.rs` (precomputed predicate +
+per-CastSpell type-specific gate in instant/sorcery/Lightstall
+emit branches — this cycle), `rust/src/state_ops_resolve.rs`
+(Player counter accessors — this cycle), `src/mtg_bot/parity/
+cross_engine.py` (`CardDef` slot + registry-dict emitter + Python
+materialization — this cycle), `src/mtg_bot/parity/trajectory.py`
+(new `_printing_is_bridge_simple_cast_restriction_enchantment`
+predicate + `_filter_deck_to_bridge_supported` disjunct — this
+cycle), `scripts/measure_pool_parity.py` (`loader_admits` mirror
+arm — this cycle).
 
 ---
 

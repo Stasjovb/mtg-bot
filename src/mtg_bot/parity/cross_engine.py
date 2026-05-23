@@ -514,6 +514,20 @@ class CardDef:
         ],
         ...,
     ] = ()
+    # Static rule-text substrate — Deafening Silence Cycle 1
+    # (2026-05-22). Printing-level bool — when ``True``, any permanent
+    # with this flag on the battlefield restricts EACH player to
+    # casting at most one noncreature spell per turn (Deafening
+    # Silence's static ability). Mirrors Python's
+    # ``CardPrinting.restricts_noncreature_spells_to_one_per_turn:
+    # bool = False`` at ``src/mtg_bot/cards/base.py:844``. The Rust
+    # mirror is the ``restricts_noncreature_spells_to_one_per_turn``
+    # field on ``CardPrinting`` (added round-86, 2026-05-22). ``False``
+    # is the back-compat default — every pre-substrate CardDef omits
+    # it and the registry-dict emitter skips it, so the Rust parser
+    # maps the absent key to ``false`` per the back-compat pattern
+    # every other optional flag uses.
+    restricts_noncreature_spells_to_one_per_turn: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -11953,6 +11967,16 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # dict when the tuple is empty (every pre-round-82 carrier:
     # Brightspear / Cloudsculpt / Gravblade), keeping every pre-
     # round-82 registry dict byte-identical.
+    # Static rule-text substrate — Deafening Silence Cycle 1
+    # (2026-05-22). Emit the noncreature-cast-restriction flag only
+    # when True so every pre-substrate CardDef registry dict is
+    # byte-identical to before this slice landed. The Rust parser
+    # maps the absent key to its zero default (``false``) per the
+    # back-compat pattern every other optional flag uses. Mirrors
+    # Python's ``CardPrinting.restricts_noncreature_spells_to_one_per_
+    # turn`` (`cards/base.py:844`).
+    if card.restricts_noncreature_spells_to_one_per_turn:
+        printing_dict["restricts_noncreature_spells_to_one_per_turn"] = True
     if card.static_self_bonuses:
         bonus_entries: list[dict] = []
         for (
@@ -12680,6 +12704,15 @@ def _card_def_to_python_printing(card: "CardDef"):
         # countered." rider. ``False`` for every pre-Phase-2 CardDef
         # (back-compat default — bit-identical CardPrinting).
         spell_is_uncounterable=card.spell_is_uncounterable,
+        # Static rule-text substrate — Deafening Silence Cycle 1
+        # (2026-05-22). Threads the noncreature-cast-restriction
+        # flag through to the Python CardPrinting. Default ``False``
+        # keeps every pre-substrate CardDef bit-identical to before
+        # this slice landed. Read by Python's ``legal.legal_actions``
+        # post-filter at `legal.py:880-893`.
+        restricts_noncreature_spells_to_one_per_turn=(
+            card.restricts_noncreature_spells_to_one_per_turn
+        ),
     )
 
 

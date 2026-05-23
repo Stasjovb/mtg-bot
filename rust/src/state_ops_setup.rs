@@ -382,6 +382,7 @@ pub fn make_state(
         life_gained_this_turn: 0,
         poison_counters: 0,
         spells_cast_this_turn: 0,
+        noncreature_spells_cast_this_turn: 0,
         artifacts_entered_under_your_control_this_turn: 0,
     };
     let p1 = Player {
@@ -399,6 +400,7 @@ pub fn make_state(
         life_gained_this_turn: 0,
         poison_counters: 0,
         spells_cast_this_turn: 0,
+        noncreature_spells_cast_this_turn: 0,
         artifacts_entered_under_your_control_this_turn: 0,
     };
 

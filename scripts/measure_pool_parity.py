@@ -1364,6 +1364,16 @@ def loader_admits(printing) -> bool:
             or traj._printing_is_bridge_simple_static_self_conditional_creature(
                 printing,
             )
+            # Static rule-text substrate — Deafening Silence Cycle 1
+            # (2026-05-22). Mirrors the real loader's new admit arm
+            # in ``_filter_deck_to_bridge_supported``. Deafening
+            # Silence (12 17lands decks) flips from BLOCKED →
+            # COVERED here (0-Effect, admit-arm fires); the cross-
+            # engine bridge round-trip + the parity probe move it
+            # to PROBED via the existing slug-keyed scanner pattern.
+            or traj._printing_is_bridge_simple_cast_restriction_enchantment(
+                printing,
+            )
             # Non-basic land substrate — phase 2 (round-85 N1): the
             # 10th admit arm of the real loader; mirrors
             # ``_filter_deck_to_bridge_supported``. The 5 EoE Planet

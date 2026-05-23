@@ -20640,4 +20640,45 @@ impl GameState {
         Ok(self.players[player_idx]
             .artifacts_entered_under_your_control_this_turn)
     }
+
+    /// **Static rule-text substrate — Deafening Silence Cycle 1
+    /// (2026-05-22) — read accessor.** Read
+    /// `Player.noncreature_spells_cast_this_turn` for a player
+    /// index. Exposed to Python so the cross-engine bridge tests can
+    /// observe the Rust counter symmetrically with Python's
+    /// `state.players[idx].noncreature_spells_cast_this_turn`
+    /// attribute access. Raises `IndexError` for `player_idx >= 2`.
+    fn get_noncreature_spells_cast_this_turn(
+        &self,
+        player_idx: usize,
+    ) -> PyResult<i32> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        Ok(self.players[player_idx].noncreature_spells_cast_this_turn)
+    }
+
+    /// **Static rule-text substrate — Deafening Silence Cycle 1
+    /// (2026-05-22) — test helper / bridge round-trip.** Directly
+    /// set `Player.noncreature_spells_cast_this_turn` for a player
+    /// index. Symmetric with `set_spells_cast_this_turn` /
+    /// `set_artifacts_entered_under_your_control_this_turn`.
+    /// Mirrors Python tests setting
+    /// `state.players[0].noncreature_spells_cast_this_turn = n`
+    /// directly. Raises `IndexError` for `player_idx >= 2`.
+    fn set_noncreature_spells_cast_this_turn(
+        &mut self,
+        player_idx: usize,
+        value: i32,
+    ) -> PyResult<()> {
+        if player_idx >= 2 {
+            return Err(PyIndexError::new_err(format!(
+                "player_idx {player_idx} out of range (must be 0 or 1)"
+            )));
+        }
+        self.players[player_idx].noncreature_spells_cast_this_turn = value;
+        Ok(())
+    }
 }

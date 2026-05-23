@@ -932,17 +932,20 @@ def test_known_card_subsystem_attribution(scout, attr):
     # lever to close it; see SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
     # §3 lever (1)).
     assert scout.SUB_WARP in cards["Starfield Vocalist"]["gates"]
-    # Deafening Silence: 2026-05-21 measurement-attribution close moved
-    # it from Unclassified to ``SUB_STATIC_RULE_TEXT`` — the printing
-    # carries ``restricts_noncreature_spells_to_one_per_turn=True``, a
-    # printing-level bool flag the Python parser + engine fully model
-    # but Rust does not mirror. The new gate row names the substrate
-    # honestly rather than leaving the card in the residue
-    # ``unclassified`` bucket.
-    ds = cards["Deafening Silence"]
-    assert ds["gates"] == [scout.SUB_STATIC_RULE_TEXT]
-    assert ds["last_mile"] == scout.SUB_STATIC_RULE_TEXT
-    assert ds["multi_gated"] is False
+    # Deafening Silence: post Cycle-1 closure (2026-05-22,
+    # ``feature/deafening-silence-cycle-1-p1``), the printing-level
+    # bool ``restricts_noncreature_spells_to_one_per_turn`` is now
+    # mirrored on Rust (``CardPrinting`` slot + ``Player`` counter
+    # mirror + per-cast increment hooks + cleanup-step reset + legal-
+    # decision filter + bridge round-trip + admit disjunct). The card
+    # FLIPPED from BLOCKED-subsystem to PROBED — the
+    # ``subsystem_attribution`` walk only enumerates BLOCKED cards, so
+    # Deafening Silence is no longer in the ``cards`` map and the
+    # ``SUB_STATIC_RULE_TEXT`` row is now empty (residue closed).
+    assert "Deafening Silence" not in cards, (
+        "Deafening Silence is now PROBED post-Cycle-1; it should NOT "
+        "appear in the BLOCKED-subsystem attribution map"
+    )
     # The honest ``unclassified`` bucket is now exactly Leyline of
     # Mutation — the parser does not recognise either of its
     # mechanics (opening-hand leyline + 5-color alternative-cost) and

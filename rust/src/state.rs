@@ -1011,11 +1011,43 @@ pub struct Player {
     ///
     /// **Scope.** Counts ALL spells cast, regardless of card type
     /// (creature, instant, sorcery, etc.) — same as Python.
-    /// Noncreature-spell tracking is a separate counter (Python's
-    /// `noncreature_spells_cast_this_turn`); Rust does NOT mirror
-    /// that yet (no EoE card uses the noncreature variant in the
-    /// triggered-ability path).
+    /// Noncreature-spell tracking lives on the companion
+    /// `noncreature_spells_cast_this_turn` counter below
+    /// (Deafening Silence Cycle 1, 2026-05-22).
     pub spells_cast_this_turn: i32,
+    /// **Static rule-text substrate — Deafening Silence Cycle 1
+    /// (2026-05-22).** Per-player cumulative count of NONCREATURE
+    /// spells cast this turn. Reset to 0 at the cleanup step
+    /// (mirroring Python's `Player.noncreature_spells_cast_this_turn`
+    /// zeroed in `turn.py:1106`).
+    ///
+    /// **Increment site.** Bumped by `+1` in every Rust `cast_*`
+    /// primitive whose source printing is NOT a Creature
+    /// (`cast_spell_noncreature` always increments; `cast_aura`
+    /// always increments — Aura is enchantment, never a Creature;
+    /// `cast_creature` and `cast_creature_warp` never increment).
+    /// Placed IMMEDIATELY AFTER the `spells_cast_this_turn` bump and
+    /// BEFORE the IS_CAST dispatch. Mirrors Python's
+    /// `actions._cast_spell` which guards on
+    /// `if not card.printing.is_creature: p.noncreature_spells_cast_
+    /// this_turn += 1` at `actions.py:1781`.
+    ///
+    /// **Gate consumer.** Read by `state_ops_legal::legal_decisions`
+    /// inside the CastSpell emission loops: when any battlefield
+    /// permanent carries the
+    /// `CardPrinting.restricts_noncreature_spells_to_one_per_turn`
+    /// flag AND this counter is already `>= 1` for the casting
+    /// player, the noncreature CastSpell emissions for that player
+    /// are suppressed. Mirrors Python's `legal.py:880-893`
+    /// post-filter.
+    ///
+    /// **Fingerprint-IN.** This counter is gameplay-relevant state
+    /// (it controls whether the next noncreature spell is legal
+    /// while Deafening Silence is on the battlefield), so it
+    /// belongs in the fingerprint. Same shape as
+    /// `spells_cast_this_turn` and
+    /// `artifacts_entered_under_your_control_this_turn`.
+    pub noncreature_spells_cast_this_turn: i32,
     /// **Static / layered abilities substrate — round-82 (Mechan
     /// Shieldmate closure, 2026-05-20).** Per-player cumulative
     /// count of artifact permanents (including artifact creatures
@@ -3405,6 +3437,7 @@ fn make_player(
         life_gained_this_turn: 0,
         poison_counters: 0,
         spells_cast_this_turn: 0,
+        noncreature_spells_cast_this_turn: 0,
         artifacts_entered_under_your_control_this_turn: 0,
     }
 }
@@ -3528,6 +3561,13 @@ pub fn make_synthetic_state(
         // 2026-05-20): synthetic-state printings have no SELF-scope
         // conditional bonuses. Back-compat default.
         static_self_bonuses: Vec::new(),
+        // Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22): synthetic-state printings carry no
+        // noncreature-cast restriction. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `restricts_noncreature_spells_to_one_per_turn` key, parser
+        // maps the absence to false.
+        restricts_noncreature_spells_to_one_per_turn: false,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -3611,6 +3651,13 @@ pub fn make_synthetic_state(
         // 2026-05-20): synthetic-state printings have no SELF-scope
         // conditional bonuses. Back-compat default.
         static_self_bonuses: Vec::new(),
+        // Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22): synthetic-state printings carry no
+        // noncreature-cast restriction. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `restricts_noncreature_spells_to_one_per_turn` key, parser
+        // maps the absence to false.
+        restricts_noncreature_spells_to_one_per_turn: false,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -3707,6 +3754,13 @@ pub fn make_synthetic_state(
         // 2026-05-20): synthetic-state printings have no SELF-scope
         // conditional bonuses. Back-compat default.
         static_self_bonuses: Vec::new(),
+        // Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22): synthetic-state printings carry no
+        // noncreature-cast restriction. Back-compat default — every
+        // pre-substrate registry dict omits the
+        // `restricts_noncreature_spells_to_one_per_turn` key, parser
+        // maps the absence to false.
+        restricts_noncreature_spells_to_one_per_turn: false,
     });
     let registry = builder.snapshot();
 

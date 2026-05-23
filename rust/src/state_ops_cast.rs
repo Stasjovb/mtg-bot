@@ -1721,6 +1721,18 @@ impl GameState {
         // `cast_creature_warp` — mirrors Python's
         // `actions._cast_spell` increment at `actions.py:1777`.
         self.players[player_id as usize].spells_cast_this_turn += 1;
+        // **Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22).** `cast_spell_noncreature` is by definition
+        // the noncreature cast path; every spell entering through
+        // this primitive is non-Creature (the matching cast_creature
+        // / cast_creature_warp / cast_aura primitives own the
+        // Creature/Aura-host paths). Bump the noncreature counter
+        // unconditionally. Mirrors Python's `actions._cast_spell`
+        // guard at `actions.py:1781`: `if not card.printing.is_creature:
+        //   p.noncreature_spells_cast_this_turn += 1`. (Auras DO get
+        // their own bump in `cast_aura` — Aura is an Enchantment, not
+        // a Creature; see the matching block there.)
+        self.players[player_id as usize].noncreature_spells_cast_this_turn += 1;
         // Delta 6: CAST event after the spell is stack-resident (S5a)
         // and before the stack push, same ordering as `cast_creature`
         // / `cast_creature_warp`. The subject is in `stack_objects`;
@@ -2777,6 +2789,14 @@ impl GameState {
         // Phase 6: bump spells-cast counter (MMM Pin 1 — Python parity
         // at `actions.py:1777`, BEFORE IS_CAST dispatch).
         self.players[player_id as usize].spells_cast_this_turn += 1;
+        // **Static rule-text substrate — Deafening Silence Cycle 1
+        // (2026-05-22).** An Aura is an Enchantment subtype, never a
+        // Creature, so it counts as a noncreature spell for the
+        // Deafening Silence restriction. Bump the noncreature counter
+        // here unconditionally. Mirrors Python's `actions._cast_spell`
+        // `if not card.printing.is_creature:` guard at
+        // `actions.py:1781` (Auras' is_creature returns False).
+        self.players[player_id as usize].noncreature_spells_cast_this_turn += 1;
         // Phase 7: dispatch Event::Cast — spell is stack-resident,
         // before the StackItem push. Same ordering as
         // `cast_creature` / `cast_spell_noncreature`.

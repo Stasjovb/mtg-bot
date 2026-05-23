@@ -8457,6 +8457,37 @@ pub struct CardPrinting {
     /// table or a `RemoveKeyword` payload the Rust reader does
     /// not yet fold).
     pub static_self_bonuses: Vec<StaticSelfBonus>,
+    /// **Static rule-text substrate — Deafening Silence Cycle 1
+    /// (2026-05-22).** Printing-level bool — when `true`, any
+    /// permanent with this flag on the battlefield restricts EACH
+    /// player to casting at most ONE noncreature spell per turn
+    /// (regardless of the permanent's controller — Deafening Silence
+    /// is symmetric). Mirrors Python's
+    /// `CardPrinting.restricts_noncreature_spells_to_one_per_turn:
+    /// bool = False` at `src/mtg_bot/cards/base.py:844`.
+    ///
+    /// **Default `false`.** Every pre-substrate registry dict omits
+    /// the `restricts_noncreature_spells_to_one_per_turn` key; the
+    /// parser maps the absence to `false`, keeping every pre-
+    /// substrate printing's parse byte-identical (the back-compat
+    /// pattern every other optional flag uses).
+    ///
+    /// **Gate consumer.** Read in `state_ops_legal::legal_decisions`
+    /// inside the CastSpell emission loop(s): when ANY permanent on
+    /// either battlefield carries this flag AND the casting player's
+    /// `noncreature_spells_cast_this_turn >= 1`, the noncreature
+    /// CastSpell emissions for that player are suppressed. Mirrors
+    /// Python's post-filter at `src/mtg_bot/legal.py:880-893`.
+    ///
+    /// **Increment site.** The companion
+    /// `Player.noncreature_spells_cast_this_turn` counter (in
+    /// `state.rs`) is bumped at every noncreature cast site in
+    /// `state_ops_cast.rs` immediately after the
+    /// `spells_cast_this_turn` bump, and reset at the cleanup step
+    /// (`state_ops_cleanup.rs`) alongside the other per-turn
+    /// counters. Symmetric to Python's
+    /// `actions.py:1782` increment + `turn.py:1106` reset.
+    pub restricts_noncreature_spells_to_one_per_turn: bool,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -12401,6 +12432,23 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => None,
     };
+    // **Static rule-text substrate — Deafening Silence Cycle 1
+    // (2026-05-22).** Printing-level bool. Missing key maps to
+    // `false` — the back-compat default every pre-substrate registry
+    // dict carries implicitly. Mirrors Python's
+    // `CardPrinting.restricts_noncreature_spells_to_one_per_turn:
+    // bool = False` (`src/mtg_bot/cards/base.py:844`).
+    let restricts_noncreature_spells_to_one_per_turn = match dict
+        .get_item("restricts_noncreature_spells_to_one_per_turn")?
+    {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "restricts_noncreature_spells_to_one_per_turn must be a bool \
+                 (the Deafening-Silence-style cast-restriction flag)",
+            )
+        })?,
+        None => false,
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -12438,6 +12486,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         grants_creature_spells_uncounterable,
         static_self_bonuses,
         dynamic_pt_formula,
+        restricts_noncreature_spells_to_one_per_turn,
     })
 }
 
@@ -14712,6 +14761,21 @@ impl Registry {
         id: u32,
     ) -> PyResult<bool> {
         Ok(self.lookup(id)?.grants_creature_spells_uncounterable)
+    }
+
+    /// **Static rule-text substrate — Deafening Silence Cycle 1
+    /// (2026-05-22).** `true` iff this printing carries the
+    /// Deafening-Silence-style noncreature-cast restriction —
+    /// when any permanent with this flag is on the battlefield,
+    /// each player may cast at most ONE noncreature spell per turn.
+    /// Defaults to `false` for every pre-substrate printing.
+    /// Mirrors Python's
+    /// `CardPrinting.restricts_noncreature_spells_to_one_per_turn`.
+    fn get_printing_restricts_noncreature_spells_to_one_per_turn(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.restricts_noncreature_spells_to_one_per_turn)
     }
 
     /// **Static / layered abilities substrate — Phase 3 (round-81,

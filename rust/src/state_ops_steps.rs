@@ -386,6 +386,19 @@ fn cleanup_step_for_active_player_inline(state: &mut GameState) {
     for p in state.players.iter_mut() {
         p.spells_cast_this_turn = 0;
     }
+    // **Static rule-text substrate — Deafening Silence Cycle 1
+    // (2026-05-22).** Reset per-player noncreature-spells-cast-this-
+    // turn counters. Mirrors Python's `turn.py:1106`:
+    // `p.noncreature_spells_cast_this_turn = 0` in
+    // `run_cleanup_step`. The cleanup step is the canonical "this
+    // turn" boundary for noncreature-cast tracking, same as the
+    // spells-cast counter above. Read by
+    // `state_ops_legal::legal_decisions`'s Deafening-Silence
+    // post-filter — without the reset, a single noncreature cast
+    // would permanently lock out all further noncreature casts.
+    for p in state.players.iter_mut() {
+        p.noncreature_spells_cast_this_turn = 0;
+    }
     // **Round-82 (2026-05-20, Mechan Shieldmate closure).** Reset
     // per-player artifacts-entered-under-your-control-this-turn
     // counters. Mirrors Python's `turn.py:1110`:

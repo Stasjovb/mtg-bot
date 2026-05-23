@@ -6809,6 +6809,131 @@ def _printing_is_bridge_simple_uncounterable_creature(printing) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Static rule-text substrate — Deafening Silence Cycle 1
+# (2026-05-22). Admit predicate for Deafening-Silence-shape
+# enchantments — single printing-level bool slot mirrored on both
+# engines. Mirrors the round-80 Phase-2 uncounterable-creature shape
+# (`_printing_is_bridge_simple_uncounterable_creature`) but adapted
+# for a non-creature Enchantment with no triggered/activated/static
+# abilities — purely the printing-level bool slot.
+# ---------------------------------------------------------------------------
+
+
+def _printing_is_bridge_simple_cast_restriction_enchantment(
+    printing,
+) -> bool:
+    """True iff a CardPrinting is a Deafening-Silence-shape vanilla
+    Enchantment carrying ONLY the printing-level
+    ``restricts_noncreature_spells_to_one_per_turn`` bool, with no
+    other riders.
+
+    **Static rule-text substrate — Deafening Silence Cycle 1
+    (2026-05-22; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY
+    .md`` §5 "Static rule-text" row).** Closes the substrate for
+    Deafening Silence — the canonical EoE single-gated carrier of
+    the printing-level cast-restriction flag (12 17lands decks).
+    Mirrors the Phase-2 ``_printing_is_bridge_simple_uncounterable_
+    creature`` shape one-for-one: one new printing-level bool slot,
+    one bridge round-trip, one admit disjunct.
+
+    **Substrate carriers.**
+
+    * The bridge dict carries the flag at
+      ``printing_dict["restricts_noncreature_spells_to_one_per_turn"]``
+      (omitted when False, back-compat).
+    * Rust's ``CardPrinting`` carries the matching bool slot; the
+      ``state_ops_legal::legal_decisions`` CastSpell-emission loops
+      consult it at cast-time legal-emission, mirroring Python's
+      post-filter at ``src/mtg_bot/legal.py:880-893``.
+    * The companion ``Player.noncreature_spells_cast_this_turn``
+      counter is incremented in every noncreature cast path (Rust
+      ``cast_spell_noncreature`` + ``cast_aura``; Python
+      ``actions._cast_spell`` at ``actions.py:1782``) and reset at
+      the cleanup step (Rust ``state_ops_steps`` post-phase reset;
+      Python ``turn.py:1106``).
+
+    **Defensive §2 teeth.** The carrier must be a NON-Creature
+    Enchantment with no spell effect, no triggered / activated /
+    static abilities, no warp / kicker / room / impending / X
+    riders, and no cost-reduction. The only printing-level slot
+    in play is the ``restricts_noncreature_spells_to_one_per_turn``
+    flag itself; every other slot must be at its zero/default value.
+    This matches Deafening Silence's actual EoE printing exactly
+    ("Enchantment {1}{W}. Each player can't cast more than one
+    noncreature spell each turn.") — no other text on the card.
+    """
+    # Must be an Enchantment (not Creature, not Artifact-only).
+    if "Enchantment" not in printing.card_types:
+        return False
+    if "Creature" in printing.card_types:
+        return False
+    # The flag itself MUST be set — otherwise this disjunct doesn't
+    # apply (vanilla Enchantments are not in scope for this admit
+    # arm; they fall through to whatever future Enchantment-admit
+    # arm lands).
+    if not getattr(
+        printing, "restricts_noncreature_spells_to_one_per_turn", False
+    ):
+        return False
+    # Power / toughness must be unset (non-Creature).
+    if printing.power is not None or printing.toughness is not None:
+        return False
+    # No keywords — Deafening Silence has none, and a generic
+    # rider would risk bridge-side divergence.
+    if printing.keywords:
+        return False
+    # No spell effect (an Enchantment's "spell" is just "ETB"; it's
+    # not an Instant / Sorcery, so spell_effect should be None).
+    if printing.spell_effect is not None:
+        return False
+    # No triggered / activated / static abilities — pure vanilla
+    # Enchantment with one printing-level rider bool.
+    if printing.triggered_abilities:
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    # No alt-cost / mode riders.
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    # No X-cost / cost-reduction.
+    mc = printing.mana_cost
+    if getattr(mc, "x_pips", 0):
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    # No station / dynamic-PT / aura / loyalty riders (defensive
+    # — Enchantments shouldn't carry these, but pin them).
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # Aura riders must be off — Deafening Silence is not an Aura.
+    if getattr(printing, "is_aura", False):
+        return False
+    # spell_is_uncounterable / grants_creature_spells_uncounterable
+    # must be off — pure single-rider shape.
+    if getattr(printing, "spell_is_uncounterable", False):
+        return False
+    if getattr(printing, "grants_creature_spells_uncounterable", False):
+        return False
+    # Defensive: the mana cost must be parseable (mirrors the
+    # uncounterable-creature predicate's parse check).
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Phase 3 — SELF-scope conditional bonus admit (round-81)
 # ---------------------------------------------------------------------------
 
@@ -7503,6 +7628,24 @@ def _printing_to_card_def(printing) -> CardDef:
             dynamic_pt_formula=getattr(
                 printing, "dynamic_pt_formula", None
             ),
+        )
+    if _printing_is_bridge_simple_cast_restriction_enchantment(printing):
+        # Static rule-text substrate — Deafening Silence Cycle 1
+        # (2026-05-22). Vanilla Enchantment carrying ONLY the
+        # printing-level ``restricts_noncreature_spells_to_one_per_turn``
+        # bool. The CardDef carries the flag through; the bridge
+        # registry-dict emitter sets the matching Rust
+        # ``CardPrinting.restricts_noncreature_spells_to_one_per_turn``
+        # slot and the Python materializer threads it onto the Python
+        # ``CardPrinting``.
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "")
+        return CardDef(
+            name=printing.name,
+            card_type="Enchantment",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            restricts_noncreature_spells_to_one_per_turn=True,
         )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "
@@ -8369,6 +8512,24 @@ def _filter_deck_to_bridge_supported(
             # ``RemoveKeyword`` payload the Rust reader doesn't yet
             # fold).
             or _printing_is_bridge_simple_static_self_conditional_creature(
+                printing,
+            )
+            # Static rule-text substrate — Deafening Silence Cycle 1
+            # (2026-05-22; spec at ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_
+            # INVENTORY.md`` §5 "Static rule-text" row). Closes the
+            # gate for Deafening Silence — the canonical EoE single-
+            # gated carrier of the
+            # ``restricts_noncreature_spells_to_one_per_turn`` flag
+            # (12 17lands decks). Rust-side gate rides the printing-
+            # level bool slot (``CardPrinting.restricts_noncreature_
+            # spells_to_one_per_turn``) consulted by the
+            # ``state_ops_legal::legal_decisions`` CastSpell-
+            # emission loops; the companion
+            # ``Player.noncreature_spells_cast_this_turn`` counter
+            # is bumped in every noncreature cast primitive and
+            # reset at the cleanup step. Closing this admits
+            # Deafening Silence through the loader filter.
+            or _printing_is_bridge_simple_cast_restriction_enchantment(
                 printing,
             )
             # Non-basic land substrate — phase 2 (round-85 N1): the
