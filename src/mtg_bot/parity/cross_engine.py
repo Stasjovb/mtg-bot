@@ -434,7 +434,21 @@ class CardDef:
     # ``trajectory._SAFE_KEYWORDS`` (e.g. ``"haste"``, ``"flying"``).
     # Empty tuple = no anthem statics — the back-compat default for
     # every pre-substrate CardDef.
-    static_anthems: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # **Phase 4 (Memorial Team Leader Cycle 1 substrate, 2026-05-24).**
+    # Each anthem entry may be EITHER the legacy 2-tuple
+    # ``(scope, granted_keywords)`` (every Phase-1 keyword-only anthem
+    # — Tannuk Steadfast Second — stays bit-identical) OR an extended
+    # 6-tuple ``(scope, granted_keywords, power_bonus, toughness_bonus,
+    # condition_tag, condition_args)`` carrying a layer-7 P/T
+    # contribution + optional condition gate. Memorial Team Leader's
+    # "During your turn, other creatures you control get +1/+0." is
+    # the canonical 6-tuple carrier. The bridge emit + parse paths
+    # tolerate both shapes via len-check; the Rust parser maps absent
+    # P/T + condition fields to the back-compat 0/empty defaults.
+    # NOTE: The admit predicate for the 6-tuple shape is NOT yet
+    # widened — Memorial Team Leader stays DECLINED at the loader
+    # filter this cycle (Cycle 2 ships the admit-set widen).
+    static_anthems: tuple = ()
     # Static / layered abilities substrate — Phase 2 (round-80,
     # 2026-05-20). Frenzied Baloth's "This spell can't be countered."
     # rider — a cast-side per-printing flag. ``False`` is the back-
@@ -13247,15 +13261,57 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     # to before this slice. Mirrors the `aura_equipment_bonuses`
     # omission pattern above.
     if card.static_anthems:
-        printing_dict["static_anthems"] = [
-            {
+        # **Phase 4 (Memorial Team Leader Cycle 1 substrate, 2026-05-24).**
+        # Accept BOTH the legacy 2-tuple shape (Phase 1, Tannuk —
+        # ``(scope, granted_keywords)``) AND the extended 6-tuple shape
+        # ``(scope, granted_keywords, power_bonus, toughness_bonus,
+        # condition_tag, condition_args)``. The emitted dict omits
+        # P/T + condition keys when they're at their back-compat
+        # zero/empty defaults, so every Phase-1 anthem's registry
+        # dict stays byte-identical to pre-Phase-4.
+        anthem_entries: list[dict] = []
+        for entry in card.static_anthems:
+            if len(entry) == 2:
+                scope, granted_keywords = entry
+                power_bonus = 0
+                toughness_bonus = 0
+                condition_tag = ""
+                condition_args: tuple[int, ...] = ()
+            elif len(entry) == 6:
+                (
+                    scope,
+                    granted_keywords,
+                    power_bonus,
+                    toughness_bonus,
+                    condition_tag,
+                    condition_args,
+                ) = entry
+            else:
+                raise ValueError(
+                    f"static_anthems entries must be 2-tuple or 6-tuple "
+                    f"(got len={len(entry)}): {entry!r}"
+                )
+            anthem_dict: dict = {
                 "scope": scope,
                 "granted_keywords": [
                     kw.replace(" ", "_") for kw in granted_keywords
                 ],
             }
-            for scope, granted_keywords in card.static_anthems
-        ]
+            if power_bonus:
+                anthem_dict["power_bonus"] = int(power_bonus)
+            if toughness_bonus:
+                anthem_dict["toughness_bonus"] = int(toughness_bonus)
+            if condition_tag:
+                anthem_dict["condition_tag"] = condition_tag
+                # Emit args only when the tag is set (an empty-args
+                # tag like `during_your_turn` still emits an empty
+                # list so the parse path reads a present-but-empty
+                # field consistently).
+                anthem_dict["condition_args"] = [
+                    int(a) for a in condition_args
+                ]
+            anthem_entries.append(anthem_dict)
+        printing_dict["static_anthems"] = anthem_entries
     # Aura-attachment substrate — Phase 2 S2 extension (Tractor
     # Beam closure, 2026-05-20). Emit ``aura_prevents_host_untap``
     # only when set so every pre-extension CardDef registry dict is
@@ -13633,6 +13689,65 @@ def _static_self_bonus_condition_from_tag(
     )
 
 
+def _static_anthem_condition_from_tag(
+    cond_tag: str, cond_args: "tuple[int, ...]",
+):
+    """Rehydrate a :class:`mtg_bot.effects.conditions.Condition` from
+    the bridge's ANTHEM-scope ``(condition_tag, condition_args)`` pair.
+
+    **Static / layered abilities substrate — Phase 4 (Memorial Team
+    Leader Cycle 1 substrate, 2026-05-24).** The Phase-4 anthem shape
+    carries an optional condition gate next to its layer-7 P/T payload
+    and layer-6 keyword grants. This Python-side helper inverts the
+    bridge's ``(tag, args)`` encoding to produce a real ``Condition``
+    instance (or ``None`` for the unconditional Phase-1 default).
+    Mirrors the Phase-3 sibling :func:`_static_self_bonus_condition_
+    from_tag` shape — single dispatch table, sibling-narrow
+    vocabulary (today: just the unconditional case + the active-
+    player gate Memorial Team Leader needs).
+
+    Recognized tags (in lockstep with the Rust dispatch table in
+    ``state_ops_combat::static_anthem_condition_matches``):
+
+    * ``""`` (empty string, no args) → ``None``. The Phase-1
+      unconditional default — Tannuk Steadfast Second's anthem rides
+      this arm; the back-compat 2-tuple bridge shape collapses to it.
+    * ``"during_your_turn"`` (no args) → ``DuringYourTurn()``.
+      Memorial Team Leader's "During your turn, other creatures you
+      control get +1/+0." prints in this exact surface. The Condition
+      reads ``state.active_player().id == viewer_id``; for an anthem
+      the viewer is the source's controller.
+
+    An unknown tag raises ``ValueError`` — the Rust parser's
+    whitelist is the source of truth for which tags reach this
+    function, and a tag arriving here that isn't in the table is a
+    bridge-vs-materializer disagreement that must fail loudly. The
+    SELF-scope sibling condition tags (e.g. ``"control_permanent_is_
+    artifact"``) are intentionally NOT recognized here — anthems
+    don't share the SELF condition vocabulary; conflating the two
+    dispatch tables would silently mis-route a tag if a future
+    slice added the same surface form to both scopes.
+    """
+    from mtg_bot.effects.conditions import DuringYourTurn
+
+    if cond_tag == "":
+        if cond_args:
+            raise ValueError(
+                f"unconditional anthem (empty tag) takes no args; got "
+                f"{cond_args!r}"
+            )
+        return None
+    if cond_tag == "during_your_turn":
+        if cond_args:
+            raise ValueError(
+                f"during_your_turn takes no args; got {cond_args!r}"
+            )
+        return DuringYourTurn()
+    raise ValueError(
+        f"unknown anthem-scope conditional static tag: {cond_tag!r}"
+    )
+
+
 def _card_def_to_python_printing(card: "CardDef"):
     """Materialize a Python ``CardPrinting`` from a :class:`CardDef`.
 
@@ -13835,13 +13950,59 @@ def _card_def_to_python_printing(card: "CardDef"):
     static_abilities: tuple = ()
     if card.static_anthems:
         from mtg_bot.cards.base import StaticAbility, StaticScope
-        from mtg_bot.effects.modifiers import ContinuousModifier, GrantKeyword
+        from mtg_bot.effects.modifiers import (
+            ContinuousModifier,
+            GrantKeyword,
+            PowerToughnessBonus,
+        )
         sa_list: list[StaticAbility] = []
-        for scope, granted_keywords in card.static_anthems:
+        for entry in card.static_anthems:
+            # **Phase 4 (Memorial Team Leader Cycle 1 substrate,
+            # 2026-05-24).** Accept both legacy 2-tuple and extended
+            # 6-tuple shapes. The 6-tuple carries an optional layer-7
+            # P/T bonus + a condition_tag the rehydrator turns back
+            # into the matching Condition subclass (today: only
+            # `DuringYourTurn`). The fan-out fires ONE
+            # `StaticAbility` per granted keyword AND one for the
+            # P/T payload (when non-zero) — same shape the parser
+            # emits.
+            if len(entry) == 2:
+                scope, granted_keywords = entry
+                power_bonus = 0
+                toughness_bonus = 0
+                condition_tag = ""
+                condition_args: tuple[int, ...] = ()
+            else:
+                (
+                    scope,
+                    granted_keywords,
+                    power_bonus,
+                    toughness_bonus,
+                    condition_tag,
+                    condition_args,
+                ) = entry
+            cond = _static_anthem_condition_from_tag(
+                condition_tag, condition_args,
+            )
+            if power_bonus or toughness_bonus:
+                sa_list.append(
+                    StaticAbility(
+                        scope=scope,
+                        condition=cond,
+                        continuous_effect=ContinuousModifier(
+                            layer=7,
+                            payload=PowerToughnessBonus(
+                                power_bonus=int(power_bonus),
+                                toughness_bonus=int(toughness_bonus),
+                            ),
+                        ),
+                    )
+                )
             for kw in granted_keywords:
                 sa_list.append(
                     StaticAbility(
                         scope=scope,
+                        condition=cond,
                         continuous_effect=ContinuousModifier(
                             layer=6,
                             payload=GrantKeyword(kw.replace("_", " ")),

@@ -109,6 +109,29 @@ impl GameState {
         self.active_player
     }
 
+    /// **Static / layered abilities substrate — Phase 4 (Memorial Team
+    /// Leader Cycle 1 substrate, 2026-05-24).** Direct active-player
+    /// setter for tests / fast-forward scenarios where exercising the
+    /// full turn-rollover path is unnecessary noise. Validates the
+    /// player_id is in {0, 1}; raises `ValueError` otherwise rather
+    /// than silently corrupting state. Mirrors the existing
+    /// `set_priority_player` setter pattern below.
+    ///
+    /// Phase-4 anthem reader-fold (Memorial Team Leader's "During
+    /// your turn, ...") needs the synthetic battlefield to be able
+    /// to toggle the active player so the condition gate's
+    /// open/closed branches can be exercised in isolation.
+    fn set_active_player(&mut self, player_id: u8) -> PyResult<()> {
+        if player_id > 1 {
+            return Err(PyValueError::new_err(format!(
+                "active_player must be 0 or 1 (got: {})",
+                player_id
+            )));
+        }
+        self.active_player = player_id;
+        Ok(())
+    }
+
     /// Python-property alias for `get_priority_player()`. Mirrors
     /// Python's `GameState.priority_player_idx` dataclass field —
     /// read as a plain attribute (no parens). Same semantics as the
