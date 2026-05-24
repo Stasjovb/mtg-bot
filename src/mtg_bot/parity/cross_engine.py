@@ -4987,8 +4987,31 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect's required-n contract at cards.rs:3744-"
                 "3760)"
             )
+        # **Codecracker Hound Cycle 2 (2026-05-24) — ``reveal_chosen``
+        # field thread.** The refined-Cycle-1 fold added a
+        # ``reveal_chosen: bool = True`` rider on Python's class
+        # (default True for Commune-with-Evil back-compat; False for
+        # Codecracker Hound preserves the no-reveal observable). Rust's
+        # ``Effect::LookTopNPutOneInHandRestToGraveyard { n: i32 }``
+        # has no mirror field — its resolve at state_ops_resolve.rs:
+        # 6366-6394 never reveals — so the cross-engine byte-equality
+        # contract requires Python's ``reveal_chosen=False`` when the
+        # dict-driven path constructs the Python instance. The
+        # safe-trigger recognizer (``trajectory._python_ta_to_safe_dict``)
+        # gates on ``eff.reveal_chosen == False`` and emits the
+        # ``reveal_chosen`` key into the dict; this bridge arm reads it
+        # back. Missing key defaults to ``True`` so the prior
+        # Commune-with-Evil-default round-trip semantics (no dict
+        # consumer thread the flag) stays bit-equal — the Cycle-2
+        # widen only adds the flag for the Codecracker Hound consumer,
+        # NOT for the prior consumers. Rust's parse_effect IGNORES
+        # the extra ``reveal_chosen`` field (cards.rs:12042-12056
+        # reads only ``n``), so emitting it in the dict is structurally
+        # safe on the Rust side.
+        reveal_chosen = bool(eff_dict.get("reveal_chosen", True))
         return LookTopNPutOneInHandRestToGraveyard(
             n=int(eff_dict["n"]),
+            reveal_chosen=reveal_chosen,
         )
     if kind == "put_plus_one_counter_on_each_of_up_to_n_target_creatures":
         # **Round-21 BLOCKED-BRIDGE-ARM slice -- "put a +1/+1 counter

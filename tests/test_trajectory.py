@@ -6627,13 +6627,29 @@ import pytest as _pytest_warp  # noqa: E402
         # the ONLY card carrying either rider (verified live), so this
         # is exactly +1 vs Phase 1.5.
         ("Timeline Culler", True),
-        # Pin 11 — the multi-gated traps stay filtered: Starfield
-        # Vocalist (static-ability gate), Codecracker Hound
-        # (Effect-uncovered + NON-safe trigger). The §2 teeth survive
-        # the Phase-1.5 widen — only genuinely-already-safe+bridged
-        # triggers are admitted.
+        # Pin 11 — Starfield Vocalist stays filtered (static-ability
+        # gate). The §2 teeth survive the Phase-1.5 widen — only
+        # genuinely-already-safe+bridged triggers are admitted.
         ("Starfield Vocalist", False),
-        ("Codecracker Hound", False),
+        # **Codecracker Hound Cycle 2 (2026-05-24) — FLIPPED False → True.**
+        # The C1-refined-fold collapsed CH's bespoke
+        # ``LookAtTopTwoSplitHandGraveyard`` into the existing
+        # ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=
+        # False)`` primitive (effect_uncovered gate closed); C2 adds
+        # the 9th ENTERS+IsSelf safe-trigger leaf in
+        # ``_python_ta_to_safe_dict``
+        # (``look_top_n_put_one_in_hand_rest_to_graveyard`` + the
+        # paired ``_SAFE_TRIGGERS`` entry + the
+        # ``_SAFE_EFFECT_KEYS`` whitelist + the bridge-arm
+        # ``reveal_chosen`` thread), closing the
+        # ``nonsafe_triggered_ability`` gate too. The warp arm
+        # admits the result. §2 silent-mistranslation gate: the
+        # recognizer requires ``eff.reveal_chosen == False`` (Rust's
+        # resolve never reveals; admitting ``reveal_chosen=True`` would
+        # diverge on the ``publicly_known_to`` observable). Cycle 3
+        # ships the per-card real-EoE byte-equality probe under
+        # warp-cast + normal-cast lifecycles.
+        ("Codecracker Hound", True),
         # Phase-1.5 §2-teeth: Quantum Riddler ALSO has a safe ETB
         # trigger (ENTERS/IsSelf/DrawCards 1) + {1}{U} warp, but
         # carries a HandSizeAtMost(1) draw-replacement static — it is
@@ -6682,19 +6698,46 @@ def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
 
 
 def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
-    """Phase-2 spec pin (WARP_COST_PHASE2_DESIGN.md §4 pin 14) — the
-    guardrail's positive set is EXHAUSTIVE: EXACTLY six EoE printings
-    pass ``_printing_is_bridge_pure_warp_creature`` — the two
-    pure-fixed-cost Phase-1 cards (Bygone Colossus, Red Tiger Mechan),
-    the safe-trigger+warp residue trio (Germinating Wurm, Knight
-    Luminary, Starbreach Whale), PLUS Timeline Culler (Phase 2 — the
-    life + graveyard-cast riders). Regenerable companion to the
-    round-58 scout; the anti-count-chasing pin that catches a future
-    silent widen (e.g. Quantum Riddler — safe trigger but static-gated
-    — must NOT leak in; a non-safe-trigger warp card must NOT leak
-    in). The Phase-2 delta vs the pre-Phase-2 count of 5 is EXACTLY
-    {Timeline Culler} — it is the only card carrying either rider
-    (verified live)."""
+    """Warp-arm positive set pin — EXHAUSTIVE admit set across the
+    Phase-1 / Phase-1.5 / Phase-2 lifetime of
+    ``_printing_is_bridge_pure_warp_creature``, post-**Codecracker Hound
+    Cycle 2** (2026-05-24) admit-widen flip.
+
+    **Set composition (7 cards post-Cycle-2 — was 6 pre-Cycle-2).**
+
+    * **Phase-1 pure-fixed-cost pair** — Bygone Colossus + Red Tiger
+      Mechan (no triggers; warp_cost is the only blocking feature).
+    * **Phase-1.5 safe-trigger+warp residue trio** — Germinating Wurm +
+      Knight Luminary + Starbreach Whale (each ENTERS+IsSelf+ one safe
+      leaf).
+    * **Phase-2 rider card** — Timeline Culler (the only live EoE card
+      carrying ``warp_additional_life_cost`` and/or
+      ``warp_castable_from_graveyard``).
+    * **Codecracker Hound Cycle 2 (this slice)** — Codecracker Hound
+      ({1}{U} 2/2 warp creature, ENTERS+IsSelf+
+      ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)``
+      — ~22,144 17lands decks). The Cycle-2 ``_python_ta_to_safe_dict``
+      widen (the 9th ENTERS+IsSelf leaf,
+      ``look_top_n_put_one_in_hand_rest_to_graveyard``) classified
+      CH's ETB trigger as safe, closing the
+      ``nonsafe_triggered_ability`` gate; the warp arm now admits.
+      Inserted alphabetically between Bygone Colossus and Germinating
+      Wurm. The §2 silent-mistranslation teeth (the
+      ``eff.reveal_chosen == False`` gate in the recognizer; Rust's
+      resolve never reveals) keep the admit surgical — a future
+      ``reveal_chosen=True`` consumer (synthetic or future EoE) stays
+      DECLINED. The function-name "is_exactly_six" predates Cycle 2;
+      preserved as-is for SCM stability — the docstring + assertion
+      are the load-bearing pins.
+
+    Regenerable companion to the round-58 scout — anti-count-chasing
+    teeth that catch a future silent widen (e.g. Quantum Riddler — safe
+    trigger but static-gated — must NOT leak in; a non-safe-trigger
+    warp card other than Codecracker Hound MUST NOT leak in). The
+    Cycle-2 delta vs the Phase-2 count of 6 is EXACTLY {Codecracker
+    Hound} — the only EoE warp card whose sole remaining gate
+    (``nonsafe_triggered_ability``) closed under the Cycle-2 widen.
+    """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_pure_warp_creature,
@@ -6707,23 +6750,27 @@ def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
     )
     assert passing == [
         "Bygone Colossus",
+        "Codecracker Hound",
         "Germinating Wurm",
         "Knight Luminary",
         "Red Tiger Mechan",
         "Starbreach Whale",
         "Timeline Culler",
     ], (
-        f"Phase-2 guardrail must admit EXACTLY the pure-fixed-cost "
-        f"pair + the safe-trigger+warp trio + Timeline Culler; got "
-        f"{passing}. The Phase-2 widen drops ONLY the two rider "
-        f"rejections — a new warp creature is admitted ONLY if its "
-        f"sole gate is warp_cost (modulo the life/graveyard riders) "
-        f"and every trigger round-trips the SAFE gate; anything "
-        f"static-gated (Quantum Riddler) or non-safe-trigger "
-        f"(Codecracker Hound) belongs to a separate substrate, not a "
-        f"silent expansion (see "
+        f"Warp guardrail must admit EXACTLY the Phase-1 pair + "
+        f"Phase-1.5 trio + Timeline Culler + Codecracker Hound "
+        f"(Cycle-2 flip); got {passing}. The Cycle-2 widen flipped "
+        f"Codecracker Hound DECLINED → ADMITTED via the 9th "
+        f"ENTERS+IsSelf safe-trigger leaf "
+        f"(look_top_n_put_one_in_hand_rest_to_graveyard) — a new "
+        f"warp creature is admitted ONLY if every trigger round-trips "
+        f"the SAFE gate; anything static-gated (Quantum Riddler) or "
+        f"non-safe-trigger (any non-CH warp card whose trigger is "
+        f"outside _SAFE_TRIGGERS) belongs to a separate substrate, "
+        f"not a silent expansion (see "
         f"_printing_is_bridge_pure_warp_creature's docstring + "
-        f"docs/WARP_COST_PHASE2_DESIGN.md §1/§2)."
+        f"docs/WARP_COST_PHASE2_DESIGN.md §1/§2 + "
+        f"docs/CODECRACKER_HOUND_CYCLE_1_HONEST_STOP_2026-05-24.md §6)."
     )
 
 

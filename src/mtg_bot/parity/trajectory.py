@@ -1627,6 +1627,65 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # tests/test_trajectory.py — proves the gate is the triple +
     # bare-shape product, not the bare targeted-ETB shape).
     ("enters", "source_is_self", "return_target_permanent_you_control"),
+    # **Codecracker Hound Cycle 2 (2026-05-24)** — the 9th ENTERS+IsSelf
+    # leaf. Adds ``look_top_n_put_one_in_hand_rest_to_graveyard`` to the
+    # safe set under (ENTERS, source_is_self). Sole admitted EoE consumer
+    # at HEAD is **Codecracker Hound** ({1}{U} 2/2 warp creature, ~22,144
+    # 17lands decks — the multi-cycle closure target from the 2026-05-24
+    # multi-gated-tail tractability scout). Parser-emitted shape: ETB
+    # trigger with ``IsSelf`` predicate + ``LookTopNPutOneInHandRest
+    # ToGraveyard(n=2, reveal_chosen=False)`` effect.
+    #
+    # **Bridge support (both pre-existed; this slice only wires the safe-
+    # trigger recognizer).**
+    #   * Rust ``Effect::LookTopNPutOneInHandRestToGraveyard { n: i32 }``
+    #     (rust/src/cards.rs:4392) + parse_effect at cards.rs:12042-12056
+    #     + resolve at state_ops_resolve.rs:6366-6394 + the
+    #     ``PendingDecision::PickCardFromExaminedChoice`` + the
+    #     ``submit_pick_card_decision`` dispatcher have been on main
+    #     since round 28.
+    #   * Cross-engine bridge arm (cross_engine.py:4901-4978) — the
+    #     ``look_top_n_put_one_in_hand_rest_to_graveyard`` translator
+    #     — has been on main since round 21 (BLOCKED-BRIDGE-ARM slice).
+    #     C2 widens it minimally to thread ``reveal_chosen`` from the
+    #     dict to the Python class so the round-trip preserves the
+    #     no-reveal contract.
+    #   * Refined-Cycle-1 fold (commit ``bd37cca0``, 2026-05-24)
+    #     collapsed the prior bespoke ``LookAtTopTwoSplitHandGraveyard``
+    #     class into ``LookTopNPutOneInHandRestToGraveyard(n=2,
+    #     reveal_chosen=False)`` — the parser-CLAUDE-faithful
+    #     primitive-merge path.
+    #
+    # **§2 silent-mistranslation teeth.** The recognizer
+    # (``_python_ta_to_safe_dict``) gates on ``eff.reveal_chosen ==
+    # False``: Rust's resolve never reveals, so a ``reveal_chosen=True``
+    # instance would silently mistranslate the post-resolve
+    # ``publicly_known_to`` observable on the chosen card (Python's
+    # ``reveal_to_all`` rider sets it; Rust leaves it unchanged).
+    # Codecracker Hound's parser path emits ``reveal_chosen=False``;
+    # Commune-with-Evil (n=4, reveal_chosen=True) is a Sorcery and
+    # reaches the engine via the spell-card-bridge path, never this
+    # safe-trigger path. ``n`` must be non-negative (Rust's parse_effect
+    # rejects negatives at cards.rs:12051-12055; mirror in the
+    # recognizer).
+    #
+    # **Cross-engine resolve contract.** Both engines split the resolve
+    # into a "look + queue choice" phase + an "answer choice + apply"
+    # phase, but the wire-shape differs: Rust pushes
+    # ``PendingDecision::PickCardFromExaminedChoice`` at
+    # state_ops_resolve.rs:6387-6393 and short-circuits; the choice is
+    # drained via ``submit_pick_card_decision(chosen_id)``. Python's
+    # ``LookTopNPutOneInHandRestToGraveyard.resolve`` synchronously calls
+    # ``agent.choose_card_from_library(...)`` and resolves inline:
+    # chosen card moves to hand (no reveal_to_all when
+    # ``reveal_chosen=False``), the rest move to graveyard in popped
+    # order. Both converge on the post-resolve observable: one card to
+    # hand + the remainder in graveyard + ``publicly_known_to`` unchanged
+    # for the moved cards. The genuine per-card real-EoE byte-equality
+    # probe under both warp-cast and normal-cast lifecycles ships in
+    # Cycle 3 (mirror of the Phase-1.5 trio's
+    # ``test_probe_warp_admitted.py`` per-card probe shape).
+    ("enters", "source_is_self", "look_top_n_put_one_in_hand_rest_to_graveyard"),
     # Surveil extension (round-42 carddef-triggers slice). Adds the
     # bare-shape ``surveil`` effect (``count`` payload key only — no
     # ``use_artifact_count`` rider) under both ENTERS and DIES events
@@ -2702,6 +2761,35 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "create_token_tapped": frozenset(
         {"kind", "count", "token_printing_id"}
     ),
+    # **Codecracker Hound Cycle 2 (2026-05-24)** —
+    # ``look_top_n_put_one_in_hand_rest_to_graveyard`` bare-shape: three
+    # payload keys (``kind`` + ``n`` + ``reveal_chosen``). Rust's
+    # ``Effect::LookTopNPutOneInHandRestToGraveyard { n: i32 }``
+    # (rust/src/cards.rs:4392) carries only ``n`` — its parse_effect at
+    # cards.rs:12042-12056 reads ``n`` and ignores other fields, so
+    # carrying ``reveal_chosen`` in the dict is structurally safe on the
+    # Rust side (effective ``reveal_chosen=False`` always, since Rust's
+    # resolve never reveals). Python's
+    # ``LookTopNPutOneInHandRestToGraveyard(n: int = 4, reveal_chosen:
+    # bool = True)`` (effects/generic/library_lookat.py:160) carries the
+    # ``reveal_chosen`` rider for parser-faithful no-reveal observable
+    # on the Codecracker Hound surface form. The recognizer
+    # (``_python_ta_to_safe_dict``) gates on ``eff.reveal_chosen == False``
+    # so the only dict emitted by the safe-trigger path carries
+    # ``reveal_chosen: False`` — that gate is the §2 silent-mistranslation
+    # teeth, NOT this whitelist (the whitelist's job is to refuse any
+    # OTHER unrecognized key, e.g. a future rider added to either engine
+    # without a matched bridge widen). The bridge arm at
+    # ``cross_engine.py:4901-4978`` reads ``reveal_chosen`` to
+    # reconstruct the Python instance with the matching flag — the
+    # post-resolve byte-equality contract requires both engines to skip
+    # the ``reveal_to_all`` rider. See the ``("enters", "source_is_self",
+    # "look_top_n_put_one_in_hand_rest_to_graveyard")`` entry in
+    # :data:`_SAFE_TRIGGERS` for the full cross-engine parity provenance
+    # + the Cycle-3 per-card real-EoE byte-equality probe plan.
+    "look_top_n_put_one_in_hand_rest_to_graveyard": frozenset(
+        {"kind", "n", "reveal_chosen"}
+    ),
 }
 
 
@@ -3314,6 +3402,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.generic.draw_mill import DrawCards, EachPlayerDraws
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
         Scry,
         SelfMill,
         Surveil,
@@ -3404,10 +3493,35 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # ``_SAFE_TRIGGERS`` entry (this list is necessary, not
             # sufficient); the recognizer's bare-shape gate above is
             # the §2 teeth.
+            # **Codecracker Hound Cycle 2 (2026-05-24) — 9th ENTERS+IsSelf
+            # leaf.** Adds ``look_top_n_put_one_in_hand_rest_to_graveyard``
+            # to the safe set. Sole admitted EoE consumer at HEAD is
+            # Codecracker Hound ({1}{U} 2/2 warp creature, ENTERS+IsSelf+
+            # ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=
+            # False)``). Bridge support: Rust ``Effect::LookTopNPutOne
+            # InHandRestToGraveyard { n: i32 }`` (cards.rs:4392 +
+            # parse_effect at cards.rs:12042-12056 + resolve at
+            # state_ops_resolve.rs:6366-6394 + PendingDecision::Pick
+            # CardFromExaminedChoice + submit_pick_card_decision
+            # dispatcher) has been on main since round 28; the
+            # cross_engine bridge arm (cross_engine.py:4901-4978) has
+            # been on main since round 21. The §2 silent-mistranslation
+            # gate (handled in the effect-class arm below): the parsed
+            # Codecracker Hound effect MUST carry ``reveal_chosen=
+            # False`` (Rust's resolve never reveals; admitting a
+            # ``reveal_chosen=True`` instance would silently mistranslate
+            # public-knowledge state across engines — the Python
+            # ``reveal_to_all`` rider sets ``publicly_known_to`` whereas
+            # Rust does not). Codecracker Hound's parser path explicitly
+            # emits ``reveal_chosen=False``; Commune-with-Evil (which
+            # uses the same primitive at n=4 with ``reveal_chosen=True``)
+            # is a Sorcery (spell_effect, not a triggered ability), so
+            # it does NOT flow through this safe-trigger path.
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
                 "create_token", "create_token_tapped",
                 "return_target_permanent_you_control",
+                "look_top_n_put_one_in_hand_rest_to_graveyard",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -3928,6 +4042,49 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             return None
         eff_kind = "return_target_permanent_you_control"
         eff_dict = {"kind": "return_target_permanent_you_control"}
+    elif isinstance(eff, LookTopNPutOneInHandRestToGraveyard):
+        # **Codecracker Hound Cycle 2 (2026-05-24) — the 9th ENTERS+IsSelf
+        # leaf.** Python's
+        # ``LookTopNPutOneInHandRestToGraveyard(n: int = 4,
+        # reveal_chosen: bool = True)`` (effects/generic/library_lookat.
+        # py:160) carries the parser-faithful no-reveal observable on
+        # the Codecracker Hound surface form (n=2, reveal_chosen=False);
+        # Rust's ``Effect::LookTopNPutOneInHandRestToGraveyard
+        # { n: i32 }`` (rust/src/cards.rs:4392) carries ONLY the ``n``
+        # field — its resolve at ``state_ops_resolve.rs:6366-6394``
+        # never reveals, so the cross-engine byte-equality contract
+        # holds iff Python's ``reveal_chosen`` is False as well. A
+        # ``reveal_chosen=True`` instance would silently mistranslate
+        # the post-resolve ``publicly_known_to`` observable on the
+        # chosen card (Python's ``reveal_to_all`` rider sets it; Rust
+        # leaves it unchanged), so we gate on ``reveal_chosen=False``
+        # at the recognizer — the §2 silent-mistranslation teeth. The
+        # only EoE consumer parser-emitted with this shape is
+        # Codecracker Hound; Commune-with-Evil (n=4, reveal_chosen=
+        # True) is a Sorcery and reaches the Rust engine via the
+        # spell-card-bridge path, not this safe-trigger path. ``n``
+        # must be non-negative (Rust's parse_effect rejects negative
+        # n at cards.rs:12051-12055; mirror here so the recognizer's
+        # bare-shape gate enforces the same contract). The emitted
+        # dict shape carries both ``n`` and ``reveal_chosen``; the
+        # bridge arm (cross_engine.py:4901-4978) reads
+        # ``reveal_chosen`` to reconstruct the Python instance with
+        # the same flag; Rust's parse_effect IGNORES the extra
+        # ``reveal_chosen`` field (it only extracts ``n``), so
+        # carrying it in the dict is structurally safe on the Rust
+        # side — Rust effectively behaves as ``reveal_chosen=False``
+        # always, and the recognizer's ``reveal_chosen=False`` gate
+        # ensures the Python side matches.
+        if eff.reveal_chosen:
+            return None
+        if int(eff.n) < 0:
+            return None
+        eff_kind = "look_top_n_put_one_in_hand_rest_to_graveyard"
+        eff_dict = {
+            "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+            "n": int(eff.n),
+            "reveal_chosen": False,
+        }
     else:
         return None
     if eff_kind not in safe_effect_kinds:
