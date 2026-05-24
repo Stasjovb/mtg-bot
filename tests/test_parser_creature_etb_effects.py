@@ -22,10 +22,12 @@ previously not in the unified ``_parse_effect`` dispatcher. The cluster:
   tail flips ``until_caster_next_turn=True`` (Mouth of the Storm).
 * ``look at the top two cards of your library. Put one into your hand
   and the other into your graveyard`` →
-  ``LookAtTopTwoSplitHandGraveyard()``. Codecracker Hound's ETB; the
-  embedded period sits inside the effect phrase rather than terminating
-  it (compound splitting doesn't apply because the second sentence
-  isn't a standalone effect).
+  ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)``.
+  Codecracker Hound's ETB; the embedded period sits inside the effect
+  phrase rather than terminating it (compound splitting doesn't apply
+  because the second sentence isn't a standalone effect). Refined-
+  Cycle-1 fold collapsed the prior ``LookAtTopTwoSplitHandGraveyard``
+  bespoke class into the parameterized primitive.
 * ``return up to one other target permanent you control to its
   owner's hand`` → ``ReturnTargetPermanentYouControlToOwnersHand(
   optional=True, exclude_self=True)``. Exosuit Savior's ETB.
@@ -49,7 +51,7 @@ from mtg_bot.cards.base import (
     DealDamageToOpponentCreature,
     DealDamageToTargetCreature,
     ExileEachOpponentsGraveyard,
-    LookAtTopTwoSplitHandGraveyard,
+    LookTopNPutOneInHandRestToGraveyard,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpTargetCreatureUntilEOT,
     PutPlusOneCounterOnCreatureYouControl,
@@ -236,10 +238,16 @@ def test_parse_effect_recognizes_look_at_top_two_split():
     # primitive — ``_parse_compound_effect``'s all-or-nothing rule
     # rejects the split because the second sentence isn't a
     # standalone effect, so we fall through to this regex.
+    # Refined-Cycle-1 fold (2026-05-24): the parser produces
+    # ``LookTopNPutOneInHandRestToGraveyard(n=2,
+    # reveal_chosen=False)`` instead of the prior bespoke
+    # ``LookAtTopTwoSplitHandGraveyard()``. ``reveal_chosen=False``
+    # preserves Codecracker Hound's printed-text observable (no
+    # "Reveal that card" clause).
     assert _parse_effect(
         "look at the top two cards of your library. "
         "Put one into your hand and the other into your graveyard"
-    ) == LookAtTopTwoSplitHandGraveyard()
+    ) == LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)
 
 
 def test_parse_effect_phrase_recognizes_look_at_top_two_split():
@@ -248,7 +256,7 @@ def test_parse_effect_phrase_recognizes_look_at_top_two_split():
     assert _parse_effect_phrase(
         "look at the top two cards of your library. "
         "Put one into your hand and the other into your graveyard"
-    ) == LookAtTopTwoSplitHandGraveyard()
+    ) == LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)
 
 
 def test_parse_effect_returns_none_for_look_at_top_two_wrong_pile():
@@ -458,12 +466,15 @@ def test_codecracker_hound_phrase_still_claims_single_primitive():
     # ``and`` joiner. The compound split tries the ``and`` joiner
     # FIRST and rejects (neither piece parses), which lets the
     # single-effect dispatcher claim the whole phrase as the
-    # ``LookAtTopTwoSplitHandGraveyard`` primitive. Regression guard
-    # for the sentence-boundary split path not stealing this phrase.
+    # ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)``
+    # primitive (refined-Cycle-1 fold of the prior
+    # ``LookAtTopTwoSplitHandGraveyard`` bespoke class). Regression
+    # guard for the sentence-boundary split path not stealing this
+    # phrase.
     assert _parse_effect(
         "look at the top two cards of your library. "
         "Put one into your hand and the other into your graveyard"
-    ) == LookAtTopTwoSplitHandGraveyard()
+    ) == LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)
 
 
 def test_dauntless_scrapbot_claimed_by_parser():

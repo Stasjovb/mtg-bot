@@ -143,7 +143,6 @@ from mtg_bot.effects.generic import (
     IfGainedLifeThisTurnUntapSelf,
     LockOrUnlockDoorOfTargetRoomYouControl,
     LookAtTopNRevealOrCounter,
-    LookAtTopTwoSplitHandGraveyard,
     LookTopNPutOneInHandRestToGraveyard,
     LoseLife,
     MayHaveSourceDealDamageToTarget,

@@ -199,7 +199,6 @@ from mtg_bot.effects.generic.search import (
 
 from mtg_bot.effects.generic.library_lookat import (
     LookAtTopNRevealOrCounter,
-    LookAtTopTwoSplitHandGraveyard,
     LookTopNPutOneInHandRestToGraveyard,
     ManifestDread,
     ManifestDreadThenAttachSelf,
@@ -466,7 +465,6 @@ __all__ = [
     "SearchLibraryForGreenCreatureWithMVAtMostX",
     # library_lookat
     "LookAtTopNRevealOrCounter",
-    "LookAtTopTwoSplitHandGraveyard",
     "LookTopNPutOneInHandRestToGraveyard",
     "ManifestDread",
     "ManifestDreadThenAttachSelf",

@@ -67,9 +67,11 @@ Cards claimed in this batch:
   bespoke ``CommuneWithEvilEffect`` engine class that folds the
   three-step single-resolve effect (look at top 4, put one into
   hand, rest into graveyard, gain 3 life) into a single resolve.
-  Mirrors ``LookAtTopTwoSplitHandGraveyard`` in shape but generalizes
-  the 2-card surveil-style split to a 4-card single-pick split with
-  a trailing 3-life-gain rider.
+  Mirrors ``LookTopNPutOneInHandRestToGraveyard(n=2,
+  reveal_chosen=False)`` (Codecracker Hound, after the refined-
+  Cycle-1 fold of the prior ``LookAtTopTwoSplitHandGraveyard`` class)
+  in shape but generalizes the 2-card split to a 4-card single-pick
+  split with a trailing 3-life-gain rider.
 
 * **Turn Inside Out** ``{R}`` Instant — pump-target-creature +3/+0
   UEOT plus a "When it dies this turn, manifest dread."
@@ -398,7 +400,8 @@ def test_commune_with_evil_resolves_split_and_life_gain():
 
 def test_commune_with_evil_no_agent_default_picks_top():
     # Without an agent seated, the controller's pick defaults to the
-    # top card (matches the existing LookAtTopTwoSplitHandGraveyard
+    # top card (matches the existing
+    # ``LookTopNPutOneInHandRestToGraveyard``/Codecracker Hound
     # convention for unit-test paths). The other three examined cards
     # go to graveyard.
     from mtg_bot.cards.base import make_creature
@@ -476,9 +479,10 @@ def test_commune_with_evil_empty_library_only_gains_life():
 def test_commune_with_evil_agent_invalid_pick_falls_back_to_top():
     # If the agent picks an id not in the examined pool, the spell
     # falls back to the top card going to hand (defensive: matches
-    # the existing LookAtTopTwoSplitHandGraveyard's default-on-invalid
-    # convention, prevents agent bugs from desynchronizing the
-    # resolve).
+    # ``LookTopNPutOneInHandRestToGraveyard``'s default-on-invalid
+    # convention — same default convention previously documented on
+    # the now-folded LookAtTopTwoSplitHandGraveyard — prevents agent
+    # bugs from desynchronizing the resolve).
     from mtg_bot.cards.base import make_creature
     from mtg_bot.effects import CommuneWithEvilEffect
     from mtg_bot.game import GameObject, GameState, Player, Zone

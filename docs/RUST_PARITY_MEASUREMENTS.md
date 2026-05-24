@@ -136,8 +136,7 @@ Gathered by `scripts/parity_discovery_*.py` (re-runnable). Three datasets follow
 | `GrantTriggeredAbilityUEOT` | 1 | Requiem Monolith |
 | `IfGainedLifeThisTurnUntapSelf` | 1 | Ragost, Deft Gastronaut |
 | `LockOrUnlockDoorOfTargetRoomYouControl` | 1 | Keys to the House |
-| `LookAtTopTwoSplitHandGraveyard` | 1 | Codecracker Hound |
-| `LookTopNPutOneInHandRestToGraveyard` | 1 | Commune with Evil |
+| `LookTopNPutOneInHandRestToGraveyard` | 2 | Codecracker Hound (n=2, reveal_chosen=False); Commune with Evil (n=4, reveal_chosen=True) |
 | `MayHaveSourceDealDamageToTarget` | 1 | Requiem Monolith |
 | `MoveEachExiledWithSourceToOwnersGraveyard` | 1 | Pinnacle Starcage |
 | `MovePlusOneCounterBetweenPermanentsYouControl` | 1 | Nesting Grounds |

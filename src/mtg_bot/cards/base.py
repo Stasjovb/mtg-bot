@@ -234,7 +234,6 @@ from mtg_bot.effects import (
     StaticAbility,
     StaticScope,
     LookAtTopNRevealOrCounter,
-    LookAtTopTwoSplitHandGraveyard,
     LookTopNPutOneInHandRestToGraveyard,
     ManifestDread,
     ManifestDreadThenPutPlusOneCountersOnIt,

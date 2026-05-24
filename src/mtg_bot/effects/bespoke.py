@@ -2579,21 +2579,19 @@ class CommuneWithEvilEffect(Effect):
        graveyard.
     3. Controller gains 3 life.
 
-    Mirrors ``LookAtTopTwoSplitHandGraveyard`` (Codecracker Hound's
-    ETB) in shape — examine the top cards, split into hand/graveyard
-    piles via the agent — but generalizes the 2-card split to a
-    4-card hand-vs-graveyard distribution where exactly ONE card goes
-    to hand and the rest to graveyard. A new bespoke class rather
-    than parameterizing the existing one because:
+    Mirrors ``LookTopNPutOneInHandRestToGraveyard(n=2,
+    reveal_chosen=False)`` (Codecracker Hound's ETB after the
+    refined-Cycle-1 parser/engine fold; previously the bespoke
+    ``LookAtTopTwoSplitHandGraveyard`` class) in shape — examine the
+    top cards, split into hand/graveyard piles via the agent — but
+    generalizes the 2-card split to a 4-card hand-vs-graveyard
+    distribution where exactly ONE card goes to hand and the rest to
+    graveyard. A bespoke class rather than reusing the parameterized
+    primitive because:
 
-    - the existing class's per-card surveil-vs-hand prompt has the
-      agent decide each card individually (picking ``False`` means
-      "this one to hand"; ``True`` means graveyard), with the
-      asymmetric outcome of "exactly one to hand";
     - Commune with Evil's printed text reads as a single forced choice
       ("put one of them into your hand"), best modeled by
-      ``choose_card_from_library`` (a single id-pick prompt) rather
-      than four sequential surveil prompts;
+      ``choose_card_from_library`` (a single id-pick prompt);
     - the trailing ``You gain 3 life.`` rider is bundled into the
       same resolve step rather than a Sequence wrapper because the
       static side ships the spell as one engine class.

@@ -157,82 +157,29 @@ class LookAtTopNRevealOrCounter(Effect):
 
 
 @dataclass(frozen=True)
-class LookAtTopTwoSplitHandGraveyard(Effect):
-    """Look at the top two cards of your library; put one into your
-    hand, the other into your graveyard.
-
-    Matches Codecracker Hound's ETB. The agent's choice via
-    choose_surveil decides which pile each card goes to (surveil=True
-    means graveyard, False means hand — mirrors the surveil semantics).
-    Asymmetric: exactly one card ends up in hand, exactly one in
-    graveyard (or fewer if the library has < 2 cards).
-    """
-
-    def resolve(
-        self, state: "GameState", controller_id: int,
-        targets: tuple[Target, ...] = (),
-    ) -> None:
-        from mtg_bot.game import Zone
-
-        p = state.player_by_id(controller_id)
-        if not p.library:
-            return
-        # Take the top 2 (or 1 if only one left).
-        examined = p.library[:2]
-        # Asks the agent per card; first "True" (graveyard) pick goes
-        # there, then the remainder to hand. Fallback heuristic: top
-        # card → hand, second → graveyard.
-        if len(examined) == 1:
-            card = examined[0]
-            p.library.remove(card)
-            card.zone = Zone.HAND
-            p.hand.append(card)
-            state.log.append(
-                f"P{controller_id} draws {card.printing.name}"
-            )
-            return
-        # Two cards; pick the one to send to hand. The other goes to
-        # graveyard. Default: top card → hand.
-        if p.agent is None:
-            hand_card = examined[0]
-            gy_card = examined[1]
-        else:
-            hand_card = examined[0]
-            if p.agent.choose_surveil(state, p.id, hand_card.id):
-                # Agent says "mill this one" → swap: other → hand.
-                hand_card = examined[1]
-                gy_card = examined[0]
-            else:
-                gy_card = examined[1]
-        p.library.remove(hand_card)
-        hand_card.zone = Zone.HAND
-        p.hand.append(hand_card)
-        p.library.remove(gy_card)
-        gy_card.zone = Zone.GRAVEYARD
-        p.graveyard.append(gy_card)
-        state.log.append(
-            f"P{controller_id} puts {hand_card.printing.name} into "
-            f"hand and {gy_card.printing.name} into graveyard"
-        )
-
-    def describe(self) -> str:
-        return (
-            "look at the top two cards of your library; put one into "
-            "your hand and the other into your graveyard"
-        )
-
-
-
-@dataclass(frozen=True)
 class LookTopNPutOneInHandRestToGraveyard(Effect):
     """Look at the top ``n`` cards of your library; put one of them into
     your hand and the rest into your graveyard.
 
-    Parameterized version of ``LookAtTopTwoSplitHandGraveyard`` for
-    arbitrary ``n``.  Models the first two sentences of Commune with
-    Evil (``{2}{B}`` Duskmourn Sorcery): "Look at the top four cards of
-    your library. Put one of them into your hand and the rest into your
-    graveyard."
+    Parameterized primitive covering both shapes:
+
+    * **Commune with Evil** (``{2}{B}`` Duskmourn Sorcery), ``n=4``,
+      ``reveal_chosen=True`` (default): "Look at the top four cards of
+      your library. Put one of them into your hand and the rest into
+      your graveyard."  The chosen card is revealed to all opponents.
+    * **Codecracker Hound** (creature ETB, ``{1}{U}``), ``n=2``,
+      ``reveal_chosen=False``: "Look at the top two cards of your
+      library. Put one into your hand and the other into your
+      graveyard."  The chosen card is NOT revealed.
+
+    The Codecracker Hound surface form was previously its own engine
+    class ``LookAtTopTwoSplitHandGraveyard`` (deleted in the
+    refined-Cycle-1 fold). That class used a binary
+    ``choose_surveil``-on-top-card decision channel; this folded
+    primitive uses the canonical ``choose_card_from_library`` id-pick
+    instead — semantically equivalent at n=2 (a binary choice between
+    two examined cards is observationally the same as picking one of
+    two card ids).
 
     The agent's ``choose_card_from_library`` hook picks which of the
     examined cards goes to hand (the others go to graveyard). If the
@@ -241,6 +188,15 @@ class LookTopNPutOneInHandRestToGraveyard(Effect):
     """
 
     n: int = 4
+    # When ``True`` (default, matches Commune-with-Evil's parser path),
+    # the chosen card is revealed to all opponents post-move via
+    # ``reveal_to_all``. Codecracker Hound's printed text does NOT
+    # include "Reveal that card" — the n=2 surface form passes
+    # ``reveal_chosen=False`` so the post-resolve observable matches the
+    # printed text (and matches Rust's no-reveal resolve at
+    # ``state_ops_resolve.rs:6366-6394``, where the variant has no
+    # reveal step at all).
+    reveal_chosen: bool = True
 
     def resolve(
         self, state: "GameState", controller_id: int,
@@ -269,7 +225,8 @@ class LookTopNPutOneInHandRestToGraveyard(Effect):
         p.library.remove(hand_card)
         hand_card.zone = Zone.HAND
         p.hand.append(hand_card)
-        reveal_to_all(state, hand_card)
+        if self.reveal_chosen:
+            reveal_to_all(state, hand_card)
         state.log.append(
             f"P{controller_id} puts {hand_card.printing.name} into "
             f"hand (look at top {self.n})"
@@ -285,9 +242,13 @@ class LookTopNPutOneInHandRestToGraveyard(Effect):
             )
 
     def describe(self) -> str:
+        # Codecracker-Hound n=2 cosmetic tail "the other" matches the
+        # printed surface form for n=2; the parameterized "the rest"
+        # tail otherwise.
+        tail = "the other" if self.n == 2 and not self.reveal_chosen else "the rest"
         return (
             f"look at the top {self.n} cards of your library; put one "
-            f"into your hand and the rest into your graveyard"
+            f"into your hand and {tail} into your graveyard"
         )
 
 

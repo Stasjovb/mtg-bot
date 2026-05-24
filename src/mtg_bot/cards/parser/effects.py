@@ -88,7 +88,6 @@ from mtg_bot.cards.base import (
     GrantUnblockableUEOT,
     HouseCartographerSurvivalEffect,
     LookAtTopNRevealOrCounter,
-    LookAtTopTwoSplitHandGraveyard,
     LookTopNPutOneInHandRestToGraveyard,
     LoseLife,
     ManifestDread,
@@ -1312,18 +1311,39 @@ _SURVEIL_X_ARTIFACT_COUNT = re.compile(
     r"^surveil X, where X is the number of artifacts you control$"
 )
 _SURVEIL_N = re.compile(r"^surveil (\d+)$")
-# "Look at the top two cards of your library. Put one into your hand
-# and the other into your graveyard." — Codecracker Hound's ETB.
-# Maps to ``LookAtTopTwoSplitHandGraveyard()``. The two-sentence
-# surface is what Scryfall prints — the embedded period sits inside
-# the effect phrase rather than being the trailing terminator. Compound
-# splits don't apply (the second sentence's leading ``Put one`` doesn't
-# parse as a standalone effect — see ``_parse_compound_effect``'s
-# all-or-nothing rule), so the regex matches the literal two-sentence
-# surface as a single primitive.
-_LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
-    r"^look at the top two cards of your library\. "
-    r"Put one into your hand and the other into your graveyard$"
+# "Look at the top N cards of your library. Put one into your hand
+# and the other|rest into your graveyard." — bare two-sentence
+# look-pick-split surface form (NO trailing life-gain rider). Today's
+# only EoE/DSK consumer is Codecracker Hound's ETB ("look at the top
+# two cards ... and the other into your graveyard", n=2). The "rest"
+# tail accepts future cards with n>=3 that print the bare
+# look-pick-split shape without the Commune-with-Evil life-gain
+# rider (n=2 must use "the other"; n>=3 must use "the rest" per
+# English number-agreement; the alternation captures both surfaces
+# cleanly).
+#
+# Maps to ``LookTopNPutOneInHandRestToGraveyard(n=N,
+# reveal_chosen=False)`` — the refined-Cycle-1 fold (merge of the
+# prior ``LookAtTopTwoSplitHandGraveyard`` engine class into the
+# parameterized primitive at ``effects/generic/library_lookat.py``
+# with a ``reveal_chosen: bool`` rider). The ``reveal_chosen=False``
+# flag preserves Codecracker Hound's printed-text observable (no
+# "Reveal that card" clause) and matches Rust's no-reveal resolve at
+# ``state_ops_resolve.rs:6366-6394``.
+#
+# The two-sentence surface is what Scryfall prints — the embedded
+# period sits inside the effect phrase rather than being the trailing
+# terminator. Compound splits don't apply (the second sentence's
+# leading ``Put one`` doesn't parse as a standalone effect — see
+# ``_parse_compound_effect``'s all-or-nothing rule), so the regex
+# matches the full two-sentence surface as a single primitive.
+#
+# This recognizer is parameterized per parser CLAUDE.md (one regex
+# covers every future card with this bare look-pick-split shape, no
+# code change needed).
+_LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD = re.compile(
+    rf"^look at the top (\d+|{_SMALL_CARDINAL_PATTERN}) cards of your library\. "
+    rf"Put one(?: of them)? into your hand and (?:the other|the rest) into your graveyard$"
 )
 # "Look at the top N cards of your library. Put one of them into your
 # hand and the rest into your graveyard. You gain M life." — Commune with
@@ -1333,7 +1353,7 @@ _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD = re.compile(
 # a trailing life-gain rider (``GainLife(amount=M)``). Together they
 # produce ``Sequence(LookTopNPutOneInHandRestToGraveyard(N), GainLife(M))``.
 #
-# Tried BEFORE the two-sentence ``_LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD``
+# Tried BEFORE the bare two-sentence ``_LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD``
 # form because the "to your graveyard. You gain" boundary suffix
 # distinguishes the shapes; the bare two-sentence graveyard form's ``$``
 # anchor would not match the trailing life-gain sentence anyway, but
@@ -5416,13 +5436,23 @@ def _parse_effect(phrase: str) -> Effect | None:
             LookTopNPutOneInHandRestToGraveyard(n=n),
             GainLife(amount=m_amount),
         ))
-    if _LOOK_TOP_TWO_SPLIT_HAND_GRAVEYARD.match(phrase) is not None:
-        # ``look at the top two cards of your library. Put one into
-        # your hand and the other into your graveyard`` — Codecracker
-        # Hound's ETB. The two-sentence surface form is matched as a
-        # single primitive; the agent's ``choose_surveil`` hook
-        # decides which card goes to which pile at resolve time.
-        return LookAtTopTwoSplitHandGraveyard()
+    m = _LOOK_TOP_N_PUT_ONE_IN_HAND_REST_TO_GRAVEYARD.match(phrase)
+    if m is not None:
+        # ``look at the top N cards of your library. Put one into
+        # your hand and (the other|the rest) into your graveyard`` —
+        # bare two-sentence look-pick-split form (NO life-gain rider —
+        # the more-specific gain-life recognizer above handles
+        # Commune-with-Evil's three-sentence body). The refined-
+        # Cycle-1 fold merged the prior ``LookAtTopTwoSplitHandGraveyard``
+        # bespoke class into ``LookTopNPutOneInHandRestToGraveyard``
+        # with a ``reveal_chosen: bool`` rider; Codecracker Hound's
+        # n=2 path uses ``reveal_chosen=False`` to preserve the
+        # printed-text observable (no "Reveal that card" — matches
+        # Rust's no-reveal resolve at state_ops_resolve.rs:6366-6394).
+        n = _parse_amount(m.group(1))
+        return LookTopNPutOneInHandRestToGraveyard(
+            n=n, reveal_chosen=False,
+        )
     m = _LOOK_TOP_N_REVEAL_OR_COUNTER.match(phrase)
     if m is not None:
         # Parameterized peek-tutor-or-counter recognizer covering both

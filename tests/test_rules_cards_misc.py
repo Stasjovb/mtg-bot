@@ -6033,21 +6033,27 @@ def test_codecracker_hound_splits_top_two():
 
 
 def test_codecracker_empty_library_noop():
-    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+    # Refined-Cycle-1 fold: ``LookAtTopTwoSplitHandGraveyard()`` is
+    # now ``LookTopNPutOneInHandRestToGraveyard(n=2,
+    # reveal_chosen=False)`` (alias of the parameterized primitive;
+    # see docs/CODECRACKER_HOUND_CYCLE_1_HONEST_STOP_2026-05-24.md).
+    from mtg_bot.effects import LookTopNPutOneInHandRestToGraveyard
 
     state = _arena()
-    e = LookAtTopTwoSplitHandGraveyard()
-    assert "top two" in e.describe()
+    e = LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)
+    assert "top 2" in e.describe()
     e.resolve(state, 0)  # no crash
 
 
 def test_codecracker_single_card_library_goes_to_hand():
-    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+    from mtg_bot.effects import LookTopNPutOneInHandRestToGraveyard
 
     state = _arena()
     _stock_library(state, 0, count=1)
     last_card = state.players[0].library[0]
-    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    LookTopNPutOneInHandRestToGraveyard(
+        n=2, reveal_chosen=False,
+    ).resolve(state, 0)
     assert last_card in state.players[0].hand
 
 
@@ -6094,35 +6100,50 @@ def test_effect_describe_coverage_2():
 
 
 def test_codecracker_agent_chooses_to_mill_top():
-    """When the agent says 'mill' on the top card, the top goes to GY
-    and the second to hand."""
-    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+    """When the agent picks the second card (id-pick of the bottom of
+    the two examined), the top goes to GY and the second to hand.
+
+    Refined-Cycle-1 fold: ``LookAtTopTwoSplitHandGraveyard`` used a
+    binary ``choose_surveil``-on-top-card decision (True=mill). The
+    folded ``LookTopNPutOneInHandRestToGraveyard(n=2,
+    reveal_chosen=False)`` uses the canonical ``choose_card_from_library``
+    id-pick instead — semantically equivalent at n=2 (picking the
+    second id means the top goes to graveyard, matching the prior
+    ``choose_surveil(top)==True`` semantics).
+    """
+    from mtg_bot.effects import LookTopNPutOneInHandRestToGraveyard
     from mtg_bot.agents import RandomAgent
     import random
 
-    class AlwaysMill(RandomAgent):
-        def choose_surveil(self, state, player_id, top_card_id):
-            return True  # mill it
+    class PickSecond(RandomAgent):
+        def choose_card_from_library(self, state, player_id, options):
+            # Pick the SECOND card → top goes to graveyard, second
+            # goes to hand (the pre-fold "mill the top" behavior).
+            return options[1]
 
     state = _arena()
-    state.players[0].agent = AlwaysMill(rng=random.Random(0))
+    state.players[0].agent = PickSecond(rng=random.Random(0))
     _stock_library(state, 0, count=2)
     top = state.players[0].library[0]
     second = state.players[0].library[1]
-    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    LookTopNPutOneInHandRestToGraveyard(
+        n=2, reveal_chosen=False,
+    ).resolve(state, 0)
     assert top in state.players[0].graveyard
     assert second in state.players[0].hand
 
 
 def test_codecracker_no_agent_default_assignment():
-    from mtg_bot.effects import LookAtTopTwoSplitHandGraveyard
+    from mtg_bot.effects import LookTopNPutOneInHandRestToGraveyard
 
     state = _arena()
     state.players[0].agent = None
     _stock_library(state, 0, count=2)
     top = state.players[0].library[0]
     second = state.players[0].library[1]
-    LookAtTopTwoSplitHandGraveyard().resolve(state, 0)
+    LookTopNPutOneInHandRestToGraveyard(
+        n=2, reveal_chosen=False,
+    ).resolve(state, 0)
     assert top in state.players[0].hand
     assert second in state.players[0].graveyard
 

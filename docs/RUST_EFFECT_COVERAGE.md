@@ -6,8 +6,8 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **162 of 228 Python Effect classes covered (71.1%)** — by distinct-class count.
-- **624 of 690 per-card emissions covered (90.4%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **162 of 227 Python Effect classes covered (71.4%)** — by distinct-class count.
+- **625 of 690 per-card emissions covered (90.6%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
 - **195 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **21 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `DealSelfMVDamageToEachCreature`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `RemoveChargeCountersFromSourceDelayed`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `SacrificeSourceDelayed`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`, `WarpExileSelf`. These have no pool card exercising them today and are NOT counted as orphans.
@@ -37,13 +37,13 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | `PumpSelfUntilEOT` | 12 | yes |
 | `ManifestDread` | 10 | yes |
 
-### Frequency 2-9 (53 classes)
+### Frequency 2-9 (54 classes)
 
-- Covered by Rust: **53 / 53** (100.0%)
+- Covered by Rust: **54 / 54** (100.0%)
 
-### Frequency 1 (161 singletons)
+### Frequency 1 (159 singletons)
 
-- Covered by Rust: **95 / 161** (59.0%)
+- Covered by Rust: **94 / 159** (59.1%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -168,7 +168,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 116 | `Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | 0 |
 | 117 | `Effect::ExileTargetCreatureWithPowerOrToughnessAtMost` | `ExileTargetCreatureWithPowerOrToughnessAtMost` | 1 |
 | 118 | `Effect::MayDo` | `MayDo` | 4 |
-| 119 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 1 |
+| 119 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 2 |
 | 120 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireETBEffect` | 1 |
 | 121 | `Effect::AstelliReclaimerETBEffect` | `AstelliReclaimerETBEffect` | 1 |
 | 122 | `Effect::RovingActuatorETBEffect` | `RovingActuatorETBEffect` | 1 |
