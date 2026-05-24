@@ -477,6 +477,11 @@ pub fn make_state(
         // Spell-card-bridge lever Phase 2: second resolve-time
         // payload-target slot (2-slot spells). None by default.
         current_resolve_payload_target_id_2: None,
+        // **Coordinated Clobbering Cycle 2a (2026-05-24).** Third
+        // resolve-time payload-target slot (3-slot spells, e.g.
+        // Coordinated Clobbering's optional second caster-untapped
+        // creature). None by default.
+        current_resolve_payload_target_id_3: None,
         // CE20 Slice 5 (Walker loyalty Slice C): empty
         // once-per-turn-per-walker ledger at construction.
         loyalty_activated_this_turn: std::collections::HashSet::new(),

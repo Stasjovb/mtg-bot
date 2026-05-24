@@ -266,6 +266,64 @@ impl GameState {
         ));
     }
 
+    /// **Coordinated Clobbering Cycle 2a substrate (2026-05-24).**
+    /// Synthetic-test stack push for a 3-slot heterogeneous spell.
+    /// Mirrors `push_to_stack_with_target`'s shape (the proven
+    /// Phase-1 single-target sibling) and `new_spell_with_targets`'s
+    /// dual-target sibling — but takes THREE targets, with slot 2
+    /// optional (the agent-decline branch — when the caster has
+    /// only one untapped creature, the cast-time binder leaves
+    /// slot 2 `None`).
+    ///
+    /// **Slot semantics (Coordinated Clobbering today).**
+    ///   * `target_obj_id` (slot 0) = opp's creature taking damage.
+    ///   * `target_obj_id_2` (slot 1) = caster's first untapped
+    ///     creature.
+    ///   * `target_obj_id_3` (slot 2, optional) = caster's
+    ///     OPTIONAL second untapped creature.
+    ///
+    /// **Production cast-time binder lives in
+    /// `cast_spell_noncreature`** — this synthetic push exists
+    /// solely so unit tests can validate the resolver's 3-slot
+    /// payload-target plumbing without driving the full cast
+    /// pipeline. Cycle 2b lands the admit-set flip + the
+    /// real-EoE cross-engine probe that drives the production
+    /// path.
+    ///
+    /// **Slot-2-absent fallback contract.** When `target_obj_id_3`
+    /// is `None`, the StackItem rides with slot 2 unset and the
+    /// CC resolve arm's slot-2 read returns `None` — byte-equal
+    /// to the legacy 2-slot push (the resolve arm's slot-2
+    /// branch is gated on `if let Some(t2) = slot2_id`). This is
+    /// the pin that asserts the existing 2-slot path remains
+    /// byte-equal even after the 3-slot substrate lands.
+    #[pyo3(signature = (source_obj_id, controller, target_obj_id, target_obj_id_2, target_obj_id_3=None))]
+    fn push_to_stack_with_three_targets(
+        &mut self,
+        source_obj_id: u32,
+        controller: u8,
+        target_obj_id: u32,
+        target_obj_id_2: u32,
+        target_obj_id_3: Option<u32>,
+    ) {
+        // Use the unified 3-slot production constructor — same
+        // path the cast pipeline takes — but with non-target
+        // sidecars (mode-idx / additional-cost-choice / x-value)
+        // left `None`. This keeps the test push byte-equal to a
+        // bare non-modal non-X-cost CC cast at the StackItem
+        // field level.
+        self.stack.push(StackItem::new_spell_with_targets_mode_addcost_and_x(
+            source_obj_id,
+            controller,
+            Some(target_obj_id),
+            Some(target_obj_id_2),
+            target_obj_id_3,
+            None,
+            None,
+            None,
+        ));
+    }
+
     /// Return the top stack item as a Python dict
     /// `{"source_obj_id", "controller"}`, or `None` if the stack is
     /// empty. Read-only — does not mutate the stack.

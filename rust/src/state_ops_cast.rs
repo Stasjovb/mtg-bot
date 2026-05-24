@@ -1981,8 +1981,118 @@ impl GameState {
                 ) => Some(*max_value),
                 _ => None,
             });
-        let (bound_target, bound_target_2): (Option<u32>, Option<u32>) =
-            if is_two_slot {
+        // **Coordinated Clobbering Cycle 2a substrate (2026-05-24).**
+        // Detector for the 3-slot heterogeneous `(2, 3)` shape with
+        // slot kinds `("creature", "my_creature", "my_creature")` —
+        // today, exactly `Effect::CoordinatedClobberingEffect`. The
+        // detector is structural (top-level effect variant), not
+        // name-based.
+        //
+        // **Cast-time binder (3-slot).**
+        //   * Slot 0 = deterministic-first opp creature (non-caster
+        //     controller, `bf_iter_etb_sorted` order).
+        //   * Slot 1 = deterministic-first caster-untapped creature
+        //     (caster controller, `!o.tapped`, `bf_iter_etb_sorted`
+        //     order).
+        //   * Slot 2 = OPTIONAL second caster-untapped creature
+        //     (caster controller, `!o.tapped`, id != slot 1's id,
+        //     `bf_iter_etb_sorted` order). When the caster has only
+        //     ONE untapped creature, slot 2 stays `None` — the
+        //     agent-decline branch at `slot_idx >= min_t` (min_t=2,
+        //     so slot 2 is past the minimum and declinable).
+        //     Mirrors Python's `_select_spell_targets` per-slot
+        //     first-legal scan with the optional-slot decline shape
+        //     (`actions.py:1337-1357`).
+        //
+        // **Substrate-only landing.** The admit predicate
+        // `_printing_is_bridge_simple_spell` STILL declines
+        // Coordinated Clobbering at the target-grammar gate this
+        // cycle (Cycle 2b lands the Phase 6 admit arm). So this
+        // binder NEVER fires production paths today — every
+        // synthetic unit test of the 3-slot resolve drives through
+        // `push_to_stack_with_three_targets` (bypassing the cast
+        // pipeline), and every cross-engine trajectory stays
+        // byte-identical because CC is never cast through this
+        // pipeline. The binder is wired NOW so Cycle 2b can flip
+        // the admit gate as an additive change (no churn at the
+        // cast-time bind site).
+        let is_coordinated_clobbering = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                matches!(
+                    p.effects.first(),
+                    Some(crate::cards::Effect::CoordinatedClobberingEffect)
+                )
+            })
+            .unwrap_or(false);
+        let (bound_target, bound_target_2, bound_target_3): (
+            Option<u32>,
+            Option<u32>,
+            Option<u32>,
+        ) = if is_coordinated_clobbering {
+            // 3-slot CC: slot 0 = first opp creature, slot 1 =
+            // first caster-untapped creature, slot 2 = OPTIONAL
+            // second caster-untapped creature (None when only one
+            // available — agent-decline branch).
+            let mut slot0: Option<u32> = None;
+            let mut slot1: Option<u32> = None;
+            let mut slot2: Option<u32> = None;
+            for o in crate::bf_iter::bf_iter_etb_sorted(self) {
+                let is_creature = self
+                    .registry
+                    .lookup(o.printing_id)
+                    .map(|p| {
+                        p.card_types.iter().any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false);
+                if !is_creature {
+                    continue;
+                }
+                if effective_controller_id(o) == player_id {
+                    // Caster's creature — only untapped ones are
+                    // eligible (Python's `legal_targets` filter
+                    // for the my_creature slots requires
+                    // `not obj.tapped`).
+                    if o.tapped {
+                        continue;
+                    }
+                    if slot1.is_none() {
+                        slot1 = Some(o.id);
+                    } else if slot2.is_none() {
+                        // Guard against re-picking slot 1 — the
+                        // iteration already advanced past it via
+                        // the `slot1.is_none()` branch above. The
+                        // explicit id != slot1 guard is belt-and-
+                        // suspenders for any non-deduplicated
+                        // bf-iter variant a future migration might
+                        // introduce.
+                        if Some(o.id) != slot1 {
+                            slot2 = Some(o.id);
+                        }
+                    }
+                } else if slot1.is_none() && slot2.is_none() {
+                    // Slot 0 (opp creature). No untapped filter —
+                    // the opp's creature taking damage doesn't
+                    // need to be untapped (the oracle text "target
+                    // creature an opponent controls" doesn't
+                    // require it). First non-caster creature in
+                    // bf_iter_etb_sorted order wins.
+                    if slot0.is_none() {
+                        slot0 = Some(o.id);
+                    }
+                } else if slot0.is_none() {
+                    slot0 = Some(o.id);
+                }
+                if slot0.is_some()
+                    && slot1.is_some()
+                    && slot2.is_some()
+                {
+                    break;
+                }
+            }
+            (slot0, slot1, slot2)
+        } else if is_two_slot {
                 // 2-slot: slot 0 = first caster-controlled creature,
                 // slot 1 = first non-caster-controlled creature, both
                 // in `bf_iter_etb_sorted` order.
@@ -2015,7 +2125,11 @@ impl GameState {
                         break;
                     }
                 }
-                (slot0, slot1)
+                // **Coordinated Clobbering Cycle 2a (2026-05-24).**
+                // 2-slot Diplomatic Relations grammar has no slot-2
+                // target — `None` is byte-clean (the resolve arm
+                // ignores it, the swap is `None → None`).
+                (slot0, slot1, None)
             } else if is_radiant_strike_destroy {
                 // Radiant Strike's destroy half: first artifact-OR-
                 // tapped-creature on EITHER bf in
@@ -2050,7 +2164,7 @@ impl GameState {
                         }
                         Some(o.id)
                     });
-                (t, None)
+                (t, None, None)
             } else if is_focus_fire {
                 // Focus Fire: first attacking-or-blocking creature on
                 // EITHER bf in `bf_iter_etb_sorted` order (matches
@@ -2082,7 +2196,7 @@ impl GameState {
                             None
                         }
                     });
-                (t, None)
+                (t, None, None)
             } else if is_seedship_impact {
                 // Seedship Impact: first artifact-OR-enchantment on
                 // EITHER bf in `bf_iter_etb_sorted` order, non-
@@ -2116,7 +2230,7 @@ impl GameState {
                         }
                         Some(o.id)
                     });
-                (t, None)
+                (t, None, None)
             } else if is_emergency_eject {
                 // Emergency Eject: first non-land permanent on
                 // EITHER bf in `bf_iter_etb_sorted` order, non-
@@ -2144,7 +2258,7 @@ impl GameState {
                         }
                         Some(o.id)
                     });
-                (t, None)
+                (t, None, None)
             } else if let Some(max_value) = is_exile_creature_with_pt_at_most {
                 // **Warping Wail Cycle 1a substrate (2026-05-22).**
                 // First creature on EITHER bf in `bf_iter_etb_sorted`
@@ -2191,7 +2305,7 @@ impl GameState {
                             None
                         }
                     });
-                (t, None)
+                (t, None, None)
             } else {
                 // Phase-1 single-target: first creature on EITHER bf.
                 let t = crate::bf_iter::bf_iter_etb_sorted(self)
@@ -2209,7 +2323,7 @@ impl GameState {
                             None
                         }
                     });
-                (t, None)
+                (t, None, None)
             };
         // **ModalChooseOne envelope — Cycle 1 (cast-time mode
         // binding, 2026-05-21).** Detect whether the spell's first
@@ -2814,6 +2928,18 @@ impl GameState {
                 player_id,
                 bound_target,
                 bound_target_2,
+                // **Coordinated Clobbering Cycle 2a substrate
+                // (2026-05-24).** Thread the 3rd-slot bound target
+                // (Coordinated Clobbering's optional second
+                // caster-untapped creature) through the unified
+                // production constructor. `None` for every non-CC
+                // cast (back-compat byte-identical — every existing
+                // cross-engine trajectory through this site has
+                // `bound_target_3 == None`). The cast-time binder
+                // above mints `Some(_)` ONLY for the CC detector
+                // arm; substrate-only — CC is still admit-declined
+                // this cycle, so production never observes this.
+                bound_target_3,
                 bound_mode_idx,
                 bound_additional_cost_choice_id,
                 // **X-value subsystem C2.5 (2026-05-22) — first live

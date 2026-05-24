@@ -21922,6 +21922,106 @@ fn apply_effect(
                     break;
                 }
             }
+            // **Coordinated Clobbering Cycle 2a substrate (2026-05-24)
+            // — slot 2 (optional second friendly attacker).** Read
+            // slot 2 (my creature id) from
+            // `current_resolve_payload_target_id_3`. Re-validate per
+            // CR 608.2b (still on a bf AND still controlled by the
+            // caster — Python `bespoke.py:2463` `obj.controller_id
+            // != controller_id` is the skip-this-attacker condition).
+            // If slot 2 is legal AND distinct from slot 1, tap it
+            // (idempotent on `obj.tapped`) and add a SECOND damage
+            // instance equal to its counters-inclusive
+            // effective_power to slot 0. The damage instance is
+            // independent of slot 1's contribution — Coordinated
+            // Clobbering says each chosen attacker deals damage
+            // equal to its OWN power; the two damage instances both
+            // land on slot 0 (the single opp target).
+            //
+            // **Identity guard (id != my_id).** Python's
+            // `for obj in my_objs` walks the distinct creatures
+            // chosen. If a synthetic / mis-bound caller passed the
+            // same id for both slots, treat slot 2 as a no-op (no
+            // double-tap, no double-damage). Production cast-time
+            // binder picks two DIFFERENT untapped creatures by
+            // walking `bf_iter_etb_sorted` and skipping the slot-1
+            // pick — but the resolve arm's identity guard is the
+            // belt-and-suspenders for synthetic test pushes.
+            //
+            // **Slot-0 re-validation NOT repeated.** The Python
+            // walk computes damage per attacker and applies all
+            // damage in one pass — the opp target's bf-residency
+            // was validated above and we mutate the same opp_pidx
+            // here. No SBA fires mid-arm (the resolve loop only
+            // calls apply_sbas after the arm completes).
+            let slot2_id = state.current_resolve_payload_target_id_3;
+            let mut my2_pidx: Option<usize> = None;
+            if let Some(t2) = slot2_id {
+                if Some(t2) != slot1_id {
+                    'find_my2: for (pidx, player) in
+                        state.players.iter().enumerate()
+                    {
+                        if let Some(obj) = player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == t2)
+                        {
+                            if obj.controller == controller {
+                                my2_pidx = Some(pidx);
+                            }
+                            break 'find_my2;
+                        }
+                    }
+                }
+            }
+            if let (Some(my2_pidx), Some(my2_id)) =
+                (my2_pidx, slot2_id)
+            {
+                // Tap slot 2 — idempotent on `obj.tapped`.
+                {
+                    let bf2_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[my2_pidx].battlefield,
+                    );
+                    for obj in bf2_mut.iter_mut() {
+                        if obj.id == my2_id {
+                            obj.tapped = true;
+                            break;
+                        }
+                    }
+                }
+                // Compute slot-2 effective_power (counters-
+                // inclusive) — same recipe as slot 1 above.
+                let amount2: i32 = {
+                    let o = state.players[my2_pidx]
+                        .battlefield
+                        .iter()
+                        .find(|x| x.id == my2_id)
+                        .expect("slot-2 id validated but not found");
+                    let printing = state
+                        .registry
+                        .lookup(o.printing_id)
+                        .expect("slot-2 printing must resolve");
+                    let printed_p = printing.power.unwrap_or(0) as i32;
+                    let base_p = o
+                        .ueot_base_pt_override()
+                        .map(|(p, _)| p)
+                        .unwrap_or(printed_p);
+                    base_p + o.counters + o.ueot_power_bonus()
+                };
+                let amount2_i16 = amount2
+                    .clamp(i16::MIN as i32, i16::MAX as i32)
+                    as i16;
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[opp_pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == opp_id {
+                        obj.damage =
+                            obj.damage.saturating_add(amount2_i16);
+                        break;
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -22169,6 +22269,20 @@ impl GameState {
         // points (the §3.4 sibling-parity requirement; pin #4 / #6).
         let saved_target_2 = self.current_resolve_payload_target_id_2;
         self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
+        // **Coordinated Clobbering Cycle 2a substrate (2026-05-24).**
+        // Swap in the THIRD bound target for a 3-slot spell
+        // (Coordinated Clobbering's optional second caster-untapped
+        // creature). Identical save → set → restore bracketing as
+        // slots 0/1; `None` for every pre-Cycle-2a push (back-compat
+        // — single-target / 2-slot spells, triggers, and activations
+        // never set it; closed arms self-scan / ignore all three
+        // payload slots, so the swap is a correct no-op for them).
+        // Mirrored into BOTH resolve entry points per the §3.4
+        // sibling-parity requirement (same discipline Phase-2 /
+        // mode-index siblings follow). Substrate-only landing —
+        // Cycle 2b flips the admit gate.
+        let saved_target_3 = self.current_resolve_payload_target_id_3;
+        self.current_resolve_payload_target_id_3 = top.target_obj_id_3;
         // ModalChooseOne envelope — Cycle 2 (cast-time-bound mode
         // dispatch). Swap in the StackItem's cast-time-bound mode
         // index so the `Effect::ChooseOneMode` arm reads the
@@ -22234,6 +22348,11 @@ impl GameState {
         self.current_resolve_additional_cost_choice_id =
             saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
+        // **Coordinated Clobbering Cycle 2a (2026-05-24).** Restore
+        // the 3rd-slot payload target. Mirrors the slot-2 restore
+        // immediately below — substrate-only swap that is `None →
+        // None` for every pre-Cycle-2a push.
+        self.current_resolve_payload_target_id_3 = saved_target_3;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
@@ -22449,6 +22568,18 @@ impl GameState {
         // points (the §3.4 sibling-parity requirement; pin #4 / #6).
         let saved_target_2 = self.current_resolve_payload_target_id_2;
         self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
+        // **Coordinated Clobbering Cycle 2a substrate (2026-05-24,
+        // `_pause` sibling).** Swap in the THIRD bound target for a
+        // 3-slot spell. Save → set → restore bracket mirroring the
+        // `resolve_top_of_stack` entry point above. Mirrored across
+        // BOTH resolve entry points per the §3.4 sibling-parity
+        // requirement (same discipline every other transient slot
+        // follows). For every pre-Cycle-2a push `top.target_obj_id_3
+        // == None` so the swap is a no-op; Cycle 2b flips the admit
+        // gate and the cast pipeline mints `Some(_)` when a second
+        // friendly untapped creature is bindable.
+        let saved_target_3 = self.current_resolve_payload_target_id_3;
+        self.current_resolve_payload_target_id_3 = top.target_obj_id_3;
         // ModalChooseOne envelope — Cycle 2 (cast-time-bound mode
         // dispatch). Swap in the StackItem's cast-time-bound mode
         // index so the `Effect::ChooseOneMode` arm reads the
@@ -22502,6 +22633,11 @@ impl GameState {
         self.current_resolve_additional_cost_choice_id =
             saved_addcost_choice_id;
         self.current_resolve_chosen_mode_idx = saved_mode_idx;
+        // **Coordinated Clobbering Cycle 2a (2026-05-24, `_pause`
+        // sibling).** Restore the 3rd-slot payload target. Mirrors
+        // the slot-2 restore immediately below — substrate-only
+        // swap that is `None → None` for every pre-Cycle-2a push.
+        self.current_resolve_payload_target_id_3 = saved_target_3;
         self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
@@ -22860,6 +22996,10 @@ impl GameState {
             trigger_payload: None,
             target_obj_id: None,
             target_obj_id_2: None,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).** The
+            // synthetic-spell push helper has no printing → 3-slot
+            // target detection never fires → default `None`.
+            target_obj_id_3: None,
             // ModalChooseOne envelope — Cycle 1: this is the
             // bespoke synthetic-spell push helper (no printing
             // lookup); modal mode binding rides on the production
