@@ -2916,6 +2916,39 @@ _LANDER_SAFE_ACTIVATED_ABILITY: dict = {
 }
 
 
+# **Warping Wail Cycle 3 (2026-05-24) — token-AA bridge widen for the
+# Eldrazi-Scion creature-token-with-sac-self-mana-ability shape.** The
+# exact bridge-correct activated-ability dict for the EoE ``Eldrazi
+# Scion`` token: ``Sacrifice this token: Add {C}.`` minted by Warping
+# Wail's third mode. Round-trips Python<->Rust with NO §2 gap:
+#   * the cost is ``sacrifice_self`` alone (no mana / tap component) —
+#     the exact subset both engines pay identically (Rust's
+#     ``parse_activation_cost`` accepts the bare bool; Python's
+#     ``ActivationCost`` honors it bit-identically);
+#   * the effect is ``add_mana_to_pool`` with a single ``(color, amount)``
+#     pair — Rust's scalar-pair ``Effect::AddManaToPool { color: String,
+#     amount: i32 }`` and the bridge's
+#     :func:`cross_engine._ta_dict_to_python_effect` ``add_mana_to_pool``
+#     arm fold to Python's one-pair ``produces=((color, amount),)``;
+#   * ``is_mana_ability: True`` flags the CR 605.3a stack-bypass on
+#     BOTH engines (Rust's ActivateAbility path direct-credits the
+#     pool, Python's ``ActivatedAbility.is_mana_ability=True`` does
+#     the same).
+# This is the ONLY token-activated ability the creature-token+mana-AA
+# Phase admits; any token whose activated ability differs from this
+# exact dict stays declined (§2 — a divergent cost component, a
+# non-mana effect, or ``is_mana_ability=False`` would silently
+# mistranslate or change the activation timing). The ``color`` is
+# pinned to ``"C"`` because the real EoE Eldrazi Scion produces exactly
+# one colorless mana; a hypothetical multi-color / multi-amount variant
+# is a separate recognizer-widen and is NOT admitted here.
+_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY: dict = {
+    "cost": {"sacrifice_self": True},
+    "effect": {"kind": "add_mana_to_pool", "color": "C", "amount": 1},
+    "is_mana_ability": True,
+}
+
+
 def _token_with_safe_activated_ability_card_def(
     token_printing,
 ) -> Optional["CardDef"]:
@@ -3044,6 +3077,161 @@ def _token_with_safe_activated_ability_card_def(
         subtypes=tuple(token_printing.subtypes or ()),
         supertypes=("Token",),
         token_activated_abilities=(dict(_LANDER_SAFE_ACTIVATED_ABILITY),),
+    )
+
+
+def _token_creature_with_safe_mana_activated_ability_card_def(
+    token_printing,
+) -> Optional["CardDef"]:
+    """Build a :class:`cross_engine.CardDef` from a token
+    ``CardPrinting`` iff the token is a CREATURE whose ONLY activated
+    ability is the exact bridge-correct Eldrazi-Scion shape (and it is
+    otherwise clean), else ``None``.
+
+    **Warping Wail Cycle 3 (2026-05-24) — token-AA bridge widen for
+    creature tokens with sac-self mana abilities.** Sibling of
+    :func:`_token_vanilla_card_def` (vanilla creature, no AAs) and
+    :func:`_token_with_safe_activated_ability_card_def` (Lander shape —
+    non-creature with the {2}+Sac+Search AA). This third helper closes
+    the §2-honest gap left by the first two: a CREATURE token with one
+    activated ability whose shape is
+
+      ``Sacrifice this token: Add {C}``  (``is_mana_ability=True``)
+
+    The dict-side shape is :data:`_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY`.
+
+    **§2 silent-mistranslation discipline (STRICT).** The token must:
+
+      * have ``Creature`` among its card types AND non-None printed
+        P/T (a creature-token GameObject's per-object signature includes
+        power / toughness — None-P/T would silently diverge).
+      * carry EXACTLY ONE activated ability, byte-equal to the real
+        authored ``TOKEN_PRINTINGS["Eldrazi Scion"]`` ability AND to
+        :data:`_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY` (cost
+        ``sacrifice_self`` alone — NO mana, NO tap, NO other sac flag;
+        effect ``AddManaToPool(produces=(("C", 1),))``;
+        ``is_mana_ability=True``). ANY deviation (an added mana / tap
+        cost, an extra sac flag, a different color or amount, a non-
+        mana effect, or ``is_mana_ability=False``) keeps the token
+        DECLINED — admitting a token whose ability silently differs
+        cross-engine is exactly the §2 class this campaign exists to
+        avoid.
+      * carry NO keywords / static abilities / triggered abilities /
+        nested abilities / block-restriction flags (CardDef carries
+        only the synthesized single activated ability via
+        ``token_activated_abilities``; any other token feature would
+        silently vanish on the bridge).
+
+    The synthesized CardDef's ``card_type`` is ``"Creature"`` (with
+    any multi-type overlap threaded through ``extra_card_types`` —
+    the Eldrazi Scion is single-type ``Creature`` so this is the
+    empty tuple in practice). The ``Token`` supertype is stamped so
+    both engines remove the token from non-battlefield zones per CR
+    704.5d. P/T thread through as in :func:`_token_vanilla_card_def`.
+
+    **Why a sibling rather than widening
+    :func:`_token_with_safe_activated_ability_card_def`?** The two
+    shapes have orthogonal positive gates:
+      * Lander: NON-creature artifact, mana+sacrifice_self cost,
+        non-mana-ability search effect.
+      * Eldrazi Scion: CREATURE, sacrifice_self ONLY cost, mana-ability
+        AddManaToPool effect.
+    Widening the single helper to admit BOTH would require disjunctive
+    cost-and-effect gating that obscures the per-shape §2 contract.
+    The sibling-split mirrors the Lander vs. vanilla split — each
+    helper §2-strictly admits ONE token shape and declines every
+    other, so a future bug in either path can't silently widen the
+    other.
+
+    **Substrate-only landing.** Cycle 3 lands the helper + a sibling
+    constant + the byte-equal probe. The
+    :func:`_printing_is_bridge_simple_spell` admit predicate is NOT
+    flipped — that's Cycle 4's job. The
+    ``test_warping_wail_stays_declined_at_admit_gate_post_cycle_1a``
+    pin in ``tests/test_warping_wail_substrate_cycle_1a.py``
+    continues to fire (and is verified still-green by this lane's
+    sanity gates).
+    """
+    from mtg_bot.effects.base import ActivatedAbility
+    from mtg_bot.effects.generic.mana import AddManaToPool
+
+    if token_printing is None:
+        return None
+    card_types = tuple(getattr(token_printing, "card_types", ()) or ())
+    if "Creature" not in card_types:
+        return None
+    # Creature body requires non-None printed P/T (the per-object
+    # signature carries P/T; a None-P/T creature token would silently
+    # diverge cross-engine).
+    if token_printing.power is None or token_printing.toughness is None:
+        return None
+    if getattr(token_printing, "static_abilities", None):
+        return None
+    if getattr(token_printing, "triggered_abilities", None):
+        return None
+    if token_printing.keywords:
+        return None
+    if getattr(
+        token_printing, "can_only_block_creatures_with_flying", False
+    ):
+        return None
+    aas = tuple(token_printing.activated_abilities or ())
+    if len(aas) != 1:
+        return None
+    aa = aas[0]
+    if not isinstance(aa, ActivatedAbility):
+        return None
+    # STRICT cost gate: exactly ``sacrifice_self`` alone. NO mana cost,
+    # NO tap, NO other sac flag, NO targeting requirement. Any extra
+    # cost component would round-trip differently or silently change
+    # cross-engine activation legality (§2).
+    cost = aa.cost
+    if cost.mana is not None:
+        # The Eldrazi Scion AA carries no mana cost — its ``cost.mana``
+        # is ``None`` on the authored printing. A printing whose mana
+        # is a zero-but-present ManaCost should still be DECLINED
+        # here because the bridge dict would carry the empty mana
+        # field, which the round-trip-or-bail teeth would reject as
+        # a shape drift.
+        return None
+    if not cost.sacrifice_self:
+        return None
+    for _extra in (
+        "tap_self",
+        "requires_target_creature_you_control",
+        "sacrifice_another_creature_or_artifact",
+        "sacrifice_a_land",
+        "sacrifice_another_artifact",
+        "sacrifice_food",
+        "sacrifice_a_desert",
+    ):
+        if getattr(cost, _extra, False):
+            return None
+    # STRICT effect gate: ``AddManaToPool(produces=(("C", 1),))``.
+    # No spend_restriction, exactly one (color, amount) pair, color
+    # is colorless, amount is 1.
+    if not isinstance(aa.effect, AddManaToPool):
+        return None
+    if getattr(aa.effect, "spend_restriction", None) is not None:
+        return None
+    produces = tuple(aa.effect.produces or ())
+    if produces != (("C", 1),):
+        return None
+    if not getattr(aa, "is_mana_ability", False):
+        return None
+    extra = tuple(t for t in card_types if t != "Creature")
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+    return _CardDef(
+        name=token_printing.name,
+        card_type="Creature",
+        extra_card_types=extra,
+        power=int(token_printing.power),
+        toughness=int(token_printing.toughness),
+        subtypes=tuple(token_printing.subtypes or ()),
+        supertypes=("Token",),
+        token_activated_abilities=(
+            dict(_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY),
+        ),
     )
 
 
