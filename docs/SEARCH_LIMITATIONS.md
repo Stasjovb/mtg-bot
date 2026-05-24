@@ -11098,6 +11098,88 @@ the X-tracking C1 substrate.
   any spell; uncounterability gate composes cleanly with
   filter_types).
 
+- **Warping Wail Cycle 3 substrate LANDED (2026-05-24,
+  `feature/warping-wail-cycle-3-token-aa-p1`).** **Substrate-only
+  closure** for the third of Warping Wail's three modes —
+  token-AA bridge widen for **creature tokens with sac-self mana
+  abilities** (the Eldrazi Scion shape Warping Wail mode 3 mints:
+  "Create a 1/1 colorless Eldrazi Scion creature token. It has
+  '{T}, Sacrifice this token: Add {C}.'", authored in the engine as
+  the simplified bare `Sacrifice this token: Add {C}` AA on a 1/1
+  creature body per `cards/tokens.py`).
+
+  **The narrowest gap was in the printing-registration walk.** Both
+  engines already supported the cost/effect/flag end-to-end:
+  Rust's `parse_activation_cost` accepts the bare `sacrifice_self`
+  bool; `parse_activated_ability` threads `is_mana_ability=True`;
+  the `ActivateAbility` dispatch arm pays the sac cost and bypasses
+  the stack per CR 605.3a; `Effect::AddManaToPool { color, amount }`
+  resolves byte-equal to Python's `AddManaToPool(produces=(("C",
+  1),))`. The cross-engine bridge already routes `sacrifice_self`
+  through `_AA_COST_BOOL_KEYS`, `add_mana_to_pool` through
+  `_ta_dict_to_python_effect`, and the AA dict through
+  `_aa_dict_to_python_activated_ability`. The gap was strictly in
+  the loader-side `trajectory.py` printing-registration helper that
+  builds the token CardDef from a `CardPrinting` — the existing
+  `_token_with_safe_activated_ability_card_def` is Lander-specific
+  (positively declines creature tokens at line 2990 and pins the
+  cost shape to `{2}+sacrifice_self`+`SearchLibraryForBasicLandTapped`).
+
+  **Changes shipped:**
+    - `src/mtg_bot/parity/trajectory.py` — new
+      `_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY` dict constant:
+      `{"cost": {"sacrifice_self": True}, "effect": {"kind":
+      "add_mana_to_pool", "color": "C", "amount": 1},
+      "is_mana_ability": True}`.
+    - `src/mtg_bot/parity/trajectory.py` — new
+      `_token_creature_with_safe_mana_activated_ability_card_def`
+      sibling helper. §2-strict positive gate: requires a Creature
+      body with non-None P/T, exactly one AA byte-equal to the
+      Scion shape (no mana cost, no tap, no other sac flag,
+      `AddManaToPool(produces=(("C", 1),))` effect, `is_mana_ability=
+      True`, no `spend_restriction`), no keywords / static
+      abilities / triggered abilities / block restrictions. Declines
+      every per-disqualifier variant — the sibling-split mirrors the
+      Lander vs. vanilla helper split so each helper §2-strictly
+      admits ONE token shape only and a future bug in either path
+      can't silently widen the other.
+
+  **Substrate-only — Warping Wail itself stays DECLINED at the
+  admit gate this cycle.** The `_printing_is_bridge_simple_spell`
+  predicate continues to decline Warping Wail because the
+  `(0, 1) + or_both=False` Phase-6 modal admit-gate widen + per-mode
+  binders still gap (Cycle 4). The
+  `test_warping_wail_stays_declined_at_admit_gate_post_cycle_1a`
+  pin (in `tests/test_warping_wail_substrate_cycle_1a.py`) plus the
+  matching Cycle 3 pin (in
+  `tests/test_warping_wail_substrate_cycle_3.py`) catch any
+  accidental early-flip.
+
+  **No NEW PROBED side-effects.** Cycle 3 widens the substrate but
+  doesn't flip any spell into the admit set today — the new helper
+  is consumed only by the future Cycle 4 per-mode token-mint binder
+  (Warping Wail mode 3 is the only EoE consumer of the creature-
+  token+sac-self-mana-AA shape, and Warping Wail itself still
+  declines until Cycle 4 lands the modal admit). Admit-set pin
+  tests (`test_spell_card_lever_phase1_negative_pins_decline_set` +
+  `test_probe_spell_card_bridge_admitted.py`) STILL PASS unchanged.
+
+  **Tests.** `tests/test_warping_wail_substrate_cycle_3.py` (16
+  pins): helper SoT (admits the authored Eldrazi Scion + per-
+  disqualifier rejects — Lander/Treasure/vanilla-creature, added
+  mana cost, `is_mana_ability=False`, wrong color, non-creature
+  body, two AAs, keyword carrier); §2 sibling-split pins (vanilla
+  + Lander helpers STILL decline the Scion); cross-engine byte-
+  equal-printing pin (`_card_def_to_python_printing` materializes a
+  printing bit-identical to `TOKEN_PRINTINGS["Eldrazi Scion"]` for
+  every forward-relevant field including the AA tuple); synthetic-
+  state probe — Rust half mints the Scion via the bridge-correct
+  dict shape + activates the AA + verifies the {C} pool increment,
+  the off-bf cease-to-exist, the stack-bypass, and the no-graveyard-
+  pass-through; Python half drives the same observables through
+  `_activate_ability` on the authored printing; substrate-only
+  invariant pin (Warping Wail stays declined at the admit gate).
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any
