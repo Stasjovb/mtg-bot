@@ -4605,6 +4605,17 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.bespoke import (
         CoordinatedClobberingEffect,
     )
+    # **Archenemy's Charm flip (2026-05-24).** Per-leaf serializer
+    # for `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+    # Control` — the combined Effect class for Archenemy's Charm's
+    # Mode 2 ("Put N +1/+1 counters on target creature you control.
+    # It gains <kw> until end of turn."). Two-field carrier:
+    # `amount: int` + `granted_keywords: frozenset[str]`. Emits the
+    # sorted-list-of-strings shape Rust's parse arm requires (the
+    # bridge's `granted_keywords` `frozenset` round-trip).
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+    )
 
     def _leaf(eff, *, _in_modal_mode: bool = False) -> Optional[dict]:
         """Per-leaf serializer recursion.
@@ -5969,6 +5980,27 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # + 3-slot binder + admit-set pin bump.
         if isinstance(eff, CoordinatedClobberingEffect):
             return {"kind": "coordinated_clobbering_effect"}
+        # **Archenemy's Charm flip (2026-05-24).** Two-field carrier.
+        # Emit `amount` always (no Python-side default elision; Rust's
+        # parse arm tolerates omitted `amount` defaulting to 2 — but
+        # explicit emit keeps the §2 round-trip teeth honest). Emit
+        # `granted_keywords` as a sorted list (Rust storage is
+        # sorted-unique; emitting sorted keeps the dict byte-identical
+        # across a Python→Rust→Python round-trip). Mirrors the
+        # `GrantKeywordsToTargetCreatureUntilEOT` per-leaf shape
+        # (sorted-list serialization of a frozenset[str]).
+        if isinstance(
+            eff,
+            PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+        ):
+            return {
+                "kind": (
+                    "put_plus_one_counters_and_grant_keywords_ueot_"
+                    "on_target_creature_you_control"
+                ),
+                "amount": int(eff.amount),
+                "granted_keywords": sorted(eff.granted_keywords),
+            }
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child

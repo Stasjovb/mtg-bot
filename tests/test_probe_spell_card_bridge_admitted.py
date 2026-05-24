@@ -315,8 +315,33 @@ pytestmark = pytest.mark.skipif(
 # made the flip safe. Coordinated Clobbering AUTO-JOINS via the §2
 # auto-grow teeth — inserted alphabetically between "Close Encounter"
 # and "Cut Propulsion". Admit set 41 → 42.
+# **archenemys-charm-flip-p1 (2026-05-24):** Closes Archenemy's
+# Charm. Adds (a) the Mode 2 Effect substrate
+# ``Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+# Control`` Rust variant (declaration + parse + to_pydict + resolve
+# arms) — Modes 0 + 1 are ALREADY Rust-covered today (Mode 0 by
+# ``Effect::ExileTargetCreature`` from the Gravkill closure; Mode 1
+# by ``Effect::ReturnUpToNCreaturesFromYourGraveyardToHand`` from
+# the substrate-only branch); (b) the matching cross-engine bridge
+# arm + reverse-serializer leaf for the Mode 2 carrier; (c) the
+# per-mode cast-time binder allowlist widen in ``state_ops_cast.rs
+# ::is_recognized_targeted_mode_leaf`` for ALL THREE Archenemy's
+# Charm modes (``ExileTargetCreature``, ``ReturnUpToNCreaturesFrom
+# YourGraveyardToHand``, ``PutPlusOneCountersAndGrantKeywordsUEOT
+# OnTargetCreatureYouControl``); (d) the matching per-mode dispatch
+# arms (mode 0 = first creature any-side, mode 1 = passthrough for
+# resolve-time graveyard self-scan, mode 2 = own-side first
+# creature). Archenemy's Charm AUTO-JOINS via the §2 auto-grow teeth:
+# all three modes are covered+bridged + round-trip clean + the
+# Phase 4 ``not slot_kinds`` permissive disjunct admits the
+# ``(1, 2)`` empty-slot_kinds ModalChooseOne shape (same single-cycle
+# auto-grow as Singularity Rupture). PROBED tier — pool delta +1.
+# Admit set 42 → 43 (Archenemy's Charm inserted alphabetically
+# between Annul and Beyond the Quiet). ~4,286 17lands decks
+# BLOCKED → PROBED.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Annul",
+    "Archenemy's Charm",
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
     "Close Encounter", "Coordinated Clobbering",
     "Cut Propulsion", "Darkness", "Depressurize",

@@ -7228,6 +7228,73 @@ pub enum Effect {
     /// Creature` per-leaf precedent for the spell-card-bridge admit
     /// flow.
     ExileTargetCreature,
+    /// **Archenemy's Charm Mode 2 substrate (2026-05-24).** Put N
+    /// +1/+1 counters on target creature you control AND grant it the
+    /// listed keywords until end of turn. Mirrors Python's
+    /// `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`
+    /// (`effects/generic/counters.py:662`) — a single combined Effect
+    /// class (NOT a `Sequence`) because Python's `Sequence` allows at
+    /// most one targeting sub-effect. Archenemy's Charm's mode 3 is
+    /// the sole EoE consumer ("Put two +1/+1 counters on target
+    /// creature you control. It gains lifelink until end of turn.").
+    ///
+    /// **Payload-target seat (per-mode binder path).** Reads the
+    /// cast-time-bound target from
+    /// `state.current_resolve_payload_target_id`. The Cycle-5
+    /// per-mode-target binder at
+    /// `state_ops_cast.rs::cast_spell_noncreature` scans the
+    /// caster's own battlefield in `bf_iter_etb_sorted` order for
+    /// the first Creature controlled by the caster — matches
+    /// Python's `_select_spell_targets` first-legal pick against
+    /// `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+    /// Control.legal_targets` (own-side creatures only).
+    ///
+    /// **Resolve semantics.** Re-validate at resolve per CR 608.2b
+    /// that the seated target is still on the source-controller's
+    /// battlefield AND still a Creature. Failure → silent fizzle
+    /// (byte-equal with Python's `__post_init__` slot-target
+    /// re-check + the `obj is None` early return). On success:
+    ///   1. Apply +1/+1 counters (`obj.counters += amount`).
+    ///   2. For EACH keyword in `granted_keywords` (sorted for
+    ///      determinism), push a `UeotModifier::GrantKeyword { kw }`
+    ///      onto the bound creature so the layer-7 keyword reader
+    ///      surfaces it through end-of-turn cleanup. Mirrors
+    ///      Python's `ApplyEffect(inner=GrantKeywords(...),
+    ///      ends_at=EndOfTurn()).resolve(...)` invocation.
+    ///
+    /// **Sorted keyword emission.** Python's resolve walks
+    /// `self.granted_keywords` (a `frozenset[str]`) in iteration
+    /// order — which is insertion order for str sets on Python 3.7+
+    /// BUT `frozenset` is unordered. The Python serializer side and
+    /// the bridge sort the keywords for determinism, so Rust also
+    /// sorts on emit to keep the UeotModifier push order byte-equal
+    /// across the bridge boundary. Empty `granted_keywords` is a
+    /// legal no-op (pure counter pump).
+    ///
+    /// **Schema parity with Python.** Two-field carrier:
+    /// `amount: i32` (mirrors Python `int`, default 2 — the
+    /// Archenemy's Charm-printed value) and `granted_keywords:
+    /// Vec<String>` (mirrors Python `frozenset[str]` — emit
+    /// sorted-unique). Round-trip dict shape:
+    /// `{"kind": "put_plus_one_counters_and_grant_keywords_ueot_on_
+    /// target_creature_you_control", "amount": N, "granted_keywords":
+    /// [...]}`. Negative `amount` raises at parse time; non-string
+    /// keyword entries raise.
+    ///
+    /// **Subsystem entanglement.** Sibling of the two existing
+    /// substrate Effects this lane composes through Archenemy's
+    /// Charm's ModalChooseOne: `Effect::PutPlusOneCounterOnTarget
+    /// Creature` (the counters portion's bare-target variant — own-
+    /// control restriction is the documented departure) and
+    /// `Effect::GrantKeywordsToTargetCreatureUntilEOT` (the UEOT
+    /// keyword grant variant — own-control restriction is again the
+    /// documented departure). Both arms read the same payload-target
+    /// shape; this combined variant fuses them under a single
+    /// resolve-arm sequence with a single CR 608.2b re-validate.
+    PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl {
+        amount: i32,
+        granted_keywords: Vec<String>,
+    },
     /// **Boilerbilges Ripper Cycle 1 (2026-05-22).** Boilerbilges
     /// Ripper `{4}{R}` 4/4 Creature — Human Assassin (DSK). ETB
     /// trigger body: "When this creature enters, you may sacrifice
@@ -11720,6 +11787,56 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // consistency convention: dict carries only `kind`.
             Ok(Effect::ExileTargetCreature)
         }
+        "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control" => {
+            // **Archenemy's Charm Mode 2 substrate (2026-05-24).** Two-
+            // field carrier; mirrors Python's
+            // `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+            // YouControl(amount: int = 2, granted_keywords:
+            // frozenset[str] = frozenset())` shape from
+            // `effects/generic/counters.py:662`. `amount` defaults to
+            // 2 (the Archenemy's Charm-printed value); negative raises;
+            // `granted_keywords` defaults to empty; entries must be
+            // non-empty strings.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 2,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control: amount must be non-negative, got {amount}"
+                )));
+            }
+            let mut granted_keywords: Vec<String> = match dict.get_item("granted_keywords")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control.granted_keywords must be a list of strings (got: {e})"
+                    ))
+                })?,
+                None => Vec::new(),
+            };
+            for kw in &granted_keywords {
+                if kw.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control.granted_keywords entries must be non-empty strings",
+                    ));
+                }
+            }
+            // Sort + dedup so the Rust resolve arm pushes
+            // UeotModifier::GrantKeyword entries in a deterministic
+            // order that matches the Python serializer's emit order
+            // (both engines sort frozenset → list on the bridge
+            // boundary).
+            granted_keywords.sort();
+            granted_keywords.dedup();
+            Ok(Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl {
+                amount,
+                granted_keywords,
+            })
+        }
         // **Boilerbilges Ripper Cycle 1 (2026-05-22).** Unit-variant
         // parse arm — Python's `BoilerbilgesRipperETBEffect`
         // (`effects/bespoke.py:2738`) is a parameterless frozen
@@ -13609,7 +13726,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control"
         ))),
     }
 }
@@ -16195,6 +16312,28 @@ pub(crate) fn effect_to_pydict<'py>(
             // shape (no constructor args). Round-trip dict-shape
             // consistency: only `kind` emitted.
             d.set_item("kind", "exile_target_creature")?;
+        }
+        Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl {
+            amount,
+            granted_keywords,
+        } => {
+            // **Archenemy's Charm Mode 2 substrate (2026-05-24).**
+            // Two-field round-trip pair with the
+            // `put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control`
+            // parse arm. `amount` always emitted (no Python-side
+            // default elision); `granted_keywords` emitted as a
+            // sorted-list-of-strings (the Rust storage is already
+            // sorted-unique post-parse, so the emit order matches the
+            // parse-side input order on a round-trip — keeping the
+            // §2 byte-equal-or-bail teeth happy).
+            d.set_item(
+                "kind",
+                "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control",
+            )?;
+            d.set_item("amount", *amount)?;
+            let kw_list: Vec<&str> =
+                granted_keywords.iter().map(|s| s.as_str()).collect();
+            d.set_item("granted_keywords", kw_list)?;
         }
         Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
             d.set_item("kind", "exile_opponents_nonland_permanent_until_leaves")?;

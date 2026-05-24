@@ -2518,6 +2518,41 @@ impl GameState {
                         // `effects[0]` is `ChooseOneMode`, none of the
                         // ladder's `is_*` detectors match).
                         | Effect::CounterTargetSpell { .. }
+                        // **Archenemy's Charm flip (2026-05-24) — mode 0
+                        // `ExileTargetCreature` recognized targeted leaf.**
+                        // The resolve arm scans both bfs in
+                        // `bf_iter_etb_sorted` order for the first
+                        // Creature (no controller restriction); the
+                        // matching default-first-creature scan in the
+                        // non-modal ladder coincides with that picker
+                        // exactly when modal+mode-0 fires. Listing it
+                        // here so the `chosen_mode` peek correctly
+                        // identifies mode 0 as targeted and the match
+                        // arm below dispatches to a per-mode scan
+                        // mirroring the resolve arm.
+                        | Effect::ExileTargetCreature
+                        // **Archenemy's Charm flip (2026-05-24) — mode 1
+                        // `ReturnUpToNCreaturesFromYourGraveyardToHand`
+                        // recognized targeted leaf.** Like
+                        // `CounterTargetSpell`, this Effect's resolve
+                        // arm self-scans the source-controller's
+                        // graveyard at resolve time (no cast-time
+                        // payload-target seat); the cross-engine
+                        // harness's `_PickFirstLegalTargetAgent` picks
+                        // first-N legal in legal_targets order and
+                        // Rust mirrors that order. Listing it here so
+                        // the `chosen_mode` peek correctly identifies
+                        // mode 1 as targeted; the match arm below
+                        // returns `bound_target` (passthrough — the
+                        // resolve arm walks the graveyard itself).
+                        | Effect::ReturnUpToNCreaturesFromYourGraveyardToHand { .. }
+                        // **Archenemy's Charm flip (2026-05-24) — mode 2
+                        // `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`
+                        // recognized targeted leaf.** Own-side first-
+                        // creature scan; the resolve arm reads the
+                        // payload-target seat and applies counters +
+                        // UEOT keyword grants.
+                        | Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl { .. }
                 )
             }
             let chosen_mode: Option<crate::cards::Effect> = self
@@ -2779,6 +2814,89 @@ impl GameState {
                 // pre-resolve target id — both engines walk the stack
                 // at resolve time.
                 Some(crate::cards::Effect::CounterTargetSpell { .. }) => bound_target,
+                // **Archenemy's Charm flip (2026-05-24) — mode 0
+                // `ExileTargetCreature`.** First creature on EITHER bf
+                // in `bf_iter_etb_sorted` order. NO controller filter
+                // — Python's `ExileTargetCreature.legal_targets` walks
+                // any `IsCreature()`-passing object (`effects/generic/
+                // exile.py:717`). Filter mirrors the resolve arm at
+                // `state_ops_resolve.rs::ExileTargetCreature` exactly:
+                // any-side, any-creature. The cross-engine harness's
+                // `_PickFirstLegalTargetAgent` picks `pool[0]` and the
+                // resolve arm's payload-target re-validate accepts
+                // whichever side's creature comes first in
+                // `bf_iter_etb_sorted` order — both engines converge
+                // byte-equal.
+                Some(crate::cards::Effect::ExileTargetCreature) => {
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            let p = self.registry.lookup(o.printing_id)?;
+                            if p.card_types.iter().any(|t| t == "Creature") {
+                                Some(o.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                // **Archenemy's Charm flip (2026-05-24) — mode 1
+                // `ReturnUpToNCreaturesFromYourGraveyardToHand`.** The
+                // resolve arm self-scans the source-controller's
+                // graveyard in front-to-back order and returns up to
+                // `max_n` creature cards to hand (see the resolve arm
+                // at `state_ops_resolve.rs::ReturnUpToNCreaturesFrom
+                // YourGraveyardToHand`); no cast-time payload-target
+                // seat is required. Returning `bound_target`
+                // preserves whatever the non-modal ladder bound
+                // (which is `None` here because the ladder didn't
+                // fire — Archenemy's Charm's `effects[0]` is
+                // `ChooseOneMode`, none of the ladder's `is_*`
+                // detectors match). The §2 byte-equal-or-don't-admit
+                // invariant is preserved because Python's matching
+                // site (`actions._select_spell_targets` for a
+                // graveyard-source multi-target mode) likewise picks
+                // the same first-N legal targets from the graveyard
+                // at cast time and the cross-engine harness's
+                // `_PickFirstLegalTargetAgent` collapses to that
+                // first-N order. Sibling of the `CounterTargetSpell`
+                // passthrough; documented as a deliberate divergence
+                // in `docs/SEARCH_LIMITATIONS.md` "Multi-target Phase
+                // 4 resolve-time self-scan vs CR 601.2c cast-time
+                // binding".
+                Some(crate::cards::Effect::ReturnUpToNCreaturesFromYourGraveyardToHand { .. }) => {
+                    bound_target
+                }
+                // **Archenemy's Charm flip (2026-05-24) — mode 2
+                // `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`.**
+                // First Creature on the CASTER's own bf in
+                // `bf_iter_etb_sorted` order. Own-control restriction
+                // (`you_control_only=True` on the Python class). Filter
+                // mirrors the resolve arm at
+                // `state_ops_resolve.rs::PutPlusOneCountersAndGrant
+                // KeywordsUEOTOnTargetCreatureYouControl` and Python's
+                // `legal_targets` exactly: `IsCreature() &
+                // ControlledByYou()`. Effective-controller-aware to
+                // admit UEOT control-grant flips (the same shape
+                // `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`
+                // uses).
+                Some(
+                    crate::cards::Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl { .. }
+                ) => {
+                    let caster = player_id as u8;
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            if effective_controller_id(o) != caster {
+                                return None;
+                            }
+                            let p = self.registry.lookup(o.printing_id)?;
+                            if p.card_types.iter().any(|t| t == "Creature") {
+                                Some(o.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
                 // Any other chosen mode (or no recognized leaf): keep
                 // the default `bound_target` from the ladder above.
                 // The admit predicate keeps modal spells declined
