@@ -11988,6 +11988,40 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PeekTopMayBattlefieldIfLandElseHand,
         )
         return PeekTopMayBattlefieldIfLandElseHand()
+    if kind == "singularity_rupture_effect":
+        # **Singularity Rupture Cycle 1 (2026-05-24).** "Destroy all
+        # creatures, then any number of target players each mill half
+        # their library, rounded down." — Singularity Rupture's full
+        # single-sentence body. Rust's `Effect::SingularityRuptureEffect`
+        # (cards.rs) and Python's `SingularityRuptureEffect`
+        # (effects/bespoke.py:1600) are both parameterless frozen
+        # dataclasses; the round-trip dict shape is one key (`kind`)
+        # only.
+        #
+        # **Two-phase resolve.** Both engines:
+        #   1. Wrath phase — walk both battlefields in ETB-timestamp
+        #      order; for every non-indestructible Creature, send to
+        #      that controller's graveyard with CR 400.7 zone-change
+        #      reset (counters retained per R77-CFI1).
+        #   2. Mill phase — walk all living players in player-index
+        #      order; mill floor(library/2) cards each.
+        #
+        # **No `target_player_ids` plumbing required.** The cross-
+        # engine harness's `_PickFirstLegalTargetAgent` picks EVERY
+        # living player as a target at cast time (since the picker
+        # returns `pool[0]` non-None on every call until pool is
+        # exhausted, and the agent-decline branch only fires at
+        # `slot_idx >= min_t`); Python's
+        # `SingularityRuptureEffect.resolve` iterates the bound
+        # targets in pick order; Rust's resolve self-scans all
+        # living players in `state.players` iteration order — both
+        # converge to "mill every living player" byte-equal under
+        # the harness convention. Documented as a deliberate
+        # divergence in `docs/SEARCH_LIMITATIONS.md` "Multi-target
+        # Phase 4 resolve-time self-scan vs CR 601.2c cast-time
+        # binding".
+        from mtg_bot.effects.bespoke import SingularityRuptureEffect
+        return SingularityRuptureEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

@@ -4578,6 +4578,17 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         TerminalVelocityEffect,
         DealSelfMVDamageToEachCreature,
     )
+    # **Singularity Rupture Cycle 1 (2026-05-24).** Per-leaf serializer
+    # for `SingularityRuptureEffect()` — the field-free frozen
+    # dataclass for Singularity Rupture's full single-sentence body
+    # ("destroy all creatures, then any number of target players each
+    # mill half their library, rounded down"). Unit-variant sibling of
+    # `TerminalVelocityEffect` / `ZeroPointBalladEffect` — both are
+    # parameterless bespoke spell-effect classes whose dict-shape
+    # carries only `kind`.
+    from mtg_bot.effects.bespoke import (
+        SingularityRuptureEffect,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -5812,6 +5823,15 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "min_n": int(eff.min_n),
                 "max_n": int(eff.max_n),
             }
+        # **Singularity Rupture Cycle 1 (2026-05-24).** Field-free
+        # frozen dataclass — the round-trip dict carries only
+        # `kind`. Sibling of the `TerminalVelocityEffect` /
+        # `ZeroPointBalladEffect` unit-variant idiom. Rust variant
+        # `Effect::SingularityRuptureEffect` ships in the SAME lane
+        # (declaration + parse + to_pydict + resolve arms + bridge
+        # arm).
+        if isinstance(eff, SingularityRuptureEffect):
+            return {"kind": "singularity_rupture_effect"}
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child
