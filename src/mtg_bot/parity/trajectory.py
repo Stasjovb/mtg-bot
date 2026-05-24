@@ -4509,6 +4509,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     # for the X-cost token-copy + per-token end-step sac delayed
     # trigger. Imports kept narrow per the established convention.
     from mtg_bot.effects.generic.tokens import (
+        CreateToken,
         CreateXTokensOfTargetPermanentWithHasteEndStepSac,
     )
     from mtg_bot.effects.generic.delayed_actions import (
@@ -4590,7 +4591,37 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         SingularityRuptureEffect,
     )
 
-    def _leaf(eff) -> Optional[dict]:
+    def _leaf(eff, *, _in_modal_mode: bool = False) -> Optional[dict]:
+        """Per-leaf serializer recursion.
+
+        ``_in_modal_mode``: True iff this call is the direct child of a
+        ``ModalChooseOne`` composer (one of its ``modes``). Threaded
+        downward from the modal composer at the bottom of this
+        function. The flag is consulted ONLY by the
+        Warping-Wail-Cycle-4 ``CreateToken`` arm (which emits a
+        symbolic ``_token_card_def`` carrier that the
+        ``_seat_token_printings`` nested-mode walk extension resolves
+        post-frozen-union — and that walk ONLY recognizes the modal
+        position today). For every other position (top-level
+        spell_effect, nested inside a Sequence, nested inside an
+        IfYouDo / MayDo / OptionalSacAnotherForEffect / IfNot), the
+        seating pass does NOT walk in and the leaf would emit a
+        symbolic ref that survives past the loader and gets rejected
+        by Rust's parse_effect — so we bail (return None) when
+        ``_in_modal_mode`` is False to keep the round-trip-or-bail
+        teeth honest (the no-fallback-hybrid discipline).
+
+        Three EoE printings carry CreateToken in non-modal positions
+        and would AUTO-FLIP if this gate widened: Glimmerburst
+        (``Sequence(DrawCards, CreateToken(Glimmer))``), Midnight
+        Mayhem (top-level ``CreateToken(Gremlin, count=3)``), and
+        Sami's Curiosity (``Sequence(GainLife, CreateToken(Lander))``).
+        Each needs its own substrate slice (the ``_seat_token_printings``
+        walk extended to the position + the matching pin updates +
+        cross-engine probe). The narrow Cycle-4 admit discipline keeps
+        them DECLINED until their own cycle ships — per the §2 honest-
+        stop convention this campaign has used throughout.
+        """
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
         # Creature is a unit variant (intrinsic filter — Rust's
         # parse arm takes NO fields, the bridge arm constructs the
@@ -5387,6 +5418,85 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             if ft:
                 out["filter_types"] = sorted(ft)
             return out
+        # **Warping Wail Cycle 4 (2026-05-24) — spell-side CreateToken
+        # leaf.** Per-leaf serializer for ``CreateToken(token_printing,
+        # count, tapped, ...)`` when nested inside a ``ModalChooseOne``
+        # (Warping Wail mode 3 mints a 1/1 colorless Eldrazi Scion
+        # token; the C3 substrate added the bridge-correct token-AA
+        # CardDef helper :func:`_token_creature_with_safe_mana_activated_
+        # ability_card_def`). Sibling of the trigger-side
+        # ``CreateToken`` arm in :func:`_python_ta_to_safe_dict` (line
+        # 3699): same §2 token-shape disqualifier gates (each_player /
+        # attacking / schedule_end_of_combat_sacrifice rejected; only
+        # ``tapped=True`` rider is supported on top of the bare shape),
+        # same symbolic ``_token_card_def`` carrier (numeric
+        # ``token_printing_id`` is seated by
+        # :func:`_seat_token_printings` AFTER the union ``card_defs``
+        # tuple is frozen). The single difference vs the trigger-side
+        # arm is that THIS one ALSO tries the C3-shipped
+        # :func:`_token_creature_with_safe_mana_activated_ability_card_def`
+        # helper (the Eldrazi Scion shape) so Warping Wail mode 3 can
+        # round-trip; that helper is intentionally NOT consulted from
+        # the trigger-side path (no current EoE triggered ability mints
+        # an Eldrazi-Scion-shape token — the §2 narrow-admit
+        # discipline).
+        #
+        # **The seating pass (:func:`_seat_token_printings`) is extended
+        # in this cycle to walk INTO ``choose_one_mode.modes`` for
+        # symbolic ``_token_card_def`` carriers (previously walked only
+        # the top-level ``spell_effect`` dict via
+        # :data:`_SPELL_TOKEN_PID_KINDS`); without that walk, the
+        # symbolic ref would survive into ``build_rust_state`` and the
+        # Rust parser would reject the dict.**
+        if isinstance(eff, CreateToken):
+            # **Narrow ``_in_modal_mode`` gate.** The
+            # ``_seat_token_printings`` nested-walk extension shipping
+            # in this cycle handles ONLY the
+            # ``choose_one_mode.modes[i] == create_token / create_token_
+            # tapped`` position. Bail in every other position (top-level
+            # spell_effect, nested in Sequence / IfYouDo / MayDo / IfNot
+            # / OptionalSacAnotherForEffect) — the symbolic ref would
+            # survive past the loader and Rust's parse_effect would
+            # reject the dict. Honest-stop: Glimmerburst /
+            # Midnight Mayhem / Sami's Curiosity (the three EoE
+            # printings whose CreateToken sits in a non-modal position)
+            # stay DECLINED until each gets its own substrate slice +
+            # _seat_token_printings walk extension + pin updates. The
+            # §2 narrow-admit-per-cycle discipline.
+            if not _in_modal_mode:
+                return None
+            if eff.each_player or eff.attacking:
+                return None
+            if getattr(eff, "schedule_end_of_combat_sacrifice", False):
+                return None
+            tp = eff.token_printing
+            # Try all three token-shape helpers in the published §2-
+            # narrow-admit order (each helper admits ONE shape only —
+            # see the helpers' docstrings for the disjoint positive
+            # gates):
+            #   * vanilla creature, no AAs (Robot, etc.)
+            #   * Lander shape (non-creature artifact + safe AA)
+            #   * Eldrazi Scion shape (creature + sac-self mana AA)
+            token_cd = _token_vanilla_card_def(tp)
+            if token_cd is None:
+                token_cd = _token_with_safe_activated_ability_card_def(tp)
+            if token_cd is None:
+                token_cd = (
+                    _token_creature_with_safe_mana_activated_ability_card_def(tp)
+                )
+            if token_cd is None:
+                return None
+            eff_kind = "create_token_tapped" if eff.tapped else "create_token"
+            return {
+                "kind": eff_kind,
+                "count": int(eff.count),
+                # Symbolic token reference — replaced with a numeric
+                # ``token_printing_id`` by :func:`_seat_token_printings`
+                # (which now walks INTO ``choose_one_mode.modes`` too —
+                # the spell-axis nested-token-seating extension shipping
+                # in this cycle).
+                "_token_card_def": token_cd,
+            }
         # **Reroute Systems closure (2026-05-21).** ModalChooseOne
         # envelope **Cycle 6** per-leaf serializer for Reroute Systems
         # mode 0: ``PumpTargetArtifactOrCreatureUntilEOT``. The Rust
@@ -5903,7 +6013,16 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     if isinstance(spell_effect, ModalChooseOne):
         mode_dicts: list[dict] = []
         for mode in spell_effect.modes:
-            md = _leaf(mode)
+            # **Warping Wail Cycle 4 (2026-05-24).** Pass
+            # ``_in_modal_mode=True`` so the narrow Cycle-4 CreateToken
+            # admit-gate fires positively for a CreateToken nested as
+            # a mode of this composer. Every other ``_leaf`` call site
+            # (Sequence, IfYouDo, MayDo, top-level) leaves the flag at
+            # its False default — keeping the Glimmerburst /
+            # Midnight Mayhem / Sami's Curiosity §2 honest-stops in
+            # place (the ``_seat_token_printings`` walk extension
+            # only handles the modal-mode position today).
+            md = _leaf(mode, _in_modal_mode=True)
             if md is None:
                 return None
             mode_dicts.append(md)
@@ -9173,14 +9292,57 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
             return None
         return se.get("_token_card_def")
 
+    def _carrier_choose_one_mode_token_refs(cd: CardDef):
+        """**Warping Wail Cycle 4 (2026-05-24) — nested-token-seating
+        spell-axis extension.** Yield ``(mode_idx, token_card_def)`` for
+        each ``create_token`` / ``create_token_tapped`` mode inside the
+        CardDef's top-level ``choose_one_mode`` ``spell_effect`` that
+        still carries a symbolic ``_token_card_def``.
+
+        Sibling of :func:`_carrier_token_refs` (triggered-ability axis)
+        and :func:`_carrier_spell_token_ref` (top-level spell-effect
+        axis). The three together carry the full token-seating surface:
+        a Lander on a trigger / a Lander on a top-level spell / an
+        Eldrazi-Scion-shape token nested inside a modal spell's mode —
+        each routes through the same pid-by-name dedup + bridge-map
+        register pass below, sharing ONE token pid even if it appears
+        across multiple carriers in the same game.
+
+        Returns an empty iterator when:
+
+          * the CardDef has no top-level ``spell_effect`` dict, or
+          * the top-level kind is not ``"choose_one_mode"``, or
+          * none of the modes is a token-mint kind with a still-
+            symbolic ``_token_card_def`` carrier.
+        """
+        se = cd.spell_effect
+        if not isinstance(se, dict):
+            return
+        if se.get("kind") != "choose_one_mode":
+            return
+        modes = se.get("modes")
+        if not isinstance(modes, list):
+            return
+        for i, mode in enumerate(modes):
+            if not isinstance(mode, dict):
+                continue
+            if mode.get("kind") not in _TOKEN_CREATE_KINDS:
+                continue
+            tcd = mode.get("_token_card_def")
+            if tcd is not None:
+                yield i, tcd
+
     # Fast path: no create_token carrier AND no Lander-pid spell
-    # carrier -> return the list untouched (every pre-round-49
-    # production deck; every pre-round-73 spell deck). Avoids the
+    # carrier AND no choose_one_mode-nested token carrier (the
+    # Warping Wail Cycle 4 spell-axis extension) -> return the list
+    # untouched (every pre-round-49 production deck; every pre-round-73
+    # spell deck; every pre-Cycle-4 modal-spell deck). Avoids the
     # dataclasses / cross_engine import cost on the hot loader path
     # when there's nothing to seat.
     has_token_carrier = any(
         any(True for _ in _carrier_token_refs(cd))
         or _carrier_spell_token_ref(cd) is not None
+        or any(True for _ in _carrier_choose_one_mode_token_refs(cd))
         for cd in card_defs
     )
     if not has_token_carrier:
@@ -9193,7 +9355,10 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     # namespace (a Lander is a Lander whichever axis spawns it — same
     # name, same CardDef, ONE pid), so a deck that has BOTH a
     # triggered Lander carrier and a Lander spell shares a single
-    # Lander pid.
+    # Lander pid. The Cycle 4 nested-mode walk uses the same
+    # namespace — an Eldrazi Scion nested inside Warping Wail's mode 2
+    # would share its pid with a (hypothetical) Eldrazi Scion top-
+    # level carrier in the same deck.
     token_cd_by_name: dict[str, CardDef] = {}
     for cd in card_defs:
         for _idx, tcd in _carrier_token_refs(cd):
@@ -9201,6 +9366,8 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         stcd = _carrier_spell_token_ref(cd)
         if stcd is not None:
             token_cd_by_name.setdefault(stcd.name, stcd)
+        for _idx, tcd in _carrier_choose_one_mode_token_refs(cd):
+            token_cd_by_name.setdefault(tcd.name, tcd)
 
     # Carriers occupy pids [0, len(card_defs)); tokens get the pids
     # immediately after, in token_cd_by_name insertion order. A token
@@ -9232,13 +9399,15 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         register_token_printing(pid, py_printing)
 
     # Rewrite every carrier's symbolic create_token triggers AND/OR
-    # symbolic Lander-pid spell_effect into the numeric
-    # token_printing_id shape. CardDef is frozen -> replace.
+    # symbolic Lander-pid spell_effect AND/OR nested-mode create_token
+    # spell_effect into the numeric token_printing_id shape. CardDef
+    # is frozen -> replace.
     rewritten: list[CardDef] = []
     for cd in result:
         refs = list(_carrier_token_refs(cd))
         stcd = _carrier_spell_token_ref(cd)
-        if not refs and stcd is None:
+        nested_refs = list(_carrier_choose_one_mode_token_refs(cd))
+        if not refs and stcd is None and not nested_refs:
             rewritten.append(cd)
             continue
         replace_kwargs: dict = {}
@@ -9279,6 +9448,37 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
                 if k != "_token_card_def"
             }
             new_se["token_printing_id"] = token_pid_by_name[stcd.name]
+            replace_kwargs["spell_effect"] = new_se
+        if nested_refs and "spell_effect" not in replace_kwargs:
+            # **Warping Wail Cycle 4 (2026-05-24) — nested-mode rewrite.**
+            # Copy the top-level ``choose_one_mode`` dict; rewrite each
+            # nested ``create_token`` / ``create_token_tapped`` mode by
+            # dropping the symbolic ``_token_card_def`` and adding the
+            # numeric ``token_printing_id`` (preserving ``kind`` +
+            # ``count`` — same field set the Rust parser's
+            # ``create_token`` / ``create_token_tapped`` arms require).
+            # Mutual-exclusion contract: a top-level Lander-pid kind
+            # (``stcd is not None``) and a top-level
+            # ``choose_one_mode`` are disjoint (the kind string is
+            # different); if the spell_effect was already rewritten
+            # via the ``stcd`` branch, this block is a no-op (the
+            # ``"spell_effect" not in replace_kwargs`` guard above
+            # makes that explicit). The nested walk is bypassed in
+            # that case because Lander-pid top-level kinds are not
+            # ``choose_one_mode``.
+            old_se = cd.spell_effect
+            new_modes = list(old_se["modes"])
+            for mode_idx, tcd in nested_refs:
+                old_mode = new_modes[mode_idx]
+                new_mode = {
+                    k: v
+                    for k, v in old_mode.items()
+                    if k != "_token_card_def"
+                }
+                new_mode["token_printing_id"] = token_pid_by_name[tcd.name]
+                new_modes[mode_idx] = new_mode
+            new_se = dict(old_se)
+            new_se["modes"] = new_modes
             replace_kwargs["spell_effect"] = new_se
         rewritten.append(dataclasses.replace(cd, **replace_kwargs))
     return rewritten
