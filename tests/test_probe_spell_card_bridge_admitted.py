@@ -283,6 +283,27 @@ pytestmark = pytest.mark.skipif(
 # admit set at branch-base via a different path.) Warping Wail
 # itself stays DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-
 # gate widen).
+# **warping-wail-cycle-4-flip-p1 (2026-05-24):** Closes the Warping
+# Wail subsystem. Cycle 4 adds (a) the per-leaf ``CreateToken`` arm
+# to ``_python_spell_effect_to_dict``'s ``_leaf`` table (consults the
+# C3-shipped Eldrazi-Scion-shape token helper +
+# ``_token_with_safe_activated_ability_card_def`` + ``_token_vanilla_
+# card_def`` — all three §2-narrow-admit shapes); (b) the
+# ``_seat_token_printings`` nested-mode walk extension
+# (``_carrier_choose_one_mode_token_refs`` resolves a symbolic
+# ``_token_card_def`` carrier nested inside a ``choose_one_mode``
+# spell_effect — the spell-axis sibling of the round-73 top-level
+# Lander-pid + the round-49 trigger-axis token-seating); (c) per-mode
+# cast-time binders in ``state_ops_cast.rs::is_recognized_targeted_
+# mode_leaf`` for ``ExileTargetCreatureWithPowerOrToughnessAtMost``
+# (mode 0 — P-or-T-≤-N counters-inclusive scan) and
+# ``CounterTargetSpell`` (mode 1 — passthrough, the resolve arm walks
+# the stack itself). Warping Wail AUTO-JOINS via the §2 auto-grow
+# teeth: all three modes are covered+bridged + round-trip clean +
+# the (0, 1) target-grammar gate already accepted the shape (the
+# Phase-5 ``or_both`` predicate matches the SHAPE — it doesn't gate
+# on ``or_both==True``). PROBED tier — pool delta +1.
+# Admit set 39 → 40.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Annul",
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
@@ -303,6 +324,7 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Twist Reality",
     "Under the Skin", "Unravel",
     "Untimely Malfunction", "Vengeful Possession",
+    "Warping Wail",
     "Zero Point Ballad",
 ]
 # The two members this module's carrier-sweep probes drive directly

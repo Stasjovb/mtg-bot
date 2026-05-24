@@ -2374,6 +2374,36 @@ impl GameState {
                         | Effect::DealDamageToTargetTappedCreature { .. }
                         | Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl { .. }
                         | Effect::ReturnTargetArtifactCardFromYourGraveyardToHand
+                        // **Warping Wail Cycle 4 (2026-05-24) — mode 1
+                        // recognized targeted leaf.** The C1a substrate
+                        // shipped the cast-time scan at the non-modal
+                        // ladder (the `is_exile_creature_with_pt_at_most`
+                        // detector at line 1973); the per-mode dispatch
+                        // ALSO needs to recognize this leaf so a Warping
+                        // Wail cast with mode 0 chosen binds the per-mode
+                        // P-or-T-≤-max scan (NOT the default-first-
+                        // creature scan) — the documented per-mode-
+                        // target-binding §2 §2 gate at the Cycle 5
+                        // detector-table comment above.
+                        | Effect::ExileTargetCreatureWithPowerOrToughnessAtMost { .. }
+                        // **Warping Wail Cycle 4 (2026-05-24) — mode 2
+                        // recognized targeted leaf.** `CounterTargetSpell`
+                        // walks the stack at resolve time (see
+                        // `state_ops_resolve.rs` `CounterTargetSpell` arm:
+                        // filter-types-aware top-down scan that picks
+                        // the topmost admissible stack item itself); the
+                        // cast-time binder doesn't need to seat a
+                        // payload-target id. Listing it here so the
+                        // `chosen_mode` peek correctly identifies mode 2
+                        // as "targeted" (the counter has a target — it's
+                        // just resolved at resolve-time, not cast-time).
+                        // The match-arm dispatch below returns
+                        // `bound_target` (the non-modal-ladder default,
+                        // which is `None` here because the non-modal
+                        // ladder didn't fire — Warping Wail's
+                        // `effects[0]` is `ChooseOneMode`, none of the
+                        // ladder's `is_*` detectors match).
+                        | Effect::CounterTargetSpell { .. }
                 )
             }
             let chosen_mode: Option<crate::cards::Effect> = self
@@ -2552,6 +2582,89 @@ impl GameState {
                             }
                         })
                 }
+                // **Warping Wail Cycle 4 (2026-05-24) — mode 1
+                // `ExileTargetCreatureWithPowerOrToughnessAtMost`.**
+                // First creature on EITHER bf in
+                // `bf_iter_etb_sorted` order whose effective power OR
+                // effective toughness is at most `max_value`. Filter
+                // mirrors the resolve arm at
+                // `state_ops_resolve.rs::ExileTargetCreatureWithPower
+                // OrToughnessAtMost` and Python's `legal_targets`
+                // exactly: `IsCreature() & (HasPowerAtMost(N) |
+                // HasToughnessAtMost(N))`. NO controller filter — the
+                // printed oracle "exile target creature with..." is
+                // ANY-side. Counters-inclusive — effective P/T folds
+                // in `o.counters` exactly as the resolve arm and
+                // Python's `effective_power` / `effective_toughness`
+                // do. Forward-looking: the C1a substrate shipped the
+                // sibling detector at the non-modal ladder (line 1973
+                // — `is_exile_creature_with_pt_at_most`) for a future
+                // top-level Effect consumer; THIS per-mode arm wires
+                // the same scan for the modal-mode-0 path (Warping
+                // Wail's only cycle-4 consumer of the leaf).
+                Some(crate::cards::Effect::ExileTargetCreatureWithPowerOrToughnessAtMost {
+                    max_value,
+                }) => {
+                    let max_v = *max_value;
+                    crate::bf_iter::bf_iter_etb_sorted(self)
+                        .into_iter()
+                        .find_map(|o| {
+                            let p = self.registry.lookup(o.printing_id)?;
+                            if !p.card_types.iter().any(|t| t == "Creature") {
+                                return None;
+                            }
+                            // Effective P/T (counters-inclusive). Mirrors
+                            // the resolve arm's inline-effective-PT
+                            // recipe at
+                            // `state_ops_resolve.rs::ExileTargetCreature
+                            // WithPowerOrToughnessAtMost`
+                            // (line 14915-14926): printed P/T fall back
+                            // to 0 when None (an unrelated artifact
+                            // would never get here — the creature gate
+                            // already passed — but the unwrap_or(0)
+                            // matches the resolve arm so the cast-time
+                            // bind and the resolve re-validate use the
+                            // same arithmetic). The UEOT base override
+                            // / power-bonus / toughness-bonus reads
+                            // mirror the resolve arm too.
+                            let printed_p = p.power.unwrap_or(0) as i32;
+                            let printed_t = p.toughness.unwrap_or(0) as i32;
+                            let (base_p, base_t) = o
+                                .ueot_base_pt_override()
+                                .map(|(p, t)| (p, t))
+                                .unwrap_or((printed_p, printed_t));
+                            let eff_p = base_p
+                                + o.counters
+                                + o.ueot_power_bonus();
+                            let eff_t = base_t
+                                + o.counters
+                                + o.ueot_toughness_bonus();
+                            if eff_p <= max_v || eff_t <= max_v {
+                                Some(o.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                // **Warping Wail Cycle 4 (2026-05-24) — mode 2
+                // `CounterTargetSpell { filter_types }`.** The resolve
+                // arm walks the stack itself top-to-bottom and applies
+                // the filter — see `state_ops_resolve.rs`
+                // `CounterTargetSpell` arm. The cast-time binder does
+                // NOT seat a payload-target id (StackItems don't
+                // identify other StackItems by id in the bound-target
+                // payload slot). Returning `bound_target` here
+                // preserves whatever the non-modal ladder bound (which
+                // for the Warping Wail spell path is `None` — the
+                // ladder's `is_*` detectors all miss because
+                // `effects[0]` is `ChooseOneMode`). The §2
+                // byte-equal-or-don't-admit invariant is preserved
+                // because Python's matching site
+                // (`actions._select_spell_targets` for a
+                // `CounterTargetSpell` mode) also doesn't bind a
+                // pre-resolve target id — both engines walk the stack
+                // at resolve time.
+                Some(crate::cards::Effect::CounterTargetSpell { .. }) => bound_target,
                 // Any other chosen mode (or no recognized leaf): keep
                 // the default `bound_target` from the ladder above.
                 // The admit predicate keeps modal spells declined

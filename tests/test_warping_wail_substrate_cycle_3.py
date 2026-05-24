@@ -669,20 +669,20 @@ def test_python_direct_sac_self_mana_activation_byte_equal():
 # ---------------------------------------------------------------------------
 
 
-def test_warping_wail_stays_declined_at_admit_gate_post_cycle_3():
-    """**Substrate-only invariant pin (this cycle).** Cycle 3 ships
-    ONLY the token-AA bridge widen + the synthetic probe.
-    ``_printing_is_bridge_simple_spell`` MUST still decline Warping
-    Wail — flipping it requires the Cycle 4 admit-gate widen for the
-    ``(0, 1)`` + ``or_both=False`` Phase-6 modal shape + the per-mode
-    binders. The pin mirrors the Cycle 1a equivalent at
-    ``test_warping_wail_substrate_cycle_1a.py:test_warping_wail_
-    stays_declined_at_admit_gate_post_cycle_1a``.
+def test_warping_wail_now_admits_at_admit_gate_post_cycle_4():
+    """**Substrate-only-pin FLIP (Warping Wail Cycle 4 closure,
+    2026-05-24).** This pin was the C3 substrate-only closure marker
+    (mirror of the C1a equivalent at
+    ``test_warping_wail_substrate_cycle_1a.py``). With Cycle 4
+    landing, both pins flip to "now admits" — the substrate surface
+    closes and Warping Wail joins the spell-card-bridge admit set.
 
-    If this pin fails — i.e. Warping Wail starts admitting on this
-    branch — the substrate-only invariant has been violated and the
-    cross-engine probe will run BEFORE the Cycle 4 admit-gate widen,
-    producing wrong byte-equal claims. Catch the drift here.
+    The C4 closure is described in detail at the sibling pin
+    ``test_warping_wail_substrate_cycle_1a.py::test_warping_wail_now_
+    admits_at_admit_gate_post_cycle_4``; this pin is the C3-side echo
+    that lets the C3 substrate-only file continue to gate the C3
+    helper's correctness while the campaign-wide §2 admit-gate
+    transition is reflected in the assertion direction.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -690,11 +690,11 @@ def test_warping_wail_stays_declined_at_admit_gate_post_cycle_3():
     real = get_active_source().get_printings().get("Warping Wail")
     if real is None:
         pytest.skip("Warping Wail absent from active CardSource")
-    assert not trajectory._printing_is_bridge_simple_spell(real), (
-        "Warping Wail MUST still be declined at the admit gate after "
-        "Cycle 3 substrate-only landing (the (0,1)+or_both=False "
-        "Phase-6 modal admit-gate widen + per-mode binders still gap; "
-        "see docs/SEARCH_LIMITATIONS.md 'Warping Wail Cycle 1a "
-        "substrate LANDED'). A flip here is a substrate-scope "
-        "violation."
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Warping Wail MUST admit at the spell-card-bridge admit gate "
+        "post-Cycle-4 closure (per-leaf CreateToken serializer + "
+        "_seat_token_printings nested-mode walk + per-mode cast-time "
+        "binders for modes 0 + 1). A DECLINE here is a Cycle-4 "
+        "regression — see docs/SEARCH_LIMITATIONS.md 'Warping Wail "
+        "Cycle 4 admit-gate flip' for the full closure rationale."
     )
