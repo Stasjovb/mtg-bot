@@ -12050,6 +12050,27 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # — Cycle 2 substrate scope alongside the admit-gate widen.
         from mtg_bot.effects.bespoke import CoordinatedClobberingEffect
         return CoordinatedClobberingEffect()
+    if kind == "put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control":
+        # **Archenemy's Charm Mode 2 substrate (2026-05-24).** Two-
+        # field carrier; mirrors Python's
+        # `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+        # Control` from `effects/generic/counters.py:662`. Rust
+        # storage stores `granted_keywords` as a sorted-unique
+        # Vec<String>; Python's class accepts a `frozenset[str]` and
+        # the cross-engine harness compares effect-equality via
+        # `__eq__` (dataclass eq) so a sort+set ingest is correct
+        # regardless of bridge ordering. `amount` is always emitted
+        # post-Cycle-1 (no Python-side default elision).
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl,
+        )
+        amount = int(eff_dict.get("amount", 2))
+        granted_raw = eff_dict.get("granted_keywords", [])
+        granted = frozenset(str(k) for k in granted_raw)
+        return PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl(
+            amount=amount,
+            granted_keywords=granted,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

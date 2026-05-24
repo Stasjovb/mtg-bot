@@ -20603,6 +20603,173 @@ fn apply_effect(
                 );
             }
         }
+        // **Archenemy's Charm Mode 2 substrate (2026-05-24).** Put N
+        // +1/+1 counters on target creature you control AND grant the
+        // listed keywords until end of turn. Mirrors Python's
+        // `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYou
+        // Control.resolve` at `effects/generic/counters.py:689-721`.
+        //
+        // **Payload-target read.** Reads the cast-time-bound target
+        // from `state.current_resolve_payload_target_id` (the proven
+        // `EquipToTargetCreatureYouControl` / `PutPlusOneCounterOn
+        // TargetCreature` payload-swap pattern). The per-mode binder
+        // at `state_ops_cast.rs::cast_spell_noncreature` (see the
+        // matching arm in the `chosen_mode` peek match) is what
+        // seats the deterministic-first own-controlled creature.
+        //
+        // **None-payload synthetic-test fallback.** If the payload
+        // wasn't seated (e.g. a unit test pushing the effect onto
+        // the stack without driving `cast_spell_noncreature`), fall
+        // back to a deterministic first-creature scan over the
+        // source-controller's own battlefield in bf-order. Mirrors
+        // the sibling per-mode arms' fallback shape (the cross-
+        // engine harness always seats via the per-mode binder, so
+        // this is defense-in-depth).
+        //
+        // **CR 608.2b resolve-time re-legality.** The seated /
+        // self-scanned target must still be on the source-
+        // controller's battlefield AND still be a Creature. Failure
+        // → silent fizzle, byte-equal with Python's `obj is None`
+        // early return + the slot-target re-check.
+        //
+        // **Two-arm resolve body.** Mirrors Python's
+        // `__add_plus_one_counters` + `ApplyEffect(inner=GrantKeywords
+        // (keywords=self.granted_keywords), ends_at=EndOfTurn())
+        // .resolve(...)` shape:
+        //   1. `obj.counters = obj.counters.saturating_add(amount)`
+        //      (CR 122.1c; mirrors Python `add_plus_one_counters`).
+        //   2. For EACH keyword in `granted_keywords` (Rust storage is
+        //      already sorted-unique post-parse), push a
+        //      `UeotModifier::GrantKeyword { keyword }` onto the bound
+        //      creature so the layer-7 reader surfaces it through EOT
+        //      cleanup. Order matches Python's
+        //      `GrantKeywords.resolve` which iterates the same
+        //      sorted-frozenset; the cross-engine bridge round-trips
+        //      a sorted-list-of-strings so both engines push in
+        //      lockstep.
+        //
+        // **`amount=0` is a legal no-op** (Python treats `add_plus_one
+        // _counters(state, obj, 0)` as a no-op; mirroring saves a
+        // useless mutation). Negative raises at parse time
+        // (defense-in-depth in the resolve arm too, in case a future
+        // direct-construction path skips the parse-arm contract).
+        Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl {
+            amount,
+            granted_keywords,
+        } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution (5-zone walk + stack
+            // fallback). Mirrors the sibling
+            // `GrantKeywordsToTargetCreatureUntilEOT` arm shape so the
+            // controller scan is identical.
+            let mut src_controller: Option<u8> = state
+                .current_resolve_source_controller;
+            if src_controller.is_none() {
+                'outer: for player in &state.players {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                        &player.exile,
+                    ] {
+                        if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                            src_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Resolve the target. Prefer the cast-time-bound payload
+            // (production path); fall back to self-scan for
+            // synthetic-test no-payload paths.
+            let target_id: Option<u32> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => {
+                    // CR 608.2b: re-validate the seated target is
+                    // still on the source-controller's bf AND still a
+                    // Creature.
+                    state.players[cidx]
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == payload_target)
+                        .and_then(|obj| {
+                            let printing =
+                                state.registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some(obj.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                None => {
+                    // Synthetic-state fallback: deterministic first
+                    // Creature on the source-controller's own bf in
+                    // bf-order. Mirrors the per-mode binder's scan
+                    // (own-side only — the `you control` qualifier).
+                    let registry = &state.registry;
+                    state.players[cidx]
+                        .battlefield
+                        .iter()
+                        .find_map(|obj| {
+                            let printing = registry.lookup(obj.printing_id)?;
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                Some(obj.id)
+                            } else {
+                                None
+                            }
+                        })
+                }
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible target → silent fizzle
+            };
+            // Apply the resolve body: counters + UEOT keyword grants.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    if *amount > 0 {
+                        obj.counters =
+                            obj.counters.saturating_add(*amount);
+                    }
+                    for kw in granted_keywords {
+                        obj.ueot_modifiers
+                            .push(UeotModifier::GrantKeyword {
+                                keyword: kw.clone(),
+                            });
+                    }
+                    break;
+                }
+            }
+        }
         // **Boilerbilges Ripper Cycle 1 (2026-05-22).** No-agent
         // decline path — byte-equal mirror of Python's
         // `BoilerbilgesRipperETBEffect.resolve` no-agent gate-3
