@@ -11995,6 +11995,80 @@ triad's finding), the absence of any X-value subsystem in
 `rust/src/state.rs`, the absence of any token-copy substrate in
 `rust/src/`.
 
+## Singularity Rupture Cycle 1 — admit set 39 → 40, ~5,046 17lands decks BLOCKED → PROBED (Lane `feature/singularity-rupture-probed-flip-p1`, 2026-05-24)
+
+**Closure landed.** Singularity Rupture (`{3}{U}{B}{B}` Sorcery,
+"Destroy all creatures, then any number of target players each mill
+half their library, rounded down.") is now PROBED.
+
+**Substrate**:
+- New unit Rust variant `Effect::SingularityRuptureEffect` in
+  `rust/src/cards.rs` (declaration + parse arm + to_pydict arm —
+  field-free round-trip dict-shape `{"kind":
+  "singularity_rupture_effect"}`, sibling of
+  `TerminalVelocityEffect` / `ZeroPointBalladEffect` /
+  `PeekTopMayBattlefieldIfLandElseHand` unit-variant idiom).
+- Rust resolve arm in `rust/src/state_ops_resolve.rs::apply_effect`
+  performs Python's full two-phase resolve: (1) wrath phase (mirror
+  of `Effect::DestroyAllCreatures` — bf_iter_etb_sorted walk,
+  CR 400.7 zone-change reset with R77-CFI1 counter retention, LTB
+  + token-cease queue plumbing); (2) mill phase (walk `state.players`
+  in player-index order, mill `floor(library_size / 2)` cards from
+  `library[0]` for each living player). No `target_player_ids`
+  plumbing required — see the **Resolve-time self-scan for player-
+  target multi-target** subsection below.
+- Cross-engine bridge arm `singularity_rupture_effect` in
+  `src/mtg_bot/parity/cross_engine.py` (before the
+  `PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE` sentinel),
+  reconstructing `SingularityRuptureEffect()`.
+- Python reverse-serializer leaf in
+  `src/mtg_bot/parity/trajectory.py::_python_spell_effect_to_dict::_leaf`
+  emitting the one-key round-trip dict.
+
+**Admit flip**: Phase 4's `_PHASE4_MULTI_GRAVEYARD_SHAPE` predicate
+admits Singularity Rupture under the `not slot_kinds` permissive
+disjunct since `max_t=8>1, min_t=0, slot_kinds=(), x_pips=0` — no
+admit-predicate widen needed. The Singularity Rupture closure was
+the second consumer of the `not slot_kinds` auto-grow path
+discovered by the 2026-05-24 Phase-4 permissiveness audit (the
+first being Pull Through the Weft via its uniform-kind branch).
+
+**Resolve-time self-scan for player-target multi-target**: the
+cross-engine harness's `_PickFirstLegalTargetAgent`
+(`tests/parity/_picker_shims.py:140`) picks `legal_targets[0]` non-
+None on every call; the multi-target dispatch in `actions.py:1300`
+exhausts the pool by repeatedly calling `choose_target` for each
+`slot_idx in range(max_t)`, removing the pick from the remaining
+pool. For Singularity Rupture's `(0, 8)` "any number of target
+players" shape, the agent picks EVERY living player as a target
+(since `slot_idx >= min_t == 0` allows the agent's None-return to
+break early — but the picker NEVER returns None for non-empty pools,
+so the loop exhausts to the player count). Python's
+`SingularityRuptureEffect.resolve` then walks the bound targets;
+Rust's self-scan of `state.players` in player-index order is byte-
+equal under this convention. **Inside the cross-engine harness this
+divergence is unobservable** — same shape as the Phase-4 sibling
+(see the next entry).
+
+**Pre-existing inventory error**: the 2026-05-23 honest-stops
+(`2199f172` / `d9d21881`) and the 2026-05-24 verify-first audit
+(`b9bfafb6`) estimated 3 substrate cycles + a `(0, 8)` admit-
+predicate widen. The Phase-4 permissiveness audit (`64080991`)
+re-walked the admit predicate and downgraded to 1 cycle (no
+admit-predicate widen needed; the existing `not slot_kinds`
+disjunct already admits). This lane lands the 1-cycle closure.
+
+**Per-card probe** at `tests/test_singularity_rupture_parity.py`
+(parser SoT, round-trip, admit-gate flip, covered-set membership,
+Rust unit pins for wrath + mill + indestructible + empty-library +
+no-op resolve, plus the genuine real-EoE cross-engine byte-equal
+probe `test_cross_engine_real_eoe_singularity_rupture_wrath_and_mill_parity`).
+
+**Sibling self-scan precedent**: see the next entry "Multi-target
+Phase 4 resolve-time self-scan vs CR 601.2c cast-time binding"
+(Scout for Survivors / Pull Through the Weft / Singularity Rupture
+all share the same deliberate divergence).
+
 ## Multi-target Phase 4 resolve-time self-scan vs CR 601.2c cast-time binding (Lane `feature/multi-target-admit-phase4`, 2026-05-21)
 
 **Scope of this lane**: widen the spell-card-bridge admit predicate

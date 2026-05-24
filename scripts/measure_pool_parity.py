@@ -901,6 +901,22 @@ PROBE_MODULES: tuple[Path, ...] = (
     # _n_nonland_permanents_parity`` function which binds the genuine
     # parsed "Pull Through the Weft" printing. PROBED 279 → 280.
     REPO_ROOT / "tests" / "test_pull_through_the_weft_parity.py",
+    # **Singularity Rupture Cycle 1 (2026-05-24):** Singularity Rupture
+    # ({3}{U}{B}{B} Sorcery) — full closure landing. The Rust
+    # ``Effect::SingularityRuptureEffect`` unit variant + bridge arm +
+    # reverse-serializer leaf land the resolve-time self-scan substrate
+    # (wrath phase + per-living-player floor(library/2) mill). The Phase
+    # 4 admit predicate AUTO-GROWS under the ``not slot_kinds``
+    # permissive disjunct the moment ``SingularityRuptureEffect``
+    # enters the covered+bridged set (no admit-predicate widen needed —
+    # the ``(0, 8)`` / empty-slot_kinds shape was already accepted).
+    # The dedicated probe module
+    # ``test_singularity_rupture_parity.py`` carries the canonical
+    # ``test_cross_engine_real_eoe_singularity_rupture_wrath_and_mill_
+    # parity`` function which binds the genuine parsed "Singularity
+    # Rupture" printing. Admit set 39 → 40 (admits ~5,046 17lands
+    # decks BLOCKED → PROBED).
+    REPO_ROOT / "tests" / "test_singularity_rupture_parity.py",
     # **PPP Pins 1+2+3 (10th Rust slice, ``41c57251``):** the
     # ``test_probe_ppp_downstream.py`` module carries three canonical
     # probes naming the ``_parity`` convention (Drix Fatemaker,

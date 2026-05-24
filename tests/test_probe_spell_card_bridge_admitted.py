@@ -298,7 +298,7 @@ _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Pyroclasm",
     "Radiant Strike", "Reroute Systems", "Ruinous Rampage",
     "Scour for Scrap", "Scout for Survivors", "Seedship Impact",
-    "Shattered Wings", "Systems Override",
+    "Shattered Wings", "Singularity Rupture", "Systems Override",
     "Terminal Velocity",
     "Twist Reality",
     "Under the Skin", "Unravel",
