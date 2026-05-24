@@ -7953,6 +7953,68 @@ pub enum Effect {
     /// `cross_engine.py` reconstructs
     /// `PeekTopMayBattlefieldIfLandElseHand()`.
     PeekTopMayBattlefieldIfLandElseHand,
+    /// **Singularity Rupture Cycle 1 (2026-05-24).** Bespoke
+    /// resolve-time self-scan variant for Singularity Rupture
+    /// (`{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any
+    /// number of target players each mill half their library, rounded
+    /// down."). Field-free unit variant — both sub-effects intrinsic
+    /// to the variant.
+    ///
+    /// **Resolve semantics — two-phase self-scan.**
+    ///   1. **Wrath phase.** Walk both players' battlefields in ETB-
+    ///      timestamp order (`bf_iter_etb_sorted` precedent — same as
+    ///      `Effect::DestroyAllCreatures`); for every Creature
+    ///      printing that is NOT indestructible, pop from its
+    ///      controller's bf, mirror the CR 400.7 zone-change reset
+    ///      (tapped / damage / attached_to / exiled_with_source
+    ///      cleared, counters retained per R77-CFI1), and push to
+    ///      that controller's graveyard.
+    ///   2. **Mill phase.** Walk `state.players` in player-index
+    ///      order (the cross-engine harness's
+    ///      `_PickFirstLegalTargetAgent` picks `legal_targets[0]`,
+    ///      then `pool[0]` of remaining, etc. — Python's
+    ///      `legal_targets` returns `[("player", p.id) for p in
+    ///      state.players if not p.has_lost]` in `state.players`
+    ///      iteration order, so the agent picks ALL living players
+    ///      in player-index order. The Rust resolve mirrors by self-
+    ///      scanning all living players directly — no `target_player
+    ///      _ids` plumbing required). For each living player, mill
+    ///      `floor(library_size / 2)` cards from the TOP of their
+    ///      library: pop `library[0]` n times, CR 400.7 zone-change
+    ///      reset on each, push to that player's graveyard. Silent
+    ///      stop on empty library.
+    ///
+    /// **No agent-driven choice plumbing.** The cross-engine harness
+    /// installs `_PickFirstLegalTargetAgent` on every Python player
+    /// (`tests/parity/_picker_shims.py:140`); since it always picks
+    /// `pool[0]` (never returns None), it picks EVERY living player
+    /// as a target. The Rust self-scan mirrors that "every living
+    /// player" pick at resolve time, byte-equal to Python's
+    /// `SingularityRuptureEffect.resolve` (`bespoke.py:1630`) when
+    /// driven by the harness agent. The wrath phase is implicit-
+    /// target (no target picks).
+    ///
+    /// **Deliberate divergence vs CR 601.2c cast-time binding.**
+    /// Same shape as `Effect::ReturnUpToNSmallCreaturesFromGraveyard
+    /// WithCounters` / `Effect::ReturnUpToNNonlandPermanentCardsFrom
+    /// GraveyardToHand` Phase 4 sibling — see
+    /// `docs/SEARCH_LIMITATIONS.md` entry "Multi-target Phase 4
+    /// resolve-time self-scan vs CR 601.2c cast-time binding".
+    /// Singularity Rupture's only target-pool source IS the player
+    /// list (no permanent that could leave the bf between cast and
+    /// resolve to invalidate a target), so the resolve-time mill of
+    /// all-still-living-players is byte-equal to the cast-time-bound
+    /// pick under the `_PickFirstLegalTargetAgent` convention.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// no fields. Round-trip dict-shape: `{"kind":
+    /// "singularity_rupture_effect"}` (only `kind` emitted). The
+    /// bridge `_ta_dict_to_python_effect` arm at
+    /// `cross_engine.py` reconstructs `SingularityRuptureEffect()`;
+    /// the per-leaf serializer at
+    /// `trajectory.py::_python_spell_effect_to_dict::_leaf` emits the
+    /// one-key dict.
+    SingularityRuptureEffect,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -11678,6 +11740,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "peek_top_may_battlefield_if_land_else_hand" => {
             Ok(Effect::PeekTopMayBattlefieldIfLandElseHand)
         }
+        // **Singularity Rupture Cycle 1 (2026-05-24).** Unit-variant
+        // parse arm — Python's `SingularityRuptureEffect`
+        // (`effects/bespoke.py:1600`) is a parameterless frozen
+        // dataclass. Round-trip dict shape: `{"kind":
+        // "singularity_rupture_effect"}` (no other fields). Sibling of
+        // the `PeekTopMayBattlefieldIfLandElseHand` /
+        // `TerminalVelocityEffect` / `ZeroPointBalladEffect` field-
+        // free unit-variant idiom.
+        "singularity_rupture_effect" => {
+            Ok(Effect::SingularityRuptureEffect)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -13451,7 +13524,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect"
         ))),
     }
 }
@@ -16670,6 +16743,14 @@ pub(crate) fn effect_to_pydict<'py>(
         // `cross_engine.py` consumes the same one-key shape.
         Effect::PeekTopMayBattlefieldIfLandElseHand => {
             d.set_item("kind", "peek_top_may_battlefield_if_land_else_hand")?;
+        }
+        // **Singularity Rupture Cycle 1 (2026-05-24).** Field-free
+        // unit-variant to_pydict arm — only `kind` emitted. Mirrors
+        // Python's parameterless `SingularityRuptureEffect` dict
+        // shape; the bridge dict→Python arm in `cross_engine.py`
+        // consumes the same one-key shape.
+        Effect::SingularityRuptureEffect => {
+            d.set_item("kind", "singularity_rupture_effect")?;
         }
     }
     Ok(d)

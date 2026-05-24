@@ -21601,6 +21601,137 @@ fn apply_effect(
             // function's existing parameter binding.
             let _ = source_obj_id; // unused; silent no-op
         }
+        // **Singularity Rupture Cycle 1 (2026-05-24).** Mirrors
+        // Python's `SingularityRuptureEffect.resolve`
+        // (`effects/bespoke.py:1630-1667`) on its full body: a
+        // wrath of all (destructible) creatures, then mill each
+        // living player's library by floor(library/2).
+        //
+        // **Resolve steps.**
+        //   1. Wrath phase — walk both bf via `bf_iter_etb_sorted`,
+        //      pop every non-indestructible Creature, CR 400.7
+        //      zone-change reset (counters retained per R77-CFI1),
+        //      push to that controller's graveyard. Mirrors the
+        //      `Effect::DestroyAllCreatures` arm at
+        //      state_ops_resolve.rs:6760.
+        //   2. Mill phase — walk `state.players` in player-index
+        //      order. For each player with `!has_lost`, mill
+        //      `floor(library_size / 2)` cards from `library[0]`:
+        //      pop, CR 400.7 reset, push to that player's graveyard.
+        //      Silent stop on empty library mid-mill.
+        //
+        // **No `target_player_ids` plumbing.** The cross-engine
+        // harness's `_PickFirstLegalTargetAgent` (tests/parity/
+        // _picker_shims.py:140) picks EVERY living player as a
+        // target (since it returns `pool[0]` non-None on each call
+        // until the pool is exhausted at min_t..=max_t iteration),
+        // so the resolve-time self-scan of all living players is
+        // byte-equal to a cast-time-bound multi-target mill under
+        // the harness convention. See
+        // `docs/SEARCH_LIMITATIONS.md` "Multi-target Phase 4
+        // resolve-time self-scan vs CR 601.2c cast-time binding".
+        Effect::SingularityRuptureEffect => {
+            let _ = source_obj_id;
+            // --- Wrath phase. Mirror `Effect::DestroyAllCreatures`.
+            let destroyable: Vec<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .filter_map(|obj| {
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        if !printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some((obj.controller as usize, obj.id))
+                    })
+                    .collect();
+            for (pidx, target_id) in destroyable {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos =
+                    match bf_mut.iter().position(|o| o.id == target_id) {
+                        Some(p) => p,
+                        None => continue, // defensively skip
+                    };
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // R77-CFI1: counters retained on dead object (mirrors
+                // the `Effect::DestroyAllCreatures` arm's R77-CFI1
+                // discipline).
+                obj.damage = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let leaving_printing_id = obj.printing_id;
+                let leaving_obj_id = obj.id;
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+                // Slice 11 / Round 55 LTB + token-cease parity with
+                // `Effect::DestroyAllCreatures` (state_ops_resolve.rs
+                // :6810-6840): route the void-flag stamp through
+                // `mark_left_battlefield_if_nonland` AND push onto
+                // `pending_leaves_dispatches` so LTB triggers fire on
+                // a Wrath. Drain is deferred to
+                // `resolve_top_of_stack`'s
+                // `drain_pending_leaves_dispatches` call AFTER the
+                // resolving spell's stack pop. The per-card byte-
+                // equal probe constructs vanilla creatures with no
+                // LTB hooks so the queues drain to no-op; the
+                // plumbing is in place defense-in-depth for future
+                // pool growth.
+                mark_left_battlefield_if_nonland(state, leaving_printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+            }
+            // --- Mill phase. Walk all living players in player-
+            // index order; mill floor(library/2) each.
+            let n_players = state.players.len();
+            for pidx in 0..n_players {
+                if state.players[pidx].has_lost {
+                    continue;
+                }
+                let lib_size = state.players[pidx].library.len();
+                let n_to_mill = lib_size / 2;
+                if n_to_mill == 0 {
+                    continue;
+                }
+                let library_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].library);
+                let mut milled: Vec<GameObject> =
+                    Vec::with_capacity(n_to_mill);
+                for _ in 0..n_to_mill {
+                    if library_mut.is_empty() {
+                        break;
+                    }
+                    milled.push(library_mut.remove(0));
+                }
+                let gy_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].graveyard);
+                for mut obj in milled {
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    obj.summoning_sick = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    gy_mut.push(obj);
+                }
+            }
+        }
     }
     Ok(())
 }

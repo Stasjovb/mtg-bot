@@ -21533,7 +21533,15 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # (Warping Wail mode 2 is ALSO ``filter_types=frozenset(
     # {"Sorcery"})`` but the printing's other modes still gap, so
     # the card stays DECLINED until Cycle 3 + Cycle 4 close.)
-    # Admit set 33 → 39.
+    # Admit set 33 → 39 → 40 (Singularity Rupture closure
+    # 2026-05-24 — `Effect::SingularityRuptureEffect` Rust variant
+    # + bridge arm + reverse-serializer leaf lands the resolve-time
+    # self-scan substrate. Singularity Rupture auto-grows under the
+    # Phase 4 `not slot_kinds` permissive disjunct since the
+    # `(0, 8)` empty-slot_kinds shape fits the predicate and the
+    # `SingularityRuptureEffect` Python class now flips covered+
+    # bridged. Inserted alphabetically between Shattered Wings and
+    # Systems Override).
     assert admitted == [
         "Annul",
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
@@ -21548,23 +21556,24 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Pull Through the Weft",
         "Pyroclasm", "Radiant Strike", "Reroute Systems",
         "Ruinous Rampage", "Scour for Scrap", "Scout for Survivors",
-        "Seedship Impact", "Shattered Wings", "Systems Override",
+        "Seedship Impact", "Shattered Wings", "Singularity Rupture",
+        "Systems Override",
         "Terminal Velocity",
         "Twist Reality",
         "Under the Skin", "Unravel", "Untimely Malfunction",
         "Vengeful Possession", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 39 covered+bridged Tier-A spells: the 33 "
-        f"prior + 6 counterspells (Annul / Divert Disaster / "
-        f"Don't Make a Sound / Get Out / Twist Reality / Unravel) "
-        f"flipped by the Warping Wail Cycle 2 substrate "
-        f"(``CounterTargetSpell.filter_types`` Rust schema widening + "
-        f"bridge thread + reverse-serializer leaf via "
-        f"warping-wail-substrate-cycle-2). Warping Wail itself stays "
-        f"DECLINED until Cycle 3 (token-AA) + Cycle 4 (admit-gate "
-        f"widen) close. Auto-grows further as the remaining Tier-A "
-        f"and per-mode-target modal spells close)")
+        f"exactly the 40 covered+bridged Tier-A spells: the 39 prior "
+        f"(33 base + 6 counterspells from Warping Wail Cycle 2) + 1 "
+        f"new (Singularity Rupture, flipped by the Singularity "
+        f"Rupture Cycle 1 substrate — `Effect::SingularityRupture"
+        f"Effect` Rust variant + bridge arm + reverse-serializer "
+        f"leaf, auto-grow under the Phase 4 `not slot_kinds` "
+        f"permissive disjunct). Warping Wail itself stays DECLINED "
+        f"until Cycle 3 (token-AA) + Cycle 4 (admit-gate widen) "
+        f"close. Auto-grows further as the remaining Tier-A and "
+        f"per-mode-target modal spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
