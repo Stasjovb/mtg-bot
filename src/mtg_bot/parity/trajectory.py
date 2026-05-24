@@ -4590,6 +4590,21 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.bespoke import (
         SingularityRuptureEffect,
     )
+    # **Coordinated Clobbering Cycle 1 substrate (2026-05-24).**
+    # Per-leaf serializer for `CoordinatedClobberingEffect()` — the
+    # field-free frozen dataclass for Coordinated Clobbering's two-
+    # sentence body ("tap one or two target untapped creatures you
+    # control; they each deal damage equal to their power to target
+    # creature an opponent controls"). Unit-variant sibling of
+    # `SingularityRuptureEffect` / `TerminalVelocityEffect` — all
+    # three are parameterless bespoke spell-effect classes whose
+    # dict-shape carries only `kind`. Substrate-only — admit gate
+    # stays declined for the `(2, 3)` heterogeneous 3-slot grammar
+    # until Cycle 2 ships the Phase 6 admit arm; Cycle 1 wires the
+    # serializer leaf for round-trip closure.
+    from mtg_bot.effects.bespoke import (
+        CoordinatedClobberingEffect,
+    )
 
     def _leaf(eff, *, _in_modal_mode: bool = False) -> Optional[dict]:
         """Per-leaf serializer recursion.
@@ -5942,6 +5957,18 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # arm).
         if isinstance(eff, SingularityRuptureEffect):
             return {"kind": "singularity_rupture_effect"}
+        # **Coordinated Clobbering Cycle 1 substrate (2026-05-24).**
+        # Field-free frozen dataclass — the round-trip dict carries
+        # only `kind`. Sibling of the `SingularityRuptureEffect` /
+        # `TerminalVelocityEffect` unit-variant idiom. Rust variant
+        # `Effect::CoordinatedClobberingEffect` ships in the SAME
+        # lane (declaration + parse + to_pydict + resolve arms +
+        # bridge arm). Substrate-only — Coordinated Clobbering's
+        # `(2, 3)` heterogeneous 3-slot grammar stays declined at the
+        # admit gate this cycle; Cycle 2 ships the Phase 6 admit arm
+        # + 3-slot binder + admit-set pin bump.
+        if isinstance(eff, CoordinatedClobberingEffect):
+            return {"kind": "coordinated_clobbering_effect"}
         return None
 
     # Sequence composer (Radiant Strike): recurse into each child

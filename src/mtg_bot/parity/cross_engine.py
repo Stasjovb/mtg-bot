@@ -12022,6 +12022,34 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # binding".
         from mtg_bot.effects.bespoke import SingularityRuptureEffect
         return SingularityRuptureEffect()
+    if kind == "coordinated_clobbering_effect":
+        # **Coordinated Clobbering Cycle 1 substrate (2026-05-24).**
+        # Bridge dict→Python arm for the field-free unit-variant
+        # `CoordinatedClobberingEffect()`. Rust's
+        # `Effect::CoordinatedClobberingEffect` (cards.rs) and
+        # Python's `CoordinatedClobberingEffect`
+        # (effects/bespoke.py:2358) are both parameterless frozen
+        # dataclasses; round-trip dict shape is one key (`kind`).
+        #
+        # **Substrate-only — admit gate stays declined.** The
+        # spell-card-bridge admit predicate
+        # `_printing_is_bridge_simple_spell` does NOT admit
+        # Coordinated Clobbering's `(2, 3)` heterogeneous 3-slot
+        # grammar `("creature", "my_creature", "my_creature")` today
+        # (positively rejected at every Phase 1-5 disjunct — see
+        # `docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md`
+        # §1). Cycle 2 will ship the Phase 6 admit arm + cross-engine
+        # 3-slot binder + admit-set pin bump + per-card real-EoE
+        # probe.
+        #
+        # **Cycle 1 resolve scope.** The Rust resolve arm handles
+        # the 2-target invocation (1 opp + 1 my) via the existing
+        # `current_resolve_payload_target_id` + `target_id_2`
+        # payload slots. The 3-target invocation (1 opp + 2 my)
+        # requires a `target_id_3` field (or per-effect target tuple)
+        # — Cycle 2 substrate scope alongside the admit-gate widen.
+        from mtg_bot.effects.bespoke import CoordinatedClobberingEffect
+        return CoordinatedClobberingEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

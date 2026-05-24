@@ -21732,6 +21732,197 @@ fn apply_effect(
                 }
             }
         }
+        // **Coordinated Clobbering Cycle 1 substrate (2026-05-24).**
+        // Mirrors Python's `CoordinatedClobberingEffect.resolve`
+        // (`effects/bespoke.py:2438-2486`) restricted to the
+        // 2-target (1 opp + 1 my) invocation. The 3-target
+        // invocation (1 opp + 2 my) is Cycle 2 scope — today's
+        // payload-target plumbing carries 2 slots only
+        // (`current_resolve_payload_target_id` and
+        // `current_resolve_payload_target_id_2`); a `target_id_3`
+        // field (or a per-effect target tuple) is the Cycle 2
+        // substrate alongside the Phase 6 admit-predicate widen.
+        //
+        // **Substrate-only invariant.** The spell-card-bridge admit
+        // predicate `_printing_is_bridge_simple_spell` does NOT
+        // admit Coordinated Clobbering's `(2, 3)` heterogeneous
+        // 3-slot grammar today (positively rejected at every Phase
+        // 1-5 disjunct — see
+        // `docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md`
+        // §1). The cross-engine harness therefore never drives
+        // Coordinated Clobbering through this resolve arm in Cycle 1.
+        // The arm is wired so unit-tests can exercise it in isolation
+        // (synthetic-state pushes with target_id + target_id_2) and
+        // Cycle 2 can flip the admit gate without a follow-up Rust
+        // substrate cycle.
+        //
+        // **Resolve steps.**
+        //   1. Resolve the source controller (the 5-zone-walk +
+        //      stack-scan shape used by `Effect::DiplomaticRelations
+        //      Effect` `:8723`).
+        //   2. Read slot 0 (opp creature id) from
+        //      `current_resolve_payload_target_id`. Re-validate
+        //      (still on a bf AND still controlled by a non-caster
+        //      — Python `bespoke.py:2478`
+        //      `opp_obj.controller_id == controller_id` is the
+        //      fizzle condition).
+        //   3. Read slot 1 (my creature id) from
+        //      `current_resolve_payload_target_id_2`. Re-validate
+        //      (still on a bf AND still controlled by the caster —
+        //      Python `bespoke.py:2463` `obj.controller_id !=
+        //      controller_id` is the skip-this-attacker condition).
+        //   4. If slot 1 is legal, set `obj.tapped = true`
+        //      (idempotent on already-tapped — Python's
+        //      `obj.tapped = True` write).
+        //   5. If BOTH slots survived, deal slot-1's effective_power
+        //      (counters-inclusive) as damage to slot 0 via the
+        //      proven `obj.damage.saturating_add` shape (mirror of
+        //      `Effect::DiplomaticRelationsEffect`'s damage step
+        //      `:8889-8898`).
+        //
+        // **Effective_power computation.** Inline counters-inclusive
+        // recipe sibling of `Effect::DiplomaticRelationsEffect`
+        // `:8852-8868` — `printed_p + counters + ueot_power_bonus`,
+        // with `ueot_base_pt_override` overriding `printed_p` when
+        // present. Mirrors Python's `mtg_bot.game.effective_power`.
+        //
+        // **No indestructible guard.** Damage is applied via
+        // `obj.damage += amount`; SBA post-resolve handles lethal
+        // vs indestructible byte-equal with Python.
+        Effect::CoordinatedClobberingEffect => {
+            // Source-controller resolution (mirror of
+            // `Effect::DiplomaticRelationsEffect`'s 5-zone-walk +
+            // stack-scan shape at `:8723-8753`). This is the caster
+            // (= `controller_id` in Python's `resolve`).
+            let mut src_controller: Option<u8> = None;
+            'cc_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'cc_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Slot 1: the friendly attacker. Read from
+            // `target_id_2`. Re-validate (CR 608.2b).
+            let slot1_id = state.current_resolve_payload_target_id_2;
+            let mut my_pidx: Option<usize> = None;
+            if let Some(t1) = slot1_id {
+                'find_my: for (pidx, player) in
+                    state.players.iter().enumerate()
+                {
+                    if let Some(obj) = player
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == t1)
+                    {
+                        if obj.controller == controller {
+                            my_pidx = Some(pidx);
+                        }
+                        break 'find_my;
+                    }
+                }
+            }
+            // Tap slot 1 if legal — idempotent on `obj.tapped`
+            // (mirrors Python's `obj.tapped = True` at
+            // `bespoke.py:2465`).
+            if let (Some(my_pidx), Some(my_id)) = (my_pidx, slot1_id) {
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[my_pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == my_id {
+                        obj.tapped = true;
+                        break;
+                    }
+                }
+            }
+            // Damage component: requires BOTH slot 1 (my creature
+            // surviving) AND slot 0 (opp creature target on a bf
+            // and controlled by a non-caster). Python:
+            // `if opp_target is None or not my_objs: return` at
+            // `bespoke.py:2472`.
+            let (Some(my_pidx), Some(my_id)) = (my_pidx, slot1_id)
+            else {
+                return Ok(()); // no surviving friendly attacker
+            };
+            // Slot 0: the opp's creature taking damage.
+            let slot0_id = state.current_resolve_payload_target_id;
+            let mut opp_pidx: Option<usize> = None;
+            if let Some(t0) = slot0_id {
+                'find_opp: for (pidx, player) in
+                    state.players.iter().enumerate()
+                {
+                    if let Some(obj) = player
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == t0)
+                    {
+                        if obj.controller != controller {
+                            opp_pidx = Some(pidx);
+                        }
+                        break 'find_opp;
+                    }
+                }
+            }
+            let (Some(opp_pidx), Some(opp_id)) = (opp_pidx, slot0_id)
+            else {
+                return Ok(()); // opp target absent / fizzled
+            };
+            // Damage = slot-1 attacker's effective_power, counters-
+            // inclusive. Inline recipe sibling of
+            // `Effect::DiplomaticRelationsEffect` `:8852-8868`.
+            let amount: i32 = {
+                let o = state.players[my_pidx]
+                    .battlefield
+                    .iter()
+                    .find(|x| x.id == my_id)
+                    .expect("slot-1 id validated but not found");
+                let printing = state
+                    .registry
+                    .lookup(o.printing_id)
+                    .expect("slot-1 printing must resolve");
+                let printed_p = printing.power.unwrap_or(0) as i32;
+                let base_p = o
+                    .ueot_base_pt_override()
+                    .map(|(p, _)| p)
+                    .unwrap_or(printed_p);
+                base_p + o.counters + o.ueot_power_bonus()
+            };
+            let amount_i16 = amount
+                .clamp(i16::MIN as i32, i16::MAX as i32)
+                as i16;
+            let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[opp_pidx].battlefield,
+            );
+            for obj in bf_mut.iter_mut() {
+                if obj.id == opp_id {
+                    obj.damage =
+                        obj.damage.saturating_add(amount_i16);
+                    break;
+                }
+            }
+        }
     }
     Ok(())
 }
