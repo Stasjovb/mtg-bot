@@ -748,15 +748,19 @@ def test_rust_anthem_pt_fold_unconditional_phase1_anthem_zero_pt():
 # ---------------------------------------------------------------------------
 
 
-def test_memorial_team_leader_stays_declined_at_admit_gate():
-    """**LOAD-BEARING substrate-only invariant pin.** Memorial Team
-    Leader's live ``CardPrinting`` STAYS DECLINED at every admit
-    predicate disjunct after this cycle. The Phase-4 substrate is
-    wired but the admit-set widen is Cycle 2 work. If this pin fails,
-    MTL has started admitting WITHOUT the warp-cast lifecycle wiring
-    that Cycle 2 ships — the per-card real-EoE probe would then run
-    against an incomplete engine path and produce wrong byte-equal
-    claims. Catch the drift here.
+def test_memorial_team_leader_now_admits_at_admit_gate_post_cycle_2():
+    """**LOAD-BEARING Cycle 2 FLIP marker.** Memorial Team Leader's
+    live ``CardPrinting`` ADMITS post-Cycle-2 via the new Phase-4
+    ``_printing_is_bridge_static_anthem_pt_conditional_warp_creature``
+    disjunct. The Cycle 1 substrate invariant pin (this test's
+    predecessor — ``test_memorial_team_leader_stays_declined_at_admit_
+    gate``) has been INVERTED here: the same five Cycle 1 disjuncts
+    still REJECT (their gates haven't widened — the Phase-4 admit
+    rides its own dedicated arm, not a relaxation of any prior
+    predicate), and the new Cycle-2 arm POSITIVELY admits. If this
+    pin fails, MTL has started declining OR auto-grown OFF the
+    dedicated Phase-4 disjunct — both shapes are regressions Cycle 2
+    must not introduce. Catch the drift here.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -766,43 +770,68 @@ def test_memorial_team_leader_stays_declined_at_admit_gate():
     if mtl is None:
         pytest.skip("Memorial Team Leader absent from active CardSource")
 
-    # Phase 1 anthem-keyword predicate rejects MTL (P/T anthem; the
-    # predicate gates `if ability.power_bonus or ability.toughness_
-    # bonus: return False` — Cycle 1 doesn't touch this).
+    # The five Cycle-1 disjuncts STAY rejecting — the Phase-4 admit
+    # is a new dedicated arm, NOT a relaxation of any prior gate.
+
+    # Phase 1 anthem-keyword predicate STILL rejects MTL (P/T anthem
+    # carrier; the Phase-1 narrow predicate gates ``if ability.power_
+    # bonus or ability.toughness_bonus: return False`` AND requires
+    # ``condition is None`` — MTL has a layer-7 PowerToughnessBonus
+    # under DuringYourTurn so it's positively rejected here).
     assert trajectory._printing_is_bridge_simple_static_anthem_creature(
         mtl,
     ) is False
 
-    # Phase 3 SELF-scope conditional rejects MTL (anthem scope, not
-    # SELF).
+    # Phase 3 SELF-scope conditional still rejects MTL (anthem scope,
+    # not SELF).
     assert (
         trajectory._printing_is_bridge_simple_static_self_conditional_creature(
             mtl,
         ) is False
     )
 
-    # Phase 2 uncounterable predicate rejects MTL (no uncounterable
-    # flag).
+    # Phase 2 uncounterable predicate still rejects MTL (no
+    # uncounterable flag).
     assert (
         trajectory._printing_is_bridge_simple_uncounterable_creature(mtl)
         is False
     )
 
-    # Pure-warp creature predicate rejects MTL (has static_abilities).
+    # Pure-warp creature predicate still rejects MTL (has
+    # static_abilities — the pure-warp arm's positive ban is
+    # unchanged).
     assert trajectory._printing_is_bridge_pure_warp_creature(mtl) is False
 
-    # Plain simple-creature predicate rejects MTL (has both warp_cost
-    # AND static_abilities).
+    # Plain simple-creature predicate still rejects MTL (has both
+    # warp_cost AND static_abilities).
     assert trajectory._printing_is_bridge_simple_creature(mtl) is False
 
+    # **The Cycle 2 FLIP marker.** The new Phase-4 disjunct
+    # POSITIVELY admits MTL — the load-bearing closure for ~6,229
+    # 17lands decks.
+    assert (
+        trajectory._printing_is_bridge_static_anthem_pt_conditional_warp_creature(
+            mtl,
+        )
+        is True
+    ), (
+        "Cycle 2 FLIP marker: MTL must positively admit via the "
+        "Phase-4 conditional-P/T-anthem + warp disjunct."
+    )
 
-def test_memorial_team_leader_drops_at_loader_filter():
+
+def test_memorial_team_leader_admits_through_loader_filter_post_cycle_2():
     """The end-to-end loader filter
-    :func:`_filter_deck_to_bridge_supported` drops Memorial Team
-    Leader from a deck containing it — the ``not_bridged_sink`` echo
-    confirms the drop and the produced ``filtered_names`` omits MTL.
-    Substrate-only invariant: MTL stays at the
-    drop-at-bridge boundary post Cycle 1.
+    :func:`_filter_deck_to_bridge_supported` ADMITS Memorial Team
+    Leader from a deck containing it post-Cycle 2 — the
+    ``not_bridged_sink`` stays empty and the produced
+    ``filtered_names`` preserves every copy. The Cycle 1 invariant
+    pin (predecessor: ``test_memorial_team_leader_drops_at_loader_
+    filter``) has been INVERTED: MTL is now bridge-supported end-to-
+    end via the new Phase-4 disjunct, the bridge round-trip threads
+    the 6-tuple ``static_anthems`` shape Cycle 1 wired, and the
+    resulting CardDef carries ``has_warp=True`` + the Phase-4
+    ``static_anthems`` entry.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -812,11 +841,33 @@ def test_memorial_team_leader_drops_at_loader_filter():
         pytest.skip("Memorial Team Leader absent from active CardSource")
 
     not_bridged: list[str] = []
-    filtered, _card_defs = trajectory._filter_deck_to_bridge_supported(
+    filtered, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Memorial Team Leader"] * 4 + ["Forest"] * 36,
         src,
         not_bridged_sink=not_bridged,
     )
-    # 4x MTL drops; 36x Forest passes (basic land predicate).
-    assert filtered == ["Forest"] * 36
-    assert not_bridged == ["Memorial Team Leader"] * 4
+    # 4x MTL admit + 36x Forest admit; `not_bridged` empty.
+    assert filtered == ["Memorial Team Leader"] * 4 + ["Forest"] * 36
+    assert not_bridged == []
+    # Exactly two CardDefs (deduplicated by name) — MTL + Forest.
+    cd_by_name = {cd.name: cd for cd in card_defs}
+    assert set(cd_by_name) == {"Memorial Team Leader", "Forest"}
+    mtl_cd = cd_by_name["Memorial Team Leader"]
+    assert mtl_cd.card_type == "Creature"
+    assert mtl_cd.power == 4
+    assert mtl_cd.toughness == 3
+    assert mtl_cd.has_warp is True
+    # The 6-tuple Phase-4 ``static_anthems`` entry threaded byte-
+    # equal: scope=other_creatures_you_control, empty
+    # granted_keywords, power_bonus=1, toughness_bonus=0,
+    # condition_tag=during_your_turn, no args.
+    assert mtl_cd.static_anthems == (
+        (
+            "other_creatures_you_control",
+            (),
+            1,
+            0,
+            "during_your_turn",
+            (),
+        ),
+    )

@@ -8411,6 +8411,255 @@ def _printing_is_bridge_simple_static_self_conditional_creature(
     return True
 
 
+def _static_ability_is_phase4_anthem_pt_conditional(ability) -> bool:
+    """True iff ``ability`` is a Phase-4 bridge-admittable anthem static —
+    an ``[other_]creatures_you_control``-scope layer-7
+    ``PowerToughnessBonus`` gated by ``DuringYourTurn`` (today's only
+    recognized anthem-condition tag).
+
+    **Static / layered abilities substrate — Phase 4 (Memorial Team
+    Leader Cycle 2 flip, 2026-05-24; spec at Cycle 1 substrate commit
+    ``1d6f5cd3``).** Mirrors the shape ``parser/statics.py:_parse_
+    anthem_static_line`` emits for Memorial Team Leader's "During your
+    turn, other creatures you control get +1/+0." line. The §2 teeth:
+
+      * ``scope`` is ``creatures_you_control`` or
+        ``other_creatures_you_control`` — the only two anthem scopes
+        the Rust parser arm whitelists (matches the Phase-1 sibling
+        :func:`_static_ability_is_simple_anthem_keyword_grant` vocab).
+      * ``condition`` is a ``DuringYourTurn`` instance — today's only
+        recognized anthem-condition tag (the Cycle 1 dispatcher at
+        :func:`cross_engine._static_anthem_condition_from_tag` rejects
+        unknown tags; this gate keeps the predicate locked to the
+        same vocabulary so the admit set never widens past the Rust
+        dispatch table).
+      * ``continuous_effect`` is a layer-7
+        ``ContinuousModifier(PowerToughnessBonus(p, t))``. ``p`` and
+        ``t`` are not bounded here — the bridge round-trips arbitrary
+        signed ints — but the Rust reader-fold (``static_anthem_pt_
+        bonus_for`` in ``state_ops_combat.rs``) is the source of truth
+        for what gets applied, so admitting any (p, t) is bridge-safe.
+      * ``subject_filter`` on the modifier is ``None`` (Phase 4
+        doesn't carry typed-anthem subjects — Slivers-only etc. would
+        be a future slice).
+      * All non-anthem flags are at their defaults (no
+        ``granted_keywords``, no ``replacement_effect``, no
+        ``tier_threshold``, no ``room_half``, no
+        ``grants_no_max_hand_size``, no
+        ``grants_creature_spells_uncounterable``, no
+        ``power_bonus``/``toughness_bonus`` field — the bonus rides on
+        the ``ContinuousModifier`` payload, not the legacy field).
+
+    Mixed shapes (e.g. an anthem with BOTH a layer-7 P/T bonus AND a
+    layer-6 keyword grant) would parse to MULTIPLE StaticAbility
+    instances on the same printing — one per payload — sharing the
+    same scope + condition. The admit predicate calling this helper
+    accepts a printing whose every static_ability passes EITHER this
+    Phase-4 P/T-conditional helper OR (future slice) a sibling layer-6
+    keyword-conditional helper; for the Cycle 2 admit set the live
+    pool carries exactly one card (Memorial Team Leader) with exactly
+    one Phase-4 P/T-conditional StaticAbility, so the predicate
+    accepts the single-payload shape today.
+    """
+    from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.conditions import DuringYourTurn
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier,
+        PowerToughnessBonus,
+    )
+
+    if ability.scope not in (
+        StaticScope.CREATURES_YOU_CONTROL,
+        StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    ):
+        return False
+    if not isinstance(ability.condition, DuringYourTurn):
+        return False
+    if ability.replacement_effect is not None:
+        return False
+    if ability.power_bonus or ability.toughness_bonus:
+        # Legacy P/T slot must be empty — the bonus rides on the
+        # ContinuousModifier payload below.
+        return False
+    if ability.granted_keywords:
+        return False
+    if ability.tier_threshold:
+        return False
+    if ability.room_half is not None:
+        return False
+    if ability.grants_no_max_hand_size:
+        return False
+    if ability.grants_creature_spells_uncounterable:
+        return False
+    ce = ability.continuous_effect
+    if ce is None:
+        return False
+    if not isinstance(ce, ContinuousModifier):
+        return False
+    if ce.layer != 7:
+        return False
+    if not isinstance(ce.payload, PowerToughnessBonus):
+        return False
+    if getattr(ce, "subject_filter", None) is not None:
+        return False
+    return True
+
+
+def _printing_is_bridge_static_anthem_pt_conditional_warp_creature(
+    printing,
+) -> bool:
+    """True iff a CardPrinting is a Phase-4 bridge-supported
+    conditional-P/T-anthem warp creature.
+
+    **Static / layered abilities substrate — Phase 4 (Memorial Team
+    Leader Cycle 2 flip, 2026-05-24).** Closes the substrate for
+    Memorial Team Leader — the canonical EoE single-gated carrier
+    composing two previously-multi-gated subsystems: Phase-4
+    anthem-shape (layer-7 P/T under ``DuringYourTurn``,
+    other-creatures-you-control scope) AND ``warp_cost``. Cycle 1
+    substrate landed the Rust ``StaticAnthem`` P/T + condition_tag
+    extension + the ``during_your_turn`` dispatcher + the
+    ``static_anthem_pt_bonus_for`` reader fold + the 6-tuple bridge
+    round-trip; Cycle 2 (this slice) ships the admit-set widen and
+    the per-card real-EoE warp-cast-then-anthem lifecycle probe.
+
+    **Substrate carriers (all wired in Cycle 1).**
+
+    * Python's ``CardPrinting.static_abilities`` carries one
+      ``StaticAbility(scope=OTHER_CREATURES_YOU_CONTROL,
+      condition=DuringYourTurn(),
+      continuous_effect=ContinuousModifier(layer=7,
+      payload=PowerToughnessBonus(1, 0)))`` for MTL — the parser SoT
+      pinned by ``test_real_eoe_memorial_team_leader_static_ability_
+      shape``.
+    * Rust's ``CardPrinting`` carries the matching
+      ``StaticAnthem { scope, power_bonus, toughness_bonus,
+      condition_tag, condition_args, ... }`` slot consulted by the
+      ``battlefield_creature_power`` /
+      ``battlefield_creature_toughness`` reader folds via
+      ``static_anthem_pt_bonus_for`` after the Phase-3
+      ``static_self_bonus_pt_on`` fold.
+    * Bridge: ``_spec_card_to_printing_dict`` emits the 6-tuple
+      shape ``(scope, granted_keywords, power_bonus, toughness_bonus,
+      condition_tag, condition_args)``;
+      ``_card_def_to_python_printing`` rehydrates the Python
+      ``StaticAbility`` with the ``DuringYourTurn`` condition.
+
+    **Defensive §2 teeth.** Every creature-side filter from
+    :func:`_printing_is_bridge_simple_creature` applies UNCHANGED
+    EXCEPT:
+
+      * ``static_abilities`` ban is replaced with a positive
+        allowlist via :func:`_static_ability_is_phase4_anthem_pt_
+        conditional` (every static must pass the Phase-4 anthem-PT-
+        conditional shape).
+      * ``warp_cost`` REQUIRED (not banned) — Phase 4 admits the
+        composed warp+anthem shape that's the load-bearing MTL
+        signature; a future non-warp Phase-4 anthem carrier (if one
+        ever ships) would need its own sibling predicate.
+
+    Mirrors the sibling :func:`_printing_is_bridge_pure_warp_creature`
+    structure for the warp gates (life rider + graveyard-cast rider
+    must be at defaults — MTL carries neither; a future Timeline-
+    Culler-shape Phase-4 anthem would need a per-rider slice).
+    Triggered abilities are admitted ONLY if every one round-trips
+    through :func:`_python_ta_to_safe_dict` (the same safe-trigger
+    gate the pure-warp arm uses); MTL carries no triggers, so the
+    empty-tuple case is the only one exercised this slice.
+
+    **Live pool admit set.** Verified at this HEAD: the live pool
+    carries EXACTLY ONE creature passing this predicate — Memorial
+    Team Leader. The other four warp+static creatures (Exalted
+    Sunborn, Quantum Riddler, Starfield Vocalist, Drix Fatemaker) all
+    fail the helper's positive shape gate (each carries a
+    ``ReplacementEffect`` or layer-6 keyword grant under a non-
+    ``DuringYourTurn`` condition or a non-anthem scope). No silent
+    auto-grows — Cycle 2 is a single-card flip.
+
+    **Honest-stops.**
+
+    * Phase-4 P/T-anthem carriers WITHOUT warp_cost: no such card
+      ships in the live pool today; if one lands, a sibling non-warp
+      predicate or a parameterized variant is the natural follow-up.
+    * Phase-4 keyword-only anthems under ``DuringYourTurn`` (sibling
+      shape): no live carrier today; the same admit-set
+      bookkeeping pattern would extend the helper trivially when one
+      ships.
+    * Other anthem conditions (e.g. ``OnYourTurnWithThreshold``):
+      honest-stopped to whichever future slice ports them through
+      the Rust ``static_anthem_condition_matches`` dispatcher first.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.warp_cost is None:
+        return False
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    # Triggered abilities: only admit if every one round-trips through
+    # the safe-trigger gate (same shape the pure-warp arm uses). MTL
+    # carries no triggers — empty-tuple is the only case exercised this
+    # slice, but the gate is here so a future Phase-4 warp+anthem
+    # printing with a safe ETB trigger can be admitted on the same
+    # disjunct without a predicate widen.
+    if printing.triggered_abilities:
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
+    if printing.activated_abilities:
+        return False
+    # Static abilities — positive allowlist of the Phase-4 anthem-PT-
+    # conditional shape. Empty static_abilities falls back to the
+    # pure-warp arm (or simple-creature if no warp); this predicate
+    # specifically admits the WARP+ANTHEM composition.
+    if not printing.static_abilities:
+        return False
+    for ability in printing.static_abilities:
+        if not _static_ability_is_phase4_anthem_pt_conditional(ability):
+            return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    # Warp riders — life cost + graveyard-cast rider — must be at
+    # defaults. MTL is a hand-only warp creature with no extra life
+    # cost (verify-first pinned in the substrate test); a future
+    # Timeline-Culler-shape Phase-4 anthem carrier would need its own
+    # slice to admit those riders here.
+    if getattr(printing, "warp_additional_life_cost", 0):
+        return False
+    if getattr(printing, "warp_castable_from_graveyard", False):
+        return False
+    # Dynamic P/T formulas — gated to the round-78 admit set; no
+    # Phase-4 anthem carrier in the live pool is a CDA. Reject the
+    # rest defensively (same shape as the pure-warp arm).
+    dpt_formula = getattr(printing, "dynamic_pt_formula", None)
+    if dpt_formula is not None and dpt_formula != "harmonious_grovestrider":
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # hand_ability_grants honest-stop (same pattern as Tannuk's
+    # Phase-1 anthem predicate) — the bridge doesn't carry the field;
+    # MTL has none.
+    if getattr(printing, "hand_ability_grants", ()):
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+        _parse_mana_cost_string(printing.warp_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
@@ -8846,6 +9095,102 @@ def _printing_to_card_def(printing) -> CardDef:
             keywords=tuple(sorted(printing.keywords)),
             triggered_abilities=triggered_abilities,
             static_self_bonuses=static_self_bonuses,
+        )
+    if _printing_is_bridge_static_anthem_pt_conditional_warp_creature(
+        printing,
+    ):
+        # Static / layered abilities substrate — Phase 4 (Memorial
+        # Team Leader Cycle 2 flip, 2026-05-24). The conditional-P/T-
+        # anthem + warp arm threads BOTH the printing's anthem statics
+        # (via the new 6-tuple ``static_anthems`` bridge shape: scope +
+        # granted_keywords + power_bonus + toughness_bonus + condition_
+        # tag + condition_args) AND the warp_cost (via the existing
+        # ``has_warp`` / ``warp_cost_*`` CardDef slots from the Phase-1
+        # warp substrate) through to the CardDef. Sibling to today's
+        # Phase-3 ``static_self_bonuses`` arm + the Phase-1
+        # ``static_anthems`` (2-tuple) arm + the pure-warp arm — the
+        # 6-tuple bridge shape is the Cycle 1 substrate; this arm wires
+        # it through ``_printing_to_card_def`` for the Cycle 2 admit
+        # set. The arm sits ABOVE the plain ``_printing_is_bridge_
+        # simple_static_anthem_creature`` branch so a Phase-4 anthem
+        # carrier never falls through to the Phase-1 narrow arm (which
+        # would reject on the P/T-bonus gate; this branch admits +
+        # threads it).
+        from collections import defaultdict
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        wgen, wcol = _parse_mana_cost_string(printing.warp_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
+        # Coalesce per-scope-keyed entries: every static is the
+        # Phase-4 P/T-conditional shape (no keyword grants this slice;
+        # the predicate guarantees ``granted_keywords`` is empty and
+        # the ``ContinuousModifier`` payload is exclusively
+        # ``PowerToughnessBonus``). The 6-tuple entry shape carries the
+        # P/T bonus PLUS the condition tag/args; we materialize one
+        # entry per (scope, condition_tag, condition_args) triple,
+        # summing P/T contributions across multi-static fan-outs (today
+        # MTL is the sole carrier with exactly one StaticAbility, so
+        # the sum is just the single payload's bonus — but the
+        # coalesce shape is here for shape-symmetry with the Phase-3
+        # sibling fan-out collapser and to keep the round-trip honest
+        # for any future multi-static Phase-4 carrier).
+        per_entry: dict[
+            tuple[str, str, tuple[int, ...]], list[int]
+        ] = {}
+        for ability in printing.static_abilities:
+            # Condition is DuringYourTurn (predicate guarantees).
+            # Today's only Phase-4 condition tag — future slices add
+            # to the dispatcher table at
+            # ``cross_engine._static_anthem_condition_from_tag``.
+            cond_tag = "during_your_turn"
+            cond_args: tuple[int, ...] = ()
+            scope = ability.scope
+            payload = ability.continuous_effect.payload
+            key = (scope, cond_tag, cond_args)
+            if key not in per_entry:
+                per_entry[key] = [0, 0]
+            per_entry[key][0] += int(payload.power_bonus)
+            per_entry[key][1] += int(payload.toughness_bonus)
+        # Deterministic ordering: sort by scope (matches the Phase-1
+        # anthem arm above). The granted_keywords slot stays empty
+        # for the Phase-4 P/T-only shape; future P/T+keyword
+        # composite anthems would populate it from the layer-6
+        # GrantKeyword payload's keyword.
+        static_anthems: tuple[
+            tuple[
+                str, tuple[str, ...], int, int, str, tuple[int, ...],
+            ],
+            ...,
+        ] = tuple(
+            (
+                scope,
+                (),  # granted_keywords — empty for the Phase-4 P/T shape
+                per_entry[(scope, cond_tag, cond_args)][0],
+                per_entry[(scope, cond_tag, cond_args)][1],
+                cond_tag,
+                cond_args,
+            )
+            for (scope, cond_tag, cond_args) in sorted(per_entry.keys())
+        )
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
+            warp_cost_generic=wgen,
+            warp_cost_colored=wcol,
+            has_warp=True,
+            warp_life_cost=getattr(
+                printing, "warp_additional_life_cost", 0),
+            warp_from_graveyard=getattr(
+                printing, "warp_castable_from_graveyard", False),
+            static_anthems=static_anthems,
         )
     if _printing_is_bridge_simple_static_anthem_creature(printing):
         # Static / layered abilities substrate — Phase 1 first-
@@ -9896,6 +10241,26 @@ def _filter_deck_to_bridge_supported(
             # ``RemoveKeyword`` payload the Rust reader doesn't yet
             # fold).
             or _printing_is_bridge_simple_static_self_conditional_creature(
+                printing,
+            )
+            # Static / layered abilities substrate — Phase 4 (Memorial
+            # Team Leader Cycle 2 flip, 2026-05-24). The Phase-4
+            # conditional-P/T-anthem + warp creature arm: admits a
+            # creature whose every static_ability is the layer-7
+            # ``PowerToughnessBonus`` gated by ``DuringYourTurn`` under
+            # ``[other_]creatures_you_control`` scope AND which carries
+            # ``warp_cost``. Memorial Team Leader ({3}{R} 4/3 with warp
+            # {1}{R}; "During your turn, other creatures you control
+            # get +1/+0.") is the SOLE live-pool carrier — single-card
+            # FLIP, no silent auto-grows (verified pre-flip against
+            # the 5-creature warp+static set). Cycle 1 substrate
+            # (commit ``1d6f5cd3``) shipped the Rust ``StaticAnthem``
+            # P/T + condition_tag extension + the
+            # ``during_your_turn`` dispatcher + the
+            # ``static_anthem_pt_bonus_for`` reader fold + the 6-tuple
+            # bridge round-trip; Cycle 2 (this slice) wires the admit
+            # gate. ~6,229 17lands decks BLOCKED -> PROBED.
+            or _printing_is_bridge_static_anthem_pt_conditional_warp_creature(
                 printing,
             )
             # Static rule-text substrate — Deafening Silence Cycle 1

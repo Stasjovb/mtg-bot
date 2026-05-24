@@ -1119,6 +1119,27 @@ PROBE_MODULES: tuple[Path, ...] = (
     # accepts it). Registration alone flips Codecracker Hound
     # ``covered_by_construction`` → PROBED in the pool-parity metric.
     REPO_ROOT / "tests" / "test_codecracker_hound_parity.py",
+    # **memorial-team-leader-cycle-2-flip (2026-05-24):** Memorial
+    # Team Leader ({3}{R} 4/3 with warp {1}{R}; "During your turn,
+    # other creatures you control get +1/+0.") closes the Phase-4
+    # static-anthem-PT-conditional + warp composition. The C1
+    # substrate (commit ``1d6f5cd3``) wired the Rust ``StaticAnthem``
+    # P/T + ``during_your_turn`` dispatcher + the 6-tuple bridge
+    # shape; C2 (this lane) ships the
+    # ``_printing_is_bridge_static_anthem_pt_conditional_warp_creature``
+    # admit predicate + the matching
+    # ``_printing_to_card_def`` arm + the matching ``loader_admits``
+    # disjunct + the per-card real-EoE parity probe in
+    # ``tests/test_memorial_team_leader_parity.py``. The probe's
+    # canonical ``test_cross_engine_real_eoe_memorial_team_leader_
+    # anthem_byte_equal_parity`` function drives the genuine parsed
+    # printing through both engines byte-equal across the
+    # DuringYourTurn-gated anthem fold (active-player flip, cross-
+    # controller scope exclusion, source-self exclusion). ~6,229
+    # 17lands decks BLOCKED → PROBED; admit set delta +1 for the
+    # creature-side admit predicates (single-card single-cycle FLIP,
+    # no silent auto-grows).
+    REPO_ROOT / "tests" / "test_memorial_team_leader_parity.py",
     # NOT registered (deliberate, documented):
     #   * ``test_deafening_silence_parity.py`` — the
     #     ``test_cross_engine_real_eoe_deafening_silence_noncreature_
@@ -1583,7 +1604,7 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through. Mirrors all 11 disjuncts
+    EXACT gate the bench corpus runs through. Mirrors all 13 disjuncts
     of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
 
     1. ``_printing_is_bridge_basic_land``
@@ -1687,6 +1708,19 @@ def loader_admits(printing) -> bool:
                 printing,
             )
             or traj._printing_is_bridge_simple_static_self_conditional_creature(
+                printing,
+            )
+            # Static / layered abilities substrate — Phase 4 (Memorial
+            # Team Leader Cycle 2 flip, 2026-05-24). Mirrors the real
+            # loader's new admit arm in
+            # ``_filter_deck_to_bridge_supported``. Memorial Team Leader
+            # (~6,229 17lands decks) is the sole live-pool carrier;
+            # flips BLOCKED → PROBED via the Cycle 2 admit-set widen +
+            # the dedicated per-card real-EoE warp-cast-then-anthem
+            # lifecycle probe in
+            # ``tests/test_memorial_team_leader_parity.py``. No silent
+            # auto-grows — single-card single-cycle FLIP.
+            or traj._printing_is_bridge_static_anthem_pt_conditional_warp_creature(
                 printing,
             )
             # Static rule-text substrate — Deafening Silence Cycle 1
