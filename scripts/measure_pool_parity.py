@@ -1017,6 +1017,52 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``_leaf`` table was the only missing piece) flips Vengeful
     # Possession COVERED → PROBED.
     REPO_ROOT / "tests" / "test_vengeful_possession_parity.py",
+    # **post-flip-reclassification-scout-2026-05-24 (this sweep):**
+    # 12 dedicated probe modules each carry a canonical
+    # ``test_cross_engine_real_eoe_<...>_parity`` function with a live
+    # EoE ``get_active_source().get_printings().get("<Card>")`` binding,
+    # but were never registered in ``PROBE_MODULES`` when they landed,
+    # leaving each carrier silently classified COVERED rather than the
+    # stronger PROBED tier. Pure measurement-attribution gap — identical
+    # shape to the 2026-05-21 ``feature/loader-admits-attribution-sweep``
+    # precedent (5 missing disjuncts in the loader_admits helper → 9
+    # BLOCKED→PROBED flips). The probes are LIVE and PASSING at this
+    # HEAD; registration alone flips each card COVERED → PROBED in the
+    # metric (no engine changes, no new tests). The two NEW (2026-05-24)
+    # carriers (Coordinated Clobbering Cycle 2b + Warping Wail Cycle 4)
+    # were surfaced directly by today's flips; the other 10 are
+    # accumulated backlog from the 2026-05-22 / 2026-05-23 Effect-
+    # uncovered closure wave that shipped its probe modules without
+    # adding the registration line:
+    #
+    #   * ``test_arabella_abandoned_doll_parity.py`` — Arabella, Abandoned Doll
+    #   * ``test_boilerbilges_ripper_parity.py`` — Boilerbilges Ripper
+    #   * ``test_burgeoning_parity.py`` — Burgeoning
+    #   * ``test_comet_crawler_parity.py`` — Comet Crawler
+    #   * ``test_coordinated_clobbering_parity.py`` — Coordinated Clobbering (today)
+    #   * ``test_fanatic_of_the_harrowing_parity.py`` — Fanatic of the Harrowing
+    #   * ``test_osseous_sticktwister_parity.py`` — Osseous Sticktwister
+    #   * ``test_terminal_velocity_parity.py`` — Terminal Velocity
+    #   * ``test_terrapact_intimidator_parity.py`` — Terrapact Intimidator
+    #   * ``test_endstone_parity.py`` — The Endstone
+    #   * ``test_vaultguard_trooper_parity.py`` — Vaultguard Trooper
+    #   * ``test_warping_wail_cycle_4_cross_engine.py`` — Warping Wail (today)
+    #
+    # Net delta: PROBED 287 → 299 (+12); covered_by_construction
+    # 123 → 111 (-12); BLOCKED-subsystem-gated unchanged at 65; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_arabella_abandoned_doll_parity.py",
+    REPO_ROOT / "tests" / "test_boilerbilges_ripper_parity.py",
+    REPO_ROOT / "tests" / "test_burgeoning_parity.py",
+    REPO_ROOT / "tests" / "test_comet_crawler_parity.py",
+    REPO_ROOT / "tests" / "test_coordinated_clobbering_parity.py",
+    REPO_ROOT / "tests" / "test_fanatic_of_the_harrowing_parity.py",
+    REPO_ROOT / "tests" / "test_osseous_sticktwister_parity.py",
+    REPO_ROOT / "tests" / "test_terminal_velocity_parity.py",
+    REPO_ROOT / "tests" / "test_terrapact_intimidator_parity.py",
+    REPO_ROOT / "tests" / "test_endstone_parity.py",
+    REPO_ROOT / "tests" / "test_vaultguard_trooper_parity.py",
+    REPO_ROOT / "tests" / "test_warping_wail_cycle_4_cross_engine.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

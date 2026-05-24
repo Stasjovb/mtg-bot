@@ -253,6 +253,83 @@ load-bearing live claim and remains correct.
     pin updates + 3 cross-engine probes); `9c51412e` (SEARCH_
     LIMITATIONS Cycle 4 documentation).
 
+### Post-flip reclassification scout (2026-05-24,
+`feature/post-flip-reclassification-scout-2026-05-24-p1`)
+
+**Trigger:** today's flip cadence (Singularity Rupture admit 39 →
+40, Warping Wail Cycle 4 admit 40 → 41, Coordinated Clobbering
+Cycle 2b admit 41 → 42) re-walked the BLOCKED tier looking for
+free-PROBED candidates the bumps had silently enabled.
+
+**Audit method.** Three checks (mirroring the 2026-05-21
+`loader-admits-attribution-sweep` + `tannuk-frenzied-baloth-probes`
+playbook):
+
+  1. **`loader_admits` disjunct sync** — walked all disjuncts of the
+     canonical `trajectory._filter_deck_to_bridge_supported` admit
+     gate vs `scripts/measure_pool_parity.loader_admits`. **Result:
+     fully in sync** (13 disjuncts both sides; today's Phase-6 CC
+     3-slot + Phase-4 modal widens both fold into the existing
+     `_printing_is_bridge_simple_spell` shape, no new top-level
+     disjunct).
+  2. **Per-card admit walk on BLOCKED tier** — for each of the 65
+     BLOCKED-subsystem-gated cards, queried `loader_admits(printing)`
+     AND `_printing_is_bridge_simple_spell(printing)`. **Result: 0
+     BLOCKED cards return True for either.** The Phase-6 / Phase-4
+     widens stayed surgical — no silent admit-gate auto-grow beyond
+     the explicit per-card pins.
+  3. **PROBE_MODULES registration sweep** — scanned every
+     `tests/test_*.py` file for `def test_cross_engine_real_eoe_<...>
+     _parity` functions with a live `get_printings().get("<Card>")`
+     binding. **Result: 12 dedicated probe modules unregistered**,
+     each crediting a card currently classified COVERED. Same shape
+     as the 2026-05-21 loader-admits-attribution-sweep — a pure
+     measurement-attribution gap (the probes exist + pass; the
+     `PROBE_MODULES` tuple was never updated when they landed).
+
+**Closure shipped.** Registered all 12 unregistered probe modules in
+`PROBE_MODULES`. Each flipped its carrier COVERED → PROBED in the
+metric. Net delta: **PROBED 287 → 299 (+12)**, **covered_by_
+construction 123 → 111 (-12)**, BLOCKED-subsystem-gated unchanged at
+65, pool total 475 unchanged. The 12 carriers, with origin commit:
+
+  | Card | Probe module | Original closure |
+  |---|---|---|
+  | Coordinated Clobbering | `test_coordinated_clobbering_parity.py` | `ef9abb8d` (today, Cycle 2b) |
+  | Warping Wail | `test_warping_wail_cycle_4_cross_engine.py` | `8e47c1bf` (today, Cycle 4) |
+  | Arabella, Abandoned Doll | `test_arabella_abandoned_doll_parity.py` | `9c6b285c` (2026-05-23) |
+  | Boilerbilges Ripper | `test_boilerbilges_ripper_parity.py` | `3e7ded06` (2026-05-22) |
+  | Burgeoning | `test_burgeoning_parity.py` | `22801b36` (2026-05-23) |
+  | Comet Crawler | `test_comet_crawler_parity.py` | `95423db0` (2026-05-22) |
+  | Fanatic of the Harrowing | `test_fanatic_of_the_harrowing_parity.py` | `22fe18f0` (2026-05-23) |
+  | Osseous Sticktwister | `test_osseous_sticktwister_parity.py` | `3e9eb260` (2026-05-23) |
+  | Terminal Velocity | `test_terminal_velocity_parity.py` | `13ee8db5` (2026-05-22) |
+  | Terrapact Intimidator | `test_terrapact_intimidator_parity.py` | `d3e9de5e` (2026-05-23) |
+  | The Endstone | `test_endstone_parity.py` | `d39124bb` (2026-05-23) |
+  | Vaultguard Trooper | `test_vaultguard_trooper_parity.py` | `23ec7e5d` (2026-05-23) |
+
+**Engine surface change: NONE.** Zero edits to `rust/`, zero edits to
+`src/mtg_bot/parity/trajectory.py` or any production module. The
+sweep is pure metric-attribution: each probe was ALREADY landed +
+passing; only `scripts/measure_pool_parity.PROBE_MODULES` was stale.
+
+**Honest-stop bound.** No further free PROBED candidates surfaced
+by the registration sweep. The 13 remaining COVERED-but-loader-
+admitted non-land carriers (Bedhead Beastie, Cackling Slasher,
+Daggermaw Megalodon, Deafening Silence, Duskmourn's Domination,
+Fear of Being Hunted, Friendly Teddy, Magus of the Moon, Patched
+Plaything, Piranha Fly, Shepherding Spirits, Slavering
+Branchsnapper, Spectral Snatcher) each lack a dedicated `*_parity`
+probe entirely (not an unregistered probe; a genuinely-absent
+probe). The remaining COVERED-admitted land carriers (5 basic lands
++ Cathedral of War, the 10 Duskmourn painlands) are each
+land-substrate carriers without a per-card byte-equal probe; the
+land bridge runs auto-untap symmetric-drop. Each of these is the
+same shape as the 2026-05-21 tannuk-baloth lane — writing a
+real-EoE byte-equal probe per card — but is a real probe-authoring
+lane, not a free reclassification. Honest-stopped at the
+registration sweep.
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
