@@ -426,6 +426,117 @@ was the only one.
   * Precedent: `22a0457d` / `a9829787` (2026-05-24 — 12-card
     sweep this lane mirrors).
 
+### Probe-module predicate widen (2026-05-24,
+`feature/probe-module-predicate-widen-p1`)
+
+**Trigger:** the prior `feature/post-ac-flip-attribution-sweep-p1`
+section above surfaced — but deliberately did not close — a
+predicate-shape inconsistency in
+`scripts/measure_pool_parity._probe_module_probed_cards`: four
+per-card parity modules hoist the printings dict to module scope
+(`_PRINTINGS = get_active_source().get_printings()` at the top of
+the file) and call `_PRINTINGS.get("<Card>")` inside the canonical
+`test_cross_engine_real_eoe_<slug>_parity` function body. The
+predicate's bounded body-scan never sees the `get_printings()` call
+(it lives outside the function body), so the probes were silently
+undercounted. This lane closes that gap.
+
+**Implementation.** Widened `_probe_module_probed_cards` to ALSO
+AST-walk the module: pass 1 records every module-level `Assign`
+whose RHS is exactly `get_active_source().get_printings()` (or bare
+`get_printings()`) and whose target(s) are `Name` nodes — those are
+the printings-dict bindings; pass 2 walks each top-level
+`*_parity` function body and credits `<bound>.get("Card")` Call
+nodes + `<bound>["Card"]` Subscript nodes against the live pool.
+The original body-scoped regex scan stays unchanged — both detectors
+union into the same return set. The integrity guard test
+`test_probe_module_synthetic_nonprobe_is_not_counted` continues to
+pass because the widen recognizes ONLY the bare printings-dict
+shape: a module-level
+`_X = get_printings().get("Card")` is a per-card extraction (not a
+dict binding), so the negative-control case-(4) is still correctly
+excluded.
+
+**Closure shipped.** Four per-card parity modules registered in
+`PROBE_MODULES`; all four flipped COVERED → PROBED via the widened
+predicate. Net delta:
+
+  * **PROBED 300 → 304 (+4)**
+  * **covered_by_construction 111 → 107 (-4)**
+  * BLOCKED-subsystem-gated unchanged at 64
+  * pool total 475 unchanged
+
+The four carriers (each currently classified COVERED-by-construction
+pre-widen, flipped here):
+
+  | Probe module | Card | Pattern |
+  |---|---|---|
+  | `test_blade_of_the_swarm_parity.py` | Blade of the Swarm | `_PRINTINGS.get("Blade of the Swarm")` |
+  | `test_genemorph_imago_parity.py` | Genemorph Imago | `_PRINTINGS.get("Genemorph Imago")` |
+  | `test_possibility_technician_parity.py` | Possibility Technician | `_PRINTINGS.get("Possibility Technician")` |
+  | `test_territorial_bruntar_parity.py` | Territorial Bruntar | `_PRINTINGS.get("Territorial Bruntar")` |
+
+**Engine surface change: NONE.** Zero edits to `rust/`, zero edits
+to `src/mtg_bot/parity/trajectory.py` or any production module. Pure
+metric-attribution close — all four parity probes pass at this HEAD
+(verified pre- and post-widen, 10/10/10/12 = 42 tests; unchanged).
+
+**Honest-stop on Deafening Silence (the prior sweep mis-bucketed
+it).** The prior `post-ac-flip-attribution-sweep` table listed
+`test_deafening_silence_parity.py` alongside the four cached-binding
+modules — but the actual shape is different. The Deafening Silence
+parity function
+(`test_cross_engine_real_eoe_deafening_silence_noncreature_block_parity`)
+drives a SYNTHETIC `CardDef(name="Deafening Silence",
+restricts_noncreature_spells_to_one_per_turn=True, ...)` carrier
+through the bridge — it does NOT bind the live parsed printing via
+`get_printings()` at all. The three
+`get_active_source().get_printings().get("Deafening Silence")`
+bindings in the file live in non-`*_parity` setup tests
+(`test_real_deafening_silence_printing_has_restriction_flag`,
+`test_deafening_silence_passes_bridge_admit_gate`,
+`test_deafening_silence_passes_measure_pool_parity_loader_admits`),
+all of which are correctly outside the credited `*_parity` body. The
+module-scope-binding widen above (and the body-scoped scan) both
+correctly fail to credit it. Flipping Deafening Silence honestly
+would require either (a) a separate widen recognizing
+`CardDef(name="<Card>", ...)` synthetic-carrier-driven probes as
+parity probes — riskier because it would credit any `*_parity`
+module that mentions a real pool card name inside a `CardDef`
+constructor, expanding the inclusion bar materially — or (b) a
+per-probe rewrite to bind the real printing via `get_printings()`
+first (and assert it carries the relevant flag) before driving the
+synthetic carrier. Deferred to a separate lane; the predicate
+contract for THIS sweep is strict module-scope-cached-binding
+matching, of which Deafening Silence is honestly not a member.
+
+**Atomic Microsizer** stays correctly excluded: explicit
+`@pytest.mark.skip` + `raise NotImplementedError` multi-cycle
+scaffold per `docs/SEARCH_LIMITATIONS.md`.
+
+**Sanity-gate runs (this lane):**
+
+  * `tests/test_measure_pool_parity.py` — 31/31 passed (registry-
+    consistency + the four
+    `test_probe_module_synthetic_nonprobe_is_not_counted` /
+    `test_tierc_synthetic_nonbar_probe_is_not_counted` integrity
+    guards all still hold).
+  * The four newly-credited probe modules — 42/42 passed
+    (Blade 10, Genemorph 10, Possibility 10, Territorial 12).
+  * The two correctly-excluded modules — 14/14 passed (Deafening
+    Silence 13 — synthetic-CardDef-driven, Atomic Microsizer 7 +
+    1 skip — `@pytest.mark.skip` scaffold body).
+  * Spot-check of unaffected probe modules — Singularity Rupture
+    11/11, Warping Wail Cycle 4 4/4, Coordinated Clobbering parity
+    6/6, Archenemy's Charm parity 10/10 (all unchanged).
+
+**Cross-references for this sweep:**
+
+  * Predicate-shape inconsistency surfaced: prior section above
+    (`feature/post-ac-flip-attribution-sweep-p1`, `2a8919d2`).
+  * Precedent registration sweeps: `22a0457d` / `a9829787`
+    (12-card sweep), `2a8919d2` (AC sweep).
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)

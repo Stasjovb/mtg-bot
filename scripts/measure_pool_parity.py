@@ -114,6 +114,7 @@ class the round-54/55/56 cron guards, applied to THIS metric.
 
 from __future__ import annotations
 
+import ast
 import io
 import re
 import sys
@@ -1075,27 +1076,59 @@ PROBE_MODULES: tuple[Path, ...] = (
     # attribution gap (identical shape to the 2026-05-24
     # ``feature/post-flip-reclassification-scout`` 12-card sweep
     # immediately prior). Registration alone flips Archenemy's Charm
-    # COVERED → PROBED in the metric; no engine changes. The other
-    # six per-card parity modules that landed since the prior sweep
-    # (``test_blade_of_the_swarm_parity.py``,
-    # ``test_deafening_silence_parity.py``,
-    # ``test_genemorph_imago_parity.py``,
-    # ``test_possibility_technician_parity.py``,
-    # ``test_territorial_bruntar_parity.py``,
-    # ``test_atomic_microsizer_parity.py``) are NOT registered here
-    # because they do not satisfy ``_probe_module_probed_cards``'s
-    # in-body ``get_printings()`` binding rule at this HEAD: five
-    # cache the live printing via a module-level
-    # ``_PRINTINGS = get_active_source().get_printings()`` and call
-    # ``_PRINTINGS.get(...)`` inside the probe function (the
-    # cached form is OUTSIDE the bounded function body the predicate
-    # scans, so the probe correctly drives the real printing but the
-    # script does not credit it — surfaced as an honest predicate-
-    # shape inconsistency, not closed in this sweep); the sixth
-    # (Atomic Microsizer) is an explicitly ``@pytest.mark.skip``
-    # multi-cycle scaffold whose ``raise NotImplementedError`` body
-    # is not yet a live probe.
+    # COVERED → PROBED in the metric; no engine changes.
     REPO_ROOT / "tests" / "test_archenemys_charm_parity.py",
+    # **probe-module-predicate-widen-2026-05-24:** four per-card
+    # parity modules that hoist the printings dict to module scope —
+    # ``_PRINTINGS = get_active_source().get_printings()`` at the top
+    # of the file — and call ``_PRINTINGS.get("<Card>")`` inside the
+    # canonical ``test_cross_engine_real_eoe_<...>_parity`` function
+    # body. The body-scoped scan above never saw the ``get_printings()``
+    # call (it lives outside the bounded function body), so these
+    # probes were silently undercounted. The companion widen in
+    # ``_probe_module_probed_cards`` now AST-walks the module to
+    # detect the module-level binding and credit the in-body
+    # ``_PRINTINGS.get("<Card>")`` references — the integrity guard
+    # in ``test_probe_module_synthetic_nonprobe_is_not_counted`` is
+    # preserved because the widen only recognizes the BARE
+    # printings-dict shape (``= get_active_source().get_printings()``
+    # / ``= get_printings()``); a module-level
+    # ``_X = get_printings().get("Card")`` is NOT a dict binding,
+    # so the case-(4) negative-control still passes. Pure
+    # measurement-attribution gap (identical shape to the immediately-
+    # prior 12-card + Archenemy's Charm sweeps): the probes EXIST and
+    # PASS at this HEAD, only the predicate + registry needed to
+    # learn the new idiom.
+    REPO_ROOT / "tests" / "test_blade_of_the_swarm_parity.py",
+    REPO_ROOT / "tests" / "test_genemorph_imago_parity.py",
+    REPO_ROOT / "tests" / "test_possibility_technician_parity.py",
+    REPO_ROOT / "tests" / "test_territorial_bruntar_parity.py",
+    # NOT registered (deliberate, documented):
+    #   * ``test_deafening_silence_parity.py`` — the
+    #     ``test_cross_engine_real_eoe_deafening_silence_noncreature_
+    #     block_parity`` function drives a SYNTHETIC ``CardDef(name=
+    #     "Deafening Silence", restricts_noncreature_spells_to_one_
+    #     per_turn=True, ...)`` carrier through the bridge, not the
+    #     live parsed printing via ``get_printings()``. The
+    #     ``_PRINTINGS.get(...)`` widen above does not match because
+    #     there is no module-level ``_PRINTINGS`` binding (the three
+    #     ``get_active_source().get_printings().get("Deafening Silence")``
+    #     bindings in the file live in non-``*_parity`` setup tests —
+    #     they are outside any credited body). The prior post-AC-flip
+    #     sweep audit (``2a8919d2``) misclassified this module into
+    #     the ``_PRINTINGS`` bucket — it is actually a CardDef-
+    #     driven synthetic-carrier probe, a third shape this widen
+    #     deliberately does not address. Flipping Deafening Silence
+    #     COVERED → PROBED honestly would require either a separate
+    #     widen recognizing the synthetic-CardDef-by-name pattern
+    #     (riskier — opens credit to any module that mentions a real
+    #     pool card name inside a CardDef constructor) or a per-
+    #     probe rewrite to bind the real printing via
+    #     ``get_printings()`` first; deferred to a separate lane.
+    #   * ``test_atomic_microsizer_parity.py`` — explicit
+    #     ``@pytest.mark.skip`` + ``raise NotImplementedError`` multi-
+    #     cycle scaffold per ``docs/SEARCH_LIMITATIONS.md``; correctly
+    #     stays BLOCKED-subsystem-gated.
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
@@ -1264,11 +1297,35 @@ def _probe_module_probed_cards(
     smoke file. A bound name that is not a live pool card (a synthetic
     stub / typo / negative-control fixture) is NOT credited — that is
     the integrity guard against over-counting. Pure text; no engine
-    import (mirrors the smoke detector's contract)."""
+    import (mirrors the smoke detector's contract).
+
+    **Module-scope-binding widen (2026-05-24).** Some probe modules
+    hoist the printings dict to module scope —
+    ``_PRINTINGS = get_active_source().get_printings()`` at the top —
+    and call ``_PRINTINGS.get("<Card>")`` inside the ``*_parity``
+    function body. The body-scoped scan above never sees the
+    ``get_printings()`` call directly (it lives outside the bounded
+    function body), so a probe authored this way is silently
+    undercounted. To close that gap WITHOUT loosening the bar, the
+    helper now also AST-parses the module, detects every module-level
+    assignment whose RHS is ``get_active_source().get_printings()`` (or
+    bare ``get_printings()``), and credits any ``<bound>.get("<Card>")``
+    / ``<bound>["<Card>"]`` reference inside a ``*_parity`` function
+    body. A module-level binding to a SPECIFIC card
+    (``_X = get_printings().get("Card")``) is NOT recognized as a
+    printings-dict binding — only the bare ``get_printings()`` form is
+    — so the integrity guard cases in
+    ``test_probe_module_synthetic_nonprobe_is_not_counted`` (module-
+    level ``_MODULE_LEVEL = get_printings().get("Gravkill")`` and a
+    helper that returns ``get_printings().get("Plasma Bolt")`` —
+    neither belongs to a credited ``*_parity`` body) all still
+    correctly fail to be credited. Pure text + AST; no engine import.
+    """
     if not module_path.exists():
         return set()
     text = module_path.read_text(encoding="utf-8")
     probed: set[str] = set()
+    # ---- (1) original body-scoped scan: in-body get_printings().get("X").
     for hm in _PROBE_FN_HEADER_RE.finditer(text):
         # The body runs from just after the header line to the start of
         # the NEXT top-level construct (column-0 def/class/@/identifier)
@@ -1281,7 +1338,154 @@ def _probe_module_probed_cards(
             nm = dq or sq
             if nm in pool_names:
                 probed.add(nm)
+    # ---- (2) module-scope-binding widen: AST-walk the module to find
+    # module-level bindings ``X = (get_active_source().)?get_printings()``,
+    # then for each ``*_parity`` function body credit ``X.get("Card")``
+    # / ``X["Card"]`` references where ``"Card"`` is a live pool name.
+    probed |= _probe_module_probed_cards_via_module_scope_binding(
+        pool_names, text
+    )
     return probed
+
+
+def _probe_module_probed_cards_via_module_scope_binding(
+    pool_names: set[str], text: str
+) -> set[str]:
+    """Find ``*_parity`` cards credited via the module-level
+    ``_PRINTINGS = get_active_source().get_printings()`` binding idiom.
+
+    Walks the AST in two passes:
+
+      1. Module body — record every ``Assign`` whose targets are
+         ``Name`` nodes and whose RHS is ``get_active_source().
+         get_printings()`` OR bare ``get_printings()``. The recorded
+         names are the printings-dict bindings.
+      2. Each top-level function whose name matches the
+         ``test_cross_engine_real_eoe_<...>_parity`` shape — walk the
+         body for ``<bound>.get("C")`` Call nodes and ``<bound>["C"]``
+         Subscript nodes. ``"C"`` is credited iff it is in the live pool.
+
+    A binding whose RHS is ``get_printings().get("X")`` (i.e. an already-
+    resolved per-card extraction, not a printings-dict binding) is NOT
+    recorded as a dict binding — this is the integrity guard test
+    ``test_probe_module_synthetic_nonprobe_is_not_counted`` pins on
+    case (4). Equally, a binding inside a function body (not at module
+    scope) is NOT walked here — the body-scoped detector above already
+    handles that case.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        # Defensive: a probe module that does not parse cannot credit
+        # anything (mirrors the never-block contract of the body
+        # detector — return empty rather than raising).
+        return set()
+    # Pass 1: module-level printings-dict bindings.
+    bindings: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not _is_printings_dict_call(node.value):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bindings.add(target.id)
+    if not bindings:
+        return set()
+    # Pass 2: every top-level ``*_parity`` function body — credit
+    # ``<bound>.get("Card")`` and ``<bound>["Card"]`` references.
+    probed: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not _PROBE_FN_NAME_RE.match(node.name):
+            continue
+        for sub in ast.walk(node):
+            nm = _extract_bound_card_lookup(sub, bindings)
+            if nm is not None and nm in pool_names:
+                probed.add(nm)
+    return probed
+
+
+def _is_printings_dict_call(node: ast.AST) -> bool:
+    """``True`` iff ``node`` is exactly ``get_active_source().get_printings()``
+    OR bare ``get_printings()`` — the printings-DICT binding shape. A
+    chained ``.get("X")`` on the end disqualifies it (that is a per-card
+    extraction, not a dict binding)."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if not isinstance(func, ast.Attribute):
+        # Bare ``get_printings()`` call.
+        if (
+            isinstance(func, ast.Name)
+            and func.id == "get_printings"
+            and not node.args
+            and not node.keywords
+        ):
+            return True
+        return False
+    # ``<receiver>.get_printings()`` form.
+    if func.attr != "get_printings":
+        return False
+    if node.args or node.keywords:
+        return False
+    # ``<receiver>`` should be ``get_active_source()`` (the canonical
+    # shape across the affected probe modules). A literal ``mod.
+    # get_printings()`` on some other receiver is intentionally not
+    # recognized — we want the same parser-of-truth surface the smoke +
+    # body detectors anchor on.
+    receiver = func.value
+    if not isinstance(receiver, ast.Call):
+        return False
+    rfunc = receiver.func
+    if not isinstance(rfunc, ast.Name):
+        return False
+    return (
+        rfunc.id == "get_active_source"
+        and not receiver.args
+        and not receiver.keywords
+    )
+
+
+def _extract_bound_card_lookup(
+    node: ast.AST, bindings: set[str]
+) -> str | None:
+    """If ``node`` is ``<bound>.get("Card")`` or ``<bound>["Card"]``
+    where ``<bound>`` is one of the recorded module-level printings-
+    dict bindings, return ``"Card"``; otherwise ``None``."""
+    # ``<bound>.get("Card")`` — single positional string arg.
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "get"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in bindings
+            and len(node.args) >= 1
+            and not node.keywords
+        ):
+            arg0 = node.args[0]
+            if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                return arg0.value
+        return None
+    # ``<bound>["Card"]`` — Subscript with constant string slice.
+    if isinstance(node, ast.Subscript):
+        value = node.value
+        if isinstance(value, ast.Name) and value.id in bindings:
+            slc = node.slice
+            if isinstance(slc, ast.Constant) and isinstance(slc.value, str):
+                return slc.value
+        return None
+    return None
+
+
+# ``*_parity`` function-name shape (the same predicate the body-scoped
+# detector anchors on, in regex form for the AST function-name match —
+# kept aligned with ``_PROBE_FN_HEADER_RE``).
+_PROBE_FN_NAME_RE = re.compile(
+    r"test_cross_engine_real_eoe_\w+?_parity\Z"
+)
 
 
 def genuine_probed_cards(
