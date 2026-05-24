@@ -3,16 +3,25 @@
 **Lane:** `feature/multi-gated-tail-tractability-scout-2026-05-24-p1`
 (Worker A in the 2026-05-24 parallel-agent dispatch).
 
-**Trigger.** Today's session shipped three substrate closures — Singularity
-Rupture (`31c823c8`), Warping Wail Cycle 4 (`8e47c1bf`), Coordinated
-Clobbering Cycle 2b (`ef9abb8d`) — plus a 12-card measurement-attribution
-sweep (`a9829787`, COVERED → PROBED). Worker B was simultaneously in
-flight on Archenemy's Charm, which when it lands will close the last
-single-gated `effect_uncovered` card and drain the cheap single-gated
-lane. This scout's question: **with the single-gated frontier bottoming
-out, what is the cheapest tractable closure in the 65-card BLOCKED-
-subsystem multi-gated tail, and is any of them a 1-cycle closure on the
-sibling-substrate shapes that today's closures shipped?**
+**Trigger.** Today's session shipped four substrate closures —
+Singularity Rupture (`31c823c8`), Warping Wail Cycle 4 (`8e47c1bf`),
+Coordinated Clobbering Cycle 2b (`ef9abb8d`), and Archenemy's Charm
+(`7088c9bd`, Worker B 2026-05-24) — plus a 12-card measurement-
+attribution sweep (`a9829787`, COVERED → PROBED). Archenemy's Charm
+was the last single-gated `effect_uncovered` card; the single-gated
+`effect_uncovered` lane is now empty. This scout's question: **with
+the single-gated frontier bottomed out, what is the cheapest tractable
+closure in the 64-card BLOCKED-subsystem multi-gated tail, and is any
+of them a 1-cycle closure on the sibling-substrate shapes that today's
+closures shipped?**
+
+**Note.** This doc was authored against the pre-Worker-B HEAD (65
+BLOCKED cards / 12 single-gated, scout snapshot pre-`7088c9bd`); the
+post-rebase live numbers are 64 BLOCKED / 11 single-gated (the
+`effect_uncovered` single-gated row dropped from 1 → 0 with the
+Archenemy's Charm flip). The ranked top-5 below is unaffected — none of
+the candidates were Archenemy's Charm and none compose with the
+Archenemy's Charm substrate.
 
 ## TL;DR
 
@@ -25,24 +34,28 @@ non-safe triggered ability, warp+static, etc.). All five sibling
 precedents shipped today close specific shapes that the multi-gated tail
 does not match.
 
-**Live single-gated row (12 cards) is all DEFERRED / honest-stop / in
-flight:** 5 cost_reduction (DEFERRED — guaranteed cross-engine
-divergence), 2 nonbasic_land (DEFERRED — clone + activated-abilities
-substrates), 1 station_spacecraft (DEFERRED — §2-decline), 1 unclassified
-(DEFERRED — Leyline of Mutation, two new substrates needed for 0-deck
-leverage), 2 static_layered (Soulrager / Wickerfolk — NOT in EoE snapshot,
-need data refresh), and Archenemy's Charm (4,498 decks; **Worker B in
-flight 2026-05-24**).
+**Live single-gated row (11 cards post-Worker-B / 12 pre-rebase) is all
+DEFERRED / honest-stop:** 5 cost_reduction (DEFERRED — guaranteed
+cross-engine divergence), 2 nonbasic_land (DEFERRED — clone +
+activated-abilities substrates), 1 station_spacecraft (DEFERRED —
+§2-decline), 1 unclassified (DEFERRED — Leyline of Mutation, two new
+substrates needed for 0-deck leverage), 2 static_layered (Soulrager /
+Wickerfolk — NOT in EoE snapshot, need data refresh). Archenemy's Charm
+(4,498 decks) was the 12th and closed today as Worker B's flip
+(`7088c9bd`).
 
-**Loader-admits sanity check on the 65 BLOCKED cards: 0 are
-loader-admitted.** The 2026-05-24 post-flip reclassification scout
-(`a9829787`) already confirmed the admit-gate is in sync with the metric
-helper and no measurement-attribution gap remains in the BLOCKED tier.
+**Loader-admits sanity check on the BLOCKED cards (65 pre-rebase / 64
+post-rebase): 0 are loader-admitted.** The 2026-05-24 post-flip
+reclassification scout (`a9829787`) already confirmed the admit-gate is
+in sync with the metric helper and no measurement-attribution gap
+remains in the BLOCKED tier.
 
 **Recommendation:** the multi-gated tail is genuinely multi-cycle
-territory. Worker B's Archenemy's Charm flip + the 12-card sweep is the
-high-leverage work for today. **Next Worker A dispatch should pivot to
-either (a) a fresh substrate cycle in the X-value or control-change-UEOT
+territory. Today's session (Singularity Rupture + Warping Wail C4 +
+Coordinated Clobbering C2b + Archenemy's Charm + 12-card sweep) is
+substantial — 4 substrate flips + 12 measurement-attribution flips, all
+landed in one session. **Next Worker A dispatch should pivot to either
+(a) a fresh substrate cycle in the X-value or control-change-UEOT
 families (both have shipped C1-C5 substrate and have demonstrated
 amortization across multiple cards) or (b) the highest-leverage
 multi-cycle candidate from the ranking below.** The ranking is by total
@@ -50,8 +63,10 @@ closure scope, NOT by 1-cycle tractability — no candidate is 1-cycle.
 
 ## Live snapshot (re-run of `scripts/scout_r58_subsystem_attribution.py`)
 
+**Post-Worker-B (live HEAD = `7088c9bd`):**
+
 ```
-# subsystem-gated attribution — 65 cards
+# subsystem-gated attribution — 64 cards
 subsystem                                  #cards  1gate  multi  decks(tot)  decks(1g)
 Cost-reduction substrate                        5      5      0       53648      53648
 Non-basic land substrate                        2      2      0        7688       7688
@@ -63,15 +78,16 @@ Aura-attachment substrate                       3      0      3        2783     
 Rooms / doors                                   3      0      3           0          0
 Planeswalker loyalty                            1      0      1        2311          0
 Carrier activated abilities                    30      0     30       34470          0
-Effect-uncovered                               49      1     48      109449       4286
+Effect-uncovered                               48      0     48      105163          0
 Unclassified (residual)                         1      1      0           0          0
 Non-safe triggered ability                     23      0     23       82976          0
 ```
 
-Reconcile: 65 = 12 single-gated + 53 multi-gated. Sum of per-subsystem
-single-gated equals 12. (The inventory's "13 single-gated" claim is
-stale — it counted Singularity Rupture and/or Warping Wail before today's
-closures landed.)
+Reconcile: 64 = 11 single-gated + 53 multi-gated. Sum of per-subsystem
+single-gated equals 11. (The inventory's pre-today "13 single-gated"
+claim is stale — it counted Singularity Rupture and Warping Wail
+before their closures landed; AC drops the count to 11 with the
+single-gated `effect_uncovered` row now empty.)
 
 ## What today's shipped substrates actually admit
 
@@ -83,7 +99,7 @@ closures landed.)
 | Phase-4 modal admit / `not slot_kinds` permissive disjunct (Singularity Rupture + WW) | Modal envelope widen | Narrowly gated on the modal-chooseone admit predicate; the multi-gated effect_uncovered cards are not modal. |
 
 The five sibling precedents the dispatch listed are real, but each
-narrowly admits a specific shape. The 65-card multi-gated tail does not
+narrowly admits a specific shape. The 64-card multi-gated tail does not
 share these shapes by inspection.
 
 ## Ranked top-5 multi-cycle candidates (closure-cost estimates)
@@ -208,13 +224,13 @@ That's the unit of work. For a card to flip in 1 cycle on a SIBLING
 substrate, the card's Effect class must already be Rust-covered. By
 inspection of `missing_effect_classes` in the live scout:
 
-* 1 of 65 cards has no missing Effect classes from its single-gated
+* 5 of 64 cards have no missing Effect classes from their gating
   attribution (Memorial Team Leader / Starfield Vocalist / Exalted
   Sunborn / Loading Zone / Lumen-Class Frigate — the warp+static and
   station+static rows). These are **NOT 1-cycle** because each requires
   Phase-4 static-substrate work (a new scope+layer+condition triple not
   yet admitted).
-* 64 of 65 cards have at least one missing Effect class. Each missing
+* 59 of 64 cards have at least one missing Effect class. Each missing
   Effect class is a unique Rust variant — `grep` confirms ZERO Effect
   classes are shared across the 65 cards' `missing_effect_classes`
   rows. The diffuseness is real.
@@ -266,9 +282,15 @@ split shape is a meaningful sibling substrate that future cards
 "split top-N to two zones" family are common across MTG sets — the
 substrate will amortize at the cross-set boundary).
 
-**Scope sanity:** today's session already shipped 3 substrate closures +
-12-card sweep + (after Worker B lands) 1 more flip. That is well
-within a heavy session. The right move is to consolidate the day's
+**Scope sanity:** today's session already shipped 4 substrate closures
+(Singularity Rupture, Warping Wail C4, Coordinated Clobbering C2b,
+Archenemy's Charm) + the 12-card measurement-attribution sweep — 15+
+tier transitions in one session (12 measurement-attribution flips
+COVERED → PROBED, 2 substrate flips BLOCKED → PROBED for Singularity
+Rupture and Warping Wail, 1 substrate flip BLOCKED → COVERED for
+Coordinated Clobbering at C2b before its subsequent registration into
+PROBE_MODULES, and 1 substrate flip BLOCKED → COVERED for Archenemy's
+Charm). That is well above the typical session cadence. The right move is to consolidate the day's
 gains, not force a 4th closure on a tail that has bottomed out for
 1-cycle work.
 
@@ -285,4 +307,10 @@ gains, not force a 4th closure on a tail that has bottomed out for
   non-basic land / Station-Spacecraft / Carrier-AA / Rooms / Loyalty /
   Kicker).
 * `docs/POOL_PARITY.md` — headline tier counts at this HEAD: PROBED
-  299 / covered 111 / BLOCKED-subsystem 65 / pool total 475.
+  299 / covered 112 / BLOCKED-subsystem 64 / pool total 475 (post
+  Archenemy's Charm flip, `7088c9bd`). The AC flip moved AC
+  BLOCKED → covered-by-construction (per the regen commit `173fe19a`
+  message: PROBED tier unchanged at 299 because AC + CC both have
+  dedicated probes but their PROBE_MODULES registration is the next
+  reclassification-scout job, mirroring today's `a9829787` sweep
+  shape). Net delta: +1 covered, -1 BLOCKED.
