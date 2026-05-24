@@ -1196,6 +1196,37 @@ pub struct StackItem {
     /// single-target arms self-scan and IGNORE both fields, so the
     /// swap is a correct no-op for them).
     pub target_obj_id_2: Option<u32>,
+    /// **Coordinated Clobbering Cycle 2a substrate (2026-05-24).**
+    /// The THIRD deterministic-first bound target for a
+    /// `StackItemKind::Spell` whose `spell_effect` is a 3-slot
+    /// heterogeneous-target spell with an OPTIONAL slot-2 pick
+    /// (today: Coordinated Clobbering — slot 0 = opp's creature
+    /// taking damage on `target_obj_id`, slot 1 = caster's first
+    /// untapped creature on `target_obj_id_2`, slot 2 here = the
+    /// OPTIONAL second caster's untapped creature; `(2, 3)`
+    /// heterogeneous shape with `("creature", "my_creature",
+    /// "my_creature")` slot kinds). Computed at cast time in
+    /// `cast_spell_noncreature` (the 3-slot first-legal scan
+    /// mirroring Python's `_select_spell_targets` per-`slot_kinds`
+    /// pick with the agent-decline branch at `slot_idx >= min_t`)
+    /// and swapped into `current_resolve_payload_target_id_3` by
+    /// both resolve entry points exactly like its siblings. `None`
+    /// for every pre-Cycle-2a push (back-compat — single-target,
+    /// 2-slot, trigger, activation pushes never set it; the closed
+    /// arms self-scan / ignore the slot, so the swap is a correct
+    /// no-op for them). It is the forward substrate for any 3-slot
+    /// arm that opts into the payload-target convention.
+    ///
+    /// **Optional-slot semantics.** Unlike `target_obj_id_2` (whose
+    /// presence/absence pins whether a 2-slot bridge fires at all),
+    /// `target_obj_id_3` carries the agent-decline branch: when the
+    /// caster has only ONE untapped creature, the cast-time binder
+    /// leaves this slot `None` (mirrors Python's `if slot_idx >=
+    /// min_t: maybe decline` shape — the slot is past the minimum
+    /// and agent-declinable). Cycle 2a wires the substrate; Cycle
+    /// 2b ships the admit-set flip + per-card real-EoE probe that
+    /// actually drives the slot through cross-engine.
+    pub target_obj_id_3: Option<u32>,
     /// **ModalChooseOne envelope — Cycle 1 (cast-time mode binding,
     /// 2026-05-21).** The cast-time-picked mode index for a
     /// `StackItemKind::Spell` whose `spell_effect` is an
@@ -1341,6 +1372,12 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id: None,
             target_obj_id_2: None,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).** The
+            // 3rd-slot synthetic-target slot defaults `None` for the
+            // bare untargeted spell push — every existing call site
+            // sees `target_obj_id_3 = None` so the resolve-time swap
+            // is a no-op (None → None).
+            target_obj_id_3: None,
             // ModalChooseOne envelope — Cycle 1. The bare untargeted
             // spell push doesn't go through the ChooseOneMode
             // detector (it sees no first-effect `ChooseOneMode`
@@ -1402,6 +1439,17 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id,
             target_obj_id_2,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).** The
+            // 3-slot superset constructor lives at
+            // `new_spell_with_targets_mode_addcost_and_x` (the cast
+            // pipeline's single live target-carrying push site). The
+            // 2-arg target-only constructor stays unchanged for its
+            // existing callers (Phase-1 single-target / Phase-2
+            // 2-slot synthetic pushes + the Aura push site) — those
+            // never carry a 3rd target, so `None` here is byte-
+            // clean. A future 3-target synthetic constructor adds
+            // its own pathway rather than extending this signature.
+            target_obj_id_3: None,
             // ModalChooseOne envelope — Cycle 1. Spells that bind
             // a modal pick at cast time use the dedicated
             // `new_spell_with_targets_mode_and_addcost` sibling
@@ -1481,6 +1529,7 @@ impl StackItem {
         controller: u8,
         target_obj_id: Option<u32>,
         target_obj_id_2: Option<u32>,
+        target_obj_id_3: Option<u32>,
         chosen_mode_idx: Option<u8>,
         additional_cost_choice_id: Option<u32>,
         x_value: Option<i32>,
@@ -1492,6 +1541,16 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id,
             target_obj_id_2,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).** The
+            // 3rd-slot target slot threads through the cast-pipeline
+            // single live target-carrying push site. `None` for every
+            // pre-Cycle-2a callsite (every non-3-slot cast); the
+            // Cycle 2a cast-time binder for Coordinated Clobbering
+            // sets `Some(_)` when the caster has a second eligible
+            // untapped creature on the battlefield (the agent-
+            // decline branch at `slot_idx >= min_t` leaves it `None`
+            // when only one is available).
+            target_obj_id_3,
             chosen_mode_idx,
             additional_cost_choice_id,
             // scour-for-scrap-slice Cycle 1 widen: the single-pick
@@ -1539,6 +1598,14 @@ impl StackItem {
             trigger_payload: None,
             target_obj_id,
             target_obj_id_2,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).**
+            // `or_both` modal spells aren't on the (2, 3) heterogeneous
+            // 3-slot grammar pathway today (different first-effect
+            // shape — modal `Effect::ChooseOneMode` vs CC's bespoke
+            // `Effect::CoordinatedClobberingEffect`). Leave `None` —
+            // back-compat byte-identical for every existing multi-
+            // pick modal push.
+            target_obj_id_3: None,
             // Mutual-exclusion: when the multi-pick path is active,
             // leave the single-pick slot `None`. The resolve arm
             // reads multi first; the legacy path is byte-identical
@@ -1587,6 +1654,10 @@ impl StackItem {
             // Phase-2 (round-76): the 2-slot spell grammar is
             // Spell-kind-only.
             target_obj_id_2: None,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).**
+            // 3-slot grammar is Spell-kind-only — triggers carry
+            // their target on `trigger_payload.target_id`.
+            target_obj_id_3: None,
             // ModalChooseOne envelope — Cycle 1. The cast-time
             // mode-pick slot is Spell-kind-only. A trigger whose
             // body is itself an `Effect::ChooseOneMode` would
@@ -1642,6 +1713,9 @@ impl StackItem {
             target_obj_id: None,
             // Phase-2 (round-76): Spell-kind-only 2-slot grammar.
             target_obj_id_2: None,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).**
+            // 3-slot grammar is Spell-kind-only.
+            target_obj_id_3: None,
             // ModalChooseOne envelope — Cycle 1: Spell-kind-only.
             chosen_mode_idx: None,
             // Close Encounter additional-cost-choice envelope —
@@ -2708,6 +2782,28 @@ pub struct GameState {
     /// the fingerprint, identical discipline to
     /// `current_resolve_payload_target_id`.
     pub current_resolve_payload_target_id_2: Option<u32>,
+    /// **Coordinated Clobbering Cycle 2a substrate (2026-05-24).**
+    /// The THIRD resolve-time payload target — the slot-2 /
+    /// optional friendly attacker slot of a 3-slot heterogeneous
+    /// spell (today: Coordinated Clobbering's optional second
+    /// caster-untapped creature; slot 0 is the opp creature on
+    /// `current_resolve_payload_target_id`, slot 1 is the first
+    /// caster-untapped creature on
+    /// `current_resolve_payload_target_id_2`). Swapped in/out by
+    /// both resolve entry points exactly like its single-slot and
+    /// 2-slot siblings (save → set → restore bracketing the apply
+    /// closure). `None` for every pre-Cycle-2a push (back-compat —
+    /// 1-slot / 2-slot spells, triggers, and activations never set
+    /// it; closed arms self-scan and IGNORE all three payload
+    /// targets, so the swap is a correct no-op for them). It is
+    /// the forward substrate for any 3-slot arm that opts into the
+    /// payload-target convention (today only
+    /// `CoordinatedClobberingEffect`, and only via the Cycle 2b
+    /// admit-set flip — Cycle 2a stays substrate-only). Transient
+    /// + not serialized into the fingerprint, identical discipline
+    /// to `current_resolve_payload_target_id` /
+    /// `current_resolve_payload_target_id_2`.
+    pub current_resolve_payload_target_id_3: Option<u32>,
     /// **CE20 follow-up Slice 5 (Walker loyalty Slice C) —
     /// once-per-turn-per-walker activation ledger.** CR 606.3:
     /// "A player may activate a loyalty ability of a planeswalker
@@ -3017,6 +3113,11 @@ impl Clone for GameState {
             pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
             current_resolve_payload_target_id_2: self.current_resolve_payload_target_id_2,
+            // **Coordinated Clobbering Cycle 2a (2026-05-24).**
+            // Transient slot-2 payload-target slot; cloned as
+            // `Option<u32>` (Copy). Bracketed by the resolver —
+            // `None` outside the resolve window by construction.
+            current_resolve_payload_target_id_3: self.current_resolve_payload_target_id_3,
             // ModalChooseOne envelope — Cycle 2. Transient mode-
             // index slot; cloned as `Option<u8>` (Copy). Bracketed
             // by the resolver — `None` outside the resolve window
@@ -3941,6 +4042,12 @@ pub fn make_synthetic_state(
         // Relations). None by default — single-target spells /
         // triggers / activations never set it.
         current_resolve_payload_target_id_2: None,
+        // **Coordinated Clobbering Cycle 2a (2026-05-24).** The
+        // third resolve-time payload-target slot (3-slot spells,
+        // e.g. Coordinated Clobbering's optional second caster-
+        // untapped creature). None by default — pre-Cycle-2a
+        // pushes never set it.
+        current_resolve_payload_target_id_3: None,
         // CE20 Slice 5 (Walker loyalty Slice C): empty
         // once-per-turn-per-walker ledger at construction; reset
         // each turn at cleanup.
