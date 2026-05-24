@@ -11180,6 +11180,103 @@ the X-tracking C1 substrate.
   `_activate_ability` on the authored printing; substrate-only
   invariant pin (Warping Wail stays declined at the admit gate).
 
+- **Warping Wail Cycle 4 admit-gate flip LANDED (2026-05-24,
+  `feature/warping-wail-cycle-4-flip-p1`).** **THE FLIP.** Closes
+  the Warping Wail subsystem with the §2 admit gate POSITIVE for
+  the GENUINE Warping Wail printing — pool delta PROBED +1
+  (Warping Wail BLOCKED → PROBED). The C1a/C2/C3 substrate
+  surfaces (Effect classes, bridge arms, reverse-serializer leaves,
+  token-AA helper) are all in place; Cycle 4 lands the last
+  three pieces:
+
+  **(a) Per-leaf `CreateToken` arm in
+  `_python_spell_effect_to_dict`'s `_leaf` table.** Threads a new
+  `_in_modal_mode: bool = False` keyword through the recursion;
+  the `CreateToken` arm fires ONLY when called from the
+  `ModalChooseOne` composer at the bottom of
+  `_python_spell_effect_to_dict` (the composer passes
+  `_in_modal_mode=True`). The arm consults all THREE token-shape
+  helpers (vanilla, Lander, and the C3-shipped Eldrazi-Scion-shape
+  via `_token_creature_with_safe_mana_activated_ability_card_def`)
+  in the published §2-narrow-admit order; bails on any other
+  rider profile (`each_player`, `attacking`, `schedule_end_of_combat_
+  sacrifice` — same disqualifiers the trigger-side arm at line
+  3699 enforces). The emitted dict carries a symbolic
+  `_token_card_def` Eldrazi Scion CardDef that the seating pass
+  (see (b)) later resolves to a numeric `token_printing_id`.
+
+  **Narrow `_in_modal_mode` gate (§2 honest-stop discipline).** The
+  three EoE printings that carry CreateToken in NON-modal positions
+  — Glimmerburst (`Sequence(DrawCards, CreateToken(Glimmer))`),
+  Midnight Mayhem (top-level `CreateToken(Gremlin, count=3)`),
+  Sami's Curiosity (`Sequence(GainLife, CreateToken(Lander))`) —
+  stay DECLINED at the admit gate this cycle. Each needs its own
+  substrate slice (`_seat_token_printings` walk extension to the
+  non-modal position + matching pin updates + per-card cross-engine
+  probe). The §2 narrow-admit-per-cycle discipline.
+
+  **(b) `_seat_token_printings` nested-mode walk extension.** New
+  `_carrier_choose_one_mode_token_refs(cd)` helper yields
+  `(mode_idx, token_card_def)` for each `create_token` /
+  `create_token_tapped` mode inside a CardDef's top-level
+  `choose_one_mode` `spell_effect` that still carries a symbolic
+  `_token_card_def`. The pass's existing pid-by-name dedup + bridge-
+  map register flow handles the new position byte-identically — a
+  token nested inside a modal spell's mode shares its pid with any
+  other carrier of the same logical token in the same game. The
+  fast-path detector + token-name pass + rewrite pass are each
+  extended to OR-in the nested walk; the rewrite preserves the
+  modal envelope verbatim and swaps ONLY the symbolic ref for the
+  numeric pid inside the matched mode dict (every other modal field
+  stays bit-identical — the no-fallback-hybrid contract).
+
+  **(c) Per-mode cast-time binders for modes 0 + 1.** Extends
+  `state_ops_cast.rs::is_recognized_targeted_mode_leaf` to admit
+  two new `Effect` variants:
+    * `Effect::ExileTargetCreatureWithPowerOrToughnessAtMost` — Warping
+      Wail mode 0. Per-mode dispatch scans
+      `bf_iter_etb_sorted` for the first creature whose effective
+      P or T ≤ `max_value`. Effective-P/T computation mirrors the
+      resolve arm at `state_ops_resolve.rs::ExileTargetCreatureWith
+      PowerOrToughnessAtMost` (line 14915-14926) inline-recipe:
+      `printed = power.unwrap_or(0) as i32` + counters +
+      ueot_power_bonus / ueot_toughness_bonus, with the
+      `ueot_base_pt_override()` swap honored. NO controller filter
+      (the printed oracle "exile target creature with..." is ANY-
+      side; mirrors Python's `legal_targets`).
+    * `Effect::CounterTargetSpell { filter_types }` — Warping Wail
+      mode 1. The resolve arm walks the stack itself at resolve
+      time (top-down, filter-types-aware) — the cast-time binder
+      is a passthrough (returns `bound_target` from the ladder
+      above, which is `None` for Warping Wail since `effects[0]`
+      is `ChooseOneMode` and none of the ladder's `is_*` detectors
+      match). Listing the variant in the allowlist makes the
+      `chosen_mode` peek correctly identify mode 1 as "targeted"
+      (the counter has a stack-walk target — it's just resolved at
+      resolve-time, not cast-time).
+
+  **(d) Substrate-only-pin FLIP.** The C1a + C3 substrate-only
+  invariant pins (`test_warping_wail_stays_declined_at_admit_gate_
+  post_cycle_1a` / `..._post_cycle_3`) FLIP to "now admits"
+  (`test_warping_wail_now_admits_at_admit_gate_post_cycle_4`). The
+  flip-direction is the load-bearing closure marker: if either pin
+  ever regresses to "stays declined" without an explicit roll-back-
+  the-flip cycle, the campaign-wide §2 invariant has been silently
+  broken.
+
+  **PROBED tier.** Pool delta +1 (Warping Wail BLOCKED → PROBED).
+  Admit set 39 → 40. Three new cross-engine probes ship at
+  `tests/test_warping_wail_cycle_4_cross_engine.py` (one per mode):
+  the verify-first production-loader admit + seating pin, the mode 0
+  exile-target-creature-P-or-T-≤-1 probe, the mode 1 counter-target-
+  sorcery probe, and the mode 2 create-Eldrazi-Scion-token probe.
+  Each probe drives the GENUINE parsed Warping Wail through resolve
+  on BOTH engines via the production cast path + chosen-modes
+  override and asserts the per-mode observables match. The verify-
+  first pin ensures the seating pass swaps the symbolic
+  `_token_card_def` for a numeric `token_printing_id` on the spell
+  CardDef's `spell_effect` dict — the no-fallback-hybrid contract.
+
 ### 3. Singularity Rupture — `(0, 8)` admit-predicate widen for "any number of target X"
 
 Oracle: `{3}{U}{B}{B}` Sorcery — "Destroy all creatures, then any
