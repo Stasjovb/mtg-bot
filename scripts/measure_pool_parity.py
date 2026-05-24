@@ -1103,6 +1103,22 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_genemorph_imago_parity.py",
     REPO_ROOT / "tests" / "test_possibility_technician_parity.py",
     REPO_ROOT / "tests" / "test_territorial_bruntar_parity.py",
+    # **codecracker-hound-cycle-3-probe-p1 (2026-05-24):** the per-card
+    # real-EoE cross-engine byte-equality probe for Codecracker Hound.
+    # Cycle 1 (commit ``bd37cca0``) folded the bespoke
+    # ``LookAtTopTwoSplitHandGraveyard`` engine class into
+    # ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)``.
+    # Cycle 2 (commit ``278992d7``) widened the safe-trigger admit gate
+    # (warp-arm admit set 6 → 7) so CH is now ADMITTED at
+    # ``_printing_is_bridge_pure_warp_creature``. Cycle 3 (this slice)
+    # ships the dedicated per-card probe — the load-bearing PROBED-tier
+    # flip evidence: ``test_cross_engine_real_eoe_codecracker_hound_etb_
+    # parity`` binds the live EoE printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it). Registration alone flips Codecracker Hound
+    # ``covered_by_construction`` → PROBED in the pool-parity metric.
+    REPO_ROOT / "tests" / "test_codecracker_hound_parity.py",
     # NOT registered (deliberate, documented):
     #   * ``test_deafening_silence_parity.py`` — the
     #     ``test_cross_engine_real_eoe_deafening_silence_noncreature_

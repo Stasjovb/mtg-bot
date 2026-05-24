@@ -116,6 +116,28 @@ _WARP_CARDS = [
     # etb_kind ("life+2" | "token" | "none")
     ("Red Tiger Mechan", "R", "{1}{R}", "{3}{R}", 5, "none"),
     ("Bygone Colossus", "R", "{3}", "{9}", 5, "none"),
+    # **Codecracker Hound Cycle 3** — warp-arm admit set 6→7 (Cycle-2
+    # closure marker ``278992d7`` flipped CH DECLINED → ADMITTED at
+    # ``_printing_is_bridge_pure_warp_creature``). CH's printed warp
+    # cost equals its normal cost (both ``{2}{U}``) — the cost-side
+    # is identical between the warp arm and the normal arm, but the
+    # warp arm still fires the at-end-step delayed-trigger exile sweep
+    # distinct from a normal cast (Lifecycle 1's load-bearing
+    # observable). CH's ETB observable is the chosen card moving to
+    # hand WITHOUT ``reveal_to_all`` (Cycle-1 refined fold's
+    # ``reveal_chosen=False`` rider preserves the no-reveal observable
+    # cross-engine; byte-equality is proved by the surrounding zero-
+    # divergence full ``compare_fields``) — etb_kind="none" (no
+    # public side beyond the zero-divergence full compare).
+    # Archetype 22 is U/B (9 Islands, 8 Swamps); CH is NOT in arch
+    # 22's real 17lands deck (the exact-one-copy probe invariant the
+    # other Phase-1/1.5 cards naturally satisfy because none of them
+    # is in their respective archetype's real deck either — arch 2's
+    # real deck contains 2 copies of CH, which would multiply with
+    # the seated copy and break the
+    # ``p0_library.count(card_name) == 1`` invariant; arch 22 is the
+    # nearest U-heavy CH-free real archetype).
+    ("Codecracker Hound", "U", "{2}{U}", "{2}{U}", 22, "none"),
     ("Germinating Wurm", "G", "{1}{G}", "{4}{G}", 2, "life+2"),
     ("Knight Luminary", "W", "{1}{W}", "{3}{W}", 9, "token"),
     ("Starbreach Whale", "U", "{1}{U}", "{4}{U}", 2, "none"),
