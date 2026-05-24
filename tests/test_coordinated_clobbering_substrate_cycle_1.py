@@ -390,48 +390,43 @@ def test_rust_resolve_silent_noop_no_targets_bound():
 # **Load-bearing closure marker for Cycle 2's flip.**
 
 
-def test_coordinated_clobbering_stays_declined_at_admit_gate_post_cycle_1():
-    """**Substrate-only invariant.** This cycle ships ONLY the Rust
-    Effect substrate (variant + parse + to_pydict + resolve + bridge
-    + serializer leaf). The spell-card-bridge admit predicate
-    ``_printing_is_bridge_simple_spell`` MUST still decline
-    Coordinated Clobbering — flipping it requires the Cycle 2 Phase
-    6 admit arm + 3-slot binder (see the audit at
-    ``docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md`` §1 and
-    the inventory note at
-    ``docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md``).
+def test_coordinated_clobbering_now_admits_at_admit_gate_post_cycle_2():
+    """**Cycle 2b closure marker (INVERTED — was the substrate-only
+    invariant in Cycle 1 + Cycle 2a, flipped here).** The
+    spell-card-bridge admit predicate
+    ``_printing_is_bridge_simple_spell`` now ADMITS Coordinated
+    Clobbering — the Cycle 2b Phase 6 admit arm in
+    ``trajectory._printing_is_bridge_simple_spell`` (the new
+    ``_PHASE6_CC_3SLOT_SHAPE`` disjunct gating on
+    ``slot_kinds == ("creature", "my_creature", "my_creature")``)
+    flipped the gate. The Cycle 2a substrate (3-slot StackItem
+    plumbing + cast-time binder + resolve arm with slot-2 step) is
+    what made the flip safe.
 
-    Coordinated Clobbering's ``(2, 3)`` shape with ``slot_kinds ==
-    ("creature", "my_creature", "my_creature")`` is positively
-    rejected by every existing Phase 1-5 disjunct in the predicate
-    (Phase 1 fails on max_t≠1; Phase 2 fails on max_t=3 + slot_kinds
-    mismatch; Phase 3 fails on not (0,0); Phase 4 fails on
-    slot_kinds[0]="creature" not in ("graveyard_creature",); Phase 5
-    fails on not (0,1)).
+    Coordinated Clobbering's ``(2, 3)`` heterogeneous 3-slot shape
+    now hits the Phase-6 admit arm: ``max_t > min_t`` (the optional
+    second-mine_creature slot, agent-decline branch); ``len
+    (slot_kinds) == max_t == 3`` (every potentially-filled slot
+    enumerated); ``len(set(slot_kinds)) == 2`` (the
+    ``"creature"`` + ``"my_creature"`` kinds); ``slot_kinds[0] ==
+    "creature"`` (mandatory opp creature first); the exact tuple
+    ``("creature", "my_creature", "my_creature")`` (surgical match —
+    no sibling 3-slot grammar auto-grows in silently).
 
-    If this pin fails — i.e. Coordinated Clobbering starts admitting
-    on this branch — the substrate-only invariant has been violated
-    and the cross-engine probe will run BEFORE the 3-slot binder is
-    implemented, producing wrong byte-equal claims for the slot-2
-    friendly attacker. Catch the drift here.
-
-    This pin is the **load-bearing closure marker for Cycle 2's
-    flip**: Cycle 2 widens the admit predicate (Phase 6 arm) + lands
-    the 3-slot binder + bumps the admit-set pin + ships the real-EoE
-    probe, AND this pin gets inverted (renamed to
-    ``test_coordinated_clobbering_now_admits_at_admit_gate_post_
-    cycle_2``)."""
+    If this pin fails — i.e. Coordinated Clobbering goes back to
+    DECLINED at the admit gate — the Cycle 2b Phase 6 admit arm has
+    regressed. The flip is load-bearing for the per-card real-EoE
+    probe + the admit-set pin bump (count 41 → 42) — a regression
+    here cascades into both."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     real = get_active_source().get_printings().get("Coordinated Clobbering")
     if real is None:
         pytest.skip("Coordinated Clobbering absent from active CardSource")
-    assert not trajectory._printing_is_bridge_simple_spell(real), (
-        "Coordinated Clobbering MUST still be declined at the admit "
-        "gate after Cycle 1 substrate-only landing (the (2, 3) "
-        "heterogeneous 3-slot grammar needs the Cycle 2 Phase 6 admit "
-        "arm + 3-slot binder — see "
-        "docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md §1). A "
-        "flip here is a substrate-scope violation."
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Coordinated Clobbering MUST be ADMITTED at the admit gate "
+        "post-Cycle-2b (the Phase 6 admit arm landed in "
+        "trajectory._printing_is_bridge_simple_spell). A DECLINE "
+        "here is a regression of the Cycle 2b flip."
     )

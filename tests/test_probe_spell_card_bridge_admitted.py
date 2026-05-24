@@ -304,10 +304,22 @@ pytestmark = pytest.mark.skipif(
 # Phase-5 ``or_both`` predicate matches the SHAPE — it doesn't gate
 # on ``or_both==True``). PROBED tier — pool delta +1.
 # Admit set 39 → 40.
+# **coordinated-clobbering-cycle-2b-flip-p1 (2026-05-24):** Closes the
+# Coordinated Clobbering subsystem. Cycle 2b lands the Phase 6 admit
+# arm in ``trajectory._printing_is_bridge_simple_spell`` (the
+# ``_PHASE6_CC_3SLOT_SHAPE`` disjunct gating the ``(2, 3)``
+# heterogeneous 3-slot grammar with slot_kinds ``('creature',
+# 'my_creature', 'my_creature')``). The Cycle 1 + 2a substrate
+# (Effect variant + bridge + serializer leaf + 3-slot StackItem
+# plumbing + cast-time binder + resolve arm slot-2 step) is what
+# made the flip safe. Coordinated Clobbering AUTO-JOINS via the §2
+# auto-grow teeth — inserted alphabetically between "Close Encounter"
+# and "Cut Propulsion". Admit set 41 → 42.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
     "Annul",
     "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-    "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
+    "Close Encounter", "Coordinated Clobbering",
+    "Cut Propulsion", "Darkness", "Depressurize",
     "Devastating Onslaught",
     "Diplomatic Relations", "Divert Disaster",
     "Don't Make a Sound",

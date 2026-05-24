@@ -21533,7 +21533,7 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # (Warping Wail mode 2 is ALSO ``filter_types=frozenset(
     # {"Sorcery"})`` but the printing's other modes still gap, so
     # the card stays DECLINED until Cycle 3 + Cycle 4 close.)
-    # Admit set 33 → 39 → 40 → 41.
+    # Admit set 33 → 39 → 40 → 41 → 42.
     # **singularity-rupture-cycle-1 (2026-05-24)**: lands
     # `Effect::SingularityRuptureEffect` Rust variant + bridge arm +
     # reverse-serializer leaf for the resolve-time self-scan substrate.
@@ -21566,10 +21566,29 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # grammar gate already accepted the shape (the Phase-5
     # ``or_both`` predicate doesn't enforce ``or_both==True``).
     # Admit set 40 → 41 (Warping Wail appended at the end).
+    # **coordinated-clobbering-cycle-2b-flip-p1 (2026-05-24):** Closes
+    # the Coordinated Clobbering subsystem. Cycle 2b lands the Phase 6
+    # admit arm in ``trajectory._printing_is_bridge_simple_spell`` (the
+    # ``_PHASE6_CC_3SLOT_SHAPE`` disjunct: ``max_t > min_t`` + ``len
+    # (slot_kinds) == max_t`` + ``len(set(slot_kinds)) == 2`` +
+    # ``slot_kinds[0] == "creature"`` + the exact heterogeneous
+    # ``("creature", "my_creature", "my_creature")`` tuple). The Cycle
+    # 1 + 2a substrate (3-slot StackItem plumbing +
+    # ``current_resolve_payload_target_id_3`` resolver bracket +
+    # ``push_to_stack_with_three_targets`` synthetic API + cast-time
+    # binder + resolve arm slot-2 step) is what made the flip safe.
+    # Coordinated Clobbering AUTO-JOINS via the §2 auto-grow teeth: it's
+    # covered+bridged (``CoordinatedClobberingEffect`` Python class +
+    # ``Effect::CoordinatedClobberingEffect`` Rust unit variant + bridge
+    # arm + reverse-serializer leaf, all from Cycle 1) AND round-trips
+    # AND fits the new Phase-6 target grammar. Inserted alphabetically
+    # between "Close Encounter" and "Cut Propulsion". PROBED tier.
+    # Admit set 41 → 42.
     assert admitted == [
         "Annul",
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
-        "Close Encounter", "Cut Propulsion", "Darkness", "Depressurize",
+        "Close Encounter", "Coordinated Clobbering",
+        "Cut Propulsion", "Darkness", "Depressurize",
         "Devastating Onslaught",
         "Diplomatic Relations", "Divert Disaster",
         "Don't Make a Sound",
@@ -21588,15 +21607,24 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Vengeful Possession", "Warping Wail", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 41 covered+bridged Tier-A spells: the 39 prior "
-        f"(33 base + 6 counterspells from Warping Wail Cycle 2) + "
-        f"Singularity Rupture (flipped by the Singularity Rupture "
-        f"Cycle 1 substrate — `Effect::SingularityRuptureEffect` "
-        f"Rust variant + bridge arm + reverse-serializer leaf, "
-        f"auto-grow under the Phase 4 `not slot_kinds` permissive "
-        f"disjunct) + Warping Wail (flipped by the Warping Wail "
-        f"Cycle 4 substrate — per-leaf CreateToken spell-side "
-        f"serializer + the _seat_token_printings nested-mode walk + "
+        f"exactly the 42 covered+bridged Tier-A spells: the 41 prior "
+        f"(33 base + 6 counterspells from Warping Wail Cycle 2 + "
+        f"Singularity Rupture + Warping Wail) + Coordinated "
+        f"Clobbering (flipped by the Coordinated Clobbering Cycle 2b "
+        f"Phase 6 admit arm — `_PHASE6_CC_3SLOT_SHAPE` disjunct on "
+        f"the `(2, 3)` heterogeneous 3-slot grammar with `('creature', "
+        f"'my_creature', 'my_creature')` slot kinds, consuming the "
+        f"Cycle 1 Rust Effect substrate + the Cycle 2a 3-slot "
+        f"StackItem plumbing + cast-time binder + resolve arm "
+        f"slot-2 step). Inserted alphabetically between Close "
+        f"Encounter and Cut Propulsion. Singularity Rupture "
+        f"(flipped by the Singularity Rupture Cycle 1 substrate — "
+        f"`Effect::SingularityRuptureEffect` Rust variant + bridge "
+        f"arm + reverse-serializer leaf, auto-grow under the Phase "
+        f"4 `not slot_kinds` permissive disjunct) + Warping Wail "
+        f"(flipped by the Warping Wail Cycle 4 substrate — per-leaf "
+        f"CreateToken spell-side serializer + the "
+        f"_seat_token_printings nested-mode walk + "
         f"per-mode cast-time binders for modes 0 + 1 via "
         f"warping-wail-cycle-4-flip-p1). Auto-grows further as the "
         f"remaining Tier-A and per-mode-target modal spells close)")
