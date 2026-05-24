@@ -21584,8 +21584,30 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # AND fits the new Phase-6 target grammar. Inserted alphabetically
     # between "Close Encounter" and "Cut Propulsion". PROBED tier.
     # Admit set 41 → 42.
+    # **archenemys-charm-flip-p1 (2026-05-24):** Closes Archenemy's
+    # Charm. Adds the `Effect::PutPlusOneCountersAndGrantKeywordsUEOT
+    # OnTargetCreatureYouControl` Rust variant (Mode 2 substrate —
+    # Modes 0 + 1 are already Rust-covered today: Mode 0 by
+    # `Effect::ExileTargetCreature` from the Gravkill closure, Mode 1
+    # by `Effect::ReturnUpToNCreaturesFromYourGraveyardToHand` from
+    # the return-up-to-n-creatures-graveyard-to-hand-p1 substrate-
+    # only branch) + parse/to_pydict/resolve arms + cross-engine
+    # bridge arm + reverse-serializer leaf + the
+    # `is_recognized_targeted_mode_leaf` allowlist widen for all
+    # three Archenemy's Charm modes + per-mode dispatch arms for
+    # modes 0/1/2 (mode 0 = first creature any-side, mode 1 =
+    # passthrough for resolve-time self-scan, mode 2 = own-side
+    # first creature). Archenemy's Charm AUTO-JOINS via the §2 auto-
+    # grow teeth (all three modes now covered+bridged, the round-
+    # trip-or-bail teeth flip True, and the Phase-4 `not slot_kinds`
+    # permissive disjunct admits the `(1, 2)` empty-slot_kinds
+    # ModalChooseOne shape — same single-cycle FLIP pattern as
+    # Singularity Rupture). Admit set 42 → 43 (Archenemy's Charm
+    # inserted alphabetically between Annul and Beyond the Quiet).
+    # ~4,286 17lands decks BLOCKED → PROBED.
     assert admitted == [
         "Annul",
+        "Archenemy's Charm",
         "Beyond the Quiet", "Biosynthic Burst", "Break Down the Door",
         "Close Encounter", "Coordinated Clobbering",
         "Cut Propulsion", "Darkness", "Depressurize",
@@ -21607,23 +21629,26 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         "Vengeful Possession", "Warping Wail", "Zero Point Ballad",
     ], (
         f"spell-card-bridge admit set drifted: {admitted} (expected "
-        f"exactly the 42 covered+bridged Tier-A spells: the 41 prior "
+        f"exactly the 43 covered+bridged Tier-A spells: the 42 prior "
         f"(33 base + 6 counterspells from Warping Wail Cycle 2 + "
-        f"Singularity Rupture + Warping Wail) + Coordinated "
+        f"Singularity Rupture + Warping Wail + Coordinated Clobbering) "
+        f"+ Archenemy's Charm (flipped by the Archenemy's Charm "
+        f"single-cycle substrate — Mode 2 "
+        f"`Effect::PutPlusOneCountersAndGrantKeywordsUEOTOn"
+        f"TargetCreatureYouControl` Rust variant + bridge arm + "
+        f"reverse-serializer leaf + per-mode binder allowlist widen "
+        f"for modes 0 + 1 + 2, auto-grow under the Phase 4 "
+        f"`not slot_kinds` permissive disjunct, same single-cycle "
+        f"FLIP pattern as Singularity Rupture). Coordinated "
         f"Clobbering (flipped by the Coordinated Clobbering Cycle 2b "
         f"Phase 6 admit arm — `_PHASE6_CC_3SLOT_SHAPE` disjunct on "
         f"the `(2, 3)` heterogeneous 3-slot grammar with `('creature', "
         f"'my_creature', 'my_creature')` slot kinds, consuming the "
         f"Cycle 1 Rust Effect substrate + the Cycle 2a 3-slot "
         f"StackItem plumbing + cast-time binder + resolve arm "
-        f"slot-2 step). Inserted alphabetically between Close "
-        f"Encounter and Cut Propulsion. Singularity Rupture "
-        f"(flipped by the Singularity Rupture Cycle 1 substrate — "
-        f"`Effect::SingularityRuptureEffect` Rust variant + bridge "
-        f"arm + reverse-serializer leaf, auto-grow under the Phase "
-        f"4 `not slot_kinds` permissive disjunct) + Warping Wail "
-        f"(flipped by the Warping Wail Cycle 4 substrate — per-leaf "
-        f"CreateToken spell-side serializer + the "
+        f"slot-2 step). Singularity Rupture + Warping Wail flipped "
+        f"via their dedicated single-cycle substrate lanes "
+        f"(per-leaf CreateToken spell-side serializer + the "
         f"_seat_token_printings nested-mode walk + "
         f"per-mode cast-time binders for modes 0 + 1 via "
         f"warping-wail-cycle-4-flip-p1). Auto-grows further as the "

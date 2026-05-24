@@ -210,8 +210,6 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
     each card; cards that haven't had their closure cycle ship yet stay
     declined.
 
-    Tested cards: Archenemy's Charm (``(1, 2)``-shape).
-
     **Drill Too Deep + Reroute Systems closures (2026-05-21).** Both
     cards were originally pinned in the Cycle 4 declined list.
     ``feature/drill-too-deep-slice`` closed Drill Too Deep via the
@@ -234,16 +232,31 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
     arm (narrow ``_in_modal_mode`` gate) + the
     ``_seat_token_printings`` nested-mode walk extension + per-mode
     cast-time binders for modes 0 + 1 — Warping Wail is now bridge-
-    admitted (see ``test_warping_wail_cycle_4_cross_engine.py``). The
-    remaining some-targeted modal stays declined.
+    admitted (see ``test_warping_wail_cycle_4_cross_engine.py``).
+
+    **Archenemy's Charm closure (archenemys-charm-flip-p1,
+    2026-05-24).** Archenemy's Charm was originally pinned here too.
+    The single-cycle FLIP lane closed it via the Mode 2 substrate
+    ``Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+    YouControl`` Rust variant + bridge arm + reverse-serializer leaf
+    + the per-mode binder allowlist widen for all three modes
+    (``ExileTargetCreature``, ``ReturnUpToNCreaturesFromYourGraveyard
+    ToHand``, ``PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+    YouControl``) + matching per-mode dispatch arms — Archenemy's
+    Charm is now bridge-admitted (see
+    ``test_archenemys_charm_parity.py``). With the Archenemy's Charm
+    closure landing this cycle, there are NO remaining some-targeted
+    ModalChooseOne cards in the EoE pool to pin DECLINED — the prior
+    declined-modals list is empty post-this-flip. The test stays as a
+    structural guard: any future some-targeted modal that lands in the
+    pool starts DECLINED until its closure cycle ships, so this list
+    grows then shrinks again as each closes.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
-    declined_modals = [
-        "Archenemy's Charm",
-    ]
+    declined_modals: list[str] = []
     for nm in declined_modals:
         p = src.get(nm)
         if p is None:

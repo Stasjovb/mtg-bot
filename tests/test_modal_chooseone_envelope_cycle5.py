@@ -367,16 +367,26 @@ def test_admit_predicate_still_declines_some_targeted_modal_cards_post_cycle5():
     (the multi-pick or_both walk picks the targeted mode 1's
     ``ReturnTargetArtifactCardFromYourGraveyardToHand`` for cast-time
     target binding) PLUS the Phase-5 ``(0, 1)`` ``or_both`` admit-
-    shape widen — see ``test_scour_for_scrap_parity.py``. Only
-    Archenemy's Charm remains declined.
+    shape widen — see ``test_scour_for_scrap_parity.py``.
+
+    **Archenemy's Charm closure (archenemys-charm-flip-p1,
+    2026-05-24).** Archenemy's Charm was the last some-targeted
+    ModalChooseOne pinned declined here. The single-cycle FLIP lane
+    closed it via the Mode 2 substrate
+    ``Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+    YouControl`` Rust variant + bridge arm + reverse-serializer leaf
+    + the per-mode binder allowlist widen for all three modes —
+    Archenemy's Charm is now bridge-admitted (see
+    ``test_archenemys_charm_parity.py``). The declined list is empty
+    post-this-flip; the structural guard stays in place so any future
+    some-targeted modal landing in the pool starts DECLINED until its
+    closure cycle ships.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
 
     src = get_active_source().get_printings()
-    declined_modals = [
-        "Archenemy's Charm",
-    ]
+    declined_modals: list[str] = []
     for nm in declined_modals:
         p = src.get(nm)
         if p is None:
