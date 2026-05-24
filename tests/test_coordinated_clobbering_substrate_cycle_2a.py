@@ -355,42 +355,44 @@ def test_cycle_2a_substrate_does_not_regress_cycle_1_parse_round_trip():
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant: Coordinated Clobbering STAYS DECLINED.
+# Cycle 2b closure marker (INVERTED — was the substrate-only invariant).
 # ---------------------------------------------------------------------------
 
 
-def test_coordinated_clobbering_stays_declined_at_admit_gate_post_cycle_2a():
-    """**Substrate-only invariant (Cycle 2a closure marker).** This
-    cycle ships ONLY the ``target_obj_id_3`` plumbing + the 3-slot
-    synthetic push API + the resolve arm's slot-2 extension. The
-    spell-card-bridge admit predicate
-    ``_printing_is_bridge_simple_spell`` MUST still decline
-    Coordinated Clobbering — flipping the admit gate is Cycle 2b's
-    job (Phase 6 admit arm + admit-set pin bump + per-card real-EoE
-    probe).
+def test_coordinated_clobbering_now_admits_at_admit_gate_post_cycle_2():
+    """**Cycle 2b closure marker (INVERTED — was the substrate-only
+    invariant in Cycle 2a, flipped here).** The spell-card-bridge
+    admit predicate ``_printing_is_bridge_simple_spell`` now ADMITS
+    Coordinated Clobbering — the Cycle 2b Phase 6 admit arm
+    (``_PHASE6_CC_3SLOT_SHAPE`` disjunct) flipped the gate, consuming
+    the 3-slot substrate this cycle pre-positioned (the
+    ``target_obj_id_3`` plumbing + ``push_to_stack_with_three_
+    targets`` synthetic API + the resolve arm's slot-2 extension +
+    the cast-time binder).
 
-    If this pin fails — i.e. Coordinated Clobbering starts admitting
-    on this branch — the substrate-only invariant has been violated
-    and the cross-engine probe will run BEFORE the cast-time binder
-    has been validated end-to-end. The Cycle 2a binder IS in place
-    (the ``is_coordinated_clobbering`` detector + the 3-slot scan)
-    but has NEVER been observed against a real-EoE trajectory; Cycle
-    2b is the validation lane.
+    Sibling-paired with
+    ``test_coordinated_clobbering_now_admits_at_admit_gate_post_
+    cycle_2`` in
+    ``test_coordinated_clobbering_substrate_cycle_1.py`` — both
+    Cycle 1 + Cycle 2a substrate-only invariants flipped atomically
+    in the SAME Cycle 2b commit (the load-bearing closure marker
+    discipline — flip the gate AND flip both invariant pins in
+    lockstep so a regression of any of the three surfaces is caught
+    here loudly).
 
-    This pin is the **Cycle 2a load-bearing closure marker**: Cycle
-    2b widens the admit predicate + bumps the admit-set + ships the
-    real-EoE probe, AND this pin gets inverted in the SAME cycle.
-    """
+    If this pin fails — i.e. Coordinated Clobbering goes back to
+    DECLINED — the Cycle 2b Phase 6 admit arm has regressed. The
+    flip cascades into the per-card real-EoE probe + the admit-set
+    pin bump (count 41 → 42); a regression here masks both."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     real = get_active_source().get_printings().get("Coordinated Clobbering")
     if real is None:
         pytest.skip("Coordinated Clobbering absent from active CardSource")
-    assert not trajectory._printing_is_bridge_simple_spell(real), (
-        "Coordinated Clobbering MUST still be declined at the admit "
-        "gate after Cycle 2a's substrate-only landing. The "
-        "(2, 3) heterogeneous 3-slot grammar needs the Cycle 2b "
-        "Phase 6 admit arm to flip — a flip HERE would silently "
-        "drive untested admit-gate transitions."
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Coordinated Clobbering MUST be ADMITTED at the admit gate "
+        "post-Cycle-2b (the Phase 6 admit arm landed in "
+        "trajectory._printing_is_bridge_simple_spell). A DECLINE "
+        "here is a regression of the Cycle 2b flip."
     )

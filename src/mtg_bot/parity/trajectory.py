@@ -6379,12 +6379,70 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
         and not slot_kinds
         and not _printing_is_x_cost
     )
+    # **Phase 6 — Coordinated Clobbering Cycle 2b admit widen
+    # (2026-05-24).** ``(2, 3)``-shape heterogeneous 3-slot grammar:
+    # one mandatory opp creature (slot 0) + one mandatory caster's
+    # untapped creature (slot 1) + one OPTIONAL second caster's
+    # untapped creature (slot 2 — beyond ``min_t``, the agent-decline
+    # branch). Today's sole consumer is **Coordinated Clobbering**
+    # (DSK ``{G}`` Sorcery: "Tap one or two target untapped creatures
+    # you control. They each deal damage equal to their power to
+    # target creature an opponent controls."). The
+    # ``CoordinatedClobberingEffect`` Python class reports
+    # ``target_count_range() == (2, 3)`` and
+    # ``target_slot_kinds() == ("creature", "my_creature",
+    # "my_creature")``.
+    #
+    # **Cross-engine binder shape.** The Cycle 2a Rust substrate ships
+    # the 3-slot ``StackItem.target_obj_id_3`` field + the
+    # ``current_resolve_payload_target_id_3`` resolver-bracket slot
+    # (save → set → restore on BOTH resolve entry points) + the
+    # cast-time binder in ``state_ops_cast.rs``'s
+    # ``is_coordinated_clobbering`` arm (slot 0 = first opp creature
+    # in ``bf_iter_etb_sorted`` order; slot 1 = first caster-untapped
+    # creature; slot 2 = OPTIONAL second caster-untapped, ``None`` if
+    # only one available — the ``slot_idx >= min_t`` agent-decline
+    # branch mirroring Python's ``_select_spell_targets`` shape) + the
+    # resolve arm's slot-2 read/validate/idempotent-tap step + second
+    # damage instance to slot 0. Both engines converge to the same
+    # deterministic-first ``("creature" opp, "my_creature" mine_1,
+    # "my_creature" mine_2)`` triple under the harness's
+    # ``_PickFirstLegalTargetAgent`` convention.
+    #
+    # **The widen is SURGICAL.** Only the EXACT heterogeneous tuple
+    # ``("creature", "my_creature", "my_creature")`` is admitted; the
+    # length-3 + 2-distinct-kinds + leading-``"creature"`` conjuncts
+    # block any sibling 3-slot shape from auto-growing into the admit
+    # set silently (e.g. ``("my_creature", "creature", "creature")``
+    # or any other re-ordering remains DECLINED — those would need
+    # their own per-card binder + Phase-N arm). The ``max_t > min_t``
+    # conjunct positively distinguishes the optional-third-slot shape
+    # from a hypothetical ``(3, 3)`` "all three required" grammar
+    # (which would need a different binder — no agent-decline branch).
+    # The ``len(slot_kinds) == max_t`` conjunct mirrors the audit's
+    # canonical "slot_kinds enumerates every potentially-filled slot"
+    # contract.
+    #
+    # **No X-cost branch.** Coordinated Clobbering's ``{G}`` mana
+    # cost has no X-pips; the ``not _printing_is_x_cost`` conjunct
+    # keeps the lane surgical (a hypothetical X-cost ``(2, 3)`` 3-slot
+    # card would need a separate substrate cycle to ship the X-binding
+    # bracket alongside the slot-3 binding bracket).
+    _PHASE6_CC_3SLOT_SHAPE = (
+        max_t > min_t
+        and len(slot_kinds) == max_t
+        and len(set(slot_kinds)) == 2
+        and slot_kinds[0] == "creature"
+        and tuple(slot_kinds) == ("creature", "my_creature", "my_creature")
+        and not _printing_is_x_cost
+    )
     if not (
         _PHASE1_SHAPE
         or _PHASE2_SHAPE
         or _PHASE3_WRATH_SHAPE
         or _PHASE4_MULTI_GRAVEYARD_SHAPE
         or _PHASE5_OR_BOTH_MIXED_TARGET_SHAPE
+        or _PHASE6_CC_3SLOT_SHAPE
     ):
         return False  # every other target grammar stays declined
     # The load-bearing §2 gate: the effect must be COVERED + BRIDGED
