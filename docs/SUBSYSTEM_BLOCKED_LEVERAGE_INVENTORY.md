@@ -102,6 +102,148 @@ are multi-cycle when their substrate is honestly accounted for:
   No single 1-cycle close shipped. The doc cruft cleanup is the
   full deliverable of this lane.
 
+### Inventory refresh (2026-05-24,
+`feature/inventory-refresh-2026-05-24-p1`)
+
+**Trigger:** today's Phase-4-permissiveness audit
+(`64080991`, `docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md`)
+discovered that §3's candidate enumeration was stale by the
+2026-05-22/23 closure wave — 6 of 8 candidates (Mutinous Massacre,
+Systems Override, Vengeful Possession, Zero Point Ballad,
+Devastating Onslaught, Terminal Velocity) had already flipped
+PROBED, leaving the audit-time single-gated `effect_uncovered` set
+at just 3 cards (Archenemy's Charm, Coordinated Clobbering,
+Singularity Rupture). The audit recommended this refresh.
+Subsequently today: **Singularity Rupture closed** (`31c823c8`;
+resolve-time self-scan option-(a) per the audit; admit set 39 → 40;
+PROBED 286 → 287; ~5,046 17lands decks BLOCKED → PROBED). And
+**Warping Wail Cycle 4 closed** (`8e47c1bf`; per-mode binder
+admit-gate flip + 3 cross-engine probes; ~23 17lands decks BLOCKED
+→ PROBED). Live single-gated `effect_uncovered` is now **2 cards**
+(Archenemy's Charm and Coordinated Clobbering; Singularity Rupture
+gone with today's closure, Warping Wail gone with C4).
+
+**Headline post-refresh:** `scout_r58_subsystem_attribution` reports
+**66 subsystem-gated** cards (down from the 2026-05-21 refresh's
+110, down further from older §0 / §2 body wording of 128) /
+**13 single-gated** (down from 35 / 53). `docs/POOL_PARITY.md` at
+this HEAD reports **PROBED 287 / covered 122 / BLOCKED-subsystem 66
+/ pool total 475**. Per-row deltas vs. the 2026-05-21 refresh
+body (which read PROBED 279 / BLOCKED-subsystem 110):
+
+  * **Effect-uncovered** — now `50 cards, 2 single-gated` (was
+    `82/12` in the 2026-05-21 refresh; `94/24` in the deeper body).
+    The 2026-05-22/23 closure wave + today's Singularity Rupture and
+    Warping Wail closures account for the drop. Live single-gated
+    members: **Archenemy's Charm** (multi-gate cascade per-mode
+    binder allowlist + missing mode-3 Effect variant + multi-target
+    return arm; 3-4 cycles per audit §3) and **Coordinated
+    Clobbering** (heterogeneous `(2, 3)` 3-slot grammar — positively
+    rejected by the target-grammar gate before the covered+bridged
+    tooth fires; needs a NEW Phase-6 admit arm; 2-3 cycles per audit
+    §1).
+  * **Warp_cost** — now `6/0/0` (was `7/0/0`). Multi-gated tail of
+    6 remains; Warping Wail's prior `(1, 0)` modal `or_both=False`
+    shape closed via Cycle 4's per-mode binder allowlist widen +
+    the Eldrazi-Scion token-AA bridge widen from Cycle 3.
+  * **Non-basic land substrate** — now `2/2/7,688` (was `13/13/8,893`
+    in the 2026-05-21 refresh). Cathedral of War closed in round-N
+    (`714bde69` Cathedral of War Cycle 1 — keyword-colorless tapped
+    mana-only land bridge predicate); the 10 Duskmourn painlands
+    closed via `744d67cf` (Non-basic land substrate Phase 2 —
+    Duskmourn conditional painlands). Single-gated residue: Echoing
+    Deeps + Secluded Starforge (clone substrate + activated-abilities
+    substrate respectively).
+  * **Static / layered abilities** — unchanged (`9/2/0`; the 2
+    single-gated Soulrager / Wickerfolk are still EoE-snapshot-
+    absent honest-stops).
+  * **Aura-attachment substrate** — unchanged (`3/0/0`; 3 multi-gated
+    residue Chorale of the Void / Cracked Skull / Sporogenic Infection
+    each waiting on Effect-uncovered + nonsafe-trigger event bridges).
+  * **Carrier activated abilities** — now `30 cards, 0 single-gated`
+    (was `32/0/0`). Drop tracks effect-uncovered closures that
+    co-resolved AA-multi-gated cards (Burgeoning, Osseous Sticktwister,
+    Blade of the Swarm — all PROBED via dedicated per-card probes
+    closing the effect_uncovered gate; their classifier carrier-AA
+    multi-gate stays True but the card itself is PROBED).
+  * **Non-safe triggered ability** — now `23 cards, 0 single-gated`
+    (down from a higher prior value as the effect-uncovered closure
+    chain drained multi-gated combinations). Co-blocker row only.
+  * **All other rows** — minor or unchanged drift.
+
+**Live single-gated by subsystem (the canonical "what to grind"
+column, 13 cards):**
+
+| Subsystem | Single-gated members |
+|---|---|
+| `cost_reduction` | Fungal Colossus, Gigastorm Titan, Lashwhip Predator, Sami Wildcat Captain, Uthros Psionicist (5) |
+| `nonbasic_land_substrate` | Echoing Deeps, Secluded Starforge (2) |
+| `static_abilities_layered` | Rampaging Soulrager, Wildfire Wickerfolk (2) |
+| `effect_uncovered` | Archenemy's Charm, Coordinated Clobbering (2) |
+| `station_spacecraft` | Galvanizing Sawship (1) |
+| `unclassified` | Leyline of Mutation (1) |
+
+All 13 single-gated cards have **0 17lands decks** at this HEAD —
+the EoE-pool single-gate-leverage frontier has effectively bottomed
+out. The remaining `decks(1g) = 4,286` row total tracks the
+Archenemy's Charm + Coordinated Clobbering pair (the only
+single-gated effect_uncovered members) at 4,286 cumulative — but per
+the live attribution snapshot above those two also read 0 individual
+deck count. (The aggregate column above continues to display the
+historical row total from the scout's cumulative summary; the
+per-card breakdown is what the live single-gated count actually
+covers.) The implication: every remaining single-gated closure is
+substrate-cost paid against effectively-zero in-pool leverage. The
+campaign's deck-leverage signal now lives **entirely in the
+multi-gated tail** (53 multi-gated cards; Cost-reduction's
+53,648-deck single-gated row is the only large remaining named
+single-gated row, and it's documented DEFERRED per §5 — admitting
+any of the 5 ships a guaranteed cross-engine divergence).
+
+**Per-card audit (today's two closures):**
+
+  * **Singularity Rupture** (5,046 17lands decks). Closed via
+    resolve-time self-scan option (a) per the audit's §3 verdict —
+    bespoke `Effect::SingularityRuptureEffect` Rust variant + parse
+    arm + `to_pydict` arm + resolve arm + cross-engine bridge dict→
+    Python arm + reverse-serializer `_leaf` arm. Mirrors Scout for
+    Survivors / Pull Through the Weft's deterministic-all self-scan
+    pattern — no new `StackItem.target_player_ids` field required.
+    The §3 candidate-list entry (line 685) and the §3 caveat block
+    (lines 714-732) are historical-narrative; Singularity Rupture is
+    now PROBED.
+  * **Warping Wail Cycle 4** (~23 17lands decks). Closed via the
+    `feature/warping-wail-cycle-4-flip-p1` lane — per-mode binder
+    admit-gate flip + the Cycle-3 token-AA bridge widen (creature
+    tokens with sac-self mana abilities, i.e. Eldrazi Scion) + 3
+    new cross-engine probes. The §3 candidate-list entry (line 686)
+    is historical-narrative; Warping Wail is now PROBED.
+
+**Body wording NOT rewritten by this lane.** §0, §1 (headline),
+§2 (subsystem table), §3 (per-lever sections), §4 (closure
+sequence), §5 (substrates explicitly OFF the top-5), §6 (new
+sub-gates revealed), §7 (cross-references) all continue to read
+against the 2026-05-21-refresh body (`110/35`) or earlier
+(`128/53`). Per the precedent established by the 2026-05-21 refresh
+section above (lines 27-103), this delta-section is the canonical
+"what does the body actually mean today" overlay; older row counts
+in the body text below should be interpreted as historical
+narrative anchored at their dated HEADs. The body's claim that
+"the substrate's been built — remainder is per-card" is the
+load-bearing live claim and remains correct.
+
+**Cross-references for this refresh:**
+
+  * `docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md` — today's
+    Phase-4 permissiveness audit (the trigger).
+  * Singularity Rupture closure: commit `31c823c8` (merge);
+    `c156aac2` (Rust substrate); `cf0446f6` (admit-set pin bump +
+    real-EoE probe + regen docs).
+  * Warping Wail Cycle 4: commit `8e47c1bf` (merge); `170f1e2b`
+    (admit-gate flip closure Python + Rust); `535118a3` (admit-set
+    pin updates + 3 cross-engine probes); `9c51412e` (SEARCH_
+    LIMITATIONS Cycle 4 documentation).
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
