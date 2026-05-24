@@ -12166,6 +12166,247 @@ Phase 4 resolve-time self-scan vs CR 601.2c cast-time binding"
 (Scout for Survivors / Pull Through the Weft / Singularity Rupture
 all share the same deliberate divergence).
 
+## Archenemy's Charm Cycle 1 substrate — substrate-only landing not possible; Mode 2 Effect substrate alone would AUTO-FLIP the admit gate (HONEST-STOP, 2026-05-24)
+
+**Lane**: `feature/archenemys-charm-cycle-1-substrate-p4` —
+docs-only honest-stop. No engine changes shipped; no admit-set
+pin bump; no new probe tests.
+
+**Trigger**: today's Worker-B parallel-agent campaign dispatched
+to ship the first cycle of a 3-4 cycle Archenemy's Charm closure,
+scoped as "the simplest of the 3 modes' Rust Effect substrate"
+under a strict substrate-only invariant — Archenemy's Charm STAYS
+DECLINED at the admit gate post-Cycle-1, admit count unchanged at
+41, decline-set pin unchanged. The verify-first walk against the
+live tree found the scope is unachievable: landing ANY of the
+remaining 3 modes' Effect substrate (only Mode 2's
+`PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`
+is uncovered today — Modes 0 + 1 are already covered by prior
+landings) auto-grows the admit set.
+
+**Live state at this HEAD (`ee0a8155`)**:
+
+  * **Mode 0** — `ExileTargetCreature`: ALREADY Rust-covered
+    (`Effect::ExileTargetCreature` declared, parsed, resolved,
+    bridged, serialized) via the `feature/effect-exile-target-
+    creature-p1` Gravkill closure landed 2026-05-22 (admit 31→32).
+  * **Mode 1** — `ReturnUpToNCreaturesFromYourGraveyardToHand`:
+    ALREADY Rust-covered via the `feature/effect-return-up-to-n-
+    creatures-graveyard-to-hand-p1` substrate-only branch landed
+    2026-05-22 (admit unchanged at the time — no EoE printing
+    carries this Effect as a top-level `spell_effect`; Archenemy's
+    Charm is the sole consumer, through a `ModalChooseOne` mode
+    slot, so the substrate-only landing left the card itself
+    BLOCKED).
+  * **Mode 2** — `PutPlusOneCountersAndGrantKeywordsUEOTOnTarget
+    CreatureYouControl`: NOT Rust-covered. Only one of the three
+    modes uncovered today.
+
+**Verify-first finding**: I implemented the Mode 2 Rust substrate
+(Effect variant declaration + parse + to_pydict + resolve arm,
+mirroring the Python class's two-arm shape — `obj.counters` +=
+amount AND a UEOT `GrantKeyword` push per element of
+`granted_keywords` — with a payload-target read-and-revalidate
+ladder per CR 608.2b, a self-scan fallback for the synthetic-push
+substrate path, all sibling of the
+`Effect::PutPlusOneCounterOnTargetCreature` /
+`Effect::GrantKeywordsToTargetCreatureUntilEOT` precedents), the
+cross-engine bridge arm, and the reverse-serializer leaf, then
+verified against the live tree:
+
+```python
+from mtg_bot.cards.source import get_active_source
+from mtg_bot.parity import trajectory
+real = get_active_source().get_printings().get("Archenemy's Charm")
+trajectory._spell_effect_is_covered_and_bridged(real)
+# => True  (was False pre-substrate)
+trajectory._printing_is_bridge_simple_spell(real)
+# => True  (was False pre-substrate)
+```
+
+The admit predicate at
+`src/mtg_bot/parity/trajectory.py::_printing_is_bridge_simple_spell`
+flipped True. Archenemy's Charm's `(1, 2)` empty-slot_kinds
+ModalChooseOne shape matches the Phase-4 `not slot_kinds`
+permissive disjunct (the same path Singularity Rupture rode in
+its 1-cycle closure today), AND with all three modes now
+covered+bridged the §2 auto-grow teeth flip the gate. The
+substrate-only invariant pin the dispatch required — Archenemy's
+Charm STAYS DECLINED post-Cycle-1 — is unachievable.
+
+Concrete pin breakage observed locally with the substrate landed:
+
+  * `tests/test_cross_engine_etb_triggers.py::test_spell_card_lever_
+    phase1_negative_pins_decline_set` — FAILED (admit set 41 →
+    42; Archenemy's Charm inserted alphabetically between Annul
+    and Beyond the Quiet).
+  * `tests/test_probe_spell_card_bridge_admitted.py::test_phase1_
+    admit_set_is_exactly_the_covered_bridged_seatable_set` —
+    FAILED (same mechanism).
+  * `tests/test_modal_chooseone_envelope_cycle4.py` +
+    `tests/test_modal_chooseone_envelope_cycle5.py` declined-modals
+    lists — would FAIL (both list Archenemy's Charm as a still-
+    declined modal that the substrate landing flips).
+
+**Audit re-read**: the 2026-05-24 Phase-4 permissiveness audit
+(`64080991`,
+`docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md` §3) noted
+that Archenemy's Charm has a "multi-gate cascade" beyond the
+predicate (per-mode targeted-leaf binder allowlist + multi-target
+return arm). On verify-first walk against the live tree, those
+cascade gates are **downstream of the admit predicate**, NOT
+predicate-side disjuncts — i.e. they would block the live
+cross-engine probe at cast time, but they don't prevent the admit
+predicate from returning True. The audit's "stays declined past
+the predicate" framing is technically true (cast-time binding
+fails) but DOES NOT save the admit-set pin: that pin reads
+`_printing_is_bridge_simple_spell` directly, which flips True
+once all 3 modes are covered+bridged regardless of the cast-time
+binder state.
+
+The 2026-05-22 multi-step characterization at
+`docs/SEARCH_LIMITATIONS.md` "Next-tractable-substrate hexad
+characterization" §5 ("Archenemy's Charm — three-mode
+ModalChooseOne, fully-characterized verify-first") confirms this
+reading: step 4 of the closure plan explicitly bumps the admit-
+set pin alongside the Mode 2 substrate landing (admit set "33 →
+34" — quoting the pre-2026-05-22-closure-wave count). Today's
+substrate landing would land that bump (admit 41 → 42).
+
+**Subsystem entanglement** — this is the textbook honest-stop
+trigger from the dispatch's pre-authorization: "if subsystem
+entanglements show up, STOP and push docs-only honest-stop. The
+card's BLOCKED tier may be a closure-bookkeeping gap not an
+actual Rust substrate gap." That language applies here, but the
+inverse: the card's BLOCKED tier is an admit-gate-staging
+bookkeeping consequence (the prior lanes ordered Modes 0 + 1
+substrate ahead of Mode 2 precisely because each individually
+left the card still BLOCKED at the covered+bridged tooth; Mode 2
+is the load-bearing third mode whose landing tips the tooth over)
+— not a substrate-cycle-decomposable gap.
+
+**Sibling lane finding**: today's Coordinated Clobbering Cycle 1
+substrate (`b199e98b`) achieved its substrate-only invariant pin
+(Coordinated Clobbering STAYS DECLINED post-Cycle-1) because
+Coordinated Clobbering trips the **target-grammar gate** (Phase
+1-5 all positively reject the heterogeneous `(2, 3)` 3-slot
+shape) before the covered+bridged tooth fires. That gate is a
+predicate-side disjunct, so landing the Effect substrate alone
+doesn't open the admit predicate — Cycle 2's Phase 6 admit-arm
+widen is the load-bearing flip. Archenemy's Charm has no such
+predicate-side gate today (the Phase 4 permissive disjunct
+already admits its shape); the covered+bridged tooth is the
+sole gate, and Mode 2's substrate landing tips it.
+
+**Three plausible closure-plan revisions for the next dispatch**:
+
+  1. **Single-cycle flip (most economical).** Ship Mode 2 Effect
+     substrate + per-mode targeted-leaf binder allowlist widen
+     (the `is_recognized_targeted_mode_leaf` allowlist at
+     `rust/src/state_ops_cast.rs:2368` — currently 5 variants;
+     add `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreature
+     YouControl`, `ExileTargetCreature`, and
+     `ReturnUpToNCreaturesFromYourGraveyardToHand` so the
+     cast-time per-mode binder seats each mode's target) + the
+     multi-target return arm widen (Mode 1's `(1, 2)` graveyard
+     bind) + admit-set pin bump + per-card real-EoE probe driving
+     the full 3-mode envelope byte-equal. This is the same
+     1-cycle pattern Singularity Rupture rode today: the audit's
+     "3-4 cycles" estimate was conservative against today's
+     post-Phase-4-permissive-disjunct admit predicate. The
+     payoff: ~4,286 17lands decks BLOCKED → PROBED in a single
+     cycle. Risk: the per-mode targeted-leaf binder allowlist
+     widen has subsystem entanglement with the
+     `ReturnUpToNCreaturesFromYourGraveyardToHand` multi-target
+     bind — Mode 1's (1, 2) target seating requires either
+     resolve-time self-scan (sibling of the Pull Through the Weft
+     / Scout for Survivors precedent) or a cast-time per-mode
+     2-slot binder (Phase 2 sibling of the Diplomatic Relations
+     2-slot grammar). Resolve-time self-scan is the established
+     precedent; preferred.
+
+  2. **Two-cycle close.** Cycle A: ship the Mode 2 Effect
+     substrate + per-mode binder allowlist widen for Modes 0 + 2
+     ONLY (the single-target seating patterns), with the
+     substrate-only invariant pin INVERTED (Archenemy's Charm
+     SHOULD ADMIT post-Cycle-A) + the admit-set pin bumped +
+     declined-modals pins updated. The single-target probes pin
+     Modes 0 + 2 byte-equal. Mode 1's (1, 2) multi-target
+     resolve-time self-scan + per-card probe land in Cycle B.
+     Risk: Cycle A admits Archenemy's Charm at the admit gate
+     while Mode 1 is still un-seated — but the cross-engine
+     harness's `_PickFirstLegalTargetAgent` is mode-blind, so a
+     probe driving Mode 1 specifically would crash or fizzle
+     un-byte-equal. The mitigation is the per-card probe being
+     mode-0-and-mode-2-only in Cycle A.
+
+  3. **Three-cycle close.** Cycle A: Mode 2 Effect substrate
+     ONLY (no admit-gate flip — this lane's scope, but it's
+     unachievable per the finding above). Cycle B: per-mode
+     binder allowlist widen (admit-gate flip lands here). Cycle
+     C: multi-target return arm widen + real-EoE probe. This
+     decomposition requires a way to land Mode 2 substrate
+     WITHOUT flipping the admit gate, which — given the
+     covered+bridged tooth is the sole remaining gate — would
+     mean either NOT bridging the Mode 2 dict-shape (deliberate
+     half-wire — violates the no-fallback-hybrid rule) or NOT
+     adding the reverse-serializer leaf (same violation). Both
+     are anti-patterns; the 3-cycle path is structurally
+     unsound.
+
+**Recommended next dispatch**: option 1 (single-cycle flip)
+under a `feature/archenemys-charm-flip-p1` lane name with the
+invariant pin INVERTED (admit set 41 → 42, decline-set pin
+removed, declined-modals pins updated, per-card real-EoE probe
+written against all three modes). The per-mode binder allowlist
+widen is the load-bearing piece; reuse the Warping-Wail Cycle 4
+per-mode binder shape (`is_recognized_targeted_mode_leaf` was
+extended with `ExileTargetCreatureWithPowerOrToughnessAtMost`
+and `CounterTargetSpell` for Warping Wail modes 0 + 1) and the
+Pull Through the Weft / Scout for Survivors / Singularity
+Rupture resolve-time self-scan precedent for Mode 1's
+multi-target return.
+
+**No measurable progress this lane.** No Rust changes; no
+admit-set bump; no probe tests; no PROBED flip. The honest-stop
+entry is the full deliverable.
+
+**Concurrent-agent coordination**: Worker A is on Coordinated
+Clobbering Cycle 2a in parallel. CC's lane touches the
+`(2, 3)` heterogeneous Phase 6 admit arm + 3-slot binder
+(predicate-side widen) — orthogonal to Archenemy's Charm's
+post-predicate cascade. No mechanical conflict with this
+docs-only honest-stop. Worker A's lane will not surface this
+finding because CC's lane stays in the target-grammar-gate
+regime, not the covered+bridged tooth regime.
+
+**Cross-references**:
+
+* `docs/PHASE4_ADMIT_PERMISSIVENESS_AUDIT_2026-05-24.md` §3 —
+  the audit-time characterization (the "stays declined past
+  the predicate" framing this honest-stop refines).
+* `docs/SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md`'s 2026-05-24
+  inventory-refresh section — Archenemy's Charm + Coordinated
+  Clobbering as the live single-gated `effect_uncovered` pair.
+* `docs/SEARCH_LIMITATIONS.md` "Next-tractable-substrate hexad
+  characterization" §5 (2026-05-21) — the
+  fully-characterized verify-first walk that documented the
+  4-step closure plan; today's finding upgrades step 2's
+  substrate-only landing to "auto-flips the admit gate"
+  rather than "substrate-only landing leaves card BLOCKED".
+* `docs/SEARCH_LIMITATIONS.md` "Singularity Rupture Cycle 1"
+  (2026-05-24) — the sibling auto-grow exemplar; both cards
+  ride the Phase-4 `not slot_kinds` permissive disjunct.
+* `src/mtg_bot/parity/trajectory.py:6177-6189` — the Phase 4
+  permissive `not slot_kinds` disjunct (the load-bearing
+  predicate arm).
+* `src/mtg_bot/effects/generic/counters.py:662` — the Python
+  Mode 2 Effect class definition.
+* `tests/test_cross_engine_etb_triggers.py::test_spell_card_
+  lever_phase1_negative_pins_decline_set` — the load-bearing
+  decline-set pin (admit count 41) the substrate landing
+  would break.
+
 ## Multi-target Phase 4 resolve-time self-scan vs CR 601.2c cast-time binding (Lane `feature/multi-target-admit-phase4`, 2026-05-21)
 
 **Scope of this lane**: widen the spell-card-bridge admit predicate

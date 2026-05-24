@@ -137,11 +137,20 @@ body (which read PROBED 279 / BLOCKED-subsystem 110):
     Warping Wail closures account for the drop. Live single-gated
     members: **Archenemy's Charm** (multi-gate cascade per-mode
     binder allowlist + missing mode-3 Effect variant + multi-target
-    return arm; 3-4 cycles per audit §3) and **Coordinated
-    Clobbering** (heterogeneous `(2, 3)` 3-slot grammar — positively
-    rejected by the target-grammar gate before the covered+bridged
-    tooth fires; needs a NEW Phase-6 admit arm; 2-3 cycles per audit
-    §1).
+    return arm; 3-4 cycles per audit §3 — **but see the 2026-05-24
+    `archenemys-charm-cycle-1-substrate-p4` honest-stop finding in
+    `docs/SEARCH_LIMITATIONS.md`**: the substrate-only-stays-declined
+    invariant is unachievable because the Mode 2 substrate landing
+    flips the covered+bridged tooth on its own. The closure should
+    re-scope to a single-cycle flip — Mode 2 Effect substrate +
+    per-mode binder allowlist widen + Mode 1 resolve-time
+    multi-target self-scan — riding the same Phase-4 `not slot_kinds`
+    permissive disjunct + admit-set pin bump pattern Singularity
+    Rupture used today; ~4,286 17lands decks BLOCKED → PROBED in a
+    single cycle) and **Coordinated Clobbering** (heterogeneous
+    `(2, 3)` 3-slot grammar — positively rejected by the
+    target-grammar gate before the covered+bridged tooth fires;
+    needs a NEW Phase-6 admit arm; 2-3 cycles per audit §1).
   * **Warp_cost** — now `6/0/0` (was `7/0/0`). Multi-gated tail of
     6 remains; Warping Wail's prior `(1, 0)` modal `or_both=False`
     shape closed via Cycle 4's per-mode binder allowlist widen +
