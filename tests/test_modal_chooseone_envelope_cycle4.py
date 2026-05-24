@@ -204,38 +204,38 @@ def test_admit_predicate_admits_ruinous_rampage_post_cycle4():
 
 
 def test_admit_predicate_declines_some_targeted_modal_cards():
-    """The remaining some-targeted ModalChooseOne cards STAY DECLINED
-    post-Cycle-4. Per-mode target binding (Cycle 5) PLUS the matching
-    per-leaf Effect variants (Cycle 6+, one card at a time) are the
-    substrate that admits them.
+    """The remaining some-targeted ModalChooseOne cards STAY DECLINED.
+    Per-mode target binding + the matching per-leaf Effect variants +
+    matching reverse-serializer leaves are the substrate that admits
+    each card; cards that haven't had their closure cycle ship yet stay
+    declined.
 
-    Tested cards: Scour for Scrap (``or_both=True``; bails at the
-    modal composer too), Archenemy's Charm (``(1, 2)``-shape),
-    Warping Wail (``(0, 1)``-shape).
+    Tested cards: Archenemy's Charm (``(1, 2)``-shape).
 
     **Drill Too Deep + Reroute Systems closures (2026-05-21).** Both
     cards were originally pinned in the Cycle 4 declined list.
     ``feature/drill-too-deep-slice`` closed Drill Too Deep via the
     ``PutChargeCountersOnTargetSpacecraftOrPlanetYouControl`` Effect
-    variant + matching leaf + the Cycle-5 detector table extension —
-    Drill Too Deep is now bridge-admitted (see
-    ``test_drill_too_deep_parity.py``).
+    variant + matching leaf + the Cycle-5 detector table extension.
     ``feature/reroute-systems-slice-v2`` closed Reroute Systems via
-    its per-leaf Effect variants (extended
-    ``PumpTargetArtifactOrCreatureUntilEOT`` with ``granted_keywords``
-    + new ``DealDamageToTargetTappedCreature`` variant — see
-    ``test_reroute_systems.py``). The remaining 3 some-targeted
-    modals stay declined.
+    its per-leaf Effect variants (``PumpTargetArtifactOrCreatureUntilEOT``
+    `granted_keywords` widen + new ``DealDamageToTargetTappedCreature``).
 
     **Scour for Scrap closure (scour-for-scrap-cycle-2, 2026-05-21).**
-    Scour for Scrap was originally pinned here too — it's the only
-    ``or_both=True`` modal in EoE. cycle-2 closed it via the new
-    ``Effect::ReturnTargetArtifactCardFromYourGraveyardToHand`` Rust
-    variant + matching leaf + the Cycle-5 detector table extension
-    PLUS the Phase-5 ``(0, 1)`` ``or_both`` admit-shape widen in
-    ``_printing_is_bridge_simple_spell`` — Scour for Scrap is now
-    bridge-admitted (see ``test_scour_for_scrap_parity.py``). The
-    remaining 2 some-targeted modals stay declined.
+    Scour for Scrap was originally pinned here too. cycle-2 closed it
+    via the new ``Effect::ReturnTargetArtifactCardFromYourGraveyardTo
+    Hand`` Rust variant + matching leaf + the Cycle-5 detector table
+    extension PLUS the Phase-5 ``(0, 1)`` ``or_both`` admit-shape widen
+    in ``_printing_is_bridge_simple_spell``.
+
+    **Warping Wail Cycle 4 closure (warping-wail-cycle-4-flip-p1,
+    2026-05-24).** Warping Wail was originally pinned here too. Cycle
+    4 closed it via the per-leaf ``CreateToken`` spell-side serializer
+    arm (narrow ``_in_modal_mode`` gate) + the
+    ``_seat_token_printings`` nested-mode walk extension + per-mode
+    cast-time binders for modes 0 + 1 — Warping Wail is now bridge-
+    admitted (see ``test_warping_wail_cycle_4_cross_engine.py``). The
+    remaining some-targeted modal stays declined.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
@@ -243,7 +243,6 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
     src = get_active_source().get_printings()
     declined_modals = [
         "Archenemy's Charm",
-        "Warping Wail",
     ]
     for nm in declined_modals:
         p = src.get(nm)
@@ -251,9 +250,9 @@ def test_admit_predicate_declines_some_targeted_modal_cards():
             # Cards may be off-set / not in active source.
             continue
         assert _printing_is_bridge_simple_spell(p) is False, (
-            f"{nm} must STAY DECLINED post-Cycle-4 — some-targeted "
-            f"ModalChooseOne shapes need Cycle-5 per-mode target "
-            f"binding PLUS Cycle-6+ per-leaf Effect variants before "
+            f"{nm} must STAY DECLINED — some-targeted ModalChooseOne "
+            f"shapes need per-mode target binding PLUS per-leaf Effect "
+            f"variants PLUS matching reverse-serializer leaves before "
             f"they can flip."
         )
 

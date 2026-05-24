@@ -611,30 +611,105 @@ def test_rust_to_pydict_round_trip_max_value_1():
 # ---------------------------------------------------------------------------
 
 
-def test_warping_wail_stays_declined_at_admit_gate_post_cycle_1a():
-    """**Substrate-only invariant.** This cycle ships ONLY the Effect
-    substrate for Mode 1. Warping Wail has THREE modes; Modes 2 + 3
-    still have no Rust substrate. The spell-card-bridge admit
-    predicate ``_printing_is_bridge_simple_spell`` MUST still decline
-    Warping Wail — flipping it requires (a) the Mode 2 substrate
-    (Cycle 2), (b) the Mode 3 substrate (Cycle 3), and (c) the
-    admit-gate widen for the (0, 1) + or_both=False Phase-6 shape
-    (Cycle 4).
+def test_warping_wail_now_admits_at_admit_gate_post_cycle_4():
+    """**Substrate-only-pin FLIP (Warping Wail Cycle 4 closure,
+    2026-05-24).** The C1a substrate-only pin was the load-bearing
+    closure marker that gate-kept the §2 invariant during Cycles 1a→3:
+    Warping Wail MUST stay declined at the spell-card-bridge admit gate
+    as long as ANY of its three modes lacks substrate, because flipping
+    the admit gate prematurely would let the cross-engine probe run
+    against an incomplete bridge surface and silently emit wrong
+    byte-equal claims for the missing modes.
 
-    If this pin fails — i.e. Warping Wail starts admitting on this
-    branch — the substrate-only invariant has been violated and the
-    cross-engine probe will run BEFORE Modes 2 + 3 are implemented,
-    producing wrong byte-equal claims. Catch the drift here."""
+    Cycle 4 closes the §2 surface:
+
+      * Cycle 1a (landed ``ff512bea``): Mode 1's
+        ``ExileTargetCreatureWithPowerOrToughnessAtMost`` Effect
+        substrate.
+      * Cycle 2 (landed ``32248da3``): Mode 2's
+        ``CounterTargetSpell.filter_types`` Rust schema widen + bridge
+        thread + reverse-serializer leaf.
+      * Cycle 3 (landed ``62bb1d94``): Mode 3's token-AA bridge widen
+        (the ``_token_creature_with_safe_mana_activated_ability_card_
+        def`` helper + ``_ELDRAZI_SCION_SAFE_ACTIVATED_ABILITY`` dict).
+      * Cycle 4 (THIS lane): per-leaf ``CreateToken`` spell-side
+        serializer (extending ``_python_spell_effect_to_dict``'s
+        ``_leaf`` table to recognize the nested-modal ``CreateToken``
+        mint) + the matching ``_seat_token_printings`` nested-mode walk
+        extension (the spell-axis sibling of the round-73 top-level
+        Lander-pid spell-token seating + the round-49 trigger-axis
+        seating) + per-mode cast-time binders for modes 0 + 1 (the
+        ``ExileTargetCreatureWithPowerOrToughnessAtMost`` + the
+        ``CounterTargetSpell`` arms in ``state_ops_cast.rs``'s
+        ``is_recognized_targeted_mode_leaf`` allowlist).
+
+    The §2 admit gate FLIPS POSITIVE for Warping Wail this cycle:
+    ``_printing_is_bridge_simple_spell`` now admits because (a)
+    ``_spell_effect_is_covered_and_bridged`` is True (every mode's
+    Effect class is in the covered+bridged set — Cycles 1a/2/3 closed
+    each per-mode Effect surface), AND (b)
+    ``_python_spell_effect_to_dict`` now round-trips clean (the
+    composer recurses through the three modes; mode 3's CreateToken
+    leaf emits the symbolic ``_token_card_def`` Eldrazi Scion ref the
+    ``_seat_token_printings`` nested-mode walk later resolves to a
+    numeric ``token_printing_id``), AND (c) the target-grammar gate
+    already accepted the ``(0, 1)`` + empty ``slot_kinds`` Phase-6
+    modal shape (the Phase-5 ``or_both`` shape predicate
+    ``_PHASE5_OR_BOTH_MIXED_TARGET_SHAPE`` already matched the same
+    shape — the C5 Scour for Scrap closure widened to admit it, and
+    the predicate does NOT gate on ``or_both`` value despite the
+    historical name, so ``or_both=False`` Warping Wail rides the same
+    arm). PROBED tier — pool delta +1 (Warping Wail BLOCKED →
+    PROBED).
+
+    The pin's flip-direction is the load-bearing closure marker: if
+    this assertion ever regresses to "stays declined" without an
+    explicit roll-back-the-flip cycle, the campaign-wide §2 invariant
+    has been silently broken — catch it here."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     real = get_active_source().get_printings().get("Warping Wail")
     if real is None:
         pytest.skip("Warping Wail absent from active CardSource")
-    assert not trajectory._printing_is_bridge_simple_spell(real), (
-        "Warping Wail MUST still be declined at the admit gate after "
-        "Cycle 1a substrate-only landing (Mode 2 + Mode 3 substrates "
-        "still gap — see docs/SEARCH_LIMITATIONS.md 'Warping Wail "
-        "Cycle 1a substrate LANDED'). A flip here is a substrate-"
-        "scope violation."
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Warping Wail MUST admit at the spell-card-bridge admit gate "
+        "post-Cycle-4 closure (the per-leaf CreateToken spell-side "
+        "serializer + the _seat_token_printings nested-mode walk + the "
+        "per-mode cast-time binders for modes 0 + 1 are what flips this "
+        "card into the §2 admit set — see docs/SEARCH_LIMITATIONS.md "
+        "'Warping Wail Cycle 4 admit-gate flip' for the full closure "
+        "rationale). A DECLINE here is a Cycle-4 regression — the §2 "
+        "auto-grow teeth must positively close on all three modes."
     )
+    # Per-tooth gate sanity: each conjunct of the admit predicate
+    # fires positively so a debug failure tells us which gate the
+    # regression hit.
+    assert trajectory._spell_effect_is_covered_and_bridged(real) is True, (
+        "Warping Wail's spell_effect must be covered+bridged "
+        "(every per-mode Effect class in the covered+bridged set)"
+    )
+    rt = trajectory._python_spell_effect_to_dict(real.spell_effect)
+    assert rt is not None, (
+        "Warping Wail must round-trip cleanly via the ModalChooseOne "
+        "composer + the three per-mode _leaf arms"
+    )
+    # Pin the exact dict shape: choose_one_mode composer + the three
+    # per-mode leaves (mode 0 max_value=1; mode 1 Sorcery-filter; mode
+    # 2 create_token with the symbolic Eldrazi Scion ref). The
+    # symbolic ref is what _seat_token_printings later swaps for the
+    # numeric token_printing_id.
+    assert rt["kind"] == "choose_one_mode"
+    assert len(rt["modes"]) == 3
+    assert rt["modes"][0] == {
+        "kind": "exile_target_creature_with_power_or_toughness_at_most",
+        "max_value": 1,
+    }
+    assert rt["modes"][1] == {
+        "kind": "counter_target_spell",
+        "filter_types": ["Sorcery"],
+    }
+    assert rt["modes"][2]["kind"] == "create_token"
+    assert rt["modes"][2]["count"] == 1
+    assert "_token_card_def" in rt["modes"][2]
+    assert rt["modes"][2]["_token_card_def"].name == "Eldrazi Scion"
