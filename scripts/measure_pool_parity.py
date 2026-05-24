@@ -1063,6 +1063,39 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_endstone_parity.py",
     REPO_ROOT / "tests" / "test_vaultguard_trooper_parity.py",
     REPO_ROOT / "tests" / "test_warping_wail_cycle_4_cross_engine.py",
+    # **post-ac-flip-attribution-sweep-2026-05-24:** the
+    # Archenemy's Charm BLOCKED → PROBED flip (merge ``7088c9bd``)
+    # landed ``tests/test_archenemys_charm_parity.py`` with three
+    # canonical ``test_cross_engine_real_eoe_archenemys_charm_mode_
+    # {0,1,2}_..._parity`` functions, each binding the live EoE
+    # printing via the in-body ``get_active_source().get_printings()
+    # .get("Archenemy's Charm")`` idiom — i.e. the
+    # ``_probe_module_probed_cards`` predicate matches — but the
+    # AC merge did not also touch this registry. Pure measurement-
+    # attribution gap (identical shape to the 2026-05-24
+    # ``feature/post-flip-reclassification-scout`` 12-card sweep
+    # immediately prior). Registration alone flips Archenemy's Charm
+    # COVERED → PROBED in the metric; no engine changes. The other
+    # six per-card parity modules that landed since the prior sweep
+    # (``test_blade_of_the_swarm_parity.py``,
+    # ``test_deafening_silence_parity.py``,
+    # ``test_genemorph_imago_parity.py``,
+    # ``test_possibility_technician_parity.py``,
+    # ``test_territorial_bruntar_parity.py``,
+    # ``test_atomic_microsizer_parity.py``) are NOT registered here
+    # because they do not satisfy ``_probe_module_probed_cards``'s
+    # in-body ``get_printings()`` binding rule at this HEAD: five
+    # cache the live printing via a module-level
+    # ``_PRINTINGS = get_active_source().get_printings()`` and call
+    # ``_PRINTINGS.get(...)`` inside the probe function (the
+    # cached form is OUTSIDE the bounded function body the predicate
+    # scans, so the probe correctly drives the real printing but the
+    # script does not credit it — surfaced as an honest predicate-
+    # shape inconsistency, not closed in this sweep); the sixth
+    # (Atomic Microsizer) is an explicitly ``@pytest.mark.skip``
+    # multi-cycle scaffold whose ``raise NotImplementedError`` body
+    # is not yet a live probe.
+    REPO_ROOT / "tests" / "test_archenemys_charm_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

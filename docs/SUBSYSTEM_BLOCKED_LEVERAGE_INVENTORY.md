@@ -330,6 +330,102 @@ real-EoE byte-equal probe per card — but is a real probe-authoring
 lane, not a free reclassification. Honest-stopped at the
 registration sweep.
 
+### Post-AC-flip attribution sweep (2026-05-24,
+`feature/post-ac-flip-attribution-sweep-p1`)
+
+**Trigger:** the Archenemy's Charm BLOCKED → PROBED flip (merge
+`7088c9bd`) shipped `tests/test_archenemys_charm_parity.py` (three
+canonical `test_cross_engine_real_eoe_archenemys_charm_mode_{0,1,2}
+_..._parity` functions, each driving the live EoE printing through
+the bridge) but did not also update `scripts/measure_pool_parity.
+PROBE_MODULES`. Identical shape to the prior `feature/post-flip-
+reclassification-scout-2026-05-24-p1` 12-card sweep: a pure
+measurement-attribution gap — the probe exists + passes; only the
+registry was stale.
+
+**Audit method.** Same playbook as the prior 12-card sweep:
+
+  1. **PROBE_MODULES registration sweep** — enumerated the
+     `PROBE_MODULES` tuple, listed all `tests/test_*_parity.py`
+     files, computed the diff, and per-candidate ran the script's
+     own `_probe_module_probed_cards` predicate (top-level
+     `def test_cross_engine_real_eoe_<...>_parity` with an in-body
+     `get_active_source().get_printings().get("<Card>")` binding
+     on a live pool name). **Result: 1 unregistered probe module
+     credits a live COVERED card** —
+     `tests/test_archenemys_charm_parity.py` → `Archenemy's Charm`
+     (currently COVERED at this HEAD).
+  2. **Atomic Microsizer / BLOCKED-tier inconsistency check
+     (bonus)** — the probe at `tests/test_atomic_microsizer_
+     parity.py` IS unregistered AND the card is currently
+     BLOCKED-subsystem-gated, which would have been the auditing
+     red flag. **Cleared as honest:** the function body is
+     `@pytest.mark.skip` (multi-cycle scaffold) with a
+     `raise NotImplementedError` body — explicitly NOT a live
+     probe yet, so the BLOCKED classification is correct. The
+     skip reason cross-references the multi-cycle substrate
+     scope in `docs/SEARCH_LIMITATIONS.md`.
+
+**Closure shipped.** Registered the AC probe module. Flipped
+Archenemy's Charm COVERED → PROBED in the metric. Net delta:
+
+  * **PROBED 299 → 300 (+1)**
+  * **covered_by_construction 112 → 111 (-1)**
+  * BLOCKED-subsystem-gated unchanged at 64
+  * pool total 475 unchanged
+
+**Engine surface change: NONE.** Zero edits to `rust/`, zero
+edits to `src/mtg_bot/parity/trajectory.py` or any production
+module. Pure metric-attribution close — the AC probe was already
+landed + passing (10/10 at this HEAD).
+
+**Inconsistency surfaced (NOT closed in this sweep).** Six
+per-card parity modules that landed since the prior sweep emit a
+canonical `test_cross_engine_real_eoe_<slug>_parity` function but
+do NOT satisfy the script's
+`_probe_module_probed_cards` predicate because they bind the live
+printing via a MODULE-LEVEL cached form
+(`_PRINTINGS = get_active_source().get_printings()` at module
+scope, then `_PRINTINGS.get("<Card>")` inside the probe function
+body) — the predicate scans only the BOUNDED function body, so
+the cached form is OUTSIDE the body it sees and the probe is not
+credited even though it correctly drives the real parsed
+printing. The six modules + their carrier cards (each currently
+classified COVERED-by-construction, not flipped here):
+
+  | Probe module | Card | Classification |
+  |---|---|---|
+  | `test_blade_of_the_swarm_parity.py` | Blade of the Swarm | COVERED |
+  | `test_deafening_silence_parity.py` | Deafening Silence | COVERED |
+  | `test_genemorph_imago_parity.py` | Genemorph Imago | COVERED |
+  | `test_possibility_technician_parity.py` | Possibility Technician | COVERED |
+  | `test_territorial_bruntar_parity.py` | Territorial Bruntar | COVERED |
+  | `test_atomic_microsizer_parity.py` | Atomic Microsizer | BLOCKED-SG (probe is `@pytest.mark.skip` scaffold — body is `raise NotImplementedError`) |
+
+Closing this would be either a separate **predicate-shape**
+follow-up (widen `_probe_module_probed_cards` to also match the
+module-level cached binding pattern — a real change to the
+metric's evidence rule, not a registration sweep) or a
+**per-probe rewrite** (inline the
+`get_active_source().get_printings().get("<Card>")` call inside
+each probe function body to match the existing predicate). Five
+of the six (excluding Atomic Microsizer, the explicit scaffold)
+would then flip COVERED → PROBED on registration. Surfaced here
+as an honest-stop; the original scope of THIS sweep is the
+strict-predicate-matching free flips, of which Archenemy's Charm
+was the only one.
+
+**Cross-references for this sweep:**
+
+  * Archenemy's Charm closure: commit `7088c9bd` (merge);
+    `b6a4b861` (Mode 2 Effect substrate + per-mode binder
+    allowlist widen — Python + Rust engine half); `cb8ef5ed`
+    (admit-set pin bump 41 → 42 + declined-modals pin updates +
+    per-card real-EoE probe); `173fe19a` (regen POOL_PARITY.md +
+    RUST_EFFECT_COVERAGE.md post-flip).
+  * Precedent: `22a0457d` / `a9829787` (2026-05-24 — 12-card
+    sweep this lane mirrors).
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
