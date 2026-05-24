@@ -10250,6 +10250,21 @@ pub struct CardPrinting {
 /// kw)))` shape collapsed to the simpler anthem-keyword tuple — the
 /// Rust side groups all keywords for one scope into one struct, the
 /// reader site fans out at fold time.
+///
+/// **Phase 4 (Memorial Team Leader Cycle 1 substrate, 2026-05-24).**
+/// Extended to ALSO carry a layer-7 P/T contribution + an optional
+/// condition gate on the same scope. Memorial Team Leader's "During
+/// your turn, other creatures you control get +1/+0." is the
+/// canonical Phase-4 carrier (warp+static; admit-set widen lands in
+/// Cycle 2). The fields are back-compat:
+///   * `power_bonus = 0` / `toughness_bonus = 0` for every Phase-1
+///     keyword-only anthem (Tannuk Steadfast Second).
+///   * `condition_tag` empty string for every Phase-1 unconditional
+///     anthem; `"during_your_turn"` for Memorial Team Leader.
+/// The reader site `static_anthem_pt_bonus_for` walks anthems on the
+/// SAME controller as the target and folds the P/T contribution
+/// into `battlefield_creature_power` / `_toughness`, gated by the
+/// condition matching the current game state.
 #[derive(Clone, Debug)]
 pub struct StaticAnthem {
     /// One of `"creatures_you_control"` /
@@ -10263,6 +10278,25 @@ pub struct StaticAnthem {
     /// `"first_strike"`). Vocabulary restricted to
     /// `trajectory._SAFE_KEYWORDS` by the loader predicate.
     pub granted_keywords: Vec<String>,
+    /// **Phase 4 (Memorial Team Leader Cycle 1, 2026-05-24).**
+    /// Layer-7c additive P/T contribution to every battlefield
+    /// permanent matching this anthem's `scope` under the source's
+    /// controller. `0` for every Phase-1 keyword-only anthem
+    /// (back-compat default — the bridge omits the key, Rust parses
+    /// the absence to 0).
+    pub power_bonus: i16,
+    pub toughness_bonus: i16,
+    /// **Phase 4 (Memorial Team Leader Cycle 1, 2026-05-24).**
+    /// Condition gate dispatched by
+    /// `static_anthem_condition_matches`. Empty string = unconditional
+    /// (every Phase-1 anthem); `"during_your_turn"` = active-player
+    /// gate (Memorial Team Leader). Lockstep with Python's
+    /// `_static_anthem_condition_from_tag` rehydrator.
+    pub condition_tag: String,
+    /// Integer args for `condition_tag`. Empty for `during_your_turn`
+    /// (arg-less) and the unconditional default. Bridge
+    /// serialization uses a `[int, ...]` list.
+    pub condition_args: Vec<i32>,
 }
 
 /// **Static / layered abilities substrate — Phase 3 (round-81,
@@ -14357,9 +14391,89 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                     }
                     None => Vec::new(),
                 };
+                // **Phase 4 (Memorial Team Leader Cycle 1 substrate,
+                // 2026-05-24).** Optional P/T contribution + condition
+                // tag/args. All four keys default to the back-compat
+                // zero shape (every pre-Phase-4 registry dict omits
+                // them — Tannuk Steadfast Second's anthem stays
+                // bit-identical).
+                let power_bonus = match anthem_dict.get_item("power_bonus")? {
+                    Some(v) => v.extract::<i16>().map_err(|_| {
+                        PyValueError::new_err(
+                            "static_anthems[].power_bonus must be an integer",
+                        )
+                    })?,
+                    None => 0,
+                };
+                let toughness_bonus =
+                    match anthem_dict.get_item("toughness_bonus")? {
+                        Some(v) => v.extract::<i16>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_anthems[].toughness_bonus must be \
+                                 an integer",
+                            )
+                        })?,
+                        None => 0,
+                    };
+                let condition_tag =
+                    match anthem_dict.get_item("condition_tag")? {
+                        Some(v) => v.extract::<String>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_anthems[].condition_tag must be \
+                                 a string",
+                            )
+                        })?,
+                        None => String::new(),
+                    };
+                let condition_args: Vec<i32> =
+                    match anthem_dict.get_item("condition_args")? {
+                        Some(args_any) => {
+                            let it = args_any.try_iter().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_anthems[].condition_args must \
+                                     be an iterable of integers",
+                                )
+                            })?;
+                            let mut out = Vec::new();
+                            for v in it {
+                                let n: i32 =
+                                    v?.extract().map_err(|_| {
+                                        PyValueError::new_err(
+                                            "static_anthems[].condition_args \
+                                             entries must be integers",
+                                        )
+                                    })?;
+                                out.push(n);
+                            }
+                            out
+                        }
+                        None => Vec::new(),
+                    };
+                // Whitelist the condition_tag to today's known
+                // dispatch arms. Empty string = unconditional (Phase
+                // 1). `"during_your_turn"` = Phase-4 anthem
+                // active-player gate (Memorial Team Leader). An
+                // unknown tag is a bridge-vs-Rust disagreement that
+                // would silently no-op the gate (everything still
+                // looks correct but the P/T fold would either
+                // always-fire or never-fire) — fail loudly so a
+                // future tag extension can't silently mis-translate.
+                if !condition_tag.is_empty()
+                    && condition_tag != "during_your_turn"
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "static_anthems[].condition_tag must be empty \
+                         or 'during_your_turn' (got: {})",
+                        condition_tag
+                    )));
+                }
                 out.push(StaticAnthem {
                     scope,
                     granted_keywords: kws,
+                    power_bonus,
+                    toughness_bonus,
+                    condition_tag,
+                    condition_args,
                 });
             }
             out
@@ -17258,6 +17372,37 @@ impl Registry {
         Ok(p.static_anthems
             .iter()
             .map(|a| (a.scope.clone(), a.granted_keywords.clone()))
+            .collect())
+    }
+
+    /// **Static / layered abilities substrate — Phase 4 (Memorial Team
+    /// Leader Cycle 1 substrate, 2026-05-24).** Surface the FULL
+    /// per-anthem record, including the new layer-7 P/T contribution
+    /// + condition gate fields. Each element is
+    /// `(scope, granted_keywords, power_bonus, toughness_bonus,
+    /// condition_tag, condition_args)`. Empty list for every
+    /// non-anthem printing. Used by the Cycle-1 substrate round-trip
+    /// pins to assert byte-equal Python → bridge → Rust → readback.
+    /// The Phase-1 narrow `get_printing_static_anthems` shape stays
+    /// for back-compat (every existing test that only cares about
+    /// scope+keywords keeps working byte-identical).
+    fn get_printing_static_anthems_full(
+        &self,
+        id: u32,
+    ) -> PyResult<Vec<(String, Vec<String>, i16, i16, String, Vec<i32>)>> {
+        let p = self.lookup(id)?;
+        Ok(p.static_anthems
+            .iter()
+            .map(|a| {
+                (
+                    a.scope.clone(),
+                    a.granted_keywords.clone(),
+                    a.power_bonus,
+                    a.toughness_bonus,
+                    a.condition_tag.clone(),
+                    a.condition_args.clone(),
+                )
+            })
             .collect())
     }
 

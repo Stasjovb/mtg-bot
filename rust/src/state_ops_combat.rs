@@ -598,12 +598,135 @@ pub(crate) fn static_anthem_grants_keyword_to(
             if !admits {
                 continue;
             }
+            // **Phase 4 (Memorial Team Leader Cycle 1, 2026-05-24).**
+            // Condition gate. Empty condition_tag = unconditional
+            // (Phase-1 default — Tannuk Steadfast Second). A non-empty
+            // tag dispatches through `static_anthem_condition_matches`
+            // (today: only `"during_your_turn"`).
+            if !anthem.condition_tag.is_empty()
+                && !static_anthem_condition_matches(
+                    state,
+                    target_controller_idx,
+                    anthem,
+                )
+            {
+                continue;
+            }
             if anthem.granted_keywords.iter().any(|k| k == keyword) {
                 return true;
             }
         }
     }
     false
+}
+
+/// **Static / layered abilities substrate — Phase 4 (Memorial Team
+/// Leader Cycle 1 substrate, 2026-05-24).** Dispatch table for
+/// `StaticAnthem.condition_tag`. Mirrors the Phase-3 sibling
+/// `static_self_bonus_condition_matches` but reads game state through
+/// the ANTHEM controller's lens (passed as `viewer_idx` — for an
+/// anthem, the source's controller is also the viewer for the
+/// condition).
+///
+/// Recognized tags (in lockstep with Python's
+/// `_static_anthem_condition_from_tag` rehydrator):
+///   * `""` — unconditional. Caller is expected to skip the dispatch
+///     entirely on this case; the empty-tag arm here returns `true`
+///     defensively so a stray dispatch is byte-equal to skipping.
+///   * `"during_your_turn"` — anthem fires iff the anthem source's
+///     controller is the active player. Mirrors Python's
+///     `DuringYourTurn.matches`
+///     (`src/mtg_bot/effects/conditions.py:301-302`): the rider
+///     compares `state.active_player().id == viewer_id`. The
+///     `condition_args` Vec is empty for this tag (no parameter).
+///
+/// An unknown tag returns `false` — a bridge-vs-Rust disagreement
+/// the parser already rejects at registry-build time
+/// (`cards.rs::parse_printing` whitelists the tag string), so this
+/// branch is unreachable in practice today but kept as a defensive
+/// catch-all.
+pub(crate) fn static_anthem_condition_matches(
+    state: &GameState,
+    viewer_idx: usize,
+    anthem: &crate::cards::StaticAnthem,
+) -> bool {
+    match anthem.condition_tag.as_str() {
+        "" => true,
+        "during_your_turn" => state.active_player as usize == viewer_idx,
+        _ => false,
+    }
+}
+
+/// **Static / layered abilities substrate — Phase 4 (Memorial Team
+/// Leader Cycle 1 substrate, 2026-05-24).** Walk every anthem on the
+/// SAME controller as the target and fold in the layer-7c additive
+/// P/T contribution under the current scope + condition gates.
+/// Returns `(p_sum, t_sum)` — `(0, 0)` for any controller index with
+/// no anthem sources, no matching scope, or every condition gated
+/// closed.
+///
+/// Mirrors Python's `_static_bonuses` per-source per-static
+/// `applies_to` walk, narrowed to the anthem-scope case (the
+/// contributor is OTHER than the target — or self-inclusive when
+/// `scope == creatures_you_control`).
+///
+/// **Reader-site composition.** Called from
+/// `battlefield_creature_power` / `_toughness` AFTER the Phase-3
+/// `static_self_bonus_pt_on` fold and AFTER the Aura layer-7c fold,
+/// matching the Python `_static_bonuses` walk order. Layer-7c is
+/// additive per CR 613.3c, so the order within layer 7c doesn't
+/// affect the sum — but the fold order is documented for
+/// future-reader tractability.
+pub(crate) fn static_anthem_pt_bonus_for(
+    state: &GameState,
+    target_controller_idx: usize,
+    target_id: u32,
+) -> (i16, i16) {
+    let source_player = match state.players.get(target_controller_idx) {
+        Some(p) => p,
+        None => return (0, 0),
+    };
+    let mut p_sum: i32 = 0;
+    let mut t_sum: i32 = 0;
+    for source in source_player.battlefield.iter() {
+        let Some(printing) = state.registry.lookup(source.printing_id) else {
+            continue;
+        };
+        if printing.static_anthems.is_empty() {
+            continue;
+        }
+        for anthem in printing.static_anthems.iter() {
+            // Short-circuit: a keyword-only anthem (Phase 1; Tannuk)
+            // contributes 0/0 — skip the scope check entirely for
+            // the back-compat path.
+            if anthem.power_bonus == 0 && anthem.toughness_bonus == 0 {
+                continue;
+            }
+            let admits = match anthem.scope.as_str() {
+                "creatures_you_control" => true,
+                "other_creatures_you_control" => source.id != target_id,
+                _ => false,
+            };
+            if !admits {
+                continue;
+            }
+            if !anthem.condition_tag.is_empty()
+                && !static_anthem_condition_matches(
+                    state,
+                    target_controller_idx,
+                    anthem,
+                )
+            {
+                continue;
+            }
+            p_sum += anthem.power_bonus as i32;
+            t_sum += anthem.toughness_bonus as i32;
+        }
+    }
+    (
+        p_sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        t_sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+    )
 }
 
 /// Read effective power for a battlefield creature, returning 0 for
@@ -812,7 +935,19 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     // the target). `(0, 0)` for every printing without entries (the
     // back-compat default — pre-Phase-3 read path bit-identical).
     let (self_p, _self_t) = static_self_bonus_pt_on(state, obj_id);
-    let effective = base + bonus + net_counters + aura_p + self_p as i32;
+    // **Phase 4 (Memorial Team Leader Cycle 1 substrate, 2026-05-24).**
+    // Fold in the layer-7c P/T contribution from anthem-scope statics
+    // (other-creature / inclusive-creature scope, optionally gated by
+    // `during_your_turn`). For the live admit set today every anthem
+    // is keyword-only (Tannuk Steadfast Second), so the short-circuit
+    // in `static_anthem_pt_bonus_for` returns `(0, 0)` — bit-identical
+    // to pre-Phase-4. The Memorial-Team-Leader admit-set widen lands
+    // in Cycle 2; the fold has to be wired here in Cycle 1 so the
+    // Cycle-2 admit ships against an already-correct reader site.
+    let (anthem_p, _anthem_t) =
+        static_anthem_pt_bonus_for(state, player_idx, obj_id);
+    let effective = base + bonus + net_counters + aura_p + self_p as i32
+        + anthem_p as i32;
     // Saturate into i16 to match the existing return-shape contract;
     // a 32k+ effective power is unreachable on any real card.
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
@@ -1111,7 +1246,14 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     // See sibling `battlefield_creature_power` for the full
     // rationale. `(0, 0)` for every printing without entries.
     let (_self_p, self_t) = static_self_bonus_pt_on(state, obj_id);
-    let effective = base + ueot_bonus + net_counters + aura_t + self_t as i32;
+    // **Phase 4 (Memorial Team Leader Cycle 1 substrate, 2026-05-24).**
+    // Sibling toughness fold; see `battlefield_creature_power` for
+    // the rationale. Same short-circuit for the Phase-1 keyword-only
+    // anthem; bit-identical for the live admit set.
+    let (_anthem_p, anthem_t) =
+        static_anthem_pt_bonus_for(state, player_idx, obj_id);
+    let effective = base + ueot_bonus + net_counters + aura_t + self_t as i32
+        + anthem_t as i32;
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
