@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **352 (74.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 65 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **357 (75.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 60 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **58 (12.2%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 352 | 74.1% |
-| Effect+bridge covered (not individually probed) | 65 | 13.7% |
+| PROBED byte-equal | 357 | 75.2% |
+| Effect+bridge covered (not individually probed) | 60 | 12.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -144,6 +144,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Faller's Faithful
 - Famished Worldsire
 - Fanatic of the Harrowing
+- Fear of Being Hunted
 - Fear of Failed Tests
 - Fear of Lost Teeth
 - Fear of Surveillance
@@ -262,10 +263,12 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Overlord of the Floodpits
 - Overlord of the Mistmoors
 - Pain for All
+- Patched Plaything
 - Perigee Beckoner
 - Piggy Bank
 - Pinnacle Emissary
 - Pinnacle Kill-Ship
+- Piranha Fly
 - Plains
 - Plasma Bolt
 - Possibility Technician
@@ -302,6 +305,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Shardmage's Rescue
 - Shattered Wings
 - Sheltered by Ghosts
+- Shepherding Spirits
 - Shrewd Storyteller
 - Shroudstomper
 - Singularity Rupture
@@ -309,6 +313,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Skullsnap Nuisance
 - Skystinger
 - Slagdrill Scrapper
+- Slavering Branchsnapper
 - Sothera, the Supervoid
 - Space-Time Anomaly
 - Specimen Freighter

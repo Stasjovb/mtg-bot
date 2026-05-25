@@ -1896,6 +1896,58 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_cackling_slasher_parity.py",
     REPO_ROOT / "tests" / "test_spectral_snatcher_parity.py",
     REPO_ROOT / "tests" / "test_bedhead_beastie_parity.py",
+    # **covered-by-construction-probe-writing-p8 (2026-05-25):** Five
+    # additional per-card real-EoE cross-engine byte-equal probes
+    # extending the batch-7 bridge-simple-vanilla-creature shape family
+    # to four new per-keyword sub-shapes (flying / trample / double
+    # strike / haste) and TWO NEW multi-type-carrier sub-shapes
+    # (Artifact+Creature, Enchantment+Creature).  Each per-keyword /
+    # per-card-type-tuple variant earns a PROBED-tier slot per the
+    # cathedral-of-war-style same-Effect-class-different-printing-slug
+    # precedent — same lane discipline as batches 1-7: per-slug
+    # attribution credits a PROBED slot per-printing, no engine
+    # changes, no Rust changes, no substrate widens.
+    #
+    #   * ``test_piranha_fly_parity.py`` — Piranha Fly ({1}{U} Creature
+    #     — Fish Insect, 2/1, flying; 0 17lands decks — Stellar Sights /
+    #     Special Guests reprint).  The FIRST flying-keyword binding
+    #     under the bridge-simple-vanilla-creature family templated by
+    #     batch 7.
+    #   * ``test_shepherding_spirits_parity.py`` — Shepherding Spirits
+    #     ({4}{W}{W} Creature — Spirit, 4/5, flying; 0 17lands decks).
+    #     The (4, 5) P/T variant of the flying sub-shape — distinct
+    #     from Piranha Fly (2/1).
+    #   * ``test_slavering_branchsnapper_parity.py`` — Slavering
+    #     Branchsnapper ({4}{G}{G} Creature — Lizard, 7/6, trample; 0
+    #     17lands decks).  The FIRST trample-keyword binding under the
+    #     family.
+    #   * ``test_patched_plaything_parity.py`` — Patched Plaything
+    #     ({2}{W} Artifact Creature — Toy, 4/3, double strike; 0 17lands
+    #     decks).  The FIRST double-strike-keyword binding AND the
+    #     FIRST Artifact+Creature multi-type-carrier sub-shape under
+    #     the family.  Parser-side ``card_types=("Artifact",
+    #     "Creature")`` is documented-drop on round-trip per the bare
+    #     ``_printing_is_bridge_simple_creature`` arm (CardDef builds
+    #     ``card_type="Creature" + extra_card_types=()``); same
+    #     symmetric-drop precedent as the batch-7 subtype drop.
+    #   * ``test_fear_of_being_hunted_parity.py`` — Fear of Being
+    #     Hunted ({1}{R}{R} Enchantment Creature — Nightmare, 4/2,
+    #     haste; 0 17lands decks).  The FIRST haste-keyword binding
+    #     AND the FIRST Enchantment+Creature multi-type-carrier sub-
+    #     shape under the family.  Parser-side ``card_types=
+    #     ("Enchantment", "Creature")`` is documented-drop on round-
+    #     trip via the same bare simple-creature CardDef arm.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 350 → 355;
+    # covered_by_construction 65 → 60; BLOCKED unchanged at 58; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_piranha_fly_parity.py",
+    REPO_ROOT / "tests" / "test_shepherding_spirits_parity.py",
+    REPO_ROOT / "tests" / "test_slavering_branchsnapper_parity.py",
+    REPO_ROOT / "tests" / "test_patched_plaything_parity.py",
+    REPO_ROOT / "tests" / "test_fear_of_being_hunted_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
