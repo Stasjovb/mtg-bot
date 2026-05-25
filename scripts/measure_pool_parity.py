@@ -1175,6 +1175,46 @@ PROBE_MODULES: tuple[Path, ...] = (
     # creature-side admit predicates (single-card single-cycle FLIP,
     # no silent auto-grows).
     REPO_ROOT / "tests" / "test_memorial_team_leader_parity.py",
+    # **weftwalking-cycle-3-probe-p1 (2026-05-24):** Weftwalking
+    # ({4}{U}{U} Enchantment with ETB+IsSelf+ConditionalIfCastFromHand(
+    # Sequence(ShuffleZonesIntoLibrary(hand+graveyard), DrawCards(7))))
+    # closes the multi-cycle Enchantment-side admit pipeline. The C1
+    # substrate (commits ``61f04bef`` + ``d18bb3a4``) wired two new
+    # Rust Effect variants -- ``Effect::ConditionalIfCastFromHand``
+    # (recursive Box<Effect>) + ``Effect::ShuffleZonesIntoLibrary``
+    # (Vec<String>) -- with parse/to_pydict/resolve + cross-engine
+    # bridge arms + reverse-serializer leaves (incl. nested-Sequence-
+    # as-leaf). C2 (commit ``0017d9c1``) widened
+    # ``_python_ta_to_safe_dict`` to admit the 10th ENTERS+IsSelf
+    # safe-trigger leaf (conditional_if_cast_from_hand with the EXACT
+    # canonical Weftwalking inner gate -- surgical §2 teeth) + landed
+    # the ``_SAFE_TRIGGERS`` triple + the ``_SAFE_EFFECT_KEYS``
+    # whitelist + a NEW ``_printing_is_bridge_simple_enchantment``
+    # admit arm (the Enchantment-side sibling of
+    # ``_printing_is_bridge_simple_creature`` -- a fresh arm rather
+    # than extending the Creature arm because the latter cascades
+    # through Creature-specific downstream assumptions). C3 (this
+    # lane) ships the per-card real-EoE parity probe in
+    # ``tests/test_weftwalking_parity.py``. The probe's canonical
+    # ``test_cross_engine_real_eoe_weftwalking_etb_parity`` function
+    # drives the genuine parsed printing through both engines (direct
+    # injection bypass -- Rust has no cast_enchantment primitive, see
+    # state_ops_actions.rs cast dispatch cascade), exercising the
+    # documented ConditionalIfCastFromHand always-run-inner resolve
+    # degradation (combinators.py:1518-1536 -- the cast_via_hand flag
+    # is ephemeral, cleared before ETB triggers fire on both engines)
+    # + the Sequence(Shuffle, Draw(7)) body under a shared external
+    # Python RNG (round-54 set_external_rng cross-engine shuffle-
+    # parity pattern). Full ``compare_fields == []`` over the WHOLE
+    # field view post-resolve. NORMAL-CAST LIFECYCLE ONLY -- the
+    # warp-cast lifecycle is structurally inapplicable (Weftwalking
+    # has ``warp_cost_str == ""``, verify-first pinned by the C1
+    # substrate module). ~3,680 17lands decks BLOCKED -> PROBED;
+    # admit set delta +1 for the new Enchantment-side admit predicate
+    # (single-card single-cycle FLIP, no silent auto-grows --
+    # Weftwalking is the SOLE ConditionalIfCastFromHand carrier
+    # system-wide).
+    REPO_ROOT / "tests" / "test_weftwalking_parity.py",
     # **probe-module-rename-sweep-p1 (2026-05-24):** the eight per-card
     # real-EoE cross-engine byte-equal probe modules whose cross-engine
     # function name previously used a non-canonical ``_round_trip`` /
