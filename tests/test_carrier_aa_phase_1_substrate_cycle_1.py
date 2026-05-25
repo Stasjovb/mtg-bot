@@ -602,23 +602,20 @@ def test_swarmyard_now_admits_at_admit_gate_post_cycle_2():
     )
 
 
-def test_deserted_temple_stays_declined_post_cycle_2():
-    """**Cycle 2 HONEST-STOP invariant pin.** Cycle 2 ships the
-    STRICT bare-``{T}`` admit gate (per design doc §2.3 +
-    ``_aa_is_phase1_sub_shape_a`` gate ``cost.mana is None``). Deserted
-    Temple's printed cost is ``{1}, {T}`` (mana=ManaCost(generic=1),
-    tap_self=True; verified-first in
-    ``test_deserted_temple_live_printing_matches_design_doc_shape``).
-    The STRICT gate honestly declines Deserted Temple as out-of-scope
-    for Phase 1 — it waits for Phase 1.5's ``{N}, {T}`` cost-shape
-    widen or a sibling-swap to Terrain Generator / Thespian's Stage
-    (bare-``{T}`` siblings whose ``PutBasicLandFromHandOntoBattlefield
-    Tapped`` / ``BecomesCopyOfTargetLand`` Effects each need their own
-    cross-engine port).
+def test_deserted_temple_now_admits_at_admit_gate_post_phase_1_5a():
+    """**Phase 1.5a INVERSION pin.** Phase 1.5a (2026-05-25) widened
+    ``_aa_is_phase1_sub_shape_a``'s cost gate from STRICT bare-``{T}``
+    to bare-``{T}`` OR ``{N}, {T}`` (generic-only mana). Deserted
+    Temple's printed cost ``{1}, {T}`` (mana=ManaCost(generic=1),
+    tap_self=True; verified-first at C1) now PASSES the Carrier-AA
+    disjunct (and ONLY that disjunct — sibling predicates still
+    decline). Inverts the C2 honest-stop pin
+    ``test_deserted_temple_stays_declined_post_cycle_2``.
 
-    Inverted analogue of ``test_swarmyard_now_admits_at_admit_gate_
-    post_cycle_2`` — verifies the Carrier-AA disjunct DECLINES
-    Deserted Temple AND no sibling disjunct silently admits it.
+    Verifies (a) ``_printing_is_bridge_simple_carrier_aa_land`` admits
+    Deserted Temple post-Phase-1.5a, and (b) the new Carrier-AA
+    disjunct is the ONLY disjunct that admits — no sibling-predicate
+    spillover.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
@@ -626,15 +623,15 @@ def test_deserted_temple_stays_declined_post_cycle_2():
     ps = OracleParserCardSource().get_printings()
     dt = ps["Deserted Temple"]
 
-    # The Carrier-AA Phase 1 disjunct DECLINES Deserted Temple on
-    # the STRICT bare-``{T}`` gate (cost.mana is None false →
-    # decline; the STRICT gate IS the contract).
+    # The Carrier-AA Phase 1.5a disjunct admits Deserted Temple (the
+    # cost-gate widen FLIP).
     assert (
-        traj._printing_is_bridge_simple_carrier_aa_land(dt) is False
+        traj._printing_is_bridge_simple_carrier_aa_land(dt) is True
     )
 
-    # No sibling disjunct admits Deserted Temple — confirms no
-    # silent auto-grow from an unrelated substrate.
+    # No sibling disjunct admits Deserted Temple — only the Carrier-AA
+    # arm. Walk every ``_printing_is_bridge_*`` predicate and confirm
+    # exactly ONE returns True (mirrors the Swarmyard FLIP shape).
     candidate_predicates = [
         (name, getattr(traj, name))
         for name in dir(traj)
@@ -645,12 +642,12 @@ def test_deserted_temple_stays_declined_post_cycle_2():
         for name, pred in candidate_predicates
         if callable(pred) and pred(dt)
     ]
-    assert not admits, (
-        f"Carrier-AA Phase 1 Cycle 2 honest-stop violated: "
-        f"Deserted Temple is admitted by {admits}. The STRICT "
-        f"bare-`{{T}}` gate keeps it declined; Phase 1.5 widens. "
-        f"If a sibling predicate now admits it, a different "
-        f"substrate has widened — investigate."
+    assert admits == ["_printing_is_bridge_simple_carrier_aa_land"], (
+        f"Carrier-AA Phase 1.5a FLIP invariant violated: "
+        f"Deserted Temple is admitted by {admits} — expected exactly "
+        f"['_printing_is_bridge_simple_carrier_aa_land']. A sibling "
+        f"predicate spillover means a different substrate has "
+        f"widened — investigate before merging Phase 1.5a."
     )
 
 

@@ -1,8 +1,10 @@
-"""**Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).**
+"""**Carrier-AA substrate Phase 1 Cycle 2 + Phase 1.5a (2026-05-25).**
 
 Tests for the Phase 1 Cycle 2 admit-gate landing per
 ``docs/CARRIER_AA_SUBSTRATE_PHASE_1_DESIGN.md`` §5/§6/§7 (Python bridge
-+ admit predicate + builder slice):
++ admit predicate + builder slice), with C2 honest-stop pins **inverted
+in-place by Phase 1.5a** (cost-gate widen — see
+``docs/CARRIER_AA_SUBSTRATE_PHASE_1_5_DESIGN.md`` §5/§6):
 
   - New :func:`mtg_bot.parity.cross_engine._python_aa_to_safe_dict`
     helper — sibling of :func:`trajectory._python_ta_to_safe_dict`,
@@ -10,8 +12,9 @@ Tests for the Phase 1 Cycle 2 admit-gate landing per
     dict OR ``None`` if any rider falls outside the Phase-1 admit
     set.
   - New :func:`mtg_bot.parity.trajectory._aa_is_phase1_sub_shape_a`
-    predicate — gates the per-AA shape (bare ``{T}`` cost + no
-    AA-level riders + Phase-1 Effect class).
+    predicate — gates the per-AA shape. **Phase 1.5a widened the
+    cost gate** from STRICT bare ``{T}`` to bare ``{T}`` OR
+    ``{N}, {T}`` (generic-only mana — no colored / hybrid / X-pip).
   - New :func:`mtg_bot.parity.trajectory._printing_is_bridge_simple_
     carrier_aa_land` admit predicate — gates the printing-level shape
     (single-typed non-token Land, exactly 1 AA, no co-gates).
@@ -21,22 +24,32 @@ Tests for the Phase 1 Cycle 2 admit-gate landing per
   - Wires the new predicate into
     ``_filter_deck_to_bridge_supported``'s OR-chain (the FLIP).
 
-**The FLIP.** Cycle 2 inverts the C1 substrate-only invariant pin
+**The FLIPs.** Cycle 2 inverted the C1 substrate-only invariant pin
 ``test_swarmyard_stays_declined_post_cycle_1`` →
-``test_swarmyard_now_admits_at_admit_gate_post_cycle_2`` (lives in the
-C1 test module; the C1 inversion is part of the C2 commit).
-Swarmyard DECLINED → ADMITTED. Admit-set count + 1.
+``test_swarmyard_now_admits_at_admit_gate_post_cycle_2``. Phase 1.5a
+(this slice) inverts the C2 honest-stop pins for Deserted Temple
+(cost-axis admit on ``{N}, {T}``):
 
-**Honest-stop.** Deserted Temple stays declined (cost ``{1}, {T}``
-fails the STRICT bare-``{T}`` admit gate per design doc §2.3). Pin
-``test_deserted_temple_stays_declined_post_cycle_2`` in the C1 module
-guards the honest-stop. Phase 1.5 ships the ``{N}, {T}`` cost-shape
-widen.
+  * ``test_aa_is_phase1_sub_shape_a_declines_deserted_temple_1T_cost``
+    → ``test_aa_is_phase1_5_sub_shape_a_admits_deserted_temple_1T_cost``
+  * ``test_printing_is_bridge_simple_carrier_aa_land_declines_live_
+    deserted_temple`` →
+    ``test_printing_is_bridge_simple_carrier_aa_land_admits_live_
+    deserted_temple``
+  * ``test_filter_deck_to_bridge_supported_declines_deserted_temple``
+    → ``test_filter_deck_to_bridge_supported_admits_deserted_temple``
 
-**No silent auto-grow.** Verify-first walk of the 30 BLOCKED-SG
-Carrier-AA cards (per design doc §2.1) confirmed only Swarmyard
-admits at Phase 1's STRICT bare-``{T}`` gate. The decline-set pin
-below codifies the +1 admit count.
+Admit-set count + 1 (Swarmyard + Deserted Temple, total 2).
+
+**No silent auto-grow (Phase 1.5a re-walk).** Verify-first walk of
+the 30 BLOCKED-SG Carrier-AA cards (per design doc §2.1) under the
+WIDENED cost-gate confirms only Swarmyard + Deserted Temple admit at
+the Phase-1 Effect-class scope ``{RegenerateTargetCreature,
+UntapTargetLand}``. Candidate siblings stay declined on Effect-class
+teeth: Terrain Generator
+(``PutBasicLandFromHandOntoBattlefieldTapped``), Thespian's Stage
+(``BecomesCopyOfTargetLand``), Mystifying Maze
+(``ExileTargetAttackingCreatureUntilEndStep``).
 """
 
 from __future__ import annotations
@@ -217,15 +230,20 @@ def test_aa_is_phase1_sub_shape_a_declines_non_bare_T_costs(
 
 
 # ---------------------------------------------------------------------------
-# Pin 5 — _aa_is_phase1_sub_shape_a declines cost.mana not None
+# Pin 5 — _aa_is_phase1_sub_shape_a (Phase 1.5a widen) — admits {N}, {T}
+# generic-only mana costs; declines colored / hybrid / X-pip
 # ---------------------------------------------------------------------------
 
 
-def test_aa_is_phase1_sub_shape_a_declines_deserted_temple_1T_cost():
-    """**Decline pin (Deserted Temple's exact ``{1}, {T}`` shape).**
-    The STRICT bare-``{T}`` admit gate rejects ``cost.mana is not None``
-    — Deserted Temple's printed cost ``{1}, {T}`` is HONESTLY out-of-
-    scope for Phase 1 (waits for Phase 1.5's ``{N}, {T}`` widen)."""
+def test_aa_is_phase1_5_sub_shape_a_admits_deserted_temple_1T_cost():
+    """**Phase 1.5a INVERSION admit pin (Deserted Temple's exact
+    ``{1}, {T}`` shape).** The Phase-1.5a cost-gate widen accepts
+    ``cost.mana`` carrying generic-only pips alongside ``tap_self`` —
+    Deserted Temple's printed cost ``{1}, {T}`` now ADMITS at the
+    Phase-1.5a admit gate (was Phase-1 honest-stop on the STRICT
+    bare-``{T}`` gate). Inverts the C2 pin
+    ``test_aa_is_phase1_sub_shape_a_declines_deserted_temple_1T_cost``.
+    """
     from mtg_bot.cards.base import ManaCost
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
@@ -238,7 +256,135 @@ def test_aa_is_phase1_sub_shape_a_declines_deserted_temple_1T_cost():
         ),
         effect=UntapTargetLand(),
     )
+    assert _aa_is_phase1_sub_shape_a(aa) is True
+
+
+def test_aa_is_phase1_5_sub_shape_a_admits_generic_two_T_cost():
+    """**Phase 1.5a admit pin (generic mana axis — ``{2}, {T}`` shape).**
+    The Phase-1.5a widen accepts any positive generic-only mana count
+    alongside ``tap_self``. Synthetic two-generic carrier with
+    ``UntapTargetLand`` admits (regression coverage past the
+    Deserted-Temple-shape ``generic=1`` case)."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            mana=ManaCost(generic=2),
+            tap_self=True,
+        ),
+        effect=UntapTargetLand(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is True
+
+
+def test_aa_is_phase1_5_sub_shape_a_declines_colored_mana_cost():
+    """**Phase 1.5a decline pin (colored mana axis).** A synthetic AA
+    carrying ``cost=ActivationCost(tap_self=True,
+    mana=ManaCost(colored=(('R', 1),)))`` declines — colored mana stays
+    Phase-2+ honest-stop. The widen is strictly additive on the
+    generic-mana axis."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            mana=ManaCost(generic=0, colored=(("R", 1),)),
+            tap_self=True,
+        ),
+        effect=UntapTargetLand(),
+    )
     assert _aa_is_phase1_sub_shape_a(aa) is False
+
+
+def test_aa_is_phase1_5_sub_shape_a_declines_hybrid_mana_cost():
+    """**Phase 1.5a decline pin (hybrid mana axis).** A synthetic AA
+    carrying a hybrid-mana cost (``mana=ManaCost(hybrid=(('R', 'G'),))``)
+    declines — hybrid mana stays Phase-2+ honest-stop."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            mana=ManaCost(generic=0, hybrid=(("R", "G"),)),
+            tap_self=True,
+        ),
+        effect=UntapTargetLand(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is False
+
+
+def test_aa_is_phase1_5_sub_shape_a_declines_x_pip_mana_cost():
+    """**Phase 1.5a decline pin (X-cost axis).** A synthetic AA carrying
+    an X-pip mana cost (``mana=ManaCost(x_pips=1)``) declines — X-cost
+    AAs stay Phase-2+ honest-stop."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            mana=ManaCost(generic=0, x_pips=1),
+            tap_self=True,
+        ),
+        effect=UntapTargetLand(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is False
+
+
+def test_aa_is_phase1_5_sub_shape_a_still_declines_T_plus_sac_after_widen():
+    """**Phase 1.5a regression pin (non-mana cost axis intact).** Bare
+    ``{T}`` + ``sacrifice_self=True`` still declines under Phase 1.5a
+    — the widen is strictly additive on the cost-mana axis; sacrifice /
+    pay_life / etc. teeth bite untouched."""
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(tap_self=True, sacrifice_self=True),
+        effect=UntapTargetLand(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is False
+
+
+def test_aa_is_phase1_5_sub_shape_a_round_trips_deserted_temple_synthetic():
+    """**Phase 1.5a round-trip pin (cost-mana axis through the safe-
+    dict bridge).** A synthetic Deserted-Temple-shape AA round-trips
+    byte-equal through ``_python_aa_to_safe_dict`` ↔
+    ``_aa_dict_to_python_activated_ability`` — confirming the bridge
+    already serializes generic-mana costs (no Rust change needed for
+    Phase 1.5a)."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.parity.cross_engine import (
+        _aa_dict_to_python_activated_ability,
+        _python_aa_to_safe_dict,
+    )
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            mana=ManaCost(generic=1),
+            tap_self=True,
+        ),
+        effect=UntapTargetLand(),
+    )
+    safe = _python_aa_to_safe_dict(aa)
+    assert safe is not None
+    assert safe == {
+        "cost": {"mana": {"generic": 1}, "tap_self": True},
+        "effect": {"kind": "untap_target_land"},
+    }
+    back = _aa_dict_to_python_activated_ability(safe)
+    assert back == aa
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +405,14 @@ def test_printing_is_bridge_simple_carrier_aa_land_admits_live_swarmyard():
     assert _printing_is_bridge_simple_carrier_aa_land(ps["Swarmyard"]) is True
 
 
-def test_printing_is_bridge_simple_carrier_aa_land_declines_live_deserted_temple():
-    """**Honest-stop pin.** Deserted Temple's live printing fails the
-    STRICT bare-``{T}`` gate (cost ``{1}, {T}``). The predicate
-    declines; substrate is in place for Phase 1.5 widen."""
+def test_printing_is_bridge_simple_carrier_aa_land_admits_live_deserted_temple():
+    """**Phase 1.5a INVERSION admit-set pin.** Deserted Temple's live
+    printing now PASSES :func:`_printing_is_bridge_simple_carrier_aa_
+    land` post-cost-gate-widen. The Phase 1.5a admit-set has Swarmyard
+    + Deserted Temple (was Swarmyard alone at strict bare-``{T}``).
+    Inverts the C2 pin
+    ``test_printing_is_bridge_simple_carrier_aa_land_declines_live_
+    deserted_temple``."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -271,7 +421,7 @@ def test_printing_is_bridge_simple_carrier_aa_land_declines_live_deserted_temple
     ps = OracleParserCardSource().get_printings()
     assert (
         _printing_is_bridge_simple_carrier_aa_land(ps["Deserted Temple"])
-        is False
+        is True
     )
 
 
@@ -280,12 +430,28 @@ def test_printing_is_bridge_simple_carrier_aa_land_declines_live_deserted_temple
 # ---------------------------------------------------------------------------
 
 
-def test_carrier_aa_30_no_silent_auto_grow_admit_set_exactly_swarmyard():
-    """**No-silent-auto-grow pin (per design doc §7.4.10).** Walks the
-    30 BLOCKED-SG Carrier-AA cards from design doc §2.1 against
-    :func:`_printing_is_bridge_simple_carrier_aa_land`. ONLY Swarmyard
-    admits. Every other carrier honestly declines per the verify-first
-    walk recorded in the C2 commit message."""
+def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple():
+    """**Phase 1.5a no-silent-auto-grow pin.** Walks the 30 BLOCKED-SG
+    Carrier-AA cards from design doc §2.1 against
+    :func:`_printing_is_bridge_simple_carrier_aa_land` under the
+    Phase-1.5a widened cost-gate (bare ``{T}`` OR ``{N}, {T}``). ONLY
+    Swarmyard + Deserted Temple admit; every other carrier honestly
+    declines per the verify-first walk recorded in the Phase 1.5a
+    commit message.
+
+    Sibling-candidate Effect-class teeth are load-bearing: Terrain
+    Generator (``PutBasicLandFromHandOntoBattlefieldTapped``),
+    Thespian's Stage (``BecomesCopyOfTargetLand``), and Mystifying Maze
+    (``ExileTargetAttackingCreatureUntilEndStep``) all carry
+    ``{N}, {T}`` costs that pass the widened cost-gate but DECLINE on
+    the Phase-1 Effect-class admit set
+    ``{RegenerateTargetCreature, UntapTargetLand}``. Any new Effect
+    class admitted to that set would surface here as a silent auto-grow
+    — investigate before merging.
+
+    Inverts the C2 pin
+    ``test_carrier_aa_30_no_silent_auto_grow_admit_set_exactly_
+    swarmyard``."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -305,16 +471,16 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_exactly_swarmyard():
         "The Eternity Elevator", "Thespian's Stage",
         "Wandering Fumarole",
     ]
-    admits = [
+    admits = sorted(
         name
         for name in carrier_aa_30
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
-    ]
-    assert admits == ["Swarmyard"], (
-        f"Carrier-AA Phase 1 Cycle 2 admit-set pin violated: "
-        f"expected admit set = ['Swarmyard'], got {admits}. A widen "
-        f"in a sibling substrate or predicate would surface here as "
-        f"a silent auto-grow — investigate before merging."
+    )
+    assert admits == ["Deserted Temple", "Swarmyard"], (
+        f"Carrier-AA Phase 1.5a admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Swarmyard'], got {admits}. "
+        f"A widen in a sibling substrate or predicate would surface "
+        f"here as a silent auto-grow — investigate before merging."
     )
 
 
@@ -380,26 +546,34 @@ def test_filter_deck_to_bridge_supported_admits_swarmyard():
 
 
 # ---------------------------------------------------------------------------
-# Pin 10 — loader DECLINES Deserted Temple (honest-stop end-to-end)
+# Pin 10 — Phase 1.5a INVERSION — loader ADMITS Deserted Temple end-to-end
 # ---------------------------------------------------------------------------
 
 
-def test_filter_deck_to_bridge_supported_declines_deserted_temple():
-    """**Honest-stop wiring pin.** The loader DROPS Deserted Temple
-    (cost-shape mismatch with the STRICT bare-``{T}`` gate). The
-    ``not_bridged_sink`` records the drop with the original name."""
+def test_filter_deck_to_bridge_supported_admits_deserted_temple():
+    """**Phase 1.5a INVERSION wiring pin.** The loader ADMITS Deserted
+    Temple end-to-end post-cost-gate-widen — the Carrier-AA disjunct
+    fires under the bare-``{T}`` OR ``{N}, {T}`` gate. The returned
+    CardDef carries the Carrier-AA builder's output for the
+    ``UntapTargetLand`` Effect.
+
+    Inverts the C2 pin
+    ``test_filter_deck_to_bridge_supported_declines_deserted_temple``."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
     ps = OracleParserCardSource().get_printings()
-    not_bridged: list[str] = []
     filtered, card_defs = _filter_deck_to_bridge_supported(
         ["Deserted Temple"], ps,
-        not_bridged_sink=not_bridged,
     )
-    assert filtered == []
-    assert card_defs == []
-    assert not_bridged == ["Deserted Temple"]
+    assert filtered == ["Deserted Temple"]
+    assert len(card_defs) == 1
+    card_def = card_defs[0]
+    assert card_def.name == "Deserted Temple"
+    assert len(card_def.activated_abilities) == 1
+    aa_dict = card_def.activated_abilities[0]
+    assert aa_dict["cost"] == {"mana": {"generic": 1}, "tap_self": True}
+    assert aa_dict["effect"] == {"kind": "untap_target_land"}
 
 
 # ---------------------------------------------------------------------------

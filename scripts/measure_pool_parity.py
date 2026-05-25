@@ -2397,12 +2397,44 @@ PROBE_MODULES: tuple[Path, ...] = (
     # scenarios: (a) carrier-in-play baseline (cleanup drains the
     # unconsumed shield byte-equal) and (b) regenerate-the-attacker
     # SBA-consume (the consume path replaces the destroy byte-equal).
-    # Deserted Temple stays DECLINED on the C2 STRICT bare-``{T}``
-    # gate (its live cost is ``{1}, {T}``); the Phase-1.5 (or Phase 2)
-    # cost-shape widen is the next Carrier-AA cycle's pivot. See
-    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_1_DESIGN.md`` §2.3 / §7.3 /
+    # See ``docs/CARRIER_AA_SUBSTRATE_PHASE_1_DESIGN.md`` §2.3 / §7.3 /
     # §10.3 for the campaign context + sibling-swap rationale.
     REPO_ROOT / "tests" / "test_swarmyard_parity.py",
+    # **Carrier-AA substrate Phase 1.5a (2026-05-25):** Per-card real-
+    # EoE byte-equal probe binding Deserted Temple to the Phase-1.5a
+    # widened Carrier-AA admit gate. Phase 1.5a (see
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_1_5_DESIGN.md`` §2/§5) widens
+    # ``_aa_is_phase1_sub_shape_a``'s cost gate from STRICT bare-``{T}``
+    # to bare-``{T}`` OR ``{N}, {T}`` (generic-only mana). Deserted
+    # Temple was the Phase-1 honest-stop on the cost gate; Phase 1.5a
+    # admits it immediately on the gate-widen alone — the
+    # ``UntapTargetLand`` Effect was already in the Phase-1 admit set
+    # (``226c9738`` C1 substrate). ZERO Rust changes (Rust already
+    # routes generic mana for AAs via the ``_python_aa_to_safe_dict``
+    # round-trip).
+    #
+    #   * ``test_deserted_temple_parity.py`` — Deserted Temple ({0}
+    #     Land); single AA (``{1}, {T}: Untap target land.``) →
+    #     ``UntapTargetLand()`` (unit-variant Effect). The FIRST
+    #     PROBE_MODULES-credited probe of ``UntapTargetLand`` on a
+    #     real-EoE Land + AA carrier; templates on the sibling
+    #     Carrier-AA AA probes (parse + bridge round-trip + Rust
+    #     synthetic acceptance + end-to-end loader admit + Python-side
+    #     resolve smoke covering both the baseline silent-fizzle line
+    #     and the load-bearing untap-a-tapped-Forest line).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 30 → 28 cards (combined with the parallel C3
+    # Swarmyard probe). Sibling-candidate cards (Terrain Generator,
+    # Thespian's Stage, Mystifying Maze) stay honestly DECLINED at
+    # the Phase-1 Effect-class admit set
+    # ``{RegenerateTargetCreature, UntapTargetLand}`` — the
+    # no-silent-auto-grow walk pin in
+    # ``test_carrier_aa_phase_1_substrate_cycle_2.py`` codifies the
+    # exact +2 admit set. Phase 1.5b (CONDITIONAL) would add Terrain
+    # Generator via a Rust ``PutBasicLandFromHandOntoBattlefieldTapped``
+    # Effect port.
+    REPO_ROOT / "tests" / "test_deserted_temple_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
