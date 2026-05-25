@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **413 / 475 EoE cards (86.9%) are byte-equal at the Effect+bridge level**; of those, **306 (64.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 107 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **413 / 475 EoE cards (86.9%) are byte-equal at the Effect+bridge level**; of those, **305 (64.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 108 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **62 (13.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 306 | 64.4% |
-| Effect+bridge covered (not individually probed) | 107 | 22.5% |
+| PROBED byte-equal | 305 | 64.2% |
+| Effect+bridge covered (not individually probed) | 108 | 22.7% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -205,7 +205,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Meltstrider Eulogist
 - Meltstrider's Gear
 - Meltstrider's Resolve
-- Memorial Team Leader
 - Memorial Vault
 - Mental Modulation
 - Midnight Mayhem
@@ -367,17 +366,17 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 |---|---:|---:|---:|---:|---:|---|
 | Cost-reduction substrate | 5 | 5 | 0 | 53,648 | 53,648 | medium |
 | Non-basic land substrate | 2 | 2 | 0 | 7,688 | 7,688 | medium |
-| warp_cost (declined cost-mechanic) | 4 | 0 | 4 | 15,724 | 0 | medium |
+| warp_cost (declined cost-mechanic) | 4 | 0 | 4 | 14,396 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
-| Static / layered abilities | 8 | 2 | 6 | 15,558 | 0 | sprawling |
+| Static / layered abilities | 9 | 2 | 7 | 21,051 | 0 | sprawling |
 | Station / Spacecraft | 8 | 1 | 7 | 41,281 | 5,938 | sprawling |
 | Aura-attachment substrate | 3 | 0 | 3 | 2,783 | 0 | sprawling |
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 30 | 0 | 30 | 34,470 | 0 | sprawling |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
-| Non-safe triggered ability (unbridged event/shape) | 22 | 0 | 22 | 64,349 | 0 | diffuse |
-| Effect-uncovered (no covered Rust counterpart) | 47 | 0 | 47 | 86,536 | 0 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 21 | 0 | 21 | 57,528 | 0 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 46 | 0 | 46 | 79,715 | 0 | diffuse |
 
 **Reconciliation:** 62 subsystem-gated = 11 single-gated + 51 multi-gated; the per-subsystem `1gate` column sums to 11 (== single-gated total). The breakout partitions exactly the same 62 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
@@ -387,7 +386,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 
 - All-Fates Scroll
 - Ancient Tomb
-- Anticausal Vestige
 - Atomic Microsizer
 - Auxiliary Boosters
 - Baseball Bat
@@ -418,6 +416,7 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Lotus Field
 - Lumen-Class Frigate
 - Meat Locker // Drowned Diner
+- Memorial Team Leader
 - Meteor Crater
 - Mirrorpool
 - Mystifying Maze

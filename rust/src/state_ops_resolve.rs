@@ -15216,6 +15216,181 @@ fn apply_effect(
             // `fire_landfall_triggers`.
             state.pending_etb_dispatches.extend(entered_ids);
         }
+        // **Anticausal Vestige Cycle 1 (2026-05-24, substrate-only) —
+        // LTB draw + may-put-permanent-from-hand-tapped.** "When this
+        // creature leaves the battlefield, draw a card, then you may
+        // put a permanent card with mana value less than or equal to
+        // the number of lands you control from your hand onto the
+        // battlefield tapped." Mirrors Python's
+        // `AnticausalVestigeLeavesEffect.resolve`
+        // (`effects/bespoke.py:870-900`) STEP-FOR-STEP for the
+        // seated-agent (deterministic first-legal) path so the
+        // post-resolve state is byte-equal:
+        //   draw_n_cards(state, controller_id, 1)
+        //   land_count = sum(... if o.controller_id == controller_id
+        //                          and o.printing.is_land)
+        //   candidates = [c for c in p.hand
+        //                  if c.printing.is_permanent
+        //                  and c.printing.mana_cost.total <= land_count]
+        //   if not candidates: return    (no-op after draw)
+        //   pick = candidates[0]         (deterministic — Python's
+        //                                 seated-agent fallback)
+        //   remove from hand; put onto bf TAPPED; fire ETB
+        //
+        // **No PendingDecision (substrate-only contract).** Python's
+        // `if p.agent is None: return` early-returns BEFORE the
+        // put-onto-bf when no agent is seated; the seated-agent
+        // fallback `candidates[0]` is what both engines converge on
+        // when an agent IS seated. The Cycle-1 substrate-only landing
+        // keeps AV DECLINED at the admit gate (no bridge consumer),
+        // so the resolve arm is exercised ONLY by direct unit tests
+        // that exercise the seated-agent equivalence path. The
+        // no-agent / seated-agent contract refinement (whether C2
+        // routes through a new `PendingDecision::
+        // PickCardFromHandChoice` or keeps deterministic-first) is a
+        // Cycle-2 design decision left open. The first-legal-deterministic
+        // pick mirrors the `AstelliReclaimerETBEffect` /
+        // `FamishedWorldsireLookTopXByPowerPutLandsTapped` substrate
+        // precedent (choice-shaped bespokes that DON'T plumb a
+        // PendingDecision).
+        Effect::AnticausalVestigeLeavesEffect => {
+            // Source-controller resolution — same shape as Astelli
+            // Reclaimer / Famished Worldsire (I69 / I61): "your hand"
+            // / "lands you control" = the SOURCE's controller's,
+            // CR 119.5 / 608.2. Even though the LTB trigger fires
+            // with the source already off-battlefield (in graveyard
+            // or exile), the controller transient still carries the
+            // source's controller from the dispatch site.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            let controller_u8 = controller;
+            // Step 1: draw a card. Mirrors Python's `draw_n_cards(...,
+            // 1)`. Library empty → no-op (loss-by-decking SBA handles
+            // it on next SBA check — same as every other
+            // `Effect::DrawCards { count: 1 }` consumer).
+            {
+                let player = &mut state.players[controller_idx];
+                let lib_len = player.library.len();
+                if lib_len > 0 {
+                    let lib = Arc::make_mut(&mut player.library);
+                    let mut obj = lib.remove(0);
+                    obj.zone = ZONE_HAND;
+                    obj.controller = controller_u8;
+                    let hand = Arc::make_mut(&mut player.hand);
+                    hand.push(obj);
+                }
+            }
+            // Step 2: count lands the controller controls on
+            // battlefield. Mirrors Python's `sum(1 for o in
+            // state.battlefield if o.controller_id == controller_id
+            // and o.printing.is_land)`.
+            let land_count: u32 = {
+                let mut n: u32 = 0;
+                for player in state.players.iter() {
+                    for obj in player.battlefield.iter() {
+                        if obj.controller != controller_u8 {
+                            continue;
+                        }
+                        let pr = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if pr.card_types.iter().any(|t| t == "Land") {
+                            n += 1;
+                        }
+                    }
+                }
+                n
+            };
+            // Step 3: first-legal scan over hand. Pick the FIRST card
+            // (insertion order) whose printing satisfies
+            // `is_permanent && mana_cost.total <= land_count`.
+            // `is_permanent` = card_types intersects {Creature,
+            // Artifact, Land, Enchantment, Planeswalker} (CR 110.4 +
+            // Python's `cards/base.py:1068-1076` is_permanent
+            // property). Mirrors Python's `candidates = [c for c in
+            // p.hand if c.printing.is_permanent and
+            // c.printing.mana_cost.total <= land_count]` followed by
+            // the deterministic `candidates[0]` seated-agent
+            // fallback.
+            let pick_idx: Option<usize> = {
+                let hand = &state.players[controller_idx].hand;
+                let mut found: Option<usize> = None;
+                for (i, obj) in hand.iter().enumerate() {
+                    let pr = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let is_creature =
+                        pr.card_types.iter().any(|t| t == "Creature");
+                    let is_land =
+                        pr.card_types.iter().any(|t| t == "Land");
+                    let is_artifact =
+                        pr.card_types.iter().any(|t| t == "Artifact");
+                    let is_enchantment =
+                        pr.card_types.iter().any(|t| t == "Enchantment");
+                    let is_planeswalker =
+                        pr.card_types.iter().any(|t| t == "Planeswalker");
+                    let is_permanent = is_creature
+                        || is_artifact
+                        || is_land
+                        || is_enchantment
+                        || is_planeswalker;
+                    if !is_permanent {
+                        continue;
+                    }
+                    let mc = &pr.mana_cost;
+                    let mv: u32 = mc.generic as u32
+                        + mc.white as u32
+                        + mc.blue as u32
+                        + mc.black as u32
+                        + mc.red as u32
+                        + mc.green as u32;
+                    if mv <= land_count {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            let pick_idx = match pick_idx {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            // Step 4: reserve a fresh ETB timestamp BEFORE the
+            // player-mut borrow (same pattern as Astelli Reclaimer /
+            // Famished Worldsire).
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // Step 5: remove from hand; stamp battlefield-entry
+            // fields (tapped per the printed text "onto the
+            // battlefield tapped"; summoning_sick=true per CR 302.1
+            // since the picked card MAY be a creature even though
+            // Astelli's is not). Push to controller's battlefield.
+            let entered_id: u32 = {
+                let player = &mut state.players[controller_idx];
+                let hand = Arc::make_mut(&mut player.hand);
+                let mut obj = hand.remove(pick_idx);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                obj.summoning_sick = true;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                let id = obj.id;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+                id
+            };
+            // Step 6: queue ENTERS dispatch — drained AFTER the
+            // resolving AV LTB trigger frame pops. Mirrors Python's
+            // `put_into_battlefield`'s
+            // `dispatch_event(Event.Enters, ...)`.
+            state.pending_etb_dispatches.push(entered_id);
+        }
         // **16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer
         // ETB.** "Return target noncreature, nonland permanent card
         // with mana value X or less from your graveyard to the

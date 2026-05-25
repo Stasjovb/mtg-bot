@@ -4449,6 +4449,91 @@ pub enum Effect {
     ///    `SearchLibraryForBasicLandTapped` uses. Mirrors Python's
     ///    `shuffle_library(state, controller_id)`.
     FamishedWorldsireLookTopXByPowerPutLandsTapped,
+    /// **Anticausal Vestige Cycle 1 (2026-05-24, substrate-only) — LTB
+    /// draw-then-put-permanent-from-hand-tapped.** "When this creature
+    /// leaves the battlefield, draw a card, then you may put a
+    /// permanent card with mana value less than or equal to the number
+    /// of lands you control from your hand onto the battlefield
+    /// tapped." Mirrors Python's `AnticausalVestigeLeavesEffect`
+    /// (`effects/bespoke.py:858-907`) — the ONLY EoE card with this
+    /// shape, ~6,900 17lands decks (the #3-ranked multi-gated-tail
+    /// candidate from the 2026-05-24 multi-gated tractability scout).
+    ///
+    /// **Unit variant; no payload.** Both the land count (X) and the
+    /// hand pick are dynamic resolve-time computations — there is no
+    /// static field to surface. Python's class is a frozen dataclass
+    /// with no fields; we mirror the unit-variant convention shipped
+    /// by round-49 `gain_life_equal_to_your_life_total` / round-54
+    /// `famished_worldsire_look_top_x_by_power_put_lands_tapped` /
+    /// 16th-slice `astelli_reclaimer_etb_effect`.
+    ///
+    /// **Resolve semantics (mirrors `AnticausalVestigeLeavesEffect`).**
+    /// 1. Source-controller resolution via the transient
+    ///    `current_resolve_source_controller` (fallback
+    ///    `active_player`) — CR 119.5 / 608.2; "your hand" / "lands
+    ///    you control" are the source's controller's.
+    /// 2. Draw a card for the controller (Python's `draw_n_cards(...,
+    ///    1)`). If the library is empty, the loss-by-decking SBA
+    ///    handles it on the next SBA check — same as every other
+    ///    `Effect::DrawCards { count: 1 }` consumer.
+    /// 3. Count lands the controller controls on the battlefield (the
+    ///    `X` for the MV gate). Mirrors Python's `sum(1 for o in
+    ///    state.battlefield if o.controller_id == controller_id and
+    ///    o.printing.is_land)`.
+    /// 4. Walk the controller's hand in insertion order. Collect the
+    ///    indices of cards whose printing satisfies
+    ///    `is_permanent && mana_cost.total() <= X` (`is_permanent` =
+    ///    `card_types intersects {Creature, Artifact, Land,
+    ///    Enchantment, Planeswalker}`). If no card matches, silent
+    ///    no-op after the draw (Python parity — the `if not
+    ///    candidates ...` early-return).
+    /// 5. Deterministic first-legal pick — `candidates[0]` in hand
+    ///    insertion order. Mirrors Python's seated-agent fallback
+    ///    `next((c for c in candidates if c.id == pick_id),
+    ///    candidates[0])` — when no agent is plumbed, the
+    ///    `candidates[0]` fallback is the deterministic byte-equal
+    ///    pick both engines converge on (the
+    ///    `AstelliReclaimerETBEffect` first-legal-deterministic
+    ///    precedent for choice-shaped bespokes that DON'T plumb a
+    ///    PendingDecision).
+    /// 6. Remove the picked card from the hand. Stamp the standard
+    ///    battlefield-entry fields (`zone = ZONE_BATTLEFIELD`,
+    ///    `tapped = true` — the printed text says "onto the
+    ///    battlefield tapped"; `summoning_sick = true` per CR 302.1 —
+    ///    the picked card MAY be a creature even though Astelli is
+    ///    non-creature; `controller = controller_u8`, `damage = 0`,
+    ///    `counters = 0`, `attached_to = None`,
+    ///    `exiled_with_source = None`, fresh `etb_timestamp`). Push
+    ///    to controller's battlefield.
+    /// 7. Queue `Event::Enters` for the entered card via
+    ///    `pending_etb_dispatches.push(entered_id)` so any ETB trigger
+    ///    fires AFTER the resolving AV LTB trigger frame pops
+    ///    (mirrors `AstelliReclaimerETBEffect` /
+    ///    `FamishedWorldsireLookTopXByPowerPutLandsTapped`).
+    ///
+    /// **Why no PendingDecision (substrate-only).** Python's
+    /// `choose_sacrifice` call uses the hand-id picker hook, but the
+    /// `if not candidates or p.agent is None: return` early-return
+    /// fires when no agent is seated — the bridge consumer path. For
+    /// the substrate-only landing (this slice, Cycle 1), AV STAYS
+    /// DECLINED at the admit gate, so the resolve arm is exercised
+    /// ONLY by direct substrate-pin unit tests where the test seats a
+    /// `controller` consistently. The deterministic first-legal pick
+    /// matches Python's seated-agent fallback semantics
+    /// (`candidates[0]`) byte-equal. Cycle 2 ships the
+    /// `_python_ta_to_safe_dict` LEAVES_BATTLEFIELD widen + the
+    /// admit-set bump that lets AV ride the bridge; Cycle 3 ships the
+    /// per-card real-EoE byte-equality probe. The no-agent /
+    /// seated-agent contract refinement (whether C2 routes through a
+    /// new `PendingDecision::PickCardFromHandChoice` or keeps the
+    /// deterministic-first contract) is a Cycle-2 design decision the
+    /// substrate-only landing leaves open.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — the
+    /// hand pick is computed at resolve time from the deterministic
+    /// hand scan, not stored on the variant. The bridge translates
+    /// this Rust unit variant to `AnticausalVestigeLeavesEffect()`.
+    AnticausalVestigeLeavesEffect,
     /// **16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer ETB.**
     /// "When this creature enters, return target noncreature, nonland
     /// permanent card with mana value X or less from your graveyard
@@ -12102,6 +12187,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // arm shape verbatim, swapping the literal).
             Ok(Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped)
         }
+        "anticausal_vestige_leaves_effect" => {
+            // Anticausal Vestige Cycle 1 (2026-05-24, substrate-only)
+            // — LTB draw-then-may-put-permanent-from-hand-tapped. Unit
+            // variant; no payload fields beyond `kind` (both the land
+            // count and the hand pick are dynamic — read from the
+            // source's controller's battlefield + hand at resolve
+            // time; pick is a deterministic first-legal scan
+            // mirroring Python's seated-agent fallback `candidates[0]`).
+            // Extra dict fields silently ignored for round-trip
+            // dict-shape consistency (mirrors the round-49 /
+            // round-54 / 16th-slice unit-variant parse arm shape).
+            Ok(Effect::AnticausalVestigeLeavesEffect)
+        }
         "astelli_reclaimer_etb_effect" => {
             // 16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer
             // ETB. Unit variant; no payload fields beyond `kind` (X is
@@ -13760,7 +13858,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect"
         ))),
     }
 }
@@ -16494,6 +16592,18 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "famished_worldsire_look_top_x_by_power_put_lands_tapped",
             )?;
+        }
+        Effect::AnticausalVestigeLeavesEffect => {
+            // Anticausal Vestige Cycle 1 (2026-05-24, substrate-only).
+            // Unit variant; no payload fields beyond `kind` (land
+            // count + hand pick are both dynamic, computed at resolve
+            // time — pick is deterministic first-legal in hand order).
+            // Mirrors Python's `AnticausalVestigeLeavesEffect` dict
+            // shape (no static fields on the @dataclass). No other
+            // keys emitted (round-trip dict-shape consistency
+            // convention — round-49 / round-54 / 16th-slice
+            // unit-variant precedent).
+            d.set_item("kind", "anticausal_vestige_leaves_effect")?;
         }
         Effect::AstelliReclaimerETBEffect => {
             // 16th Rust slice (TTT Pin 3 closure). Unit variant; no

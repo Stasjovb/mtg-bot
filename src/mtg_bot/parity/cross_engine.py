@@ -9472,6 +9472,62 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             FamishedWorldsireETBEffect,
         )
         return FamishedWorldsireETBEffect()
+    if kind == "anticausal_vestige_leaves_effect":
+        # **Anticausal Vestige Cycle 1 (2026-05-24, substrate-only) —
+        # bridge arm.** Rust's ``Effect::AnticausalVestigeLeavesEffect``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-54
+        # ``famished_worldsire_look_top_x_by_power_put_lands_tapped``
+        # arm; to_dict immediately after the matching enum slot;
+        # resolve in ``state_ops_resolve.rs`` immediately after
+        # ``FamishedWorldsireLookTopXByPowerPutLandsTapped``) mirrors
+        # Python's ``AnticausalVestigeLeavesEffect``
+        # (``effects/bespoke.py:858-907``).
+        #
+        # **Unit variant — no fields.** Both the land count (X) and
+        # the hand pick are dynamic resolve-time computations — there
+        # is no static field to surface. The bridge passes through
+        # verbatim; extra dict keys ignored (mirrors the round-54
+        # ``famished_worldsire_look_top_x_by_power_put_lands_tapped``
+        # / 16th-slice ``astelli_reclaimer_etb_effect`` unit-variant
+        # arm shape).
+        #
+        # **Resolve semantics (cross-engine, seated-agent
+        # deterministic-first contract).** Both engines: resolve under
+        # the SOURCE's controller (CR 119.5 / 608.2); draw 1 card;
+        # count lands the controller controls on bf (X); pick the
+        # FIRST card in hand insertion order whose printing is a
+        # permanent with ``mana_cost.total <= X``; remove from hand;
+        # put onto battlefield TAPPED with ``summoning_sick=True``
+        # (CR 302.1 — the picked card MAY be a creature). Empty
+        # filter result → silent no-op after the draw. Rust mirrors
+        # the deterministic ``candidates[0]`` seated-agent fallback
+        # path of Python; the no-agent path (which Python early-
+        # returns from before the put) is a separate contract
+        # the C2 admit-set widen will settle (substrate-only Cycle 1
+        # keeps AV DECLINED at the admit gate so the bridge is never
+        # exercised on a no-agent harness today).
+        #
+        # **Real EoE consumer:** Anticausal Vestige ({2}{B} 2/2 with
+        # warp_cost {4}; ~6,900 17lands decks — the #3-ranked multi-
+        # gated-tail candidate from the 2026-05-24 multi-gated
+        # tractability scout). The full *card* STAYS DECLINED at the
+        # ``_printing_is_bridge_pure_warp_creature`` admit gate post-
+        # Cycle-1: the warp arm gates ``triggered_abilities`` through
+        # ``_python_ta_to_safe_dict``, and LEAVES_BATTLEFIELD is
+        # absent from that recognizer's event vocabulary today
+        # (gated to ``(ENTERS, DIES, ATTACKS, BECOMES_TAPPED)`` at
+        # ``trajectory.py:3437-3440``). Cycle 2 ships the
+        # LEAVES_BATTLEFIELD event widen + the matching safe-trigger
+        # leaf + admit-set bump; Cycle 3 ships the per-card real-EoE
+        # byte-equality probe. Sibling mirroring of the Codecracker
+        # Hound multi-cycle (commits ``bd37cca0`` C1, ``278992d7``
+        # C2, ``6f99bf45`` C3) — substrate first, admit widen second,
+        # probe third.
+        from mtg_bot.effects.bespoke import (
+            AnticausalVestigeLeavesEffect,
+        )
+        return AnticausalVestigeLeavesEffect()
     if kind == "astelli_reclaimer_etb_effect":
         # 16th Rust slice (TTT Pin 3 closure) — Astelli Reclaimer ETB
         # bridge arm. Rust's ``Effect::AstelliReclaimerETBEffect``
