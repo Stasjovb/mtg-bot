@@ -8383,6 +8383,53 @@ pub enum Effect {
     /// **Unit variant** — no fields. Mirrors Python's
     /// `UntapTargetLand()` frozen dataclass.
     UntapTargetLand,
+    /// **Carrier-AA substrate Phase 2a Cycle 1 (2026-05-25) —
+    /// `ReturnTargetLandFromGraveyardToHand`.** Mirrors Python's
+    /// `ReturnTargetLandFromGraveyardToHand` from
+    /// `effects/generic/bounce.py:468` (a `ReturnFromGraveyard` subclass
+    /// with `land=True, destination="hand", target_kind="graveyard_land",
+    /// log_suffix="(Petrified Field)"`). Pilot effect on Petrified Field
+    /// (`{T}, Sacrifice this land: Return target land card from your
+    /// graveyard to your hand.`).
+    ///
+    /// **Resolve semantics (CR 701.3 — return target card from
+    /// graveyard to its owner's hand).** Re-validate the targeted
+    /// card's legality at resolve (CR 608.2b — if it left the
+    /// graveyard, silent fizzle), then move it from the SOURCE-
+    /// controller's graveyard to that player's hand. Mirrors Python's
+    /// `ReturnFromGraveyard.resolve` at
+    /// `effects/generic/graveyard.py:195-219` for `max_n=1` with
+    /// `destination="hand"` and `land=True` filter (walks the
+    /// controller's graveyard only — `p = state.player_by_id(
+    /// controller_id)`, so target enumeration is own-graveyard only).
+    /// No ETB triggers (CR 603.6 ETB fires on entering the
+    /// battlefield, not the hand).
+    ///
+    /// **Target selection.** Same cast-time-bound + substrate-fallback
+    /// dual-path as the Phase 1 sibling Effect arms (`UntapTargetLand`
+    /// / `RegenerateTargetCreature`). Cycle 2 admit predicate widens
+    /// to keep Petrified Field DECLINED post-Cycle-1 (the substrate-
+    /// only invariant); synthetic tests supply
+    /// `current_resolve_payload_target_id`, and the fallback walks the
+    /// source-controller's graveyard front-to-back for the first
+    /// Land-card-typed match.
+    ///
+    /// **Source-already-left-bf invariant.** The cost-pay path
+    /// (`state_ops_actions.rs:1344-1391` Phase 5b sacrifice_self
+    /// commit) has already moved the source to its controller's
+    /// graveyard BEFORE this resolve arm fires (CR 117.10 / 119 —
+    /// costs pay before effects resolve). The Petrified Field-shape
+    /// activation thus puts the source in the graveyard alongside any
+    /// pre-existing land cards; the targeted card MUST NOT be the
+    /// source itself (the source just arrived; the targeted card was
+    /// in the graveyard at the time of legal-target emission per CR
+    /// 601.2c). The fallback target-scan skips ETB-time validity
+    /// concerns — the same substrate-fallback pattern as the Phase 1
+    /// `RegenerateTargetCreature` / `UntapTargetLand` arms.
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `ReturnTargetLandFromGraveyardToHand()` frozen dataclass.
+    ReturnTargetLandFromGraveyardToHand,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -12585,6 +12632,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // dropped (unit-variant contract).
         "untap_target_land" => {
             Ok(Effect::UntapTargetLand)
+        }
+        // **Carrier-AA substrate Phase 2a Cycle 1 (2026-05-25) —
+        // `return_target_land_from_graveyard_to_hand` parse arm.** Unit
+        // variant; no fields. Mirrors Python's parameterless
+        // `ReturnTargetLandFromGraveyardToHand()` frozen dataclass at
+        // `effects/generic/bounce.py:468`. Extra dict keys silently
+        // dropped (unit-variant contract; same shape as the
+        // `untap_target_land` sibling).
+        "return_target_land_from_graveyard_to_hand" => {
+            Ok(Effect::ReturnTargetLandFromGraveyardToHand)
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -18291,6 +18348,15 @@ pub(crate) fn effect_to_pydict<'py>(
         // `UntapTargetLand()` frozen dataclass.
         Effect::UntapTargetLand => {
             d.set_item("kind", "untap_target_land")?;
+        }
+        // **Carrier-AA substrate Phase 2a Cycle 1 (2026-05-25) —
+        // `ReturnTargetLandFromGraveyardToHand.to_pydict`.** Field-free
+        // unit-variant; only `kind` emitted. Mirrors Python's
+        // parameterless `ReturnTargetLandFromGraveyardToHand()` frozen
+        // dataclass (`effects/generic/bounce.py:468`). Same emit shape
+        // as the `UntapTargetLand` sibling.
+        Effect::ReturnTargetLandFromGraveyardToHand => {
+            d.set_item("kind", "return_target_land_from_graveyard_to_hand")?;
         }
     }
     Ok(d)

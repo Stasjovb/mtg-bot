@@ -22776,6 +22776,145 @@ fn apply_effect(
             }
             // else: silent fizzle.
         }
+        // **Carrier-AA substrate Phase 2a Cycle 1 (2026-05-25) —
+        // `ReturnTargetLandFromGraveyardToHand` resolve.** Mirrors
+        // Python's `ReturnFromGraveyard.resolve` at
+        // `effects/generic/graveyard.py:195-219` for `max_n=1` with
+        // `destination="hand"` and `land=True` filter. Pilot effect on
+        // Petrified Field (`{T}, Sacrifice this land: Return target
+        // land card from your graveyard to your hand.`).
+        //
+        // **Substrate-only invariant — Petrified Field STAYS DECLINED.**
+        // Cycle 2 widens the Python admit gate
+        // (`_aa_is_phase1_sub_shape_a` cost-gate widen to admit
+        // `sacrifice_self=True`). Until then, no real card drives this
+        // resolve arm — synthetic tests supply the target via
+        // `current_resolve_payload_target_id`, and the substrate-
+        // fallback walks the source-controller's graveyard front-to-
+        // back for the first Land-card-typed match.
+        //
+        // **Target scope — controller's graveyard only.** Mirrors
+        // Python's `ReturnFromGraveyard.legal_targets` at
+        // `effects/generic/graveyard.py:183-191`: `p =
+        // state.player_by_id(controller_id)`; walks `p.graveyard`
+        // only. The target's "owner" in CR 701.3 terminology is its
+        // controller in graveyard zones (same player). Petrified
+        // Field's printed text reads "from your graveyard"; Python's
+        // implementation honors that strict reading.
+        //
+        // **CR 608.2b re-validation.** Re-check the bound target's
+        // legality at resolve time — if it left the graveyard between
+        // activation and resolve, silent fizzle. The Phase 1 sibling
+        // pattern (`UntapTargetLand` re-checks `tapped` at resolve;
+        // `RegenerateTargetCreature` re-checks `card_types`-Creature
+        // + subtype overlap). For Land cards in graveyard the re-
+        // check is `printing.card_types.contains("Land")` AND the
+        // object is still in the controller's graveyard.
+        //
+        // **No ETB triggers.** CR 603.6 — ETB fires on entering the
+        // battlefield, not the hand. Mirrors Python's `_move_one`
+        // `destination == "hand"` branch at
+        // `effects/generic/graveyard.py:284-295` (set zone=HAND,
+        // append to hand, reveal — no ETB dispatch).
+        //
+        // **Source-already-left-bf semantics.** The cost-pay path at
+        // `state_ops_actions.rs:1344-1391` (Phase 5b `sacrifice_self`
+        // commit) has already moved the source to its controller's
+        // graveyard BEFORE this resolve arm fires (CR 117.10 / 119 —
+        // costs pay before effects resolve). For Petrified Field
+        // specifically, the just-sacrificed source sits in the
+        // graveyard alongside any pre-existing land cards; the
+        // legal-emit fan-out (deferred to C2) must exclude self-as-
+        // target (or rely on the target-list-snapshotted-at-
+        // activation-time semantics — Python's
+        // `_play_one_activation` emits legal targets BEFORE paying
+        // costs, so the source isn't yet in the graveyard at the
+        // emission moment). The substrate-fallback path in this arm
+        // walks the graveyard for the first Land match — which under
+        // synthetic test conditions can include the sac'd source if
+        // the test setup pre-stages a graveyard scenario. Production-
+        // safe: the C2 admit gate widens to admit the activation, and
+        // the legal-emit fan-out picks the right target.
+        Effect::ReturnTargetLandFromGraveyardToHand => {
+            // Source-controller defaults to active_player when the
+            // resolve-source-controller stamp is absent (synthetic
+            // direct-apply path). Mirrors the
+            // `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`
+            // sibling at `state_ops_resolve.rs:20125-20127`.
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            // Predicate: object is a Land card. Mirrors Python's
+            // `_gy_card_matches` with the `land=True` branch
+            // (`effects/generic/graveyard.py:80`): `primary_ok =
+            // p.is_land`. No mana-value cap (Petrified Field has none).
+            let is_legal_target = |state: &GameState, id: u32| -> bool {
+                for obj in state.players[controller_idx].graveyard.iter() {
+                    if obj.id == id {
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => return false,
+                        };
+                        return printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land");
+                    }
+                }
+                false
+            };
+            // Cast-time-bound target path: re-validate the bound
+            // target per CR 608.2b. Fall back to deterministic-first-
+            // legal substrate scan when no bound payload (synthetic
+            // direct-apply path).
+            let target_id: Option<u32> = match state.current_resolve_payload_target_id {
+                Some(payload_id) => {
+                    if is_legal_target(state, payload_id) {
+                        Some(payload_id)
+                    } else {
+                        None
+                    }
+                }
+                None => {
+                    let mut found: Option<u32> = None;
+                    for obj in state.players[controller_idx].graveyard.iter() {
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if printing.card_types.iter().any(|t| t == "Land") {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                    found
+                }
+            };
+            if let Some(tid) = target_id {
+                // Remove from graveyard, set zone=HAND, append to
+                // hand. Same shape as the
+                // `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`
+                // sibling at `state_ops_resolve.rs:20162-20176`:
+                // remove + reset transient fields + push to hand.
+                // No ETB / landfall (CR 603.6 — graveyard→hand zone
+                // change doesn't fire ETB).
+                let graveyard_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].graveyard);
+                if let Some(pos) =
+                    graveyard_mut.iter().position(|o| o.id == tid)
+                {
+                    let mut obj = graveyard_mut.remove(pos);
+                    obj.zone = ZONE_HAND;
+                    obj.tapped = false;
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+                }
+            }
+            // else: silent fizzle (no eligible Land in graveyard).
+        }
     }
     Ok(())
 }

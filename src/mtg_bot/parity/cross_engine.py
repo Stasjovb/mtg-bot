@@ -12416,6 +12416,37 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # outcomes.
         from mtg_bot.effects.generic.tap import UntapTargetLand
         return UntapTargetLand()
+    if kind == "return_target_land_from_graveyard_to_hand":
+        # **Carrier-AA substrate Phase 2a Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::ReturnTargetLandFromGraveyardToHand``
+        # variant (cards.rs). Mirrors Python's parameterless
+        # ``ReturnTargetLandFromGraveyardToHand`` frozen dataclass at
+        # ``effects/generic/bounce.py:468``. Unit variant — no fields
+        # beyond ``kind``. The Python class is a ``ReturnFromGraveyard``
+        # subclass whose ``__post_init__`` stamps ``land=True``,
+        # ``destination="hand"``, ``target_kind="graveyard_land"``, and
+        # ``log_suffix="(Petrified Field)"`` — the bridge constructs a
+        # bare zero-arg instance and the Python ``__post_init__`` does
+        # the rest, so the dict-shape carries only ``kind``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 2a Cycle 1 keeps Petrified
+        # Field DECLINED at the production-deck loader; the cost-gate
+        # widen to admit ``sacrifice_self=True`` ships Cycle 2 (Python-
+        # bridge agent's slice). This bridge arm is byte-equal for both
+        # the substrate-only and the post-Cycle-2 flipped outcomes.
+        #
+        # **isinstance specificity.** The match-side check (design doc
+        # §5.3) must use the SPECIFIC subclass
+        # ``ReturnTargetLandFromGraveyardToHand`` — NOT the parent
+        # ``ReturnFromGraveyard`` — to avoid silently widening
+        # admission to other ``ReturnFromGraveyard`` siblings (e.g.
+        # ``ReturnUpToNNonlandPermanentCardsFromYourGraveyardToHand``
+        # at ``bounce.py:441``). The Phase-2a admit gate is
+        # specifically the target-land single-card variant.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnTargetLandFromGraveyardToHand,
+        )
+        return ReturnTargetLandFromGraveyardToHand()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -14137,15 +14168,34 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         return None
     if cost.requires_control_of_subtype:
         return None
-    # **Effect dict.** Phase 1 admits exactly two Effect classes:
+    # **Effect dict.** Phase-1/1.5a admit exactly two Effect classes:
     # ``RegenerateTargetCreature`` and ``UntapTargetLand``. Each has
     # a matching ``_ta_dict_to_python_effect`` arm (Cycle 1 substrate
-    # at ``cross_engine.py:12366,12395``). Phase-2/3/N extends this
-    # set as each Effect class lands cross-engine — extend the
-    # ``effect_dict`` dispatch below in lockstep with the matching
-    # arm.
+    # at ``cross_engine.py:12366,12395``). Phase 2a substrate Cycle 1
+    # (2026-05-25) extends the bridge-emit set with
+    # ``ReturnTargetLandFromGraveyardToHand`` (Petrified Field pilot)
+    # — the Cycle 1 substrate landing widens the bridge round-trip
+    # floor BUT the admit predicate ``_aa_is_phase1_sub_shape_a``
+    # cost-gate STILL DECLINES ``sacrifice_self=True`` (Cycle 2 ships
+    # that widen). Substrate-only invariant: Petrified Field stays
+    # DECLINED at the admit gate post-Cycle-1; the bridge emit
+    # widening here is exercised by synthetic Cycle 1 pins only.
+    # Phase-2/3/N extends this set as each Effect class lands cross-
+    # engine — extend the ``effect_dict`` dispatch below in lockstep
+    # with the matching arm.
+    #
+    # **isinstance specificity for ReturnTargetLandFromGraveyardToHand.**
+    # The class is a ``ReturnFromGraveyard`` subclass (base at
+    # ``effects/generic/graveyard.py:93``). The isinstance match must
+    # be on the SPECIFIC subclass — not the parent — to avoid silently
+    # widening admission to sibling ``ReturnFromGraveyard`` subclasses
+    # like ``ReturnUpToNNonlandPermanentCardsFromYourGraveyardToHand``
+    # (``bounce.py:441``). Design doc §5.3 makes this explicit.
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetLandFromGraveyardToHand,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -14157,8 +14207,10 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             )
     elif isinstance(effect, UntapTargetLand):
         effect_dict = {"kind": "untap_target_land"}
+    elif isinstance(effect, ReturnTargetLandFromGraveyardToHand):
+        effect_dict = {"kind": "return_target_land_from_graveyard_to_hand"}
     else:
-        # Effect class not in the Phase-1 admit set — decline.
+        # Effect class not in the Phase-1/1.5a/2a admit set — decline.
         return None
     return {
         "cost": cost_dict,
