@@ -354,6 +354,81 @@ def test_loader_admits_credits_simple_aura_disjunct(mod):
             break
 
 
+def test_loader_admits_mirrors_canonical_admit_gate_predicates(mod):
+    """**Drift guard for ``loader_admits``.** AST-walks
+    ``trajectory._filter_deck_to_bridge_supported`` to extract the exact
+    set of ``_printing_is_bridge_*`` predicates the canonical admit gate
+    calls, then AST-walks ``loader_admits`` to extract the predicates IT
+    calls — and asserts the two sets are EQUAL.
+
+    This is the structural "helper-vs-canonical drift" sanity gate.
+    When a substrate cycle widens the canonical gate (lands a new
+    ``_printing_is_bridge_*`` disjunct), this test FIRES until the
+    helper is synced — the same drift class today's post-flip
+    attribution sweep (2026-05-25) caught and closed (cost-reduction
+    Phase 1/2/3 + Weftwalking Cycle 2 + Carrier-AA Phase 1.5a).
+
+    The check is mechanical and parser-only — no engine import, no
+    live pool walk; runs in milliseconds.
+    """
+    import ast
+
+    traj_path = REPO_ROOT / "src" / "mtg_bot" / "parity" / "trajectory.py"
+    traj_text = traj_path.read_text(encoding="utf-8")
+    traj_tree = ast.parse(traj_text)
+
+    canonical_preds: set[str] = set()
+    for node in ast.walk(traj_tree):
+        if (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "_filter_deck_to_bridge_supported"
+        ):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                    fn = sub.func.id
+                    if fn.startswith("_printing_is_bridge_"):
+                        canonical_preds.add(fn)
+            break
+    assert canonical_preds, (
+        "Failed to extract any _printing_is_bridge_* predicates from "
+        "the canonical _filter_deck_to_bridge_supported — the AST walk "
+        "drifted; fix this test."
+    )
+
+    helper_text = SCRIPT_PATH.read_text(encoding="utf-8")
+    helper_tree = ast.parse(helper_text)
+    helper_preds: set[str] = set()
+    for node in ast.walk(helper_tree):
+        if (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "loader_admits"
+        ):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                    fn = sub.func.attr
+                    if fn.startswith("_printing_is_bridge_"):
+                        helper_preds.add(fn)
+            break
+    assert helper_preds, (
+        "Failed to extract any _printing_is_bridge_* predicates from "
+        "loader_admits — the AST walk drifted; fix this test."
+    )
+
+    missing_in_helper = canonical_preds - helper_preds
+    extra_in_helper = helper_preds - canonical_preds
+    assert not missing_in_helper, (
+        f"``loader_admits`` is missing canonical admit-gate predicates: "
+        f"{sorted(missing_in_helper)}. The helper is drifted -- sync it "
+        f"with ``trajectory._filter_deck_to_bridge_supported``'s "
+        f"disjunct list."
+    )
+    assert not extra_in_helper, (
+        f"``loader_admits`` calls predicates NOT in the canonical admit "
+        f"gate: {sorted(extra_in_helper)}. Remove them or add them to "
+        f"the canonical gate."
+    )
+
+
 def test_loader_admits_exception_path_returns_false(mod):
     """The ``try / except Exception`` envelope in ``loader_admits``
     swallows any predicate-side blow-up (a defensive guard around

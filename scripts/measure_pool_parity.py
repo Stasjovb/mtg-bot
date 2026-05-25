@@ -2873,25 +2873,34 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through. Mirrors all 13 disjuncts
+    EXACT gate the bench corpus runs through. Mirrors all 17 disjuncts
     of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
 
     1. ``_printing_is_bridge_basic_land``
     2. ``_printing_is_bridge_nonbasic_mana_land``
     3. ``_printing_is_bridge_pure_warp_creature``
-    4. ``_printing_is_bridge_simple_creature``
-    5. ``_printing_is_bridge_simple_spell``
-    6. ``_printing_is_bridge_simple_aura``
-    7. ``_printing_is_bridge_simple_static_anthem_creature``
-    8. ``_printing_is_bridge_simple_uncounterable_creature``
-    9. ``_printing_is_bridge_simple_static_self_conditional_creature``
-   10. ``_printing_is_bridge_simple_tapped_mana_land`` — non-basic
+    4. ``_printing_is_bridge_pure_cost_reduction_creature``
+    5. ``_printing_is_bridge_simple_creature``
+    6. ``_printing_is_bridge_simple_spell``
+    7. ``_printing_is_bridge_simple_aura``
+    8. ``_printing_is_bridge_simple_static_anthem_creature``
+    9. ``_printing_is_bridge_simple_uncounterable_creature``
+   10. ``_printing_is_bridge_simple_static_self_conditional_creature``
+   11. ``_printing_is_bridge_static_anthem_pt_conditional_warp_creature``
+   12. ``_printing_is_bridge_simple_cast_restriction_enchantment``
+   13. ``_printing_is_bridge_simple_enchantment`` — Weftwalking Cycle 2
+       (2026-05-24) vanilla non-Creature Enchantment with safe-trigger
+       ETB; sole admitted EoE consumer is Weftwalking (~3,680 17lands
+       decks). Sibling to the cast-restriction-enchantment arm on the
+       Enchantment-type axis with ``triggered_abilities`` half OPEN
+       and ``restricts_noncreature_spells_to_one_per_turn`` OFF.
+   14. ``_printing_is_bridge_simple_tapped_mana_land`` — non-basic
        land substrate phase 2 (round-85 N1; admits the 5 EoE Planet
        lands as untapped mono-color lands — the parser-flattened
        ``enters_tapped=True`` mono-color shape; the bridge drops
        ``enters_tapped`` on both engines; round-39 Ward / round-60
        shockland symmetric-drop precedent).
-   11. ``_printing_is_bridge_keyword_colorless_tapped_mana_land`` —
+   15. ``_printing_is_bridge_keyword_colorless_tapped_mana_land`` —
        non-basic land substrate sub-shape E (Cathedral of War cycle 1,
        2026-05-23; admits Cathedral of War as an untapped colorless
        land — the parser-flattened ``produces=frozenset()`` +
@@ -2901,6 +2910,17 @@ def loader_admits(printing) -> bool:
        bridge drops ``enters_tapped`` + Exalted on both engines;
        round-60 shockland / round-85 Planet land symmetric-drop
        precedent extended to a keyword-bearing colorless land).
+   16. ``_printing_is_bridge_nonbasic_painland_conditional`` — non-
+       basic land substrate phase 2 painland conditional (2026-05-23).
+   17. ``_printing_is_bridge_simple_carrier_aa_land`` — Carrier-AA
+       substrate Phase 1.5a (2026-05-25); admits the bare ``{T}:
+       <Phase-1-Effect>`` OR ``{N}, {T}: <Phase-1-Effect>`` single-AA
+       Land profile — Swarmyard + Deserted Temple in the EoE pool
+       post-Phase-1.5a. Phase-1 cycle 1+2 Rust substrate
+       (``226c9738``) ships the ``CardDef.activated_abilities`` field +
+       ``Effect::RegenerateTargetCreature`` / ``Effect::
+       UntapTargetLand`` variants + ``GameObject.regeneration_shield``
+       SBA-time consume + cleanup reset.
 
     Reused, not reimplemented, so the bench tier and the real bench can
     never disagree on what "admitted" means.
@@ -2963,7 +2983,24 @@ def loader_admits(printing) -> bool:
     cards move all the way to PROBED. Pattern follows the round-83
     warp_cost Phase 3 / round-84 Cosmogoyf idiom: thin delegators
     re-use existing byte-equal helpers, no duplicated probe logic, no
-    engine changes."""
+    engine changes.
+
+    **post-flip attribution sweep (2026-05-25):** 3 more disjuncts —
+    ``_printing_is_bridge_pure_cost_reduction_creature`` (cost-reduction
+    Phase 1/2/3, 2026-05-24/25; admits 5 carriers: Gigastorm Titan,
+    Lashwhip Predator, Uthros Psionicist, Sami Wildcat Captain,
+    Fungal Colossus),
+    ``_printing_is_bridge_simple_enchantment`` (Weftwalking Cycle 2,
+    2026-05-24; admits Weftwalking — vanilla non-Creature Enchantment
+    with safe-trigger ETB), and
+    ``_printing_is_bridge_simple_carrier_aa_land`` (Carrier-AA
+    substrate Phase 1.5a, 2026-05-25; admits Swarmyard + Deserted
+    Temple) — were folded in here, closing the helper-vs-canonical
+    drift today's substrate landings introduced. All 7 cards are
+    already PROBED via dedicated per-card probes, so this widen is
+    pure metric-truthfulness (tier counts unchanged). The helper now
+    mirrors all 17 canonical disjuncts in
+    ``trajectory._filter_deck_to_bridge_supported``."""
     from mtg_bot.parity import trajectory as traj
 
     try:
@@ -2971,6 +3008,18 @@ def loader_admits(printing) -> bool:
             traj._printing_is_bridge_basic_land(printing)
             or traj._printing_is_bridge_nonbasic_mana_land(printing)
             or traj._printing_is_bridge_pure_warp_creature(printing)
+            # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24) +
+            # Phase 2 Cycle 2 (2026-05-25) + Phase 3 Cycle 2 (2026-05-25).
+            # Mirrors the real loader's admit arm in
+            # ``_filter_deck_to_bridge_supported``. Admits the 5
+            # cost-reduction carriers (Gigastorm Titan, Lashwhip Predator,
+            # Uthros Psionicist, Sami Wildcat Captain, Fungal Colossus —
+            # ~53,648 17lands decks total). All 5 already PROBED via
+            # dedicated per-card probes; this fold is pure
+            # metric-truthfulness (tier counts unchanged).
+            or traj._printing_is_bridge_pure_cost_reduction_creature(
+                printing,
+            )
             or traj._printing_is_bridge_simple_creature(printing)
             or traj._printing_is_bridge_simple_spell(printing)
             or traj._printing_is_bridge_simple_aura(printing)
@@ -3004,6 +3053,21 @@ def loader_admits(printing) -> bool:
             # engine bridge round-trip + the parity probe move it
             # to PROBED via the existing slug-keyed scanner pattern.
             or traj._printing_is_bridge_simple_cast_restriction_enchantment(
+                printing,
+            )
+            # **Weftwalking Cycle 2 (2026-05-24).** Mirrors the real
+            # loader's admit arm in ``_filter_deck_to_bridge_supported``.
+            # Vanilla non-Creature Enchantment whose every ETB
+            # triggered_ability round-trips through the safe-trigger
+            # recognizer; sole admitted EoE consumer is Weftwalking
+            # (~3,680 17lands decks — already PROBED via
+            # ``tests/test_weftwalking_parity.py``). Sibling to the
+            # cast-restriction-enchantment arm above on the
+            # Enchantment-type axis: triggered_abilities half OPEN
+            # (every entry must round-trip the safe-trigger recognizer)
+            # and ``restricts_noncreature_spells_to_one_per_turn`` OFF.
+            # The two arms are mutually exclusive by construction.
+            or traj._printing_is_bridge_simple_enchantment(
                 printing,
             )
             # Non-basic land substrate — phase 2 (round-85 N1): the
@@ -3042,6 +3106,17 @@ def loader_admits(printing) -> bool:
             or traj._printing_is_bridge_nonbasic_painland_conditional(
                 printing,
             )
+            # **Carrier-AA substrate Phase 1.5a (2026-05-25).** Mirrors
+            # the real loader's admit arm in
+            # ``_filter_deck_to_bridge_supported``. Admits the bare
+            # ``{T}: <Phase-1-Effect>`` OR ``{N}, {T}: <Phase-1-Effect>``
+            # single-AA Land profile — Swarmyard + Deserted Temple in
+            # the EoE pool post-Phase-1.5a. Both already PROBED via
+            # dedicated per-card probes
+            # (``tests/test_swarmyard_parity.py`` +
+            # ``tests/test_deserted_temple_parity.py``); this fold is
+            # pure metric-truthfulness (tier counts unchanged).
+            or traj._printing_is_bridge_simple_carrier_aa_land(printing)
         )
     except Exception:
         return False
