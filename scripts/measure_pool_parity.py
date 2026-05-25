@@ -1739,6 +1739,31 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_swamp_parity.py",
     REPO_ROOT / "tests" / "test_mountain_parity.py",
     REPO_ROOT / "tests" / "test_illvoi_light_jammer_parity.py",
+    # Cost-reduction substrate Phase 1 Cycle 3 (cost-reduction-
+    # phase-1-cycle-3-gigastorm-probe-p3 lane, 2026-05-25):
+    # per-card real-EoE cross-engine byte-equality probe for
+    # **Gigastorm Titan** flips ``covered_by_construction`` ->
+    # PROBED in the pool-parity metric.  Companion Cycle 4 lane
+    # will land ``test_probe_lashwhip_predator_real_eoe_cost_
+    # reduction.py`` next.  Drives BOTH lifecycles of the Phase-1
+    # AnotherSpellCastThisTurn cost-reduction substrate that
+    # commits ``8593b0fb`` (Cycle 2 FLIP) shipped: (a) full-cost
+    # cast as first spell of turn — pays base {4}{U}, reduction
+    # condition False; (b) reduced-cost cast as second spell —
+    # pays {1}{U} after the {3} reduction applies, the load-bearing
+    # case the C2 substrate FLIP rides on.  Pool-primed mana on
+    # both engines so the cost-payment arithmetic is the entire
+    # load-bearing signal (no land-tap noise).  Full
+    # ``compare_fields == []`` over the 22-field cross-engine
+    # field view post-cast.  Per-slug attribution = "Gigastorm
+    # Titan" (24,908 17lands decks, the larger of the two C2
+    # carriers).  This commit is concurrent with the batch-6
+    # covered-by-construction probe-writing lane above; both
+    # append to PROBE_MODULES (no semantic conflict — different
+    # per-slug attributions).
+    REPO_ROOT
+    / "tests"
+    / "test_probe_gigastorm_titan_real_eoe_cost_reduction.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
