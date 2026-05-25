@@ -236,15 +236,17 @@ def test_bridge_round_trip_lashwhip_predator_byte_equal():
 
 
 def test_phase1_cost_reduction_admit_set_is_exactly_the_two_phase1_carriers():
-    """Pin #3 — admit set exhaustive.
+    """Pin #3 — Phase-1 carriers admit at the predicate post-Phase-2.
 
-    The set of live EoE printings passing the new
-    :func:`_printing_is_bridge_pure_cost_reduction_creature`
-    predicate is EXACTLY ``{"Gigastorm Titan", "Lashwhip
-    Predator"}`` — the two Phase-1 carriers identified by the
-    revisit (24,908 17lands decks / 46 % of the cost-reduction
-    single-gated deck pool). Auto-grows in Phase 2 / Phase 3 when
-    the Condition grammar widens.
+    **Updated post-Phase-2-Cycle-2 (2026-05-25).** This Phase-1
+    test originally pinned the admit set as EXACTLY ``{Gigastorm
+    Titan, Lashwhip Predator}``. Phase 2 widened the predicate to
+    admit Uthros Psionicist + Sami, Wildcat Captain. The Phase-1
+    invariant the pin actually guards is "Phase-1 carriers admit"
+    + "no Phase-1-grammar-violating card admits"; the exhaustive-
+    set claim now lives in
+    ``test_cost_reduction_phase_2_substrate_cycle_2.py``'s
+    Pin #3 (4-card subsystem-attribution pin).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -257,13 +259,15 @@ def test_phase1_cost_reduction_admit_set_is_exactly_the_two_phase1_carriers():
             printing,
         )
     )
-    assert admitted == ["Gigastorm Titan", "Lashwhip Predator"], (
-        f"cost-reduction admit set drifted: {admitted!r} (expected "
-        f"exactly Gigastorm Titan + Lashwhip Predator — the 2 "
-        f"Phase-1 carriers). If a new card joined, verify it actually "
-        f"carries a Phase-1 boolean-condition cost_reductions shape "
-        f"(no PerDifferentlyNamedLand, no external_cost_reductions, "
-        f"no other rider) — Phase 2 / Phase 3 will widen the set."
+    # Phase-1 carriers must admit (the original invariant — no
+    # Phase-2 regression on Phase-1).
+    assert "Gigastorm Titan" in admitted, (
+        f"Gigastorm Titan must STILL admit post-Phase-2; got "
+        f"admit set {admitted!r}"
+    )
+    assert "Lashwhip Predator" in admitted, (
+        f"Lashwhip Predator must STILL admit post-Phase-2; got "
+        f"admit set {admitted!r}"
     )
 
 
@@ -317,18 +321,15 @@ def test_fungal_colossus_stays_declined_per_differently_named_land_is_phase_2():
 
 
 def test_uthros_psionicist_stays_declined_external_cost_reductions_is_phase_3():
-    """Pin #4b — Uthros Psionicist stays DECLINED (§2 teeth).
+    """Pin #4b — INVERTED post-Phase-2-Cycle-2 — Uthros admits.
 
-    Uthros Psionicist carries
-    ``external_cost_reductions=(ExternalCostReduction(amount=2,
-    condition=NthSpellThisTurn(n=2)),)`` — externals are Phase 3
-    (battlefield-scan analogue + NthSpellThisTurn condition).
-    The Phase-1 admit predicate rejects any non-empty
-    ``external_cost_reductions`` outright.
-
-    Cycle Phase-3 will widen this (Rust battlefield-scan analogue
-    of ``_apply_external_cost_reductions`` + per-Condition Rust
-    port).
+    **Updated post-Phase-2-Cycle-2 (2026-05-25).** Originally this
+    pin claimed Uthros Psionicist STAYS DECLINED because the
+    Phase-1 admit predicate rejected any non-empty
+    ``external_cost_reductions``. Phase 2 widened the predicate —
+    Uthros now admits at the cost-reduction-aware path. The flip-
+    point inversion lives here for cadence visibility; the
+    exhaustive pin lives in the Phase-2 C2 test module.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -338,26 +339,27 @@ def test_uthros_psionicist_stays_declined_external_cost_reductions_is_phase_3():
     if up is None:
         pytest.skip("Uthros Psionicist absent from active CardSource")
 
-    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(up) is False, (
-        "Uthros Psionicist must STAY DECLINED — external_cost_reductions "
-        "is Phase-3."
+    assert (
+        trajectory._printing_is_bridge_pure_cost_reduction_creature(up)
+        is True
+    ), (
+        "Uthros Psionicist must ADMIT post-Phase-2-Cycle-2 — the "
+        "widened predicate admits NthSpellThisTurn externals."
     )
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Uthros Psionicist"], src,
     )
-    assert filtered_names == []
-    assert card_defs == []
+    assert filtered_names == ["Uthros Psionicist"]
+    assert len(card_defs) == 1
 
 
 def test_sami_wildcat_captain_stays_declined_external_cost_reductions_is_phase_3():
-    """Pin #4c — Sami, Wildcat Captain stays DECLINED (§2 teeth).
+    """Pin #4c — INVERTED post-Phase-2-Cycle-2 — Sami admits.
 
-    Sami carries ``external_cost_reductions=(ExternalCostReduction(
-    amount=1, condition=PerControlled(IsArtifact())),)`` —
-    affinity-like external with a variable multiplier AND a
-    non-creature predicate. Both are Phase-3 (externals scan) +
-    Phase-2 (variable multiplier) + Phase-2+ (predicate algebra)
-    — multiple §2 teeth.
+    **Updated post-Phase-2-Cycle-2 (2026-05-25).** Simultaneous
+    flip with #4b above — Sami, Wildcat Captain now admits at the
+    widened cost-reduction-aware predicate via the
+    PerControlled(IsArtifact()) externals shape.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -367,15 +369,19 @@ def test_sami_wildcat_captain_stays_declined_external_cost_reductions_is_phase_3
     if sami is None:
         pytest.skip("Sami, Wildcat Captain absent from active CardSource")
 
-    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(sami) is False, (
-        "Sami must STAY DECLINED — external_cost_reductions is "
-        "Phase-3."
+    assert (
+        trajectory._printing_is_bridge_pure_cost_reduction_creature(sami)
+        is True
+    ), (
+        "Sami, Wildcat Captain must ADMIT post-Phase-2-Cycle-2 — the "
+        "widened predicate admits PerControlled(IsArtifact()) "
+        "externals."
     )
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Sami, Wildcat Captain"], src,
     )
-    assert filtered_names == []
-    assert card_defs == []
+    assert filtered_names == ["Sami, Wildcat Captain"]
+    assert len(card_defs) == 1
 
 
 # ---------------------------------------------------------------------------

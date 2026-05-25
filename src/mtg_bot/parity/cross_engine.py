@@ -595,6 +595,39 @@ class CardDef:
     # ``CardPrinting.cost_reductions: Vec<CostReduction>`` at
     # ``rust/src/cards.rs`` (added 2026-05-24, Cycle 1).
     cost_reductions: tuple[tuple[int, str, tuple], ...] = ()
+    # cost-reduction substrate — Phase 2 Cycle 2 (2026-05-25).
+    # External cost reductions granted by a permanent on the
+    # battlefield to OTHER spells the controller casts (EoE —
+    # Uthros Psionicist's "second spell" rider, Sami, Wildcat
+    # Captain's "affinity for artifacts" rider). Each entry is a
+    # frozen ``(amount: int, condition_kind: str, condition_args:
+    # tuple)`` triple. Phase 2 supports EXACTLY two condition_kinds:
+    #
+    #   * ``"nth_spell_this_turn"`` — args = (n,)
+    #   * ``"per_controlled"``      — args = ("artifact",)   # Phase 2
+    #                              OR args = ("creature",)   # already-
+    #                              shipped TypeFilter::Creature; useful
+    #                              for synthetic tests, no live carrier
+    #                              today.
+    #
+    # The filter guardrail
+    # :func:`mtg_bot.parity.trajectory._printing_is_bridge_pure_cost_
+    # reduction_creature` (widened in C2) positively rejects every
+    # other condition kind, every variable-multiplier condition
+    # (Phase 3: ``PerDifferentlyNamedLand``), and any non-empty
+    # ``cost_reductions`` whose condition isn't Phase-1-supported.
+    # Empty tuple = no externals (back-compat default; every
+    # pre-Phase-2 CardDef omits this).
+    #
+    # Round-trips Python ↔ Rust through
+    # :func:`_spec_card_to_printing_dict` (forward emit) and
+    # :func:`_card_def_to_python_printing` (reverse re-materialization
+    # to Python's structural ``ExternalCostReduction(amount,
+    # condition)`` dataclass at ``src/mtg_bot/cards/base.py:326``).
+    # The Rust mirror is ``CardPrinting.external_cost_reductions:
+    # Vec<ExternalCostReduction>`` at ``rust/src/cards.rs`` (added
+    # 2026-05-25, Phase 2 Cycle 1).
+    external_cost_reductions: tuple[tuple[int, str, tuple], ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -13604,6 +13637,29 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
             }
             for (amount, cond_kind, cond_args) in card.cost_reductions
         ]
+    # cost-reduction substrate — Phase 2 Cycle 2 (2026-05-25). The
+    # externals registry-dict emit. Each ``(amount, condition_kind,
+    # condition_args)`` triple translates to one registry dict
+    # ``{"amount": int, "condition_kind": str, "condition_args":
+    # tuple}``. The key is OMITTED when the field is empty (every
+    # pre-Phase-2 CardDef), keeping every pre-substrate registry
+    # dict byte-identical. Wire tokens are bridge-side stable strings:
+    # ``"nth_spell_this_turn"`` (args = (n,)) +
+    # ``"per_controlled"``      (args = (pred_token,) with
+    # pred_token ∈ {"artifact", "creature"}). The Rust ``parse_printing``
+    # ``external_cost_reductions`` arm hard-errors on any other
+    # ``condition_kind`` / arg-count / predicate token (the §2 teeth).
+    if card.external_cost_reductions:
+        printing_dict["external_cost_reductions"] = [
+            {
+                "amount": amount,
+                "condition_kind": cond_kind,
+                "condition_args": cond_args,
+            }
+            for (amount, cond_kind, cond_args) in (
+                card.external_cost_reductions
+            )
+        ]
     if card.static_self_bonuses:
         bonus_entries: list[dict] = []
         for (
@@ -14382,6 +14438,59 @@ def _card_def_to_python_printing(card: "CardDef"):
                 )
             rules.append(CostReduction(amount=int(amount), condition=cond))
         cost_reductions = tuple(rules)
+    # cost-reduction substrate — Phase 2 Cycle 2 (2026-05-25).
+    # Reconstructs the structural ``ExternalCostReduction`` from the
+    # bridge-stable wire tokens. Mirror of the Phase-1
+    # ``cost_reductions`` arm above; Phase 2 supports two
+    # ``ExternalCondition`` variants —
+    # ``NthSpellThisTurn(n)`` (Uthros Psionicist's "second spell"
+    # rider) and ``PerControlled(filter)`` with ``filter`` ∈
+    # ``{IsArtifact(), IsCreature()}`` (Sami's "affinity for
+    # artifacts" rider). Any other ``condition_kind`` /
+    # predicate-token raises (the §2 bridge-side teeth — matches the
+    # Rust ``parse_printing`` hard-error in
+    # ``rust/src/cards.rs::parse_printing``'s
+    # ``external_cost_reductions`` arm; both sides fail loudly rather
+    # than silently dropping a Phase-3 rider). Empty tuple =
+    # back-compat — every pre-Phase-2 CardDef materializes
+    # ``external_cost_reductions=()`` bit-identical to before this
+    # slice landed.
+    external_cost_reductions: tuple = ()
+    if card.external_cost_reductions:
+        from mtg_bot.cards.base import ExternalCostReduction
+        from mtg_bot.effects.conditions import (
+            NthSpellThisTurn,
+            PerControlled,
+        )
+        from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+        ext_rules = []
+        for (amount, cond_kind, cond_args) in card.external_cost_reductions:
+            if cond_kind == "nth_spell_this_turn":
+                (n,) = cond_args
+                ext_cond = NthSpellThisTurn(n=int(n))
+            elif cond_kind == "per_controlled":
+                (pred_token,) = cond_args
+                if pred_token == "artifact":
+                    ext_cond = PerControlled(filter=IsArtifact())
+                elif pred_token == "creature":
+                    ext_cond = PerControlled(filter=IsCreature())
+                else:
+                    raise ValueError(
+                        f"Phase-2 external cost-reduction bridge: only "
+                        f"'artifact'/'creature' predicate tokens are "
+                        f"supported on per_controlled; got "
+                        f"{pred_token!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"Phase-2 external cost-reduction bridge: "
+                    f"unsupported condition_kind {cond_kind!r} "
+                    f"(Phase 3+ adds per_differently_named_land)"
+                )
+            ext_rules.append(ExternalCostReduction(
+                amount=int(amount), condition=ext_cond,
+            ))
+        external_cost_reductions = tuple(ext_rules)
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -14517,6 +14626,17 @@ def _card_def_to_python_printing(card: "CardDef"):
         # at cast time + ``legal._effective_cost``
         # (`legal.py:187-188`) at the affordability probe.
         cost_reductions=cost_reductions,
+        # cost-reduction substrate — Phase 2 Cycle 2 (2026-05-25).
+        # Threads the structural ``ExternalCostReduction`` rule tuple
+        # onto Python's CardPrinting. Default ``()`` keeps every
+        # pre-Phase-2 CardDef bit-identical to before this slice
+        # landed (the widened admit predicate rejects every
+        # non-Phase-2 external shape, so this only fires for the 2
+        # Phase-2 admitted carriers — Uthros Psionicist + Sami,
+        # Wildcat Captain). Read by Python's
+        # ``actions._apply_external_cost_reductions`` at cast time +
+        # legal-side affordability probe.
+        external_cost_reductions=external_cost_reductions,
     )
 
 

@@ -4914,14 +4914,13 @@ def _cost_reduction_rule_is_phase1(rule) -> bool:
         Predator: ``CostReduction(amount=2, condition=
         OpponentsControlAtLeast(IsCreature(), 3))``).
 
-    Any variable-multiplier (Phase 2:
+    Any variable-multiplier (Phase 3:
     :class:`PerDifferentlyNamedLand`), any non-``IsCreature`` predicate
-    (Phase 2+ predicate algebra), or any non-Phase-1 Condition
+    (Phase 3+ predicate algebra), or any non-Phase-1 Condition
     subclass — False (rejected). The §2 admit-predicate teeth: this
-    + the ``external_cost_reductions`` reject in
-    :func:`_printing_is_bridge_pure_cost_reduction_creature` are the
-    two halves of the substrate-only-invariant the Cycle-1 pin set
-    pins.
+    is the spell-local-condition half. Phase 2 adds the
+    externals-condition sibling
+    :func:`_external_cost_reduction_rule_is_phase2`.
     """
     from mtg_bot.effects.conditions import (
         AnotherSpellCastThisTurn,
@@ -4937,32 +4936,71 @@ def _cost_reduction_rule_is_phase1(rule) -> bool:
     return False
 
 
-def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
-    """True iff a CardPrinting is a PURE spell-local boolean-condition
-    cost-reduction creature the Phase-1 cost-reduction substrate
-    round-trips byte-equal across engines.
+def _external_cost_reduction_rule_is_phase2(rule) -> bool:
+    """True iff ``rule`` is one of the two ``ExternalCondition``
+    shapes Phase 2 of the cost-reduction substrate ports.
 
-    **Cost-reduction substrate, Phase 1 Cycle 2 (2026-05-24; spec at
-    ``docs/COST_REDUCTION_SUBSTRATE_PHASE_1_DESIGN.md`` §6).**
-    Motivating set: Gigastorm Titan + Lashwhip Predator (2 cards /
-    24,908 17lands decks / 46 % of the cost-reduction single-gated
-    deck pool). The §2 Class-1 positive-allowlist guardrail.
+    Phase 2 carries EXACTLY 2 ExternalCondition variants:
+
+      * :class:`NthSpellThisTurn` — payload ``n: int`` (Uthros
+        Psionicist: ``ExternalCostReduction(amount=2,
+        condition=NthSpellThisTurn(n=2))``).
+      * :class:`PerControlled` — restricted to the
+        :class:`IsArtifact` / :class:`IsCreature` filter tokens
+        (Sami, Wildcat Captain: ``ExternalCostReduction(amount=1,
+        condition=PerControlled(IsArtifact()))``).
+
+    Any variable-multiplier on the spell-local side (Phase 3 sub-
+    shape D — :class:`PerDifferentlyNamedLand` lives on
+    ``cost_reductions``, NOT ``external_cost_reductions``), any
+    non-Phase-2 ExternalCondition subclass, or any non-
+    ``IsArtifact``/``IsCreature`` predicate — False (rejected).
+    Mirror of :func:`_cost_reduction_rule_is_phase1` for the
+    externals side; the bridge §2 teeth.
+    """
+    from mtg_bot.effects.conditions import (
+        NthSpellThisTurn,
+        PerControlled,
+    )
+    from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
+
+    c = rule.condition
+    if isinstance(c, NthSpellThisTurn):
+        return isinstance(c.n, int)
+    if isinstance(c, PerControlled):
+        return isinstance(c.filter, (IsArtifact, IsCreature))
+    return False
+
+
+def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
+    """True iff a CardPrinting is a PURE cost-reduction creature the
+    Phase-1 / Phase-2 cost-reduction substrate round-trips byte-equal
+    across engines.
+
+    **Cost-reduction substrate, Phase 1 Cycle 2 (2026-05-24) +
+    Phase 2 Cycle 2 (2026-05-25; spec at ``docs/COST_REDUCTION_
+    SUBSTRATE_PHASE_2_DESIGN.md`` §5.4 Option A).** Motivating set:
+    Gigastorm Titan + Lashwhip Predator (Phase 1 — 24,908 17lands
+    decks) + Uthros Psionicist + Sami, Wildcat Captain (Phase 2 —
+    +15,575 17lands decks). The §2 Class-1 positive-allowlist
+    guardrail; one named site, widened in Phase 2 (Option A — both
+    Phase-2 cards have ``cost_reductions == ()`` so the
+    spell-local admit-loop is vacuous on them, and Phase-1 carriers
+    have ``external_cost_reductions == ()`` so the new externals
+    admit-loop is vacuous on them — both phases route through the
+    SAME named site).
 
     **§2 teeth (must reject):**
 
       * Fungal Colossus — ``cost_reductions=(CostReduction(amount=1,
         condition=PerDifferentlyNamedLand()),)``. The
-        :class:`PerDifferentlyNamedLand` condition is Phase 2 (variable
-        multiplier). Rejected by
+        :class:`PerDifferentlyNamedLand` condition is Phase 3 (variable
+        multiplier on the spell-local side). Rejected by
         :func:`_cost_reduction_rule_is_phase1`.
-      * Uthros Psionicist — ``external_cost_reductions=(External
-        CostReduction(amount=2, condition=NthSpellThisTurn(n=2)),)``.
-        Phase 3 (external scan). Rejected by the
-        ``external_cost_reductions`` empty check below.
-      * Sami, Wildcat Captain — ``external_cost_reductions=(External
-        CostReduction(amount=1, condition=PerControlled(IsArtifact())
-        ),)``. Phase 3 (external scan + variable multiplier).
-        Rejected by the ``external_cost_reductions`` empty check.
+      * Any future Phase-3+ externals carrier (e.g.
+        ``per_differently_named_land`` on the externals side, or
+        any predicate beyond ``IsArtifact``/``IsCreature``).
+        Rejected by :func:`_external_cost_reduction_rule_is_phase2`.
 
     Sibling of :func:`_printing_is_bridge_pure_warp_creature` (the
     round-63 warp predicate this is structurally modeled on). The §2
@@ -4973,21 +5011,40 @@ def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
     room_halves / loyalty / station_threshold / dynamic_pt_formula
     / ward_cost) — the ONLY thing this predicate ADDS over
     simple-creature is admitting the Phase-1 ``cost_reductions``
-    rider. Both Phase-1 cards are bare ``('Creature',)`` (no Artifact-
-    type-drop caveat unlike the warp Phase-1 pair).
+    rider AND the Phase-2 ``external_cost_reductions`` rider. All
+    four phase-1/2 cards are bare ``('Creature',)``.
     """
     if "Creature" not in printing.card_types:
         return False
     if printing.power is None or printing.toughness is None:
         return False
-    # §2 teeth — admit ONLY the Phase-1 cost-reduction shape.
-    if not printing.cost_reductions:
-        return False
+    # Phase 1 spell-local admit (unchanged). Each spell-local rule
+    # must be one of the two Phase-1 boolean conditions; Fungal
+    # Colossus's variable-X ``PerDifferentlyNamedLand`` rejects here.
+    if printing.cost_reductions:
+        for rule in printing.cost_reductions:
+            if not _cost_reduction_rule_is_phase1(rule):
+                return False
+    # Phase 2 externals admit (NEW). Replaces the old
+    # ``if printing.external_cost_reductions: return False`` guard.
+    # Each externals rule must be one of the two Phase-2
+    # ExternalCondition shapes; any other ExternalCondition or
+    # predicate token rejects (the §2 teeth — Phase 3+ widens this
+    # via the same pattern).
     if printing.external_cost_reductions:
-        return False  # Uthros, Sami — Phase 3 (external scan).
-    for rule in printing.cost_reductions:
-        if not _cost_reduction_rule_is_phase1(rule):
-            return False  # Fungal Colossus (PerDifferentlyNamedLand) — Phase 2.
+        for ext in printing.external_cost_reductions:
+            if not _external_cost_reduction_rule_is_phase2(ext):
+                return False
+    # At least ONE rider must be present (otherwise the
+    # ``_printing_is_bridge_simple_creature`` predicate handles it).
+    # No-silent-vanilla-grow check: a printing with both
+    # ``cost_reductions == ()`` and ``external_cost_reductions == ()``
+    # is NOT a cost-reduction carrier and must not be admitted here.
+    if (
+        not printing.cost_reductions
+        and not printing.external_cost_reductions
+    ):
+        return False
     # Same exclusion set as ``_printing_is_bridge_simple_creature``:
     if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
         return False
@@ -10041,24 +10098,29 @@ def _printing_to_card_def(printing) -> CardDef:
             static_anthems=static_anthems,
         )
     if _printing_is_bridge_pure_cost_reduction_creature(printing):
-        # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24).**
-        # A bridge-pure cost-reduction creature routes to the cost-
-        # reduction-aware CardDef BEFORE the plain simple-creature
-        # arm — defense-in-depth even though
+        # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24) +
+        # Phase 2 Cycle 2 (2026-05-25).** A bridge-pure cost-reduction
+        # creature routes to the cost-reduction-aware CardDef BEFORE
+        # the plain simple-creature arm — defense-in-depth even though
         # ``_printing_is_bridge_simple_creature`` rejects any
-        # ``cost_reductions`` carrier today. Materialize the CardDef
-        # with ``cost_reductions`` carrying the SAME (amount,
-        # condition_kind, condition_args) triples the §5.2 bridge
-        # emitter consumes. The filter above guarantees each rule is
-        # one of the two Phase-1 boolean condition shapes; the
-        # condition_kind dispatch here is the inverse of
-        # :func:`_cost_reduction_rule_is_phase1` (any other shape
-        # would have been rejected by the filter, so the unreachable-
-        # else raises like the bridge §2 teeth).
+        # ``cost_reductions``/``external_cost_reductions`` carrier
+        # today. Materialize the CardDef with ``cost_reductions``
+        # (Phase 1) AND ``external_cost_reductions`` (Phase 2)
+        # carrying the SAME (amount, condition_kind, condition_args)
+        # triples the bridge emitters consume. The filter above
+        # guarantees each rule is one of the two supported shapes per
+        # phase; the condition_kind dispatch here is the inverse of
+        # :func:`_cost_reduction_rule_is_phase1` /
+        # :func:`_external_cost_reduction_rule_is_phase2` (any other
+        # shape would have been rejected by the filter, so the
+        # unreachable-else raises like the bridge §2 teeth).
         from mtg_bot.effects.conditions import (
             AnotherSpellCastThisTurn,
+            NthSpellThisTurn,
             OpponentsControlAtLeast,
+            PerControlled,
         )
+        from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
 
         generic, colored = _parse_mana_cost_string(
             printing.mana_cost_str or "")
@@ -10091,6 +10153,44 @@ def _printing_to_card_def(printing) -> CardDef:
                     f"predicate passed an unsupported condition "
                     f"{type(cond).__name__!r} on {printing.name!r}"
                 )
+        # Phase 2 externals forward emit. Inverse of
+        # :func:`_external_cost_reduction_rule_is_phase2`.
+        ext_triples: list[tuple[int, str, tuple]] = []
+        for ext_rule in printing.external_cost_reductions:
+            ext_cond = ext_rule.condition
+            if isinstance(ext_cond, NthSpellThisTurn):
+                ext_triples.append((
+                    int(ext_rule.amount),
+                    "nth_spell_this_turn",
+                    (int(ext_cond.n),),
+                ))
+            elif isinstance(ext_cond, PerControlled):
+                # Filter is guaranteed IsArtifact / IsCreature by
+                # the Phase-2 rule predicate above.
+                if isinstance(ext_cond.filter, IsArtifact):
+                    pred_token = "artifact"
+                elif isinstance(ext_cond.filter, IsCreature):
+                    pred_token = "creature"
+                else:
+                    raise ValueError(
+                        f"unreachable: Phase-2 external cost-"
+                        f"reduction admit predicate passed an "
+                        f"unsupported PerControlled filter "
+                        f"{type(ext_cond.filter).__name__!r} on "
+                        f"{printing.name!r}"
+                    )
+                ext_triples.append((
+                    int(ext_rule.amount),
+                    "per_controlled",
+                    (pred_token,),
+                ))
+            else:
+                raise ValueError(
+                    f"unreachable: Phase-2 external cost-reduction "
+                    f"admit predicate passed an unsupported "
+                    f"condition {type(ext_cond).__name__!r} on "
+                    f"{printing.name!r}"
+                )
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -10101,6 +10201,7 @@ def _printing_to_card_def(printing) -> CardDef:
             keywords=tuple(sorted(printing.keywords)),
             triggered_abilities=triggered_abilities,
             cost_reductions=tuple(cr_triples),
+            external_cost_reductions=tuple(ext_triples),
         )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")

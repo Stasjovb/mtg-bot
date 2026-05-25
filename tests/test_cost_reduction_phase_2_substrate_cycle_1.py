@@ -357,22 +357,18 @@ def test_rust_parser_accepts_empty_external_cost_reductions_list():
 # ---------------------------------------------------------------------------
 
 
-def test_uthros_psionicist_stays_declined_at_admit_gate_post_cycle_1():
-    """Pin #4a — Uthros Psionicist STAYS DECLINED post-Cycle-1.
+def test_uthros_psionicist_admits_at_cost_reduction_predicate_post_cycle_2():
+    """Pin #4a — INVERTED in Cycle 2 — Uthros Psionicist ADMITS.
 
-    **The load-bearing closure marker (Cycle 1 substrate-only
-    invariant).** The 9 sibling ``if printing.cost_reductions or
-    printing.external_cost_reductions: return False`` guards in
-    ``trajectory.py`` keep Uthros Psionicist out of the bridge-
-    admitted set this cycle. Admitting Uthros now without the
-    Cycle 2 bridge round-trip would ship a guaranteed divergence
-    (the Rust ``external_cost_reductions`` field exists post-this-
-    slice, but no Python emit/reverse arm or admit-side widening
-    has landed; Uthros's externals rider would be silently dropped
-    at the bridge).
-
-    Cycle 2 inverts this pin (Uthros FLIPS DECLINED → ADMITTED at
-    ``_printing_is_bridge_pure_cost_reduction_creature``).
+    **The load-bearing FLIP marker (Cycle 2 widened-predicate
+    invariant).** Post-Cycle-2 the widened
+    :func:`_printing_is_bridge_pure_cost_reduction_creature`
+    admits Uthros Psionicist — the Phase-2 externals rider
+    ``ExternalCostReduction(amount=2,
+    condition=NthSpellThisTurn(n=2))`` is one of the two §5.4
+    admit shapes. The simple-creature predicate STILL rejects
+    (the 9 sibling guards remain load-bearing — defense-in-depth);
+    the new admit happens at the cost-reduction-aware predicate.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -382,30 +378,32 @@ def test_uthros_psionicist_stays_declined_at_admit_gate_post_cycle_1():
     if p is None:
         pytest.skip("Uthros Psionicist absent from active CardSource")
 
-    # Pre-Cycle-1 decline state preserved: simple-creature rejects.
+    # Cycle 2 inverted state: simple-creature still rejects (the 9
+    # sibling guards are intact — defense-in-depth).
     assert trajectory._printing_is_bridge_simple_creature(p) is False, (
         "Uthros Psionicist must STAY DECLINED at the simple-creature "
-        "admit gate post-Cycle-1 — the external_cost_reductions guard "
-        "is load-bearing this cycle."
+        "admit gate post-Cycle-2 — the external_cost_reductions "
+        "guard there remains load-bearing (the FLIP happens at the "
+        "cost-reduction-aware predicate, not at simple-creature)."
     )
-    # AND the Phase-1 cost-reduction admit predicate also rejects.
-    # Cycle 2 widens THIS predicate to admit Phase-2 carriers.
+    # AND the cost-reduction admit predicate ADMITS (the FLIP).
     assert (
         trajectory._printing_is_bridge_pure_cost_reduction_creature(p)
-        is False
+        is True
     ), (
-        "Uthros Psionicist must STAY DECLINED at the Phase-1 cost-"
-        "reduction admit predicate post-Cycle-1. The Cycle 2 widening "
-        "of this predicate is the C1 → C2 inversion point."
+        "Uthros Psionicist must ADMIT at the Phase-1+2 cost-"
+        "reduction admit predicate post-Cycle-2. The Cycle-2 "
+        "widening of this predicate is THE FLIP."
     )
 
 
-def test_sami_wildcat_captain_stays_declined_at_admit_gate_post_cycle_1():
-    """Pin #4b — Sami, Wildcat Captain STAYS DECLINED post-Cycle-1.
+def test_sami_wildcat_captain_admits_at_cost_reduction_predicate_post_cycle_2():
+    """Pin #4b — INVERTED in Cycle 2 — Sami, Wildcat Captain ADMITS.
 
-    Same load-bearing closure marker as #4a, for Sami, Wildcat
-    Captain. Inverts at Cycle 2 (the simultaneous DECLINED → ADMITTED
-    flip for both Phase-2 carriers).
+    Same FLIP marker as #4a, for Sami, Wildcat Captain. The
+    Phase-2 externals rider ``ExternalCostReduction(amount=1,
+    condition=PerControlled(IsArtifact()))`` is one of the two
+    §5.4 admit shapes. Both Phase-2 carriers flip simultaneously.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -417,14 +415,16 @@ def test_sami_wildcat_captain_stays_declined_at_admit_gate_post_cycle_1():
 
     assert trajectory._printing_is_bridge_simple_creature(p) is False, (
         "Sami, Wildcat Captain must STAY DECLINED at the simple-"
-        "creature admit gate post-Cycle-1."
+        "creature admit gate post-Cycle-2 — the sibling guard "
+        "remains load-bearing."
     )
     assert (
         trajectory._printing_is_bridge_pure_cost_reduction_creature(p)
-        is False
+        is True
     ), (
-        "Sami, Wildcat Captain must STAY DECLINED at the Phase-1 "
-        "cost-reduction admit predicate post-Cycle-1."
+        "Sami, Wildcat Captain must ADMIT at the Phase-1+2 cost-"
+        "reduction admit predicate post-Cycle-2. Simultaneous FLIP "
+        "with Uthros Psionicist."
     )
 
 
@@ -658,22 +658,19 @@ def test_rust_parser_rejects_non_list_external_cost_reductions():
 # ---------------------------------------------------------------------------
 
 
-def test_live_cost_reduction_admit_count_is_unchanged_post_cycle_1():
-    """Pin #6 — bench-aggregate sibling of pin #4.
+def test_live_cost_reduction_admit_count_is_bumped_post_cycle_2():
+    """Pin #6 — INVERTED in Cycle 2 — admit-set bumped +2.
 
     The set of live EoE printings that pass
-    ``_printing_is_bridge_pure_cost_reduction_creature`` post-Cycle-1
-    is EXACTLY ``{Gigastorm Titan, Lashwhip Predator}`` — identical to
-    pre-Cycle-1 (the Phase-1 carrier set). No Phase-2 card silently
-    auto-grew under the substrate landing — the Rust
-    ``external_cost_reductions`` field exists but the Python bridge
-    half (Cycle 2) is not wired yet, so the live admit gate is exactly
-    identical pre-/post-Cycle-1.
+    ``_printing_is_bridge_pure_cost_reduction_creature`` post-Cycle-2
+    is EXACTLY ``{Gigastorm Titan, Lashwhip Predator, Uthros
+    Psionicist, Sami, Wildcat Captain}`` — the +2 bump from the
+    Phase-1 carrier set. Both Phase-2 carriers flipped DECLINED →
+    ADMITTED at the widened predicate; Fungal Colossus (Phase 3)
+    still declines.
 
-    Cycle 2 will bump this set by exactly +2 (Uthros Psionicist +
-    Sami, Wildcat Captain) once the bridge round-trip + admit
-    predicate widening land. The bump that flips Cycle 2's
-    invariant pin into place.
+    Subsystem-attribution pin: exactly 4 EoE printings now pass the
+    predicate post-Phase-2 closure (design doc §7.4 pin 12).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -684,19 +681,27 @@ def test_live_cost_reduction_admit_count_is_unchanged_post_cycle_1():
         if trajectory._printing_is_bridge_pure_cost_reduction_creature(p):
             admitted.add(name)
 
-    # Phase-1 carriers admit; Phase-2 carriers do not.
-    assert "Gigastorm Titan" in admitted
-    assert "Lashwhip Predator" in admitted
-    assert "Uthros Psionicist" not in admitted, (
-        "Uthros Psionicist must STAY DECLINED post-Cycle-1 (the "
-        "Phase-2 substrate landing must NOT auto-flip the admit gate "
-        "— Cycle 2 owns the FLIP)."
+    # Phase-1 carriers still admit (no regression).
+    assert "Gigastorm Titan" in admitted, (
+        "Gigastorm Titan (Phase-1) must STILL admit post-Cycle-2."
     )
-    assert "Sami, Wildcat Captain" not in admitted, (
-        "Sami, Wildcat Captain must STAY DECLINED post-Cycle-1."
+    assert "Lashwhip Predator" in admitted, (
+        "Lashwhip Predator (Phase-1) must STILL admit post-Cycle-2."
     )
-    # Fungal Colossus (Phase 3) also stays declined.
+    # Phase-2 carriers NOW admit — THE FLIP.
+    assert "Uthros Psionicist" in admitted, (
+        "Uthros Psionicist must ADMIT post-Cycle-2 — the widened "
+        "_printing_is_bridge_pure_cost_reduction_creature includes "
+        "Phase-2 externals (NthSpellThisTurn)."
+    )
+    assert "Sami, Wildcat Captain" in admitted, (
+        "Sami, Wildcat Captain must ADMIT post-Cycle-2 — the widened "
+        "predicate includes Phase-2 externals (PerControlled "
+        "Artifact)."
+    )
+    # Fungal Colossus (Phase 3) STILL declined — no silent auto-grow.
     assert "Fungal Colossus" not in admitted, (
-        "Fungal Colossus must STAY DECLINED post-Cycle-1 (Phase 3 "
-        "scope — the design doc §3.1 deferral)."
+        "Fungal Colossus must STAY DECLINED post-Cycle-2 "
+        "(PerDifferentlyNamedLand is Phase 3 — the design doc §3.1 "
+        "deferral; the no-silent-auto-grow discipline)."
     )
