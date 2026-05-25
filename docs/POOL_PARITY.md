@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **334 (70.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 81 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **339 (71.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 76 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **60 (12.6%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 334 | 70.3% |
-| Effect+bridge covered (not individually probed) | 81 | 17.1% |
+| PROBED byte-equal | 339 | 71.4% |
+| Effect+bridge covered (not individually probed) | 76 | 16.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -158,6 +158,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Funeral Room // Awakening Hall
 - Galactic Wayfarer
 - Gemstone Caverns
+- Gene Pollinator
 - Genemorph Imago
 - Germinating Wurm
 - Get Out
@@ -296,11 +297,13 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Sinister Cryologist
 - Skullsnap Nuisance
 - Skystinger
+- Slagdrill Scrapper
 - Sothera, the Supervoid
 - Space-Time Anomaly
 - Specimen Freighter
 - Spineseeker Centipede
 - Splitskin Doll
+- Squire's Lightblade
 - Starbreach Whale
 - Starfield Shepherd
 - Starfighter Pilot
@@ -310,6 +313,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Stay Hidden, Stay Silent
 - Stomping Ground
 - Strip Mine
+- Sunken Citadel
 - Sunset Saboteur
 - Sunstar Chaplain
 - Sunstar Expansionist
@@ -333,6 +337,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Territorial Bruntar
 - Thaumaton Torpedo
 - Thawbringer
+- The Dominion Bracelet
 - The Endstone
 - The Seriema
 - Thrumming Hivepool

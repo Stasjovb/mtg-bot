@@ -1562,6 +1562,105 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_cascading_cataracts_parity.py",
     REPO_ROOT / "tests" / "test_gemstone_caverns_parity.py",
     REPO_ROOT / "tests" / "test_eldrazi_temple_parity.py",
+    # **covered-by-construction-probe-writing-p5 (2026-05-25):** Five
+    # additional per-card real-EoE cross-engine byte-equal probes
+    # extending the lane established by batches 1-4.  This batch
+    # opens **TWO new shape families** for the per-slug attribution
+    # lane:
+    #
+    #   * **activated-ability + DrawCards on artifact-creature
+    #     carrier with {generic}+{T} cost shape** (Slagdrill Scrapper)
+    #   * **activated-ability + EquipToTargetCreatureYouControl on
+    #     artifact-equipment carrier with paid-Equip {generic} cost
+    #     shape** (Squire's Lightblade + The Dominion Bracelet)
+    #
+    # plus continuing the batch-4 AddManaToPool(any, 1) shape family
+    # onto **artifact-creature** + **non-Legendary Land** carriers
+    # (Gene Pollinator + Sunken Citadel), templating directly off the
+    # batch-4 Mana Confluence / Gemstone Caverns siblings.  Same lane
+    # discipline as batches 1-4: per-slug attribution credits a
+    # PROBED slot per-printing, no engine changes, no Rust changes,
+    # no substrate widens.  Each module carries a canonical
+    # ``test_cross_engine_real_eoe_<slug>_..._parity`` function that
+    # binds the live EoE printing via the module-scope ``_PRINTINGS
+    # = get_active_source().get_printings()`` idiom + drives the
+    # GENUINE parsed printing through the parse + bridge round-trip +
+    # Python-side resolve idiom:
+    #
+    #   * ``test_gene_pollinator_parity.py`` — Gene Pollinator ({G}
+    #     Artifact Creature, ~31,824 17lands decks); mana AA ({T}:
+    #     Add one mana of any color) → AddManaToPool(produces=
+    #     (('any', 1),), spend_restriction=None).  Bit-identical
+    #     bridge round-trip to the batch-4 Mana Confluence /
+    #     Gemstone Caverns siblings at the Effect level; the per-
+    #     slug attribution distinction is the **Artifact Creature
+    #     carrier** (not a Land) — per the cathedral-of-war-style
+    #     same-Effect-class-different-printing-slug precedent, each
+    #     carrier-typed printing-slug gets its own PROBED-tier slot.
+    #     The highest-deck-count flip in this batch (~31.8k decks).
+    #   * ``test_slagdrill_scrapper_parity.py`` — Slagdrill Scrapper
+    #     ({R} Artifact Creature, ~12,879 17lands decks); activated
+    #     ability ({2},{T}: Draw a card) → DrawCards(amount=1).
+    #     **NEW shape family** for the per-slug attribution lane:
+    #     **activated-ability + DrawCards on artifact-creature
+    #     carrier with {generic}+{T} cost shape**.  The FIRST
+    #     PROBE_MODULES-credited probe of the DrawCards Effect class
+    #     on an activated-ability artifact-creature carrier (DrawCards
+    #     is widely covered across spell-effect carriers but the AA-
+    #     on-creature variant is the new slot).  Exercises the
+    #     ``draw_cards`` bridge arm field-name narrowing (Rust's
+    #     ``count`` → Python's ``amount``).  The {2} generic mana
+    #     cost atom stays cost-substrate-deferred.
+    #   * ``test_squires_lightblade_parity.py`` — Squire's Lightblade
+    #     ({W} Artifact — Equipment, ~3,927 17lands decks); Equip
+    #     activated ability ({3}: attach this Equipment to target
+    #     creature you control) → EquipToTargetCreatureYouControl(
+    #     granted_keywords_ueot=frozenset()).  **NEW shape family**
+    #     for the per-slug attribution lane: **activated-ability +
+    #     EquipToTargetCreatureYouControl on artifact-equipment
+    #     carrier with paid-Equip {generic} cost shape**.  The FIRST
+    #     PROBE_MODULES-credited probe of the
+    #     EquipToTargetCreatureYouControl Effect class (the round-19
+    #     audit-refresh bridge arm landed end-to-end without a slug-
+    #     attribution probe — sister to the
+    #     ``attach_to_target_creature_you_control`` ETB-shape arm).
+    #     The ETB-attach TriggeredAbility variant (with the
+    #     granted_keywords_ueot={'first strike'} rider) is implicit-
+    #     drop per the IIII / HHHH "covered carrier with non-bridge-
+    #     clean rider" precedent.
+    #   * ``test_the_dominion_bracelet_parity.py`` — The Dominion
+    #     Bracelet ({2} Artifact — Equipment, ~830 17lands decks);
+    #     Equip activated ability ({1}: attach) →
+    #     EquipToTargetCreatureYouControl(granted_keywords_ueot=
+    #     frozenset()).  Templates on the immediately-prior batch-5
+    #     sibling Squire's Lightblade (the FIRST PROBE_MODULES-
+    #     credited consumer of equip_to_target_creature_you_control);
+    #     bit-identical Effect-level bridge round-trip — the per-slug
+    #     attribution distinction is the printing identity (mana cost
+    #     {2} generic-only vs {W} colored; Equip {1} vs {3}).
+    #   * ``test_sunken_citadel_parity.py`` — Sunken Citadel ({0}
+    #     Land, ~1,235 17lands decks); AA[0] ({T}: Add one mana of
+    #     any color) → AddManaToPool(produces=(('any', 1),),
+    #     spend_restriction=None).  Bit-identical bridge round-trip
+    #     to the batch-4 Mana Confluence / Gemstone Caverns siblings
+    #     + the batch-5 Gene Pollinator sibling at the Effect level.
+    #     AA[1] (the spend_restriction='land_activation' rider on
+    #     the {T}: Add {2} variant) is deferred per the IIII / HHHH
+    #     "covered carrier with spend-restriction rider" implicit
+    #     drop + the batch-4 Eldrazi Temple AA[1] colorless_eldrazi
+    #     precedent — AA[0] alone carries the load-bearing slug-
+    #     attribution flip.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 334 → 339;
+    # covered_by_construction 81 → 76; BLOCKED unchanged at 60; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_gene_pollinator_parity.py",
+    REPO_ROOT / "tests" / "test_slagdrill_scrapper_parity.py",
+    REPO_ROOT / "tests" / "test_squires_lightblade_parity.py",
+    REPO_ROOT / "tests" / "test_the_dominion_bracelet_parity.py",
+    REPO_ROOT / "tests" / "test_sunken_citadel_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
