@@ -1294,6 +1294,46 @@ PROBE_MODULES: tuple[Path, ...] = (
     #     ``@pytest.mark.skip`` + ``raise NotImplementedError`` multi-
     #     cycle scaffold per ``docs/SEARCH_LIMITATIONS.md``; correctly
     #     stays BLOCKED-subsystem-gated.
+    # **covered-by-construction-probe-writing-p1 (2026-05-24):** Four
+    # per-card real-EoE cross-engine byte-equal probes for cards
+    # previously honest-stopped on "bit-identical to PROBED sibling"
+    # grounds (CCCC / HHHH / IIII / JJJJ drop lists). The
+    # 2026-05-24 ``post-flip-reclassification-scout`` 12-card sweep +
+    # the IIII Optimistic Scavenger / Command Bridge precedent
+    # together established that per-slug attribution credits a PROBED
+    # slot per-printing — the classifier credits per-slug, not per-
+    # effect-class. Each module carries a canonical
+    # ``test_cross_engine_real_eoe_<slug>_..._parity`` function that
+    # binds the live EoE printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it) + drives the GENUINE parsed printing through both
+    # engines byte-equal end-to-end via the substrate the sibling
+    # PROBED carrier already pinned:
+    #
+    #   * ``test_trapped_in_the_screen_parity.py`` — Trapped in the
+    #     Screen ({2}{W} Enchantment, EoE special guest); mirrors the
+    #     PROBED Banishing Light I80 probe (ENTERS+IsSelf →
+    #     ExileOpponentsNonlandPermanentUntilLeaves(max_mv=0)).
+    #   * ``test_innocuous_rat_parity.py`` — Innocuous Rat ({1}{B}
+    #     Creature); mirrors the PROBED Bashful Beastie probe
+    #     (DIES+IsSelf → ManifestDread(count=1)).
+    #   * ``test_unwanted_remake_parity.py`` — Unwanted Remake ({W}
+    #     Instant); mirrors the PROBED Murder probe
+    #     (DestroyTargetCreature bare).
+    #   * ``test_fear_of_failed_tests_parity.py`` — Fear of Failed
+    #     Tests ({4}{U} Enchantment Creature); mirrors the PROBED
+    #     Starwinder probe (DEALS_COMBAT_DAMAGE →
+    #     DrawCardsEqualToResolvingCombatDamage()) with the distinct
+    #     IsSelf+target-IsPlayer predicate (vs Starwinder's broader
+    #     "any creature you control" predicate).
+    #
+    # Pure measurement-attribution: no engine changes, no Rust
+    # changes, no substrate widens. Per-slug credit only.
+    REPO_ROOT / "tests" / "test_trapped_in_the_screen_parity.py",
+    REPO_ROOT / "tests" / "test_innocuous_rat_parity.py",
+    REPO_ROOT / "tests" / "test_unwanted_remake_parity.py",
+    REPO_ROOT / "tests" / "test_fear_of_failed_tests_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

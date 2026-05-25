@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **317 (66.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 98 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **321 (67.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 94 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **60 (12.6%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 317 | 66.7% |
-| Effect+bridge covered (not individually probed) | 98 | 20.6% |
+| PROBED byte-equal | 321 | 67.6% |
+| Effect+bridge covered (not individually probed) | 94 | 19.8% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -136,6 +136,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Faller's Faithful
 - Famished Worldsire
 - Fanatic of the Harrowing
+- Fear of Failed Tests
 - Fear of Lost Teeth
 - Fear of Surveillance
 - Fell Gravship
@@ -183,6 +184,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Illvoi Operative
 - Impossible Inferno
 - Infernal Phantom
+- Innocuous Rat
 - Insatiable Skittermaw
 - Interceptor Mechan
 - Intrepid Tenderfoot
@@ -327,6 +329,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Timeline Culler
 - Tractor Beam
 - Tragic Trajectory
+- Trapped in the Screen
 - Trial of Agony
 - Tunnel Surveyor
 - Turn Inside Out
@@ -336,6 +339,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Unravel
 - Unsettling Twins
 - Untimely Malfunction
+- Unwanted Remake
 - Uthros Scanship
 - Uthros, Titanic Godcore
 - Valgavoth's Faithful
