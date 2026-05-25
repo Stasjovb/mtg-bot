@@ -718,28 +718,122 @@ pub(crate) fn auto_tap_headroom_pool(
     pool
 }
 
-/// **legal_decisions mana-awareness Slice 1 — the cost-reduction
-/// seam.** Returns the EFFECTIVE `ManaCost` for affordability, the
-/// Rust analog of Python's `_effective_cost` / `apply_cost_reductions`
-/// (`src/mtg_bot/actions.py:406-438`, called as `_effective_cost` at
-/// `legal.py:187-188` BEFORE every `_can_cast`). Python applies
-/// spell-local + battlefield-permanent-granted generic-mana
-/// reductions before the payability check; the predicate must see the
-/// reduced cost, not the printed one.
+/// **cost-reduction substrate Phase 1 — Cycle 2 (admit-widen +
+/// eff() seam extension, 2026-05-24).** Reduces the generic portion
+/// of `cost` by the sum of every `printing.cost_reductions` rule
+/// whose `Condition` holds against `state` for `caster_idx`.
+/// Returns an OWNED `ManaCost` (the `ManaCost::reduced(amount)`
+/// shape Python uses at `cards/base.py:291-305` — clamp generic at
+/// 0, never touch colored pips, preserve `x_pips` per CR 601.2f).
+/// Phase 1 supports EXACTLY 2 boolean Condition variants —
+/// `AnotherSpellCastThisTurn` (Gigastorm Titan; reads
+/// `Player.spells_cast_this_turn`) and `OpponentsControlAtLeast {
+/// type_filter: Creature, count: n }` (Lashwhip Predator; scans
+/// every opponent's battlefield).
 ///
-/// **Live-surface scope (verify-first, evidence-bound):** Rust's
-/// `cards.rs` has NO `cost_reductions` / `external_cost_reductions`
-/// fields on the live bridge-admitted cast surface — the bridge
-/// declines cost-reduction cards (`docs/COST_REDUCTION_PHASE1_DESIGN.md`
-/// is "realizable-0"). So `eff(c) = c` (identity) for every live
-/// CastSpell axis. This is the single NAMED insertion point so a
-/// future cost-reduction slice has exactly one place to wire the
-/// reduction in (it does NOT have to re-touch the 6 gate sites).
-/// Deliberate live-surface simplification, recorded in
-/// `SEARCH_LIMITATIONS.md`; a pin asserts the live admitted set
-/// carries no `cost_reductions` (the §3.5.4 regression tripwire).
+/// Mirrors a Phase-1 subset of Python's
+/// `actions.apply_cost_reductions` (`src/mtg_bot/actions.py:406-438`)
+/// + `actions._evaluate_cost_reduction`
+/// (`src/mtg_bot/actions.py:441-468`). Phase 1 has NO external scan
+/// (Phase 3 substrate — `external_cost_reductions`) and NO variable
+/// multiplier (Phase 2 substrate — `PerDifferentlyNamedLand`); every
+/// Phase-1 condition contributes exactly `rule.amount` generic when
+/// it holds (the default `Condition.multiplier == 1`).
+///
+/// **Pre-Cycle-2 history (the eff() identity seam).** Cycle 1's
+/// substrate landing left `eff()` as the identity wrapper Slice-1
+/// mana-awareness shipped (the "single named insertion point" for
+/// the future cost-reduction slice). Cycle 2 extends it to a real
+/// evaluator. The 6 call sites this fn replaces are all the
+/// CastSpell-emission affordability probes in `legal_decisions`
+/// (the hand instant + sorcery passes, warp on each, warp-from-
+/// graveyard, warp exile-recast, Lightstall surcharge); plus the
+/// cast-side cost source at `state_ops_cast.rs::cast_creature`
+/// (lines 1131-1158) routes through the SAME helper so the
+/// legal-emission gate and the actual pay-time cost stay in
+/// lockstep (the Python-mirror discipline — `legal.py:187-188`
+/// uses the SAME `apply_cost_reductions` as `actions._cast_spell`).
+///
+/// **Live-incidence scope.** Both Phase-1 admitted cards (Gigastorm
+/// Titan + Lashwhip Predator) carry NO warp_cost (verified live),
+/// so warp call sites are reduction-incidence-zero. We still route
+/// warp/exile-recast/Lightstall through the helper for parity-
+/// completeness; for any printing without `cost_reductions` the
+/// helper short-circuits to the original cost (empty Vec → no work).
 #[inline]
-fn eff(cost: &crate::cards::ManaCost) -> &crate::cards::ManaCost {
+pub(crate) fn apply_cost_reductions_rust(
+    state: &crate::state::GameState,
+    caster_idx: usize,
+    printing: &crate::cards::CardPrinting,
+    base: crate::cards::ManaCost,
+) -> crate::cards::ManaCost {
+    if printing.cost_reductions.is_empty() {
+        return base;
+    }
+    let mut cost = base;
+    for rule in printing.cost_reductions.iter() {
+        let holds = match &rule.condition {
+            crate::cards::Condition::AnotherSpellCastThisTurn => {
+                // Mirrors Python `effects/conditions.py:235-244`
+                // `AnotherSpellCastThisTurn.matches`: True iff the
+                // caster has already cast >=1 OTHER spell this
+                // turn. `Player.spells_cast_this_turn` is
+                // incremented AFTER pay in every cast primitive
+                // (state_ops_cast.rs:1222 / :1502 / :1793 / :3218,
+                // MMM Pin 1 — landed 11th Rust slice), so the
+                // FIRST spell of the turn reads 0 here (full
+                // cost), the SECOND reads 1 (reduction fires).
+                state.players[caster_idx].spells_cast_this_turn >= 1
+            }
+            crate::cards::Condition::OpponentsControlAtLeast {
+                type_filter,
+                count,
+            } => {
+                // Mirrors Python `effects/conditions.py:206-228`
+                // `OpponentsControlAtLeast(IsCreature(), n).matches`:
+                // sum, across every opponent, the count of permanents
+                // matching the predicate; True iff the sum >= n.
+                // Phase 1 hard-codes the `IsCreature` predicate (the
+                // sole Phase-1 type filter); the Rust `card_types`
+                // contains-"Creature" check mirrors Python's
+                // `IsCreature.matches`. Early-out on first satisfied
+                // count.
+                let n = *count;
+                let mut found = 0i32;
+                'opps: for (other_idx, other) in state.players.iter().enumerate() {
+                    if other_idx == caster_idx {
+                        continue;
+                    }
+                    for obj in other.battlefield.iter() {
+                        let Some(pr) = state.registry.lookup(obj.printing_id) else {
+                            continue;
+                        };
+                        let matches = match type_filter {
+                            crate::cards::TypeFilter::Creature => {
+                                pr.card_types.iter().any(|t| t == "Creature")
+                            }
+                        };
+                        if matches {
+                            found += 1;
+                            if found >= n {
+                                break 'opps;
+                            }
+                        }
+                    }
+                }
+                found >= n
+            }
+        };
+        if holds && rule.amount > 0 {
+            // Mirror Python `ManaCost.reduced` (`cards/base.py:291-305`):
+            // clamp generic at 0, leave colored pips untouched, preserve
+            // x_pips (CR 601.2f). The default `Condition.multiplier` is
+            // 1 for Phase-1 boolean conditions, so the reduction is
+            // exactly `rule.amount` generic.
+            let amt = rule.amount as u8;
+            cost.generic = cost.generic.saturating_sub(amt);
+        }
+    }
     cost
 }
 
@@ -2305,11 +2399,26 @@ impl GameState {
                         obj.printing_id,
                         idx,
                     );
+            // **cost-reduction substrate Phase 1 — Cycle 2 (eff()
+            // seam extension, 2026-05-24).** Apply spell-local
+            // cost reductions BEFORE the affordability probe (the
+            // Python-mirror discipline — `legal.py:187-188` /
+            // `:253` apply `_effective_cost` BEFORE `_can_cast`).
+            // For a non-cost-reduction printing the helper
+            // short-circuits to the base cost (empty
+            // `cost_reductions` Vec); for a Phase-1 carrier
+            // (Gigastorm Titan / Lashwhip Predator) the helper
+            // evaluates each rule's `Condition` against `self`
+            // (caster-context) and reduces the generic portion
+            // accordingly.
+            let base_eff = apply_cost_reductions_rust(
+                self, idx, printing, printing.mana_cost.clone(),
+            );
             let base_payable = nonmana_ok
                 && crate::state_ops_mana::can_pay_cost(
                     self,
                     idx,
-                    eff(&printing.mana_cost),
+                    &base_eff,
                     &sk,
                 );
             // Warp variant is gated on its OWN cost (`warp_cost`),
@@ -2323,14 +2432,24 @@ impl GameState {
             // precondition applies identically (same spell body) —
             // Python's warp arm also `&& _targets_are_satisfiable &&
             // _additional_costs_payable` (`legal.py:267-268`).
+            // **Cycle 2 — cost-reduction substrate.** Python's
+            // `_effective_cost` (`legal.py:265`) ALSO applies to
+            // warp_cost; route warp through the same evaluator for
+            // parity completeness. Phase-1 incidence: zero (every
+            // Phase-1 carrier has warp_cost=None per the
+            // ``_printing_is_bridge_pure_cost_reduction_creature``
+            // §2 teeth — the helper short-circuits trivially).
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
+                    let warp_eff = apply_cost_reductions_rust(
+                        self, idx, printing, wc.clone(),
+                    );
                     nonmana_ok
                         && (self.players[idx].life as i64)
                             > (printing.warp_additional_life_cost
                                 as i64)
                         && crate::state_ops_mana::can_pay_cost(
-                            self, idx, eff(wc), &sk,
+                            self, idx, &warp_eff, &sk,
                         )
                 }
                 None => false,
@@ -2505,21 +2624,33 @@ impl GameState {
                         obj.printing_id,
                         idx,
                     );
+            // **cost-reduction substrate Phase 1 — Cycle 2** (same
+            // reduction routing as the instant-speed pass above).
+            // Empty-Vec short-circuit makes this a no-op for every
+            // non-cost-reduction printing; Phase-1 carriers
+            // (Gigastorm Titan / Lashwhip Predator) get their
+            // generic reduced before the affordability probe.
+            let base_eff = apply_cost_reductions_rust(
+                self, idx, printing, printing.mana_cost.clone(),
+            );
             let base_payable = nonmana_ok
                 && crate::state_ops_mana::can_pay_cost(
                     self,
                     idx,
-                    eff(&printing.mana_cost),
+                    &base_eff,
                     &sk,
                 );
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
+                    let warp_eff = apply_cost_reductions_rust(
+                        self, idx, printing, wc.clone(),
+                    );
                     nonmana_ok
                         && (self.players[idx].life as i64)
                             > (printing.warp_additional_life_cost
                                 as i64)
                         && crate::state_ops_mana::can_pay_cost(
-                            self, idx, eff(wc), &sk,
+                            self, idx, &warp_eff, &sk,
                         )
                 }
                 None => false,
@@ -2594,8 +2725,16 @@ impl GameState {
                 .warp_cost
                 .as_ref()
                 .expect("warp_cost checked Some by the is_none skip");
+            // **cost-reduction substrate Phase 1 — Cycle 2** (parity-
+            // complete routing of warp through `apply_cost_reductions_
+            // rust`; Phase-1 incidence on the graveyard-warp axis is
+            // zero by the bridge guardrail — no Phase-1 carrier has
+            // warp_cost — so this short-circuits trivially today).
+            let warp_eff = apply_cost_reductions_rust(
+                self, idx, printing, wc.clone(),
+            );
             if !crate::state_ops_mana::can_pay_cost(
-                self, idx, eff(wc), &sk,
+                self, idx, &warp_eff, &sk,
             ) {
                 continue;
             }
@@ -2649,11 +2788,19 @@ impl GameState {
             // exile-recast pays the NORMAL `mana_cost` (not
             // `warp_cost`). Mirror Python's `_can_cast(mana_cost)`
             // gate on the exile-recast (`legal.py:486-489`).
+            // **cost-reduction substrate Phase 1 — Cycle 2** (parity-
+            // complete routing through `apply_cost_reductions_rust`;
+            // Phase-1 incidence on the exile-recast axis is zero by
+            // the bridge guardrail — no Phase-1 carrier has
+            // warp_cost — so this short-circuits trivially today).
             let sk = crate::state_ops_mana::SpellKind::Any;
+            let base_eff = apply_cost_reductions_rust(
+                self, idx, printing, printing.mana_cost.clone(),
+            );
             if !crate::state_ops_mana::can_pay_cost(
                 self,
                 idx,
-                eff(&printing.mana_cost),
+                &base_eff,
                 &sk,
             ) {
                 continue;
@@ -2754,7 +2901,22 @@ impl GameState {
             // surcharge increments ONLY the `generic` slot (the {1}
             // is colorless); colored pip slots are unchanged.
             let sk = crate::state_ops_mana::SpellKind::Any;
-            let base_cost = eff(&printing.mana_cost);
+            // **cost-reduction substrate Phase 1 — Cycle 2 (composition
+            // order matters).** Python's Lightstall path mirrors
+            // `_effective_cost(card, card.printing.mana_cost)` first,
+            // THEN folds in the +{1} surcharge (`legal.py:565-567`).
+            // Match that order: reduce generic first, then add 1.
+            // Phase-1 incidence on the Lightstall axis is zero
+            // (no Phase-1 carrier is bridge-admitted with both
+            // cost_reductions AND a Lightstall surcharge flag — the
+            // bridge guardrail rejects any non-Phase-1 shape on the
+            // cost-reduction axis), so the reduction is a no-op for
+            // every live admitted Lightstall surface today. The
+            // routing is parity-complete for the Python-mirror
+            // discipline so the seam holds when Phase 2/3 widen.
+            let base_cost = apply_cost_reductions_rust(
+                self, idx, printing, printing.mana_cost.clone(),
+            );
             // X-value subsystem Cycle 2: `x_pips` template is
             // preserved across the +{1} Lightstall surcharge (CR
             // 601.2f). Today's `can_pay_cost` ignores `x_pips`

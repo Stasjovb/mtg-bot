@@ -561,6 +561,40 @@ class CardDef:
     # Peculiar Lighthouse / Raucous Carnival / Razortrap Gorge) all
     # print ``threshold = 13``.
     enters_tapped_unless_any_player_life_at_most: int = 0
+    # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24).
+    # Spell-local boolean-condition ``CostReduction`` riders (EoE —
+    # Gigastorm Titan {3}-less-if-cast-another-spell, Lashwhip
+    # Predator {2}-less-if-opponents-control->=3-creatures). Each
+    # entry is a frozen ``(amount: int, condition_kind: str,
+    # condition_args: tuple)`` triple. Phase 1 supports EXACTLY
+    # two condition_kinds:
+    #
+    #   * ``"another_spell_cast_this_turn"`` — args = ()
+    #   * ``"opponents_control_at_least"``   — args = ("creature", n)
+    #
+    # The filter guardrail
+    # :func:`mtg_bot.parity.trajectory._printing_is_bridge_pure_cost_
+    # reduction_creature` positively rejects every other condition
+    # kind, every variable-multiplier condition (Phase 2:
+    # ``PerDifferentlyNamedLand``), and any non-empty
+    # ``external_cost_reductions`` (Phase 3) — so only these two
+    # shapes ever reach this field in a Phase-1 deckspec. Empty
+    # tuple = no reduction (back-compat default; every pre-Phase-1
+    # CardDef omits it). The tuple-of-triples shape (NOT a
+    # ``CostReduction`` object) keeps CardDef frozen-hashable and
+    # matches the existing flat-codec field convention (mirroring
+    # ``mana_cost_colored``, ``warp_cost_colored``,
+    # ``static_anthems``).
+    #
+    # Round-trips Python ↔ Rust through
+    # :func:`_spec_card_to_printing_dict` (forward emit at
+    # ``cross_engine.py``) and :func:`_card_def_to_python_printing`
+    # (reverse re-materialization to Python's structural
+    # ``CostReduction(amount, condition)`` dataclass at
+    # ``src/mtg_bot/cards/base.py:308``). The Rust mirror is
+    # ``CardPrinting.cost_reductions: Vec<CostReduction>`` at
+    # ``rust/src/cards.rs`` (added 2026-05-24, Cycle 1).
+    cost_reductions: tuple[tuple[int, str, tuple], ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -13550,6 +13584,26 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
         printing_dict["enters_tapped_unless_any_player_life_at_most"] = (
             card.enters_tapped_unless_any_player_life_at_most
         )
+    # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24). Emit
+    # the list-of-dicts shape Rust's ``parse_printing`` consumes
+    # (the C1 substrate landing). Each CardDef triple
+    # ``(amount, condition_kind, condition_args)`` translates to one
+    # registry dict ``{"amount": int, "condition_kind": str,
+    # "condition_args": tuple}``. The key is OMITTED when the field
+    # is empty (every pre-Cycle-2 CardDef), keeping every pre-
+    # substrate registry dict byte-identical to before this slice
+    # landed. Wire tokens are bridge-side stable strings (NOT Python
+    # class names or Rust enum discriminants) — same convention as
+    # the ``triggered_abilities`` ``"kind"`` discriminator.
+    if card.cost_reductions:
+        printing_dict["cost_reductions"] = [
+            {
+                "amount": amount,
+                "condition_kind": cond_kind,
+                "condition_args": cond_args,
+            }
+            for (amount, cond_kind, cond_args) in card.cost_reductions
+        ]
     if card.static_self_bonuses:
         bonus_entries: list[dict] = []
         for (
@@ -14278,6 +14332,56 @@ def _card_def_to_python_printing(card: "CardDef"):
                     )
                 )
         static_abilities = (*static_abilities, *ssb_list)
+    # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24). Reverse-
+    # materialize the CardDef ``cost_reductions`` tuple-of-triples
+    # into Python's structural ``CostReduction(amount, condition)``
+    # dataclass tuple at ``src/mtg_bot/cards/base.py:308``. Phase 1
+    # supports EXACTLY two ``condition_kind`` tokens:
+    #
+    #   * ``"another_spell_cast_this_turn"`` →
+    #     ``AnotherSpellCastThisTurn()`` (no args)
+    #   * ``"opponents_control_at_least"`` →
+    #     ``OpponentsControlAtLeast(IsCreature(), n)``
+    #     (args = ("creature", n) — the Phase-1 hard-coded predicate)
+    #
+    # Unknown kind is a hard ``ValueError`` (the §2 bridge-side teeth
+    # — matches the Rust ``parse_printing`` hard-error in
+    # ``rust/src/cards.rs::parse_printing``'s cost_reductions arm;
+    # both sides fail loudly rather than silently dropping a Phase-2
+    # rider). Empty tuple = back-compat — non-Phase-1 CardDefs
+    # materialize ``cost_reductions=()`` byte-identical to before
+    # this slice.
+    cost_reductions = ()
+    if card.cost_reductions:
+        from mtg_bot.cards.base import CostReduction
+        from mtg_bot.effects.conditions import (
+            AnotherSpellCastThisTurn,
+            OpponentsControlAtLeast,
+        )
+        from mtg_bot.effects.object_predicates import IsCreature
+        rules = []
+        for (amount, cond_kind, cond_args) in card.cost_reductions:
+            if cond_kind == "another_spell_cast_this_turn":
+                cond = AnotherSpellCastThisTurn()
+            elif cond_kind == "opponents_control_at_least":
+                pred_token, n = cond_args
+                if pred_token != "creature":
+                    raise ValueError(
+                        f"Phase-1 cost-reduction bridge: only the "
+                        f"'creature' predicate token is supported on "
+                        f"opponents_control_at_least (Phase 2+ adds "
+                        f"others); got {pred_token!r}"
+                    )
+                cond = OpponentsControlAtLeast(IsCreature(), int(n))
+            else:
+                raise ValueError(
+                    f"Phase-1 cost-reduction bridge: unsupported "
+                    f"condition_kind {cond_kind!r} (Phase 2+ adds "
+                    f"per_differently_named_land / nth_spell_this_turn / "
+                    f"per_controlled)"
+                )
+            rules.append(CostReduction(amount=int(amount), condition=cond))
+        cost_reductions = tuple(rules)
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -14401,6 +14505,18 @@ def _card_def_to_python_printing(card: "CardDef"):
         enters_tapped_unless_any_player_life_at_most=(
             card.enters_tapped_unless_any_player_life_at_most
         ),
+        # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24).
+        # Threads the structural ``CostReduction`` rule tuple onto
+        # Python's CardPrinting at ``cards/base.py:764``. Default
+        # ``()`` keeps every pre-Cycle-2 CardDef bit-identical to
+        # before this slice landed (the guardrail rejects every
+        # non-Phase-1 condition shape, so this only fires for the 2
+        # Phase-1 admitted carriers — Gigastorm Titan + Lashwhip
+        # Predator). Read by Python's
+        # ``actions.apply_cost_reductions`` (`actions.py:406-438`)
+        # at cast time + ``legal._effective_cost``
+        # (`legal.py:187-188`) at the affordability probe.
+        cost_reductions=cost_reductions,
     )
 
 

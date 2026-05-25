@@ -323,29 +323,24 @@ def test_rust_parser_accepts_absent_cost_reductions_back_compat():
 # ---------------------------------------------------------------------------
 
 
-def test_gigastorm_titan_stays_declined_post_cycle_1():
-    """Pin #4a — substrate-only invariant.
+def test_gigastorm_titan_now_admits_at_admit_gate_post_cycle_2():
+    """Pin #4a — INVERTED post-Cycle-2 — Gigastorm Titan FLIP.
 
-    **The load-bearing closure marker.** Post-Cycle-1, Gigastorm Titan
-    is STILL DECLINED at every existing admit predicate in
-    ``trajectory.py``. The 10 sibling guards ``if
-    printing.cost_reductions or printing.external_cost_reductions:
-    return False`` are load-bearing this cycle: admitting Gigastorm
-    Titan without the C2 bridge round-trip (CardDef field +
-    ``_printing_to_card_def`` arm + new
+    **The load-bearing closure marker (Cycle 2 inversion).** Post-
+    Cycle-2, Gigastorm Titan FLIPS DECLINED → ADMITTED at the new
     ``_printing_is_bridge_pure_cost_reduction_creature`` admit
-    predicate) ships a guaranteed mana-pool divergence (Python
-    applies the {3}-less reduction via ``apply_cost_reductions``;
-    Rust pays the full ``p.mana_cost = {4}{U}``).
+    predicate AND at the deck-level
+    ``_filter_deck_to_bridge_supported`` OR-chain. Cycle 1's pin
+    (substrate-only invariant — STAY DECLINED) inverts here when
+    the bridge round-trip + new admit predicate land. The
+    ``_printing_is_bridge_simple_creature`` predicate STAYS False
+    (the cost_reductions guard there is still load-bearing — the
+    new cost-reduction-aware predicate is the dedicated admit arm,
+    a SIBLING of simple-creature not a widen).
 
-    Cycle 2 inverts this pin to
-    ``test_gigastorm_titan_now_admits_at_admit_gate_post_cycle_2``
-    when the bridge round-trip + new admit predicate land. If this
-    assertion FLIPS True post-Cycle-1, the substrate ALONE
-    auto-flipped the admit gate (replicating the Archenemy's Charm
-    Cycle 1 honest-stop situation, commit ``8f8bc77b``) — verify a
-    Cycle-1-only change did not accidentally widen
-    ``_filter_deck_to_bridge_supported`` or its disjuncts.
+    The Cycle 1 → Cycle 2 inversion is the documented closure
+    pattern (sibling mirror of Anticausal Vestige Cycle 2 commit
+    ``c32f07f9``'s admit-widen).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -355,36 +350,53 @@ def test_gigastorm_titan_stays_declined_post_cycle_1():
     if g is None:
         pytest.skip("Gigastorm Titan absent from active CardSource")
 
-    # The Creature-arm admit predicate must reject — the
-    # cost_reductions guard is load-bearing this cycle.
+    # The simple-creature arm STILL rejects (its cost_reductions
+    # guard is sibling-load-bearing, not removed). Cycle 2 did NOT
+    # widen the existing predicate — it added a NEW dedicated
+    # cost-reduction-aware predicate.
     assert trajectory._printing_is_bridge_simple_creature(g) is False, (
         "Gigastorm Titan must STAY DECLINED at the simple-creature "
-        "admit gate post-Cycle-1 — the cost_reductions guard at the 10 "
-        "sibling sites is load-bearing this cycle. Cycle 2 ships the "
-        "bridge round-trip + new admit predicate; admit it earlier "
-        "and Python reduces the cost while Rust pays the full "
-        "{4}{U} — guaranteed mana-pool divergence on the first cast."
+        "admit gate post-Cycle-2 — the cost_reductions guard there "
+        "is sibling-load-bearing. The new cost-reduction admit "
+        "predicate is a parallel OR-arm, not a simple-creature widen."
+    )
+    # The new dedicated admit predicate FLIPS True.
+    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(g) is True, (
+        "Gigastorm Titan must ADMIT at the new "
+        "_printing_is_bridge_pure_cost_reduction_creature predicate "
+        "post-Cycle-2 (the C1 → C2 inversion). If False, the C2 "
+        "admit-widen didn't land — verify the trajectory.py predicate "
+        "+ OR-chain disjunct landed together."
     )
     # And the deck-level filter likewise — a 1-card deck containing
-    # only Gigastorm Titan must filter to (empty-name-list, empty-
-    # CardDef-list).
+    # only Gigastorm Titan must filter to (1-name, 1-CardDef-list)
+    # post-Cycle-2.
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Gigastorm Titan"], src,
     )
-    assert filtered_names == [], (
-        "Gigastorm Titan must STAY DECLINED at the deck-level filter "
-        "post-Cycle-1 (no admit predicate in the OR-chain admits a "
-        "cost-reduction creature). Got filtered_names="
-        f"{filtered_names!r}"
+    assert filtered_names == ["Gigastorm Titan"], (
+        "Gigastorm Titan must FLIP DECLINED→ADMITTED at the deck-level "
+        "filter post-Cycle-2 (the new cost-reduction admit predicate "
+        f"is wired into the OR-chain). Got filtered_names={filtered_names!r}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    (cd,) = card_defs
+    assert cd.name == "Gigastorm Titan"
+    assert cd.card_type == "Creature"
+    # The CardDef carries the Phase-1 cost-reduction triple
+    # round-trip-ready for the bridge — pinned here so a future
+    # refactor that drops the field gets caught at the C2 inversion.
+    assert cd.cost_reductions == (
+        (3, "another_spell_cast_this_turn", ()),
+    ), f"unexpected cost_reductions tuple: {cd.cost_reductions!r}"
 
 
-def test_lashwhip_predator_stays_declined_post_cycle_1():
-    """Pin #4b — substrate-only invariant — Lashwhip Predator.
+def test_lashwhip_predator_now_admits_at_admit_gate_post_cycle_2():
+    """Pin #4b — INVERTED post-Cycle-2 — Lashwhip Predator FLIP.
 
     Same load-bearing closure marker as #4a, for Lashwhip Predator.
-    Inverts at Cycle 2.
+    Inverts at Cycle 2 (the simultaneous DECLINED → ADMITTED flip
+    for both Phase-1 carriers).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -395,17 +407,30 @@ def test_lashwhip_predator_stays_declined_post_cycle_1():
         pytest.skip("Lashwhip Predator absent from active CardSource")
 
     assert trajectory._printing_is_bridge_simple_creature(lp) is False, (
-        "Lashwhip Predator must STAY DECLINED post-Cycle-1 — the "
-        "cost_reductions guard is load-bearing this cycle."
+        "Lashwhip Predator must STAY DECLINED at the simple-creature "
+        "admit gate post-Cycle-2."
+    )
+    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(lp) is True, (
+        "Lashwhip Predator must ADMIT at the new cost-reduction "
+        "predicate post-Cycle-2."
     )
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Lashwhip Predator"], src,
     )
-    assert filtered_names == [], (
-        "Lashwhip Predator must STAY DECLINED at the deck-level "
-        f"filter post-Cycle-1. Got filtered_names={filtered_names!r}"
+    assert filtered_names == ["Lashwhip Predator"], (
+        "Lashwhip Predator must FLIP DECLINED→ADMITTED at the deck-"
+        f"level filter post-Cycle-2. Got filtered_names={filtered_names!r}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    (cd,) = card_defs
+    assert cd.name == "Lashwhip Predator"
+    assert cd.card_type == "Creature"
+    # The Phase-1 OpponentsControlAtLeast(IsCreature(), 3) triple.
+    assert cd.cost_reductions == (
+        (2, "opponents_control_at_least", ("creature", 3)),
+    ), f"unexpected cost_reductions tuple: {cd.cost_reductions!r}"
+    # Reach stays a SAFE keyword (preserved on the CardDef).
+    assert "reach" in cd.keywords
 
 
 # ---------------------------------------------------------------------------

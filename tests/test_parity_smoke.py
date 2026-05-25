@@ -67217,43 +67217,53 @@ def test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal():
     # been masking a divergence.
     #
     # **Fixture re-derive history.** The carrier archetype has
-    # legitimately shifted twice as new cards joined the spell-card-
-    # bridge admit set and altered game trajectories:
+    # legitimately shifted multiple times as new cards joined the
+    # bench-admit set and altered game trajectories:
     #
     #   1. Pre-Emergency-Eject (round-69 original) — arch=9 seed=1.
     #   2. Post-Emergency-Eject (``feature/next-effect-uncovered``,
     #      2026-05-21) — arch=7 seed=0. The Emergency Eject admit
     #      added Lander permanents that shifted archetype 9's
     #      trajectory.
-    #   3. Post-bare-``ExileTargetCreature`` (this lane,
-    #      ``feature/effect-exile-target-creature-p1``, 2026-05-22) —
-    #      arch=10 seed=0. The bare ``ExileTargetCreature`` admit
+    #   3. Post-bare-``ExileTargetCreature``
+    #      (``feature/effect-exile-target-creature-p1``, 2026-05-22)
+    #      — arch=10 seed=0. The bare ``ExileTargetCreature`` admit
     #      adds Gravkill to the bench-admit set; archetype 7 now
     #      runs Gravkill's resolves and PASSes at cap-25.
+    #   4. Post-cost-reduction-phase-1-cycle-2-flip
+    #      (``feature/cost-reduction-phase-1-cycle-2-flip-p1``,
+    #      2026-05-24) — arch=1 seed=2. The Phase-1 cost-reduction
+    #      flip admits Gigastorm Titan + Lashwhip Predator (2 cards
+    #      / 24,908 17lands decks); archetype 10 now runs cost-
+    #      reduced casts in its trajectory and PASSes at cap-25.
+    #      arch=1 seed=2 is the new TIMEOUT-at-cap-25 / PASS-at-cap-60
+    #      carrier (re-derived from a fresh stall-anatomy sweep —
+    #      arch=10 seed=2, arch=11 seed=2, arch=12 seed=2 are
+    #      siblings).
     #
     # The TWO properties this pin asserts — parity-safety (Property 1)
     # and timeout-recovery (Property 2) — remain unchanged; only the
     # per-archetype carrier shifted. Re-derived from a fresh stall-
     # anatomy sweep per the fixture's own re-derivation contract.
     lo7 = drive_one_game(
-        archetype=10, seed=0, max_turns=25,
+        archetype=1, seed=2, max_turns=25,
         combat_strategy="attack_all", mulligans=0,
     )
     hi7 = drive_one_game(
-        archetype=10, seed=0, max_turns=60,
+        archetype=1, seed=2, max_turns=60,
         combat_strategy="attack_all", mulligans=0,
     )
     assert lo7.status == "FAIL_TIMEOUT", (
-        "round-69 data fixture (re-derived post-bare-"
-        "ExileTargetCreature): "
-        f"arch=10 seed=0 is expected to FAIL_TIMEOUT at cap-25; got "
+        "round-69 data fixture (re-derived post-cost-reduction-phase-1-"
+        "cycle-2-flip): "
+        f"arch=1 seed=2 is expected to FAIL_TIMEOUT at cap-25; got "
         f"{lo7.status}. If the bench trajectory legitimately changed, "
         "re-derive the fixture from a fresh stall-anatomy run (do NOT "
         "just relax this assertion)."
     )
     assert hi7.status in ("PASS", "FAIL_DIVERGENCE"), (
         f"raising the cap must convert the timeout into a real parity "
-        f"verdict; arch=10 seed=0 got {hi7.status} at cap-60"
+        f"verdict; arch=1 seed=2 got {hi7.status} at cap-60"
     )
     assert hi7.status != "FAIL_DIVERGENCE" or lo7.status != "PASS", (
         "sanity: a cap-25 PASS cannot become a cap-60 DIVERGENCE "

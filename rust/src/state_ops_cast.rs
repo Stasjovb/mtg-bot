@@ -1133,25 +1133,60 @@ impl GameState {
                 if !p.card_types.iter().any(|t| t == "Creature") {
                     return Ok(false);
                 }
+                // **cost-reduction substrate Phase 1 — Cycle 2
+                // (cast-side reduction, 2026-05-24).** Apply
+                // spell-local cost reductions BEFORE paying. Mirrors
+                // Python's `actions._cast_spell` calling
+                // `apply_cost_reductions(printing, state, caster_id,
+                // base_cost)` at `actions.py:1474-1486` BEFORE
+                // `auto_tap_for_cost`. The legal-side affordability
+                // probe (`state_ops_legal.rs::apply_cost_reductions_
+                // rust`) routes through the SAME helper so the
+                // emission gate and pay-time cost are derived from
+                // the same Condition evaluation — no drift between
+                // "legal says payable" and "cast actually pays". For
+                // every printing without `cost_reductions` the helper
+                // short-circuits to the base cost (empty Vec).
+                //
+                // **Composition with Lightstall surcharge:** Python
+                // applies `_effective_cost(card, card.printing.mana_
+                // cost)` FIRST, then adds the surcharge
+                // (`legal.py:565-567` is the legal-side mirror; the
+                // cast pay path computes the surcharge over the
+                // pre-reduction cost at `actions.py:1494-1499` —
+                // verify-first traces this; see the parity note in
+                // `apply_cost_reductions_rust`'s docstring). Reduce
+                // first, then add 1.
+                //
+                // Borrow note: the registry lookup borrow on `self`
+                // is live through the `apply_cost_reductions_rust`
+                // call (we pass `&self` again, which is fine: the
+                // helper only reads `state.players[*]` /
+                // `state.registry.lookup(*)` and never writes; no
+                // aliasing conflict with the read-only `p` borrow).
+                let base_eff = crate::state_ops_legal::apply_cost_reductions_rust(
+                    self, idx, p, p.mana_cost.clone(),
+                );
                 if from_exile_lightstall {
-                    // Apply +{1} generic surcharge. Mirrors Python
-                    // `actions.py:1494-1499`. Colored pips unchanged.
+                    // Apply +{1} generic surcharge ON TOP of the
+                    // reduced cost. Mirrors Python `actions.py:1494-
+                    // 1499`. Colored pips unchanged.
                     // X-value subsystem Cycle 2: `x_pips` template
                     // is preserved across surcharge (CR 601.2f —
                     // cost adjustments touch the generic side
                     // only; `{X}` symbols intact for the controller
                     // to choose later).
                     crate::cards::ManaCost {
-                        generic: p.mana_cost.generic.saturating_add(1),
-                        white: p.mana_cost.white,
-                        blue: p.mana_cost.blue,
-                        black: p.mana_cost.black,
-                        red: p.mana_cost.red,
-                        green: p.mana_cost.green,
-                        x_pips: p.mana_cost.x_pips,
+                        generic: base_eff.generic.saturating_add(1),
+                        white: base_eff.white,
+                        blue: base_eff.blue,
+                        black: base_eff.black,
+                        red: base_eff.red,
+                        green: base_eff.green,
+                        x_pips: base_eff.x_pips,
                     }
                 } else {
-                    p.mana_cost.clone()
+                    base_eff
                 }
             }
             None => return Ok(false),
