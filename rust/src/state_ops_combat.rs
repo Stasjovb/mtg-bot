@@ -237,6 +237,59 @@ where
     false
 }
 
+/// **Spacecraft Station substrate Phase 1 — Cycle 1 (substrate-only,
+/// 2026-05-25).** True iff the printing carries a `station_threshold`
+/// AND `charge_counters >= threshold`. Non-Spacecraft (threshold ==
+/// `None`) and non-animating Spacecraft (Phase 4 only — same `None`
+/// shape) ALWAYS return False. The predicate is the substrate's
+/// fundamental gate: every Cycle-2+ reader that asks "is this
+/// stationed Spacecraft acting as a creature now?" calls into this
+/// helper.
+///
+/// **Pure predicate over the printing + the GameObject's
+/// `charge_counters` field.** No battlefield walk, no controller
+/// check, no zone check — callers gate on those. Mirrors Python's
+/// `is_stationed` at `src/mtg_bot/game.py:825-828`.
+///
+/// **Cycle 1 reader scope.** No production-side caller invokes this
+/// yet (Cycle 2 ships the `Action::ActivateStation` action +
+/// resolver + the `is_creature_now` extension that consumes this
+/// predicate). The function lands here in Cycle 1 so the unit pin
+/// (`tests/test_spacecraft_phase_1_substrate_cycle_1.py` pin #3) can
+/// exercise it through the thin `is_stationed_check` `#[pyfunction]`
+/// shim at `lib.rs`.
+pub(crate) fn is_stationed_predicate(
+    station_threshold: Option<i32>,
+    charge_counters: i32,
+) -> bool {
+    match station_threshold {
+        Some(t) => charge_counters >= t,
+        None => false,
+    }
+}
+
+/// **Spacecraft Station substrate Phase 1 — Cycle 1 (substrate-only,
+/// 2026-05-25).** `GameObject`-flavored wrapper of
+/// `is_stationed_predicate` — reads `obj.printing_id`'s
+/// `station_threshold` from the registry and folds against
+/// `obj.charge_counters`. Returns False if the printing is missing
+/// from the registry (which would itself be a bug — this is a
+/// defense-in-depth fallback matching the
+/// `state.registry.lookup(...)?` shape used in
+/// `read_creature_status` above).
+///
+/// **Cycle 1 reader scope.** Same as `is_stationed_predicate` —
+/// lands here in Cycle 1 for the substrate, no Rust caller yet.
+/// Cycle 2 wires the `is_creature_now` fold + the legal-action
+/// emitter into this helper at every consumer site.
+#[allow(dead_code)]
+pub(crate) fn is_stationed(state: &GameState, obj: &GameObject) -> bool {
+    let Some(printing) = state.registry.lookup(obj.printing_id) else {
+        return false;
+    };
+    is_stationed_predicate(printing.station_threshold, obj.charge_counters)
+}
+
 /// Read-only check: is this object on a battlefield AND a creature
 /// (printing.power.is_some())? Returns `Some((tapped, summoning_sick))`
 /// when the object exists on a battlefield AND is a creature; `None`

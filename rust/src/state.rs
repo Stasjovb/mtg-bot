@@ -3785,6 +3785,13 @@ pub fn make_synthetic_state(
         // parser maps the absent `external_cost_reductions` key to the
         // same — sibling of the Phase-1 `cost_reductions` shape).
         external_cost_reductions: Vec::new(),
+        // Spacecraft Station substrate Phase 1 — Cycle 1
+        // (substrate-only, 2026-05-25): synthetic-state printings
+        // are not Spacecraft. Back-compat defaults (every
+        // pre-substrate registry dict omits both keys; parser maps
+        // the absences to None / empty Vec respectively).
+        station_threshold: None,
+        stationed_keywords: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -3894,6 +3901,13 @@ pub fn make_synthetic_state(
         // parser maps the absent `external_cost_reductions` key to the
         // same — sibling of the Phase-1 `cost_reductions` shape).
         external_cost_reductions: Vec::new(),
+        // Spacecraft Station substrate Phase 1 — Cycle 1
+        // (substrate-only, 2026-05-25): synthetic-state printings
+        // are not Spacecraft. Back-compat defaults (every
+        // pre-substrate registry dict omits both keys; parser maps
+        // the absences to None / empty Vec respectively).
+        station_threshold: None,
+        stationed_keywords: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -4016,6 +4030,13 @@ pub fn make_synthetic_state(
         // parser maps the absent `external_cost_reductions` key to the
         // same — sibling of the Phase-1 `cost_reductions` shape).
         external_cost_reductions: Vec::new(),
+        // Spacecraft Station substrate Phase 1 — Cycle 1
+        // (substrate-only, 2026-05-25): synthetic-state printings
+        // are not Spacecraft. Back-compat defaults (every
+        // pre-substrate registry dict omits both keys; parser maps
+        // the absences to None / empty Vec respectively).
+        station_threshold: None,
+        stationed_keywords: Vec::new(),
     });
     let registry = builder.snapshot();
 

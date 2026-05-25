@@ -57,6 +57,26 @@ fn gameobject_byte_size() -> usize {
     std::mem::size_of::<state::GameObject>()
 }
 
+/// **Spacecraft Station substrate Phase 1 — Cycle 1 (substrate-only,
+/// 2026-05-25).** Thin Python-visible shim over the Rust internal
+/// `state_ops_combat::is_stationed_predicate` helper, so the Cycle-1
+/// unit pins can exercise the predicate directly without driving a
+/// full `GameState` build (the `GameObject.charge_counters` field is
+/// not exposed to Python, and would require a deeper test setter
+/// fixture — Cycle 2's `Action::ActivateStation` flow will provide
+/// that natural surface). For Cycle 1 the predicate is pure over
+/// `(Option<i32>, i32)`, so this shim suffices.
+///
+/// `threshold = None` mirrors a non-Spacecraft printing AND a
+/// non-animating Spacecraft (The Eternity Elevator — Phase 4 only);
+/// both shapes return False regardless of `charge_counters`.
+/// `threshold = Some(t)` returns `charge_counters >= t`.
+#[pyfunction]
+#[pyo3(signature = (threshold, charge_counters))]
+fn is_stationed_check(threshold: Option<i32>, charge_counters: i32) -> bool {
+    state_ops_combat::is_stationed_predicate(threshold, charge_counters)
+}
+
 #[pymodule]
 fn mtg_bot_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<state::GameState>()?;
@@ -64,6 +84,7 @@ fn mtg_bot_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(state::make_synthetic_state, m)?)?;
     m.add_function(wrap_pyfunction!(state_ops_setup::make_state, m)?)?;
     m.add_function(wrap_pyfunction!(gameobject_byte_size, m)?)?;
+    m.add_function(wrap_pyfunction!(is_stationed_check, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

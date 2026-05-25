@@ -10755,6 +10755,52 @@ pub struct CardPrinting {
     /// tuple[ExternalCostReduction, ...]` at
     /// `src/mtg_bot/cards/base.py:771`.
     pub external_cost_reductions: Vec<ExternalCostReduction>,
+    /// **Spacecraft Station substrate Phase 1 — Cycle 1
+    /// (substrate-only, 2026-05-25).** EoE Spacecraft Station
+    /// gate: a Spacecraft printing carries `Some(threshold)`; once
+    /// `obj.charge_counters >= threshold` the Spacecraft "is a
+    /// creature" with its printed P/T and gains
+    /// `stationed_keywords`. `None` = non-Spacecraft printings AND
+    /// non-animating Spacecraft (The Eternity Elevator — Phase 4
+    /// only). The back-compat default (every pre-Phase-1 registry
+    /// dict omits the `station_threshold` key) maps to `None`,
+    /// identical to the `warp_cost` Option-parse shape.
+    ///
+    /// **Cycle 1 reader scope.** No Rust consumer reads this field
+    /// yet — Cycle 1 ships the FIELD + PARSE + `is_stationed`
+    /// predicate only. Cycle 2 adds `Action::ActivateStation`,
+    /// `apply_activate_station`, the legal-action emitter, and the
+    /// `is_creature_now` / effective-keyword folds. The admit set
+    /// is unchanged: Galvanizing Sawship remains DECLINED at
+    /// `_printing_is_bridge_simple_creature` (the line
+    /// `if printing.station_threshold: return False` at
+    /// `trajectory.py:4698` is sibling-load-bearing). Cycle 3
+    /// widens the admit predicate.
+    ///
+    /// Mirrors Python's `CardPrinting.station_threshold: int | None`
+    /// at `src/mtg_bot/cards/base.py:564`.
+    pub station_threshold: Option<i32>,
+    /// **Spacecraft Station substrate Phase 1 — Cycle 1
+    /// (substrate-only, 2026-05-25).** Set of keyword strings the
+    /// Spacecraft gains while stationed (`obj.charge_counters >=
+    /// station_threshold`). Empty `Vec` = no extra keywords (the
+    /// back-compat default — every pre-Phase-1 registry dict omits
+    /// this key; parser maps the absence to `Vec::new()`, identical
+    /// to the `keywords` / `cost_reductions` Vec-parse shape).
+    ///
+    /// **Cycle 1 reader scope.** No Rust consumer reads this field
+    /// yet — Cycle 2 wires the effective-keyword fold at the
+    /// `state_ops_combat::effective_keywords_for` reader site.
+    /// Cycle 1 ships the FIELD + PARSE only, so a Galvanizing-
+    /// Sawship-shaped synthetic dict round-trips through
+    /// `parse_printing` without ablation of the keyword payload.
+    ///
+    /// Mirrors Python's
+    /// `CardPrinting.stationed_keywords: frozenset[str]` at
+    /// `src/mtg_bot/cards/base.py:565` + the layer-6 fold at
+    /// `src/mtg_bot/game.py:1191-1193` (the fold itself is Cycle-2
+    /// scope).
+    pub stationed_keywords: Vec<String>,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -15846,6 +15892,77 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             }
             None => Vec::new(),
         };
+    // Spacecraft Station substrate Phase 1 — Cycle 1 (substrate-only,
+    // 2026-05-25). New `station_threshold` + `stationed_keywords`
+    // parse arms. Both keys are OPTIONAL — missing key maps to the
+    // back-compat default (`None` / `Vec::new()`), identical to the
+    // `warp_cost` / `cost_reductions` Option-parse shapes above.
+    //
+    // `station_threshold`: an `Option<i32>` mirroring Python's
+    // `CardPrinting.station_threshold: int | None`. Absent key, or an
+    // explicit `None` Python value, both parse to `Option::None`. A
+    // present positive int parses to `Some(value)`; negative / zero /
+    // non-int values hard-error at registry build (the §2 Rust-side
+    // teeth — the `silent no-op pipeline runs are pipeline bugs`
+    // discipline applies to this substrate too).
+    let station_threshold: Option<i32> = match dict
+        .get_item("station_threshold")?
+    {
+        Some(v) => {
+            // Distinguish explicit Python `None` from a real int —
+            // the bridge emit on the Python side may pass `None`
+            // explicitly for non-Spacecraft printings, matching the
+            // Python dataclass default. Both shapes map to
+            // `Option::None` on the Rust side.
+            if v.is_none() {
+                None
+            } else {
+                let threshold: i32 = v.extract().map_err(|_| {
+                    PyValueError::new_err(
+                        "station_threshold must be an int or None",
+                    )
+                })?;
+                if threshold <= 0 {
+                    return Err(PyValueError::new_err(format!(
+                        "station_threshold must be positive when \
+                         set; got {threshold}"
+                    )));
+                }
+                Some(threshold)
+            }
+        }
+        None => None,
+    };
+    // `stationed_keywords`: a `Vec<String>` of lowercase keyword
+    // names. Absent key maps to `Vec::new()` (the back-compat
+    // default — every pre-Phase-1 registry dict omits the key,
+    // identical to the `keywords` Vec-parse shape). Values are
+    // lowercased here to mirror the existing `keywords` arm's
+    // normalization (see `state_ops_combat.rs:645`); the bridge
+    // emit on the Python side passes lowercase by convention so
+    // this is a defense-in-depth pass.
+    let stationed_keywords: Vec<String> = match dict
+        .get_item("stationed_keywords")?
+    {
+        Some(v) => {
+            let lst = v.downcast::<PyList>().map_err(|_| {
+                PyValueError::new_err(
+                    "stationed_keywords must be a list of strings",
+                )
+            })?;
+            let mut out = Vec::with_capacity(lst.len());
+            for item in lst.iter() {
+                let kw: String = item.extract().map_err(|_| {
+                    PyValueError::new_err(
+                        "stationed_keywords[i] must be a string",
+                    )
+                })?;
+                out.push(kw.to_lowercase());
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -15887,6 +16004,8 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         enters_tapped_unless_any_player_life_at_most,
         cost_reductions,
         external_cost_reductions,
+        station_threshold,
+        stationed_keywords,
     })
 }
 
