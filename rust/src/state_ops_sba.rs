@@ -579,10 +579,23 @@ impl GameState {
     ///    == 0` effective and printed toughness coincide, so the
     ///    no-counter cases reduce to the printed-toughness predicate.
     ///
-    /// Returns `(controller_id, obj_id)` pairs. Each obj_id appears at
-    /// most once even if both rules would catch it, because the inner
-    /// loop short-circuits on the first matching rule.
-    fn collect_sba_victims(&self) -> Vec<(u8, u32)> {
+    /// Returns `(controller_id, obj_id, regen_eligible)` triples. Each
+    /// obj_id appears at most once even if both rules would catch it,
+    /// because the inner loop short-circuits on the first matching
+    /// rule. `regen_eligible == true` iff the matching rule is 704.5g
+    /// (lethal damage path); 704.5f (zero-toughness) and 704.5i
+    /// (walker-loyalty-zero) victims are NOT regen-eligible per CR
+    /// 701.15 ("regenerate replaces the destroy from lethal damage or
+    /// a 'destroy' effect" — toughness-based destruction is not on
+    /// that list). Mirrors Python's `turn.py:1260-1264` "gate on
+    /// not-zero-toughness to match the rule" comment.
+    ///
+    /// **Carrier-AA Phase 1 Cycle 3 (2026-05-25) — the third tuple
+    /// slot is consumed by the SBA-time regenerate-shield consume in
+    /// `apply_sbas`.** Pre-C3 the helper returned a 2-tuple; C3
+    /// extended to a 3-tuple to carry the per-victim regen-eligibility
+    /// flag without recomputing effective-toughness in two places.
+    fn collect_sba_victims(&self) -> Vec<(u8, u32, bool)> {
         // CE5 closure: walk battlefield in ETB-timestamp order
         // (matching Python's centralized `state.battlefield` walk in
         // `turn.py:1242`) via the shared `bf_iter_etb_sorted` helper.
@@ -612,7 +625,11 @@ impl GameState {
                 .iter()
                 .any(|t| t == "Planeswalker");
             if is_walker && obj.loyalty_counters <= 0 {
-                victims.push((obj.controller, obj.id));
+                // 704.5i (walker loyalty <= 0) — NOT regen-eligible
+                // per CR 701.15 (regenerate replaces destroy-from-
+                // lethal-damage or destroy effects; loyalty-zero is a
+                // different SBA category).
+                victims.push((obj.controller, obj.id, false));
                 continue;
             }
             let Some(toughness) = printing.toughness else {
@@ -689,14 +706,24 @@ impl GameState {
                 crate::state_ops_combat::aura_pt_bonus_on(self, obj.id);
             let effective_toughness =
                 base_toughness + obj.counters + obj.ueot_toughness_bonus() + aura_t;
-            // 704.5f first per CR ordering.
+            // 704.5f first per CR ordering — NOT regen-eligible per
+            // CR 701.15 / Python `turn.py:1260-1263` (zero-toughness
+            // destruction is not on the replaceable-by-regenerate
+            // list).
             if effective_toughness <= 0 {
-                victims.push((obj.controller, obj.id));
+                victims.push((obj.controller, obj.id, false));
                 continue;
             }
             // 704.5g second — also keyed on effective toughness.
+            // **704.5g IS regen-eligible** (per CR 701.15: regenerate
+            // replaces destruction from lethal damage). The
+            // `regen_eligible = true` flag is read by `apply_sbas` to
+            // gate the regeneration_shield-consume on
+            // `obj.regeneration_shield && tough > 0`. Mirrors Python's
+            // `if obj.regeneration_shield and tough > 0:` consume gate
+            // at `turn.py:1265-1278`.
             if obj.damage as i32 >= effective_toughness {
-                victims.push((obj.controller, obj.id));
+                victims.push((obj.controller, obj.id, true));
             }
         }
         victims
@@ -759,7 +786,106 @@ impl GameState {
                 _ => {}
             }
         }
-        let victims = self.collect_sba_victims();
+        let raw_victims = self.collect_sba_victims();
+        // **Carrier-AA Phase 1 Cycle 3 (2026-05-25) — SBA-time
+        // regenerate-shield consume.** Mirrors Python's
+        // `turn.py:1256-1278` regenerate-replacement path: a victim
+        // collected under 704.5g (lethal damage; the third tuple slot
+        // = `regen_eligible == true`) whose `regeneration_shield ==
+        // true` does NOT move to the graveyard. Instead the engine
+        // *replaces* the destroy with the regenerate sequence per CR
+        // 701.15 ("remove all damage marked on it, tap it, and remove
+        // it from combat"). The shield is consumed (set to `false`),
+        // and the creature stays on the battlefield.
+        //
+        // **Per-object state on consume:**
+        //   - `damage = 0` (CR 701.15 "remove all damage")
+        //   - `tapped = true` (CR 701.15 "tap it")
+        //   - `regeneration_shield = false` (one-shot replacement
+        //     effect — consumed)
+        //
+        // **Combat-state on consume:** the regenerated creature's id
+        // is also retained-out of `self.attackers` and `self.blockers`
+        // — CR 701.15 "remove it from combat". Mirrors Python's
+        // `obj.attacking = False; obj.blocking = None; obj.blocked_by
+        // = []` (Python's per-object combat fields; Rust tracks
+        // combat at the GameState level). Field-view comparison does
+        // NOT inspect `attackers`/`blockers` (per `scripts/
+        // parity_smoke.py::_build_field_view` — only per-zone object
+        // 8-tuples + scalars are in the view), but the honest mirror
+        // keeps Rust's combat list semantics consistent with Python
+        // for downstream combat-resolution observers.
+        //
+        // **Regen-ineligible victims (zero-toughness, walker
+        // loyalty-zero) bypass this consume path entirely** — they
+        // proceed to the destroy loop below regardless of shield
+        // value. Pinned by the C1 SL entry's "shielded creature with
+        // 0 toughness still destroys, shield stays set on the dying
+        // object" failure-mode comment.
+        let mut victims: Vec<(u8, u32)> = Vec::new();
+        let mut shield_consume_ids: Vec<u32> = Vec::new();
+        for (controller, obj_id, regen_eligible) in raw_victims {
+            if regen_eligible {
+                // Look up the victim's regeneration_shield bit on its
+                // current battlefield slot. If true, this victim is
+                // consumed rather than destroyed.
+                let mut has_shield = false;
+                'shield_lookup: for player in self.players.iter() {
+                    for obj in player.battlefield.iter() {
+                        if obj.id == obj_id {
+                            has_shield = obj.regeneration_shield;
+                            break 'shield_lookup;
+                        }
+                    }
+                }
+                if has_shield {
+                    shield_consume_ids.push(obj_id);
+                    continue;
+                }
+            }
+            victims.push((controller, obj_id));
+        }
+        // Apply shield consume IN PLACE on each saved victim. Same
+        // bf-search shape as the destroy loop below; no zone change,
+        // no `Arc::make_mut` cost when the player has no shielded
+        // victim. Per-victim mutation: damage=0, tapped=true,
+        // shield=false.
+        for &consume_id in shield_consume_ids.iter() {
+            for pidx in 0..self.players.len() {
+                let has = self.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == consume_id);
+                if !has {
+                    continue;
+                }
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut self.players[pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == consume_id {
+                        obj.damage = 0;
+                        obj.tapped = true;
+                        obj.regeneration_shield = false;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        // CR 701.15 "remove it from combat" — drop the regenerated
+        // creature from `attackers` and any `blockers` entries
+        // referencing its id (as attacker OR blocker). Idempotent
+        // when not in combat. Pre-Phase-1-C3 the helpers never
+        // shrunk these lists outside `clear_combat`; the regen-
+        // consume path is the first SBA-time membership drop.
+        if !shield_consume_ids.is_empty() {
+            self.attackers.retain(|id| !shield_consume_ids.contains(id));
+            self.blockers.retain(
+                |(att, blk)| !shield_consume_ids.contains(att)
+                    && !shield_consume_ids.contains(blk),
+            );
+        }
         let count = victims.len();
         // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.
         // Collect (owner, id) for every SBA-destroyed creature that

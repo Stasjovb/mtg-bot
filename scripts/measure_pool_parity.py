@@ -2385,6 +2385,24 @@ PROBE_MODULES: tuple[Path, ...] = (
     # subsystems).
     REPO_ROOT / "tests" / "test_plaza_of_heroes_parity.py",
     REPO_ROOT / "tests" / "test_rust_harvester_parity.py",
+    # Carrier-AA substrate Phase 1 Cycle 3 (2026-05-25) — Swarmyard
+    # real-EoE per-card cross-engine byte-equality probe. Closes the
+    # ``covered_by_construction`` → PROBED tier flip for Swarmyard
+    # (the FIRST PROBE_MODULES-credited probe of the
+    # ``RegenerateTargetCreature`` Effect class with the
+    # ``allowed_subtypes={Insect, Rat, Spider, Squirrel}`` filter +
+    # the SBA-time ``regeneration_shield`` consume + cleanup-step
+    # reset closure for the C1 SL entry's "no zone-change reset"
+    # failure-mode). The probe drives both engines through two
+    # scenarios: (a) carrier-in-play baseline (cleanup drains the
+    # unconsumed shield byte-equal) and (b) regenerate-the-attacker
+    # SBA-consume (the consume path replaces the destroy byte-equal).
+    # Deserted Temple stays DECLINED on the C2 STRICT bare-``{T}``
+    # gate (its live cost is ``{1}, {T}``); the Phase-1.5 (or Phase 2)
+    # cost-shape widen is the next Carrier-AA cycle's pivot. See
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_1_DESIGN.md`` §2.3 / §7.3 /
+    # §10.3 for the campaign context + sibling-swap rationale.
+    REPO_ROOT / "tests" / "test_swarmyard_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

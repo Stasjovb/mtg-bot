@@ -517,6 +517,39 @@ impl GameState {
         // bf to filter-stamp).
         self.loyalty_activated_this_turn.clear();
 
+        // (3d) **Carrier-AA Phase 1 Cycle 3 (2026-05-25) — regenerate
+        // shield drain.** CR 514.3 — "all effects with duration 'this
+        // turn' end at the cleanup step". A regeneration shield set
+        // earlier in the turn but never consumed by an SBA-destroy
+        // wears off here. Mirrors Python's `turn.py:1052`
+        // `obj.regeneration_shield = False` blanket clear during the
+        // CR 514 cleanup pass. Two-pass shape per player (count first,
+        // CoW-clone only on hit) — same optimization shape as the
+        // damage / UEOT drains above; a vanilla state with zero
+        // shielded permanents pays no `Arc::make_mut` cost.
+        //
+        // **Cycle 3 closes the C1 SL entry's "no zone-change reset"
+        // failure-mode** by mirroring Python's cleanup-step clear
+        // directly. C1 documented this gap as: "Python's cleanup-step
+        // clear at `turn.py:1052` (clears `regeneration_shield = false`
+        // at end of turn if unused) has no Rust mirror in Cycle 1.
+        // Wired alongside the SBA consume in Cycle 3+."
+        let mut regeneration_shields_cleared: usize = 0;
+        for player in self.players.iter_mut() {
+            let count =
+                player.battlefield.iter().filter(|o| o.regeneration_shield).count();
+            if count == 0 {
+                continue;
+            }
+            regeneration_shields_cleared += count;
+            let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.regeneration_shield {
+                    obj.regeneration_shield = false;
+                }
+            }
+        }
+
         // (3c) Darkness-shape combat-damage prevention substrate —
         // Cycle 1 (2026-05-21): drain the state-level
         // `prevent_all_combat_damage_this_turn` flag back to `false`.
@@ -561,6 +594,18 @@ impl GameState {
         d.set_item(
             "prevent_all_combat_damage_drained",
             prevent_all_combat_damage_drained,
+        )?;
+        // Carrier-AA Phase 1 Cycle 3 (2026-05-25): surface the drain
+        // count for tests + future assertions. Pre-Cycle-3 cleanup
+        // summaries never carried this key; callers reading the dict
+        // with a default fallback (`.get("regeneration_shields_
+        // cleared", 0)`) stay back-compat. Substrate-only until the
+        // Cycle-2 admit predicate routes a real Swarmyard activation
+        // through this path — every value is 0 on the pre-Cycle-3
+        // baseline.
+        d.set_item(
+            "regeneration_shields_cleared",
+            regeneration_shields_cleared,
         )?;
         Ok(d)
     }

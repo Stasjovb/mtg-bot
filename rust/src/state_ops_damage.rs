@@ -303,4 +303,53 @@ impl GameState {
         self.players[idx].life -= amount;
         Ok(())
     }
+
+    /// **Carrier-AA Phase 1 Cycle 3 (2026-05-25) — test-only setter
+    /// for `GameObject.regeneration_shield`.** Mirrors Python's direct
+    /// attribute access (`obj.regeneration_shield = True/False`) used
+    /// by probe tests to pre-stage a shielded creature without driving
+    /// the full `RegenerateTargetCreature` resolve path through both
+    /// engines. The setter walks the battlefield (the only zone where
+    /// the shield field has any meaning — its SBA-time consume +
+    /// cleanup-step reset both gate on `bf` membership) and writes the
+    /// flag in place.
+    ///
+    /// Returns `true` if a battlefield object with `obj_id` was found
+    /// and the flag was written, `false` otherwise (silent no-op,
+    /// same convention as `deal_damage` / `clear_damage` /
+    /// `tap_object`). CoW: skip `Arc::make_mut` if the value is
+    /// already `value` (matches Python's no-op attribute-set
+    /// observable shape).
+    fn set_regeneration_shield(&mut self, obj_id: u32, value: bool) -> bool {
+        for player in self.players.iter_mut() {
+            let pos = player.battlefield.iter().position(|o| o.id == obj_id);
+            if let Some(idx) = pos {
+                if player.battlefield[idx].regeneration_shield == value {
+                    return true;
+                }
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+                bf_mut[idx].regeneration_shield = value;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// **Carrier-AA Phase 1 Cycle 3 (2026-05-25) — test-only getter
+    /// for `GameObject.regeneration_shield`.** Mirrors Python's direct
+    /// attribute access. Returns `Some(bool)` if a battlefield object
+    /// with `obj_id` exists, `None` otherwise. Sibling to
+    /// `set_regeneration_shield` above; probes use the pair to assert
+    /// the shield flips cross-engine byte-equal post-SBA-consume and
+    /// post-cleanup-reset.
+    fn get_regeneration_shield(&self, obj_id: u32) -> Option<bool> {
+        for player in self.players.iter() {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.regeneration_shield);
+                }
+            }
+        }
+        None
+    }
 }

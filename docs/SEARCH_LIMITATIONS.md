@@ -16774,6 +16774,40 @@ staying True on `nonsafe_triggered_ability`).
 
 ---
 
+## Carrier-AA substrate Phase 1 Cycle 3 LANDED — SBA-time `regeneration_shield` consume + cleanup-step reset on Rust + Swarmyard real-EoE per-card cross-engine byte-equality probe (Swarmyard `covered_by_construction` → PROBED)
+
+**Where:**
+- Rust SBA-time consume — `rust/src/state_ops_sba.rs::apply_sbas` (3rd-tuple-slot regen_eligible flag stamped by `collect_sba_victims`; victim splitter loop replaces destroy with consume on `regeneration_shield && regen_eligible`; per-victim mutation: `damage = 0`, `tapped = true`, `regeneration_shield = false`; combat-state cleanup via `self.attackers.retain` / `self.blockers.retain`).
+- Rust cleanup-step reset — `rust/src/state_ops_cleanup.rs::cleanup_step_for_active_player` ((3d) shield-drain block; mirrors the damage / UEOT drains' CoW-skip shape; new `regeneration_shields_cleared` count key on the returned dict).
+- Rust test-only setter / getter — `rust/src/state_ops_damage.rs::set_regeneration_shield` + `get_regeneration_shield` pymethods (probe-driver primitives for staging mid-turn shielded state without driving the full Swarmyard activation through both engines; sibling shape to `deal_damage` / `get_damage`).
+- Real-EoE per-card probe — `tests/test_swarmyard_parity.py` (10 pins: parser SoT + bridge round-trip + Rust effect-arm parse smoke + 4 Rust-side substrate unit pins for the SBA-consume / cleanup-reset mechanics + 2 GENUINE real-EoE cross-engine byte-equal probes for scenarios (a) baseline-cleanup-drain and (b) regenerate-the-attacker-SBA-consume).
+- PROBE_MODULES registration — `scripts/measure_pool_parity.py::PROBE_MODULES` (Swarmyard's `covered_by_construction` → PROBED tier flip; PROBED 382 → 383, covered_by_construction 40 → 39).
+
+**What the shortcut WAS — now CLOSED:** The Cycle-1 SL entry above documented three gaps:
+1. **No production-deck admit** — CLOSED by Cycle 2 (`0cc08732`): Swarmyard ADMITTED at the bridge admit gate via `_printing_is_bridge_simple_carrier_aa_land` + the `_aa_is_phase1_sub_shape_a` STRICT bare-`{T}` gate.
+2. **`Effect::RegenerateTargetCreature` resolve is set-only (no SBA consume)** — CLOSED by THIS CYCLE: the Rust SBA pass now reads `regeneration_shield` and replaces destroy with the CR 701.15 regenerate sequence byte-equal with Python's `turn.py:1265-1278` consume.
+3. **No zone-change reset for `regeneration_shield`** — CLOSED by THIS CYCLE: the Rust cleanup step now drains every shielded battlefield permanent's flag back to `false`, mirroring Python's `turn.py:1052` blanket clear at the CR 514 cleanup pass.
+
+**Remaining shortcut (carries forward from C2):** **Deserted Temple stays DECLINED on the STRICT bare-`{T}` gate.** Deserted Temple's live cost is `{1}, {T}` — Cycle 2's `_aa_is_phase1_sub_shape_a` predicate requires `cost.mana is None`, so the second pilot stays DECLINED honestly post-C3. The Cycle-4 follow-up (or Phase-1.5 cost-shape widen) is the next Carrier-AA cycle's pivot. The design doc §10.3 sibling-swap rationale (Terrain Generator / Thespian's Stage with their own Effect-class ports) remains an alternative path; per the C2 commit message Deserted Temple stays declined as the Phase 2 (`{T}, Sac:` cost-shape widen) lane's first pivot card.
+
+**Why it's OK:**
+- The SBA-consume's regen-eligibility gate honors CR 701.15's "replaces destruction from lethal damage or a destroy effect" — 704.5f (zero-toughness) and 704.5i (walker loyalty) are correctly NOT regen-eligible per the `regen_eligible == false` flag the C3-modified `collect_sba_victims` stamps. Pinned by `test_rust_sba_no_consume_on_zero_toughness_shielded` (the honest gate-on-not-zero-toughness pin).
+- The cleanup-step drain has the same CoW-skip shape as the sibling damage / UEOT drains — zero-shield states pay no `Arc::make_mut` cost; the new dict key `regeneration_shields_cleared` is back-compat (callers with a default-fallback `.get("regeneration_shields_cleared", 0)` stay unbroken).
+- The cross-engine probe drives scenarios (a) + (b) with full `compare_fields` byte-equality over the whole field view — damage / tapped / bf membership all in the per-zone 8-tuple; the shield bit itself elided from the view per the C1 SL entry's per-object fingerprint convention but asserted via direct `get_regeneration_shield` / Python attribute reads.
+
+**Failure mode (post-C3 residual):**
+- A future card with a multi-AA carrier whose first AA is a Phase-1-sub-shape regenerate AND second AA is a Phase-2+ shape would stay DECLINED at the admit gate (the predicate gates on `len(printing.activated_abilities) == 1`). Phase 2 multi-AA widen pivots this.
+- A future card with the regen effect bound to a NON-tap-self cost (e.g. `{1}, Sac:` or `Pay 2 life:`) would stay DECLINED — Phase 2 / Phase N widen.
+- A future replacement-effect-engine port could surface an interaction where the C3 SBA-consume path's "no combat-state propagation past attackers/blockers retain" diverges from Python's per-object `attacking=False` / `blocking=None` / `blocked_by=[]` writes; field-view doesn't catch this (combat-state is GameState-level on Rust), but downstream combat-resolution observers might. Phase-N replacement-effects port revisit.
+
+**Fix scope:** CLOSED for the Phase-1 sub-shape A admit; Deserted Temple cost-shape widen is the next Carrier-AA cycle (Cycle 4 or Phase 1.5).
+
+**Impact estimate:** Swarmyard `covered_by_construction` → PROBED (PROBED 382 → 383; covered_by_construction 40 → 39); ~1 17lands deck attributable to Swarmyard's single-card production-deck slot (low decks(1g) realized leverage per the design doc §0 calibration). 0 strength cost — the consume + cleanup-reset Rust slices mirror Python's behavior byte-equal; no new divergence introduced.
+
+**Pinned by:** `tests/test_swarmyard_parity.py` — 10 pins: parser SoT (Swarmyard claimed + printed attrs match design doc §2.1), bridge round-trip (`_carrier_aa_land_card_def` → CardDef → Rust dict → Python printing byte-equal on `activated_abilities`), Rust parse smoke, 4 substrate unit pins (SBA-consume on shielded lethal damage, SBA NO-consume on zero-toughness shielded, cleanup drains unconsumed shield, cleanup zero-count), 2 GENUINE real-EoE cross-engine byte-equal probes (scenario (a) baseline cleanup drain + scenario (b) regenerate-the-attacker SBA-consume).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
