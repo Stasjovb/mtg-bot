@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **325 (68.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 90 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **415 / 475 EoE cards (87.4%) are byte-equal at the Effect+bridge level**; of those, **329 (69.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 86 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **60 (12.6%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 325 | 68.4% |
-| Effect+bridge covered (not individually probed) | 90 | 18.9% |
+| PROBED byte-equal | 329 | 69.3% |
+| Effect+bridge covered (not individually probed) | 86 | 18.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -92,6 +92,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Commune with Evil
 - Coordinated Clobbering
 - Cosmogoyf
+- Cosmogrand Zenith
 - Cryogen Relic
 - Cryoshatter
 - Cut Propulsion
@@ -105,6 +106,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Defiant Survivor
 - Demonic Counsel
 - Depressurize
+- Derelict Attic // Widow's Walk
 - Desculpting Blast
 - Devastating Onslaught
 - Diplomatic Relations
@@ -299,6 +301,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Starfighter Pilot
 - Starport Security
 - Starwinder
+- Station Monitor
 - Stay Hidden, Stay Silent
 - Stomping Ground
 - Strip Mine
@@ -339,6 +342,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Twist Reality
 - Umbral Collar Zealot
 - Under the Skin
+- Underwater Tunnel // Slimy Aquarium
 - Unravel
 - Unsettling Twins
 - Untimely Malfunction

@@ -1406,6 +1406,80 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_bottomless_pool_locker_room_parity.py",
     REPO_ROOT / "tests" / "test_ticket_booth_tunnel_of_hate_parity.py",
     REPO_ROOT / "tests" / "test_wickerfolk_thresher_parity.py",
+    # **covered-by-construction-probe-writing-p3 (2026-05-24):** Four
+    # additional per-card real-EoE cross-engine byte-equal probes for
+    # cards previously honest-stopped (the ``test_probe_cast_spell_aa
+    # .py`` LANE RECON dropped Cosmogrand Zenith + Station Monitor on
+    # StateBound grounds; the JJJJ + batch-2 half-coverage precedents
+    # left the Room front-halves Derelict Attic + Underwater Tunnel
+    # uncovered).  Same lane discipline as p1 + p2: per-slug
+    # attribution credits a PROBED slot per-printing, no engine
+    # changes, no substrate widens, no Rust changes.  Each module
+    # carries a canonical ``test_cross_engine_real_eoe_<slug>_...
+    # _parity`` function that binds the live EoE printing via the
+    # module-scope ``_PRINTINGS = get_active_source().get_printings()``
+    # idiom (the ``_probe_module_probed_cards_via_module_scope_binding``
+    # widen accepts it) + drives the GENUINE parsed printing through
+    # the parse + bridge round-trip + Python-side resolve idiom DDD
+    # slice 17 / YYY / ZZZ / AAAA / CCCC / DDDD / EEEE / FFFF / GGGG /
+    # HHHH / IIII / JJJJ / batch-1 / batch-2 established:
+    #
+    #   * ``test_cosmogrand_zenith_parity.py`` — Cosmogrand Zenith
+    #     ({2}{W} Creature — Human Soldier, ~3,046 17lands decks);
+    #     IS_CAST + And(Controlled, StateBound(SpellsCastThisTurn(2)))
+    #     → ModalChooseOne(CreateToken(Human Soldier, 2),
+    #     PutPlusOneCounterOnEachCreatureYouControl(1)).  Templates on
+    #     batch-2 Sunstar Lightsmith (IS_CAST EEEE-idiom) + Archenemy's
+    #     Charm (ModalChooseOne composer); mode-1 (each-creature-pump)
+    #     pinned for byte-equality, mode-0 (CreateToken) scoped out
+    #     per the Bottomless Pool / Locker Room half-coverage
+    #     precedent.  The EEEE-idiom sidesteps the StateBound +
+    #     slot='controller' bridge gap (the ``test_probe_cast_spell
+    #     _aa.py`` LANE RECON honest-stop) per Sunstar Lightsmith
+    #     batch-2 precedent.
+    #   * ``test_station_monitor_parity.py`` — Station Monitor ({W}{U}
+    #     Creature — Lizard Artificer, ~13,216 17lands decks); IS_CAST
+    #     + And(Controlled, StateBound(SpellsCastThisTurn(2))) →
+    #     CreateToken(Drone, count=1).  Templates on Pinnacle Emissary
+    #     (PROBED via ``test_probe_cast_spell_aa.py``, CreateToken +
+    #     Drone but non-StateBound predicate) + batch-2 Sunstar
+    #     Lightsmith (IS_CAST EEEE-idiom).  Reuses Pinnacle Emissary's
+    #     ``register_token_printing`` + ``TOKEN_PRINTINGS["Drone"]``
+    #     canonical-printing pattern; the EEEE-idiom sidesteps the
+    #     StateBound + slot='controller' bridge gap.
+    #   * ``test_derelict_attic_widows_walk_parity.py`` — Derelict
+    #     Attic // Widow's Walk (Enchantment — Room, EoE pool);
+    #     ENTERS + IsSelf → Sequence(DrawCards(2), LoseLife(2)) on the
+    #     Derelict Attic front-half.  Templates on Withering Torment
+    #     (BBBB Sequence composer + LoseLife leaf) + batch-2
+    #     Bottomless Pool / Locker Room (Room-subsystem half-coverage)
+    #     + Sunstar Lightsmith batch-2 (Sequence composer with two
+    #     bridged leaves).  Back-half (Widow's Walk YOU_ATTACK
+    #     StateBound LoneAttackerForYou + PumpTargetCreatureUntilEOT
+    #     granted_keywords=deathtouch) deferred per the IIII / HHHH
+    #     "pump carriers with granted_keywords riders" drop list.
+    #   * ``test_underwater_tunnel_slimy_aquarium_parity.py`` —
+    #     Underwater Tunnel // Slimy Aquarium (Enchantment — Room,
+    #     EoE pool); ENTERS + IsSelf → Surveil(amount=2) on the
+    #     Underwater Tunnel front-half.  Templates on JJJJ Funeral
+    #     Room // Awakening Hall (Room ENTERS empty-library no-op
+    #     precedent) + batch-E Lost in Space (Surveil leaf inside a
+    #     Sequence wrapper, different carrier shape).  Empty-library
+    #     silent no-op resolve sidesteps the ``choose_surveil`` agent-
+    #     decision surface entirely.  Back-half (Slimy Aquarium ENTERS
+    #     ManifestDreadThenPutPlusOneCountersOnIt) deferred per the
+    #     JJJJ Funeral Room / Ticket Booth // Tunnel of Hate batch-2
+    #     ManifestDread-family deferral.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta: +4
+    # PROBED / -4 covered_by_construction: PROBED 325 → 329; covered_
+    # by_construction 90 → 86; BLOCKED unchanged at 60; pool total 475
+    # unchanged.
+    REPO_ROOT / "tests" / "test_cosmogrand_zenith_parity.py",
+    REPO_ROOT / "tests" / "test_station_monitor_parity.py",
+    REPO_ROOT / "tests" / "test_derelict_attic_widows_walk_parity.py",
+    REPO_ROOT / "tests" / "test_underwater_tunnel_slimy_aquarium_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
