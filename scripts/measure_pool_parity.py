@@ -1661,6 +1661,84 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_squires_lightblade_parity.py",
     REPO_ROOT / "tests" / "test_the_dominion_bracelet_parity.py",
     REPO_ROOT / "tests" / "test_sunken_citadel_parity.py",
+    # **covered-by-construction-probe-writing-p6 (2026-05-25):** Five
+    # additional per-card real-EoE cross-engine byte-equal probes
+    # extending the lane established by batches 1-5.  This batch opens
+    # **ONE new shape family** for the per-slug attribution lane:
+    #
+    #   * **basic-land carrier via the parser-flattened-vanilla
+    #     profile + the basic-land CardDef bridge auto-wire** — the
+    #     parser ships basic lands as ZERO-Effect vanilla printings
+    #     with the ``{T}: Add {color}`` primitive folded into the
+    #     ``produces`` field; the loader-admit-gated converter
+    #     ``trajectory._printing_to_card_def`` recognizes the printing
+    #     via ``_printing_is_bridge_basic_land`` and emits a CardDef
+    #     with ``mana_produced=(<color>,)`` which
+    #     ``cross_engine._card_def_to_python_printing`` materializes
+    #     back into a Python ``CardPrinting`` that **auto-wires the
+    #     {T}: Add {color} mana ability** as a structured
+    #     ``ActivatedAbility(AddManaToPool(produces=((<color>, 1),)))``.
+    #     The bridge auto-wire (NOT the parser-shipped AA) is the
+    #     load-bearing observable; the auto-wired Effect is byte-equal
+    #     to the round-27 ``add_mana_to_pool`` bridge arm's emission.
+    #
+    # plus continuing the batch-5 EquipToTargetCreatureYouControl
+    # shape family onto **another artifact-equipment carrier** (Illvoi
+    # Light Jammer), templating directly off the batch-5 sibling
+    # Squire's Lightblade / The Dominion Bracelet probes.  Same lane
+    # discipline as batches 1-5: per-slug attribution credits a PROBED
+    # slot per-printing, no engine changes, no Rust changes, no
+    # substrate widens.
+    #
+    #   * ``test_forest_parity.py`` — Forest (Basic Land — Forest,
+    #     ~466,226 17lands decks); basic-land bridge auto-wire →
+    #     AddManaToPool(produces=(('G', 1),), spend_restriction=None).
+    #     **NEW shape family** for the per-slug attribution lane: the
+    #     FIRST PROBE_MODULES-credited probe binding a basic-land slug
+    #     to its bridge-auto-wired AA shape via the
+    #     ``_printing_to_card_def`` → ``_card_def_to_python_printing``
+    #     basic-land path.  The highest-deck-count covered_by_
+    #     construction holdout — every G-touching deck plays Forest.
+    #   * ``test_island_parity.py`` — Island (Basic Land — Island,
+    #     ~465,009 17lands decks); basic-land bridge auto-wire →
+    #     AddManaToPool(produces=(('U', 1),)).  Sibling to the Forest
+    #     probe — bit-identical bridge auto-wire mechanism, distinct
+    #     color slot 'U' (per the cathedral-of-war-style same-Effect-
+    #     class-different-printing-slug precedent, each basic-land
+    #     color slot gets its own PROBED-tier slot).
+    #   * ``test_swamp_parity.py`` — Swamp (Basic Land — Swamp,
+    #     ~434,410 17lands decks); basic-land bridge auto-wire →
+    #     AddManaToPool(produces=(('B', 1),)).  Sibling to the Forest
+    #     / Island probes — distinct color slot 'B'.
+    #   * ``test_mountain_parity.py`` — Mountain (Basic Land —
+    #     Mountain, ~365,413 17lands decks); basic-land bridge auto-
+    #     wire → AddManaToPool(produces=(('R', 1),)).  Sibling to the
+    #     Forest / Island / Swamp probes — distinct color slot 'R'.
+    #   * ``test_illvoi_light_jammer_parity.py`` — Illvoi Light Jammer
+    #     ({1}{U} Artifact — Equipment, ~10,767 17lands decks); Equip
+    #     activated ability ({3}: attach this Equipment to target
+    #     creature you control) → EquipToTargetCreatureYouControl(
+    #     granted_keywords_ueot=frozenset()).  Templates directly off
+    #     the batch-5 sibling Squire's Lightblade / The Dominion
+    #     Bracelet probes — bit-identical Effect-level bridge round-
+    #     trip, distinct printing identity (mana cost {1}{U} U-color
+    #     vs {W} Squire's; Equip {3} matches Squire's).  The ETB-
+    #     attach TriggeredAbility variant (with the
+    #     granted_keywords_ueot={'hexproof'} rider) is implicit-drop
+    #     per the IIII / HHHH "covered carrier with non-bridge-clean
+    #     rider" precedent + the batch-5 Squire's Lightblade narrow-
+    #     pin half-coverage precedent.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 339 → 344;
+    # covered_by_construction 76 → 71; BLOCKED unchanged at 60; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_forest_parity.py",
+    REPO_ROOT / "tests" / "test_island_parity.py",
+    REPO_ROOT / "tests" / "test_swamp_parity.py",
+    REPO_ROOT / "tests" / "test_mountain_parity.py",
+    REPO_ROOT / "tests" / "test_illvoi_light_jammer_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
