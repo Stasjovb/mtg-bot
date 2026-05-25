@@ -1793,6 +1793,42 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_lashwhip_predator_real_eoe_cost_reduction.py",
+    # Cost-reduction substrate Phase 2 Cycle 3 (cost-reduction-
+    # phase-2-cycle-3-uthros-probe-p1 lane, 2026-05-25): per-card
+    # real-EoE cross-engine byte-equality probe for **Uthros
+    # Psionicist** flips ``covered_by_construction`` -> PROBED in
+    # the pool-parity metric. Companion Cycle 4 lane will land
+    # ``test_probe_sami_wildcat_captain_real_eoe_cost_reduction.py``
+    # next (the ``PerControlled(IsArtifact())`` variable-multiplier
+    # carrier; second of the two Phase-2 carriers). Drives BOTH
+    # lifecycles of the Phase-2 NthSpellThisTurn external
+    # cost-reduction substrate that commit ``c370cee4`` (Cycle 2
+    # FLIP) shipped via the widened
+    # ``_printing_is_bridge_pure_cost_reduction_creature`` admit
+    # predicate + the ``apply_external_cost_reductions_rust``
+    # helper at ``state_ops_legal.rs:897`` (externals-first
+    # ordering): (a) full-cost lifecycle with one Uthros-shape
+    # carrier on caster's bf + cast as the FIRST spell of the turn
+    # (``spells_cast_this_turn == 0``); NthSpellThisTurn(n=2)
+    # checks ``spells_cast_this_turn == n - 1 == 1`` → False, no
+    # reduction applies, pays base ``{2}{U}``; (b) reduced-cost
+    # lifecycle with one Uthros-shape carrier on bf + cast as the
+    # SECOND spell (``spells_cast_this_turn == 1`` via the C1
+    # substrate setter); condition True, the {2} external
+    # reduction applies and pays the reduced ``{U}`` cost — the
+    # load-bearing case the Phase-2 C2 substrate FLIP rides on for
+    # the externals-axis condition variant. Pool-primed mana on
+    # both engines so the cost-payment arithmetic is the entire
+    # load-bearing signal (no land-tap noise). Full
+    # ``compare_fields == []`` over the 22-field cross-engine
+    # field view post-cast on BOTH lifecycles + the pre-cast
+    # scripted-picker sanity check on lifecycle B. Per-slug
+    # attribution = "Uthros Psionicist" (~14,767 17lands decks,
+    # the larger of the two Phase-2 carriers; first half of the
+    # +15,575-deck Phase-2 admit lane).
+    REPO_ROOT
+    / "tests"
+    / "test_probe_uthros_psionicist_real_eoe_cost_reduction.py",
     # **covered-by-construction-probe-writing-p7 (2026-05-25):** Six
     # additional per-card real-EoE cross-engine byte-equal probes
     # extending the lane established by batches 1-6.  This batch opens
