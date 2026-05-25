@@ -962,3 +962,75 @@ def test_cross_engine_real_dsk_wickerfolk_thresher_attack_nonland_top_parity(
         f"on BOTH engines (no-agent / non-land-top → hand path); "
         f"diffs={diffs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (6) Canonical-named delegator — Wickerfolk Thresher is in the EoE
+# pool (Duskmourn special guest reprint).  The sibling ``_dsk_``-named
+# probe above (test_cross_engine_real_dsk_wickerfolk_thresher_attack_
+# nonland_top_parity) carries the load-bearing assertions but uses the
+# DSK-named infix in the function name.  The PROBED-tier classifier's
+# slug-scanner predicate ``_PROBE_FN_HEADER_RE`` at
+# ``scripts/measure_pool_parity.py``:1474 requires the strict canonical
+# ``test_cross_engine_real_eoe_<slug>_..._parity`` prefix; this
+# delegator closes the attribution gap by exposing the same probe
+# logic under the canonical EoE-named function (the rename precedent
+# established by ``feature/probe-module-rename-sweep`` for 8 modules +
+# Cathedral of War's ``_through_bench_parity`` rename, both 2026-05-24
+# — covered_by_construction → PROBED via pure name-canonicalization,
+# no engine changes, no behavior changes).
+# ---------------------------------------------------------------------------
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_wickerfolk_thresher_attack_nonland_top_parity(
+    parity_smoke,
+):
+    """**Canonical-named EoE delegator — Wickerfolk Thresher
+    (covered_by_construction → PROBED tier flip via attribution
+    canonicalization).**
+
+    Wickerfolk Thresher is an EoE-pool Duskmourn special-guest reprint;
+    the load-bearing probe lives in the same module under the
+    ``_dsk_``-named function above (the original was authored when DSK
+    naming was the only carrier-set context).  Per the
+    ``feature/probe-module-rename-sweep`` + Cathedral of War rename
+    precedent (both 2026-05-24), the PROBED-tier classifier's strict
+    ``test_cross_engine_real_eoe_<slug>_..._parity`` slug-scanner
+    requires the canonical ``_eoe_`` infix; this delegator exposes the
+    SAME probe contract under the canonical name so Wickerfolk Thresher
+    is credited PROBED per-slug.
+
+    The delegator is a thin call into the sibling ``_dsk_``-named
+    probe.  Keeping the original ``_dsk_`` function intact (rather than
+    renaming) preserves the historical naming + author intent (the DSK
+    label was meaningful as a card-set provenance signal at authoring
+    time); the new name is the slug-scanner-recognized synonym.
+
+    PROBED tier flip: covered_by_construction → PROBED (per-slug
+    attribution credit; no engine changes, no substrate widens, no
+    Rust changes).
+    """
+    # Slug-scanner credit: pin the canonical Wickerfolk Thresher EoE
+    # printing via the module-scope _PRINTINGS binding (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # AST-walks this _PRINTINGS.get("Wickerfolk Thresher") call inside
+    # the *_parity function body to credit the slug per the JJJJ /
+    # batch-1 module-scope-binding precedent).
+    real = _PRINTINGS.get("Wickerfolk Thresher")
+    if real is None:
+        pytest.skip("Wickerfolk Thresher absent from active CardSource")
+    assert "Creature" in real.card_types, (
+        "Wickerfolk Thresher must be a Creature on the EoE pool"
+    )
+
+    # Direct delegation to the sibling probe -- the SAME parity contract
+    # (parse SoT + bridge round-trip + cross-engine full-compare_fields
+    # over the no-agent / non-land-top -> hand path).  The slug-scanner
+    # credits this _eoe_-named function via the _PRINTINGS.get(...)
+    # reference above; the load-bearing logic is the _dsk_-named sibling.
+    return (
+        test_cross_engine_real_dsk_wickerfolk_thresher_attack_nonland_top_parity(
+            parity_smoke
+        )
+    )

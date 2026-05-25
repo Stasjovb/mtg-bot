@@ -1334,6 +1334,78 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_innocuous_rat_parity.py",
     REPO_ROOT / "tests" / "test_unwanted_remake_parity.py",
     REPO_ROOT / "tests" / "test_fear_of_failed_tests_parity.py",
+    # **covered-by-construction-probe-writing-p2 (2026-05-24):** Four
+    # additional per-card real-EoE cross-engine byte-equal probes for
+    # cards previously honest-stopped on "bit-identical to PROBED
+    # sibling" / "rename-needed" grounds.  Same lane discipline as p1
+    # (the immediately-prior 4-card batch): per-slug attribution
+    # credits a PROBED slot per-printing, no engine changes, no
+    # substrate widens, no Rust changes.  Each module carries a
+    # canonical ``test_cross_engine_real_eoe_<slug>_..._parity``
+    # function that binds the live EoE printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it) + drives the GENUINE parsed printing through the
+    # parse + bridge round-trip + Python-side resolve idiom DDD slice
+    # 17 / YYY / ZZZ / AAAA / CCCC / DDDD / EEEE / FFFF / GGGG / HHHH
+    # / IIII / JJJJ / batch-1 established:
+    #
+    #   * ``test_sunstar_lightsmith_parity.py`` — Sunstar Lightsmith
+    #     ({3}{W} Creature — Human Artificer, ~11,954 17lands decks);
+    #     IS_CAST+And(Controlled, StateBound(SpellsCastThisTurn(n=2)))
+    #     → Sequence(PutPlusOneCounterOnSelf(1), DrawCards(1)).
+    #     Templates on FFFF Illvoi Operative (IS_CAST event +
+    #     PutPlusOneCounterOnSelf) + BBBB Withering Torment (Sequence
+    #     composer wrapper); the EEEE-idiom sidesteps the slice-12
+    #     IS_CAST stack-resolution divergence per FFFF's
+    #     drop-recovery precedent.  Pins parser SoT + Sequence-arm
+    #     recursive bridge round-trip (both inner arms exercised) +
+    #     Python-side resolve mutation (source +1/+1 counter, p0 hand
+    #     +1, library -1).
+    #   * ``test_bottomless_pool_locker_room_parity.py`` — Bottomless
+    #     Pool // Locker Room (Enchantment — Room, EoE pool);
+    #     DEALS_COMBAT_DAMAGE+And(Subject(source, IsCreature),
+    #     Controlled, Subject(target, IsPlayer)) → DrawCards(1) on the
+    #     Locker Room back-half.  Templates on PROBED Illvoi
+    #     Infiltrator (slice-13 deals_combat_damage_unlock probe).
+    #     Front-half (Bottomless Pool ENTERS+IsSelf →
+    #     ReturnTargetCreatureToOwnersHand) is deliberately scoped out
+    #     per the JJJJ Moldering Gym / Weight Room half-coverage
+    #     precedent — the front-half's optional/create_drone riders
+    #     don't round-trip via the bridge's bare Bounce arm.
+    #   * ``test_ticket_booth_tunnel_of_hate_parity.py`` — Ticket
+    #     Booth // Tunnel of Hate (Enchantment — Room, EoE pool);
+    #     ENTERS+IsSelf → ManifestDread(1) on the Ticket Booth front-
+    #     half.  Templates on PROBED Innocuous Rat / Bashful Beastie
+    #     (DIES+ManifestDread(1) — same effect class, different event)
+    #     + JJJJ Funeral Room // Awakening Hall (Room ENTERS carrier
+    #     pattern).  Empty-library silent no-op resolve smoke per the
+    #     JJJJ Funeral Room empty-graveyard precedent.  Back-half
+    #     (Tunnel of Hate YOU_ATTACK → PumpTargetCreatureUntilEOT with
+    #     granted_keywords={'double strike'}) deferred per the IIII /
+    #     HHHH "pump carriers with granted_keywords riders" drop.
+    #   * ``test_wickerfolk_thresher_parity.py`` — Wickerfolk Thresher
+    #     (Artifact Creature — Scarecrow, EoE Duskmourn special-guest
+    #     reprint); ATTACKS+And(IsSelf, StateBound(Delirium())) →
+    #     PeekTopMayBattlefieldIfLandElseHand().  The module ALREADY
+    #     carries a load-bearing full-cross-engine probe under the
+    #     ``test_cross_engine_real_dsk_wickerfolk_thresher_..._parity``
+    #     name (the original was authored when DSK was the only set-
+    #     provenance context).  Per the
+    #     ``feature/probe-module-rename-sweep`` + Cathedral of War
+    #     rename precedent (both 2026-05-24, attribution-only flips
+    #     via canonical-name addition), this lane appends a thin
+    #     canonical-named EoE delegator (``test_cross_engine_real_eoe_
+    #     wickerfolk_thresher_attack_nonland_top_parity``) that
+    #     references ``_PRINTINGS.get("Wickerfolk Thresher")`` for
+    #     slug-scanner credit then delegates to the load-bearing
+    #     sibling.  Pure measurement-attribution (no engine changes,
+    #     no behavior changes; the original ``_dsk_``-named probe is
+    #     preserved intact as the load-bearing sibling).
+    REPO_ROOT / "tests" / "test_sunstar_lightsmith_parity.py",
+    REPO_ROOT / "tests" / "test_bottomless_pool_locker_room_parity.py",
+    REPO_ROOT / "tests" / "test_ticket_booth_tunnel_of_hate_parity.py",
+    REPO_ROOT / "tests" / "test_wickerfolk_thresher_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
