@@ -441,17 +441,11 @@ def test_lashwhip_predator_now_admits_at_admit_gate_post_cycle_2():
 @pytest.mark.parametrize(
     ("payload", "expected_fragment"),
     [
-        # Phase-2 condition kind — `per_differently_named_land`
-        # (Fungal Colossus's `PerDifferentlyNamedLand`) loud-rejects.
-        (
-            {
-                "amount": 1,
-                "condition_kind": "per_differently_named_land",
-                "condition_args": (),
-            },
-            "per_differently_named_land",
-        ),
         # Totally unknown tag — also a hard error.
+        # (Phase-3 closure 2026-05-25 landed `per_differently_named_land`
+        # on the spell-local arm; that case is no longer rejected and is
+        # now pinned positive in
+        # ``tests/test_cost_reduction_phase_3_substrate_cycle_1.py``.)
         (
             {
                 "amount": 1,
@@ -517,7 +511,6 @@ def test_lashwhip_predator_now_admits_at_admit_gate_post_cycle_2():
         ),
     ],
     ids=[
-        "phase_2_per_differently_named_land_rejected",
         "unknown_condition_kind_rejected",
         "phase_2_predicate_token_artifact_rejected",
         "arg_count_drift_another_spell_cast_takes_0",

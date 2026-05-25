@@ -731,14 +731,17 @@ pub(crate) fn auto_tap_headroom_pool(
 /// type_filter: Creature, count: n }` (Lashwhip Predator; scans
 /// every opponent's battlefield).
 ///
-/// Mirrors a Phase-1 subset of Python's
+/// Mirrors a Phase-1+2+3 subset of Python's
 /// `actions.apply_cost_reductions` (`src/mtg_bot/actions.py:406-438`)
 /// + `actions._evaluate_cost_reduction`
-/// (`src/mtg_bot/actions.py:441-468`). Phase 1 has NO external scan
-/// (Phase 3 substrate — `external_cost_reductions`) and NO variable
-/// multiplier (Phase 2 substrate — `PerDifferentlyNamedLand`); every
-/// Phase-1 condition contributes exactly `rule.amount` generic when
-/// it holds (the default `Condition.multiplier == 1`).
+/// (`src/mtg_bot/actions.py:441-468`). Phase 1 had NO external scan
+/// and NO variable multiplier (every Phase-1 condition contributed
+/// exactly `rule.amount` generic when it held — implicit
+/// `Condition.multiplier == 1`); Phase 2 (2026-05-25) added the
+/// externals battlefield-scan path (`external_cost_reductions`,
+/// applied FIRST); Phase 3 (2026-05-25) added the spell-local
+/// variable-multiplier path (`PerDifferentlyNamedLand` — the
+/// distinct-land-name count is the multiplier).
 ///
 /// **Pre-Cycle-2 history (the eff() identity seam).** Cycle 1's
 /// substrate landing left `eff()` as the identity wrapper Slice-1
@@ -783,7 +786,14 @@ pub(crate) fn apply_cost_reductions_rust(
         return cost;
     }
     for rule in printing.cost_reductions.iter() {
-        let holds = match &rule.condition {
+        // cost-reduction substrate Phase 3 — Cycle 1 (substrate-only,
+        // 2026-05-25). Match returns a `(holds, multiplier)` pair —
+        // Phase-1 boolean variants keep implicit `multiplier == 1`;
+        // Phase-3's `PerDifferentlyNamedLand` is the FIRST non-trivial
+        // multiplier on the spell-local side (the variable-X path
+        // Fungal Colossus needs). Mirror of the Phase-2 externals
+        // match shape at `apply_external_cost_reductions_rust:912-958`.
+        let (holds, multiplier) = match &rule.condition {
             crate::cards::Condition::AnotherSpellCastThisTurn => {
                 // Mirrors Python `effects/conditions.py:235-244`
                 // `AnotherSpellCastThisTurn.matches`: True iff the
@@ -794,7 +804,10 @@ pub(crate) fn apply_cost_reductions_rust(
                 // MMM Pin 1 — landed 11th Rust slice), so the
                 // FIRST spell of the turn reads 0 here (full
                 // cost), the SECOND reads 1 (reduction fires).
-                state.players[caster_idx].spells_cast_this_turn >= 1
+                // Multiplier implicit 1 (boolean condition).
+                let holds =
+                    state.players[caster_idx].spells_cast_this_turn >= 1;
+                (holds, 1i32)
             }
             crate::cards::Condition::OpponentsControlAtLeast {
                 type_filter,
@@ -808,7 +821,7 @@ pub(crate) fn apply_cost_reductions_rust(
                 // sole Phase-1 type filter); the Rust `card_types`
                 // contains-"Creature" check mirrors Python's
                 // `IsCreature.matches`. Early-out on first satisfied
-                // count.
+                // count. Multiplier implicit 1 (boolean condition).
                 let n = *count;
                 let mut found = 0i32;
                 'opps: for (other_idx, other) in state.players.iter().enumerate() {
@@ -843,20 +856,101 @@ pub(crate) fn apply_cost_reductions_rust(
                         }
                     }
                 }
-                found >= n
+                (found >= n, 1i32)
+            }
+            // cost-reduction substrate Phase 3 — Cycle 1
+            // (substrate-only, 2026-05-25). Variable-X multiplier on
+            // the spell-local side — the FIRST non-trivial multiplier
+            // this enum evaluates. Mirrors Python
+            // `PerDifferentlyNamedLand.matches` (>= 1) +
+            // `PerDifferentlyNamedLand.multiplier` (the count itself)
+            // at `effects/conditions.py:398-402`. Sub-shape D —
+            // Fungal Colossus's `{X}-less-where-X-is-differently-
+            // named-lands` rider.
+            crate::cards::Condition::PerDifferentlyNamedLand => {
+                let count = unique_land_names_count(state, caster_idx);
+                (count >= 1, count)
             }
         };
-        if holds && rule.amount > 0 {
+        if holds && rule.amount > 0 && multiplier > 0 {
             // Mirror Python `ManaCost.reduced` (`cards/base.py:291-305`):
             // clamp generic at 0, leave colored pips untouched, preserve
-            // x_pips (CR 601.2f). The default `Condition.multiplier` is
-            // 1 for Phase-1 boolean conditions, so the reduction is
-            // exactly `rule.amount` generic.
-            let amt = rule.amount as u8;
-            cost.generic = cost.generic.saturating_sub(amt);
+            // x_pips (CR 601.2f). Clamp the multiplied amount at u8::MAX
+            // before saturating_sub so a pathological large multiplier
+            // (e.g. 100+ distinctly-named lands) still drops cost.generic
+            // to 0 cleanly instead of overflowing the i32→u8 cast. Same
+            // clamp shape Phase-2's externals scan uses at
+            // state_ops_legal.rs:967-969.
+            let amt = (rule.amount as i64) * (multiplier as i64);
+            let amt_clamped = amt.min(u8::MAX as i64) as u8;
+            cost.generic = cost.generic.saturating_sub(amt_clamped);
         }
     }
     cost
+}
+
+/// **cost-reduction substrate Phase 3 — Cycle 1 (substrate-only,
+/// 2026-05-25).** Computes the count of distinctly-named lands the
+/// caster controls — the variable-X multiplier for
+/// `Condition::PerDifferentlyNamedLand`. Mirror of Python
+/// `PerDifferentlyNamedLand._names`
+/// (`src/mtg_bot/effects/conditions.py:391-396`):
+///
+///     def _names(self, state, viewer_id) -> set[str]:
+///         names: set[str] = set()
+///         for o in state.battlefield:
+///             if o.controller_id == viewer_id and o.printing.is_land:
+///                 names.add(o.printing.name)
+///         return names
+///
+/// Returns `len(self._names(state, viewer_id))` directly without
+/// the set-allocation roundtrip when the Rust path can use a
+/// `HashSet<&str>` borrowing the printing-name slice. The set is
+/// keyed on `printing.name` (a string field on `CardPrinting`),
+/// NOT on `printing_id` — two copies of `Forest` count as 1
+/// toward the multiplier (the spec's "differently named"
+/// distinction).
+///
+/// **Per-caster scope.** Walks
+/// `state.players[caster_idx].battlefield` only (the externals
+/// substrate sibling at `apply_external_cost_reductions_rust:903`
+/// uses the same iteration shape). Opponents' lands are NOT
+/// counted — Python's `o.controller_id == viewer_id` gate mirrors
+/// this; Rust's per-caster battlefield iteration is equivalent
+/// (each player owns + controls their own battlefield in the
+/// current engine).
+///
+/// **`is_land` mirror.** The Rust port has no stored `is_land`
+/// field on `CardPrinting`; we mirror Python's `printing.is_land`
+/// property via `card_types.iter().any(|t| t == "Land")` — the
+/// idiom every other land-typed gate in the engine uses (see
+/// `state_ops_legal.rs:2449` / `state_ops_cast.rs:2280` /
+/// `state_ops_actions.rs:941`).
+///
+/// **Cost.** O(battlefield-size) walk + O(land-count)
+/// HashSet insertion. Bounded by the same small N the Phase-1
+/// `OpponentsControlAtLeast` scan + Phase-2 `PerControlled` scan
+/// already iterate without issue. See design doc §10.4 for the
+/// rejected-alternative caching analysis.
+#[inline]
+fn unique_land_names_count(
+    state: &crate::state::GameState,
+    caster_idx: usize,
+) -> i32 {
+    use std::collections::HashSet;
+    let mut names: HashSet<&str> = HashSet::new();
+    for permanent in state.players[caster_idx].battlefield.iter() {
+        let Some(pr) = state.registry.lookup(permanent.printing_id)
+        else {
+            continue;
+        };
+        let is_land = pr.card_types.iter().any(|t| t == "Land");
+        if !is_land {
+            continue;
+        }
+        names.insert(pr.name.as_ref());
+    }
+    names.len() as i32
 }
 
 /// **cost-reduction substrate Phase 2 — Cycle 1 (substrate-only).**

@@ -9788,14 +9788,16 @@ pub struct ActivationCost {
 /// A spell-local cost-reduction rule. Mirrors Python's
 /// `CostReduction` dataclass at `src/mtg_bot/cards/base.py:308`
 /// (`amount: int`, `condition: Condition`). **cost-reduction
-/// substrate Phase 1.** `amount` is the unit generic reduction; for
-/// Phase-1 boolean conditions the multiplier is implicitly 1
-/// (Python: `Condition.multiplier` default
+/// substrate Phase 1 + Phase 3.** `amount` is the unit generic
+/// reduction; for Phase-1 boolean conditions the multiplier is
+/// implicitly 1 (Python: `Condition.multiplier` default
 /// `effects/conditions.py:69-75`), so the reduction is exactly
-/// `amount` generic when the condition holds. Phase 2 will add a
-/// variable-multiplier path (`PerDifferentlyNamedLand`); Phase 3
-/// will add an `ExternalCostReduction` sibling struct + the
-/// battlefield-scan path. Both are out of scope for Cycle 1.
+/// `amount` generic when the condition holds. Phase 3 (2026-05-25)
+/// adds the spell-local variable-multiplier path
+/// (`Condition::PerDifferentlyNamedLand`) — the multiplier is the
+/// count of distinctly-named lands the caster controls. The
+/// externals sibling struct `ExternalCostReduction` lives at
+/// `cards.rs:9889` (Phase 2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CostReduction {
     pub amount: i32,
@@ -9830,17 +9832,17 @@ pub enum TypeFilter {
 /// The Phase-1 boolean-condition subset of Python's structural
 /// `Condition` grammar (`src/mtg_bot/effects/conditions.py`).
 /// Phase 1 ports EXACTLY two variants — the only two sub-shape A
-/// uses. The full `Condition`-grammar port (variable multipliers,
-/// target-dependent, predicate algebra, And/Or/Not combinators) is
-/// Phase 2+. This is the reason cost-reduction is strictly larger
-/// than warp (warp needed NO condition grammar — see
-/// `docs/WARP_COST_PHASE1_DESIGN.md` §0).
+/// uses. Phase 3 appends a third variant (`PerDifferentlyNamedLand`)
+/// — the spell-local variable-multiplier sibling of Phase-2's
+/// externals `PerControlled`. The full `Condition`-grammar port
+/// (target-dependent variants, predicate algebra beyond Creature,
+/// And/Or/Not combinators) is Phase 4+. This is the reason
+/// cost-reduction is strictly larger than warp (warp needed NO
+/// condition grammar — see `docs/WARP_COST_PHASE1_DESIGN.md` §0).
 ///
 /// **Naming convention:** the Rust enum names mirror Python's class
 /// names ONE-TO-ONE so the cross-engine bridge wire tokens
-/// (`condition_kind` strings) round-trip without ambiguity. When
-/// Phase 2 adds `PerDifferentlyNamedLand`, the new variant is
-/// `Condition::PerDifferentlyNamedLand` with the same name.
+/// (`condition_kind` strings) round-trip without ambiguity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Condition {
     /// Python `AnotherSpellCastThisTurn`
@@ -9859,6 +9861,45 @@ pub enum Condition {
     /// the `IsCreature` filter token (the only predicate sub-shape A
     /// uses); the generic predicate algebra is Phase 2+.
     OpponentsControlAtLeast { type_filter: TypeFilter, count: i32 },
+    /// **cost-reduction substrate Phase 3 — Cycle 1
+    /// (substrate-only).** Python `PerDifferentlyNamedLand`
+    /// (`src/mtg_bot/effects/conditions.py:375-402`): the variable-
+    /// multiplier condition Fungal Colossus uses for its "This spell
+    /// costs {X} less to cast, where X is the number of differently
+    /// named lands you control" rider. `matches()` returns True iff
+    /// `len(distinct_land_names) >= 1`; `multiplier()` IS the
+    /// distinct-land-name count.
+    ///
+    /// **Variable-multiplier on the spell-local side — the FIRST
+    /// non-trivial multiplier in the spell-local `Condition` enum.**
+    /// Phase 1 + Phase 2 both kept the spell-local enum at implicit
+    /// `multiplier()==1` (boolean conditions only); Phase 3
+    /// introduces the variable-multiplier hook here. The evaluator
+    /// at `state_ops_legal.rs::apply_cost_reductions_rust`'s
+    /// reduction step is extended to multiply `rule.amount` by the
+    /// per-variant multiplier (Phase 1 variants implicit `1`;
+    /// Phase 3 variant reads `unique_land_names_count(state,
+    /// caster_idx)`).
+    ///
+    /// **Why the spell-local enum, not `ExternalCondition`?**
+    /// Verified live: Fungal's rider is on `printing.cost_reductions`
+    /// (the spell-local list), not on
+    /// `printing.external_cost_reductions`. The Python parser at
+    /// `cards/parser/cost_reduction.py:264-267` constructs a
+    /// `CostReduction` (spell-local) dataclass — NOT
+    /// `ExternalCostReduction` — for Fungal's whole-rider line.
+    /// Structural reason: Fungal's "{X} less" line reduces ITS OWN
+    /// cost (the Fungal spell being cast), not some other spell.
+    /// That is the defining distinction between the two dataclasses
+    /// at `cards/base.py:308-345`.
+    ///
+    /// **No payload (unit variant).** Python's
+    /// `PerDifferentlyNamedLand` carries no fields beyond the
+    /// inherited `Condition` interface; the bridge wire token
+    /// `"per_differently_named_land"` has `args = ()` (empty
+    /// tuple), mirroring Phase 1's
+    /// `"another_spell_cast_this_turn"` shape.
+    PerDifferentlyNamedLand,
 }
 
 /// A static cost-reduction rule granted by a permanent on the
@@ -15321,15 +15362,15 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     //     "condition_args": tuple,                # parsed per tag
     //   }
     //
-    // Phase 1 supports EXACTLY two condition_kind tokens:
+    // Phase 1 + Phase 3 support EXACTLY three condition_kind tokens:
     //   * "another_spell_cast_this_turn" — args = () (empty tuple)
     //   * "opponents_control_at_least"   — args = ("creature", n)
+    //   * "per_differently_named_land"   — args = () (empty tuple)  [Phase 3]
     //
     // Any other condition_kind is a hard `Err` at registry build (the
     // §2 Rust-side teeth — `silent no-op pipeline runs are pipeline
-    // bugs`). Phase 2 will add `per_differently_named_land`; Phase 3
-    // will add the `ExternalCostReduction` sibling parse arm + the
-    // `nth_spell_this_turn` / `per_controlled` variants.
+    // bugs`). Phase 4+ may extend further (loyalty-cost reductions,
+    // additional predicate algebra, And/Or/Not combinators).
     let cost_reductions: Vec<CostReduction> =
         match dict.get_item("cost_reductions")? {
             Some(cr_any) => {
@@ -15468,13 +15509,50 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                                 count,
                             }
                         }
+                        // cost-reduction substrate Phase 3 — Cycle 1
+                        // (substrate-only). The variable-multiplier
+                        // spell-local variant Fungal Colossus uses.
+                        // Variant takes 0 args (unit-shape); an arg
+                        // drift is a hard `Err` (the §2 teeth —
+                        // same shape Phase 1's
+                        // `another_spell_cast_this_turn` arm uses).
+                        "per_differently_named_land" => {
+                            if let Some(args_any) =
+                                d.get_item("condition_args")?
+                            {
+                                let tup =
+                                    args_any.downcast::<PyTuple>().map_err(
+                                        |_| {
+                                            PyValueError::new_err(
+                                                "cost_reductions[i].\
+                                                 condition_args must be \
+                                                 a tuple",
+                                            )
+                                        },
+                                    )?;
+                                if tup.len() != 0 {
+                                    return Err(PyValueError::new_err(
+                                        format!(
+                                            "cost_reductions[i] with \
+                                             condition_kind \
+                                             'per_differently_named_land' \
+                                             takes 0 args; got {}",
+                                            tup.len(),
+                                        ),
+                                    ));
+                                }
+                            }
+                            Condition::PerDifferentlyNamedLand
+                        }
                         other => {
                             return Err(PyValueError::new_err(format!(
-                                "cost_reductions[i] Phase-1 does not \
+                                "cost_reductions[i] does not \
                                  support condition_kind {other:?} \
-                                 (Phase 2+ adds \
-                                 per_differently_named_land / \
-                                 nth_spell_this_turn / per_controlled)"
+                                 (Phase 1+3 admits \
+                                 another_spell_cast_this_turn / \
+                                 opponents_control_at_least / \
+                                 per_differently_named_land; \
+                                 Phase 4+ may extend further)"
                             )))
                         }
                     };
@@ -15501,9 +15579,11 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
     //
     // Any other condition_kind is a hard `Err` at registry build (the
     // §2 Rust-side teeth — `silent no-op pipeline runs are pipeline
-    // bugs`). Phase 3 will add `per_differently_named_land`'s sibling
-    // on the spell-local side; the externals-side grammar is closed
-    // for now at these two variants.
+    // bugs`). Phase 3 (2026-05-25) landed `per_differently_named_land`
+    // on the SPELL-LOCAL side only; the externals-side grammar
+    // remains closed at these two variants and explicitly rejects
+    // `per_differently_named_land` (verified by the Phase-2 cycle-1
+    // §2-teeth test `phase_3_per_differently_named_land_rejected_on_externals`).
     let external_cost_reductions: Vec<ExternalCostReduction> =
         match dict.get_item("external_cost_reductions")? {
             Some(ecr_any) => {
