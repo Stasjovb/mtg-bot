@@ -1793,6 +1793,109 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_lashwhip_predator_real_eoe_cost_reduction.py",
+    # **covered-by-construction-probe-writing-p7 (2026-05-25):** Six
+    # additional per-card real-EoE cross-engine byte-equal probes
+    # extending the lane established by batches 1-6.  This batch opens
+    # **TWO new shape families** for the per-slug attribution lane:
+    #
+    #   * **manland carrier via the bare BecomeLandCreatureUEOT bridge
+    #     arm shape on a Land carrier** — the parser ships the manland
+    #     animation ability as a structured ``ActivatedAbility(
+    #     BecomeLandCreatureUEOT(power, toughness, granted_keywords,
+    #     unblockable, granted_subtype, granted_activated_abilities,
+    #     granted_triggered_abilities))``; the bare bridge arm
+    #     ``become_land_creature_ueot`` carries only the
+    #     ``power`` / ``toughness`` scalars, dropping the rider fields
+    #     per the documented arm signature.  Mutavault is the ONLY
+    #     manland in the covered_by_construction tier whose all-bare-
+    #     riders Effect shape (2/2 + ZERO granted_keywords + no
+    #     unblockable + no granted_subtype + no granted abilities)
+    #     round-trips byte-equal through the bare arm; the other
+    #     manlands (Celestial Colonnade / Creeping Tar Pit / Hissing
+    #     Quagmire / Lumbering Falls / Needle Spires / Raging Ravine /
+    #     Shambling Vent / Stirring Wildwood / Inkmoth Nexus) all
+    #     carry granted_keywords / unblockable / granted_triggered_
+    #     abilities riders that DO NOT round-trip clean through the
+    #     bare arm and stay covered_by_construction under the IIII /
+    #     HHHH "covered carrier with non-bridge-clean rider" precedent.
+    #
+    #   * **bridge-simple vanilla-creature carrier via the
+    #     ``_printing_is_bridge_simple_creature`` admit + CardDef
+    #     round-trip + seated-permanent observation** — vanilla
+    #     creatures (no AAs / no TAs / no spell_effect, keywords ⊆
+    #     _SAFE_KEYWORDS) round-trip through the CardDef bridge
+    #     carrying the (card_types, power, toughness, mana_cost,
+    #     _SAFE_KEYWORDS-subset keywords) tuple byte-equal.  The
+    #     parser-side subtypes are documented-drop on round-trip.
+    #     The "resolve smoke" piece of the EEEE-idiom is replaced
+    #     with the **seated-permanent observation** — there is no
+    #     structured Effect on a vanilla creature to resolve, so the
+    #     load-bearing observable is Python's combat readers
+    #     (``effective_power`` / ``effective_toughness`` /
+    #     ``is_creature_now``) read against the seated bridge round-
+    #     tripped permanent.
+    #
+    # Same lane discipline as batches 1-6: per-slug attribution
+    # credits a PROBED slot per-printing, no engine changes, no Rust
+    # changes, no substrate widens.
+    #
+    #   * ``test_mutavault_parity.py`` — Mutavault ({0} Land, 679
+    #     17lands decks); animation ActivatedAbility →
+    #     BecomeLandCreatureUEOT(power=2, toughness=2, all-bare
+    #     riders).  **NEW shape family** for the per-slug attribution
+    #     lane: the FIRST PROBE_MODULES-credited probe binding the
+    #     BecomeLandCreatureUEOT Effect class to a slug — Mutavault is
+    #     the ONLY manland in covered_by_construction with all-bare-
+    #     riders Effect shape that round-trips byte-equal through the
+    #     bare bridge arm.
+    #   * ``test_daggermaw_megalodon_parity.py`` — Daggermaw Megalodon
+    #     ({4}{U}{U} Creature — Shark, 0 17lands decks; Stellar Sights /
+    #     Special Guests reprint).  **NEW shape family** for the per-
+    #     slug attribution lane: the FIRST PROBE_MODULES-credited probe
+    #     binding the bridge-simple-vanilla-creature shape family to a
+    #     slug via the seated-permanent observation (vigilance keyword
+    #     variant, 5/7 P/T).
+    #   * ``test_magus_of_the_moon_parity.py`` — Magus of the Moon
+    #     ({2}{R} Creature — Human Wizard, 0 17lands decks; Stellar
+    #     Sights / Special Guests reprint).  Sibling to the Daggermaw
+    #     probe — the FIRST PROBE_MODULES-credited probe binding the
+    #     ZERO-keyword variant of the bridge-simple-vanilla-creature
+    #     family (2/2 P/T).  The parser-side
+    #     ``nonbasic_lands_are_mountains=True`` static bool is
+    #     implicit-drop per the half-coverage precedent — the bool
+    #     rider does NOT trip the ``static_abilities`` tuple check in
+    #     ``_printing_is_bridge_simple_creature``.
+    #   * ``test_cackling_slasher_parity.py`` — Cackling Slasher
+    #     ({3}{B} Creature — Human Assassin, 0 17lands decks).  The
+    #     deathtouch-keyword variant of the bridge-simple-vanilla-
+    #     creature family (3/3 P/T).  Closes the batch-5 attribution
+    #     gap — the Squire's Lightblade / The Dominion Bracelet
+    #     siblings used Cackling Slasher's name as a contextual
+    #     reference but exercised a SYNTHETIC Bear as the equip target
+    #     so the walker did NOT credit Cackling Slasher.
+    #   * ``test_spectral_snatcher_parity.py`` — Spectral Snatcher
+    #     ({4}{B}{B} Creature — Spirit, 0 17lands decks; Stellar
+    #     Sights / Special Guests reprint).  Sibling to the Magus of
+    #     the Moon probe — the (6, 5) P/T variant of the ZERO-keyword
+    #     sub-shape; per the cathedral-of-war-style same-Effect-class-
+    #     different-printing-slug precedent, each P/T variant earns a
+    #     PROBED-tier slot.
+    #   * ``test_bedhead_beastie_parity.py`` — Bedhead Beastie ({4}{R}{R}
+    #     Creature — Beast, 0 17lands decks).  The menace-keyword
+    #     variant of the bridge-simple-vanilla-creature family (5/6
+    #     P/T).
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +6 PROBED / -6 covered_by_construction: PROBED 344 → 350;
+    # covered_by_construction 71 → 65; BLOCKED unchanged at 60; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_mutavault_parity.py",
+    REPO_ROOT / "tests" / "test_daggermaw_megalodon_parity.py",
+    REPO_ROOT / "tests" / "test_magus_of_the_moon_parity.py",
+    REPO_ROOT / "tests" / "test_cackling_slasher_parity.py",
+    REPO_ROOT / "tests" / "test_spectral_snatcher_parity.py",
+    REPO_ROOT / "tests" / "test_bedhead_beastie_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

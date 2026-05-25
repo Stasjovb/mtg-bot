@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **346 (72.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 71 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **352 (74.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 65 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **58 (12.2%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 346 | 72.8% |
-| Effect+bridge covered (not individually probed) | 71 | 14.9% |
+| PROBED byte-equal | 352 | 74.1% |
+| Effect+bridge covered (not individually probed) | 65 | 13.7% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -61,6 +61,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Bashful Beastie
 - Beamsaw Prospector
 - Bear Trap
+- Bedhead Beastie
 - Beyond the Quiet
 - Bioengineered Future
 - Biomechan Engineer
@@ -79,6 +80,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Broodguard Elite
 - Burgeoning
 - Bygone Colossus
+- Cackling Slasher
 - Cascading Cataracts
 - Cathedral of War
 - Cautious Survivor
@@ -97,6 +99,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cryogen Relic
 - Cryoshatter
 - Cut Propulsion
+- Daggermaw Megalodon
 - Dark Endurance
 - Darkness
 - Dashing Bloodsucker
@@ -216,6 +219,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Living Phone
 - Lost in Space
 - Luxknight Breacher
+- Magus of the Moon
 - Malevolent Chandelier
 - Mana Confluence
 - Manifest Dread
@@ -243,6 +247,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Mountain
 - Mouth of the Storm
 - Murder
+- Mutavault
 - Mutinous Massacre
 - Nanoform Sentinel
 - Nebula Dragon
@@ -307,6 +312,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Sothera, the Supervoid
 - Space-Time Anomaly
 - Specimen Freighter
+- Spectral Snatcher
 - Spineseeker Centipede
 - Splitskin Doll
 - Squire's Lightblade
