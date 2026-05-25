@@ -76,6 +76,161 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
+/// **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-only,
+/// 2026-05-25).** Validate + apply a Station activation. Silently
+/// no-ops on invalid inputs (crew tapped / summoning-sick / not own
+/// / same id as Spacecraft / Spacecraft not own / spacecraft missing
+/// / non-Spacecraft target / non-creature crew). Mirrors Python's
+/// `_activate_station` silent-validate pattern at
+/// `src/mtg_bot/actions.py:2353-2407`.
+///
+/// On success:
+///   * `crew.tapped` flips to `true` (cost — tap the crew).
+///   * `spacecraft.charge_counters += effective_power(crew)`
+///     (effect — add power-many charge counters). The legal-action
+///     emitter has already filtered eligible crew (non-tapped,
+///     non-summoning-sick, own, non-self); the resolver re-validates
+///     defensively because the emitter is not the only entry point
+///     (the parity-replay harness drives `apply_action` from a
+///     Python-derived dict — the resolver MUST be robust to a stale
+///     id, mirroring Python's silent-no-op pattern).
+///
+/// **Phase 1 does NOT honor the
+/// `grants_toughness_as_station_power_for_creatures_you_control`
+/// flag** (Tapestry Warden's flag — Python at `actions.py:2393-2401`
+/// consults it). Phase 1's admit predicate (Cycle 3) positively
+/// rejects any Tapestry-Warden-style printing, so this asymmetry is
+/// bench-invisible; SL §9 entry #2 pins it as a Phase-2+ widen.
+///
+/// **Phase 1 reader scope.** Cycle 2 ships the resolver + the
+/// legal-action emitter that produces ActivateStation dicts. The
+/// admit gate stays closed (Galvanizing Sawship STAYS DECLINED post-
+/// C2 — Cycle 3 owns the inversion). The resolver is therefore
+/// dead-relative-to-production this cycle; it powers the C2 unit
+/// pins + lights up the moment C3 admits the Sawship.
+fn apply_activate_station(
+    state: &mut GameState,
+    player_id: u8,
+    spacecraft_id: u32,
+    crew_id: u32,
+) {
+    // Silent no-op: same id (crew can't be the spacecraft itself).
+    if spacecraft_id == crew_id {
+        return;
+    }
+    // Locate spacecraft + crew on the battlefield (any player's bf —
+    // gate on controller below). Record their player_idx so the
+    // mutation path can pick the right Arc.
+    let mut spacecraft_loc: Option<(usize, u32)> = None;
+    let mut crew_loc: Option<(usize, u32)> = None;
+    for (idx, player) in state.players.iter().enumerate() {
+        for obj in player.battlefield.iter() {
+            if obj.id == spacecraft_id {
+                spacecraft_loc = Some((idx, obj.printing_id));
+            }
+            if obj.id == crew_id {
+                crew_loc = Some((idx, obj.printing_id));
+            }
+        }
+    }
+    let Some((sp_idx, sp_pid)) = spacecraft_loc else {
+        return;
+    };
+    let Some((cr_idx, cr_pid)) = crew_loc else {
+        return;
+    };
+    // Spacecraft must be a Spacecraft (subtypes ∋ "Spacecraft").
+    let Some(sp_printing) = state.registry.lookup(sp_pid) else {
+        return;
+    };
+    if !sp_printing.subtypes.iter().any(|s| s == "Spacecraft") {
+        return;
+    }
+    // Spacecraft + crew must be controlled by player_id.
+    let sp_controller = state.players[sp_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == spacecraft_id)
+        .map(|o| o.controller);
+    let cr_controller = state.players[cr_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == crew_id)
+        .map(|o| o.controller);
+    if sp_controller != Some(player_id) || cr_controller != Some(player_id) {
+        return;
+    }
+    // Crew must be a printed creature (a Spacecraft crewing another
+    // Spacecraft is rejected per Python's `_activate_station`:
+    // "spacecraft can't crew another spacecraft" — actions.py:2374-
+    // 2375). Note Python keys on `crew.printing.is_creature` (the
+    // printed flag), NOT `is_creature_now` — so a stationed
+    // Spacecraft is NOT eligible to crew another Spacecraft. Rust
+    // mirrors that strict printed-creature gate.
+    let Some(cr_printing) = state.registry.lookup(cr_pid) else {
+        return;
+    };
+    if !cr_printing.card_types.iter().any(|t| t == "Creature") {
+        return;
+    }
+    // Crew must be untapped + not summoning-sick (tap-as-cost gate).
+    let (crew_tapped, crew_sick) = match state.players[cr_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == crew_id)
+        .map(|o| (o.tapped, o.summoning_sick))
+    {
+        Some(pair) => pair,
+        None => return,
+    };
+    if crew_tapped || crew_sick {
+        return;
+    }
+    // Effective power of the crew = printed power + counters +
+    // ueot_power_bonus. Mirrors `legal_effective_power` at
+    // `state_ops_legal.rs:472` and Python's
+    // `effective_power(state, crew)` at `game.py:2138-2251`. Phase 1
+    // does NOT honor the Tapestry-Warden toughness-substitution
+    // (admit-time guard rejects that printing — SL §9 entry #2).
+    let printed_base = cr_printing.power.unwrap_or(0) as i32;
+    let crew_obj = state.players[cr_idx]
+        .battlefield
+        .iter()
+        .find(|o| o.id == crew_id);
+    let Some(crew_obj) = crew_obj else { return };
+    let base = crew_obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| crew_obj.ueot_becomes_land_creature_pt().map(|(p, _)| p))
+        .unwrap_or(printed_base);
+    let crew_power = base + crew_obj.ueot_power_bonus() + crew_obj.counters;
+    // Mutate: tap the crew, add charge counters to the spacecraft.
+    // Two Arc::make_mut sites (one per controller's bf) — same
+    // pattern as `state_ops_tap.rs::mutate_battlefield_obj`. The
+    // crew-tap mutation goes through first, mirroring Python's
+    // `tap_permanent(state, crew); add_charge_counters(state,
+    // spacecraft, crew_station_power)` ordering at
+    // `actions.py:2402-2403`.
+    {
+        let bf = Arc::make_mut(&mut state.players[cr_idx].battlefield);
+        for o in bf.iter_mut() {
+            if o.id == crew_id {
+                o.tapped = true;
+                break;
+            }
+        }
+    }
+    {
+        let bf = Arc::make_mut(&mut state.players[sp_idx].battlefield);
+        for o in bf.iter_mut() {
+            if o.id == spacecraft_id {
+                o.charge_counters = o.charge_counters.saturating_add(crew_power);
+                break;
+            }
+        }
+    }
+}
+
 #[pymethods]
 impl GameState {
     /// Apply a Python-side Action dict to this state. The dict's
@@ -161,9 +316,13 @@ impl GameState {
         // management is owned by `simulate.priority_loop`, not by
         // `apply_action`.
         //
-        // Stubs that always raise (TurnFaceUp / UnlockRoomHalf /
-        // ActivateStation) never reach the post-arm reset because
-        // they short-circuit with `?` propagation.
+        // Stubs that always raise (TurnFaceUp / UnlockRoomHalf) never
+        // reach the post-arm reset because they short-circuit with `?`
+        // propagation. **C2 (2026-05-25):** `ActivateStation` is no
+        // longer a raising stub — the dispatch arm now invokes the
+        // real `apply_activate_station` resolver and flows through
+        // the post-arm reset like any other priority-round-breaking
+        // mutation.
         let is_pass_priority = matches!(action, Action::PassPriority);
         match action {
             Action::PassPriority => {
@@ -580,43 +739,38 @@ impl GameState {
                 ));
             }
             Action::ActivateStation {
-                spacecraft_id: _,
-                crew_id: _,
+                spacecraft_id,
+                crew_id,
             } => {
-                // First-slice scope (mirrors round-23's ActivateAbility
-                // and round-24's TurnFaceUp / UnlockRoomHalf pattern):
-                // ship the Action variant + bridge round-trip scaffold;
-                // the dispatch arm is a stub because no Rust Spacecraft
-                // charge-counter state / crew-tap resolution primitive
-                // exists yet. Python's `_activate_station` taps the crew
-                // creature (cost), reads its power, and adds that many
-                // charge counters to the Spacecraft (effect) — Rust has
-                // neither the Spacecraft state field for charge counters
-                // nor a primitive that links tap-as-cost to counter-add-
-                // as-effect. A future slice adds the per-object
-                // Spacecraft charge state + the activate-station
-                // primitive (analogous to how Python's
-                // `_activate_station` mutates both sides atomically) and
-                // then flips this arm to a real `call_method1(
-                // "activate_station", (spacecraft_id, crew_id,
-                // priority_player))` dispatch — at which point the
-                // variant + bridge already shipped here keep working
-                // unchanged. The variant ships now so callers building
-                // Action dicts can already use the `activate_station`
-                // shape and hit a clear "not implemented yet" error
-                // path instead of `unknown action kind`, and the parity
-                // harness surfaces the gap loudly when Python emits an
-                // ActivateStation decision (EoE Spacecraft station
-                // mechanic — the EoE Spacecraft cycle is the production
-                // driver). **This completes the Action enum scaffold:
-                // all 8 Python Action subclasses now have Rust
-                // variants.**
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "ActivateStation dispatch not implemented yet (Rust \
-                     Spacecraft charge-counter state + crew-tap resolution \
-                     missing; future slice flips the dispatch). This slice \
-                     ships only the Action variant + bridge round-trip."
-                ));
+                // **Spacecraft Station substrate Phase 1 — Cycle 2
+                // (substrate-only, 2026-05-25).** Dispatch flipped
+                // from the C1 stub to the real `apply_activate_station`
+                // resolver. The resolver silent-validates every
+                // precondition (Spacecraft own, crew own, crew not
+                // tapped / sick, crew is a printed creature, not
+                // same id) and on success taps the crew + adds
+                // `effective_power(crew)`-many charge counters to
+                // the Spacecraft.
+                //
+                // **Why a free function instead of `call_method1`.**
+                // The other dispatch arms (PlayLand, DeclareAttackers,
+                // ...) route to existing `#[pymethods]` primitives via
+                // the Python attribute layer because those primitives
+                // pre-date the dispatch table. The Station resolver
+                // is brand-new this cycle and doesn't need Python-
+                // visibility (Python's `_activate_station` is module-
+                // private at `actions.py:2353` — the engine never
+                // calls into the Rust resolver from Python). A free
+                // Rust function is the simpler shape; future slices
+                // can promote it to a pymethod if a probe needs the
+                // direct surface.
+                let player_id = slf.borrow().priority_player;
+                apply_activate_station(
+                    &mut slf.borrow_mut(),
+                    player_id,
+                    spacecraft_id,
+                    crew_id,
+                );
             }
             Action::ActivateAbility {
                 source_id,

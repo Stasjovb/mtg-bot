@@ -290,6 +290,42 @@ pub(crate) fn is_stationed(state: &GameState, obj: &GameObject) -> bool {
     is_stationed_predicate(printing.station_threshold, obj.charge_counters)
 }
 
+/// **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-only,
+/// 2026-05-25).** Extension of the printed `is_creature` predicate
+/// that ALSO returns `true` for a stationed Spacecraft. Mirrors
+/// Python's `is_creature_now` at `src/mtg_bot/game.py:831` (the
+/// stationed-Spacecraft leg specifically; the broader Python helper
+/// also covers face-down 2/2s, impending suppression, and the
+/// Enduring-cycle enchantment-side flip — those legs are
+/// orthogonal substrate, not Phase-1 Spacecraft scope).
+///
+/// **Reader scope.** This is the layered-fold sibling of
+/// `state_ops_legal.rs:legal_effective_power` / the SBA's
+/// `printing.toughness.is_some()` gate / the legal-decisions
+/// `card_types.iter().any(|t| t == "Creature")` gate. Call sites
+/// that need the "is this object acting as a creature RIGHT NOW
+/// (including stationed Spacecraft)?" semantics swap to this
+/// helper as part of the C2 substrate landing; call sites that
+/// want the strict printed-creature predicate (graveyard-filter
+/// EffectMatcher / search-library Effect readers / Aura-enchant-
+/// type-creature gate) stay on the printed-card-types read.
+///
+/// **Phase-1 admit-side guarantee.** With the substrate-only
+/// invariant (Galvanizing Sawship STAYS DECLINED at the admit
+/// gate post-C2 — Cycle 3 owns the inversion), no live bench
+/// printing ever takes the stationed path. The helper is therefore
+/// dead-relative-to-production this cycle; it powers the
+/// cycle-2 unit pins + lights up the moment C3 admits the Sawship.
+pub(crate) fn is_creature_now(state: &GameState, obj: &GameObject) -> bool {
+    let Some(printing) = state.registry.lookup(obj.printing_id) else {
+        return false;
+    };
+    if printing.card_types.iter().any(|t| t == "Creature") {
+        return true;
+    }
+    is_stationed_predicate(printing.station_threshold, obj.charge_counters)
+}
+
 /// Read-only check: is this object on a battlefield AND a creature
 /// (printing.power.is_some())? Returns `Some((tapped, summoning_sick))`
 /// when the object exists on a battlefield AND is a creature; `None`
@@ -1096,7 +1132,46 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
     // remove entry for this keyword whose condition matches —
     // mirrors Python's post-walk `kws.discard(payload.keyword)` at
     // `game.py:1210-1213`.
+    // **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-
+    // only, 2026-05-25).** Fold in `stationed_keywords` (CR 613 layer
+    // 6 keyword grant — Spacecraft animates as a creature with extra
+    // keywords once `charge_counters >= station_threshold`). Mirrors
+    // Python's `game.py:1191-1193` shape, where `stationed_keywords`
+    // joins the base set pre-layer-6 walk. The gate uses the same
+    // `is_stationed_predicate` SoT that `is_stationed` / the
+    // legal-emitter / `is_creature_now` consume — single fold point.
+    //
+    // **Phase-1 admit-side guarantee.** With Galvanizing Sawship
+    // staying DECLINED at the admit gate post-C2 (Cycle 3 owns the
+    // inversion), this fold is dead-relative-to-production; it
+    // powers the C2 unit pins + lights up the moment C3 admits the
+    // Sawship. Phase-1 pilot stationed-keyword set is
+    // `{flying, haste}` — both already first-class in Rust combat /
+    // priority readers (the `has_haste` legal-attacker gate at
+    // `state_ops_legal.rs:2179` and the flying / blocking-pairing
+    // gate at `state_ops_combat.rs:1682+` both read through
+    // `battlefield_has_keyword`, so the fold lights up by reading
+    // the SAME helper that consumes it).
+    let stationed_grant_hit = {
+        let obj_opt = state.players[player_idx]
+            .battlefield
+            .iter()
+            .find(|o| o.id == obj_id);
+        if let Some(obj) = obj_opt {
+            if is_stationed_predicate(
+                printing.station_threshold,
+                obj.charge_counters,
+            ) {
+                printing.stationed_keywords.iter().any(|k| k == keyword)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
     let positive_hit = printing.keywords.iter().any(|k| k == keyword)
+        || stationed_grant_hit
         || state.players[player_idx]
             .battlefield
             .iter()

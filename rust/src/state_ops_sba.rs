@@ -636,6 +636,42 @@ impl GameState {
                 // Non-creature — neither 704.5f nor 704.5g apply.
                 continue;
             };
+            // **Spacecraft Station substrate Phase 1 — Cycle 2
+            // (substrate-only, 2026-05-25).** A Spacecraft printing
+            // carries printed `power` / `toughness` (Galvanizing
+            // Sawship: 6/5) even when un-stationed; the
+            // `printing.toughness.is_some()` gate above would
+            // otherwise wrongly include un-stationed Spacecraft in
+            // the creature SBA pass. Gate SBA participation
+            // SPECIFICALLY for Spacecraft on `is_creature_now`
+            // (printed Spacecraft skips SBA when not stationed;
+            // stationed Spacecraft participates normally). Phase-1
+            // admit-side guarantee: Sawship STAYS DECLINED post-
+            // C2, so no live bench permanent takes this branch this
+            // cycle (substrate pre-positioning for C3).
+            //
+            // **Why a Spacecraft-narrow gate (vs `is_creature_now`
+            // for all permanents).** The pre-C2 Rust SBA also
+            // participates artifacts / enchantments with printed
+            // `toughness` — a known divergence from Python (Python
+            // gates on `is_creature_now` for ALL permanents). The
+            // wider fold would be the right MTG model + Python
+            // SoT, but it inverts existing parity-pinned Rust-only
+            // tests (e.g., `test_r60_rust_perigee_non_creature_
+            // other_not_targeted` pins the Rust quirk that an
+            // Artifact with 99 damage dies). The substrate-only
+            // discipline of this cycle is to stay Spacecraft-focused;
+            // a future cycle owning the broader SBA-side fix can
+            // widen this gate. See SL §9 for the substrate scope.
+            let is_spacecraft = printing
+                .subtypes
+                .iter()
+                .any(|s| s == "Spacecraft");
+            if is_spacecraft
+                && !crate::state_ops_combat::is_creature_now(self, obj)
+            {
+                continue;
+            }
             // CR 702.12 — indestructible permanents are exempt
             // from both destruction-by-damage (704.5g) and
             // destruction-by-zero-toughness (704.5f). Damage and

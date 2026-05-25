@@ -616,6 +616,25 @@ fn activate_ability_dict(
     Ok(d)
 }
 
+/// **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-only,
+/// 2026-05-25).** Build a `{"kind": "activate_station",
+/// "spacecraft_id": <id>, "crew_id": <id>}` dict. Mirrors
+/// `actions.rs:action_to_pydict`'s `Action::ActivateStation` arm so
+/// a dict produced here round-trips through `parse_action` and back
+/// without key drift. Used by the sorcery-speed Station emitter at
+/// the tail of `legal_decisions`.
+fn activate_station_dict(
+    py: Python<'_>,
+    spacecraft_id: u32,
+    crew_id: u32,
+) -> PyResult<Bound<'_, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "activate_station")?;
+    d.set_item("spacecraft_id", spacecraft_id)?;
+    d.set_item("crew_id", crew_id)?;
+    Ok(d)
+}
+
 /// **CE20 Slice 1.** Pure-pool affordability check for an activated
 /// ability's mana cost. Mirrors `state_ops_cast.rs::pay_mana_cost`'s
 /// pre-mutation gate (colored pips must be matchable by same-color
@@ -699,7 +718,17 @@ pub(crate) fn auto_tap_headroom_pool(
         if obj.tapped {
             continue;
         }
-        let is_creature = printing.card_types.iter().any(|t| t == "Creature");
+        // **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-
+        // only, 2026-05-25).** Mana-ability-gating reads
+        // `is_creature_now` (not the printed `Creature` card type) so
+        // a stationed Spacecraft with a printed mana ability is gated
+        // on summoning-sickness too. Phase 1 admits no mana-producing
+        // Spacecraft, so this is bench-invisible today (substrate
+        // pre-positioning for C3+); a future widen that admits a
+        // mana-producing carrier reads the correct gate without a
+        // second swap.
+        let is_creature =
+            crate::state_ops_combat::is_creature_now(state, obj);
         if is_creature && obj.summoning_sick {
             continue;
         }
@@ -2170,13 +2199,30 @@ impl GameState {
                 if obj.tapped {
                     continue;
                 }
-                let Some(printing) = self.registry.lookup(obj.printing_id) else {
-                    continue;
-                };
-                if !printing.card_types.iter().any(|t| t == "Creature") {
+                // **Spacecraft Station substrate Phase 1 — Cycle 2
+                // (substrate-only, 2026-05-25).** Eligible-attacker
+                // gate reads `is_creature_now` (printed creature OR
+                // stationed Spacecraft) so a Galvanizing Sawship
+                // with `charge_counters >= station_threshold` can
+                // be declared as an attacker. Phase-1 admit-side
+                // guarantee: Sawship STAYS DECLINED post-C2, so
+                // this branch is dead-relative-to-production this
+                // cycle (substrate pre-positioning for C3).
+                if !crate::state_ops_combat::is_creature_now(self, obj) {
                     continue;
                 }
-                let has_haste = printing.keywords.iter().any(|k| k == "haste");
+                // **C2 haste fold.** `battlefield_has_keyword`
+                // already returns true for `obj.printing.keywords ∋
+                // "haste"` AND, post-C2, for a stationed Spacecraft
+                // whose `stationed_keywords` contains "haste". A
+                // stationed Sawship with `stationed_keywords =
+                // {flying, haste}` clears the summoning-sick gate.
+                // Phase-1 pilot stationed-keyword set is
+                // `{flying, haste}` — both lit through the same
+                // helper.
+                let has_haste = crate::state_ops_combat::battlefield_has_keyword(
+                    self, obj.id, "haste",
+                );
                 if obj.summoning_sick && !has_haste {
                     continue;
                 }
@@ -2339,10 +2385,14 @@ impl GameState {
                 if obj.tapped {
                     continue;
                 }
-                let Some(printing) = self.registry.lookup(obj.printing_id) else {
-                    continue;
-                };
-                if !printing.card_types.iter().any(|t| t == "Creature") {
+                // **Spacecraft Station substrate Phase 1 — Cycle 2
+                // (substrate-only, 2026-05-25).** Eligible-blocker
+                // gate reads `is_creature_now` so a stationed
+                // Spacecraft can be declared as a blocker. Phase-1
+                // admit-side guarantee: Sawship STAYS DECLINED post-
+                // C2, so this branch is dead-relative-to-production
+                // this cycle (substrate pre-positioning for C3).
+                if !crate::state_ops_combat::is_creature_now(self, obj) {
                     continue;
                 }
                 eligible_blockers.push(obj.id);
@@ -3515,16 +3565,88 @@ impl GameState {
             }
         }
 
+        // **Spacecraft Station substrate Phase 1 — Cycle 2 (substrate-
+        // only, 2026-05-25).** Sorcery-speed ActivateStation emit
+        // loop. For each Spacecraft this player controls, emit
+        // `(spacecraft_id, crew_id)` pairs for every untapped non-
+        // summoning-sick own creature (excluding the Spacecraft
+        // itself). Mirrors Python's `legal.py:831-852` shape exactly
+        // — same N×M product over (own Spacecraft × own eligible
+        // crew creatures) gated on sorcery timing.
+        //
+        // **Eligible crew = printed creature only.** Python keys on
+        // `crew.printing.is_creature` (the printed flag) — a stationed
+        // Spacecraft is NOT eligible to crew another Spacecraft (a
+        // Spacecraft can't crew another Spacecraft, per the bench-
+        // facing rule text). Rust mirrors that strict printed-creature
+        // gate.
+        //
+        // **Phase-1 admit-side guarantee.** With Galvanizing Sawship
+        // staying DECLINED at the admit gate post-C2 (Cycle 3 owns
+        // the inversion), this emit loop is dead-relative-to-
+        // production this cycle — no live deck admits a Spacecraft;
+        // therefore the `is_spacecraft` filter below matches zero
+        // permanents on every real-bench state, and the inner
+        // crew-loop never fires. The emit lights up the moment C3
+        // admits the Sawship.
+        if is_sorcery_timing {
+            // Pre-walk: collect own Spacecraft ids (cheap empty check
+            // saves the inner crew enumeration in the common no-
+            // Spacecraft-bench case).
+            let mut ship_ids: Vec<u32> = Vec::new();
+            for obj in self.players[idx].battlefield.iter() {
+                let Some(printing) = self.registry.lookup(obj.printing_id)
+                else {
+                    continue;
+                };
+                if printing.subtypes.iter().any(|s| s == "Spacecraft") {
+                    ship_ids.push(obj.id);
+                }
+            }
+            if !ship_ids.is_empty() {
+                // Collect eligible crew ids (printed creature, own,
+                // untapped, not summoning-sick).
+                let mut crew_ids: Vec<u32> = Vec::new();
+                for obj in self.players[idx].battlefield.iter() {
+                    if obj.tapped || obj.summoning_sick {
+                        continue;
+                    }
+                    let Some(printing) =
+                        self.registry.lookup(obj.printing_id)
+                    else {
+                        continue;
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        continue;
+                    }
+                    crew_ids.push(obj.id);
+                }
+                for &ship_id in ship_ids.iter() {
+                    for &crew_id in crew_ids.iter() {
+                        if crew_id == ship_id {
+                            continue;
+                        }
+                        actions.push(activate_station_dict(
+                            py, ship_id, crew_id,
+                        )?);
+                    }
+                }
+            }
+        }
+
         // Final emission order: [PassPriority, (DeclareAttackers...),
         // (DeclareBlockers...), CastSpell(instant/flash)...,
-        // PlayLand..., CastSpell(sorcery)..., ActivateAbility...].
+        // PlayLand..., CastSpell(sorcery)..., ActivateAbility...,
+        // ActivateStation...].
         // Matches Python's `legal.py` natural append order:
         // instant-speed CastSpell block (lines 217-301), sorcery-
         // timing gate (line 303), PlayLand (lines 319-329), sorcery-
         // speed CastSpell block (lines 335-445), ActivateAbility
-        // (lines 612-829). DeclareAttackers / DeclareBlockers are
-        // Rust-only emissions outside Python's loop (see their
-        // module-docstring sections). CE19 closure shape; see I46.
+        // (lines 612-829), ActivateStation (lines 831-852).
+        // DeclareAttackers / DeclareBlockers are Rust-only emissions
+        // outside Python's loop (see their module-docstring sections).
+        // CE19 closure shape; see I46. C2 adds the ActivateStation
+        // tail.
 
         Ok(actions)
     }
