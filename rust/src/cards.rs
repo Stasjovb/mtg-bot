@@ -31,7 +31,7 @@
 
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -9728,6 +9728,129 @@ pub struct ActivationCost {
     pub loyalty: i32,
 }
 
+// =====================================================================
+// cost-reduction substrate Phase 1 — Cycle 1 (substrate-only landing)
+// =====================================================================
+//
+// **Verify-first deviation from `docs/COST_REDUCTION_SUBSTRATE_PHASE_1_
+// DESIGN.md`.** The design doc (973 lines, 2026-05-24, merge
+// `4b94f844`) lists `Player.spells_cast_this_turn` as a Cycle-1
+// deliverable. **It already exists on `Player`** at
+// `rust/src/state.rs:1017` (landed via "MMM Pin 1 (11th Rust slice)",
+// see the docstring there) with the full plumbing: increment in all
+// four cast primitives (`cast_creature` / `cast_creature_warp` /
+// `cast_spell_noncreature` / `cast_aura`) AFTER pay, reset in
+// `state_ops_steps.rs::run_cleanup_step` at the Python-matched
+// boundary (`turn.py:1105`), threaded through canonical-state
+// fingerprint, and exposed for tests via `set_spells_cast_this_turn`
+// (`state_ops_resolve.rs:23669`). So Cycle 1 lands only the
+// cost-reduction-side structures (struct + enum + field + parse +
+// evaluator hook); the per-player state-field deliverable is a
+// no-op (already-shipped).
+//
+// **What Cycle 1 lands here (the per-design-doc-§4 surface, minus
+// already-shipped pieces):**
+//
+//   * `CostReduction` struct (this file) — mirrors Python's
+//     `cards/base.py:308` dataclass.
+//   * `Condition` enum, Phase-1 subset (this file) — mirrors a
+//     2-variant subset of `effects/conditions.py`'s structural
+//     `Condition` grammar.
+//   * `TypeFilter` enum, Phase-1 subset (this file) — hard-codes
+//     `Creature` only (the sole predicate sub-shape A uses).
+//   * `CardPrinting.cost_reductions: Vec<CostReduction>` field
+//     (added to the struct below) — back-compat default is empty
+//     Vec, mirroring the `triggered_abilities` / `subtypes` Option-
+//     parse shape.
+//   * `parse_printing` arm + tag-dispatch + hard-error on unknown
+//     `condition_kind` (the §2 Rust-side teeth).
+//
+// **What Cycle 1 deliberately does NOT do** (per the substrate-only
+// invariant; later cycles ship these):
+//
+//   * Extend the `eff()` seam at `state_ops_legal.rs:742` from
+//     identity to a real evaluator. The seam STAYS identity this
+//     cycle; the field + struct + enum land first as the smallest
+//     substrate that the bridge round-trip can pin (sibling of every
+//     prior "C1 substrate, C2 admit-widen, C3 probe" cadence in the
+//     campaign log).
+//   * Widen any admit predicate in `trajectory.py`. The 10 sibling
+//     guards `if printing.cost_reductions or printing.external_cost_
+//     reductions: return False` stay in place; Gigastorm Titan +
+//     Lashwhip Predator STAY DECLINED post-Cycle-1.
+//   * Add a per-card real-EoE probe (Cycle 3/4 ships).
+//
+// **Substrate-only invariant pin (`tests/test_cost_reduction_
+// substrate_cycle_1.py`):** Gigastorm Titan + Lashwhip Predator
+// remain DECLINED at the live admit gate post-Cycle-1. Cycle 2 will
+// invert these pins when the admit predicate widens.
+
+/// A spell-local cost-reduction rule. Mirrors Python's
+/// `CostReduction` dataclass at `src/mtg_bot/cards/base.py:308`
+/// (`amount: int`, `condition: Condition`). **cost-reduction
+/// substrate Phase 1.** `amount` is the unit generic reduction; for
+/// Phase-1 boolean conditions the multiplier is implicitly 1
+/// (Python: `Condition.multiplier` default
+/// `effects/conditions.py:69-75`), so the reduction is exactly
+/// `amount` generic when the condition holds. Phase 2 will add a
+/// variable-multiplier path (`PerDifferentlyNamedLand`); Phase 3
+/// will add an `ExternalCostReduction` sibling struct + the
+/// battlefield-scan path. Both are out of scope for Cycle 1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CostReduction {
+    pub amount: i32,
+    pub condition: Condition,
+}
+
+/// The Phase-1 hard-coded predicate-token subset. Phase 1 carries
+/// only `Creature` (Lashwhip Predator's `IsCreature` filter); Phase 2+
+/// extends this enum to `Artifact`, `Enchantment`, etc. as the
+/// predicate algebra port progresses. Kept as a separate enum (not a
+/// string) so the Rust parser hard-errors on an unknown token at
+/// registry build, matching the "silent no-op pipeline runs are
+/// pipeline bugs" discipline. Mirrors a 1-variant subset of Python's
+/// `ObjectPredicate` filter algebra at
+/// `src/mtg_bot/effects/object_predicates.py`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeFilter {
+    /// Python `IsCreature`: `obj.card_types.contains("Creature")`.
+    Creature,
+}
+
+/// The Phase-1 boolean-condition subset of Python's structural
+/// `Condition` grammar (`src/mtg_bot/effects/conditions.py`).
+/// Phase 1 ports EXACTLY two variants — the only two sub-shape A
+/// uses. The full `Condition`-grammar port (variable multipliers,
+/// target-dependent, predicate algebra, And/Or/Not combinators) is
+/// Phase 2+. This is the reason cost-reduction is strictly larger
+/// than warp (warp needed NO condition grammar — see
+/// `docs/WARP_COST_PHASE1_DESIGN.md` §0).
+///
+/// **Naming convention:** the Rust enum names mirror Python's class
+/// names ONE-TO-ONE so the cross-engine bridge wire tokens
+/// (`condition_kind` strings) round-trip without ambiguity. When
+/// Phase 2 adds `PerDifferentlyNamedLand`, the new variant is
+/// `Condition::PerDifferentlyNamedLand` with the same name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Condition {
+    /// Python `AnotherSpellCastThisTurn`
+    /// (`effects/conditions.py:235-244`): the caster has cast >=1
+    /// OTHER spell this turn. Reads the pre-existing per-player
+    /// `Player.spells_cast_this_turn` counter (already landed via
+    /// MMM Pin 1, `state.rs:1017`) which counts strictly-previous
+    /// casts (incremented AFTER cost-pay in every cast primitive,
+    /// mirroring Python — `effects/conditions.py:238-244` SoT
+    /// docstring).
+    AnotherSpellCastThisTurn,
+    /// Python `OpponentsControlAtLeast(IsCreature(), n)`
+    /// (`effects/conditions.py:206-228`): some opponent(s) of the
+    /// caster control, in total across all opponents, at least `n`
+    /// permanents matching the creature predicate. Phase 1 hard-codes
+    /// the `IsCreature` filter token (the only predicate sub-shape A
+    /// uses); the generic predicate algebra is Phase 2+.
+    OpponentsControlAtLeast { type_filter: TypeFilter, count: i32 },
+}
+
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
 /// of Python's `ActivatedAbility` dataclass at
 /// `src/mtg_bot/effects/base.py:447`.
@@ -10395,6 +10518,24 @@ pub struct CardPrinting {
     /// divergence vs Python's `actions.py:1099-1101`. Closing that
     /// gap is this slice's whole point.
     pub enters_tapped_unless_any_player_life_at_most: i32,
+    /// **cost-reduction substrate Phase 1 — Cycle 1 (substrate-only).**
+    /// Spell-local boolean-condition `CostReduction` riders. Empty
+    /// Vec = no reduction (back-compat default — every pre-Phase-1
+    /// registry dict omits the `cost_reductions` key, which the
+    /// parser maps to `Vec::new()`, identical to the
+    /// `triggered_abilities` / `subtypes` Option-parse shape).
+    ///
+    /// **Cycle 1 reader scope: NONE.** The `eff()` seam at
+    /// `state_ops_legal.rs:742` STAYS identity this cycle; no
+    /// consumer reads this field yet. Cycle 2 will extend `eff()`
+    /// to walk the rules; today the field exists only so the bridge
+    /// can pin parse + round-trip + the substrate-only invariant
+    /// (Gigastorm Titan + Lashwhip Predator carrying populated
+    /// `cost_reductions` STILL fail the admit gate post-Cycle-1).
+    ///
+    /// Mirrors Python's `CardPrinting.cost_reductions:
+    /// tuple[CostReduction, ...]` at `src/mtg_bot/cards/base.py:764`.
+    pub cost_reductions: Vec<CostReduction>,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -15062,6 +15203,180 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         })?,
         None => 0,
     };
+    // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only).
+    // Optional list of spell-local CostReduction rules. Missing key
+    // -> empty Vec (back-compat — every pre-Phase-1 registry dict
+    // omits it). Each entry is a dict with shape:
+    //
+    //   {
+    //     "amount": int,
+    //     "condition_kind": str,                  # Phase-1 grammar tag
+    //     "condition_args": tuple,                # parsed per tag
+    //   }
+    //
+    // Phase 1 supports EXACTLY two condition_kind tokens:
+    //   * "another_spell_cast_this_turn" — args = () (empty tuple)
+    //   * "opponents_control_at_least"   — args = ("creature", n)
+    //
+    // Any other condition_kind is a hard `Err` at registry build (the
+    // §2 Rust-side teeth — `silent no-op pipeline runs are pipeline
+    // bugs`). Phase 2 will add `per_differently_named_land`; Phase 3
+    // will add the `ExternalCostReduction` sibling parse arm + the
+    // `nth_spell_this_turn` / `per_controlled` variants.
+    let cost_reductions: Vec<CostReduction> =
+        match dict.get_item("cost_reductions")? {
+            Some(cr_any) => {
+                let lst = cr_any.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err(
+                        "cost_reductions must be a list of dicts",
+                    )
+                })?;
+                let mut out = Vec::with_capacity(lst.len());
+                for item in lst.iter() {
+                    let d = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err(
+                            "cost_reductions[i] must be a dict",
+                        )
+                    })?;
+                    let amount_any = d.get_item("amount")?.ok_or_else(|| {
+                        PyValueError::new_err(
+                            "cost_reductions[i].amount is required",
+                        )
+                    })?;
+                    let amount: i32 = amount_any.extract().map_err(|_| {
+                        PyValueError::new_err(
+                            "cost_reductions[i].amount must be an int",
+                        )
+                    })?;
+                    let kind_any = d
+                        .get_item("condition_kind")?
+                        .ok_or_else(|| {
+                            PyValueError::new_err(
+                                "cost_reductions[i].condition_kind is \
+                                 required",
+                            )
+                        })?;
+                    let kind: String = kind_any.extract().map_err(|_| {
+                        PyValueError::new_err(
+                            "cost_reductions[i].condition_kind must be a \
+                             string",
+                        )
+                    })?;
+                    let condition = match kind.as_str() {
+                        "another_spell_cast_this_turn" => {
+                            // Args must be the empty tuple (the §2 teeth
+                            // — an arg-shape drift on a known kind is
+                            // also a hard error).
+                            if let Some(args_any) =
+                                d.get_item("condition_args")?
+                            {
+                                let tup =
+                                    args_any.downcast::<PyTuple>().map_err(
+                                        |_| {
+                                            PyValueError::new_err(
+                                                "cost_reductions[i].\
+                                                 condition_args must be \
+                                                 a tuple",
+                                            )
+                                        },
+                                    )?;
+                                if tup.len() != 0 {
+                                    return Err(PyValueError::new_err(
+                                        format!(
+                                            "cost_reductions[i] with \
+                                             condition_kind \
+                                             'another_spell_cast_this_turn'\
+                                             takes 0 args; got {}",
+                                            tup.len(),
+                                        ),
+                                    ));
+                                }
+                            }
+                            Condition::AnotherSpellCastThisTurn
+                        }
+                        "opponents_control_at_least" => {
+                            let args_any = d
+                                .get_item("condition_args")?
+                                .ok_or_else(|| {
+                                    PyValueError::new_err(
+                                        "cost_reductions[i] with \
+                                         condition_kind \
+                                         'opponents_control_at_least' \
+                                         requires condition_args",
+                                    )
+                                })?;
+                            let tup =
+                                args_any.downcast::<PyTuple>().map_err(
+                                    |_| {
+                                        PyValueError::new_err(
+                                            "cost_reductions[i].\
+                                             condition_args must be a \
+                                             tuple",
+                                        )
+                                    },
+                                )?;
+                            if tup.len() != 2 {
+                                return Err(PyValueError::new_err(format!(
+                                    "cost_reductions[i] with \
+                                     condition_kind \
+                                     'opponents_control_at_least' takes \
+                                     2 args (pred, n); got {}",
+                                    tup.len(),
+                                )));
+                            }
+                            let pred_token: String = tup
+                                .get_item(0)?
+                                .extract()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "cost_reductions[i].\
+                                         condition_args[0] must be a \
+                                         string (predicate token)",
+                                    )
+                                })?;
+                            let type_filter = match pred_token.as_str() {
+                                "creature" => TypeFilter::Creature,
+                                other => {
+                                    return Err(PyValueError::new_err(
+                                        format!(
+                                            "cost_reductions[i] Phase-1 \
+                                             only supports the 'creature' \
+                                             predicate; got {other:?}"
+                                        ),
+                                    ))
+                                }
+                            };
+                            let count: i32 = tup
+                                .get_item(1)?
+                                .extract()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "cost_reductions[i].\
+                                         condition_args[1] must be an \
+                                         int (count)",
+                                    )
+                                })?;
+                            Condition::OpponentsControlAtLeast {
+                                type_filter,
+                                count,
+                            }
+                        }
+                        other => {
+                            return Err(PyValueError::new_err(format!(
+                                "cost_reductions[i] Phase-1 does not \
+                                 support condition_kind {other:?} \
+                                 (Phase 2+ adds \
+                                 per_differently_named_land / \
+                                 nth_spell_this_turn / per_controlled)"
+                            )))
+                        }
+                    };
+                    out.push(CostReduction { amount, condition });
+                }
+                out
+            }
+            None => Vec::new(),
+        };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -15101,6 +15416,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         dynamic_pt_formula,
         restricts_noncreature_spells_to_one_per_turn,
         enters_tapped_unless_any_player_life_at_most,
+        cost_reductions,
     })
 }
 

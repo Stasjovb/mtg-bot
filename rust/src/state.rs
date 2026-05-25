@@ -3727,6 +3727,12 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
+        // 2026-05-24): synthetic-state printings carry no spell-local
+        // cost-reduction rules. Back-compat default (empty Vec mirrors
+        // every other unused optional-list field; the parser maps the
+        // absent `cost_reductions` registry-dict key to the same).
+        cost_reductions: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -3824,6 +3830,12 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
+        // 2026-05-24): synthetic-state printings carry no spell-local
+        // cost-reduction rules. Back-compat default (empty Vec mirrors
+        // every other unused optional-list field; the parser maps the
+        // absent `cost_reductions` registry-dict key to the same).
+        cost_reductions: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -3934,6 +3946,12 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
+        // 2026-05-24): synthetic-state printings carry no spell-local
+        // cost-reduction rules. Back-compat default (empty Vec mirrors
+        // every other unused optional-list field; the parser maps the
+        // absent `cost_reductions` registry-dict key to the same).
+        cost_reductions: Vec::new(),
     });
     let registry = builder.snapshot();
 
