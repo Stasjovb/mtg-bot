@@ -1686,6 +1686,73 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Cycle 3 (mirror of the Phase-1.5 trio's
     # ``test_probe_warp_admitted.py`` per-card probe shape).
     ("enters", "source_is_self", "look_top_n_put_one_in_hand_rest_to_graveyard"),
+    # **Weftwalking Cycle 2 (2026-05-24) — 10th ENTERS+IsSelf leaf.**
+    # Adds ``conditional_if_cast_from_hand`` under (ENTERS,
+    # source_is_self). Sole admitted EoE consumer at HEAD is
+    # **Weftwalking** ({4}{U}{U} Enchantment, ~3,680 17lands decks —
+    # the #1 multi-gated-tail closure target from the 2026-05-24
+    # tractability rescout). Parser-emitted shape: ETB trigger with
+    # ``IsSelf`` predicate + ``ConditionalIfCastFromHand`` whose
+    # ``inner_effect`` is the canonical
+    # ``Sequence(ShuffleZonesIntoLibrary(zones=('hand','graveyard')),
+    # DrawCards(amount=7))`` composite.
+    #
+    # **Bridge support (all pre-existed in C1 substrate commit
+    # ``61f04bef`` / main merge ``d18bb3a4``; this slice only wires
+    # the safe-trigger recognizer).**
+    #   * Rust ``Effect::ConditionalIfCastFromHand { inner:
+    #     Box<Effect> }`` (rust/src/cards.rs — recursive composer,
+    #     sibling of MayDo / IfYouDo / OptionalSacAnotherForEffect) +
+    #     parse_effect arm + to_pydict arm + resolve arm.
+    #   * Rust ``Effect::ShuffleZonesIntoLibrary { zones:
+    #     Vec<String> }`` (rust/src/cards.rs — flat leaf, sibling of
+    #     zone-move shapes) + parse/to_pydict/resolve arms.
+    #   * Cross-engine bridge arms at
+    #     ``cross_engine.py:2295-2387`` (recursive
+    #     ``conditional_if_cast_from_hand`` + flat-leaf
+    #     ``shuffle_zones_into_library``).
+    #   * Reverse-serializer leaves in this module (including the
+    #     nested-``Sequence``-as-leaf arm so the composer-wrapping-
+    #     Sequence shape round-trips byte-equal — at lines 5607-5635
+    #     for the new variants and 6430-6437 for the nested-Sequence
+    #     arm).
+    #
+    # **§2 silent-mistranslation teeth.** The recognizer
+    # (``_python_ta_to_safe_dict``) gates on the EXACT canonical
+    # Weftwalking inner shape: ``Sequence(ShuffleZonesIntoLibrary(
+    # zones=('hand','graveyard')), DrawCards(amount=7))``. Any other
+    # inner shape (different zones, different draw count, non-
+    # Sequence inner, single-leaf inner, nested combinator inner)
+    # falls through to the filter drop. The narrow gate is the
+    # AV-C2 / CH-C2 surgical-widen precedent: a future
+    # ConditionalIfCastFromHand carrier with a different inner ships
+    # its own admit slice with a fresh ``_SAFE_TRIGGERS`` entry +
+    # the matching widen, NOT a blanket combinator widen.
+    #
+    # **Verify-first silent-auto-grow check.** Live HEAD scan
+    # confirmed Weftwalking is the SOLE ``ConditionalIfCastFromHand``
+    # carrier system-wide (every card type / every event / every
+    # predicate combination). No other carrier silently auto-grows
+    # under this widen. The widen is genuinely Weftwalking-scoped at
+    # HEAD — same scoped-widen discipline as today's AV C2 LEAVES
+    # leaf and CH C2 ``LookTopNPutOneInHandRestToGraveyard`` leaf.
+    #
+    # **Cross-engine resolve contract.** Both engines degrade the
+    # ``ConditionalIfCastFromHand`` gate to "always run the inner
+    # effect" (the documented engine simplification at
+    # combinators.py:1518-1536 — the cast-via-hand flag is ephemeral
+    # and cleared by ``put_into_battlefield`` before ETB triggers
+    # fire, so neither engine has a reliable resolve-time persistent
+    # flag); inner resolve walks both Sequence children in order: the
+    # ShuffleZonesIntoLibrary leaf moves the controller's hand +
+    # graveyard back into the library and shuffles (deterministic
+    # zone-move; no PendingDecision; the parser-faithful "hand" and
+    # "graveyard" zones are the only ones honored at resolve time on
+    # both engines per cross_engine.py:2360-2365); the DrawCards(7)
+    # leaf draws 7 cards. Genuine per-card real-EoE byte-equality
+    # probe under normal-cast lifecycle (Weftwalking has no
+    # warp_cost) ships in Cycle 3.
+    ("enters", "source_is_self", "conditional_if_cast_from_hand"),
     # Surveil extension (round-42 carddef-triggers slice). Adds the
     # bare-shape ``surveil`` effect (``count`` payload key only — no
     # ``use_artifact_count`` rider) under both ENTERS and DIES events
@@ -2865,6 +2932,32 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
     # provenance + the C3 per-card real-EoE byte-equality probe plan.
     "anticausal_vestige_leaves_effect": frozenset({"kind"}),
+    # **Weftwalking Cycle 2 (2026-05-24)** —
+    # ``conditional_if_cast_from_hand`` recursive composer: two payload
+    # keys (``kind`` + ``inner``). Rust's
+    # ``Effect::ConditionalIfCastFromHand { inner: Box<Effect> }``
+    # (rust/src/cards.rs — recursive Box payload, sibling of MayDo /
+    # IfYouDo / OptionalSacAnotherForEffect) carries the ``inner``
+    # field as a nested Effect dict; the parse_effect arm recursively
+    # parses ``inner`` via the same parse_effect dispatcher. Python's
+    # ``ConditionalIfCastFromHand(inner_effect: Effect)`` (effects/
+    # combinators.py:1513) is the matched class; the field-name
+    # translation seam (Rust ``inner`` ↔ Python ``inner_effect``)
+    # lives in the bridge arm at ``cross_engine.py:2295-2346`` and
+    # the reverse-serializer leaf at trajectory.py:5607-5614 (both
+    # shipped in C1 substrate commit ``61f04bef``). The recognizer in
+    # :func:`_python_ta_to_safe_dict` gates on the EXACT canonical
+    # Weftwalking inner shape (``Sequence(ShuffleZonesIntoLibrary(
+    # zones=('hand','graveyard')), DrawCards(amount=7))``); the
+    # ``inner`` field passes the dict-shape whitelist (it is a nested
+    # dict, not an unrecognized scalar key) but the recognizer's
+    # narrow-shape gate is the §2 silent-mistranslation teeth — any
+    # other inner shape gets rejected before reaching this whitelist.
+    # See the ``("enters", "source_is_self",
+    # "conditional_if_cast_from_hand")`` entry in
+    # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
+    # provenance + the C3 per-card real-EoE byte-equality probe plan.
+    "conditional_if_cast_from_hand": frozenset({"kind", "inner"}),
 }
 
 
@@ -3489,6 +3582,17 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # this slice admits. Imported alongside the other effect classes
     # so the ``isinstance`` dispatch below recognizes it.
     from mtg_bot.effects.bespoke import AnticausalVestigeLeavesEffect
+    # **Weftwalking Cycle 2 (2026-05-24).** The recursive composer
+    # whose narrow ConditionalIfCastFromHand(Sequence(Shuffle..., Draw))
+    # shape this slice admits. Imported alongside the other effect
+    # classes so the ``isinstance`` dispatch below recognizes the
+    # combinator (the inner Sequence + ShuffleZonesIntoLibrary +
+    # DrawCards leaves are imported above already).
+    from mtg_bot.effects.combinators import (
+        ConditionalIfCastFromHand,
+        Sequence,
+    )
+    from mtg_bot.effects.generic.zone_moves import ShuffleZonesIntoLibrary
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -3632,11 +3736,39 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # uses the same primitive at n=4 with ``reveal_chosen=True``)
             # is a Sorcery (spell_effect, not a triggered ability), so
             # it does NOT flow through this safe-trigger path.
+            # **Weftwalking Cycle 2 (2026-05-24) — 10th ENTERS+IsSelf
+            # leaf.** Adds ``conditional_if_cast_from_hand`` to the safe
+            # set. Sole admitted EoE consumer at HEAD is **Weftwalking**
+            # ({4}{U}{U} Enchantment, ~3,680 17lands decks — the #1
+            # multi-gated-tail closure target from the 2026-05-24
+            # tractability rescout). Parser-emitted shape: ETB trigger
+            # with ``IsSelf`` predicate + ``ConditionalIfCastFromHand``
+            # whose ``inner_effect`` is the NARROW
+            # ``Sequence(ShuffleZonesIntoLibrary(zones=('hand',
+            # 'graveyard')), DrawCards(amount=7))`` composite — the
+            # admit gate in the effect-class arm below enforces that
+            # exact inner shape; the wrap stays SURGICAL (does NOT
+            # silently admit arbitrary combinator inners). Bridge
+            # support (both Rust + cross_engine bridge arms) shipped
+            # in C1 substrate commit ``61f04bef``.
+            #
+            # **Silent auto-grow check.** Live HEAD scan confirmed
+            # Weftwalking is the SOLE carrier of
+            # ``ConditionalIfCastFromHand`` system-wide (any card type,
+            # any event/predicate combination); no other Enchantment /
+            # Creature / Spell carries the combinator. The widen is
+            # genuinely Weftwalking-scoped at HEAD; a future carrier
+            # with a different inner shape would be rejected by the
+            # narrow ``inner_effect``-shape gate in the effect-class
+            # arm (would need a paired widen + new ``_SAFE_TRIGGERS``
+            # entry, same pattern as the AV / CH C2 leaf-set
+            # extensions).
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
                 "create_token", "create_token_tapped",
                 "return_target_permanent_you_control",
                 "look_top_n_put_one_in_hand_rest_to_graveyard",
+                "conditional_if_cast_from_hand",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -4285,6 +4417,80 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # extension.
         eff_kind = "anticausal_vestige_leaves_effect"
         eff_dict = {"kind": "anticausal_vestige_leaves_effect"}
+    elif isinstance(eff, ConditionalIfCastFromHand):
+        # **Weftwalking Cycle 2 (2026-05-24) — the FIRST recursive
+        # combinator leaf in the safe set.** Python's
+        # ``ConditionalIfCastFromHand(inner_effect: Effect)``
+        # (effects/combinators.py:1513) wraps an inner Effect with the
+        # "if you cast it" intervening-if gate. Both engines degrade
+        # to "always run the inner effect" per the documented engine
+        # simplification at combinators.py:1518-1536 (the
+        # ``cast_via_hand`` provenance flag is ephemeral, cleared by
+        # ``put_into_battlefield`` before ETB triggers fire — neither
+        # engine has a reliable persistent flag at resolve time).
+        #
+        # **NARROW INNER SHAPE GATE (the §2 silent-mistranslation
+        # teeth).** The wrap stays surgical: the recognizer admits
+        # ONLY the canonical Weftwalking inner — a ``Sequence`` of
+        # exactly two children, ``ShuffleZonesIntoLibrary(zones=
+        # ('hand', 'graveyard'))`` followed by ``DrawCards(amount=7)``.
+        # Any other inner shape (different zones, different draw
+        # count, different children, single-leaf inner, nested
+        # combinator inner) falls through to the filter drop path —
+        # a future EoE consumer with a different inner ships its own
+        # admit slice with the matching widen. Today Weftwalking is
+        # the SOLE ConditionalIfCastFromHand carrier system-wide
+        # (verified live), so the narrow gate is genuinely the live
+        # admit pattern; it positions the substrate for safe future
+        # widens (each new inner shape = one widen + one
+        # ``_SAFE_TRIGGERS`` entry + a fresh real-EoE probe).
+        #
+        # **Bridge support pre-existed (C1 substrate commit
+        # ``61f04bef`` + main merge ``d18bb3a4``).** Rust
+        # ``Effect::ConditionalIfCastFromHand { inner: Box<Effect> }``
+        # parse + to_pydict + resolve arms; Rust
+        # ``Effect::ShuffleZonesIntoLibrary { zones: Vec<String> }``
+        # parse + to_pydict + resolve arms; cross_engine bridge arms
+        # (recursive ``conditional_if_cast_from_hand`` + flat-leaf
+        # ``shuffle_zones_into_library``); reverse-serializer leaves
+        # in this module (including the nested-Sequence-as-leaf arm
+        # so the composer-wrapping-Sequence shape round-trips
+        # byte-equal). C2 only adds the recognizer arm — the load-
+        # bearing safe-trigger admit gate.
+        #
+        # **Field-name translation: Python ``inner_effect`` -> Rust
+        # ``inner``.** Mirrors the C1 forward bridge arm at
+        # ``cross_engine.py:2295-2346`` (Rust ``inner`` ↔ Python
+        # ``inner_effect``) and the reverse-serializer leaf at
+        # trajectory.py:5607-5614.
+        inner = eff.inner_effect
+        if not isinstance(inner, Sequence):
+            return None
+        if len(inner.effects) != 2:
+            return None
+        shuffle, draw = inner.effects
+        if not isinstance(shuffle, ShuffleZonesIntoLibrary):
+            return None
+        if tuple(shuffle.zones) != ("hand", "graveyard"):
+            return None
+        if not isinstance(draw, DrawCards):
+            return None
+        if int(draw.amount) != 7:
+            return None
+        eff_kind = "conditional_if_cast_from_hand"
+        eff_dict = {
+            "kind": "conditional_if_cast_from_hand",
+            "inner": {
+                "kind": "sequence",
+                "effects": [
+                    {
+                        "kind": "shuffle_zones_into_library",
+                        "zones": ["hand", "graveyard"],
+                    },
+                    {"kind": "draw_cards", "count": 7},
+                ],
+            },
+        }
     else:
         return None
     if eff_kind not in safe_effect_kinds:
@@ -8457,6 +8663,207 @@ def _printing_is_bridge_simple_cast_restriction_enchantment(
     return True
 
 
+def _printing_is_bridge_simple_enchantment(printing) -> bool:
+    """True iff a CardPrinting is a vanilla non-Creature Enchantment
+    whose ETB triggered_abilities ALL round-trip through the safe-
+    trigger recognizer.
+
+    **Weftwalking Cycle 2 (2026-05-24).** New admit arm for the
+    enchantment-side safe-trigger path — the structural sibling of
+    :func:`_printing_is_bridge_simple_creature` on the Enchantment
+    type axis. Weftwalking ({4}{U}{U} Enchantment with ETB+IsSelf+
+    ConditionalIfCastFromHand(Sequence(ShuffleZonesIntoLibrary,
+    DrawCards(7))), ~3,680 17lands decks — the #1 multi-gated-tail
+    closure target) is the sole admitted EoE consumer at HEAD.
+
+    **Why a new arm vs. extending the creature arm?**
+    :func:`_printing_is_bridge_simple_creature` gates on
+    ``"Creature" in card_types`` AND power/toughness non-None AND a
+    Creature-specific dispatch table (``dynamic_pt_formula`` admit
+    set, ``ward_cost`` rejection, P/T-bonus statics path) downstream
+    in ``_printing_to_card_def``. Extending it to also accept
+    Enchantments-with-only-safe-triggers would cascade through many
+    Creature-specific downstream assumptions (the materializer's
+    ``card_type="Creature"`` branch threads ``power`` / ``toughness``
+    / ``keywords`` / Creature-only static layers). A new arm parallel
+    to :func:`_printing_is_bridge_simple_cast_restriction_enchantment`
+    is the cleaner cleavage — same Enchantment-type gate, same §2
+    rider-rejection block, but with the ``triggered_abilities`` half
+    OPEN (gated on every entry round-tripping the safe-trigger
+    recognizer, matching the Creature arm's discipline) and the
+    static-restriction flag OFF (it doesn't apply).
+
+    **§2 silent-mistranslation teeth.** The admit set is gated by:
+
+      * ``Enchantment`` in card_types, ``Creature`` NOT in card_types
+        (Enchantment-Creature dual-typed cards ride the Creature arm).
+      * Every ``triggered_ability`` round-trips through
+        :func:`_python_ta_to_safe_dict` (the same per-trigger gate
+        the Creature arm uses — the Weftwalking C2 recognizer widen
+        is what makes Weftwalking's trigger pass this gate today).
+      * No ``activated_abilities`` / ``static_abilities`` /
+        ``spell_effect`` / aura riders / warp / kicker / impending /
+        room / X-cost / cost-reduction / station / dynamic-PT-
+        formula / loyalty / ward / Aura-ness / uncounterable-grant
+        / cast-restriction (the cast-restriction-enchantment arm
+        handles its own narrow shape — this arm refuses overlap).
+      * Power / toughness must both be None (Enchantments are not
+        creatures; an Enchantment-Creature is handled by the
+        Creature arm above).
+      * No printing keywords (vanilla Enchantments have none; a
+        keyword-bearing Enchantment would need its own substrate).
+      * Mana cost is parseable (mirrors the established
+        ``_parse_mana_cost_string`` gate from the Creature /
+        cast-restriction-enchantment arms).
+
+    **Verify-first silent-auto-grow check.** Live HEAD scan of all
+    40 non-Creature Enchantments found 34 carry one or more
+    triggered_abilities; Weftwalking is the SOLE carrier whose
+    trigger set round-trips the safe-trigger recognizer post-C2
+    widen (every other Enchantment trigger uses an effect class /
+    event / predicate combination NOT in the safe set — Banishing
+    Light's bespoke exile-and-return, the Duskmourn Room halves'
+    bespoke Room mechanics, Burgeoning's And/landfall, etc.). The
+    C2 admit arm flips exactly one card (Weftwalking) — no silent
+    auto-grows — same surgical-by-construction discipline as
+    today's AV C2 single-card flip + CH C2 single-card flip.
+    """
+    # Must be a non-Creature Enchantment (Enchantment-Creature dual-
+    # typed cards ride the Creature arm above — the dispatch order
+    # in :func:`_filter_deck_to_bridge_supported` puts the
+    # Creature-side arms first, so a dual-typed Enchantment that
+    # passes the Creature arm never reaches this one; the explicit
+    # ``Creature not in card_types`` gate here is defense-in-depth
+    # against a reordering regression).
+    if "Enchantment" not in printing.card_types:
+        return False
+    if "Creature" in printing.card_types:
+        return False
+    # Power / toughness must be unset (non-Creature). Defense-in-
+    # depth against a printing carrying P/T without the Creature
+    # type (parser shouldn't emit that, but guard against drift).
+    if printing.power is not None or printing.toughness is not None:
+        return False
+    # No keywords — vanilla Enchantment shape. A keyword-bearing
+    # Enchantment would need its own substrate (the §2 keyword-
+    # round-trip discipline the Creature arm enforces via
+    # ``_SAFE_KEYWORDS``; Enchantments don't typically carry combat
+    # keywords, but future printings might).
+    if printing.keywords:
+        return False
+    # Every triggered ability must round-trip the safe-trigger gate.
+    # The Weftwalking C2 recognizer widen (this slice) is what flips
+    # Weftwalking's ENTERS+IsSelf+ConditionalIfCastFromHand(Sequence(
+    # ShuffleZonesIntoLibrary(hand+graveyard), DrawCards(7))) through
+    # this gate; pre-C2 the recognizer rejected the wrap.
+    if not printing.triggered_abilities:
+        # **§2 vanilla-Enchantment carveout (verify-first 2026-05-24).**
+        # A vanilla non-Creature Enchantment with NO triggered
+        # abilities and NO other features would technically pass every
+        # gate above, but admitting it via this arm would silently
+        # subsume a different substrate: the "honest no-op" enchantment
+        # surface (Leyline of Mutation in the EoE pool today). That
+        # surface needs its OWN per-card audit + carddef shape decision
+        # (the printed lines parse to no-ops on Python, but the bridge
+        # claim isn't pinned anywhere). Rejecting it here preserves the
+        # no-fallback-hybrid discipline — a future slice landing the
+        # vanilla-no-trigger-Enchantment substrate ships its own admit
+        # arm + per-card probe + the honest-no-op pin set.
+        return False
+    # **§2 Weftwalking-shape gate (verify-first 2026-05-24).** The arm
+    # admits an Enchantment ONLY when AT LEAST ONE of its triggers
+    # carries the C2-target ConditionalIfCastFromHand shape. Sibling
+    # surgical-narrowness teeth to today's AV C2 (LEAVES-event-only
+    # leaf set) + CH C2 (creature-side narrow effect-set widen). The
+    # verify-first scan caught a sibling auto-grow concern (Bioengineered
+    # Future — ENTERS+IsSelf+CreateToken(Lander), a Lander-token-
+    # enchantment shape that would silently flip here without an admit-
+    # set bump on the Enchantment-Lander axis — a separate substrate
+    # whose own per-card probe / honest stops are NOT in scope for the
+    # Weftwalking C2 slice). The narrow gate keeps the C2 admit set =
+    # {Weftwalking} at HEAD, the surgical single-card flip the dispatch
+    # called for; a future slice landing the Enchantment-Lander shape
+    # ships its own per-card admit slice + probe.
+    from mtg_bot.effects.combinators import (
+        ConditionalIfCastFromHand as _CICFH,
+    )
+    has_target_shape = False
+    for ta in printing.triggered_abilities:
+        if _python_ta_to_safe_dict(ta) is None:
+            return False
+        if isinstance(ta.effect, _CICFH):
+            has_target_shape = True
+    if not has_target_shape:
+        return False
+    # No activated abilities — the bridge's CardDef.triggered_abilities
+    # tuple has no activated-ability slot for non-token printings (the
+    # ``token_activated_abilities`` field is the round-49 token-specific
+    # path); a future activated-Enchantment substrate would extend
+    # this.
+    if printing.activated_abilities:
+        return False
+    # No static abilities — Enchantments commonly carry rule-text
+    # statics (Deafening Silence's ``restricts_noncreature_spells_to_
+    # one_per_turn`` rides the cast-restriction arm via its own
+    # printing-level bool; layered/anthem statics would need an
+    # Enchantment-side static substrate).
+    if printing.static_abilities:
+        return False
+    # No spell effect — Enchantments don't have a spell_effect (they
+    # resolve as a permanent ETB, NOT as an Instant/Sorcery from the
+    # stack); defense-in-depth against parser drift.
+    if printing.spell_effect is not None:
+        return False
+    # No alt-cost / mode riders — pure single-cost Enchantment shape.
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    # No X-cost / cost-reduction / station / dynamic-PT-formula /
+    # loyalty / ward / Aura-ness / uncounterable-grant — the same §2
+    # rider-rejection block the cast-restriction-enchantment arm
+    # uses. Each rejected rider would need its own substrate before
+    # an Enchantment with that surface could ride this admit arm.
+    mc = printing.mana_cost
+    if mc is not None and getattr(mc, "x_pips", 0):
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if getattr(printing, "is_aura", False):
+        return False
+    if getattr(printing, "spell_is_uncounterable", False):
+        return False
+    if getattr(printing, "grants_creature_spells_uncounterable", False):
+        return False
+    # The cast-restriction-enchantment arm above handles the
+    # Deafening-Silence shape (printing-level
+    # ``restricts_noncreature_spells_to_one_per_turn`` bool). This
+    # arm REFUSES overlap — a printing carrying that flag would NOT
+    # have triggered_abilities (Deafening Silence has none), so the
+    # disjuncts are mutually exclusive by construction; the explicit
+    # refusal here is defense-in-depth against a future printing
+    # combining both surfaces (which would need its own substrate).
+    if getattr(
+        printing, "restricts_noncreature_spells_to_one_per_turn", False
+    ):
+        return False
+    # Mana cost must be parseable (mirrors the established gate on
+    # the sibling Enchantment / Creature arms).
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — SELF-scope conditional bonus admit (round-81)
 # ---------------------------------------------------------------------------
@@ -9572,6 +9979,31 @@ def _printing_to_card_def(printing) -> CardDef:
             mana_cost_colored=colored,
             restricts_noncreature_spells_to_one_per_turn=True,
         )
+    if _printing_is_bridge_simple_enchantment(printing):
+        # **Weftwalking Cycle 2 (2026-05-24).** Vanilla non-Creature
+        # Enchantment whose every ETB triggered_ability round-trips
+        # through the safe-trigger recognizer (the C2 recognizer
+        # widen lands the canonical Weftwalking ETB shape). Materialize
+        # the CardDef with ``card_type="Enchantment"`` and the
+        # safe-dict round-trip of every triggered ability — the
+        # Enchantment-side sibling of the Creature arm's
+        # ``triggered_abilities = tuple(_python_ta_to_safe_dict(ta)
+        # for ta in printing.triggered_abilities)`` pattern. The
+        # admit arm's filter guarantees every entry round-trips
+        # cleanly, so this comprehension cannot emit ``None``.
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
+        return CardDef(
+            name=printing.name,
+            card_type="Enchantment",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            triggered_abilities=triggered_abilities,
+        )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "
         f"call _printing_is_bridge_* first to filter."
@@ -10556,6 +10988,32 @@ def _filter_deck_to_bridge_supported(
             # reset at the cleanup step. Closing this admits
             # Deafening Silence through the loader filter.
             or _printing_is_bridge_simple_cast_restriction_enchantment(
+                printing,
+            )
+            # **Weftwalking Cycle 2 (2026-05-24).** Vanilla non-Creature
+            # Enchantment whose every ETB triggered_ability round-trips
+            # through the safe-trigger recognizer (the C2 recognizer
+            # widen lands the canonical Weftwalking ETB shape). Sole
+            # admitted EoE consumer at HEAD is **Weftwalking**
+            # ({4}{U}{U} Enchantment with ETB+IsSelf+
+            # ConditionalIfCastFromHand(Sequence(ShuffleZonesIntoLibrary
+            # (hand+graveyard), DrawCards(7))), ~3,680 17lands decks —
+            # the #1 multi-gated-tail closure target from the
+            # 2026-05-24 tractability rescout). Rust-side gate rides
+            # the existing safe-trigger machinery + the C1-substrate
+            # ``Effect::ConditionalIfCastFromHand { inner: Box<Effect> }``
+            # + ``Effect::ShuffleZonesIntoLibrary { zones: Vec<String> }``
+            # variants (rust/src/cards.rs); the cross-engine bridge
+            # arms (cross_engine.py:2295-2387) round-trip both. Sibling
+            # arm to the cast-restriction-enchantment arm above on the
+            # Enchantment-type axis, but with the
+            # ``triggered_abilities`` half OPEN (every entry must
+            # round-trip the safe-trigger recognizer) and the
+            # ``restricts_noncreature_spells_to_one_per_turn`` flag
+            # explicitly OFF. The two arms are mutually exclusive by
+            # construction (Weftwalking has triggers + the flag off;
+            # Deafening Silence has no triggers + the flag on).
+            or _printing_is_bridge_simple_enchantment(
                 printing,
             )
             # Non-basic land substrate — phase 2 (round-85 N1): the

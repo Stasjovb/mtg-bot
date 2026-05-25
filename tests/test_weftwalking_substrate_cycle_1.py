@@ -39,21 +39,29 @@ substrate→admit-widen→probe cadence applied today):
   allowlist; the wrap is new vocabulary the recognizer hasn't been
   taught yet).
 
-* **Cycle 2 (next — admit widen).** Per the rescout (§ "#1 —
-  Weftwalking"), the cycle-2 work is the CH-paved 10th
-  ``ENTERS+IsSelf`` safe-trigger leaf widen: extend the recognizer's
-  safe-effect set to admit the ``conditional_if_cast_from_hand``
-  wrap with an ``inner`` whose ``kind`` is on a narrowed allowlist
-  (``sequence`` containing ``shuffle_zones_into_library`` +
-  ``draw_cards`` is the canonical Weftwalking shape; the wrap stays
-  surgical — does NOT silently admit arbitrary combinator inners).
-  Bumps the warp-arm / general safe-trigger admit set by exactly 1
-  (verify-first against HEAD count at the time the cycle-2 slice
-  lands; today's CH C2 set is the closest sibling reference). Flips
-  Weftwalking DECLINED → ADMITTED at whichever admit gate Cycle 2
-  surfaces (per the rescout the path is the safe-trigger ENTERS gate,
-  same as CH/AV today — the exact gate function will be confirmed
-  cycle-2-verify-first).
+* **Cycle 2 (LANDED 2026-05-24 — admit widen).** Wired the 10th
+  ``ENTERS+IsSelf`` safe-trigger leaf widen:
+  ``conditional_if_cast_from_hand`` with the EXACT canonical
+  Weftwalking inner gate (``Sequence(ShuffleZonesIntoLibrary(
+  zones=('hand','graveyard')), DrawCards(amount=7))``) — the
+  surgical-widen §2 teeth (any other inner shape stays declined).
+  Added the matching ``_SAFE_TRIGGERS`` triple + the
+  ``_SAFE_EFFECT_KEYS["conditional_if_cast_from_hand"] =
+  frozenset({"kind","inner"})`` whitelist. Wired a NEW
+  ``_printing_is_bridge_simple_enchantment`` admit arm (the
+  Enchantment-side sibling of
+  ``_printing_is_bridge_simple_creature`` — a fresh arm rather than
+  extending the Creature arm because the latter cascades through
+  Creature-specific downstream assumptions). The arm sits in the
+  ``_filter_deck_to_bridge_supported`` disjunct chain immediately
+  after ``_printing_is_bridge_simple_cast_restriction_enchantment``,
+  with the two Enchantment arms mutually exclusive by construction
+  (Weftwalking has triggers + the cast-restriction flag off;
+  Deafening Silence has no triggers + the flag on). Single-card
+  FLIP, no silent auto-grows (verified live: Weftwalking is the
+  SOLE ``ConditionalIfCastFromHand`` carrier system-wide).
+  Inverted Pin #6 from "STAYS DECLINED" to "NOW ADMITS" + added
+  the printing-level sibling pin.
 
 * **Cycle 3 (after — per-card probe + warp-cast lifecycle).** Per the
   rescout (§ "#1 — Weftwalking"), Cycle 3 ships the per-card real-
@@ -133,23 +141,26 @@ substrate→admit-widen→probe cadence applied today):
    byte-equal — without it the composer-wrapping-Sequence shape
    would bail with ``None`` at the leaf walker.
 
-6. **Substrate-only invariant — Weftwalking STAYS DECLINED at the
-   safe-trigger recognizer.**
-   ``trajectory._python_ta_to_safe_dict(weftwalking.triggered_abilities[0])
-   is None`` post-Cycle-1: the recognizer's effect-class chain does
-   not admit ``ConditionalIfCastFromHand`` (the wrap is new
-   vocabulary; the recognizer's IsSelf+ENTERS branches today admit
-   only the narrow safe-effect allowlist — ``DrawCards`` /
-   ``GainLife`` / ``Scry`` / ``Surveil`` / ``LookTopNPutOneInHandRest
-   ToGraveyard`` / ``CreateToken`` / ``PutPlusOneCounterOnSelf`` /
-   ``PumpSelfUntilEOT`` / ``SelfMill`` / ``ReturnTargetPermanentYou
-   ControlToOwnersHand`` etc., NOT the combinator wraps). If this
-   assertion FLIPS to a non-``None`` dict post-Cycle-1, the Cycle-2
-   admit-set widen has accidentally landed early (regression). The
-   inversion-discipline mirror of the Codecracker Hound /
-   Anticausal Vestige Cycle-1 pins (today's CH C1 pin
-   ``test_codecracker_hound_stays_declined_post_refined_cycle_1`` +
-   AV C1 pin ``test_anticausal_vestige_stays_declined_post_cycle_1``).
+6. **Cycle 2 INVERTED closure marker — Weftwalking NOW ADMITS at the
+   safe-trigger recognizer.** Originally a substrate-only "stays
+   declined" invariant; Cycle 2 (2026-05-24) inverted it to assert
+   the structured safe-dict round-trip
+   (``test_weftwalking_now_admits_at_safe_trigger_recognizer_post_
+   cycle_2``). The recognizer's effect-class chain now admits the
+   canonical Weftwalking ETB shape — ``ConditionalIfCastFromHand``
+   whose ``inner_effect`` is the EXACT
+   ``Sequence(ShuffleZonesIntoLibrary(zones=('hand','graveyard')),
+   DrawCards(amount=7))`` composite. The surgical-widen §2 teeth
+   keep the arm Weftwalking-scoped (any other inner shape stays
+   declined). A sibling Cycle 2 pin
+   (``test_weftwalking_now_admits_at_loader_admit_gate_post_
+   cycle_2``) closes the printing-level admit gate via the new
+   ``_printing_is_bridge_simple_enchantment`` arm. Inversion-
+   discipline mirror of today's CH C2 pin
+   ``test_codecracker_hound_now_admits_at_admit_gate_post_cycle_2``
+   (commit ``278992d7``) + AV C2 pin
+   ``test_anticausal_vestige_now_admits_at_admit_gate_post_cycle_2``
+   (commit ``c32f07f9``).
 
 7. **Covered-set membership.** Both ``conditional_if_cast_from_hand``
    and ``shuffle_zones_into_library`` kinds round-trip Rust's
@@ -417,25 +428,50 @@ def test_reverse_serializer_round_trips_weftwalking_composite():
     )
 
 
-def test_weftwalking_stays_declined_at_safe_trigger_recognizer_post_cycle_1():
-    """Pin #6 — substrate-only invariant: Weftwalking STAYS DECLINED.
+def test_weftwalking_now_admits_at_safe_trigger_recognizer_post_cycle_2():
+    """Pin #6 — Cycle 2 INVERTED closure marker: Weftwalking NOW ADMITS.
 
-    The Cycle-1 substrate landing must NOT flip Weftwalking through
-    the safe-trigger recognizer.
-    ``trajectory._python_ta_to_safe_dict(weftwalking.triggered_abilities[0])
-    is None`` post-Cycle-1: the recognizer's effect-class chain does
-    not admit ``ConditionalIfCastFromHand`` today (the wrap is new
-    vocabulary the safe-effect allowlist hasn't been taught yet).
+    **INVERSION (Cycle 2 — 2026-05-24).** The Cycle-1 substrate landed
+    with this pin asserting ``_python_ta_to_safe_dict(ta) is None``;
+    Cycle 2 (this slice) widens the recognizer to admit the canonical
+    Weftwalking ETB shape (the 10th ENTERS+IsSelf safe-trigger leaf —
+    ``conditional_if_cast_from_hand`` with the narrow
+    ``Sequence(ShuffleZonesIntoLibrary(zones=('hand','graveyard')),
+    DrawCards(amount=7))`` inner). This inverted pin asserts the
+    closure: the recognizer NOW returns the structured safe-dict for
+    Weftwalking's parsed ETB trigger.
 
-    Cycle 2 ships the recognizer widen + admit-set bump that flips
-    this assertion from ``is None`` to a structured safe-dict. If
-    this assertion FLIPS to a non-``None`` dict post-Cycle-1, the
-    substrate-only contract has regressed — verify Cycle 2 work has
-    NOT accidentally landed in this slice.
+    **Inversion-discipline mirror.** Same INVERT-the-C1-substrate-pin
+    pattern as today's CH C2 pin
+    ``test_codecracker_hound_now_admits_at_admit_gate_post_cycle_2``
+    (commit ``278992d7``) + AV C2 pin
+    ``test_anticausal_vestige_now_admits_at_admit_gate_post_cycle_2``
+    (commit ``c32f07f9``) — each multi-cycle closure inverts its C1
+    substrate-only invariant into a C2 closure marker.
 
-    Inversion-discipline mirror of today's CH C1 pin
-    ``test_codecracker_hound_stays_declined_post_refined_cycle_1``
-    + AV C1 pin ``test_anticausal_vestige_stays_declined_post_cycle_1``.
+    **The structured safe-dict's exact shape** (the §2 round-trip
+    teeth — any drift in field names or nesting catches here):
+        ``{"event": "enters",
+           "predicate": {"kind": "source_is_self"},
+           "effect": {"kind": "conditional_if_cast_from_hand",
+                      "inner": {
+                          "kind": "sequence",
+                          "effects": [
+                              {"kind": "shuffle_zones_into_library",
+                               "zones": ["hand", "graveyard"]},
+                              {"kind": "draw_cards", "count": 7},
+                          ],
+                      }}}``
+
+    The recognizer's effect-class arm gates on the EXACT canonical
+    Weftwalking inner — any other ``ConditionalIfCastFromHand`` inner
+    shape falls through to the filter drop path (the surgical-widen
+    §2 silent-mistranslation teeth). The dict-shape round-trip
+    (``_is_safe_trigger_dict``) is exercised by the same gate the
+    Creature arm uses; the bridge round-trip (forward via
+    ``cross_engine._ta_dict_to_python_effect`` + reverse via
+    ``trajectory._python_ta_effect_to_dict``) is pinned by Pin #5
+    (recursive + nested-Sequence-as-leaf round-trip).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
@@ -446,13 +482,98 @@ def test_weftwalking_stays_declined_at_safe_trigger_recognizer_post_cycle_1():
         pytest.skip("Weftwalking absent from active CardSource")
     (ta,) = w.triggered_abilities
     d = _python_ta_to_safe_dict(ta)
-    assert d is None, (
+    assert d == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "conditional_if_cast_from_hand",
+            "inner": {
+                "kind": "sequence",
+                "effects": [
+                    {
+                        "kind": "shuffle_zones_into_library",
+                        "zones": ["hand", "graveyard"],
+                    },
+                    {"kind": "draw_cards", "count": 7},
+                ],
+            },
+        },
+    }, (
         "Weftwalking's ENTERS+IsSelf+ConditionalIfCastFromHand "
-        "trigger MUST be rejected by the safe-trigger recognizer "
-        "post-Cycle-1 (Cycle 2 ships the recognizer widen). A "
-        "non-None here means the recognizer has been widened — "
-        f"verify the Cycle-2 work has NOT accidentally landed in "
-        f"this slice. Got: {d!r}"
+        "trigger MUST be ADMITTED by the safe-trigger recognizer "
+        "post-Cycle-2 (the recognizer's effect-class arm gates on "
+        "the EXACT canonical Weftwalking inner shape and emits the "
+        f"structured safe-dict). Got: {d!r}"
+    )
+
+
+def test_weftwalking_now_admits_at_loader_admit_gate_post_cycle_2():
+    """**Cycle 2 admit-gate closure marker.** Weftwalking now passes
+    the new ``_printing_is_bridge_simple_enchantment`` admit arm —
+    the Enchantment-side sibling of the Creature admit arms wired in
+    the same C2 slice. Sibling pin to the recognizer-flip pin above:
+    this one pins the printing-level admit gate, the one above pins
+    the per-trigger recognizer the admit arm consults.
+
+    **Defensive cross-checks** (mirror the AV/CH C2 admit-pin shape):
+      * ``_printing_is_bridge_simple_enchantment(w) is True`` — the
+        new C2 arm admits.
+      * ``_printing_is_bridge_simple_creature(w) is False`` — the
+        Creature arm still rejects (Weftwalking is Enchantment-only,
+        no power/toughness — the verify-first refinement from
+        ``test_weftwalking_is_an_enchantment_not_a_creature``).
+      * ``_printing_is_bridge_simple_cast_restriction_enchantment(w)
+        is False`` — the sibling Enchantment arm still rejects
+        (Weftwalking carries no ``restricts_noncreature_spells_to_
+        one_per_turn`` flag; the two Enchantment-side arms are
+        mutually exclusive by construction).
+      * ``_printing_is_bridge_pure_warp_creature(w) is False`` — the
+        warp arm still rejects (Weftwalking has no ``warp_cost`` —
+        the verify-first refinement from
+        ``test_weftwalking_verify_first_warp_cost_absent``).
+
+    **Loader-end-to-end closure marker.** The
+    ``_filter_deck_to_bridge_supported`` disjunct chain consulted by
+    ``production_deck_to_deckspec`` now admits Weftwalking; a deck
+    containing Weftwalking will materialize it as a CardDef on both
+    engines instead of silently dropping it. The C3 per-card real-
+    EoE byte-equality probe (normal-cast lifecycle only —
+    Weftwalking has no warp_cost) will exercise the materialized
+    CardDef end-to-end.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _printing_is_bridge_simple_enchantment,
+        _printing_is_bridge_simple_cast_restriction_enchantment,
+        _printing_is_bridge_pure_warp_creature,
+    )
+
+    src = get_active_source().get_printings()
+    w = src.get("Weftwalking")
+    if w is None:
+        pytest.skip("Weftwalking absent from active CardSource")
+    assert _printing_is_bridge_simple_enchantment(w) is True, (
+        "Weftwalking must be ADMITTED by the new C2 "
+        "_printing_is_bridge_simple_enchantment arm post-Cycle-2."
+    )
+    # Defensive cross-checks — the §2 mutual-exclusion teeth.
+    assert _printing_is_bridge_simple_creature(w) is False, (
+        "Weftwalking is an Enchantment (NOT a Creature) — the "
+        "Creature admit arm must still reject; the C2 admit gate "
+        "is the new Enchantment-side arm, NOT a Creature widen."
+    )
+    assert _printing_is_bridge_simple_cast_restriction_enchantment(w) is False, (
+        "Weftwalking carries no restricts_noncreature_spells_to_one_"
+        "per_turn flag — the sibling cast-restriction-enchantment "
+        "arm must still reject (the two Enchantment-side arms are "
+        "mutually exclusive by construction)."
+    )
+    assert _printing_is_bridge_pure_warp_creature(w) is False, (
+        "Weftwalking has no warp_cost — the warp arm must still "
+        "reject (the verify-first refinement was the load-bearing "
+        "evidence that the C2 admit gate is the Enchantment-side "
+        "arm, NOT the warp arm AV/CH/MTL rode)."
     )
 
 
