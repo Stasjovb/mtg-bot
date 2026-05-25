@@ -49,6 +49,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Alpharael, Dreaming Acolyte
 - Alpharael, Stonechosen
 - Annul
+- Anticausal Vestige
 - Appendage Amalgam
 - Arabella, Abandoned Doll
 - Archenemy's Charm

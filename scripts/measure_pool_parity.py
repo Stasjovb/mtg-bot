@@ -1119,6 +1119,41 @@ PROBE_MODULES: tuple[Path, ...] = (
     # accepts it). Registration alone flips Codecracker Hound
     # ``covered_by_construction`` → PROBED in the pool-parity metric.
     REPO_ROOT / "tests" / "test_codecracker_hound_parity.py",
+    # **anticausal-vestige-cycle-3-probe-p1 (2026-05-24):** the per-
+    # card real-EoE cross-engine byte-equality probe for Anticausal
+    # Vestige ({6} colorless Creature - Eldrazi 7/5 with warp {4} and
+    # a LEAVES_BATTLEFIELD draw + may-put-permanent-from-hand-tapped
+    # trigger). Cycle 1 (commit ``e148450a``) wired the new Rust
+    # ``Effect::AnticausalVestigeLeavesEffect`` unit variant + parse +
+    # to_pydict + resolve + bridge arms (AV STAYED DECLINED).
+    # Cycle 2 (commit ``c32f07f9``) widened ``_python_ta_to_safe_dict``
+    # to admit ``LEAVES_BATTLEFIELD`` as the FIFTH safe event +
+    # registered the ``("leaves_battlefield", "source_is_self",
+    # "anticausal_vestige_leaves_effect")`` _SAFE_TRIGGERS triple +
+    # the matching _SAFE_EFFECT_KEYS whitelist; warp-arm admit set
+    # 7 -> 8 (AV inserted alphabetically as the FIRST entry).
+    # Cycle 3 (this slice) ships the dedicated per-card probe — the
+    # load-bearing PROBED-tier flip evidence:
+    # ``test_cross_engine_real_eoe_anticausal_vestige_ltb_parity``
+    # drives the genuine warp-cast -> end-step exile sweep ->
+    # LEAVES_BATTLEFIELD dispatch -> LTB resolve path through both
+    # engines byte-equal under the deterministic-first contract
+    # (seated ``_PickFirstSacrificeAgent`` on Python p0 to mirror
+    # Rust's first-legal hand-iteration pick at
+    # ``rust/src/state_ops_resolve.rs:15219-15392``; resolves the C2
+    # deferral that "deterministic-first is the deferred default" —
+    # held byte-equal here, no PendingDecision pivot needed this
+    # cycle). The probe binds the live EoE printing via the module-
+    # scope ``_PRINTINGS = get_active_source().get_printings()``
+    # idiom (the ``_probe_module_probed_cards_via_module_scope_binding``
+    # widen accepts it). Registration alone flips Anticausal Vestige
+    # ``covered_by_construction`` -> PROBED in the pool-parity metric.
+    # The sibling ``tests/test_probe_warp_admitted.py`` _WARP_CARDS
+    # parametrize also gains an AV entry (warp-cast + normal-cast
+    # lifecycle real-EoE probes) — uses the same seated-agent shim
+    # in ``_build_real_deck_context`` as a card_name == "Anticausal
+    # Vestige" special-case.
+    REPO_ROOT / "tests" / "test_anticausal_vestige_parity.py",
     # **memorial-team-leader-cycle-2-flip (2026-05-24):** Memorial
     # Team Leader ({3}{R} 4/3 with warp {1}{R}; "During your turn,
     # other creatures you control get +1/+0.") closes the Phase-4

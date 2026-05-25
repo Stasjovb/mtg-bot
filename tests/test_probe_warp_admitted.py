@@ -91,6 +91,8 @@ import pathlib
 
 import pytest
 
+from mtg_bot.agents import Agent
+
 _SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -114,6 +116,29 @@ if str(_TESTS_DIR) not in sys.path:
 _WARP_CARDS = [
     # card_name, color, warp_str, normal_str, real_archetype,
     # etb_kind ("life+2" | "token" | "none")
+    # **Anticausal Vestige Cycle 3** — warp-arm admit set 7→8 (Cycle-2
+    # closure marker ``c32f07f9`` flipped AV DECLINED → ADMITTED at
+    # ``_printing_is_bridge_pure_warp_creature`` via the
+    # ``_python_ta_to_safe_dict`` event-vocabulary widen for
+    # ``LEAVES_BATTLEFIELD``). AV's printed warp cost ``{4}`` differs
+    # from its normal cost ``{6}`` (colorless, Eldrazi) — the two
+    # lifecycles cost-side differ as well as semantically. AV's
+    # LEAVES_BATTLEFIELD observable (draw a card + may put a permanent
+    # with MV<=lands-you-control from hand onto bf tapped) carries no
+    # public side beyond the zero-divergence full ``compare_fields``
+    # under the warp end-step exile sweep (the LEAVES dispatches on
+    # both engines symmetrically, the LTB resolves byte-equal under
+    # the deterministic-first contract — Rust's resolve arm at
+    # ``state_ops_resolve.rs:15219-15392`` picks the first hand-iter
+    # MV<=land_count permanent; Python's ``AnticausalVestigeLeavesEffect``
+    # under the trajectory-harness ``p.agent is None`` short-circuit
+    # is NOT seated by default, so the no-agent path early-returns
+    # AFTER the draw with NO put-onto-bf — which mirrors Rust's
+    # behavior whenever no candidate qualifies). etb_kind="none" — no
+    # public-side observable beyond the zero-divergence full compare.
+    # Archetype 24 is B-heavy (Sw=9, Mt=8) and AV-free (preserves the
+    # ``p0_library.count(card_name) == 1`` invariant).
+    ("Anticausal Vestige", "B", "{4}", "{6}", 24, "none"),
     ("Red Tiger Mechan", "R", "{1}{R}", "{3}{R}", 5, "none"),
     ("Bygone Colossus", "R", "{3}", "{9}", 5, "none"),
     # **Codecracker Hound Cycle 3** — warp-arm admit set 6→7 (Cycle-2
@@ -195,6 +220,23 @@ def _verify_warp_admitted(card_name, warp_str, normal_str):
     return real
 
 
+class _PickFirstSacrificeAgent(Agent):
+    """Deterministic agent that picks the first legal id on every
+    ``choose_sacrifice`` prompt — the seated-agent counterpart to
+    Rust's deterministic first-legal hand-iteration pick used by
+    bespoke LTB / sacrifice resolves (Anticausal Vestige LTB at
+    ``rust/src/state_ops_resolve.rs:15219-15392``). Inherits all
+    other Agent callbacks from the base ``Agent`` class — which
+    raise ``NotImplementedError`` if invoked. The cross-engine
+    trajectory harness's idiom is to seat narrow shims only when a
+    SPECIFIC callback method needs deterministic resolution; for AV
+    the trajectory's resolve path only calls ``choose_sacrifice``
+    (during LTB) so the narrow shim is correct."""
+
+    def choose_sacrifice(self, state, player_id, legal_ids):
+        return legal_ids[0] if legal_ids else None
+
+
 def _build_real_deck_context(card_name, color, real_archetype):
     """Seat the genuine warp printing into a REAL 17lands archetype
     deck context, with the union's basic lands normalised to tap the
@@ -204,6 +246,27 @@ def _build_real_deck_context(card_name, color, real_archetype):
     — the established trajectory-probe shape). Padding uses the
     card's-color basic so a short post-filter deck still drives a
     multi-turn game with a payable mana base.
+
+    **Anticausal Vestige special-case (Cycle 3, 2026-05-24).** AV's
+    LEAVES_BATTLEFIELD trigger fires during the warp end-step exile
+    sweep; its bespoke ``AnticausalVestigeLeavesEffect.resolve``
+    carries an ``if not candidates or p.agent is None: return``
+    short-circuit (the no-agent path early-returns BEFORE the put-
+    onto-bf step). Rust's resolve arm does NOT short-circuit on a
+    no-agent state — it deterministically picks the first hand-iter
+    permanent with ``mana_value <= land_count``. The
+    trajectory-harness default ``Player(agent=None)`` would surface
+    this as a byte-divergence (Python keeps the picked card in
+    hand, Rust puts it on bf tapped). Seat
+    ``_PickFirstSacrificeAgent`` on p0 ONLY when ``card_name ==
+    "Anticausal Vestige"`` to mirror Rust's deterministic-first
+    contract. The seated agent only overrides ``choose_sacrifice``
+    (the load-bearing callback for AV's LTB); all other harness
+    code paths still hit the ``agent is None`` guards because no
+    other LEAVES-related code path on the AV trajectory invokes a
+    non-``choose_sacrifice`` callback (verified empirically — the
+    warp cast / phase advancement / SBA passes never call into
+    the agent on the AV path).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -243,7 +306,16 @@ def _build_real_deck_context(card_name, color, real_archetype):
         f"archetype-{real_archetype} context; got "
         f"{spec.p0_library.count(card_name)}"
     )
-    return trajectory.setup_matched_game(spec)
+    py, rs = trajectory.setup_matched_game(spec)
+    # **Anticausal Vestige Cycle 3 — seated-agent deterministic-first
+    # contract.** Seat ``_PickFirstSacrificeAgent`` on p0 so AV's
+    # LEAVES_BATTLEFIELD trigger (fired during the warp end-step
+    # exile sweep) picks the first hand-iter MV<=land_count
+    # permanent — matching Rust's deterministic first-legal pick.
+    # See the helper's docstring for the full rationale.
+    if card_name == "Anticausal Vestige":
+        py.players[0].agent = _PickFirstSacrificeAgent()
+    return py, rs
 
 
 def _mana_total(cost_str):
