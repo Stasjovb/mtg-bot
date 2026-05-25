@@ -1829,6 +1829,46 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_uthros_psionicist_real_eoe_cost_reduction.py",
+    # Cost-reduction substrate Phase 2 Cycle 4 (cost-reduction-
+    # phase-2-cycle-4-sami-probe-p1 lane, 2026-05-25): per-card
+    # real-EoE cross-engine byte-equality probe for **Sami, Wildcat
+    # Captain** flips ``covered_by_construction`` -> PROBED in the
+    # pool-parity metric. **THE FINAL probe of Phase 2** — with
+    # this entry, both Phase-2 cost-reduction carriers (Uthros C3 +
+    # Sami C4) are PROBED-tier and the covered_by_construction
+    # cost-reduction lane drops to ONE remaining carrier (Fungal
+    # Colossus on PerDifferentlyNamedLand, Phase-3 territory).
+    # Drives BOTH lifecycles of the Phase-2 PerControlled(IsArtifact())
+    # external cost-reduction substrate — the FIRST variable-
+    # multiplier ExternalCondition path Phase 2 ships — that
+    # commit ``c370cee4`` (Cycle 2 FLIP) landed via the widened
+    # ``_printing_is_bridge_pure_cost_reduction_creature`` admit
+    # predicate + the ``apply_external_cost_reductions_rust``
+    # helper's PerControlled arm at ``state_ops_legal.rs:924-957``
+    # (the multiplier IS the count — affinity-style scaling):
+    # (a) full-cost lifecycle with one Sami-shape carrier on
+    # caster's bf + ZERO controlled artifacts; PerControlled
+    # (IsArtifact()) checks count >= 1 — False on 0 artifacts —
+    # no reduction applies, pays base ``{4}{R}{W}``; (b)
+    # reduced-cost lifecycle with one Sami-shape carrier on bf +
+    # TWO vanilla Artifact-shape carriers pre-seated on caster's
+    # bf via the scripted picker; condition True with multiplier=2,
+    # the {1}-per-artifact reduction applies as ``amount *
+    # multiplier == 1 * 2 == 2`` generic dropped, pays the reduced
+    # ``{2}{R}{W}`` cost — the load-bearing case the Phase-2 C2
+    # substrate FLIP rides on for the variable-multiplier external
+    # condition variant. Pool-primed mana on both engines so the
+    # cost-payment arithmetic is the entire load-bearing signal (no
+    # land-tap noise). Full ``compare_fields == []`` over the
+    # 22-field cross-engine field view post-cast on BOTH lifecycles
+    # + the pre-cast scripted-picker sanity check on lifecycle B.
+    # Per-slug attribution = "Sami, Wildcat Captain" (~808 17lands
+    # decks attributable specifically to Sami, the smaller of the
+    # two Phase-2 carriers; second half of the +15,575-deck Phase-2
+    # admit lane). **With this entry, Phase 2 closure is complete.**
+    REPO_ROOT
+    / "tests"
+    / "test_probe_sami_wildcat_captain_real_eoe_cost_reduction.py",
     # **covered-by-construction-probe-writing-p7 (2026-05-25):** Six
     # additional per-card real-EoE cross-engine byte-equal probes
     # extending the lane established by batches 1-6.  This batch opens
