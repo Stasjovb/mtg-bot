@@ -25,19 +25,27 @@ commits ``bd37cca0`` C1, ``278992d7`` C2, ``6f99bf45`` C3):
   ``_python_ta_to_safe_dict``'s event gate (gated to ``(ENTERS, DIES,
   ATTACKS, BECOMES_TAPPED)`` at ``trajectory.py:3437-3440`` — LEAVES
   is the 5th event the safe set will admit, shipped in Cycle 2).
-* **Cycle 2 (next).** Widen ``_python_ta_to_safe_dict``'s event
-  vocabulary to admit LEAVES_BATTLEFIELD (the genuinely new event for
-  the safe-trigger admit set; DIES exists but DIES != LEAVES
+* **Cycle 2 (this slice — admit widen, FLIPPED AV DECLINED →
+  ADMITTED).** Widened ``_python_ta_to_safe_dict``'s event
+  vocabulary to admit LEAVES_BATTLEFIELD (the genuinely new event
+  for the safe-trigger admit set; DIES exists but DIES != LEAVES
   semantically — DIES is the bf→graveyard subset, LEAVES covers
-  every bf→{anywhere} zone change), add the
+  every bf→{anywhere} zone change). Added the
   ``("leaves_battlefield", "source_is_self",
-  "anticausal_vestige_leaves_effect")`` ``_SAFE_TRIGGERS`` entry, add
-  the matching ``_SAFE_EFFECT_KEYS`` whitelist entry (bare ``{"kind"}``
-  — unit shape, no payload keys), and bump the warp-arm admit set
-  6→7 (the Codecracker Hound Cycle-2 ``test_r63_warp_phase2_
-  guardrail_positive_set_is_exactly_six`` precedent → 6→7 here, then
-  7→8 if any other LEAVES carrier admits with the same widen). FLIPS
-  AV DECLINED → ADMITTED.
+  "anticausal_vestige_leaves_effect")`` ``_SAFE_TRIGGERS`` entry +
+  the matching ``_SAFE_EFFECT_KEYS`` whitelist entry (bare
+  ``{"kind"}`` — unit shape, no payload keys) + the new
+  ``AnticausalVestigeLeavesEffect`` dispatch arm in the recognizer's
+  effect-class chain. Bumped the warp-arm admit set 7→8 (the C2
+  delta vs the post-CH-C2 count: AV inserted alphabetically before
+  Bygone Colossus) + flipped the per-card admit parametrize entry
+  ``("Anticausal Vestige", False)`` → ``("Anticausal Vestige",
+  True)`` in ``tests/test_trajectory.py``. Verify-first scan of
+  HEAD confirmed only 4 OTHER cards carry LEAVES_BATTLEFIELD
+  triggered abilities (Cryogen Relic, Broodguard Elite, Syr Vondam,
+  Nutrient Block); none silently auto-grow under the widen (their
+  effect classes are not in the LEAVES ``safe_effect_kinds`` tuple,
+  and / or their predicates are not ``IsSelf``).
 * **Cycle 3 (after).** Per-card real-EoE cross-engine byte-equality
   probe under both warp-cast and normal-cast lifecycles (mirror of
   ``test_codecracker_hound_parity.py`` shape; ``test_probe_warp_
@@ -72,16 +80,21 @@ commits ``bd37cca0`` C1, ``278992d7`` C2, ``6f99bf45`` C3):
    one legal permanent leaves hand and lands on battlefield TAPPED
    with ``summoning_sick=True`` (CR 302.1), and the entered card's
    ``Event::Enters`` is queued for the post-pop dispatch sweep.
-5. **Substrate-only invariant — AV STAYS DECLINED at the admit
-   gate.** ``_printing_is_bridge_pure_warp_creature(Anticausal
-   Vestige) is False`` post-Cycle-1; the load-bearing closure marker
-   that distinguishes the substrate-only slice from Cycle 2's admit-
-   widen. If this assertion FLIPS True post-C1, the Cycle-2 widen has
-   accidentally landed too early (regression — the
-   ``_python_ta_to_safe_dict`` event gate is no longer gating LEAVES
-   out). Mirror of the Codecracker Hound Cycle-1 pin
-   ``test_codecracker_hound_stays_declined_post_refined_cycle_1``
-   inversion-discipline.
+5. **Cycle-2 closure marker — AV NOW ADMITS at the admit gate
+   (INVERTED from the C1 substrate-only pin).**
+   ``_printing_is_bridge_pure_warp_creature(Anticausal Vestige) is
+   True`` post-Cycle-2; the load-bearing closure marker that the
+   admit-widen + recognizer extensions all landed correctly. The C1
+   pin (``test_anticausal_vestige_stays_declined_post_cycle_1``,
+   asserting ``is False``) was the inversion-discipline mirror of
+   Codecracker Hound's C1 pin; this slice flips it (mirror of
+   ``test_codecracker_hound_now_admits_at_admit_gate_post_cycle_2``
+   from CH C2 commit ``278992d7``). If this assertion FLIPS False
+   post-Cycle-2, the widen has regressed — verify the event-gate
+   widen, the LEAVES ``safe_effect_kinds`` tuple, the
+   ``AnticausalVestigeLeavesEffect`` dispatch arm, the
+   ``_SAFE_TRIGGERS`` triple, and the ``_SAFE_EFFECT_KEYS`` whitelist
+   entry are all present.
 6. **Covered-set membership.** The ``anticausal_vestige_leaves_effect``
    kind round-trips Rust's ``parse_effect`` for use within a
    triggered_ability — the per-trigger-kind smoke that the Rust
@@ -174,35 +187,51 @@ def test_bridge_arm_round_trips_anticausal_vestige_leaves_effect():
     assert rt_extra == AnticausalVestigeLeavesEffect()
 
 
-def test_anticausal_vestige_stays_declined_post_cycle_1():
-    """Pin #5 — substrate-only invariant: AV STAYS DECLINED.
+def test_anticausal_vestige_now_admits_at_admit_gate_post_cycle_2():
+    """Pin #5 — Cycle-2 closure marker: AV NOW ADMITS at the
+    warp-arm admit gate (INVERTED from the C1 substrate-only pin
+    ``test_anticausal_vestige_stays_declined_post_cycle_1``).
 
-    The Cycle-1 substrate landing must NOT flip AV through the admit
-    gate. ``_printing_is_bridge_pure_warp_creature(Anticausal Vestige)``
-    stays ``False`` post-Cycle-1: the gate at
-    ``trajectory.py:4447-4450`` requires EVERY triggered ability to
-    round-trip through ``_python_ta_to_safe_dict``, and AV's
-    LEAVES_BATTLEFIELD trigger is rejected by the event-vocabulary
-    gate at ``trajectory.py:3437-3440`` (event must be one of
-    ``(ENTERS, DIES, ATTACKS, BECOMES_TAPPED)`` — LEAVES is genuinely
-    absent today).
+    The Cycle-2 widen lands three coordinated changes in
+    ``src/mtg_bot/parity/trajectory.py``:
 
-    Cycle 2 ships the LEAVES_BATTLEFIELD widen + the matching
-    ``_SAFE_TRIGGERS`` entry + the warp-arm admit-set bump, which
-    will INVERT this assertion (the Codecracker Hound Cycle-2
-    precedent: ``test_codecracker_hound_stays_declined_post_refined_
-    cycle_1`` → ``test_codecracker_hound_now_admits_at_admit_gate_
-    post_cycle_2``).
+      * ``_python_ta_to_safe_dict`` event vocabulary widened from
+        ``(ENTERS, DIES, ATTACKS, BECOMES_TAPPED)`` to also include
+        ``LEAVES_BATTLEFIELD`` (the FIFTH event in the safe set; the
+        genuinely-new event vocabulary — ``DIES`` is the strict bf→
+        graveyard subset whereas ``LEAVES_BATTLEFIELD`` covers every
+        bf→{anywhere} zone change).
+      * New ``LEAVES_BATTLEFIELD`` arm in the IsSelf branch with
+        ``safe_effect_kinds = ("anticausal_vestige_leaves_effect",)``
+        + new dispatch arm for ``AnticausalVestigeLeavesEffect`` that
+        emits the bare unit-shape dict ``{"kind":
+        "anticausal_vestige_leaves_effect"}``.
+      * Matching ``("leaves_battlefield", "source_is_self",
+        "anticausal_vestige_leaves_effect")`` entry in
+        ``_SAFE_TRIGGERS`` + ``"anticausal_vestige_leaves_effect":
+        frozenset({"kind"})`` entry in ``_SAFE_EFFECT_KEYS`` (the
+        round-trip dict-side backstops).
 
-    Defensive cross-checks: the spell-card-bridge gate and the plain
-    simple-creature arm BOTH stay False (AV is a Creature →
-    spell-card gate filters by construction; AV has ``warp_cost`` →
-    the plain creature arm positively rejects).
+    Net effect: AV's only triggered_ability now round-trips through
+    the safe-trigger recognizer, so the per-trigger gate in
+    ``_printing_is_bridge_pure_warp_creature`` accepts AV. AV is
+    ADMITTED at the warp creature admit gate post-Cycle-2.
 
-    If this assertion FLIPS True post-Cycle-1, the substrate-only
-    contract has regressed: either the safe-trigger event gate was
-    widened, or the warp arm's logic drifted to admit
-    LEAVES_BATTLEFIELD without the recognizer support.
+    Mirror of the Codecracker Hound Cycle-2 inversion pin
+    ``test_codecracker_hound_now_admits_at_admit_gate_post_cycle_2``
+    (commit ``278992d7``).
+
+    Defensive cross-checks: the spell-card-bridge gate stays False
+    (AV is a Creature → spell-card gate filters by construction);
+    the plain simple-creature arm stays False (AV has ``warp_cost``
+    → the plain creature arm positively rejects, so the warp arm
+    remains the load-bearing admit path).
+
+    If this assertion FLIPS False post-Cycle-2, the widen has
+    regressed: either the event-gate widen, the LEAVES arm
+    ``safe_effect_kinds`` tuple, the dispatch arm, the
+    ``_SAFE_TRIGGERS`` triple, or the ``_SAFE_EFFECT_KEYS`` whitelist
+    was reverted.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -212,17 +241,19 @@ def test_anticausal_vestige_stays_declined_post_cycle_1():
     if av is None:
         pytest.skip("Anticausal Vestige absent from active CardSource")
 
-    # The load-bearing Cycle-1 invariant — AV stays DECLINED at the
+    # The load-bearing Cycle-2 closure marker — AV now ADMITS at the
     # structural admit gate (the warp creature arm).
-    assert trajectory._printing_is_bridge_pure_warp_creature(av) is False, (
-        "Anticausal Vestige MUST STAY DECLINED at the warp creature "
-        "admit gate post-Cycle-1. A True here means the Cycle-2 "
-        "admit-set widen has accidentally landed early — either "
-        "_python_ta_to_safe_dict was widened to admit "
-        "LEAVES_BATTLEFIELD, or the warp arm's logic drifted."
+    assert trajectory._printing_is_bridge_pure_warp_creature(av) is True, (
+        "Anticausal Vestige MUST ADMIT at the warp creature admit "
+        "gate post-Cycle-2. A False here means the Cycle-2 widen has "
+        "regressed — verify the event-gate widen, the LEAVES "
+        "safe_effect_kinds tuple, the AnticausalVestigeLeavesEffect "
+        "dispatch arm, the _SAFE_TRIGGERS triple, and the "
+        "_SAFE_EFFECT_KEYS whitelist entry are all present."
     )
     # Defensive cross-check: the spell-card-bridge gate stays False
-    # (AV is a Creature; this gate filters creatures by construction).
+    # (AV is a Creature; this gate filters creatures by construction —
+    # the spell arm is NOT the load-bearing admit path).
     assert trajectory._printing_is_bridge_simple_spell(av) is False, (
         "Anticausal Vestige is a Creature — the spell-card-bridge "
         "gate must continue to filter it out at the creature-type "
@@ -230,11 +261,12 @@ def test_anticausal_vestige_stays_declined_post_cycle_1():
         "widened."
     )
     # Defensive cross-check: the plain simple-creature arm stays False
-    # (AV has warp_cost, which that arm positively rejects).
+    # (AV has warp_cost, which that arm positively rejects — the warp
+    # arm remains the load-bearing admit path post-C2).
     assert trajectory._printing_is_bridge_simple_creature(av) is False, (
         "The plain simple-creature arm must continue to reject "
         "Anticausal Vestige (warp_cost trips it); the warp arm is "
-        "the load-bearing admit path AV stays declined at."
+        "the load-bearing admit path AV admits at post-Cycle-2."
     )
     # Verify-first refinement: AV's warp_cost is genuinely present
     # (the warp-arm gate is the load-bearing one).
@@ -244,22 +276,27 @@ def test_anticausal_vestige_stays_declined_post_cycle_1():
     )
 
 
-def test_anticausal_vestige_safe_dict_recognizer_rejects_leaves_event():
-    """Pin #5b — the §2 silent-mistranslation teeth: the safe-trigger
-    recognizer ``_python_ta_to_safe_dict`` REJECTS AV's parsed
-    LEAVES_BATTLEFIELD trigger today.
+def test_anticausal_vestige_safe_dict_recognizer_admits_leaves_event_post_cycle_2():
+    """Pin #5b — Cycle-2 closure marker: the safe-trigger recognizer
+    ``_python_ta_to_safe_dict`` ADMITS AV's parsed LEAVES_BATTLEFIELD
+    trigger (INVERTED from the C1 substrate-only pin
+    ``test_anticausal_vestige_safe_dict_recognizer_rejects_leaves_event``).
 
     AV's parsed triggered ability is
     ``TriggeredAbility(event=Event.LEAVES_BATTLEFIELD,
     predicate=IsSelf(), effect=AnticausalVestigeLeavesEffect())``.
-    The recognizer's event gate at ``trajectory.py:3437-3440`` admits
-    only ``(ENTERS, DIES, ATTACKS, BECOMES_TAPPED)`` — LEAVES is
-    rejected, so the helper returns ``None``. This is the structural
-    reason AV stays declined at the warp-arm admit gate (Pin #5).
+    Post-Cycle-2 the recognizer's event gate admits
+    ``LEAVES_BATTLEFIELD``, the IsSelf branch's LEAVES arm carries
+    ``safe_effect_kinds = ("anticausal_vestige_leaves_effect",)``,
+    and the dispatch arm for ``AnticausalVestigeLeavesEffect`` emits
+    the bare unit-shape dict. The recognizer returns a structured
+    safe-dict — the structural reason AV now admits at the warp-arm
+    admit gate (Pin #5).
 
-    Cycle 2 widens the event gate to include LEAVES_BATTLEFIELD,
-    which will flip this assertion from ``is None`` to a structured
-    safe-dict.
+    The exact safe-dict shape pinned here:
+      ``{"event": "leaves_battlefield",
+         "predicate": {"kind": "source_is_self"},
+         "effect": {"kind": "anticausal_vestige_leaves_effect"}}``
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
@@ -270,12 +307,18 @@ def test_anticausal_vestige_safe_dict_recognizer_rejects_leaves_event():
         pytest.skip("Anticausal Vestige absent from active CardSource")
     (ta,) = av.triggered_abilities
     d = _python_ta_to_safe_dict(ta)
-    assert d is None, (
-        "AV's LEAVES_BATTLEFIELD trigger MUST be rejected by the "
-        "safe-trigger recognizer post-Cycle-1 (Cycle 2 ships the "
-        "LEAVES_BATTLEFIELD event widen). A non-None here means the "
-        "event gate has been widened — verify the Cycle-2 work has "
-        "NOT accidentally landed in this slice."
+    assert d == {
+        "event": "leaves_battlefield",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "anticausal_vestige_leaves_effect"},
+    }, (
+        f"AV's LEAVES_BATTLEFIELD trigger MUST round-trip through "
+        f"the safe-trigger recognizer post-Cycle-2 to the bare "
+        f"unit-shape dict; got {d!r}. A None or shape-mismatch here "
+        f"means the Cycle-2 widen has regressed at one of the three "
+        f"coordinated edits (event-gate widen / LEAVES "
+        f"safe_effect_kinds tuple / AnticausalVestigeLeavesEffect "
+        f"dispatch arm)."
     )
 
 

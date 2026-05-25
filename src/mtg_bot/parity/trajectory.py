@@ -2565,6 +2565,58 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     #       in the recognizer's BECOMES_TAPPED arm (same pattern as
     #       the ENTERS/DIES/ATTACKS leaf-set widenings).
     ("becomes_tapped", "source_is_self", "create_token"),
+    # **Anticausal Vestige Cycle 2 (2026-05-24)** — the FIRST
+    # LEAVES_BATTLEFIELD entry in the safe set, and the FIRST
+    # genuinely-new event vocabulary since BECOMES_TAPPED. Sole
+    # admitted EoE consumer at HEAD is **Anticausal Vestige** ({2}{B}
+    # 2/2 warp creature with ``warp_cost {4}``, ~6,900 17lands decks
+    # — the #3-ranked multi-gated-tail closure target from the
+    # 2026-05-24 multi-gated tractability scout). Parser-emitted
+    # shape: LEAVES_BATTLEFIELD trigger with ``IsSelf`` predicate +
+    # bespoke unit-variant ``AnticausalVestigeLeavesEffect`` effect.
+    #
+    # **Bridge support (all pre-existed; this slice only wires the
+    # safe-trigger recognizer + the matching triple + the bare-shape
+    # whitelist).**
+    #   * Rust ``Effect::AnticausalVestigeLeavesEffect`` (unit variant,
+    #     rust/src/cards.rs) + parse_effect arm + effect_to_pydict arm
+    #     + resolve arm in ``state_ops_resolve.rs`` shipped in C1
+    #     commit ``e148450a`` (2026-05-24). The resolve arm mirrors
+    #     the seated-agent deterministic ``candidates[0]`` fallback
+    #     path step-for-step (draw 1, count controller lands as X,
+    #     scan hand for first permanent with ``mana_cost.total <= X``,
+    #     remove from hand, put onto bf TAPPED with
+    #     ``summoning_sick=True``, queue ``Event::Enters`` dispatch).
+    #   * Cross-engine bridge arm at ``cross_engine.py:9475`` (also
+    #     shipped in C1) consumes ``{"kind": "anticausal_vestige_
+    #     leaves_effect"}`` and yields the Python instance; extra dict
+    #     keys ignored per the unit-variant convention.
+    #
+    # **No silent-mistranslation rider on this leaf.** Unit-variant ⇒
+    # no payload keys to gate (contrast Surveil's ``use_artifact_count``
+    # or LookTopN's ``reveal_chosen``). The dict-side extra-key refusal
+    # in :func:`_is_safe_trigger_dict` (backed by the bare ``{"kind"}``
+    # whitelist in ``_SAFE_EFFECT_KEYS`` below) is the only round-trip
+    # backstop needed.
+    #
+    # **Cross-engine resolve contract along the deterministic-first
+    # candidates[0] path.** Both engines split the resolve into a
+    # "draw + filter + pick" phase + a "put-onto-bf + queue ETB"
+    # phase. The seated-agent deterministic-first contract was the C1
+    # honest-stop's open design question (deferred); C2 ships the
+    # admit widen under the assumption it's stable. If the C3 per-card
+    # real-EoE byte-equality probe surfaces a byte-divergence under
+    # deterministic-first, THAT's where the design pivots to a real
+    # ``PendingDecision::PickCardFromHandChoice`` round-trip (NOT in
+    # this C2 slice).
+    #
+    # **LEAVES_BATTLEFIELD ≠ DIES.** ``DIES`` is the strict bf→
+    # graveyard subset; ``LEAVES_BATTLEFIELD`` covers every bf→
+    # {anywhere} zone change (bounce / exile / library / hand /
+    # graveyard). Genuinely new event vocabulary — not a relabel of
+    # DIES.
+    ("leaves_battlefield", "source_is_self",
+     "anticausal_vestige_leaves_effect"),
 })
 
 
@@ -2790,6 +2842,29 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "look_top_n_put_one_in_hand_rest_to_graveyard": frozenset(
         {"kind", "n", "reveal_chosen"}
     ),
+    # **Anticausal Vestige Cycle 2 (2026-05-24)** —
+    # ``anticausal_vestige_leaves_effect`` bare unit-variant: ONLY
+    # ``kind`` (no payload fields). Rust's
+    # ``Effect::AnticausalVestigeLeavesEffect`` (rust/src/cards.rs
+    # unit variant shipped in C1 commit ``e148450a``) carries no
+    # fields — its parse_effect arm reads only ``kind`` (extras
+    # ignored), its to_pydict emits the SAME minimal unit-shape
+    # ``{"kind": "anticausal_vestige_leaves_effect"}``. Python's
+    # ``AnticausalVestigeLeavesEffect`` (``effects/bespoke.py:858-
+    # 907``) is a no-args ``@dataclass`` — also no payload. Both the
+    # land count (X) and the hand pick are dynamic resolve-time
+    # computations, not static fields. The bridge arm at
+    # ``cross_engine.py:9475`` round-trips the bare ``{"kind"}`` dict
+    # (extras ignored per the unit-variant convention) to the Python
+    # instance. The recognizer in :func:`_python_ta_to_safe_dict`
+    # emits the bare dict shape (no payload fields); this whitelist
+    # gates any future extra-key drift as the round-trip backstop
+    # (the ``_is_safe_trigger_dict`` extra-key refusal). See the
+    # ``("leaves_battlefield", "source_is_self",
+    # "anticausal_vestige_leaves_effect")`` entry in
+    # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
+    # provenance + the C3 per-card real-EoE byte-equality probe plan.
+    "anticausal_vestige_leaves_effect": frozenset({"kind"}),
 }
 
 
@@ -3409,6 +3484,11 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
     from mtg_bot.effects.generic.tokens import CreateToken
+    # **Anticausal Vestige Cycle 2 (2026-05-24).** The bespoke
+    # unit-variant whose LEAVES_BATTLEFIELD+IsSelf safe-trigger leaf
+    # this slice admits. Imported alongside the other effect classes
+    # so the ``isinstance`` dispatch below recognizes it.
+    from mtg_bot.effects.bespoke import AnticausalVestigeLeavesEffect
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -3434,8 +3514,41 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # dropped because the safe-trigger filter requires EVERY trigger
     # to round-trip and Seedship's landfall trigger alone wouldn't
     # admit it). The event-string is emitted per arm below.
+    # **Anticausal Vestige Cycle 2 (2026-05-24)** widens the gate to
+    # also admit ``LEAVES_BATTLEFIELD`` — the FIFTH event in the safe
+    # set, and the FIRST genuinely-new event vocabulary since
+    # BECOMES_TAPPED. ``LEAVES_BATTLEFIELD`` is *not* ``DIES``: ``DIES``
+    # is the strict bf→graveyard subset whereas ``LEAVES_BATTLEFIELD``
+    # covers every bf→{anywhere} zone change (bounce / exile / library
+    # / hand / graveyard). The sole admitted EoE consumer at HEAD is
+    # **Anticausal Vestige** ({2}{B} 2/2 warp creature with
+    # ``warp_cost {4}``, ~6,900 17lands decks — the #3-ranked multi-
+    # gated-tail closure target). The C1 substrate (commit
+    # ``e148450a``) shipped Rust's
+    # ``Effect::AnticausalVestigeLeavesEffect`` unit variant + parse /
+    # to_pydict / resolve arms + the cross_engine bridge arm. The C2
+    # widen here threads LEAVES through the recognizer + the matching
+    # ``_SAFE_TRIGGERS`` triple + ``_SAFE_EFFECT_KEYS`` bare-shape
+    # whitelist; the warp arm
+    # (``_printing_is_bridge_pure_warp_creature``) now admits AV.
+    #
+    # **Verify-first silent-auto-grow check.** Live HEAD scan
+    # confirmed only 5 other cards carry a LEAVES_BATTLEFIELD
+    # triggered ability (Cryogen Relic, Broodguard Elite, Syr Vondam,
+    # Nutrient Block, and AV itself). None silently auto-grow under
+    # this widen: Cryogen Relic / Nutrient Block carry ``DrawCards``
+    # which is not in the LEAVES ``safe_effect_kinds`` arm below;
+    # Broodguard Elite + Syr Vondam carry non-safe effect kinds
+    # (``MoveSelfCountersToTargetCreatureYouControl`` / ``Sequence`` /
+    # ``ConditionalIfSourcePowerAtLeast``) and Syr Vondam additionally
+    # has an ``And`` predicate. The widen is genuinely AV-scoped at
+    # HEAD; a future LEAVES carrier with a different safe leaf would
+    # be a single one-line widen here + a paired ``_SAFE_TRIGGERS``
+    # entry (same pattern as the ENTERS/DIES/ATTACKS leaf-set
+    # extensions).
     if ta.event not in (
         Event.ENTERS, Event.DIES, Event.ATTACKS, Event.BECOMES_TAPPED,
+        Event.LEAVES_BATTLEFIELD,
     ):
         return None
     if ta.event is Event.ENTERS:
@@ -3444,6 +3557,8 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         event_str = "dies"
     elif ta.event is Event.BECOMES_TAPPED:
         event_str = "becomes_tapped"
+    elif ta.event is Event.LEAVES_BATTLEFIELD:
+        event_str = "leaves_battlefield"
     else:  # Event.ATTACKS
         event_str = "attacks"
     # Recognize one of the safe predicate shapes; produce the
@@ -3610,7 +3725,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
                 "create_token", "create_token_tapped",
                 "each_player_draws",
             )
-        else:
+        elif ta.event is Event.BECOMES_TAPPED:
             # Event.BECOMES_TAPPED (round-58 N1 — the BECOMES_TAPPED
             # event bridge). The ONLY safe leaf under
             # BECOMES_TAPPED+IsSelf today is ``create_token`` — the
@@ -3634,6 +3749,48 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # the triple gate rejects any other event/predicate
             # pairing that isn't an explicit ``_SAFE_TRIGGERS`` entry.
             safe_effect_kinds = ("create_token",)
+        else:
+            # Event.LEAVES_BATTLEFIELD (**Anticausal Vestige Cycle 2**,
+            # 2026-05-24 — the FIFTH event in the safe set). The ONLY
+            # safe leaf under LEAVES_BATTLEFIELD+IsSelf today is
+            # ``anticausal_vestige_leaves_effect`` — the bespoke
+            # unit-variant whose Rust ``Effect::AnticausalVestige
+            # LeavesEffect`` (cards.rs unit variant + parse / to_pydict
+            # / resolve arms shipped in C1 commit ``e148450a``) and
+            # Python ``AnticausalVestigeLeavesEffect`` (effects/
+            # bespoke.py:858-907) mirror each other step-for-step along
+            # the seated-agent deterministic ``candidates[0]`` fallback
+            # path (draw 1, count controller lands as X, pick first
+            # mana-value-≤-X permanent from hand, put onto bf tapped
+            # with summoning_sick=True, queue Enters dispatch). The
+            # cross_engine bridge arm at ``cross_engine.py:9475`` (also
+            # shipped in C1) consumes the unit-shape dict ``{"kind":
+            # "anticausal_vestige_leaves_effect"}`` and yields the
+            # Python instance.
+            #
+            # Deliberately narrow: the verify-first scan of HEAD found
+            # only 4 OTHER cards carrying any LEAVES_BATTLEFIELD
+            # triggered ability (Cryogen Relic, Broodguard Elite,
+            # Syr Vondam, Nutrient Block); none use the
+            # ``anticausal_vestige_leaves_effect`` kind, and each
+            # carries a non-safe effect class (DrawCards under LEAVES
+            # is NOT in this safe set — LEAVES draw is a separate
+            # parity question; Move-self-counters / Sequence /
+            # Conditional are bespoke / compound) plus often a
+            # non-IsSelf predicate (Syr Vondam's first LEAVES trigger
+            # is an ``And``). A future slice landing a LEAVES carrier
+            # with a different SAFE leaf ships that leaf here + the
+            # paired ``("leaves_battlefield","source_is_self",<leaf>)``
+            # ``_SAFE_TRIGGERS`` entry (same one-line-widen pattern as
+            # the ENTERS/DIES/ATTACKS leaf-set extensions). The
+            # predicate-effect product is enforced by
+            # ``_SAFE_TRIGGERS`` (the
+            # ``("leaves_battlefield","source_is_self",
+            # "anticausal_vestige_leaves_effect")`` tuple), so even
+            # though only one kind is listed here the triple gate
+            # rejects any other event/predicate pairing that isn't an
+            # explicit ``_SAFE_TRIGGERS`` entry.
+            safe_effect_kinds = ("anticausal_vestige_leaves_effect",)
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
@@ -4085,6 +4242,49 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "n": int(eff.n),
             "reveal_chosen": False,
         }
+    elif isinstance(eff, AnticausalVestigeLeavesEffect):
+        # **Anticausal Vestige Cycle 2 (2026-05-24) — the FIRST
+        # LEAVES_BATTLEFIELD+IsSelf safe-trigger leaf.** Python's
+        # ``AnticausalVestigeLeavesEffect`` (``effects/bespoke.py:858-
+        # 907``) is a bare bespoke unit-variant — no payload fields on
+        # either side. Both the land count (X) and the hand pick are
+        # dynamic resolve-time computations: draw 1, count controller
+        # lands on bf as X, pick the FIRST permanent in hand with
+        # ``mana_cost.total <= X``, put it onto bf TAPPED with
+        # ``summoning_sick=True`` (CR 302.1). Empty filter result →
+        # silent no-op after the draw.
+        #
+        # Rust mirror: ``Effect::AnticausalVestigeLeavesEffect`` (C1
+        # commit ``e148450a``) — parse_effect arm at the position
+        # immediately after ``famished_worldsire_look_top_x_by_power_
+        # put_lands_tapped``; to_pydict emits the SAME minimal unit-
+        # shape ``{"kind": "anticausal_vestige_leaves_effect"}``;
+        # resolve arm in ``state_ops_resolve.rs`` mirrors the
+        # ``AstelliReclaimerETBEffect`` deterministic first-legal-pick
+        # precedent step-for-step along the Python seated-agent
+        # ``candidates[0]`` fallback path. The cross_engine bridge arm
+        # at ``cross_engine.py:9475`` round-trips ``{"kind":
+        # "anticausal_vestige_leaves_effect"}`` to the Python instance
+        # (extra dict keys ignored per the unit-variant convention).
+        #
+        # **No rider gate.** Unit variant ⇒ nothing for the recognizer
+        # to refuse (contrast Surveil's ``use_artifact_count`` or
+        # PumpSelf's ``granted_keywords``). The §2 silent-mistranslation
+        # gating is structural: the predicate must be ``IsSelf`` (we're
+        # in the IsSelf branch) AND the event must be
+        # ``LEAVES_BATTLEFIELD`` (gated by the
+        # ``safe_effect_kinds = ("anticausal_vestige_leaves_effect",)``
+        # tuple on the LEAVES arm above; the
+        # ``("leaves_battlefield","source_is_self",
+        # "anticausal_vestige_leaves_effect")`` ``_SAFE_TRIGGERS``
+        # entry is the load-bearing triple gate). The dict-side
+        # extra-key refusal in ``_is_safe_trigger_dict`` (backed by
+        # ``_SAFE_EFFECT_KEYS["anticausal_vestige_leaves_effect"] =
+        # frozenset({"kind"})`` — bare unit-shape whitelist) is the
+        # cross-engine round-trip backstop against any future schema
+        # extension.
+        eff_kind = "anticausal_vestige_leaves_effect"
+        eff_dict = {"kind": "anticausal_vestige_leaves_effect"}
     else:
         return None
     if eff_kind not in safe_effect_kinds:

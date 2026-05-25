@@ -6650,6 +6650,33 @@ import pytest as _pytest_warp  # noqa: E402
         # ships the per-card real-EoE byte-equality probe under
         # warp-cast + normal-cast lifecycles.
         ("Codecracker Hound", True),
+        # **Anticausal Vestige Cycle 2 (2026-05-24) — FLIPPED False → True.**
+        # The C1 substrate (commit ``e148450a``) shipped the Rust
+        # ``Effect::AnticausalVestigeLeavesEffect`` unit variant +
+        # parse / to_pydict / resolve arms + cross_engine bridge arm
+        # (AV STAYED DECLINED at the warp-arm admit gate post-C1
+        # because the safe-trigger recognizer's event-vocabulary gate
+        # rejected ``LEAVES_BATTLEFIELD``). C2 (this slice) widens the
+        # recognizer's event gate to admit ``LEAVES_BATTLEFIELD`` (the
+        # 5th event in the safe set; the first genuinely-new event
+        # vocabulary since BECOMES_TAPPED — DIES ≠ LEAVES, the latter
+        # covers every bf→{anywhere} zone change), adds the
+        # ``LEAVES_BATTLEFIELD`` arm in the IsSelf branch with
+        # ``safe_effect_kinds = ("anticausal_vestige_leaves_effect",)``,
+        # adds the matching ``AnticausalVestigeLeavesEffect`` dispatch
+        # arm + the
+        # ``("leaves_battlefield","source_is_self",
+        # "anticausal_vestige_leaves_effect")`` ``_SAFE_TRIGGERS`` entry
+        # + the bare ``{"kind"}`` ``_SAFE_EFFECT_KEYS`` whitelist (unit
+        # variant — no payload keys). AV's only triggered_ability
+        # round-trips, and the warp arm admits. Verify-first scan
+        # confirmed no silent auto-grow: 4 other LEAVES_BATTLEFIELD
+        # carriers (Cryogen Relic, Broodguard Elite, Syr Vondam,
+        # Nutrient Block) all stay rejected — their effect kinds are
+        # not in the LEAVES safe set, and/or their predicates are not
+        # IsSelf. Cycle 3 ships the per-card real-EoE byte-equality
+        # probe under warp-cast + normal-cast lifecycles.
+        ("Anticausal Vestige", True),
         # Phase-1.5 §2-teeth: Quantum Riddler ALSO has a safe ETB
         # trigger (ENTERS/IsSelf/DrawCards 1) + {1}{U} warp, but
         # carries a HandSizeAtMost(1) draw-replacement static — it is
@@ -6700,10 +6727,11 @@ def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
 def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
     """Warp-arm positive set pin — EXHAUSTIVE admit set across the
     Phase-1 / Phase-1.5 / Phase-2 lifetime of
-    ``_printing_is_bridge_pure_warp_creature``, post-**Codecracker Hound
-    Cycle 2** (2026-05-24) admit-widen flip.
+    ``_printing_is_bridge_pure_warp_creature``, post-**Anticausal
+    Vestige Cycle 2** (2026-05-24) admit-widen flip.
 
-    **Set composition (7 cards post-Cycle-2 — was 6 pre-Cycle-2).**
+    **Set composition (8 cards post-AV-Cycle-2 — was 7 post-CH-Cycle-2
+    — was 6 pre-CH-Cycle-2).**
 
     * **Phase-1 pure-fixed-cost pair** — Bygone Colossus + Red Tiger
       Mechan (no triggers; warp_cost is the only blocking feature).
@@ -6713,30 +6741,47 @@ def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
     * **Phase-2 rider card** — Timeline Culler (the only live EoE card
       carrying ``warp_additional_life_cost`` and/or
       ``warp_castable_from_graveyard``).
-    * **Codecracker Hound Cycle 2 (this slice)** — Codecracker Hound
-      ({1}{U} 2/2 warp creature, ENTERS+IsSelf+
+    * **Codecracker Hound Cycle 2 (commit ``278992d7``)** — Codecracker
+      Hound ({1}{U} 2/2 warp creature, ENTERS+IsSelf+
       ``LookTopNPutOneInHandRestToGraveyard(n=2, reveal_chosen=False)``
-      — ~22,144 17lands decks). The Cycle-2 ``_python_ta_to_safe_dict``
-      widen (the 9th ENTERS+IsSelf leaf,
-      ``look_top_n_put_one_in_hand_rest_to_graveyard``) classified
-      CH's ETB trigger as safe, closing the
-      ``nonsafe_triggered_ability`` gate; the warp arm now admits.
-      Inserted alphabetically between Bygone Colossus and Germinating
-      Wurm. The §2 silent-mistranslation teeth (the
-      ``eff.reveal_chosen == False`` gate in the recognizer; Rust's
-      resolve never reveals) keep the admit surgical — a future
-      ``reveal_chosen=True`` consumer (synthetic or future EoE) stays
-      DECLINED. The function-name "is_exactly_six" predates Cycle 2;
-      preserved as-is for SCM stability — the docstring + assertion
-      are the load-bearing pins.
+      — ~22,144 17lands decks). The CH-Cycle-2 widen added the 9th
+      ENTERS+IsSelf leaf
+      (``look_top_n_put_one_in_hand_rest_to_graveyard``).
+    * **Anticausal Vestige Cycle 2 (this slice)** — Anticausal
+      Vestige ({2}{B} 2/2 warp creature with ``warp_cost {4}``,
+      LEAVES_BATTLEFIELD+IsSelf+``AnticausalVestigeLeavesEffect()``
+      bespoke unit-variant — ~6,900 17lands decks; #3-ranked
+      multi-gated-tail closure target). The AV-Cycle-2 widen extends
+      ``_python_ta_to_safe_dict``'s event vocabulary from
+      ``(ENTERS, DIES, ATTACKS, BECOMES_TAPPED)`` to also include
+      ``LEAVES_BATTLEFIELD`` (the 5th event in the safe set; the
+      FIRST genuinely-new event vocabulary since BECOMES_TAPPED —
+      DIES ≠ LEAVES, the latter covers every bf→{anywhere} zone
+      change); adds a LEAVES arm in the IsSelf branch with
+      ``safe_effect_kinds = ("anticausal_vestige_leaves_effect",)``;
+      adds the matching dispatch arm + ``_SAFE_TRIGGERS`` triple +
+      ``_SAFE_EFFECT_KEYS`` bare ``{"kind"}`` whitelist. AV's only
+      triggered_ability round-trips, and the warp arm admits. AV
+      inserted alphabetically as the FIRST element of the sorted
+      admit set (before Bygone Colossus). The function-name
+      "is_exactly_six" predates CH/AV Cycle 2; preserved as-is for
+      SCM stability — the docstring + assertion are the load-bearing
+      pins.
 
     Regenerable companion to the round-58 scout — anti-count-chasing
     teeth that catch a future silent widen (e.g. Quantum Riddler — safe
     trigger but static-gated — must NOT leak in; a non-safe-trigger
-    warp card other than Codecracker Hound MUST NOT leak in). The
-    Cycle-2 delta vs the Phase-2 count of 6 is EXACTLY {Codecracker
-    Hound} — the only EoE warp card whose sole remaining gate
-    (``nonsafe_triggered_ability``) closed under the Cycle-2 widen.
+    warp card other than CH/AV MUST NOT leak in). The AV-Cycle-2
+    delta vs the post-CH-C2 count of 7 is EXACTLY {Anticausal
+    Vestige} — the only EoE LEAVES_BATTLEFIELD carrier whose
+    structural admit-gate (the safe-trigger event-vocabulary +
+    matching IsSelf+effect-kind arm) closed under the AV-C2 widen.
+    The verify-first scan of the 4 OTHER LEAVES_BATTLEFIELD carriers
+    (Cryogen Relic, Broodguard Elite, Syr Vondam, Nutrient Block)
+    confirmed no silent auto-grow: each fails at its effect kind
+    (DrawCards / MoveSelfCounters / Sequence / Conditional are not
+    in the LEAVES safe set) or its predicate (Syr Vondam's first
+    LEAVES trigger is an ``And``, not ``IsSelf``).
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -6749,6 +6794,7 @@ def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
         if _printing_is_bridge_pure_warp_creature(pr)
     )
     assert passing == [
+        "Anticausal Vestige",
         "Bygone Colossus",
         "Codecracker Hound",
         "Germinating Wurm",
@@ -6758,16 +6804,18 @@ def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
         "Timeline Culler",
     ], (
         f"Warp guardrail must admit EXACTLY the Phase-1 pair + "
-        f"Phase-1.5 trio + Timeline Culler + Codecracker Hound "
-        f"(Cycle-2 flip); got {passing}. The Cycle-2 widen flipped "
-        f"Codecracker Hound DECLINED → ADMITTED via the 9th "
-        f"ENTERS+IsSelf safe-trigger leaf "
-        f"(look_top_n_put_one_in_hand_rest_to_graveyard) — a new "
-        f"warp creature is admitted ONLY if every trigger round-trips "
-        f"the SAFE gate; anything static-gated (Quantum Riddler) or "
-        f"non-safe-trigger (any non-CH warp card whose trigger is "
-        f"outside _SAFE_TRIGGERS) belongs to a separate substrate, "
-        f"not a silent expansion (see "
+        f"Phase-1.5 trio + Timeline Culler + Codecracker Hound (CH "
+        f"Cycle-2 flip) + Anticausal Vestige (AV Cycle-2 flip); got "
+        f"{passing}. The AV-Cycle-2 widen flipped Anticausal Vestige "
+        f"DECLINED → ADMITTED via the 5th safe-trigger event "
+        f"vocabulary entry (LEAVES_BATTLEFIELD) + the new "
+        f"AnticausalVestigeLeavesEffect dispatch arm + the matching "
+        f"_SAFE_TRIGGERS triple + bare _SAFE_EFFECT_KEYS whitelist — "
+        f"a new warp creature is admitted ONLY if every trigger "
+        f"round-trips the SAFE gate; anything static-gated (Quantum "
+        f"Riddler) or non-safe-trigger (any non-CH-non-AV warp card "
+        f"whose trigger is outside _SAFE_TRIGGERS) belongs to a "
+        f"separate substrate, not a silent expansion (see "
         f"_printing_is_bridge_pure_warp_creature's docstring + "
         f"docs/WARP_COST_PHASE2_DESIGN.md §1/§2 + "
         f"docs/CODECRACKER_HOUND_CYCLE_1_HONEST_STOP_2026-05-24.md §6)."
