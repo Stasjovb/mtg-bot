@@ -228,15 +228,16 @@ def test_bridge_round_trip_sami_wildcat_captain_byte_equal():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_cost_reduction_admit_set_is_exactly_four_carriers():
-    """Pin #3 — admit set exhaustive post-Phase-2.
+def test_phase_2_cost_reduction_admit_set_is_exactly_five_carriers_post_phase_3():
+    """Pin #3 — INVERTED post-Phase-3-Cycle-2 — admit set is 5 (was 4).
 
     The set of live EoE printings passing the widened
     :func:`_printing_is_bridge_pure_cost_reduction_creature` is
     EXACTLY ``{"Gigastorm Titan", "Lashwhip Predator", "Uthros
-    Psionicist", "Sami, Wildcat Captain"}`` — the Phase-1 +
-    Phase-2 carriers. Subsystem-attribution pin (design doc §7.4
-    pin 12). Auto-grows when Phase 3 widens the Condition grammar.
+    Psionicist", "Sami, Wildcat Captain", "Fungal Colossus"}`` —
+    the Phase-1 + Phase-2 + Phase-3 carriers. Subsystem-attribution
+    pin (design doc §7.4 pin 13). The Phase-3-Cycle-2 FLIP added
+    Fungal Colossus (PerDifferentlyNamedLand) — was 4 pre-Phase-3.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -250,18 +251,18 @@ def test_phase_2_cost_reduction_admit_set_is_exactly_four_carriers():
         )
     )
     assert admitted == [
+        "Fungal Colossus",
         "Gigastorm Titan",
         "Lashwhip Predator",
         "Sami, Wildcat Captain",
         "Uthros Psionicist",
     ], (
         f"cost-reduction admit set drifted: {admitted!r} (expected "
-        f"exactly the 4 Phase-1+2 carriers — Gigastorm Titan + "
+        f"exactly the 5 Phase-1+2+3 carriers — Gigastorm Titan + "
         f"Lashwhip Predator + Uthros Psionicist + Sami, Wildcat "
-        f"Captain). If a new card joined, verify it actually carries "
-        f"a Phase-1 boolean-condition cost_reductions shape OR a "
-        f"Phase-2 ExternalCondition shape — Phase 3 will widen the "
-        f"set further."
+        f"Captain + Fungal Colossus). If a new card joined, verify it "
+        f"actually carries a Phase-1+3 cost_reductions shape OR a "
+        f"Phase-2 ExternalCondition shape — Phase 4 may widen further."
     )
 
 
@@ -270,19 +271,18 @@ def test_phase_2_cost_reduction_admit_set_is_exactly_four_carriers():
 # ---------------------------------------------------------------------------
 
 
-def test_fungal_colossus_stays_declined_per_differently_named_land_is_phase_3():
-    """Pin #4 — Fungal Colossus stays DECLINED (no silent auto-grow).
+def test_fungal_colossus_now_admits_per_differently_named_land_post_phase_3():
+    """Pin #4 — INVERTED post-Phase-3-Cycle-2 — Fungal Colossus FLIP.
 
     Fungal Colossus carries ``CostReduction(amount=1,
-    condition=PerDifferentlyNamedLand())`` — a variable-multiplier
-    Phase 3 shape NOT in the Phase-2 grammar.
-    :func:`_cost_reduction_rule_is_phase1` rejects
-    ``PerDifferentlyNamedLand``; the admit predicate must reject
-    the printing.
+    condition=PerDifferentlyNamedLand())`` — a variable-X Phase-3
+    shape now admitted by the widened
+    :func:`_cost_reduction_rule_is_phase1_or_3` helper. The admit
+    predicate flips True; the deck-level filter likewise admits the
+    card (the FLIP cycle's load-bearing pin).
 
-    The deck-level filter likewise drops the card — Phase 3 will
-    widen the substrate. The Cycle-2 widening (externals admit-
-    loop) does NOT extend to the spell-local Phase-3 sub-shape D.
+    Inverts the Phase-2-Cycle-2 pin #4 which had pinned Fungal as
+    DECLINED while Phase 3 was unimplemented.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -294,21 +294,28 @@ def test_fungal_colossus_stays_declined_per_differently_named_land_is_phase_3():
 
     assert (
         trajectory._printing_is_bridge_pure_cost_reduction_creature(fc)
-        is False
+        is True
     ), (
-        "Fungal Colossus must STAY DECLINED at the widened cost-"
-        "reduction admit predicate (PerDifferentlyNamedLand is "
-        "Phase 3 — the no-silent-auto-grow discipline)."
+        "Fungal Colossus must ADMIT at the widened cost-reduction "
+        "admit predicate post-Phase-3-Cycle-2 (the rename of "
+        "_cost_reduction_rule_is_phase1 -> "
+        "_cost_reduction_rule_is_phase1_or_3 + the "
+        "PerDifferentlyNamedLand isinstance arm)."
     )
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Fungal Colossus"], src,
     )
-    assert filtered_names == [], (
-        "Fungal Colossus must STAY DECLINED at the deck-level filter "
-        f"post-Cycle-2 (no OR-chain disjunct admits it). Got "
-        f"filtered_names={filtered_names!r}"
+    assert filtered_names == ["Fungal Colossus"], (
+        "Fungal Colossus must ADMIT at the deck-level filter "
+        f"post-Phase-3-Cycle-2. Got filtered_names={filtered_names!r}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    (cd,) = card_defs
+    assert cd.name == "Fungal Colossus"
+    assert cd.cost_reductions == (
+        (1, "per_differently_named_land", ()),
+    )
+    assert cd.external_cost_reductions == ()
 
 
 # ---------------------------------------------------------------------------

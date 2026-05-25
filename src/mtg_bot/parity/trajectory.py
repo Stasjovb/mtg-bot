@@ -4900,31 +4900,47 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
     return True
 
 
-def _cost_reduction_rule_is_phase1(rule) -> bool:
-    """True iff ``rule`` is one of the two boolean conditions Phase 1
-    of the cost-reduction substrate ports.
+def _cost_reduction_rule_is_phase1_or_3(rule) -> bool:
+    """True iff ``rule`` is one of the spell-local ``Condition`` variants
+    the cost-reduction substrate ports across Phases 1 + 3.
 
-    Phase 1 carries EXACTLY 2 Condition variants:
+    Phase 1 + Phase 3 carry EXACTLY 3 spell-local ``Condition`` variants:
 
       * :class:`AnotherSpellCastThisTurn` — no payload (Gigastorm
         Titan: ``CostReduction(amount=3,
         condition=AnotherSpellCastThisTurn())``).
       * :class:`OpponentsControlAtLeast` — restricted to the
         :class:`IsCreature` filter token + an int ``n`` (Lashwhip
-        Predator: ``CostReduction(amount=2, condition=
-        OpponentsControlAtLeast(IsCreature(), 3))``).
+        Predator: ``CostReduction(amount=2,
+        condition=OpponentsControlAtLeast(IsCreature(), 3))``).
+      * :class:`PerDifferentlyNamedLand` — no payload (Fungal Colossus:
+        ``CostReduction(amount=1,
+        condition=PerDifferentlyNamedLand())``).   # Phase 3 (NEW
+        — variable-X multiplier on the spell-local side; the
+        multiplier is computed by Rust's
+        :func:`unique_land_names_count` walking the caster's
+        battlefield).
 
-    Any variable-multiplier (Phase 3:
-    :class:`PerDifferentlyNamedLand`), any non-``IsCreature`` predicate
-    (Phase 3+ predicate algebra), or any non-Phase-1 Condition
-    subclass — False (rejected). The §2 admit-predicate teeth: this
-    is the spell-local-condition half. Phase 2 adds the
-    externals-condition sibling
-    :func:`_external_cost_reduction_rule_is_phase2`.
+    The full ``Condition``-grammar surface (And/Or/Not combinators,
+    target-dependent variants, the predicate algebra beyond
+    ``IsCreature``) is out of scope. Phase 2's externals-condition
+    sibling is :func:`_external_cost_reduction_rule_is_phase2`,
+    unchanged here.
+
+    The §2 admit-predicate teeth: this is the spell-local-condition
+    half. Any non-Phase-1/3 ``Condition`` subclass — False (rejected);
+    any other ``OpponentsControlAtLeast`` payload — False.
+
+    Renamed from ``_cost_reduction_rule_is_phase1`` in Phase 3 Cycle 2
+    (2026-05-25, design doc §5.4 Option A — widen the existing helper
+    rather than chain a sibling helper). The Phase-1 carriers continue
+    to admit through the SAME named site as the new Phase-3 carrier;
+    the decline-set bench check gets one predicate, one assertion.
     """
     from mtg_bot.effects.conditions import (
         AnotherSpellCastThisTurn,
         OpponentsControlAtLeast,
+        PerDifferentlyNamedLand,
     )
     from mtg_bot.effects.object_predicates import IsCreature
 
@@ -4933,6 +4949,11 @@ def _cost_reduction_rule_is_phase1(rule) -> bool:
         return True
     if isinstance(c, OpponentsControlAtLeast):
         return isinstance(c.filter, IsCreature) and isinstance(c.n, int)
+    # Phase 3 (NEW). No payload — accept any ``PerDifferentlyNamedLand``
+    # instance. The Rust side evaluates ``unique_land_names_count`` on
+    # the caster's battlefield to produce the variable-X multiplier.
+    if isinstance(c, PerDifferentlyNamedLand):
+        return True
     return False
 
 
@@ -4955,7 +4976,7 @@ def _external_cost_reduction_rule_is_phase2(rule) -> bool:
     ``cost_reductions``, NOT ``external_cost_reductions``), any
     non-Phase-2 ExternalCondition subclass, or any non-
     ``IsArtifact``/``IsCreature`` predicate — False (rejected).
-    Mirror of :func:`_cost_reduction_rule_is_phase1` for the
+    Mirror of :func:`_cost_reduction_rule_is_phase1_or_3` for the
     externals side; the bridge §2 teeth.
     """
     from mtg_bot.effects.conditions import (
@@ -4974,30 +4995,35 @@ def _external_cost_reduction_rule_is_phase2(rule) -> bool:
 
 def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
     """True iff a CardPrinting is a PURE cost-reduction creature the
-    Phase-1 / Phase-2 cost-reduction substrate round-trips byte-equal
-    across engines.
+    Phase-1 / Phase-2 / Phase-3 cost-reduction substrate round-trips
+    byte-equal across engines.
 
     **Cost-reduction substrate, Phase 1 Cycle 2 (2026-05-24) +
-    Phase 2 Cycle 2 (2026-05-25; spec at ``docs/COST_REDUCTION_
-    SUBSTRATE_PHASE_2_DESIGN.md`` §5.4 Option A).** Motivating set:
+    Phase 2 Cycle 2 (2026-05-25) + Phase 3 Cycle 2 (2026-05-25; spec
+    at ``docs/COST_REDUCTION_SUBSTRATE_PHASE_3_DESIGN.md`` §5.4
+    Option A — widen the existing helper).** Motivating set:
     Gigastorm Titan + Lashwhip Predator (Phase 1 — 24,908 17lands
     decks) + Uthros Psionicist + Sami, Wildcat Captain (Phase 2 —
-    +15,575 17lands decks). The §2 Class-1 positive-allowlist
-    guardrail; one named site, widened in Phase 2 (Option A — both
-    Phase-2 cards have ``cost_reductions == ()`` so the
-    spell-local admit-loop is vacuous on them, and Phase-1 carriers
-    have ``external_cost_reductions == ()`` so the new externals
-    admit-loop is vacuous on them — both phases route through the
-    SAME named site).
+    +15,575 17lands decks) + Fungal Colossus (Phase 3 — +13,165
+    17lands decks; the SOLE ``PerDifferentlyNamedLand`` carrier).
+    **Post-Phase-3 closure the cost-reduction substrate retires from
+    the single-gated rollup entirely** — admit set is exhaustive on
+    the EoE pool.
+
+    The §2 Class-1 positive-allowlist guardrail; one named site,
+    widened in Phase 3 (Option A — the spell-local
+    :func:`_cost_reduction_rule_is_phase1_or_3` helper handles all
+    three Phase-1/3 ``Condition`` shapes, and the externals
+    :func:`_external_cost_reduction_rule_is_phase2` helper is
+    unchanged. All five Phase-1/2/3 carriers route through the SAME
+    named site).
 
     **§2 teeth (must reject):**
 
-      * Fungal Colossus — ``cost_reductions=(CostReduction(amount=1,
-        condition=PerDifferentlyNamedLand()),)``. The
-        :class:`PerDifferentlyNamedLand` condition is Phase 3 (variable
-        multiplier on the spell-local side). Rejected by
-        :func:`_cost_reduction_rule_is_phase1`.
-      * Any future Phase-3+ externals carrier (e.g.
+      * Any future Phase-4+ spell-local ``Condition`` subclass
+        (And/Or/Not combinators, target-dependent variants).
+        Rejected by :func:`_cost_reduction_rule_is_phase1_or_3`.
+      * Any future Phase-4+ externals carrier (e.g.
         ``per_differently_named_land`` on the externals side, or
         any predicate beyond ``IsArtifact``/``IsCreature``).
         Rejected by :func:`_external_cost_reduction_rule_is_phase2`.
@@ -5010,20 +5036,24 @@ def _printing_is_bridge_pure_cost_reduction_creature(printing) -> bool:
     no spell_effect / warp_cost / kicker_cost / impending_cost /
     room_halves / loyalty / station_threshold / dynamic_pt_formula
     / ward_cost) — the ONLY thing this predicate ADDS over
-    simple-creature is admitting the Phase-1 ``cost_reductions``
+    simple-creature is admitting the Phase-1/3 ``cost_reductions``
     rider AND the Phase-2 ``external_cost_reductions`` rider. All
-    four phase-1/2 cards are bare ``('Creature',)``.
+    five phase-1/2/3 cards are bare ``('Creature',)``.
     """
     if "Creature" not in printing.card_types:
         return False
     if printing.power is None or printing.toughness is None:
         return False
-    # Phase 1 spell-local admit (unchanged). Each spell-local rule
-    # must be one of the two Phase-1 boolean conditions; Fungal
-    # Colossus's variable-X ``PerDifferentlyNamedLand`` rejects here.
+    # Phase 1 + Phase 3 spell-local admit (Phase 3 Cycle 2 widening).
+    # Each spell-local rule must be one of the THREE
+    # supported Conditions across Phase 1 + Phase 3:
+    # ``AnotherSpellCastThisTurn`` / ``OpponentsControlAtLeast(Creature,
+    # int)`` / ``PerDifferentlyNamedLand`` (the Fungal Colossus
+    # variable-X multiplier). Any other ``Condition`` subclass —
+    # rejected (Phase 4+ widens further).
     if printing.cost_reductions:
         for rule in printing.cost_reductions:
-            if not _cost_reduction_rule_is_phase1(rule):
+            if not _cost_reduction_rule_is_phase1_or_3(rule):
                 return False
     # Phase 2 externals admit (NEW). Replaces the old
     # ``if printing.external_cost_reductions: return False`` guard.
@@ -10099,18 +10129,20 @@ def _printing_to_card_def(printing) -> CardDef:
         )
     if _printing_is_bridge_pure_cost_reduction_creature(printing):
         # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24) +
-        # Phase 2 Cycle 2 (2026-05-25).** A bridge-pure cost-reduction
+        # Phase 2 Cycle 2 (2026-05-25) + Phase 3 Cycle 2 (2026-05-25 —
+        # Fungal Colossus FLIP).** A bridge-pure cost-reduction
         # creature routes to the cost-reduction-aware CardDef BEFORE
         # the plain simple-creature arm — defense-in-depth even though
         # ``_printing_is_bridge_simple_creature`` rejects any
         # ``cost_reductions``/``external_cost_reductions`` carrier
         # today. Materialize the CardDef with ``cost_reductions``
-        # (Phase 1) AND ``external_cost_reductions`` (Phase 2)
+        # (Phase 1 + Phase 3) AND ``external_cost_reductions`` (Phase 2)
         # carrying the SAME (amount, condition_kind, condition_args)
         # triples the bridge emitters consume. The filter above
-        # guarantees each rule is one of the two supported shapes per
-        # phase; the condition_kind dispatch here is the inverse of
-        # :func:`_cost_reduction_rule_is_phase1` /
+        # guarantees each rule is one of the three supported spell-
+        # local shapes (Phase 1/3) + two supported externals shapes
+        # (Phase 2); the condition_kind dispatch here is the inverse
+        # of :func:`_cost_reduction_rule_is_phase1_or_3` /
         # :func:`_external_cost_reduction_rule_is_phase2` (any other
         # shape would have been rejected by the filter, so the
         # unreachable-else raises like the bridge §2 teeth).
@@ -10119,6 +10151,7 @@ def _printing_to_card_def(printing) -> CardDef:
             NthSpellThisTurn,
             OpponentsControlAtLeast,
             PerControlled,
+            PerDifferentlyNamedLand,
         )
         from mtg_bot.effects.object_predicates import IsArtifact, IsCreature
 
@@ -10143,13 +10176,24 @@ def _printing_to_card_def(printing) -> CardDef:
                     "opponents_control_at_least",
                     ("creature", int(cond.n)),
                 ))
+            elif isinstance(cond, PerDifferentlyNamedLand):
+                # cost-reduction substrate — Phase 3 Cycle 2
+                # (2026-05-25). Unit-shape variant (no payload); the
+                # Rust evaluator computes the variable-X multiplier via
+                # ``unique_land_names_count`` on the caster's
+                # battlefield.
+                cr_triples.append((
+                    int(rule.amount),
+                    "per_differently_named_land",
+                    (),
+                ))
             else:
-                # Unreachable — the filter above only admits the two
-                # Phase-1 shapes. Loud-fail rather than silently drop
+                # Unreachable — the filter above only admits the three
+                # Phase-1/3 shapes. Loud-fail rather than silently drop
                 # (the §2 teeth — silent no-op pipeline runs are
                 # pipeline bugs).
                 raise ValueError(
-                    f"unreachable: Phase-1 cost-reduction admit "
+                    f"unreachable: Phase-1+3 cost-reduction admit "
                     f"predicate passed an unsupported condition "
                     f"{type(cond).__name__!r} on {printing.name!r}"
                 )
@@ -11152,26 +11196,32 @@ def _filter_deck_to_bridge_supported(
             _printing_is_bridge_basic_land(printing)
             or _printing_is_bridge_nonbasic_mana_land(printing)
             or _printing_is_bridge_pure_warp_creature(printing)
-            # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24).**
-            # The bridge-pure cost-reduction creature disjunct. Admits
-            # EXACTLY the 2 Phase-1 carriers (Gigastorm Titan + Lashwhip
-            # Predator — 24,908 17lands decks) by gating on the spell-
-            # local boolean-condition ``CostReduction`` shape. Routed
-            # BEFORE ``_printing_is_bridge_simple_creature`` so the
-            # ``_printing_to_card_def`` arm building the cost-reduction-
-            # aware CardDef sees the printing first (the simple-creature
-            # arm rejects ``cost_reductions`` carriers today, so the
-            # ordering is also a defense-in-depth pin against any
-            # future widen that might overlap). The §2 teeth in the
-            # admit predicate reject Fungal Colossus
-            # (``PerDifferentlyNamedLand`` — Phase 2),
-            # Uthros Psionicist + Sami, Wildcat Captain
-            # (``external_cost_reductions`` non-empty — Phase 3), and
-            # every multi-gated cost-reduction card. Rust-side gate
-            # rides the new ``apply_cost_reductions_rust`` evaluator
-            # at ``rust/src/state_ops_legal.rs`` (the eff() seam
-            # extension landed Cycle 2) + the cast-side cost source
-            # at ``state_ops_cast.rs::cast_creature``.
+            # **cost-reduction substrate Phase 1 Cycle 2 (2026-05-24) +
+            # Phase 2 Cycle 2 (2026-05-25) + Phase 3 Cycle 2 (2026-05-25
+            # — Fungal Colossus FLIP).** The bridge-pure cost-reduction
+            # creature disjunct. Admits EXACTLY the 5 Phase-1/2/3
+            # carriers (Gigastorm Titan + Lashwhip Predator — 24,908
+            # 17lands decks; Uthros Psionicist + Sami, Wildcat Captain
+            # — +15,575 decks; Fungal Colossus — +13,165 decks) by
+            # gating on the spell-local Phase-1+3 ``CostReduction``
+            # shape AND the Phase-2 externals ``ExternalCostReduction``
+            # shape via the widened
+            # :func:`_cost_reduction_rule_is_phase1_or_3` +
+            # :func:`_external_cost_reduction_rule_is_phase2` helpers.
+            # Routed BEFORE ``_printing_is_bridge_simple_creature`` so
+            # the ``_printing_to_card_def`` arm building the cost-
+            # reduction-aware CardDef sees the printing first (the
+            # simple-creature arm rejects ``cost_reductions`` carriers
+            # today, so the ordering is also a defense-in-depth pin
+            # against any future widen that might overlap). The §2
+            # teeth in the admit predicate reject every multi-gated
+            # cost-reduction card + every Phase-4+ ``Condition`` shape.
+            # Rust-side gate rides ``apply_cost_reductions_rust`` at
+            # ``rust/src/state_ops_legal.rs`` (Phase-3 substrate landed
+            # 2026-05-25 at ``8525d18e`` — adds the
+            # ``PerDifferentlyNamedLand`` match arm + the
+            # ``unique_land_names_count`` helper) + the cast-side cost
+            # source at ``state_ops_cast.rs::cast_creature``.
             or _printing_is_bridge_pure_cost_reduction_creature(printing)
             or _printing_is_bridge_simple_creature(printing)
             # Spell-card-bridge lever, Phase 1 (round-70): the 5th

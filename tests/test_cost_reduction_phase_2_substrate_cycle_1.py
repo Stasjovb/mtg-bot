@@ -699,9 +699,9 @@ def test_live_cost_reduction_admit_count_is_bumped_post_cycle_2():
         "predicate includes Phase-2 externals (PerControlled "
         "Artifact)."
     )
-    # Fungal Colossus (Phase 3) STILL declined — no silent auto-grow.
-    assert "Fungal Colossus" not in admitted, (
-        "Fungal Colossus must STAY DECLINED post-Cycle-2 "
-        "(PerDifferentlyNamedLand is Phase 3 — the design doc §3.1 "
-        "deferral; the no-silent-auto-grow discipline)."
+    # Fungal Colossus (Phase 3) NOW admits — Phase-3-Cycle-2 FLIP.
+    assert "Fungal Colossus" in admitted, (
+        "Fungal Colossus must ADMIT post-Phase-3-Cycle-2 "
+        "(PerDifferentlyNamedLand admitted by the widened "
+        "_cost_reduction_rule_is_phase1_or_3 helper)."
     )

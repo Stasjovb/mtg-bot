@@ -284,35 +284,25 @@ def test_rust_parser_accepts_per_differently_named_land_with_explicit_empty_args
 # ---------------------------------------------------------------------------
 
 
-def test_fungal_colossus_stays_declined_at_admit_gate_post_cycle_1():
-    """Pin #3a — SUBSTRATE-ONLY — Fungal Colossus STAYS DECLINED.
+def test_fungal_colossus_now_admits_at_admit_gate_post_cycle_2():
+    """Pin #3a — INVERTED post-Cycle-2 — Fungal Colossus FLIP.
 
-    **The load-bearing Cycle-1 closure marker.** With ONLY the Rust
-    substrate landed (Cycle 1) and the Python bridge half (Cycle 2)
-    NOT yet shipped, Fungal Colossus must continue to fail both
-    bridge admit predicates:
+    **The load-bearing closure marker (Cycle 2 inversion).** Post-
+    Phase-3-Cycle-2 (commit landing this slice), Fungal Colossus
+    FLIPS DECLINED → ADMITTED at
+    :func:`_printing_is_bridge_pure_cost_reduction_creature` AND at
+    the deck-level :func:`_filter_deck_to_bridge_supported` OR-chain.
+    Cycle 1's pin (substrate-only invariant — STAY DECLINED) inverts
+    here when the bridge reverse-arm + widened admit predicate land.
 
-    * ``_printing_is_bridge_simple_creature`` — the 9 sibling guards
-      (``if printing.cost_reductions or printing.external_cost_
-      reductions: return False``) keep Fungal out via the
-      ``cost_reductions`` guard.
-    * ``_printing_is_bridge_pure_cost_reduction_creature`` — the
-      Phase-1+2 admit predicate has not yet been widened to accept
-      ``Condition::PerDifferentlyNamedLand`` rules; the Phase-1
-      ``_cost_reduction_rule_is_phase1`` helper returns False for
-      non-Phase-1 conditions.
+    The simple-creature predicate STAYS False (its cost_reductions
+    guard is sibling-load-bearing — the cost-reduction-aware
+    predicate is the dedicated admit arm, a SIBLING of simple-creature
+    not a widen).
 
-    Cycle 2 inverts this pin when ``_cost_reduction_rule_is_phase1``
-    is renamed to ``_cost_reduction_rule_is_phase1_or_3`` and admits
-    ``PerDifferentlyNamedLand``.
-
-    Failure of THIS pin means the substrate ALONE auto-flipped the
-    admit gate — which would replicate the Archenemy's Charm Cycle 1
-    honest-stop situation: admitting Fungal Colossus to the bench
-    WITHOUT the bridge round-trip would ship a guaranteed mana-pool
-    divergence (Python applies the reduction; Rust would have the
-    field + evaluator but the Python bridge side has no reverse arm
-    to feed it yet through ``_card_def_to_python_printing``).
+    The Cycle 1 → Cycle 2 inversion is the documented closure pattern
+    (mirror of Phase-1 Cycle 2 commit ``c370cee4`` / Phase-2 Cycle 2
+    commit ``c370cee4``'s admit-widen).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -322,20 +312,49 @@ def test_fungal_colossus_stays_declined_at_admit_gate_post_cycle_1():
     if p is None:
         pytest.skip("Fungal Colossus absent from active CardSource")
 
+    # The simple-creature arm STILL rejects (its cost_reductions
+    # guard is sibling-load-bearing, not removed). Cycle 2 did NOT
+    # widen the existing predicate — it widened the dedicated
+    # cost-reduction-aware predicate.
     assert trajectory._printing_is_bridge_simple_creature(p) is False, (
         "Fungal Colossus must STAY DECLINED at the simple-creature "
-        "admit gate post-Cycle-1 — the 9 sibling cost_reductions "
-        "guard remains load-bearing this cycle."
+        "admit gate post-Phase-3-Cycle-2 — the cost_reductions guard "
+        "there is sibling-load-bearing."
     )
+    # The widened dedicated admit predicate FLIPS True.
     assert (
         trajectory._printing_is_bridge_pure_cost_reduction_creature(p)
-        is False
+        is True
     ), (
-        "Fungal Colossus must STAY DECLINED at the cost-reduction "
-        "admit gate post-Cycle-1 — Cycle 1 is substrate-only; the "
-        "predicate widening to admit PerDifferentlyNamedLand is "
-        "Cycle 2's deliverable."
+        "Fungal Colossus must ADMIT at the widened "
+        "_printing_is_bridge_pure_cost_reduction_creature predicate "
+        "post-Phase-3-Cycle-2 (the C1 → C2 inversion). If False, the "
+        "C2 admit-widen (the rename of "
+        "_cost_reduction_rule_is_phase1 -> "
+        "_cost_reduction_rule_is_phase1_or_3 + the PerDifferentlyNamedLand "
+        "arm) didn't land."
     )
+    # And the deck-level filter likewise — a 1-card deck containing
+    # only Fungal Colossus must filter to (1-name, 1-CardDef-list)
+    # post-Cycle-2.
+    filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
+        ["Fungal Colossus"], src,
+    )
+    assert filtered_names == ["Fungal Colossus"], (
+        "Fungal Colossus must FLIP DECLINED→ADMITTED at the deck-level "
+        "filter post-Phase-3-Cycle-2. Got "
+        f"filtered_names={filtered_names!r}"
+    )
+    assert len(card_defs) == 1
+    (cd,) = card_defs
+    assert cd.name == "Fungal Colossus"
+    assert cd.card_type == "Creature"
+    # The CardDef carries the Phase-3 cost-reduction triple
+    # round-trip-ready for the bridge.
+    assert cd.cost_reductions == (
+        (1, "per_differently_named_land", ()),
+    ), f"unexpected cost_reductions tuple: {cd.cost_reductions!r}"
+    assert cd.external_cost_reductions == ()
 
 
 def test_phase_1_and_phase_2_carriers_still_admit_post_phase_3_cycle_1():
@@ -507,25 +526,21 @@ def test_rust_externals_arm_still_rejects_per_differently_named_land():
 # ---------------------------------------------------------------------------
 
 
-def test_live_cost_reduction_admit_count_is_unchanged_post_cycle_1():
-    """Pin #5 — SUBSTRATE-ONLY — admit-set unchanged.
+def test_live_cost_reduction_admit_count_is_five_post_cycle_2():
+    """Pin #5 — INVERTED post-Cycle-2 — admit-set FLIPPED to 5.
 
     The set of live EoE printings that pass
-    ``_printing_is_bridge_pure_cost_reduction_creature`` post-
-    Cycle-1 is EXACTLY ``{Gigastorm Titan, Lashwhip Predator, Uthros
-    Psionicist, Sami, Wildcat Captain}`` — the pre-Phase-3 Phase-1 +
-    Phase-2 closure admit set. Fungal Colossus (Phase 3) still
-    declines; the cost-reduction substrate single-gated row is
-    UNCHANGED post-Cycle-1.
+    :func:`_printing_is_bridge_pure_cost_reduction_creature` post-
+    Phase-3-Cycle-2 is EXACTLY ``{Gigastorm Titan, Lashwhip Predator,
+    Uthros Psionicist, Sami, Wildcat Captain, Fungal Colossus}`` —
+    the post-Phase-3-closure admit set (the design doc §7.4 pin 13
+    "exactly 5 carriers" assertion). **The cost-reduction substrate
+    single-gated row drops to zero post-Cycle-2; the substrate
+    retires from the single-gated rollup entirely.** BLOCKED 56 → 55.
 
-    Cycle 2 inverts this pin by widening the admit predicate to
-    accept ``Condition::PerDifferentlyNamedLand`` — the FLIP. Post-
-    Cycle-2 the admit set is the 5-card ``+ Fungal Colossus`` set
-    and the cost-reduction substrate single-gated row drops to zero.
-
-    Subsystem-attribution pin: exactly 4 EoE printings now pass the
-    predicate post-Phase-3-Cycle-1 (one less than the post-Phase-3-
-    closure target of 5).
+    Subsystem-attribution pin: exactly 5 EoE printings now pass the
+    predicate post-Phase-3-Cycle-2 (was 4 post-Phase-3-Cycle-1; the
+    +1 flip is Fungal Colossus).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -536,25 +551,25 @@ def test_live_cost_reduction_admit_count_is_unchanged_post_cycle_1():
         if trajectory._printing_is_bridge_pure_cost_reduction_creature(p):
             admitted.add(name)
 
-    # The pre-Phase-3 admit set — exactly 4 carriers.
+    # The post-Phase-3 admit set — exactly 5 carriers.
     expected = {
         "Gigastorm Titan",
         "Lashwhip Predator",
         "Uthros Psionicist",
         "Sami, Wildcat Captain",
+        "Fungal Colossus",
     }
     assert admitted == expected, (
-        f"Expected the cost-reduction admit set to be EXACTLY the 4 "
-        f"pre-Phase-3 carriers post-Cycle-1 (substrate-only); got "
+        f"Expected the cost-reduction admit set to be EXACTLY the 5 "
+        f"post-Phase-3 carriers post-Cycle-2 (the FLIP); got "
         f"admitted={sorted(admitted)} expected={sorted(expected)}. "
-        f"Fungal Colossus MUST stay declined this cycle (the FLIP "
-        f"is Cycle 2)."
+        f"Fungal Colossus must FLIP DECLINED→ADMITTED in this cycle."
     )
 
-    # Fungal Colossus (Phase 3) STILL declined — no silent auto-grow.
-    assert "Fungal Colossus" not in admitted, (
-        "Fungal Colossus must STAY DECLINED post-Cycle-1 "
+    # Fungal Colossus FLIPPED — admitted post-Cycle-2.
+    assert "Fungal Colossus" in admitted, (
+        "Fungal Colossus must FLIP DECLINED→ADMITTED post-Cycle-2 "
         "(PerDifferentlyNamedLand is the Phase-3 sub-shape D rider; "
-        "the no-silent-auto-grow discipline + the substrate-only "
-        "Cycle-1 invariant)."
+        "the widened _cost_reduction_rule_is_phase1_or_3 helper "
+        "admits it)."
     )

@@ -561,29 +561,28 @@ class CardDef:
     # Peculiar Lighthouse / Raucous Carnival / Razortrap Gorge) all
     # print ``threshold = 13``.
     enters_tapped_unless_any_player_life_at_most: int = 0
-    # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24).
-    # Spell-local boolean-condition ``CostReduction`` riders (EoE —
-    # Gigastorm Titan {3}-less-if-cast-another-spell, Lashwhip
-    # Predator {2}-less-if-opponents-control->=3-creatures). Each
-    # entry is a frozen ``(amount: int, condition_kind: str,
-    # condition_args: tuple)`` triple. Phase 1 supports EXACTLY
-    # two condition_kinds:
+    # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24) +
+    # Phase 3 Cycle 2 (2026-05-25 — the variable-X multiplier widen).
+    # Spell-local ``CostReduction`` riders (EoE — Gigastorm Titan
+    # {3}-less-if-cast-another-spell, Lashwhip Predator {2}-less-
+    # if-opponents-control->=3-creatures, Fungal Colossus
+    # {1}-less-per-differently-named-land). Each entry is a frozen
+    # ``(amount: int, condition_kind: str, condition_args: tuple)``
+    # triple. Phase 1 + Phase 3 together support EXACTLY THREE
+    # condition_kinds:
     #
-    #   * ``"another_spell_cast_this_turn"`` — args = ()
-    #   * ``"opponents_control_at_least"``   — args = ("creature", n)
+    #   * ``"another_spell_cast_this_turn"`` — args = ()  # Phase 1
+    #   * ``"opponents_control_at_least"``   — args = ("creature", n)  # Phase 1
+    #   * ``"per_differently_named_land"``   — args = ()  # Phase 3 (variable-X)
     #
     # The filter guardrail
     # :func:`mtg_bot.parity.trajectory._printing_is_bridge_pure_cost_
     # reduction_creature` positively rejects every other condition
-    # kind, every variable-multiplier condition (Phase 2:
-    # ``PerDifferentlyNamedLand``), and any non-empty
-    # ``external_cost_reductions`` (Phase 3) — so only these two
-    # shapes ever reach this field in a Phase-1 deckspec. Empty
-    # tuple = no reduction (back-compat default; every pre-Phase-1
-    # CardDef omits it). The tuple-of-triples shape (NOT a
-    # ``CostReduction`` object) keeps CardDef frozen-hashable and
-    # matches the existing flat-codec field convention (mirroring
-    # ``mana_cost_colored``, ``warp_cost_colored``,
+    # kind (Phase-4+ extends this further). Empty tuple = no reduction
+    # (back-compat default; every pre-Phase-1 CardDef omits it). The
+    # tuple-of-triples shape (NOT a ``CostReduction`` object) keeps
+    # CardDef frozen-hashable and matches the existing flat-codec field
+    # convention (mirroring ``mana_cost_colored``, ``warp_cost_colored``,
     # ``static_anthems``).
     #
     # Round-trips Python ↔ Rust through
@@ -593,7 +592,9 @@ class CardDef:
     # ``CostReduction(amount, condition)`` dataclass at
     # ``src/mtg_bot/cards/base.py:308``). The Rust mirror is
     # ``CardPrinting.cost_reductions: Vec<CostReduction>`` at
-    # ``rust/src/cards.rs`` (added 2026-05-24, Cycle 1).
+    # ``rust/src/cards.rs`` (added 2026-05-24, Phase 1 Cycle 1;
+    # ``PerDifferentlyNamedLand`` variant landed 2026-05-25, Phase 3
+    # Cycle 1 — substrate commit ``8525d18e``).
     cost_reductions: tuple[tuple[int, str, tuple], ...] = ()
     # cost-reduction substrate — Phase 2 Cycle 2 (2026-05-25).
     # External cost reductions granted by a permanent on the
@@ -14413,6 +14414,7 @@ def _card_def_to_python_printing(card: "CardDef"):
         from mtg_bot.effects.conditions import (
             AnotherSpellCastThisTurn,
             OpponentsControlAtLeast,
+            PerDifferentlyNamedLand,
         )
         from mtg_bot.effects.object_predicates import IsCreature
         rules = []
@@ -14429,12 +14431,23 @@ def _card_def_to_python_printing(card: "CardDef"):
                         f"others); got {pred_token!r}"
                     )
                 cond = OpponentsControlAtLeast(IsCreature(), int(n))
+            elif cond_kind == "per_differently_named_land":
+                # cost-reduction substrate — Phase 3 Cycle 2
+                # (2026-05-25). Unit-shape variant: ``condition_args``
+                # MUST be the empty tuple (the §2 teeth — Rust's
+                # ``parse_printing`` hard-errors on non-empty args too).
+                if cond_args != ():
+                    raise ValueError(
+                        f"Phase-3 cost-reduction bridge: "
+                        f"per_differently_named_land takes 0 args; "
+                        f"got {cond_args!r}"
+                    )
+                cond = PerDifferentlyNamedLand()
             else:
                 raise ValueError(
-                    f"Phase-1 cost-reduction bridge: unsupported "
-                    f"condition_kind {cond_kind!r} (Phase 2+ adds "
-                    f"per_differently_named_land / nth_spell_this_turn / "
-                    f"per_controlled)"
+                    f"Phase-1+3 cost-reduction bridge: unsupported "
+                    f"condition_kind {cond_kind!r} (post-Phase-3 adds "
+                    f"none; future phases may extend)"
                 )
             rules.append(CostReduction(amount=int(amount), condition=cond))
         cost_reductions = tuple(rules)

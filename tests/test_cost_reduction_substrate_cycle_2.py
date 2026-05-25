@@ -276,25 +276,18 @@ def test_phase1_cost_reduction_admit_set_is_exactly_the_two_phase1_carriers():
 # ---------------------------------------------------------------------------
 
 
-def test_fungal_colossus_stays_declined_per_differently_named_land_is_phase_2():
-    """Pin #4a — Fungal Colossus stays DECLINED (§2 teeth).
+def test_fungal_colossus_now_admits_per_differently_named_land_post_phase_3():
+    """Pin #4a — INVERTED post-Phase-3-Cycle-2 — Fungal admits.
 
-    Fungal Colossus carries ``CostReduction(amount=1,
-    condition=PerDifferentlyNamedLand())`` — a variable-multiplier
-    Phase 2 shape NOT in the Cycle-2 Condition grammar.
-    :func:`_cost_reduction_rule_is_phase1` rejects
-    ``PerDifferentlyNamedLand``; the admit predicate must reject
-    the printing.
-
-    The deck-level filter likewise drops the card — no other admit
-    disjunct admits a cost-reduction creature (the
-    cost_reductions guard is load-bearing at every sibling
-    predicate this cycle, so a 1-card "Fungal Colossus" deck
-    materializes as the empty admit set).
-
-    Cycle 3 of Phase 2 will widen this (the
-    ``PerDifferentlyNamedLand`` substrate + the variable-multiplier
-    evaluator path).
+    **Updated post-Phase-3-Cycle-2 (2026-05-25).** Originally this
+    pin claimed Fungal Colossus STAYS DECLINED because the Phase-1
+    admit predicate rejected any non-Phase-1 ``Condition`` shape
+    (including ``PerDifferentlyNamedLand``). Phase 3 widened the
+    spell-local helper — ``_cost_reduction_rule_is_phase1`` was
+    renamed to ``_cost_reduction_rule_is_phase1_or_3`` and now
+    accepts ``PerDifferentlyNamedLand``. The §2 teeth still apply
+    to every Phase-4+ ``Condition`` shape; this pin's INVERSION is
+    the documented closure of the cost-reduction substrate.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -304,20 +297,18 @@ def test_fungal_colossus_stays_declined_per_differently_named_land_is_phase_2():
     if fc is None:
         pytest.skip("Fungal Colossus absent from active CardSource")
 
-    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(fc) is False, (
-        "Fungal Colossus must STAY DECLINED at the Phase-1 cost-"
-        "reduction admit predicate (PerDifferentlyNamedLand is "
-        "Phase-2; the §2 teeth must reject)."
+    assert trajectory._printing_is_bridge_pure_cost_reduction_creature(fc) is True, (
+        "Fungal Colossus must ADMIT at the widened cost-reduction "
+        "admit predicate post-Phase-3-Cycle-2 (the FLIP)."
     )
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Fungal Colossus"], src,
     )
-    assert filtered_names == [], (
-        "Fungal Colossus must STAY DECLINED at the deck-level filter "
-        f"post-Cycle-2 (no OR-chain disjunct admits it). Got "
-        f"filtered_names={filtered_names!r}"
+    assert filtered_names == ["Fungal Colossus"], (
+        "Fungal Colossus must ADMIT at the deck-level filter post-"
+        f"Phase-3-Cycle-2. Got filtered_names={filtered_names!r}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
 
 
 def test_uthros_psionicist_stays_declined_external_cost_reductions_is_phase_3():
