@@ -144,6 +144,50 @@ pub struct GameObject {
     /// this field today (matching the snapshot's existing per-counter-
     /// kind elision); pre-r30 baselines stay bit-equal.
     pub stun_counters: i32,
+    /// **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+    /// `regeneration_shield`.** Set `true` by
+    /// `Effect::RegenerateTargetCreature` resolve when this object
+    /// is the chosen target. Mirrors Python's
+    /// `GameObject.regeneration_shield: bool = False`
+    /// (`src/mtg_bot/game.py:605`).
+    ///
+    /// **Phase 1 Cycle 1 SUBSTRATE-ONLY semantics.** The shield is
+    /// SET by the resolve arm but **NOT YET CONSUMED** at SBA
+    /// destroy-time on the Rust side. Python's
+    /// `turn.py:1265-1272` consumes the bool to replace the destroy
+    /// with "remove all damage + tap + remove from combat" (CR
+    /// 701.15); Rust's mirror lands in a future cycle alongside the
+    /// real-EoE Swarmyard probe. The Phase 1 Cycle 1 admit predicate
+    /// `_printing_is_bridge_simple_carrier_aa_land` (Cycle 2, not yet
+    /// landed) keeps Swarmyard DECLINED at the production-deck
+    /// loader, so no card reaches this slot through the bench — the
+    /// substrate-only round-trip pin in
+    /// `tests/test_carrier_aa_phase_1_substrate_cycle_1.py` guards the
+    /// invariant. Documented at `docs/SEARCH_LIMITATIONS.md`
+    /// "Carrier-AA Phase 1 Cycle 1 regenerate substrate".
+    ///
+    /// **Why a distinct field** (vs overloading `counters`): G8
+    /// multi-kind-counter axis — +1/+1, charge, loyalty, stun, and
+    /// regen each need their own slot. Mirrors the Python-side
+    /// per-flag slot precedent (`game.py:605`). Defaults to `false`
+    /// for every freshly-allocated GameObject.
+    ///
+    /// **Fingerprint elision (back-compat).** NOT in the per-object
+    /// fingerprint 8-tuple or the snapshot dict today — every
+    /// pre-substrate pinned baseline stays byte-equal. Same
+    /// elision pattern as `stun_counters`, `warp_exile_pending`,
+    /// `warped`. Future cycles wiring the SBA-replacement check
+    /// will keep the field elided (the observable surface is the
+    /// destroy that DIDN'T happen — i.e. the bf object still
+    /// present — not the shield slot itself).
+    ///
+    /// **Reset on zone change.** Cleared (reset to `false`) on
+    /// every zone change (CR 400.7) — the shield is a
+    /// battlefield-only concept; mirrors the Python
+    /// `cleanup_step`'s `obj.regeneration_shield = False` clear
+    /// at `turn.py:1052` for the once-per-turn aspect (Phase 1
+    /// Cycle 1 defers wiring this; the substrate is set-only).
+    pub regeneration_shield: bool,
     /// **CE4 closure — ETB-timestamp ordering.** Monotonic counter
     /// stamped at every battlefield-entry call site (cast →
     /// move_from_hand_to_battlefield, play_land, every ETB pathway in
@@ -3504,6 +3548,8 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         attached_to: None,
         exiled_with_source: None,
         stun_counters: 0,
+        // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+        regeneration_shield: false,
         // CE4 closure: synthetic-state fixtures pre-populate the
         // battlefield without going through stamp_etb_timestamp, so
         // every object defaults to 0. The stable-sort in the snapshot

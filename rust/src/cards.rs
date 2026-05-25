@@ -8312,6 +8312,77 @@ pub enum Effect {
     /// `trajectory.py::_python_spell_effect_to_dict::_leaf` emits the
     /// one-key dict.
     CoordinatedClobberingEffect,
+    /// **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+    /// `RegenerateTargetCreature`.** Mirrors Python's
+    /// `RegenerateTargetCreature(allowed_subtypes: frozenset[str])`
+    /// from `effects/generic/destroy.py:371`. Pilot AA[0] effect on
+    /// Swarmyard (`{T}: Regenerate target Rat, Spider, Squirrel,
+    /// Insect, or Snake.`).
+    ///
+    /// **Phase 1 substrate-only resolve semantics.** Walks both
+    /// players' battlefields, finds the first eligible creature
+    /// (matching `allowed_subtypes` when non-empty, else any
+    /// creature), and stamps `regeneration_shield = true` on the
+    /// target's `GameObject`. The shield is a `bool` slot
+    /// (state.rs); the SBA-time replacement check (CR 701.15 —
+    /// "the next time SOURCE would be destroyed this turn,
+    /// instead remove all damage, tap, remove from combat") is
+    /// **NOT wired in Phase 1 Cycle 1** — the substrate carries
+    /// the bit-equal round-trip ONLY. Documented in
+    /// `docs/SEARCH_LIMITATIONS.md` "Carrier-AA Phase 1 Cycle 1
+    /// regenerate substrate" entry. Python's full SBA pass at
+    /// `turn.py:1265` consumes the bool to skip destroy + tap +
+    /// remove from combat; Rust's mirror lands C3+ alongside the
+    /// real-EoE probe.
+    ///
+    /// **Cycle 1 carrier admit gate**: the matching admit
+    /// predicate `_printing_is_bridge_simple_carrier_aa_land`
+    /// lands in **Cycle 2** (Python-bridge agent's slice). Until
+    /// C2 lands, no carrier reaches this variant through the
+    /// production-deck loader — substrate-only invariant pin per
+    /// `tests/test_carrier_aa_phase_1_substrate_cycle_1.py`.
+    ///
+    /// **`allowed_subtypes`** mirrors Python's
+    /// `frozenset[str] = frozenset()`. Stored as a sorted unique
+    /// `Vec<String>` (parse arm sorts + dedupes for byte-equal
+    /// round-trip determinism, mirroring the
+    /// `counter_target_spell.filter_types` precedent at
+    /// `cards.rs:601` / parser at `:11176-11191`). Empty Vec =
+    /// "any creature" (Phase-1 Swarmyard is the only known carrier
+    /// and IS subtype-restricted, but the empty-Vec back-compat
+    /// shape stays available for future siblings).
+    RegenerateTargetCreature {
+        /// Sorted unique list of allowed creature subtypes
+        /// (Title Case strings — "Rat", "Spider", "Squirrel",
+        /// "Insect", "Snake" for Swarmyard). Empty = any creature.
+        allowed_subtypes: Vec<String>,
+    },
+    /// **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+    /// `UntapTargetLand`.** Mirrors Python's `UntapTargetLand` from
+    /// `effects/generic/tap.py:178`. Pilot AA[0] effect on Deserted
+    /// Temple (`{1}, {T}: Untap target land.`).
+    ///
+    /// **Resolve semantics.** Walks both players' battlefields in
+    /// ETB order, finds the first tapped Land permanent (any
+    /// controller), and flips `obj.tapped = false`. Idempotent on
+    /// already-untapped lands (the eligibility filter requires
+    /// `tapped == true`, so already-untapped lands are skipped).
+    /// No eligible land = silent fizzle. Mirrors the
+    /// `UntapTargetOtherPermanent` sibling pattern at
+    /// `state_ops_resolve.rs:18044`, narrowed to Land targets.
+    ///
+    /// **Substrate-only — Cycle 2 admit predicate**: Deserted
+    /// Temple's printed cost is `{1}, {T}` (not bare `{T}`); the
+    /// Cycle-2 owner decides whether to widen the admit gate to
+    /// accept the `{1}, {T}` cost shape or swap to a bare-`{T}`
+    /// sibling (Terrain Generator / Thespian's Stage per the
+    /// design doc §10.3 escape). Either way, this variant lands
+    /// the Rust substrate cleanly — the cost-shape decision lives
+    /// in the Python admit predicate, not this resolve arm.
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's
+    /// `UntapTargetLand()` frozen dataclass.
+    UntapTargetLand,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -12431,6 +12502,44 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "coordinated_clobbering_effect" => {
             Ok(Effect::CoordinatedClobberingEffect)
         }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `regenerate_target_creature` parse arm.** Optional
+        // `allowed_subtypes` field (list-of-strings, default empty)
+        // mirrors Python's `RegenerateTargetCreature.allowed_subtypes:
+        // frozenset[str] = frozenset()`. Missing / null / empty list
+        // all parse to the empty-Vec "any creature" shape. Each entry
+        // must be a non-empty string. Sorts + dedupes for byte-equal
+        // round-trip determinism — mirrors the
+        // `counter_target_spell.filter_types` parse pattern at
+        // `:11176-11191`.
+        "regenerate_target_creature" => {
+            let mut allowed_subtypes: Vec<String> = match dict.get_item("allowed_subtypes")? {
+                Some(asu) => asu.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "regenerate_target_creature.allowed_subtypes must be a list of strings (got: {e})"
+                    ))
+                })?,
+                None => Vec::new(),
+            };
+            for t in &allowed_subtypes {
+                if t.is_empty() {
+                    return Err(PyValueError::new_err(
+                        "regenerate_target_creature.allowed_subtypes entries must be non-empty strings",
+                    ));
+                }
+            }
+            allowed_subtypes.sort();
+            allowed_subtypes.dedup();
+            Ok(Effect::RegenerateTargetCreature { allowed_subtypes })
+        }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `untap_target_land` parse arm.** Unit variant; no fields.
+        // Mirrors Python's `UntapTargetLand()` frozen dataclass at
+        // `effects/generic/tap.py:178`. Extra dict keys silently
+        // dropped (unit-variant contract).
+        "untap_target_land" => {
+            Ok(Effect::UntapTargetLand)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -14277,7 +14386,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land"
         ))),
     }
 }
@@ -18038,6 +18147,31 @@ pub(crate) fn effect_to_pydict<'py>(
         // one-key shape.
         Effect::CoordinatedClobberingEffect => {
             d.set_item("kind", "coordinated_clobbering_effect")?;
+        }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `RegenerateTargetCreature.to_pydict`.** Emit
+        // `allowed_subtypes` ONLY when non-empty so a hypothetical
+        // future bare-`RegenerateTargetCreature` (no subtype filter)
+        // round-trips with a single-key `{"kind":
+        // "regenerate_target_creature"}` dict shape. Sorted-unique
+        // Vec<String> -> Python list-of-strings; the Python class
+        // ingests `frozenset(strs)` (set ingest is order-agnostic).
+        // Mirrors the `counter_target_spell.filter_types` emit
+        // pattern at `:16620-16634`.
+        Effect::RegenerateTargetCreature { allowed_subtypes } => {
+            d.set_item("kind", "regenerate_target_creature")?;
+            if !allowed_subtypes.is_empty() {
+                let asu_list: Vec<&str> =
+                    allowed_subtypes.iter().map(|s| s.as_str()).collect();
+                d.set_item("allowed_subtypes", asu_list)?;
+            }
+        }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `UntapTargetLand.to_pydict`.** Field-free unit-variant; only
+        // `kind` emitted. Mirrors Python's parameterless
+        // `UntapTargetLand()` frozen dataclass.
+        Effect::UntapTargetLand => {
+            d.set_item("kind", "untap_target_land")?;
         }
     }
     Ok(d)

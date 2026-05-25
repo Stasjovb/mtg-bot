@@ -125,6 +125,8 @@ impl GameState {
                 // library cards never carry stun counters; default
                 // 0 mirrors the make_object precedent.
                 stun_counters: 0,
+                // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                regeneration_shield: false,
                 // CE4 closure: deck-loaded library cards never start
                 // on battlefield; default 0 is correct.
                 etb_timestamp: 0,

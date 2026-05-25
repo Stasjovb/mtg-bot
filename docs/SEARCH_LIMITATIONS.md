@@ -16731,6 +16731,49 @@ staying True on `nonsafe_triggered_ability`).
 
 ---
 
+## Carrier-AA substrate Phase 1 Cycle 1 LANDED — non-token CardDef `activated_abilities` field + two new Rust Effect variants (`RegenerateTargetCreature`, `UntapTargetLand`) + `GameObject.regeneration_shield` field shipped substrate-only; admit predicate + per-card probes deferred to Cycle 2 / 3 / 4
+
+**Where:**
+- New CardDef field — `src/mtg_bot/parity/cross_engine.py` `CardDef.activated_abilities: tuple[dict, ...] = ()` (added immediately after `token_activated_abilities`).
+- `build_rust_state` emit + mutual-exclusion guard — `cross_engine.py` (the registry-dict emit block).
+- `_card_def_to_python_printing` reverse arm — `cross_engine.py` (appended after the `token_activated_abilities` reverse arm).
+- `_ta_dict_to_python_effect` bridge arms for `"regenerate_target_creature"` + `"untap_target_land"` — `cross_engine.py` (just above the `PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE` marker).
+- Rust `Effect::RegenerateTargetCreature { allowed_subtypes: Vec<String> }` + `Effect::UntapTargetLand` (unit) — `rust/src/cards.rs` (Effect enum, parse_effect dispatch, to_pydict dispatch).
+- Rust `state_ops_resolve.rs` resolve arms for both Effects.
+- Rust `GameObject.regeneration_shield: bool` field — `rust/src/state.rs` (with default-`false` initialization at all 13 GameObject literal sites).
+- Substrate-only invariant pins — `tests/test_carrier_aa_phase_1_substrate_cycle_1.py` (20 pins; 20/20 PASS on Cycle 1 landing).
+
+**What the shortcut is:** Phase 1 Cycle 1 lands the **Rust + bridge substrate ONLY** — the new Effect variants are parseable / round-trippable on both engines, the new CardDef field carries non-token AA dicts, and the Rust GameObject carries a `regeneration_shield: bool` slot. But:
+
+1. **No production-deck admit.** The Phase-1 admit predicate `_printing_is_bridge_simple_carrier_aa_land` (per design doc §6) is the **Cycle 2** deliverable; without it, **NO production-deck loader path admits Swarmyard or Deserted Temple**. The pilot pair STAYS DECLINED at the production-deck loader filter post-Cycle-1 — the substrate-only invariant pins (`test_swarmyard_stays_declined_post_cycle_1`, `test_deserted_temple_stays_declined_post_cycle_1`) enforce this contract.
+
+2. **`Effect::RegenerateTargetCreature` resolve is set-only (no SBA consume).** The resolve arm SETS `regeneration_shield = true` on the chosen creature; Python's full CR 701.15 replacement check at `turn.py:1265-1272` ("the next time SOURCE would be destroyed this turn, instead remove all damage, tap, remove from combat") is **NOT wired on the Rust SBA pass**. A future cycle (alongside the real-EoE Swarmyard probe in Cycle 3+) wires the destroy-replacement check.
+
+3. **No zone-change reset for `regeneration_shield`.** The Rust field is set-and-keep; Python's cleanup-step clear at `turn.py:1052` (clears `regeneration_shield = false` at end of turn if unused) has no Rust mirror in Cycle 1. Wired alongside the SBA consume in Cycle 3+.
+
+4. **Pilot-pair cost-shape mismatch.** Verify-first against the live tree (main `4eed9554`) found Deserted Temple's printed cost is `{1}, {T}` (mana=ManaCost(generic=1), tap_self=True) — NOT the bare `{T}` cost-shape the design doc §2.3 admit gate requires (`cost.mana is None`). Swarmyard IS bare `{T}` cost; Swarmyard's effect carries an `allowed_subtypes` filter (`{Rat, Spider, Squirrel, Insect}`) which the Rust variant carries byte-equal via the sorted-unique `Vec<String>` shape. The Cycle-2 admit predicate must decide between (a) widening the cost-shape gate to accept `{1}, {T}` carriers, or (b) swapping the Deserted Temple pilot to a bare-`{T}` sibling per the design doc §10.3 escape (Terrain Generator's `PutBasicLandFromHandOntoBattlefieldTapped` or Thespian's Stage's `BecomesCopyOfTargetLand` — each needs its own Effect-class port). Cycle 1's Rust substrate is byte-equal for any of these outcomes.
+
+**Why it's OK** (substrate-only landing discipline):
+- Phase 1 Cycle 1 is **explicitly substrate-only** — the Rust + bridge plumbing lands as reusable infrastructure for Cycle 2's admit-predicate slice.
+- The substrate-only invariant pins (`test_*_stays_declined_post_cycle_1`) prove that NO production-deck path drives the new Effect variants through the bench today — every existing `_printing_is_bridge_*` predicate's `if printing.activated_abilities: return False` guard at the 15 sibling sites (per the design doc §1.2 enumeration) keeps the pilot pair declined.
+- The mutual-exclusion guard in `build_rust_state` raises loudly on a CardDef setting both `token_activated_abilities` AND `activated_abilities` — preventing silent double-register on the Rust side.
+- The `regeneration_shield: bool` field is elided from the per-object fingerprint 8-tuple (same convention as `stun_counters`, `warp_exile_pending`, `warped`) — every pre-substrate pinned baseline stays byte-equal.
+
+**Failure mode:**
+- If a future cycle widens an existing admit predicate (e.g. `_printing_is_bridge_basic_land`) to admit `printing.activated_abilities` without ALSO landing the `_printing_is_bridge_simple_carrier_aa_land` predicate, Carrier-AA cards would silently land in the bench with a populated Python `printing.activated_abilities` tuple while the Rust mirror has an empty Vec (because the CardDef's `activated_abilities` field would not be set by the Cycle-2-pending builder). The mutual-exclusion guard does NOT cover this — it only catches simultaneous-set on the CardDef side. The substrate-only invariant pins are the regression guard.
+- If a real card with `regeneration_shield = true` is somehow driven through the Rust SBA destroy pass (which can't happen via the production-deck loader pre-Cycle-2 — the admit predicate is the gate — but can happen via a direct `apply_effect_pub` synthetic test), the Rust side would destroy the creature normally while Python's mirror would skip the destroy + tap + remove from combat. This produces a cross-engine divergence at the destroyed-vs-shielded surface. Cycle 3+ wires the consume.
+
+**Fix scope:**
+- **Cycle 2** (Python-bridge agent, ~1 cycle): admit predicate `_printing_is_bridge_simple_carrier_aa_land` + `_aa_is_phase1_sub_shape_a` helper + `_carrier_aa_land_card_def` builder + `_python_aa_to_safe_dict` reverse helper + admit-set pin bump.
+- **Cycle 3** (Bench agent, ~1 cycle): Swarmyard real-EoE probe + `regeneration_shield` Rust SBA-consume wiring + cleanup-step reset wiring + per-cycle pool parity regen.
+- **Cycle 4** (Bench agent, ~1 cycle): Deserted Temple real-EoE probe (or sibling-swap per §10.3) + 4,286-deck decline-set parity check + Phase-1 SL entry closure.
+
+**Impact estimate:** +2 cards / low decks(1g) realized leverage at Phase-1 closure (Swarmyard + Deserted Temple); +28 cards / 34,470 decks over the Carrier-AA campaign (Phase 1/2/3/N, ~12-18 total cycles per design doc §1.3 calibration). 0 strength cost today (no admit; the substrate sits inert behind the §2 admit teeth).
+
+**Pinned by:** `tests/test_carrier_aa_phase_1_substrate_cycle_1.py` — 20 substrate + invariant pins (Python class SoT, Rust parse + to_pydict round-trip, bridge dict→Python arms, CardDef field shape, build_rust_state emit + mutual-exclusion guard, `_card_def_to_python_printing` reverse arm, substrate-only DECLINED invariant, `regeneration_shield` field smoke check).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

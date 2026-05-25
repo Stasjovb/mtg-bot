@@ -212,6 +212,44 @@ class CardDef:
     # later slices flip that). See ``docs/TOKEN_PRINTING_SUBSTRATE.md``
     # §6 for the remaining Phase-3 steps.
     token_activated_abilities: tuple[dict, ...] = ()
+    # **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25).** Non-token
+    # CardPrinting carriers with one bridge-correct activated ability
+    # (EoE pilot pair — Swarmyard ``{T}: Regenerate target Rat, Spider,
+    # Squirrel, Insect, or Snake.`` and Deserted Temple ``{1}, {T}:
+    # Untap target land.``). Each entry is the SAME ``parse_activated_
+    # ability``-shaped dict ``token_activated_abilities`` carries (line
+    # 214), bridged by the SAME
+    # :func:`_aa_dict_to_python_activated_ability` codec at
+    # ``cross_engine.py:13852``. The split into TWO fields
+    # (``token_activated_abilities`` for token printings vs.
+    # ``activated_abilities`` here for non-token carriers) keeps the
+    # token-AA admit gate's §2 contract intact — the token path's
+    # Lander / Eldrazi Scion helpers (``trajectory.py:3208,3339``)
+    # decline silently on the non-token shape, and vice versa. The
+    # builders that populate this field (Cycle 2's
+    # ``_carrier_aa_land_card_def``, not yet landed) MUST set EXACTLY
+    # ONE of ``token_activated_abilities`` / ``activated_abilities`` on
+    # any given CardDef — the ``build_rust_state`` emit pass at
+    # ``cross_engine.py:13436`` raises on a double-set (substrate-only
+    # invariant pin).
+    #
+    # Empty tuple = no carrier AA (back-compat default — every
+    # pre-Cycle-1 CardDef omits it). The Phase-1 filter guardrail
+    # ``_printing_is_bridge_simple_carrier_aa_land`` (Cycle 2 deliverable,
+    # not landed in Cycle 1) positively rejects every shape outside the
+    # narrow `{T}` single-Effect Land sub-shape so only the narrow
+    # Phase-1 admit reaches this field.
+    #
+    # **Cycle 1 SUBSTRATE-ONLY.** Phase 1 Cycle 1 lands the field + its
+    # bridge plumbing (the build_rust_state emit, the
+    # ``_card_def_to_python_printing`` reverse arm, the two new Rust
+    # Effect variants ``RegenerateTargetCreature`` /
+    # ``UntapTargetLand``). NO carrier is admitted by the production-
+    # deck loader this cycle (``_printing_is_bridge_simple_carrier_aa_
+    # land`` ships Cycle 2). Substrate-only invariant pins at
+    # ``tests/test_carrier_aa_phase_1_substrate_cycle_1.py`` guard that
+    # Swarmyard + Deserted Temple stay DECLINED post-Cycle-1.
+    activated_abilities: tuple[dict, ...] = ()
     # warp_cost substrate (Phase 1, round-63; Phase 1.5, round-65).
     # Pure fixed-`ManaCost` warp alt-cost (EoE — Red Tiger Mechan
     # {1}{R}, Bygone Colossus {3}) PLUS the Phase-1.5 safe-trigger+warp
@@ -12325,6 +12363,59 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             amount=amount,
             granted_keywords=granted,
         )
+    if kind == "regenerate_target_creature":
+        # **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::RegenerateTargetCreature``
+        # variant (cards.rs). Mirrors Python's
+        # ``RegenerateTargetCreature(allowed_subtypes: frozenset[str])``
+        # at ``effects/generic/destroy.py:371``. The Rust side stores a
+        # sorted-unique ``Vec<String>``; Python's class takes
+        # ``frozenset[str]`` — the set ingest is order-agnostic so the
+        # bridge round-trip is byte-equal at the Python ``__eq__``
+        # surface (dataclass eq).
+        #
+        # ``allowed_subtypes`` defaults to ``frozenset()`` on Python's
+        # side; the Rust emit OMITS the key when empty (mirroring the
+        # `counter_target_spell.filter_types` pattern), so an empty-
+        # filter Effect round-trips with a single-key dict
+        # ``{"kind": "regenerate_target_creature"}``. Either shape
+        # (key absent, or key present with []) ingests cleanly via
+        # ``eff_dict.get("allowed_subtypes", [])``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 1 Cycle 1 keeps Swarmyard
+        # DECLINED at the production-deck loader; the admit predicate
+        # ``_printing_is_bridge_simple_carrier_aa_land`` ships Cycle 2.
+        # The substrate is exercised by synthetic-CardDef round-trip
+        # pins in ``tests/test_carrier_aa_phase_1_substrate_cycle_1.py``.
+        from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+        allowed_raw = eff_dict.get("allowed_subtypes", [])
+        return RegenerateTargetCreature(
+            allowed_subtypes=frozenset(str(s) for s in allowed_raw),
+        )
+    if kind == "untap_target_land":
+        # **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::UntapTargetLand`` variant
+        # (cards.rs). Mirrors Python's parameterless ``UntapTargetLand``
+        # frozen dataclass at ``effects/generic/tap.py:178``. Unit
+        # variant — no fields beyond ``kind``. Sibling shape to the
+        # existing ``untap_target_other_permanent`` arm (round-28); both
+        # land their substrate cycles independently. Distinct from
+        # ``untap_target`` (target=AnyCreature) and
+        # ``untap_target_other_permanent`` (filter=any-permanent-other-
+        # than-source): this variant filters specifically to Land
+        # targets, mirroring Deserted Temple's `{1}, {T}: Untap target
+        # land.` oracle.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 1 Cycle 1 keeps Deserted
+        # Temple DECLINED at the production-deck loader (additionally,
+        # its cost is `{1}, {T}` not bare `{T}` — the Cycle-2 admit
+        # predicate must decide whether to widen the cost-shape gate
+        # to accept `{1}, {T}` or swap to a bare-`{T}` sibling per the
+        # design doc §10.3). Either decision lives in Python's Cycle-2
+        # admit slice; this bridge arm is byte-equal for both
+        # outcomes.
+        from mtg_bot.effects.generic.tap import UntapTargetLand
+        return UntapTargetLand()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -13438,6 +13529,37 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
         printing_dict["activated_abilities"] = [
             dict(aa) for aa in card.token_activated_abilities
         ]
+    # **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25).** Non-token
+    # CardDef Carrier-AA emit — mirrors the token-AA emit above but
+    # reads ``card.activated_abilities`` (NOT
+    # ``card.token_activated_abilities``). The Rust ``register_printing``
+    # consumes one ``"activated_abilities"`` registry key regardless of
+    # token-vs-non-token carrier kind; the dual-field on the Python
+    # CardDef preserves the §2 token-vs-non-token admit-helper split
+    # but the registry-dict surface is unified.
+    #
+    # **Mutual-exclusion guard.** A CardDef setting BOTH
+    # ``token_activated_abilities`` AND ``activated_abilities`` would
+    # silently double-register on the Rust side. Raise loudly instead —
+    # the Cycle-2 ``_carrier_aa_land_card_def`` builder (not yet
+    # landed) populates ``activated_abilities`` for non-token Land
+    # carriers; the existing token helpers populate
+    # ``token_activated_abilities``. Mixing them is a builder bug.
+    if card.activated_abilities:
+        if card.token_activated_abilities:
+            raise ValueError(
+                "Carrier-AA Phase 1 Cycle 1 invariant: CardDef "
+                f"{card.name!r} sets BOTH `token_activated_abilities` "
+                f"({len(card.token_activated_abilities)} entries) and "
+                f"`activated_abilities` ({len(card.activated_abilities)} "
+                "entries). The two fields are mutually exclusive — "
+                "token carriers use the former, non-token Carrier-AA "
+                "carriers use the latter. Setting both would silently "
+                "double-register on the Rust side. Fix the builder."
+            )
+        printing_dict["activated_abilities"] = [
+            dict(aa) for aa in card.activated_abilities
+        ]
     if card.has_warp:
         printing_dict["warp_cost"] = dict(
             (("generic", card.warp_cost_generic),)
@@ -14151,6 +14273,23 @@ def _card_def_to_python_printing(card: "CardDef"):
         activated_abilities = activated_abilities + tuple(
             _aa_dict_to_python_activated_ability(aa)
             for aa in card.token_activated_abilities
+        )
+    # **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25).** Non-token
+    # Carrier-AA reverse arm — mirrors the token-AA reverse arm above
+    # but reads ``card.activated_abilities`` (NOT
+    # ``card.token_activated_abilities``). The
+    # ``_aa_dict_to_python_activated_ability`` codec is shape-agnostic
+    # (it carries any parse_activated_ability-shaped dict to a Python
+    # ``ActivatedAbility``); only the field source differs. Appended
+    # after the token-AA reverse so a defensive simultaneous-set on
+    # both fields would concatenate both lists — but the build-side
+    # mutual-exclusion guard (above) raises on double-set, so this
+    # path is dead-code-by-construction except on legitimate Carrier-
+    # AA CardDefs. Empty tuple => no-op (every pre-Cycle-1 fixture).
+    if card.activated_abilities:
+        activated_abilities = activated_abilities + tuple(
+            _aa_dict_to_python_activated_ability(aa)
+            for aa in card.activated_abilities
         )
     # ETB-trigger Slice 3: bridge the harness-side
     # ``triggered_abilities`` dict-list into Python's

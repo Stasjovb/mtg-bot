@@ -3871,6 +3871,8 @@ fn apply_effect(
                     // Round-30 stun-counter substrate: tokens enter
                     // with no stun counters per make_object precedent.
                     stun_counters: 0,
+                    // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                    regeneration_shield: false,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                     // warp_cost substrate (Phase 1, round-63): tokens
@@ -4104,6 +4106,8 @@ fn apply_effect(
                         // Tokens enter with no stun counters per
                         // make_object precedent (round 30).
                         stun_counters: 0,
+                        // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                        regeneration_shield: false,
                         etb_timestamp: bf_etb_base.saturating_add(global_token_idx),
                         ueot_modifiers: Vec::new(),
                         // warp_cost substrate (Phase 1, round-63):
@@ -4279,6 +4283,8 @@ fn apply_effect(
                     attached_to: None,
                     exiled_with_source: None,
                     stun_counters: 0,
+                    // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                    regeneration_shield: false,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                     // warp_cost substrate (Phase 1, round-63): tapped
@@ -7625,6 +7631,8 @@ fn apply_effect(
                         attached_to: None,
                         exiled_with_source: None,
                         stun_counters: 0,
+                        // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                        regeneration_shield: false,
                         etb_timestamp: tok_etb,
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
@@ -7858,6 +7866,8 @@ fn apply_effect(
                     attached_to: None,
                     exiled_with_source: None,
                     stun_counters: 0,
+                    // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                    regeneration_shield: false,
                     etb_timestamp: tok_etb,
                     ueot_modifiers: Vec::new(),
                     warp_exile_pending: false,
@@ -8031,6 +8041,8 @@ fn apply_effect(
                         attached_to: None,
                         exiled_with_source: None,
                         stun_counters: 0,
+                        // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                        regeneration_shield: false,
                         etb_timestamp: tok_etb,
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
@@ -13813,6 +13825,8 @@ fn apply_effect(
                 // enter with no stun counters (per the bare-token
                 // ETB precedent above).
                 stun_counters: 0,
+                // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                regeneration_shield: false,
                 etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
                 // warp_cost substrate (Phase 1, round-63): cloned
@@ -19982,6 +19996,8 @@ fn apply_effect(
                     attached_to: None,
                     exiled_with_source: None,
                     stun_counters: 0,
+                    // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+                    regeneration_shield: false,
                     etb_timestamp: etb_ts,
                     ueot_modifiers: Vec::new(),
                     warp_exile_pending: false,
@@ -22565,6 +22581,201 @@ fn apply_effect(
                 }
             }
         }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `RegenerateTargetCreature` resolve.** Mirrors Python's
+        // `RegenerateTargetCreature.resolve` at
+        // `effects/generic/destroy.py:406-421`.
+        //
+        // **Phase 1 Cycle 1 SUBSTRATE-ONLY semantics.** Sets
+        // `regeneration_shield = true` on the chosen creature.
+        // The SBA-time consumption ("the next time SOURCE would be
+        // destroyed this turn, instead remove all damage, tap, remove
+        // from combat" per CR 701.15) is NOT WIRED in Phase 1 Cycle
+        // 1 — the Rust SBA destroy pass does not yet read this slot.
+        // Python's full consume at `turn.py:1265-1272` lands C3+
+        // alongside the real-EoE Swarmyard probe. Documented in
+        // `docs/SEARCH_LIMITATIONS.md` "Carrier-AA Phase 1 Cycle 1
+        // regenerate substrate".
+        //
+        // **Target selection.** Phase 1 admit gate (Cycle 2, not yet
+        // landed) keeps Swarmyard DECLINED, so no real card drives
+        // this resolve. Synthetic-test paths supply the target via
+        // `current_resolve_payload_target_id`; if absent (direct
+        // apply_effect_pub path), fall back to deterministic-first-
+        // legal: ETB-ordered cross-battlefield scan for the first
+        // creature matching `allowed_subtypes` (empty = any
+        // creature). Mirrors the
+        // `ReturnTargetArtifactCardFromYourGraveyardToHand` pattern
+        // for cast-time-bound + substrate-fallback duality.
+        //
+        // **No fizzle log.** Silent fizzle on no eligible creature,
+        // mirroring Python's `if not targets: return` shape at
+        // `destroy.py:410-411`.
+        Effect::RegenerateTargetCreature { allowed_subtypes } => {
+            // Predicate: object is a Creature, AND (when
+            // allowed_subtypes is non-empty) its printing's
+            // subtypes overlap. Mirrors Python's `is_creature` +
+            // subtype-overlap filter at `destroy.py:393-403`.
+            let allowed_set: std::collections::HashSet<&str> =
+                allowed_subtypes.iter().map(|s| s.as_str()).collect();
+            let matches = |obj: &GameObject| -> bool {
+                let printing = match state.registry.lookup(obj.printing_id) {
+                    Some(p) => p,
+                    None => return false,
+                };
+                let is_creature = printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Creature");
+                if !is_creature {
+                    return false;
+                }
+                if allowed_set.is_empty() {
+                    return true;
+                }
+                printing
+                    .subtypes
+                    .iter()
+                    .any(|s| allowed_set.contains(s.as_str()))
+            };
+            // Cast-time-bound target path: re-validate the bound
+            // target per CR 608.2b. Fall back to deterministic-first-
+            // legal substrate scan when no bound payload (synthetic
+            // direct-apply path).
+            let target_id: Option<u32> = match state.current_resolve_payload_target_id {
+                Some(payload_id) => {
+                    let mut found: Option<u32> = None;
+                    'find_bound: for player in &state.players {
+                        for obj in player.battlefield.iter() {
+                            if obj.id == payload_id && matches(obj) {
+                                found = Some(obj.id);
+                                break 'find_bound;
+                            }
+                        }
+                    }
+                    found
+                }
+                None => {
+                    let mut found: Option<u32> = None;
+                    for obj in crate::bf_iter::bf_iter_etb_sorted(state) {
+                        if matches(obj) {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                    found
+                }
+            };
+            if let Some(tid) = target_id {
+                // Find which player's bf carries the target and
+                // stamp the shield on that object.
+                for pidx in 0..state.players.len() {
+                    let has_target = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .any(|o| o.id == tid);
+                    if has_target {
+                        let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                            &mut state.players[pidx].battlefield,
+                        );
+                        for obj in bf_mut.iter_mut() {
+                            if obj.id == tid {
+                                obj.regeneration_shield = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            // else: silent fizzle (no eligible creature).
+        }
+        // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
+        // `UntapTargetLand` resolve.** Mirrors Python's
+        // `UntapTargetLand.resolve` at `effects/generic/tap.py:193-
+        // 210`. Find first tapped Land permanent in ETB order
+        // (across both bfs) and flip `tapped = false`. Idempotent
+        // on already-untapped lands (the filter requires
+        // `tapped == true`). No eligible land → silent fizzle
+        // (mirrors Python's `if not obj.tapped: return` early-out
+        // at `tap.py:207-208`).
+        //
+        // **Target selection.** Same cast-time-bound + substrate-
+        // fallback dual-path as the regenerate arm — Cycle 2 admit
+        // predicate keeps Deserted Temple DECLINED, so real-card
+        // drive of this arm waits for the admit widen. Synthetic
+        // tests can either supply `current_resolve_payload_target_
+        // id` or rely on the substrate's deterministic-first-legal
+        // scan.
+        Effect::UntapTargetLand => {
+            let is_legal = |state: &GameState, id: u32| -> bool {
+                for player in &state.players {
+                    for obj in player.battlefield.iter() {
+                        if obj.id == id {
+                            if !obj.tapped {
+                                return false;
+                            }
+                            let printing = match state.registry.lookup(obj.printing_id) {
+                                Some(p) => p,
+                                None => return false,
+                            };
+                            return printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Land");
+                        }
+                    }
+                }
+                false
+            };
+            let target_id: Option<u32> = match state.current_resolve_payload_target_id {
+                Some(payload_id) => {
+                    if is_legal(state, payload_id) {
+                        Some(payload_id)
+                    } else {
+                        None
+                    }
+                }
+                None => {
+                    let mut found: Option<u32> = None;
+                    for obj in crate::bf_iter::bf_iter_etb_sorted(state) {
+                        if !obj.tapped {
+                            continue;
+                        }
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if printing.card_types.iter().any(|t| t == "Land") {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                    found
+                }
+            };
+            if let Some(tid) = target_id {
+                for pidx in 0..state.players.len() {
+                    let has_target = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .any(|o| o.id == tid);
+                    if has_target {
+                        let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                            &mut state.players[pidx].battlefield,
+                        );
+                        for obj in bf_mut.iter_mut() {
+                            if obj.id == tid {
+                                obj.tapped = false;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            // else: silent fizzle.
+        }
     }
     Ok(())
 }
@@ -23347,6 +23558,8 @@ impl GameState {
             // Round-30 stun-counter substrate: caller-injected
             // objects start unstunned per make_object precedent.
             stun_counters: 0,
+            // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+            regeneration_shield: false,
             etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
             // warp_cost substrate (Phase 1, round-63): caller-
@@ -23515,6 +23728,8 @@ impl GameState {
             attached_to: None,
             exiled_with_source: None,
             stun_counters: 0,
+            // Carrier-AA Phase 1 Cycle 1: shield defaults false.
+            regeneration_shield: false,
             etb_timestamp: 0,
             ueot_modifiers: Vec::new(),
             warp_exile_pending: false,

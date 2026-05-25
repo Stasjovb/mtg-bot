@@ -213,6 +213,10 @@ fn push_object(
         // Round-30 stun-counter substrate: freshly-allocated objects
         // never carry stun counters; default 0 mirrors make_object.
         stun_counters: 0,
+        // Carrier-AA Phase 1 Cycle 1: shield defaults false; the
+        // resolve arm of `Effect::RegenerateTargetCreature` is the
+        // only writer.
+        regeneration_shield: false,
         // CE4 closure: make_state never places objects directly on
         // battlefield (bf is built up by ETB primitives), so the
         // default 0 is fine for hand / library / starting zones.
