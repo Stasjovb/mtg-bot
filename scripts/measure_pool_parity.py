@@ -1480,6 +1480,88 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_station_monitor_parity.py",
     REPO_ROOT / "tests" / "test_derelict_attic_widows_walk_parity.py",
     REPO_ROOT / "tests" / "test_underwater_tunnel_slimy_aquarium_parity.py",
+    # **covered-by-construction-probe-writing-p4 (2026-05-25):** Five
+    # additional per-card real-EoE cross-engine byte-equal probes
+    # opening a new shape family: **activated-ability + AddManaToPool /
+    # GainLife on real-EoE Land carriers.**  The prior batch-1/2/3
+    # lane focused on triggered-ability events (ENTERS / IS_CAST /
+    # YOU_ATTACK / DEALS_COMBAT_DAMAGE / DIES) + spell-effect carriers;
+    # batch-4 opens the AA-on-Land carrier lane (the
+    # ``test_probe_activated_abilities_o2.py`` lane covered the
+    # full-cross-engine ``compare_fields`` AA pivot for creature
+    # carriers; THIS batch pins the per-slug attribution for the
+    # closely-related real-EoE Land AAs that the o2 lane DROPPED on
+    # cost-substrate grounds, via the lighter EEEE-idiom on the
+    # EFFECT half).  Same lane discipline as batches 1-3: per-slug
+    # attribution credits a PROBED slot per-printing, no engine
+    # changes, no Rust changes, no substrate widens.  Each module
+    # carries a canonical ``test_cross_engine_real_eoe_<slug>_...
+    # _parity`` function that binds the live EoE printing via the
+    # module-scope ``_PRINTINGS = get_active_source().get_printings()``
+    # idiom (the ``_probe_module_probed_cards_via_module_scope_binding``
+    # widen accepts it) + drives the GENUINE parsed printing through
+    # the parse + bridge round-trip + Python-side resolve idiom:
+    #
+    #   * ``test_high_market_parity.py`` — High Market ({0} Land,
+    #     ~457 17lands decks); non-mana AA ({T}, Sacrifice a
+    #     creature: You gain 1 life) → GainLife(amount=1).  The
+    #     FIRST PROBE_MODULES-credited probe of GainLife on a real-
+    #     EoE Land + AA carrier; the sacrifice-creature cost atom
+    #     (``sacrifice_another_creature_or_artifact``) is the cost-
+    #     substrate scope and stays substrate-deferred for this lane
+    #     (the EFFECT-half bridge round-trip is what credits PROBED
+    #     per-slug per the round-1 PROBED-tier definition).
+    #   * ``test_mana_confluence_parity.py`` — Mana Confluence ({0}
+    #     Land, ~319 17lands decks); mana AA ({T}, Pay 1 life: Add
+    #     one mana of any color) → AddManaToPool(produces=(('any',
+    #     1),), spend_restriction=None).  The FIRST PROBE_MODULES-
+    #     credited consumer of the round-27 ``add_mana_to_pool``
+    #     bridge arm on a real-EoE Land carrier; the pay_life=1 cost
+    #     atom stays cost-substrate-deferred.
+    #   * ``test_cascading_cataracts_parity.py`` — Cascading Cataracts
+    #     ({0} Land, ~237 17lands decks); mana AA ({5},{T}: Add five
+    #     mana of any one color) → AddManaToPool(produces=(('any',
+    #     5),), spend_restriction=None).  Templates on the immediately-
+    #     prior batch-4 sibling Mana Confluence (amount=1) — the
+    #     distinguishing dispatch is the **amount=5** batch-mint
+    #     (the inner ``for _ in range(count)`` loop in
+    #     AddManaToPool.resolve fires count times).
+    #   * ``test_gemstone_caverns_parity.py`` — Gemstone Caverns ({0}
+    #     Legendary Land, ~183 17lands decks); mana AA ({T}: Add one
+    #     mana of any color) → AddManaToPool(produces=(('any', 1),),
+    #     spend_restriction=None).  Bit-identical bridge round-trip
+    #     to Mana Confluence at the Effect level; the per-slug
+    #     attribution distinction is the **Legendary** supertype
+    #     (Gemstone Caverns is Legendary; Mana Confluence is non-
+    #     Legendary).  Per the cathedral-of-war-style same-Effect-
+    #     class-different-printing-slug precedent, both probes credit
+    #     their respective slugs independently.
+    #   * ``test_eldrazi_temple_parity.py`` — Eldrazi Temple ({0}
+    #     Land, ~44 17lands decks); AA[0] ({T}: Add {C}) →
+    #     AddManaToPool(produces=(('C', 1),), spend_restriction=
+    #     None).  Distinct from the sibling batch-4 'any'-color Land
+    #     probes — the FIRST PROBED-tier slot for the **'C'
+    #     (colorless)** color via the add_mana_to_pool bridge arm.
+    #     The synthetic Rust carrier exercises Rust's native
+    #     ``validate_mana_symbol`` directly (no 'any' → 'C' coercion
+    #     needed, distinct from sibling probes).  AA[1] (the
+    #     spend_restriction='colorless_eldrazi' rider on the {C}{C}
+    #     variant) is deferred per the IIII / HHHH "covered carrier
+    #     with spend-restriction rider" implicit drop + the batch-2
+    #     Wickerfolk Thresher narrow-pin half-coverage precedent —
+    #     AA[0] alone carries the load-bearing slug-attribution
+    #     flip.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 329 → 334;
+    # covered_by_construction 86 → 81; BLOCKED unchanged at 60;
+    # pool total 475 unchanged.
+    REPO_ROOT / "tests" / "test_high_market_parity.py",
+    REPO_ROOT / "tests" / "test_mana_confluence_parity.py",
+    REPO_ROOT / "tests" / "test_cascading_cataracts_parity.py",
+    REPO_ROOT / "tests" / "test_gemstone_caverns_parity.py",
+    REPO_ROOT / "tests" / "test_eldrazi_temple_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
