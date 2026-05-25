@@ -537,6 +537,172 @@ scaffold per `docs/SEARCH_LIMITATIONS.md`.
   * Precedent registration sweeps: `22a0457d` / `a9829787`
     (12-card sweep), `2a8919d2` (AC sweep).
 
+### Post-MTL-flip + CH-C3 probe-modules sweep (2026-05-24,
+`feature/post-mtl-flip-probe-modules-sweep-p1`)
+
+**Trigger:** the just-landed Codecracker Hound Cycle 3 (`6f99bf45`)
++ Memorial Team Leader Cycle 2 (`f94fa44d`) tier flips each shipped a
+new dedicated `tests/test_<card>_parity.py` probe module. Both
+committing agents reported they registered their modules in
+`PROBE_MODULES`; this sweep verifies the claim race-free post-merge
+and audits the wider `tests/test_*_parity.py` surface for any
+remaining unregistered probe modules that the
+`_probe_module_probed_cards` predicate (with the 2026-05-24
+`5f53835c` module-scope-binding widen) would credit.
+
+**Audit method** (mirrors `a9829787` / `2a8919d2` / `5f53835c` prior
+sweeps): enumerate `PROBE_MODULES` (currently 90 path entries; 30 are
+the canonical `test_<card>_parity.py` shape), enumerate
+`tests/test_*_parity.py` files (47 on disk), compute the diff (17
+unregistered), and per-candidate run
+`scripts.measure_pool_parity._probe_module_probed_cards` against the
+live EoE pool to see what cards (if any) each unregistered module
+would credit.
+
+**Confirmed in-sync** for both today's tier-flip carriers:
+
+  * `test_codecracker_hound_parity.py` — registered (PROBE_MODULES
+    line 1121 per `6f99bf45`); credits "Codecracker Hound" via the
+    module-scope `_PRINTINGS = get_active_source().get_printings()` +
+    in-body `_PRINTINGS.get("Codecracker Hound")` binding the
+    2026-05-24 `5f53835c` widen recognizes. Pool classifier counts CH
+    at PROBED.
+  * `test_memorial_team_leader_parity.py` — registered (PROBE_MODULES
+    line 1142 per `f94fa44d`); credits "Memorial Team Leader" via the
+    in-body `get_active_source().get_printings().get("Memorial Team
+    Leader")` binding the original body-scoped scan recognizes.
+    Pool classifier counts MTL at PROBED.
+
+**Predicate-shape gap surfaced** (the load-bearing finding, deferred
+to a follow-up lane): of the 17 unregistered `*_parity.py` files, 4
+match the canonical `test_cross_engine_real_eoe_<slug>_parity`
+function-name shape (and would be either redundant or honest-stopped)
+and **10 carry genuine real-EoE cross-engine byte-equal probes that
+use a non-canonical function-name suffix** the predicate's regex
+(`_PROBE_FN_HEADER_RE`) does not currently match. The probes EXIST
+and PASS at this HEAD; only the predicate would need to widen to
+credit them.
+
+Three new naming-pattern variants beyond today's two widens:
+
+  * **`*_round_trip` suffix** (6 modules; all COVERED → would FLIP
+    PROBED on a predicate widen recognizing the suffix):
+    | Module | Card | Cross-engine fn name |
+    |---|---|---|
+    | `test_attack_in_the_box_parity.py` | Attack-in-the-Box | `test_cross_engine_real_eoe_attack_in_the_box_schedule_self_sac_round_trip` |
+    | `test_hemosymbic_mite_parity.py` | Hemosymbic Mite | `test_cross_engine_real_eoe_hemosymbic_mite_round_trip` |
+    | `test_ouroboroid_parity.py` | Ouroboroid | `test_cross_engine_real_eoe_ouroboroid_round_trip` |
+    | `test_splitskin_doll_parity.py` | Splitskin Doll | `test_cross_engine_real_eoe_splitskin_doll_round_trip` |
+    | `test_swarm_culler_parity.py` | Swarm Culler | `test_cross_engine_real_eoe_swarm_culler_round_trip` |
+    | `test_terrasymbiosis_parity.py` | Terrasymbiosis | `test_cross_engine_real_eoe_terrasymbiosis_round_trip` |
+
+  * **`*_byte_equal` suffix** (1 module; COVERED → would FLIP PROBED):
+    | Module | Card | Cross-engine fn name |
+    |---|---|---|
+    | `test_enduring_curiosity_parity.py` | Enduring Curiosity | `test_cross_engine_real_eoe_enduring_curiosity_silent_noop_byte_equal` |
+
+  * **Missing `_eoe_` infix** (1 module; COVERED → would FLIP PROBED):
+    | Module | Card | Cross-engine fn name |
+    |---|---|---|
+    | `test_friendly_teddy_parity.py` | Friendly Teddy | `test_cross_engine_real_friendly_teddy_dies_trigger_parity` |
+
+  * **Bench-probe shape** (1 module; COVERED → would FLIP PROBED via
+    a different widen entirely — sibling to the existing in-file
+    shockland-bench probe `test_r60_genuine_real_eoe_shockland_byte_
+    equal_through_bench` which is currently uncredited):
+    | Module | Card | Cross-engine fn name |
+    |---|---|---|
+    | `test_cathedral_of_war_parity.py` | Cathedral of War | `test_cathedral_genuine_real_eoe_byte_equal_through_bench` |
+
+  * **Wickerfolk Thresher** (`test_wickerfolk_thresher_parity.py`) is
+    a DSK card (`test_cross_engine_real_dsk_wickerfolk_thresher_attack
+    _nonland_top_parity`), not EoE pool — out of scope for the EoE
+    classifier even if the predicate widened on the `_dsk_` infix.
+
+Each of the 8 EoE candidates above is currently classified
+**COVERED-by-construction** (not PROBED) — i.e. every Python
+`Effect` they emit is in the covered-class set, but no
+predicate-credited probe pins THAT card. Registering the modules
+**without** widening the predicate would NOT flip them — the
+predicate would still return the empty set for each. The closure path
+is one of:
+
+  (a) Widen `_PROBE_FN_HEADER_RE` to a broader function-name regex —
+      e.g. accept `_round_trip` / `_byte_equal` / `(real|real_eoe)`
+      variants alongside the canonical `_parity`. Riskier because it
+      expands the inclusion bar; the integrity-guard test
+      `test_probe_module_synthetic_nonprobe_is_not_counted` would
+      need a new negative-control case per accepted suffix.
+  (b) Per-probe rename (rename each cross-engine function to the
+      canonical `..._parity` suffix). Lower-risk, narrowly scoped to
+      the 8 modules; preserves the strict predicate contract.
+  (c) For Cathedral of War specifically, a third widen recognizing
+      the bench-probe shape (sibling to the in-file shockland probe
+      precedent) — distinct from (a) / (b) and likely deferred.
+
+This sweep deliberately does NOT close the gap (per the campaign's
+"don't widen the predicate without an integrity-guard test case"
+discipline). Recommended follow-up: a single lane that picks (b) for
+the 8 candidates (cheaper + safer than a predicate widen), regenerates
+`docs/POOL_PARITY.md`, and credits the 8 cards in one closure.
+
+**Other unregistered modules — correctly excluded:**
+
+  * `test_atomic_microsizer_parity.py` — `@pytest.mark.skip` +
+    `raise NotImplementedError` multi-cycle scaffold per
+    `docs/SEARCH_LIMITATIONS.md`. Card stays BLOCKED-subsystem-gated
+    (honest). Carried over from `2a8919d2`'s honest-stop list.
+  * `test_deafening_silence_parity.py` — drives a SYNTHETIC
+    `CardDef(name="Deafening Silence", ...)` carrier through the
+    bridge (NOT the live parsed printing). Closing this honestly
+    requires a separate synthetic-CardDef-by-name widen (riskier — see
+    `5f53835c`'s deferral note above). Card stays COVERED.
+  * `test_gravkill_parity.py` — credits Gravkill via the body-scoped
+    `get_active_source().get_printings().get("Gravkill")` binding the
+    existing predicate already matches. **Gravkill is ALREADY PROBED**
+    via the sibling `test_probe_covered_unprobed_c.py` smoke-style
+    probe (per `2a8919d2`'s audit). Registration would be pure
+    metric-truthfulness (no PROBED delta) — the PPP / multi-target-
+    phase4 precedent at line 891+ would credit it; deliberately NOT
+    landed here to keep this lane docs-only per the spec.
+  * `test_measure_pool_parity.py` — the predicate's own unit-test
+    module; not a per-card probe.
+  * `test_nonbasic_land_phase2_painland_parity.py` — pool-wide painland
+    sweep (`get_printings()` returns the whole dict, no per-card
+    `.get("X")` binding); not a `*_parity`-named per-card probe.
+  * `test_rust_bridge_parity.py` — generic Rust-bridge round-trip
+    suite (no per-card binding to a specific EoE pool name).
+  * `test_trajectory_parity.py` — generic trajectory-side parity
+    suite (no per-card binding).
+
+**Net delta:** ZERO tier flips landed in this lane (docs-only
+honest-stop). The 8 deferred candidates remain COVERED and would
+flip PROBED on the follow-up lane (counts after that hypothetical
+closure: PROBED 306 → 314, covered_by_construction 107 → 99).
+
+**Sanity-gate runs (this lane):**
+
+  * `tests/test_measure_pool_parity.py` — 31/31 passed (registry
+    consistency + the four `*_synthetic_nonprobe_is_not_counted` /
+    `*_synthetic_nonbar_probe_is_not_counted` integrity guards all
+    hold post-CH-C3 + MTL-C2 merges).
+  * `tests/test_memorial_team_leader_parity.py` — 13/13 passed
+    (today's MTL C2 flip carrier).
+  * `tests/test_codecracker_hound_parity.py` — 6/6 passed
+    (today's CH C3 flip carrier).
+
+**Cross-references for this sweep:**
+
+  * Today's MTL C2 flip: `f94fa44d`.
+  * Today's CH C3 flip: `6f99bf45`.
+  * Precedent attribution sweeps today: `a9829787` (12-card),
+    `2a8919d2` (AC), `5f53835c` (predicate widen, +4).
+  * Predicate location:
+    `scripts/measure_pool_parity._probe_module_probed_cards` +
+    `_probe_module_probed_cards_via_module_scope_binding` +
+    `_PROBE_FN_HEADER_RE` (function-name shape — the load-bearing
+    bottleneck for the 8 deferred candidates).
+
 ## 0. This session's progress summary (2026-05-19/21)
 
 The session that started after `ce564786` (the original inventory)
