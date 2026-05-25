@@ -1997,6 +1997,44 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_murky_sewer_parity.py",
     REPO_ROOT / "tests" / "test_razortrap_gorge_parity.py",
     REPO_ROOT / "tests" / "test_strangled_cemetery_parity.py",
+    # **covered-by-construction-probe-writing-p10 (2026-05-25):** Five
+    # per-card real-EoE cross-engine byte-equal probes binding the
+    # REMAINING five Duskmourn conditional-painland cycle slugs to
+    # PROBED-tier slots, **closing the 10-member painland cycle** that
+    # batch-9 opened.  The five new color-pair bindings (one DISTINCT
+    # pair per probe; all five pairs were uncovered by batch-9):
+    #
+    #   * ``test_etched_cornfield_parity.py`` — Etched Cornfield
+    #     ({G}{W} painland, 0 17lands decks).  FIRST G/W color-pair
+    #     binding.
+    #   * ``test_lakeside_shack_parity.py`` — Lakeside Shack
+    #     ({G}{U} painland, 0 17lands decks).  FIRST G/U color-pair
+    #     binding.
+    #   * ``test_neglected_manor_parity.py`` — Neglected Manor
+    #     ({W}{B} painland, 0 17lands decks).  FIRST W/B color-pair
+    #     binding.
+    #   * ``test_peculiar_lighthouse_parity.py`` — Peculiar Lighthouse
+    #     ({U}{R} painland, 0 17lands decks).  FIRST U/R color-pair
+    #     binding.
+    #   * ``test_raucous_carnival_parity.py`` — Raucous Carnival
+    #     ({W}{R} painland, 0 17lands decks).  FIRST W/R color-pair
+    #     binding AND closes the cycle (all 10 dual-color painland
+    #     slugs now have dedicated per-slug PROBED-tier probes).
+    #
+    # Same lane discipline as batches 1-9: per-slug attribution credits
+    # a PROBED slot per-printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it).  Pure measurement-attribution + per-slug credit: no
+    # engine changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 362 → 367;
+    # covered_by_construction 55 → 50; BLOCKED unchanged at 58; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_etched_cornfield_parity.py",
+    REPO_ROOT / "tests" / "test_lakeside_shack_parity.py",
+    REPO_ROOT / "tests" / "test_neglected_manor_parity.py",
+    REPO_ROOT / "tests" / "test_peculiar_lighthouse_parity.py",
+    REPO_ROOT / "tests" / "test_raucous_carnival_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
