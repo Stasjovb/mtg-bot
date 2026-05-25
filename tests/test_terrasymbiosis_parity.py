@@ -429,7 +429,7 @@ def test_rust_resolve_amount_exceeds_library_stops_at_empty():
 # -------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_terrasymbiosis_round_trip():
+def test_cross_engine_real_eoe_terrasymbiosis_round_trip_parity():
     """**GENUINE real-EoE cross-engine byte-equal probe —
     Terrasymbiosis counter-amount draw effect.** The slug-credit anchor
     for the PROBED tier flip even though the classifier multi-gates

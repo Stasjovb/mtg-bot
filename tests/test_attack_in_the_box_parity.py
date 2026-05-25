@@ -472,7 +472,7 @@ def test_rust_end_step_drain_sacrifices_source():
 # -------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_attack_in_the_box_schedule_self_sac_round_trip():
+def test_cross_engine_real_eoe_attack_in_the_box_schedule_self_sac_round_trip_parity():
     """**GENUINE real-EoE cross-engine byte-equal probe — Attack-in-
     the-Box ScheduleSelfSacAtNextEndStep leaf.** The slug-credit
     anchor for the PROBED tier flip even though the classifier multi-

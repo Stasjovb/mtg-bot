@@ -461,7 +461,7 @@ def parity_smoke():
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_enduring_curiosity_silent_noop_byte_equal(
+def test_cross_engine_real_eoe_enduring_curiosity_silent_noop_byte_equal_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine byte-equal probe -- Enduring

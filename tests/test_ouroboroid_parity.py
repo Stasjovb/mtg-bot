@@ -445,7 +445,7 @@ def test_rust_resolve_x_n_applies_plus_n_to_each_controlled_creature():
 # -------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_ouroboroid_round_trip():
+def test_cross_engine_real_eoe_ouroboroid_round_trip_parity():
     """**GENUINE real-EoE cross-engine byte-equal probe — Ouroboroid
     mass-counter effect.** The slug-credit anchor for the PROBED tier
     flip even though the classifier multi-gates the card on

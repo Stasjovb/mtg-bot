@@ -1140,6 +1140,34 @@ PROBE_MODULES: tuple[Path, ...] = (
     # creature-side admit predicates (single-card single-cycle FLIP,
     # no silent auto-grows).
     REPO_ROOT / "tests" / "test_memorial_team_leader_parity.py",
+    # **probe-module-rename-sweep-p1 (2026-05-24):** the eight per-card
+    # real-EoE cross-engine byte-equal probe modules whose cross-engine
+    # function name previously used a non-canonical ``_round_trip`` /
+    # ``_byte_equal`` suffix (or missed the ``_eoe_`` infix, in
+    # Friendly Teddy's case) — the predicate's
+    # ``_PROBE_FN_HEADER_RE`` requires a ``..._parity`` suffix, so each
+    # module's genuine probe was uncredited even though it bound the
+    # live printing via ``get_active_source().get_printings().get(<n>)``
+    # in the function body. This lane renamed each cross-engine probe
+    # to the canonical ``..._parity`` suffix (append-only edit, lower
+    # diff churn than dropping the descriptive ``_round_trip`` /
+    # ``_byte_equal`` half) and now registers the eight modules so the
+    # widened-coverage credit lands. Each flip is COVERED-by-
+    # construction → PROBED in the pool-parity classifier (PROBED 306
+    # → 314, covered_by_construction 107 → 99; BLOCKED-SG unchanged).
+    # Same precedent shape as the prior
+    # ``feature/post-flip-reclassification-scout`` 12-card sweep that
+    # registered the existing ``..._parity``-named probes; this lane
+    # is the rename-then-register companion for the eight
+    # non-canonically-named cross-engine probes.
+    REPO_ROOT / "tests" / "test_attack_in_the_box_parity.py",
+    REPO_ROOT / "tests" / "test_enduring_curiosity_parity.py",
+    REPO_ROOT / "tests" / "test_friendly_teddy_parity.py",
+    REPO_ROOT / "tests" / "test_hemosymbic_mite_parity.py",
+    REPO_ROOT / "tests" / "test_ouroboroid_parity.py",
+    REPO_ROOT / "tests" / "test_splitskin_doll_parity.py",
+    REPO_ROOT / "tests" / "test_swarm_culler_parity.py",
+    REPO_ROOT / "tests" / "test_terrasymbiosis_parity.py",
     # NOT registered (deliberate, documented):
     #   * ``test_deafening_silence_parity.py`` — the
     #     ``test_cross_engine_real_eoe_deafening_silence_noncreature_

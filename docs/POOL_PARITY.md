@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **414 / 475 EoE cards (87.2%) are byte-equal at the Effect+bridge level**; of those, **306 (64.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 108 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **414 / 475 EoE cards (87.2%) are byte-equal at the Effect+bridge level**; of those, **314 (66.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 100 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **61 (12.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 306 | 64.4% |
-| Effect+bridge covered (not individually probed) | 108 | 22.7% |
+| PROBED byte-equal | 314 | 66.1% |
+| Effect+bridge covered (not individually probed) | 100 | 21.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -54,6 +54,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Archenemy's Charm
 - Astelli Reclaimer
 - Atmospheric Greenhouse
+- Attack-in-the-Box
 - Balemurk Leech
 - Banishing Light
 - Bashful Beastie
@@ -120,6 +121,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Emergency Eject
 - Emissary Escort
 - Endless Sands
+- Enduring Curiosity
 - Enter the Enigma
 - Entity Tracker
 - Erratic Apparition
@@ -142,6 +144,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Frantic Strength
 - Frenzied Baloth
 - Friendly Ghost
+- Friendly Teddy
 - Frontline War-Rager
 - Full Bore
 - Funeral Room // Awakening Hall
@@ -164,6 +167,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Hardened Escort
 - Hardlight Containment
 - Harmonious Grovestrider
+- Hemosymbic Mite
 - Honor
 - Honored Knight-Captain
 - House Cartographer
@@ -229,6 +233,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Orbital Plunge
 - Oreplate Pangolin
 - Osseous Sticktwister
+- Ouroboroid
 - Overlord of the Boilerbilges
 - Overlord of the Floodpits
 - Overlord of the Mistmoors
@@ -283,6 +288,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Space-Time Anomaly
 - Specimen Freighter
 - Spineseeker Centipede
+- Splitskin Doll
 - Starbreach Whale
 - Starfield Shepherd
 - Starfighter Pilot
@@ -299,6 +305,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Susur Secundi, Void Altar
 - Susurian Dirgecraft
 - Susurian Voidborn
+- Swarm Culler
 - Syr Vondam, Sunstar Exemplar
 - Syr Vondam, the Lucent
 - Systems Override
@@ -308,6 +315,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Terminal Velocity
 - Terramorphic Expanse
 - Terrapact Intimidator
+- Terrasymbiosis
 - Territorial Bruntar
 - Thaumaton Torpedo
 - Thawbringer

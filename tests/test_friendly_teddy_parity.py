@@ -546,7 +546,7 @@ def parity_smoke():
     return mod
 
 
-def test_cross_engine_real_friendly_teddy_dies_trigger_parity(
+def test_cross_engine_real_eoe_friendly_teddy_dies_trigger_parity(
     parity_smoke,
 ):
     """**GENUINE real cross-engine byte-equal probe — Friendly Teddy

@@ -457,7 +457,7 @@ def test_rust_resolve_another_exclusion_source_does_not_count():
 # -------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_splitskin_doll_round_trip():
+def test_cross_engine_real_eoe_splitskin_doll_round_trip_parity():
     """**GENUINE real-EoE cross-engine byte-equal probe —
     Splitskin Doll Sequence(DrawCards, IfNot(...))**. The slug-credit
     anchor for the PROBED tier flip even though the classifier multi-

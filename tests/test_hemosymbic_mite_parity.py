@@ -504,7 +504,7 @@ def test_rust_resolve_no_other_own_creature_silent_fizzle():
 # -------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_hemosymbic_mite_round_trip():
+def test_cross_engine_real_eoe_hemosymbic_mite_round_trip_parity():
     """**GENUINE real-EoE cross-engine byte-equal probe — Hemosymbic
     Mite pump-by-X effect.** The slug-credit anchor for the PROBED tier
     flip even though the classifier multi-gates the card on
