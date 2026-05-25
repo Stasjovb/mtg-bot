@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **416 / 475 EoE cards (87.6%) are byte-equal at the Effect+bridge level**; of those, **345 (72.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 71 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **346 (72.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 71 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **59 (12.4%)** are BLOCKED, broken out below.
+- **58 (12.2%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -16,12 +16,12 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 345 | 72.6% |
+| PROBED byte-equal | 346 | 72.8% |
 | Effect+bridge covered (not individually probed) | 71 | 14.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 59 | 12.4% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 58 | 12.2% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -208,6 +208,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Kavaron Skywarden
 - Kavaron, Memorial World
 - Knight Luminary
+- Lashwhip Predator
 - Lightless Evangel
 - Lightstall Inquisitor
 - Lionheart Glimmer
@@ -398,13 +399,13 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - (none)
 
-## BLOCKED — subsystem-gated / Effect-uncovered (59)
+## BLOCKED — subsystem-gated / Effect-uncovered (58)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
 | Subsystem | #cards | 1gate | multi | decks(tot) | decks(1g) | Tractability |
 |---|---:|---:|---:|---:|---:|---|
-| Cost-reduction substrate | 4 | 4 | 0 | 38,804 | 38,804 | medium |
+| Cost-reduction substrate | 3 | 3 | 0 | 28,740 | 28,740 | medium |
 | Non-basic land substrate | 2 | 2 | 0 | 7,688 | 7,688 | medium |
 | warp_cost (declined cost-mechanic) | 3 | 0 | 3 | 8,903 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
@@ -418,7 +419,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Non-safe triggered ability (unbridged event/shape) | 20 | 0 | 20 | 53,848 | 0 | diffuse |
 | Effect-uncovered (no covered Rust counterpart) | 45 | 0 | 45 | 76,035 | 0 | diffuse |
 
-**Reconciliation:** 59 subsystem-gated = 10 single-gated + 49 multi-gated; the per-subsystem `1gate` column sums to 10 (== single-gated total). The breakout partitions exactly the same 59 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 58 subsystem-gated = 9 single-gated + 49 multi-gated; the per-subsystem `1gate` column sums to 9 (== single-gated total). The breakout partitions exactly the same 58 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (1):** `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -448,7 +449,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Infinite Guideline Station
 - Keys to the House
 - Larval Scoutlander
-- Lashwhip Predator
 - Lavaclaw Reaches
 - Leyline of Mutation
 - Loading Zone

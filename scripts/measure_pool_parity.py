@@ -1764,6 +1764,35 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_gigastorm_titan_real_eoe_cost_reduction.py",
+    # Cost-reduction substrate Phase 1 Cycle 4 (cost-reduction-
+    # phase-1-cycle-4-lashwhip-probe-p1 lane, 2026-05-25):
+    # per-card real-EoE cross-engine byte-equality probe for
+    # **Lashwhip Predator** flips ``covered_by_construction`` ->
+    # PROBED in the pool-parity metric.  THE FINAL probe of
+    # cost-reduction Phase 1; with this commit BLOCKED drops
+    # 59 -> 58 and Phase 1 closure is complete.  Sibling to the
+    # Cycle 3 Gigastorm Titan probe (same shape; exercises the
+    # OpponentsControlAtLeast(IsCreature(), 3) Condition variant
+    # — the SECOND and LAST Phase-1 Condition shape — on
+    # Lashwhip's {4}{G}{G} 5/7 reach Plant Beast).  Drives BOTH
+    # lifecycles of the Phase-1 OpponentsControlAtLeast cost-
+    # reduction substrate that commit ``8593b0fb`` (Cycle 2 FLIP)
+    # shipped: (a) full-cost lifecycle with 0 opp creatures on bf
+    # — pays {4}{G}{G}, and (b) reduced-cost lifecycle with 3
+    # opp creatures pre-seated on opp's bf via the design doc
+    # §7.3 scripted picker — pays {2}{G}{G} after the {2}
+    # reduction applies, the load-bearing case the C2 substrate
+    # FLIP rides on for the battlefield-scanning condition
+    # variant.  Pool-primed mana on both engines so the cost-
+    # payment arithmetic is the entire load-bearing signal (no
+    # land-tap noise).  Full ``compare_fields == []`` over the
+    # 22-field cross-engine field view post-cast.  Per-slug
+    # attribution = "Lashwhip Predator" (10,064 17lands decks,
+    # the second of the two C2 carriers; ~24,908 decks total
+    # unblocked across the Phase-1 admit lane).
+    REPO_ROOT
+    / "tests"
+    / "test_probe_lashwhip_predator_real_eoe_cost_reduction.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
