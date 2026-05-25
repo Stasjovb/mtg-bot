@@ -559,79 +559,98 @@ def test_card_def_to_python_printing_reverse_arm_untap_target_land():
 # ---------------------------------------------------------------------------
 
 
-def test_swarmyard_stays_declined_post_cycle_1():
-    """**Substrate-only invariant pin.** Post-Cycle-1, the Phase-1
-    admit predicate ``_printing_is_bridge_simple_carrier_aa_land``
-    has NOT shipped (it ships Cycle 2). Concretely: NO disjunct in
-    the production-deck loader's ``_filter_deck_to_bridge_supported``
-    OR-chain accepts Swarmyard's printing today. Verify by walking
-    the existing per-disjunct predicates and confirming each
-    declines (one MUST decline for the invariant to hold; we assert
-    that the NONE of the existing predicates admits it)."""
+def test_swarmyard_now_admits_at_admit_gate_post_cycle_2():
+    """**Cycle 2 INVERSION pin.** Cycle 2 (2026-05-25) wired the admit
+    predicate ``_printing_is_bridge_simple_carrier_aa_land`` into
+    ``_filter_deck_to_bridge_supported``'s OR-chain. Swarmyard now
+    PASSES that disjunct (and ONLY that disjunct — sibling predicates
+    still decline) — the FLIP. Inverts the Cycle-1 substrate-only
+    invariant pin ``test_swarmyard_stays_declined_post_cycle_1``.
+
+    Verifies (a) ``_printing_is_bridge_simple_carrier_aa_land`` admits
+    Swarmyard, and (b) the new Carrier-AA disjunct is the ONLY
+    disjunct that admits — no silent sibling-predicate spillover.
+    """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     swarmyard = ps["Swarmyard"]
 
-    # All disjuncts in _filter_deck_to_bridge_supported decline
-    # Swarmyard (it carries a non-empty activated_abilities tuple,
-    # which every existing predicate guard-rejects at the
-    # ``if printing.activated_abilities: return False`` line —
-    # documented in the design doc §1.2).
-    candidate_predicates = []
-    for name in dir(traj):
-        if name.startswith("_printing_is_bridge_"):
-            candidate_predicates.append(getattr(traj, name))
+    # The Carrier-AA Phase 1 disjunct admits Swarmyard (the FLIP).
+    assert traj._printing_is_bridge_simple_carrier_aa_land(swarmyard) is True
 
-    admit_results = {
-        pred.__name__: pred(swarmyard)
-        for pred in candidate_predicates
-        if callable(pred)
-    }
-    # NONE of the existing predicates admit Swarmyard.
-    admits = [
-        name for name, accepts in admit_results.items() if accepts
+    # No sibling disjunct admits Swarmyard — only the new Carrier-
+    # AA arm. Walk every ``_printing_is_bridge_*`` predicate and
+    # confirm exactly ONE returns True.
+    candidate_predicates = [
+        (name, getattr(traj, name))
+        for name in dir(traj)
+        if name.startswith("_printing_is_bridge_")
     ]
-    assert not admits, (
-        f"Carrier-AA Phase 1 Cycle 1 substrate-only invariant "
-        f"violated: Swarmyard is admitted by {admits}. Cycle 1 "
-        f"lands Rust substrate ONLY; the admit predicate "
-        f"_printing_is_bridge_simple_carrier_aa_land ships in "
-        f"Cycle 2. If a sibling predicate now admits Swarmyard, "
-        f"a different substrate has widened — investigate before "
-        f"merging Cycle 1."
+    admits = [
+        name
+        for name, pred in candidate_predicates
+        if callable(pred) and pred(swarmyard)
+    ]
+    assert admits == ["_printing_is_bridge_simple_carrier_aa_land"], (
+        f"Carrier-AA Phase 1 Cycle 2 FLIP invariant violated: "
+        f"Swarmyard is admitted by {admits} — expected exactly "
+        f"['_printing_is_bridge_simple_carrier_aa_land']. A sibling "
+        f"predicate spillover means a different substrate has "
+        f"widened — investigate before merging Cycle 2."
     )
 
 
-def test_deserted_temple_stays_declined_post_cycle_1():
-    """**Substrate-only invariant pin.** Same as Swarmyard but for
-    Deserted Temple. Cycle 1 lands Rust substrate ONLY; no admit
-    predicate accepts Deserted Temple post-Cycle-1."""
+def test_deserted_temple_stays_declined_post_cycle_2():
+    """**Cycle 2 HONEST-STOP invariant pin.** Cycle 2 ships the
+    STRICT bare-``{T}`` admit gate (per design doc §2.3 +
+    ``_aa_is_phase1_sub_shape_a`` gate ``cost.mana is None``). Deserted
+    Temple's printed cost is ``{1}, {T}`` (mana=ManaCost(generic=1),
+    tap_self=True; verified-first in
+    ``test_deserted_temple_live_printing_matches_design_doc_shape``).
+    The STRICT gate honestly declines Deserted Temple as out-of-scope
+    for Phase 1 — it waits for Phase 1.5's ``{N}, {T}`` cost-shape
+    widen or a sibling-swap to Terrain Generator / Thespian's Stage
+    (bare-``{T}`` siblings whose ``PutBasicLandFromHandOntoBattlefield
+    Tapped`` / ``BecomesCopyOfTargetLand`` Effects each need their own
+    cross-engine port).
+
+    Inverted analogue of ``test_swarmyard_now_admits_at_admit_gate_
+    post_cycle_2`` — verifies the Carrier-AA disjunct DECLINES
+    Deserted Temple AND no sibling disjunct silently admits it.
+    """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     dt = ps["Deserted Temple"]
 
-    candidate_predicates = []
-    for name in dir(traj):
-        if name.startswith("_printing_is_bridge_"):
-            candidate_predicates.append(getattr(traj, name))
+    # The Carrier-AA Phase 1 disjunct DECLINES Deserted Temple on
+    # the STRICT bare-``{T}`` gate (cost.mana is None false →
+    # decline; the STRICT gate IS the contract).
+    assert (
+        traj._printing_is_bridge_simple_carrier_aa_land(dt) is False
+    )
 
-    admit_results = {
-        pred.__name__: pred(dt)
-        for pred in candidate_predicates
-        if callable(pred)
-    }
+    # No sibling disjunct admits Deserted Temple — confirms no
+    # silent auto-grow from an unrelated substrate.
+    candidate_predicates = [
+        (name, getattr(traj, name))
+        for name in dir(traj)
+        if name.startswith("_printing_is_bridge_")
+    ]
     admits = [
-        name for name, accepts in admit_results.items() if accepts
+        name
+        for name, pred in candidate_predicates
+        if callable(pred) and pred(dt)
     ]
     assert not admits, (
-        f"Carrier-AA Phase 1 Cycle 1 substrate-only invariant "
-        f"violated: Deserted Temple is admitted by {admits}. Cycle "
-        f"1 lands Rust substrate ONLY; the admit predicate ships "
-        f"in Cycle 2."
+        f"Carrier-AA Phase 1 Cycle 2 honest-stop violated: "
+        f"Deserted Temple is admitted by {admits}. The STRICT "
+        f"bare-`{{T}}` gate keeps it declined; Phase 1.5 widens. "
+        f"If a sibling predicate now admits it, a different "
+        f"substrate has widened — investigate."
     )
 
 

@@ -14028,6 +14028,144 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
     )
 
 
+def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
+    """Convert a Python ``ActivatedAbility`` back to the Rust-shape
+    dict iff its cost + effect round-trip cleanly through the existing
+    :func:`_aa_dict_to_python_activated_ability` codec.
+
+    Returns ``None`` for AAs whose shape isn't on the safe list — i.e.
+    any AA-level rider outside the Phase-1 Carrier-AA admit set
+    (``is_mana_ability=True``, ``sorcery_speed=True``,
+    ``activate_only_once=True``, ``tier_threshold>0``,
+    ``room_half is not None``, ``cost_reductions`` non-empty), or a
+    cost component the Rust ``parse_activation_cost`` doesn't accept
+    (any cost field outside the ``mana`` + :data:`_AA_COST_BOOL_KEYS`
+    set), or an effect class with no ``_ta_dict_to_python_effect`` arm
+    that round-trips byte-equal.
+
+    **Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).** Sibling of
+    the existing :func:`trajectory._python_ta_to_safe_dict` (the
+    triggered-ability equivalent). The Phase-1 Carrier-AA admit
+    predicate :func:`trajectory._aa_is_phase1_sub_shape_a` uses this
+    helper as the round-trip floor — an AA must serialize cleanly
+    here before any further admit-gate riders are checked. Lives in
+    ``cross_engine`` (not ``trajectory``) so the codec sits next to
+    the existing :func:`_aa_dict_to_python_activated_ability` /
+    :func:`_aa_dict_to_python_activation_cost` round-trip pair it
+    inverts.
+
+    Round-trip invariant: the dict this returns satisfies the SAME
+    schema Rust's ``parse_activated_ability`` consumes (via
+    ``register_printing``'s ``activated_abilities`` key) AND
+    :func:`_aa_dict_to_python_activated_ability` reconstructs to the
+    canonical Python ``ActivatedAbility`` byte-equal at the dataclass
+    ``__eq__`` surface.
+    """
+    from mtg_bot.effects.base import ActivatedAbility
+
+    if not isinstance(aa, ActivatedAbility):
+        return None
+    # **AA-level rider gate.** Phase 1 Carrier-AA admits no riders.
+    # Every rider here is decline-only at this Phase; a future
+    # phase that widens the admit predicate widens this gate in
+    # lockstep (mirror update — same shape as the
+    # ``_python_ta_to_safe_dict`` event-string gate).
+    if aa.is_mana_ability:
+        return None
+    if aa.sorcery_speed:
+        return None
+    if aa.activate_only_once:
+        return None
+    if aa.tier_threshold:
+        return None
+    if aa.room_half is not None:
+        return None
+    if aa.cost_reductions:
+        return None
+    # **Cost dict.** Serialize the cost into the Rust-shape dict; on
+    # the round-trip side, :func:`_aa_dict_to_python_activation_cost`
+    # rejects any key outside ``{"mana"} | _AA_COST_BOOL_KEYS`` — so
+    # we only emit keys from that set. Any non-zero / non-default
+    # field outside the set is a decline (return ``None``) — the same
+    # honest-stop discipline the trigger sibling uses.
+    cost = aa.cost
+    cost_dict: dict = {}
+    if cost.mana is not None:
+        mana_dict: dict = {}
+        if cost.mana.generic:
+            mana_dict["generic"] = int(cost.mana.generic)
+        for color, n in cost.mana.colored:
+            if int(n) > 0:
+                mana_dict[color] = int(n)
+        cost_dict["mana"] = mana_dict
+    if cost.tap_self:
+        cost_dict["tap_self"] = True
+    if cost.sacrifice_self:
+        cost_dict["sacrifice_self"] = True
+    if cost.sacrifice_another_creature_or_artifact:
+        cost_dict["sacrifice_another_creature_or_artifact"] = True
+    if cost.sacrifice_a_land:
+        cost_dict["sacrifice_a_land"] = True
+    if cost.sacrifice_another_artifact:
+        cost_dict["sacrifice_another_artifact"] = True
+    if cost.sacrifice_food:
+        cost_dict["sacrifice_food"] = True
+    if cost.sacrifice_a_desert:
+        cost_dict["sacrifice_a_desert"] = True
+    # Any cost field NOT in the bridge-supported set must be a
+    # default (zero / False / empty) — otherwise the AA carries a
+    # cost component the bridge can't round-trip and we decline.
+    if cost.exile_self:
+        return None
+    if cost.tap_permanent_you_control:
+        return None
+    if cost.exile_artifact_from_graveyard:
+        return None
+    if cost.sacrifice_another_artifact_or_land:
+        return None
+    if cost.remove_plus_one_counter_from_your_creature:
+        return None
+    if cost.exile_granting_equipment:
+        return None
+    if cost.mana_reduced_by_source_power:
+        return None
+    if cost.pay_life:
+        return None
+    if cost.requires_own_creature_power_at_least:
+        return None
+    if cost.requires_own_artifact_count_at_least:
+        return None
+    if cost.requires_control_of_subtype:
+        return None
+    # **Effect dict.** Phase 1 admits exactly two Effect classes:
+    # ``RegenerateTargetCreature`` and ``UntapTargetLand``. Each has
+    # a matching ``_ta_dict_to_python_effect`` arm (Cycle 1 substrate
+    # at ``cross_engine.py:12366,12395``). Phase-2/3/N extends this
+    # set as each Effect class lands cross-engine — extend the
+    # ``effect_dict`` dispatch below in lockstep with the matching
+    # arm.
+    from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+
+    effect = aa.effect
+    effect_dict: "Optional[dict]" = None
+    if isinstance(effect, RegenerateTargetCreature):
+        effect_dict = {"kind": "regenerate_target_creature"}
+        if effect.allowed_subtypes:
+            effect_dict["allowed_subtypes"] = sorted(
+                str(s) for s in effect.allowed_subtypes
+            )
+    elif isinstance(effect, UntapTargetLand):
+        effect_dict = {"kind": "untap_target_land"}
+    else:
+        # Effect class not in the Phase-1 admit set — decline.
+        return None
+    return {
+        "cost": cost_dict,
+        "effect": effect_dict,
+    }
+
+
 def _static_self_bonus_condition_from_tag(
     cond_tag: str, cond_args: "tuple[int, ...]",
 ):

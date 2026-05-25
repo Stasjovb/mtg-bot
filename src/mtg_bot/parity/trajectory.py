@@ -8416,6 +8416,277 @@ def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25)
+# ---------------------------------------------------------------------------
+#
+# Sub-shape A: bare single-``{T}``-cost, single-bridged-Effect, no-rider
+# non-token Land carriers. Pilot card: Swarmyard
+# (``{T}: Regenerate target Rat, Spider, Squirrel, or Insect creature.``).
+# Deserted Temple stays declined here on the STRICT bare-``{T}`` gate —
+# its printed cost is ``{1}, {T}``, not bare ``{T}`` (verified live at
+# main HEAD ``226c9738``; the C1 verify-first log surfaced the mismatch).
+# Per design doc Section 2.3, the Phase-1 admit gate requires
+# ``cost.mana is None``; Deserted Temple is honestly out-of-scope for
+# Phase 1 and waits for Phase 1.5's ``{N}, {T}`` cost-shape widen.
+#
+# Cycle 1 substrate (commit ``226c9738``) shipped the Rust side:
+# ``CardDef.activated_abilities`` field + non-token ``build_rust_state``
+# emit block + the two new Rust ``Effect`` variants
+# (``RegenerateTargetCreature {allowed_subtypes}`` and
+# ``UntapTargetLand``) + the ``_card_def_to_python_printing`` reverse
+# arm + the two ``_ta_dict_to_python_effect`` bridge arms. Cycle 2 (this
+# slice) wires the admit gate: ``_aa_is_phase1_sub_shape_a`` helper +
+# ``_printing_is_bridge_simple_carrier_aa_land`` admit predicate +
+# ``_carrier_aa_land_card_def`` non-token Carrier-AA Land builder, and
+# threads the new disjunct into ``_filter_deck_to_bridge_supported``'s
+# OR-chain.
+#
+# **No silent auto-grow.** Verify-first walked all 30 BLOCKED-SG
+# Carrier-AA cards (design doc §2.1) against the predicates below: only
+# Swarmyard admits; every other carrier honestly declines on (a) not-
+# Land card-type (11 cards), (b) cost.mana not None (8 cards), (c) n_aa
+# != 1 (3 cards), (d) triggered_abilities present (2 cards), (e)
+# is_mana_ability (3 cards), (f) keywords (1 card), (g)
+# sacrifice-self / sacrifice-a-desert in cost (2 cards). Phase 1
+# admit count: +1 (Swarmyard).
+
+
+# Phase-1 admitted AA[0] Effect classes. Pilot Swarmyard ships the
+# ``RegenerateTargetCreature`` Effect; ``UntapTargetLand`` is wired
+# substrate-side (C1) for the eventual Phase-1.5 Deserted Temple sibling
+# (or Phase-1.5 ``{N}, {T}`` cost-shape widen). Phase-2/3/N extends this
+# set as each Effect class lands cross-engine.
+def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
+    """Lazy accessor for the Phase-1 admitted AA[0] Effect classes.
+
+    Returns a frozenset of the two Python ``Effect`` subclasses the
+    Cycle-1 Rust substrate carries (``RegenerateTargetCreature`` +
+    ``UntapTargetLand``). Lazily imported so the module import-graph
+    stays light and tests that monkeypatch the effect classes (unit
+    pins) see a fresh frozenset each call.
+    """
+    from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    return frozenset({RegenerateTargetCreature, UntapTargetLand})
+
+
+def _aa_is_phase1_sub_shape_a(aa) -> bool:
+    """True iff ``aa`` is a Phase-1 Carrier-AA admit-set ``ActivatedAbility``.
+
+    Sub-shape A is the narrowest Phase-1 admit:
+
+    * **Cost gate (STRICT bare ``{T}``):** ``cost.mana is None``,
+      ``cost.tap_self is True``, every other cost field defaults
+      (sacrifice / pay_life / requires_* / control-of-subtype all
+      decline if non-default). The ``{1}, {T}`` Deserted Temple cost
+      lands honestly out-of-scope at this gate (waits for Phase 1.5's
+      ``{N}, {T}`` widen).
+    * **AA-level rider gate (STRICT no riders):**
+      ``is_mana_ability=False``, ``sorcery_speed=False``,
+      ``cost_reductions=()``, ``room_half is None``,
+      ``tier_threshold==0``, ``activate_only_once=False``. Every
+      Phase-2+ rider declines.
+    * **Effect-class gate (STRICT Phase-1 admit set):**
+      ``type(aa.effect) in {RegenerateTargetCreature, UntapTargetLand}``.
+      Phase-2/3/N extends this set as each Effect class lands cross-
+      engine.
+
+    Note on ``RegenerateTargetCreature.allowed_subtypes``: Swarmyard's
+    pilot effect carries ``allowed_subtypes={Rat, Spider, Squirrel,
+    Insect}`` (non-empty). The C1 substrate's cross-engine bridge
+    round-trips the filter byte-equal — so the predicate does NOT
+    gate on ``allowed_subtypes`` being empty. The filter is an
+    Effect-level concept, not an admit-gate rider.
+
+    **Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).** Companion
+    of :func:`_printing_is_bridge_simple_carrier_aa_land` (the
+    printing-level admit gate; this helper gates per-AA). Mirrors the
+    SoT-flip pattern of the token-AA Lander helper at
+    ``trajectory.py:3208`` and the Phase-2 Eldrazi Scion helper at
+    ``trajectory.py:3339``.
+    """
+    from mtg_bot.effects.base import ActivatedAbility
+
+    if not isinstance(aa, ActivatedAbility):
+        return False
+    # Cost gate.
+    cost = aa.cost
+    if cost.mana is not None:
+        return False
+    if not cost.tap_self:
+        return False
+    if cost.sacrifice_self:
+        return False
+    if cost.exile_self:
+        return False
+    if cost.tap_permanent_you_control:
+        return False
+    if cost.exile_artifact_from_graveyard:
+        return False
+    if cost.sacrifice_another_creature_or_artifact:
+        return False
+    if cost.sacrifice_another_artifact_or_land:
+        return False
+    if cost.sacrifice_another_artifact:
+        return False
+    if cost.sacrifice_food:
+        return False
+    if cost.sacrifice_a_land:
+        return False
+    if cost.sacrifice_a_desert:
+        return False
+    if cost.remove_plus_one_counter_from_your_creature:
+        return False
+    if cost.exile_granting_equipment:
+        return False
+    if cost.mana_reduced_by_source_power:
+        return False
+    if cost.pay_life:
+        return False
+    if cost.requires_own_creature_power_at_least:
+        return False
+    if cost.requires_own_artifact_count_at_least:
+        return False
+    if cost.requires_control_of_subtype:
+        return False
+    # AA-level rider gate.
+    if aa.is_mana_ability:
+        return False
+    if aa.sorcery_speed:
+        return False
+    if aa.cost_reductions:
+        return False
+    if aa.room_half is not None:
+        return False
+    if aa.tier_threshold:
+        return False
+    if aa.activate_only_once:
+        return False
+    # Effect-class gate.
+    if type(aa.effect) not in _carrier_aa_phase_1_effect_classes():
+        return False
+    return True
+
+
+def _printing_is_bridge_simple_carrier_aa_land(printing) -> bool:
+    """True iff a CardPrinting is a PURE single-``{T}``-cost,
+    single-bridged-Effect, no-rider non-token Land Carrier-AA carrier
+    whose AA the Phase-1 Carrier-AA substrate round-trips byte-equal.
+
+    Motivating Phase-1 admit set: Swarmyard (1 EoE card). The §2
+    Class-1 guardrail: admits ONLY the bare ``{T}: <Phase-1-Effect>``
+    Land profile and MUST reject every multi-AA, every ``{T}, Sac:``
+    carrier, every ``<empty-cost>`` carrier, every mana-ability, every
+    sorcery-speed, every triggered-ability-co-gated carrier, every
+    Creature carrier, every Equipment carrier, every
+    ``BecomeLandCreatureUEOT``-with-rider carrier — sub-shapes
+    deferred to Phase 2 / 3 / N (design doc §3).
+
+    Deserted Temple HONESTLY DECLINES here (cost ``{1}, {T}``, not
+    bare ``{T}``) — the STRICT cost-shape gate is the contract.
+    Deserted Temple stays in ``covered_by_construction`` until Phase
+    1.5 widens the cost-shape to ``{N}, {T}`` OR a sibling-swap
+    brings in Terrain Generator / Thespian's Stage at bare ``{T}``.
+    """
+    if "Land" not in printing.card_types:
+        return False
+    # Phase 1 admits only single-typed Land — no Land—Desert
+    # (Scavenger Grounds is decline-by-cost anyway), no Legendary
+    # Artifact—Spacecraft (The Eternity Elevator), no Creature
+    # overlap (Sliver Overlord).
+    extra_card_types = tuple(
+        t for t in printing.card_types if t != "Land"
+    )
+    if extra_card_types:
+        return False
+    if printing.power is not None or printing.toughness is not None:
+        return False
+    # Carrier exclusion set — every Phase-2+ rider, every other
+    # subsystem.
+    if printing.keywords:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # STRICT AA gate: EXACTLY one AA, sub-shape A.
+    aas = tuple(printing.activated_abilities or ())
+    if len(aas) != 1:
+        return False
+    if not _aa_is_phase1_sub_shape_a(aas[0]):
+        return False
+    return True
+
+
+def _carrier_aa_land_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Phase-1-admitted non-token Carrier-AA Land.
+
+    Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_simple_carrier_aa_land`. This builder
+    trusts that guardrail and serializes the single AA into the
+    bridge dict shape via the round-trip-floor helper
+    :func:`cross_engine._python_aa_to_safe_dict`. Returns ``None`` if
+    the AA fails the safe-dict round-trip (a defense-in-depth honest
+    decline; the admit predicate should already have rejected such
+    shapes, so reaching this branch is a builder-vs-guardrail
+    disagreement that fails silent rather than constructing a CardDef
+    the bridge would mistranslate).
+
+    The synthesized CardDef carries:
+
+    * ``card_type="Land"`` (single-typed — admit predicate rejects
+      any extra card type).
+    * No ``mana_produced`` — Phase-1 Carrier-AA Lands are NOT mana-
+      producing lands (Swarmyard taps to regenerate, not to add
+      mana; the bridge's mana-ability auto-wire fires only for non-
+      empty ``mana_produced``). The companion AA mana-ability auto-
+      wire at ``cross_engine.py:14252`` therefore does NOT prepend a
+      ``{T}: Add {C}`` entry. The carrier AA is the SOLE activated
+      ability on both engines.
+    * ``activated_abilities=(aa_dict,)`` carrying the bridge-shape
+      AA dict (the SAME dict Rust's ``register_printing``
+      ``activated_abilities`` key consumes and Python's
+      :func:`cross_engine._aa_dict_to_python_activated_ability`
+      reconstructs).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef as _CardDef,
+        _python_aa_to_safe_dict,
+    )
+
+    if not _printing_is_bridge_simple_carrier_aa_land(printing):
+        return None
+    aa = printing.activated_abilities[0]
+    aa_dict = _python_aa_to_safe_dict(aa)
+    if aa_dict is None:
+        return None
+    return _CardDef(
+        name=printing.name,
+        card_type="Land",
+        supertypes=tuple(printing.supertypes or ()),
+        subtypes=tuple(printing.subtypes or ()),
+        keywords=(),  # Phase 1 admits NO keywords (predicate gate).
+        activated_abilities=(aa_dict,),
+    )
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -9668,6 +9939,27 @@ def _printing_to_card_def(printing) -> CardDef:
             mana_produced=tuple(sorted(printing.produces)),
             enters_tapped_unless_any_player_life_at_most=13,
         )
+    if _printing_is_bridge_simple_carrier_aa_land(printing):
+        # **Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).** A
+        # bare-``{T}`` single-bridged-Effect single-AA non-token Land
+        # carrier flattens to a Land CardDef carrying the AA in the
+        # bridge dict shape (the SAME dict Rust's
+        # ``register_printing`` ``activated_abilities`` key consumes
+        # and Python's
+        # ``cross_engine._aa_dict_to_python_activated_ability``
+        # reconstructs). Phase-1 admits Swarmyard only — see
+        # :func:`_carrier_aa_land_card_def` for the builder + the
+        # admit predicate guardrail invariants. Returning ``None``
+        # from the builder is a defense-in-depth honest decline
+        # (admit predicate already gates the safe-dict round-trip
+        # floor); we fall through to ``_printing_to_card_def``'s
+        # tail (which raises on no-match) so an unexpected decline
+        # surfaces loudly. In practice every printing reaching this
+        # branch passes the predicate by construction (the OR-chain
+        # above only routes here when the predicate returned True).
+        card_def = _carrier_aa_land_card_def(printing)
+        if card_def is not None:
+            return card_def
     if _printing_is_bridge_pure_warp_creature(printing):
         # Phase-1 warp substrate (round-63): a pure fixed-cost warp
         # creature routes to the warp-aware CardDef BEFORE the plain
@@ -11454,6 +11746,33 @@ def _filter_deck_to_bridge_supported(
             or _printing_is_bridge_nonbasic_painland_conditional(
                 printing,
             )
+            # **Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).** The
+            # bridge-simple Carrier-AA Land disjunct. Admits EXACTLY
+            # the bare ``{T}: <Phase-1-Effect>`` single-AA Land profile
+            # — Swarmyard alone in the EoE pool (Deserted Temple
+            # honestly declines on the STRICT bare-``{T}`` cost gate
+            # because its printed cost is ``{1}, {T}``, not bare
+            # ``{T}``; waits for Phase 1.5's ``{N}, {T}`` cost-shape
+            # widen or a sibling-swap to Terrain Generator /
+            # Thespian's Stage). Routed AFTER every other Land
+            # disjunct (basic / nonbasic-mana / tapped-mana /
+            # keyword-colorless / painland-conditional) so a printing
+            # only falls through here if the preceding land disjuncts
+            # decline. The §2 teeth in :func:`_aa_is_phase1_sub_shape_a`
+            # + :func:`_printing_is_bridge_simple_carrier_aa_land`
+            # reject every multi-AA, every ``{T}, Sac:`` carrier,
+            # every ``<empty-cost>`` carrier, every mana-ability,
+            # every sorcery-speed, every triggered-ability-co-gated
+            # carrier — Phase-2/3/N widens the gate per design doc §3.
+            # Rust-side gate rides the Cycle-1 substrate
+            # (``226c9738``) — non-token ``CardDef.activated_abilities``
+            # field + two new Rust ``Effect`` variants
+            # (``RegenerateTargetCreature`` / ``UntapTargetLand``) +
+            # ``GameObject.regeneration_shield`` field; the resolve
+            # arms ship SET-only (zone-change reset deferred to
+            # Cycle 3 alongside the Swarmyard real-EoE probe per
+            # ``docs/SEARCH_LIMITATIONS.md``).
+            or _printing_is_bridge_simple_carrier_aa_land(printing)
         ):
             # Resolved but passes none of the 5 bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:
