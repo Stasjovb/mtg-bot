@@ -1168,6 +1168,31 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_splitskin_doll_parity.py",
     REPO_ROOT / "tests" / "test_swarm_culler_parity.py",
     REPO_ROOT / "tests" / "test_terrasymbiosis_parity.py",
+    # **cathedral-of-war-probe-rename-p1 (2026-05-24):** Cathedral of
+    # War was the residual 4th-shape EoE bench-probe gap surfaced by
+    # ``54a17836`` and explicitly deferred from the 8-probe rename
+    # sweep (``726e9116``) because its function name carried a
+    # ``_through_bench`` semantic infix beyond the three naming
+    # variants that sweep closed (``_round_trip`` / ``_byte_equal`` /
+    # missing ``_eoe_``). This lane completes the same per-probe
+    # rename pattern: ``test_cathedral_genuine_real_eoe_byte_equal_
+    # through_bench`` -> ``test_cross_engine_real_eoe_cathedral_of_
+    # war_through_bench_parity`` (the ``..._through_bench_parity``
+    # suffix keeps the bench-probe semantic visible while satisfying
+    # the ``_PROBE_FN_HEADER_RE`` predicate's strict ``..._parity``
+    # tail), then registers the module here. The in-file shockland
+    # bench-probe sibling
+    # (``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``
+    # in ``tests/test_parity_smoke.py``) was renamed in parallel for
+    # consistency, but adds 0 PROBED flips -- the 5 shocklands
+    # (Breeding Pool / Watery Grave / Stomping Ground / Godless Shrine
+    # / Sacred Foundry) are already PROBED via the 5 ``_parity``
+    # delegators added by the 2026-05-21 loader_admits-attribution-
+    # sweep (``1c2e62f6``). PROBED 314 -> 315 (+1, Cathedral of War);
+    # covered_by_construction 100 -> 99 (-1); BLOCKED-SG unchanged at
+    # 61. Closes the 4th-shape gap entirely (no further EoE
+    # ``_through_bench`` bench-probe shapes remain).
+    REPO_ROOT / "tests" / "test_cathedral_of_war_parity.py",
     # NOT registered (deliberate, documented):
     #   * ``test_deafening_silence_parity.py`` — the
     #     ``test_cross_engine_real_eoe_deafening_silence_noncreature_
@@ -1694,8 +1719,12 @@ def loader_admits(printing) -> bool:
     * ``_printing_is_bridge_nonbasic_mana_land`` — the 5 EoE shocklands
       (Breeding Pool / Godless Shrine / Sacred Foundry / Stomping Ground
       / Watery Grave); 0-Effect, BLOCKED → COVERED post-widen, then
-      PROBED via the round-60 shockland bench probe in this file (see
-      ``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``).
+      PROBED via the round-60 shockland bench probe in
+      ``tests/test_parity_smoke.py`` (see
+      ``test_cross_engine_real_eoe_shockland_through_bench_parity``,
+      renamed from
+      ``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``
+      by ``feature/cathedral-of-war-probe-rename-p1``).
     * ``_printing_is_bridge_simple_spell`` — the 7 EoE simple
       Instant/Sorcery cards (Biosynthic Burst / Depressurize /
       Diplomatic Relations / Focus Fire / Orbital Plunge / Radiant

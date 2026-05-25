@@ -419,7 +419,7 @@ def test_cathedral_engine_unit_pin_taps_for_colorless():
     assert cathedral.printing.keywords == frozenset()
 
 
-def test_cathedral_genuine_real_eoe_byte_equal_through_bench():
+def test_cross_engine_real_eoe_cathedral_of_war_through_bench_parity():
     """**Cathedral of War cycle 1 — the genuine real-EoE Cathedral
     probe.**
 
@@ -462,7 +462,7 @@ def test_cathedral_genuine_real_eoe_byte_equal_through_bench():
     import sys
     import pathlib
 
-    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.cards.source import OracleParserCardSource, get_active_source
     from mtg_bot.parity import trajectory
     from mtg_bot.turn import Step
 
@@ -475,6 +475,19 @@ def test_cathedral_genuine_real_eoe_byte_equal_through_bench():
         _try_cast_one_creature,
         _advance_phase_with_compare,
         _game_over,
+    )
+
+    # Canonical PROBED-tier card-binding line — matches the
+    # ``_probe_module_probed_cards`` body-scoped predicate
+    # (``get_printings().get("<Card>")`` is the load-bearing assertion
+    # this probe pins THAT card). Same recognition idiom the 8 sibling
+    # modules registered by ``feature/probe-module-rename-sweep-p1``
+    # (``726e9116``) use. Assert-checked so the binding can never
+    # silently rot to ``None`` (skip would mask a pool drift).
+    _cot_pinned = get_active_source().get_printings().get("Cathedral of War")
+    assert _cot_pinned is not None, (
+        "Cathedral of War absent from active CardSource — pool snapshot "
+        "drifted; re-pin against the current EoE data"
     )
 
     by = OracleParserCardSource().get_printings()

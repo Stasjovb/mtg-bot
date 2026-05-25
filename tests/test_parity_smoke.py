@@ -63662,7 +63662,7 @@ def test_r59_lander_sac_harness_step_byte_equal_and_default_off():
         clear_token_printings()
 
 
-def test_r60_genuine_real_eoe_shockland_byte_equal_through_bench(
+def test_cross_engine_real_eoe_shockland_through_bench_parity(
     parity_smoke,
 ):
     """**ROUND-60 N1 — the genuine real-EoE shockland probe.**
@@ -71292,7 +71292,12 @@ def test_cross_engine_real_eoe_shardmage_s_rescue_parity(
 # * ``_printing_is_bridge_nonbasic_mana_land`` — Breeding Pool /
 #   Godless Shrine / Sacred Foundry / Stomping Ground / Watery Grave.
 #   Byte-equal pinned by the round-60 shockland bench probe
-#   ``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``
+#   ``test_cross_engine_real_eoe_shockland_through_bench_parity``
+#   (renamed from ``test_r60_genuine_real_eoe_shockland_byte_equal_
+#   through_bench`` by ``feature/cathedral-of-war-probe-rename-p1``
+#   for canonical ``..._parity``-suffix consistency with the sibling
+#   Cathedral of War bench probe — 0 attribution change here; the 5
+#   shocklands are credited via the 5 ``_parity`` delegators below)
 #   in this file — that probe drives the genuine printings through
 #   ``setup_matched_game_from_real_decks`` for ~10 turns on BOTH
 #   engines under arch-30 (Stomping Ground / Watery Grave) plus a
@@ -71350,7 +71355,9 @@ def test_cross_engine_real_eoe_shardmage_s_rescue_parity(
 def test_cross_engine_real_eoe_breeding_pool_parity():
     """**PROBED-tier credit alias for Breeding Pool** — delegates to
     the round-60 shockland bench probe
-    (``test_r60_genuine_real_eoe_shockland_byte_equal_through_bench``)
+    (``test_cross_engine_real_eoe_shockland_through_bench_parity``,
+    formerly ``test_r60_genuine_real_eoe_shockland_byte_equal_through_
+    bench``)
     which walks the 5-shockland set on arch-30 through the genuine
     ``setup_matched_game_from_real_decks`` admit path on BOTH engines
     in mirror for ~10 turns. The ``_parity`` suffix is what the

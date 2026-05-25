@@ -4403,7 +4403,8 @@ printing` builds a CardPrinting with `mana_produced=("C",)` + one
 auto-wired mana ability + no enters_tapped + no keywords; Rust's
 `register_printing` builds the equivalent registry entry;
 (5) **dynamic byte-equal probe** — the Cathedral cycle 1 real-EoE
-bench probe (`test_cathedral_genuine_real_eoe_byte_equal_through_bench`)
+bench probe
+(`test_cross_engine_real_eoe_cathedral_of_war_through_bench_parity`)
 drives a real Cathedral-bearing 17lands archetype through
 `setup_matched_game_from_real_decks` with the `attack_all` strategy
 on BOTH engines for ~10 turns and asserts divergence-free play.

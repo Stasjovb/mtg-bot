@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **414 / 475 EoE cards (87.2%) are byte-equal at the Effect+bridge level**; of those, **314 (66.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 100 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **414 / 475 EoE cards (87.2%) are byte-equal at the Effect+bridge level**; of those, **315 (66.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 99 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **61 (12.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 314 | 66.1% |
-| Effect+bridge covered (not individually probed) | 100 | 21.1% |
+| PROBED byte-equal | 315 | 66.3% |
+| Effect+bridge covered (not individually probed) | 99 | 20.8% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -77,6 +77,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Broodguard Elite
 - Burgeoning
 - Bygone Colossus
+- Cathedral of War
 - Cautious Survivor
 - Cerebral Download
 - Chrome Companion

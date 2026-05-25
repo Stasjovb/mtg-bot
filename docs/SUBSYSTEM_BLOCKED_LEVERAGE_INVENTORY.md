@@ -609,10 +609,14 @@ Three new naming-pattern variants beyond today's two widens:
   * **Bench-probe shape** (1 module; COVERED → would FLIP PROBED via
     a different widen entirely — sibling to the existing in-file
     shockland-bench probe `test_r60_genuine_real_eoe_shockland_byte_
-    equal_through_bench` which is currently uncredited):
+    equal_through_bench` which is currently uncredited; both bench
+    probes were renamed to the canonical `..._through_bench_parity`
+    suffix by `feature/cathedral-of-war-probe-rename-p1` and the
+    Cathedral module was registered in `PROBE_MODULES`, flipping
+    Cathedral of War COVERED -> PROBED):
     | Module | Card | Cross-engine fn name |
     |---|---|---|
-    | `test_cathedral_of_war_parity.py` | Cathedral of War | `test_cathedral_genuine_real_eoe_byte_equal_through_bench` |
+    | `test_cathedral_of_war_parity.py` | Cathedral of War | `test_cross_engine_real_eoe_cathedral_of_war_through_bench_parity` |
 
   * **Wickerfolk Thresher** (`test_wickerfolk_thresher_parity.py`) is
     a DSK card (`test_cross_engine_real_dsk_wickerfolk_thresher_attack
