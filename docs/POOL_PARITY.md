@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **419 / 475 EoE cards (88.2%) are byte-equal at the Effect+bridge level**; of those, **374 (78.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 45 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **419 / 475 EoE cards (88.2%) are byte-equal at the Effect+bridge level**; of those, **379 (79.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 40 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **56 (11.8%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 374 | 78.7% |
-| Effect+bridge covered (not individually probed) | 45 | 9.5% |
+| PROBED byte-equal | 379 | 79.8% |
+| Effect+bridge covered (not individually probed) | 40 | 8.4% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -96,11 +96,13 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Comet Crawler
 - Command Bridge
 - Commune with Evil
+- Conductive Machete
 - Coordinated Clobbering
 - Cosmogoyf
 - Cosmogrand Zenith
 - Cryogen Relic
 - Cryoshatter
+- Cursed Windbreaker
 - Cut Propulsion
 - Daggermaw Megalodon
 - Dark Endurance
@@ -212,12 +214,14 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Intrepid Tenderfoot
 - Invasive Maneuvers
 - Inventors' Fair
+- Irreverent Gremlin
 - Island
 - Jump Scare
 - Kav Landseeker
 - Kavaron Harrier
 - Kavaron Skywarden
 - Kavaron, Memorial World
+- Killer's Mask
 - Knight Luminary
 - Lakeside Shack
 - Lashwhip Predator
@@ -298,6 +302,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Remnant Elemental
 - Reroute Systems
 - Rescue Skiff
+- Ripchain Razorkin
 - Roaring Furnace // Steaming Sauna
 - Roving Actuator
 - Ruinous Rampage

@@ -2182,6 +2182,89 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_gloomlake_verge_parity.py",
     REPO_ROOT / "tests" / "test_hushwood_verge_parity.py",
     REPO_ROOT / "tests" / "test_thornspire_verge_parity.py",
+    # **covered-by-construction-probe-writing-p12 (2026-05-25):** Five
+    # per-card real-EoE cross-engine byte-equal probes binding the
+    # **bare-bridge-clean** sub-shape — the cards whose parser-emitted
+    # Effects round-trip BYTE-EQUAL through the bridge arms (the Mutavault
+    # bare-riders precedent + the FFFF EEEE-idiom for unit-variant /
+    # bare-fielded Effect classes).  Five distinct slugs / per-slug
+    # attribution slots:
+    #
+    #   * ``test_conductive_machete_parity.py`` — Conductive Machete
+    #     ({4} Artifact - Equipment, 0 17lands decks).  FIRST PROBE_
+    #     MODULES-credited probe binding the
+    #     ``ManifestDreadThenAttachSelf`` Effect class to a real-EoE
+    #     slug (the Duskmourn-Equipment-ETB-manifest-dread family);
+    #     ALSO binds the Equip AA half via the same
+    #     ``EquipToTargetCreatureYouControl`` bridge arm Squire's
+    #     Lightblade exercises.
+    #   * ``test_killers_mask_parity.py`` — Killer's Mask ({2}{B}
+    #     Artifact - Equipment, 0 17lands decks).  Per-slug
+    #     attribution slot on the same two-effect shape; distinct from
+    #     Conductive Machete on the **{2}{B}** printing-mana color
+    #     slot + **Equip{2}** cost.
+    #   * ``test_cursed_windbreaker_parity.py`` — Cursed Windbreaker
+    #     ({2}{U} Artifact - Equipment, 0 17lands decks).  Closes the
+    #     3-member Duskmourn-Equipment-ETB-manifest-dread cycle in
+    #     the EoE merged pool; distinct on the **{2}{U}** color slot
+    #     + **Equip{3}** cost (the {2}/{3}/{4} cost ladder closes).
+    #   * ``test_ripchain_razorkin_parity.py`` — Ripchain Razorkin
+    #     ({3}{R} Creature - Human Berserker, 0 17lands decks).  FIRST
+    #     PROBE_MODULES-credited probe binding the bare ``DrawCards
+    #     (amount=1)`` Effect class on a real-EoE ACTIVATED-ABILITY
+    #     carrier (prior DrawCards probes pin the class on TA /
+    #     spell-effect carriers — Demonic Counsel's search-then-draw
+    #     composite, Decode Transmissions' instant — but none drive
+    #     the bare primitive via an AA).
+    #   * ``test_irreverent_gremlin_parity.py`` — Irreverent Gremlin
+    #     ({1}{R} Creature - Gremlin, 0 17lands decks).  FIRST PROBE_
+    #     MODULES-credited probe exercising the canonical
+    #     ``IfYouDo(MayDo(X), Y)`` looter recursive composite end-to-
+    #     end on a real-EoE printing — pins the 4-deep bridge
+    #     composition ``if_you_do`` → ``may_do`` → ``discard_self`` +
+    #     ``draw_cards`` byte-equal round-trip.
+    #
+    # **Shape-axis distinction from the verge cycle (batch 11).**  The
+    # verge probes exercise the ``add_mana_to_pool`` per-color bridge
+    # arm on parser-emitted-dual-AA Land carriers.  This batch exercises
+    # FOUR ORTHOGONAL Effect classes: ``EquipToTargetCreatureYouControl``,
+    # ``ManifestDreadThenAttachSelf``, ``DrawCards``, and the 3-arm
+    # recursive composite ``IfYouDo(MayDo(DiscardSelf), DrawCards)`` —
+    # the four leaf-level + composer-level bridge arms exercised
+    # simultaneously.  All five cards SHARE the
+    # **bridge-byte-equal-Effect** discipline: bridge round-trip
+    # produces an Effect bit-identical to the parser-emitted one (no
+    # rider-drop narrowing; the per-Mutavault-precedent bare-fielded
+    # contract).  Cards in the covered_by_construction tier whose
+    # Effects carry bridge-drop riders (granted_keywords on
+    # PumpSelfUntilEOT / PumpTargetCreatureUntilEOT; spend_restriction
+    # on AddManaToPool for Power Depot / Steelswarm Operator;
+    # nonbasic_only on Dust Bowl's DestroyTargetLand;
+    # granted_keywords/unblockable/granted_subtype on the remaining
+    # manlands' BecomeLandCreatureUEOT; min_power /
+    # tapped_only/untapped_only on the wrath variants) STAY covered_
+    # by_construction under the IIII / HHHH "covered carrier with
+    # non-bridge-clean rider" precedent until either a Rust schema
+    # widen or per-card slice ships.
+    #
+    # Same lane discipline as batches 1-11: per-slug attribution credits
+    # a PROBED slot per-printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it).  Pure measurement-attribution + per-slug credit: no
+    # engine changes, no Rust changes, no substrate widens.  Net delta
+    # for this batch in isolation: +5 PROBED / -5 covered_by_
+    # construction (relative to the batch-11 baseline).  Worker A's
+    # cost-reduction Phase 2 cycle 3-4 probes (Uthros Psionicist + Sami,
+    # Wildcat Captain — sha 809d546c + 4b683928) landed concurrently and
+    # contribute +2 PROBED from the BLOCKED-SG tier, so the post-rebase
+    # headline shows PROBED 372 → 379, covered_by_construction 45 → 40,
+    # BLOCKED-SG 58 → 56, pool total 475 unchanged.
+    REPO_ROOT / "tests" / "test_conductive_machete_parity.py",
+    REPO_ROOT / "tests" / "test_killers_mask_parity.py",
+    REPO_ROOT / "tests" / "test_cursed_windbreaker_parity.py",
+    REPO_ROOT / "tests" / "test_ripchain_razorkin_parity.py",
+    REPO_ROOT / "tests" / "test_irreverent_gremlin_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
