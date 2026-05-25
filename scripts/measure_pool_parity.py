@@ -2265,6 +2265,77 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_cursed_windbreaker_parity.py",
     REPO_ROOT / "tests" / "test_ripchain_razorkin_parity.py",
     REPO_ROOT / "tests" / "test_irreverent_gremlin_parity.py",
+    # **covered-by-construction-probe-writing-p13 (2026-05-25):** Two
+    # per-card real-EoE cross-engine byte-equal probes binding the
+    # **bare-bridge-clean** sub-shape on the LAST two cards in the
+    # 40-card ``covered_by_construction`` tier with verifiable
+    # parser-emit ↔ bridge round-trip byte-equality.  Marks the
+    # **saturation** of the bare-bridge-clean Effect-class lane this
+    # multi-batch campaign rode (batches 1-12 flipped ~60 cards via
+    # this idiom).  The remaining 38 covered_by_construction cards
+    # all carry bridge-drop riders (granted_keywords on Pump arms;
+    # BecomeLandCreatureUEOT (substrate-blocked per HH directive);
+    # spend_restriction on AddManaToPool; nonbasic_only narrowing on
+    # DestroyTargetLand; tapped_only / untapped_only / min_power
+    # narrowing on DestroyAllCreatures; multi-color batched
+    # AddManaToPool; ConditionalOnTappedCreatures CreateToken with
+    # tapped=True rider; create_token bridge-arm with
+    # register_token_printing ceremony scoped-out per JJJJ; et al.).
+    # Per-card scout results documented in
+    # ``docs/COVERED_BY_CONSTRUCTION_PROBE_WRITING_SATURATION_2026-05-25.md``.
+    #
+    #   * ``test_plaza_of_heroes_parity.py`` — Plaza of Heroes (Land,
+    #     Stellar Sights reprint, 0 17lands decks).  Binds AA[0]'s
+    #     bare ``AddManaToPool(produces=(('C', 1),), spend_restriction
+    #     =None)`` colorless-mana ability — the bridge-clean half of
+    #     a four-AA carrier (AA[1]/[2] have spend_restriction riders;
+    #     AA[3] has granted_keywords pump — bridge-drop riders, but
+    #     the per-slug attribution flips the WHOLE slug via AA[0]'s
+    #     byte-equal round-trip).  Sibling to Mana Confluence (PROBED
+    #     'any' coin) and Cascading Cataracts (PROBED {5} 'any-5'
+    #     coin); pins the additional ``'C'`` (colorless) dispatch
+    #     surface on the round-27 ``add_mana_to_pool`` bridge arm.
+    #   * ``test_rust_harvester_parity.py`` — Rust Harvester ({R}
+    #     Artifact Creature — Robot, 0 17lands decks).  Binds AA[0]'s
+    #     2-arm composite ``Sequence(PutPlusOneCounterOnSelf(amount=1),
+    #     DealDamageEqualToSourcePowerAnyTarget)``.  The activation
+    #     cost carries the HH-blocked ``exile_artifact_from_graveyard``
+    #     rider — the EEEE-idiom (parse + bridge round-trip + Python-
+    #     side resolve, NO cross-engine compare_fields) sidesteps the
+    #     cost surface entirely by exercising the EFFECT half
+    #     directly.  Exercises THREE bridge arms simultaneously
+    #     (``sequence`` composer + ``put_plus_one_counter_on_self``
+    #     leaf 0 + ``deal_damage_equal_to_source_power_any_target``
+    #     leaf 1) — load-bearing for the
+    #     ``DealDamageEqualToSourcePowerAnyTarget`` Effect class on a
+    #     real-EoE ACTIVATED-ABILITY carrier.
+    #
+    # Same lane discipline as batches 1-12: per-slug attribution
+    # credits a PROBED slot per-printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it).  Pure measurement-attribution + per-slug credit:
+    # no engine changes, no Rust changes, no substrate widens.  Net
+    # delta: +2 PROBED / -2 covered_by_construction (PROBED 379 →
+    # 381; covered_by_construction 40 → 38; BLOCKED-SG 56 unchanged;
+    # pool total 475 unchanged).
+    #
+    # **Lane saturation.**  This batch ships the LAST two bare-
+    # bridge-clean cards under the established per-slug-attribution
+    # idiom.  Subsequent batches must either (a) attack the
+    # bridge-drop-rider sub-shapes via Rust schema bumps + sibling
+    # bridge arms (e.g., spend_restriction tagging, granted_keywords
+    # on pump arms, BecomeLandCreatureUEOT) or (b) pivot to other
+    # major DEFERRED rows (Aura Phase 3+ substrate widening at 3
+    # cards / 2,783 decks; Carrier-AA substrate widening at 30
+    # cards / 34,470 decks; Spacecraft Station subsystem at 8 cards
+    # / 41,281 decks; et al.).  Recommended next direction:
+    # **Carrier-AA substrate widening** — the largest 1-gate +
+    # multi-gate pool in BLOCKED-SG (30 cards, 34,470 decks; highest
+    # deck-count leverage among the un-itemised sprawling
+    # subsystems).
+    REPO_ROOT / "tests" / "test_plaza_of_heroes_parity.py",
+    REPO_ROOT / "tests" / "test_rust_harvester_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
