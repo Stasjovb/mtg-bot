@@ -1869,6 +1869,55 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_sami_wildcat_captain_real_eoe_cost_reduction.py",
+    # Cost-reduction substrate Phase 3 Cycle 3 (cost-reduction-
+    # phase-3-cycle-3-fungal-probe-p1 lane, 2026-05-25): per-card
+    # real-EoE cross-engine byte-equality probe for **Fungal
+    # Colossus** flips ``covered_by_construction`` -> PROBED in the
+    # pool-parity metric. **THE FINAL probe of Phase 3 -- AND THE
+    # FINAL probe of the entire cost-reduction substrate single-
+    # gated lane.** With this entry, Fungal Colossus (the sole
+    # Phase-3 cost-reduction carrier) is PROBED-tier and the
+    # cost-reduction substrate retires from
+    # ``covered_by_construction`` entirely. Drives THREE scenarios
+    # across the variable-X land-count multiplier axis of the
+    # Phase-3 PerDifferentlyNamedLand spell-local cost-reduction
+    # substrate that commit ``8525d18e`` (Cycle 1 substrate) +
+    # ``7036c191`` (Cycle 2 FLIP) shipped via the widened
+    # ``_cost_reduction_rule_is_phase1_or_3`` admit helper + the
+    # ``apply_cost_reductions_rust`` spell-local match arm extension
+    # + ``unique_land_names_count`` HashSet<&str> over
+    # ``printing.name`` walk at ``state_ops_legal.rs:936-954``:
+    # (a) 0 lands controlled -- the distinct-name set is empty,
+    # count == 0 < 1, condition False, no reduction applies, pays
+    # base ``{6}{G}``; (b) 4 distinctly-named EoE-pool lands
+    # (Breeding Pool / Godless Shrine / Command Bridge / Adagia,
+    # Windswept Bastion) pre-seated on caster's bf via the design
+    # doc §7.3 scripted picker -- the HashSet collects 4 distinct
+    # keys, multiplier=4, the {1} amount * 4 = {4} reduction
+    # applies and pays the reduced ``{2}{G}`` cost -- the load-
+    # bearing variable-multiplier case the Phase-3 substrate FLIP
+    # rides on for the spell-local axis; (c) 4 SAME-named lands
+    # (Breeding Pool x4) pre-seated -- the HashSet collapses to a
+    # single key, multiplier=1 (NOT 4!), the {1} amount * 1 = {1}
+    # reduction applies and pays the reduced ``{5}{G}`` cost --
+    # the SET-SEMANTIC TEETH proving both engines key the
+    # multiplier on the DISTINCT-NAME set, not the raw caster's-
+    # land count. Pool-primed mana on both engines so the cost-
+    # payment arithmetic is the entire load-bearing signal (no
+    # land-tap noise). Full ``compare_fields == []`` over the
+    # 22-field cross-engine field view post-cast on ALL THREE
+    # scenarios + the pre-cast scripted-picker sanity check on
+    # scenarios (b) + (c). Per-slug attribution = "Fungal Colossus"
+    # (~13,165 17lands decks; the sole Phase-3 carrier; 100% of
+    # the cost-reduction REMAINING single-gated deck count post-
+    # Phase-2 closure). **With this entry, Phase 3 closure is
+    # complete AND the entire cost-reduction substrate campaign is
+    # closed -- BLOCKED 55 -> 55 (the substrate retires from the
+    # covered_by_construction tier; the single-gated row stays at
+    # 0 from the C2 FLIP).**
+    REPO_ROOT
+    / "tests"
+    / "test_probe_fungal_colossus_real_eoe_cost_reduction.py",
     # **covered-by-construction-probe-writing-p7 (2026-05-25):** Six
     # additional per-card real-EoE cross-engine byte-equal probes
     # extending the lane established by batches 1-6.  This batch opens
