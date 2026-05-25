@@ -1948,6 +1948,55 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_slavering_branchsnapper_parity.py",
     REPO_ROOT / "tests" / "test_patched_plaything_parity.py",
     REPO_ROOT / "tests" / "test_fear_of_being_hunted_parity.py",
+    # **covered-by-construction-probe-writing-p9 (2026-05-25):** Five
+    # per-card real-EoE cross-engine byte-equal probes binding the
+    # Duskmourn conditional-painland cycle slugs to PROBED-tier slots.
+    # The 10 painlands (Abandoned Campground, Bleeding Woods, Etched
+    # Cornfield, Lakeside Shack, Murky Sewer, Neglected Manor,
+    # Peculiar Lighthouse, Raucous Carnival, Razortrap Gorge,
+    # Strangled Cemetery) ALL pass the dedicated bridge predicate
+    # ``_printing_is_bridge_nonbasic_painland_conditional`` (Phase-2
+    # substrate, 2026-05-23 — see ``trajectory.py:8217-8329``); the
+    # bridge round-trip auto-wires per-produce-color
+    # ``ActivatedAbility(AddManaToPool(...))`` AAs from the
+    # ``mana_produced`` tuple (cross_engine.py:14073-14081) and
+    # threads ``enters_tapped_unless_any_player_life_at_most=13``
+    # through to the Python CardPrinting.  Per the cathedral-of-war-
+    # style same-shape-different-printing-slug precedent, each dual-
+    # color painland slug earns its own PROBED-tier slot.
+    #
+    # This batch picks five DISTINCT color pairs from the cycle (one
+    # probe per pair) — the remaining five painlands stay covered-by-
+    # construction (sufficient cycle coverage for this batch's quota;
+    # the predicate already admits them all, so future batches can
+    # template trivially).
+    #
+    #   * ``test_abandoned_campground_parity.py`` — Abandoned Campground
+    #     ({W}{U} painland, 0 17lands decks).  The FIRST PROBE_MODULES-
+    #     credited probe binding a Duskmourn-painland slug under the
+    #     Phase-2 substrate.  FIRST W/U color-pair binding.
+    #   * ``test_bleeding_woods_parity.py`` — Bleeding Woods ({G}{R}
+    #     painland, 0 17lands decks).  FIRST G/R color-pair binding.
+    #   * ``test_murky_sewer_parity.py`` — Murky Sewer ({U}{B}
+    #     painland, 0 17lands decks).  FIRST U/B color-pair binding.
+    #   * ``test_razortrap_gorge_parity.py`` — Razortrap Gorge ({B}{R}
+    #     painland, 0 17lands decks).  FIRST B/R color-pair binding.
+    #   * ``test_strangled_cemetery_parity.py`` — Strangled Cemetery
+    #     ({B}{G} painland, 0 17lands decks).  FIRST B/G color-pair
+    #     binding AND closes the audit-recovered-10th-member of the
+    #     Duskmourn painland cycle per the predicate docstring at
+    #     ``trajectory.py:8226-8228``.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 357 → 362;
+    # covered_by_construction 60 → 55; BLOCKED unchanged at 58; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_abandoned_campground_parity.py",
+    REPO_ROOT / "tests" / "test_bleeding_woods_parity.py",
+    REPO_ROOT / "tests" / "test_murky_sewer_parity.py",
+    REPO_ROOT / "tests" / "test_razortrap_gorge_parity.py",
+    REPO_ROOT / "tests" / "test_strangled_cemetery_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

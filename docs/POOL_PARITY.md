@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **357 (75.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 60 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **362 (76.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 55 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **58 (12.2%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 357 | 75.2% |
-| Effect+bridge covered (not individually probed) | 60 | 12.6% |
+| PROBED byte-equal | 362 | 76.2% |
+| Effect+bridge covered (not individually probed) | 55 | 11.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -44,6 +44,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
 
+- Abandoned Campground
 - Adagia, Windswept Bastion
 - All-Fates Stalker
 - Alpharael, Dreaming Acolyte
@@ -68,6 +69,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Biosynthic Burst
 - Biotech Specialist
 - Blade of the Swarm
+- Bleeding Woods
 - Blinkmoth Nexus
 - Blooming Stinger
 - Boilerbilges Ripper
@@ -248,6 +250,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Mountain
 - Mouth of the Storm
 - Murder
+- Murky Sewer
 - Mutavault
 - Mutinous Massacre
 - Nanoform Sentinel
@@ -281,6 +284,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Ragost, Deft Gastronaut
 - Rayblade Trooper
 - Razorkin Hordecaller
+- Razortrap Gorge
 - Red Tiger Mechan
 - Remnant Elemental
 - Reroute Systems
@@ -329,6 +333,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Station Monitor
 - Stay Hidden, Stay Silent
 - Stomping Ground
+- Strangled Cemetery
 - Strip Mine
 - Sunken Citadel
 - Sunset Saboteur
