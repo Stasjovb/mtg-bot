@@ -767,10 +767,21 @@ pub(crate) fn apply_cost_reductions_rust(
     printing: &crate::cards::CardPrinting,
     base: crate::cards::ManaCost,
 ) -> crate::cards::ManaCost {
+    // cost-reduction substrate Phase 2 — Cycle 1 (substrate-only,
+    // 2026-05-25). Externals scan FIRST (mirroring Python
+    // `actions.apply_cost_reductions` ordering at `actions.py:428-438`:
+    // externals applied before the spell's own `cost_reductions`).
+    // Empty-battlefield / no-externals-anywhere short-circuits inside
+    // the helper (per-permanent `external_cost_reductions.is_empty()`
+    // skip), so this call is O(battlefield-size) even when no rider
+    // is present. The 7 existing call sites remain structurally
+    // unchanged — only the helper's body extends.
+    let mut cost = apply_external_cost_reductions_rust(
+        state, caster_idx, base,
+    );
     if printing.cost_reductions.is_empty() {
-        return base;
+        return cost;
     }
-    let mut cost = base;
     for rule in printing.cost_reductions.iter() {
         let holds = match &rule.condition {
             crate::cards::Condition::AnotherSpellCastThisTurn => {
@@ -812,6 +823,17 @@ pub(crate) fn apply_cost_reductions_rust(
                             crate::cards::TypeFilter::Creature => {
                                 pr.card_types.iter().any(|t| t == "Creature")
                             }
+                            // cost-reduction substrate Phase 2 — Cycle 1:
+                            // the `Artifact` variant lands here so the
+                            // shared `TypeFilter` enum's exhaustive match
+                            // stays compile-clean. No live Phase-1 carrier
+                            // emits `OpponentsControlAtLeast(Artifact, n)`
+                            // — Phase 2's `Artifact` consumer is the
+                            // externals scan (`PerControlled` below), not
+                            // the spell-local `OpponentsControlAtLeast`.
+                            crate::cards::TypeFilter::Artifact => {
+                                pr.card_types.iter().any(|t| t == "Artifact")
+                            }
                         };
                         if matches {
                             found += 1;
@@ -832,6 +854,120 @@ pub(crate) fn apply_cost_reductions_rust(
             // exactly `rule.amount` generic.
             let amt = rule.amount as u8;
             cost.generic = cost.generic.saturating_sub(amt);
+        }
+    }
+    cost
+}
+
+/// **cost-reduction substrate Phase 2 — Cycle 1 (substrate-only).**
+/// Rust analogue of Python's `_apply_external_cost_reductions`
+/// (`src/mtg_bot/actions.py:471-507`). Walks the caster's
+/// battlefield for permanents granting external cost reductions and
+/// applies any whose `ExternalCondition` matches. The reduction
+/// stacks: multiple permanents with the same external sum together
+/// via successive `cost.generic.saturating_sub(...)` calls (mirror of
+/// the Python `cost = cost.reduced(amount)` loop).
+///
+/// **Variable-multiplier path.** Sami's `PerControlled` is the FIRST
+/// multiplier this engine evaluates non-trivially: the returned
+/// reduction is `external.amount * count_of_caster_permanents_
+/// matching(type_filter)`. For boolean Phase-2 variants
+/// (`NthSpellThisTurn`) the multiplier is implicit `1`. Both paths
+/// compose through the same `cost.generic.saturating_sub(amt)`
+/// reduction (mirror of Python `ManaCost.reduced` at
+/// `cards/base.py:298-305`).
+///
+/// **Cycle 1 reader scope.** Called by `apply_cost_reductions_rust`
+/// (extended this cycle) on every spell-cast affordability probe +
+/// post-pay site. The admit-set is unchanged: Uthros Psionicist +
+/// Sami, Wildcat Captain remain DECLINED at the admit gate this
+/// cycle (the 9 sibling `if printing.cost_reductions or printing.
+/// external_cost_reductions: return False` guards in `trajectory.py`
+/// are load-bearing), so this helper is reduction-incidence-zero in
+/// production today — only synthetic registry dicts emitting
+/// `external_cost_reductions` exercise the path. Cycle 2 ships the
+/// bridge round-trip + admit widen that brings the helper into the
+/// production cast pipeline.
+///
+/// **Per-permanent short-circuit.** Permanents with empty
+/// `external_cost_reductions` (every pre-Phase-2 printing — every
+/// EoE printing other than Uthros Psionicist / Sami, Wildcat Captain)
+/// skip the inner loop entirely; the cost is O(battlefield-size)
+/// regardless of rider incidence.
+fn apply_external_cost_reductions_rust(
+    state: &crate::state::GameState,
+    caster_idx: usize,
+    base: crate::cards::ManaCost,
+) -> crate::cards::ManaCost {
+    let mut cost = base;
+    for permanent in state.players[caster_idx].battlefield.iter() {
+        let Some(pr) = state.registry.lookup(permanent.printing_id)
+        else {
+            continue;
+        };
+        if pr.external_cost_reductions.is_empty() {
+            continue;
+        }
+        for ext in pr.external_cost_reductions.iter() {
+            let (holds, multiplier) = match &ext.condition {
+                crate::cards::ExternalCondition::NthSpellThisTurn { n } => {
+                    // Mirrors Python `NthSpellThisTurn.matches`
+                    // (`effects/conditions.py:259-262`): True iff the
+                    // caster is about to cast their n-th spell —
+                    // post-increment ordering, `spells_cast_this_turn
+                    // == n - 1`. Multiplier is implicit 1.
+                    let holds = state.players[caster_idx]
+                        .spells_cast_this_turn
+                        == (*n - 1);
+                    (holds, 1i32)
+                }
+                crate::cards::ExternalCondition::PerControlled {
+                    type_filter,
+                } => {
+                    // Mirrors Python `PerControlled.matches` +
+                    // `PerControlled.multiplier`
+                    // (`effects/conditions.py:418-434`): count the
+                    // caster's permanents matching the filter; matches
+                    // iff count >= 1; multiplier IS the count (the
+                    // affinity-style scaling path).
+                    let mut count = 0i32;
+                    for obj in
+                        state.players[caster_idx].battlefield.iter()
+                    {
+                        let Some(opr) =
+                            state.registry.lookup(obj.printing_id)
+                        else {
+                            continue;
+                        };
+                        let matches = match type_filter {
+                            crate::cards::TypeFilter::Creature => opr
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature"),
+                            crate::cards::TypeFilter::Artifact => opr
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Artifact"),
+                        };
+                        if matches {
+                            count += 1;
+                        }
+                    }
+                    (count >= 1, count)
+                }
+            };
+            if holds && ext.amount > 0 && multiplier > 0 {
+                // Mirror Python `ManaCost.reduced`
+                // (`cards/base.py:291-305`): clamp generic at 0, leave
+                // colored pips untouched, preserve x_pips (CR 601.2f).
+                // Clamp the multiplied amount at u8::MAX before
+                // saturating_sub so a pathological large multiplier
+                // (e.g. 100+ artifacts) still drops cost.generic to 0
+                // cleanly instead of overflowing the i32→u8 cast.
+                let amt = (ext.amount as i64) * (multiplier as i64);
+                let amt_clamped = amt.min(u8::MAX as i64) as u8;
+                cost.generic = cost.generic.saturating_sub(amt_clamped);
+            }
         }
     }
     cost

@@ -3733,6 +3733,12 @@ pub fn make_synthetic_state(
         // every other unused optional-list field; the parser maps the
         // absent `cost_reductions` registry-dict key to the same).
         cost_reductions: Vec::new(),
+        // cost-reduction substrate Phase 2 — Cycle 1 (substrate-only,
+        // 2026-05-25): synthetic-state printings carry no external
+        // cost-reduction riders. Back-compat default (empty Vec; the
+        // parser maps the absent `external_cost_reductions` key to the
+        // same — sibling of the Phase-1 `cost_reductions` shape).
+        external_cost_reductions: Vec::new(),
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -3836,6 +3842,12 @@ pub fn make_synthetic_state(
         // every other unused optional-list field; the parser maps the
         // absent `cost_reductions` registry-dict key to the same).
         cost_reductions: Vec::new(),
+        // cost-reduction substrate Phase 2 — Cycle 1 (substrate-only,
+        // 2026-05-25): synthetic-state printings carry no external
+        // cost-reduction riders. Back-compat default (empty Vec; the
+        // parser maps the absent `external_cost_reductions` key to the
+        // same — sibling of the Phase-1 `cost_reductions` shape).
+        external_cost_reductions: Vec::new(),
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -3952,6 +3964,12 @@ pub fn make_synthetic_state(
         // every other unused optional-list field; the parser maps the
         // absent `cost_reductions` registry-dict key to the same).
         cost_reductions: Vec::new(),
+        // cost-reduction substrate Phase 2 — Cycle 1 (substrate-only,
+        // 2026-05-25): synthetic-state printings carry no external
+        // cost-reduction riders. Back-compat default (empty Vec; the
+        // parser maps the absent `external_cost_reductions` key to the
+        // same — sibling of the Phase-1 `cost_reductions` shape).
+        external_cost_reductions: Vec::new(),
     });
     let registry = builder.snapshot();
 

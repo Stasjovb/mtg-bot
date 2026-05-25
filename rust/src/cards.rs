@@ -9815,6 +9815,16 @@ pub struct CostReduction {
 pub enum TypeFilter {
     /// Python `IsCreature`: `obj.card_types.contains("Creature")`.
     Creature,
+    /// **cost-reduction substrate Phase 2 — Cycle 1.** Python
+    /// `IsArtifact` (`src/mtg_bot/effects/object_predicates.py:131-138`):
+    /// `obj.card_types.contains("Artifact")`. Used by Sami, Wildcat
+    /// Captain's `PerControlled(IsArtifact())` external rider. Added in
+    /// the Phase-2 substrate landing alongside the new
+    /// `ExternalCostReduction` struct + `ExternalCondition` enum. The
+    /// `TypeFilter` enum is intentionally NOT bifurcated by spell-local
+    /// vs external — both Phase-1's `OpponentsControlAtLeast` and
+    /// Phase-2's `PerControlled` consume the same enum.
+    Artifact,
 }
 
 /// The Phase-1 boolean-condition subset of Python's structural
@@ -9849,6 +9859,75 @@ pub enum Condition {
     /// the `IsCreature` filter token (the only predicate sub-shape A
     /// uses); the generic predicate algebra is Phase 2+.
     OpponentsControlAtLeast { type_filter: TypeFilter, count: i32 },
+}
+
+/// A static cost-reduction rule granted by a permanent on the
+/// battlefield to OTHER spells the controller casts. Mirrors Python's
+/// `ExternalCostReduction` dataclass at
+/// `src/mtg_bot/cards/base.py:326` (`amount: int`,
+/// `condition: Condition`). **cost-reduction substrate Phase 2 —
+/// Cycle 1 (substrate-only).** `amount` is the unit generic reduction;
+/// the externals scan multiplies `amount` by the condition's
+/// `multiplier()` (Phase 2: `PerControlled.multiplier` is the count
+/// of the caster's matching permanents; `NthSpellThisTurn`'s
+/// multiplier is implicit 1). Distinct from the spell-local
+/// `CostReduction` (Phase 1) — externals fire whenever the
+/// CONTROLLER casts ANY spell, not just the host card's own cast.
+///
+/// **Cycle 1 reader scope.** The Phase-2 substrate body of
+/// `apply_cost_reductions_rust` at `state_ops_legal.rs:764` is
+/// extended this cycle with an externals scan that walks
+/// `state.players[caster_idx].battlefield` for permanents granting
+/// these riders and applies any whose `ExternalCondition` holds.
+/// The Cycle-1 admit-set is unchanged: the 9 sibling guards
+/// `if printing.cost_reductions or printing.external_cost_reductions:
+/// return False` in `trajectory.py` keep Uthros Psionicist + Sami,
+/// Wildcat Captain DECLINED at the admit gate this cycle. Cycle 2
+/// widens the admit predicate (`_printing_is_bridge_pure_cost_
+/// reduction_creature`) to admit these two cards.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalCostReduction {
+    pub amount: i32,
+    pub condition: ExternalCondition,
+}
+
+/// The Phase-2 condition subset for externals. Ports EXACTLY two
+/// variants — the only two sub-shape B/C uses. Phase 3 may extend
+/// (or alternatively narrow further by routing variable-X over the
+/// spell-local `Condition` enum instead).
+///
+/// **Why a separate enum from spell-local `Condition`?** Python
+/// expresses both with the SAME `Condition` grammar; the Rust side
+/// keeps them separate because: (a) Phase-1 `Condition` admits ONLY
+/// boolean conditions whose `multiplier()` is implicit 1 — extending
+/// it in-place would require staging the variable-multiplier path
+/// with its consumers; (b) the externals scan reads `multiplier`
+/// non-trivially in Phase 2 (Sami's `PerControlled` count). Phase 3
+/// may UNIFY the enums when sub-shape D adds variable-X on the
+/// spell-local side — at that point both sides will have a
+/// multiplier path, and the two enums can collapse into one.
+///
+/// **Naming convention:** mirrors Python's class names ONE-TO-ONE
+/// for cross-engine bridge wire tokens (`condition_kind` strings).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalCondition {
+    /// Python `NthSpellThisTurn(n)`
+    /// (`effects/conditions.py:248-262`): the caster is about to
+    /// cast their `n`-th spell of the turn — i.e.
+    /// `Player.spells_cast_this_turn == n - 1` (the cast pipeline
+    /// increments AFTER cost is paid, mirroring Python's
+    /// pre-increment semantics). For Uthros Psionicist:
+    /// `NthSpellThisTurn { n: 2 }`.
+    NthSpellThisTurn { n: i32 },
+    /// Python `PerControlled(filter)`
+    /// (`effects/conditions.py:405-434`): count permanents the
+    /// caster controls matching `filter`. `matches()` is True iff
+    /// count >= 1; the externals scan multiplies `amount` by the
+    /// count (the FIRST non-trivial multiplier this engine
+    /// evaluates). Phase 2 hard-codes `TypeFilter::Artifact` /
+    /// `TypeFilter::Creature` (the only predicate tokens sub-shape
+    /// C uses); Phase 3+ extends.
+    PerControlled { type_filter: TypeFilter },
 }
 
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
@@ -10536,6 +10615,34 @@ pub struct CardPrinting {
     /// Mirrors Python's `CardPrinting.cost_reductions:
     /// tuple[CostReduction, ...]` at `src/mtg_bot/cards/base.py:764`.
     pub cost_reductions: Vec<CostReduction>,
+    /// **cost-reduction substrate Phase 2 — Cycle 1
+    /// (substrate-only).** Static cost-reduction effects this
+    /// permanent grants to OTHER spells the controller casts while
+    /// this permanent is on the battlefield (Uthros Psionicist's
+    /// "second spell" rider, Sami, Wildcat Captain's "affinity for
+    /// artifacts" rider). Empty Vec = no externals (back-compat
+    /// default — every pre-Phase-2 registry dict omits the
+    /// `external_cost_reductions` key, which the parser maps to
+    /// `Vec::new()`, identical to the `cost_reductions` /
+    /// `triggered_abilities` Option-parse shape).
+    ///
+    /// **Cycle 1 reader scope.** The cast pipeline's
+    /// `apply_cost_reductions_rust` helper (extended this cycle at
+    /// `state_ops_legal.rs:764`) walks every permanent the caster
+    /// controls and applies any matching externals on top of the
+    /// spell's own spell-local `cost_reductions` (externals applied
+    /// FIRST, mirroring Python `actions.apply_cost_reductions`
+    /// ordering). The 7 call sites of the helper are unchanged this
+    /// cycle (the body extension is invisible at the call surface).
+    /// The admit-set is unchanged: Uthros Psionicist + Sami,
+    /// Wildcat Captain remain DECLINED at `_printing_is_bridge_pure_
+    /// cost_reduction_creature` post-Cycle-1; Cycle 2 widens the
+    /// admit predicate.
+    ///
+    /// Mirrors Python's `CardPrinting.external_cost_reductions:
+    /// tuple[ExternalCostReduction, ...]` at
+    /// `src/mtg_bot/cards/base.py:771`.
+    pub external_cost_reductions: Vec<ExternalCostReduction>,
 }
 
 /// **Static / layered abilities substrate — Phase 1 first-deliverable
@@ -15377,6 +15484,179 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             }
             None => Vec::new(),
         };
+    // cost-reduction substrate Phase 2 — Cycle 1 (substrate-only).
+    // Optional list of ExternalCostReduction rules. Missing key
+    // -> empty Vec (back-compat — every pre-Phase-2 registry dict
+    // omits it). Each entry is a dict with shape:
+    //
+    //   {
+    //     "amount": int,
+    //     "condition_kind": str,                  # Phase-2 grammar tag
+    //     "condition_args": tuple,                # parsed per tag
+    //   }
+    //
+    // Phase 2 supports EXACTLY two condition_kind tokens:
+    //   * "nth_spell_this_turn" — args = (n,)
+    //   * "per_controlled"      — args = ("artifact",) | ("creature",)
+    //
+    // Any other condition_kind is a hard `Err` at registry build (the
+    // §2 Rust-side teeth — `silent no-op pipeline runs are pipeline
+    // bugs`). Phase 3 will add `per_differently_named_land`'s sibling
+    // on the spell-local side; the externals-side grammar is closed
+    // for now at these two variants.
+    let external_cost_reductions: Vec<ExternalCostReduction> =
+        match dict.get_item("external_cost_reductions")? {
+            Some(ecr_any) => {
+                let lst = ecr_any.downcast::<PyList>().map_err(|_| {
+                    PyValueError::new_err(
+                        "external_cost_reductions must be a list of dicts",
+                    )
+                })?;
+                let mut out = Vec::with_capacity(lst.len());
+                for item in lst.iter() {
+                    let d = item.downcast::<PyDict>().map_err(|_| {
+                        PyValueError::new_err(
+                            "external_cost_reductions[i] must be a dict",
+                        )
+                    })?;
+                    let amount_any =
+                        d.get_item("amount")?.ok_or_else(|| {
+                            PyValueError::new_err(
+                                "external_cost_reductions[i].amount is \
+                                 required",
+                            )
+                        })?;
+                    let amount: i32 = amount_any.extract().map_err(|_| {
+                        PyValueError::new_err(
+                            "external_cost_reductions[i].amount must be \
+                             an int",
+                        )
+                    })?;
+                    let kind_any = d
+                        .get_item("condition_kind")?
+                        .ok_or_else(|| {
+                            PyValueError::new_err(
+                                "external_cost_reductions[i].\
+                                 condition_kind is required",
+                            )
+                        })?;
+                    let kind: String = kind_any.extract().map_err(|_| {
+                        PyValueError::new_err(
+                            "external_cost_reductions[i].condition_kind \
+                             must be a string",
+                        )
+                    })?;
+                    let condition = match kind.as_str() {
+                        "nth_spell_this_turn" => {
+                            let args_any = d
+                                .get_item("condition_args")?
+                                .ok_or_else(|| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i] with \
+                                         condition_kind \
+                                         'nth_spell_this_turn' requires \
+                                         condition_args",
+                                    )
+                                })?;
+                            let tup = args_any
+                                .downcast::<PyTuple>()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i].\
+                                         condition_args must be a tuple",
+                                    )
+                                })?;
+                            if tup.len() != 1 {
+                                return Err(PyValueError::new_err(format!(
+                                    "external_cost_reductions[i] with \
+                                     condition_kind 'nth_spell_this_turn' \
+                                     takes 1 arg (n); got {}",
+                                    tup.len(),
+                                )));
+                            }
+                            let n: i32 = tup
+                                .get_item(0)?
+                                .extract()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i].\
+                                         condition_args[0] must be an int \
+                                         (n)",
+                                    )
+                                })?;
+                            ExternalCondition::NthSpellThisTurn { n }
+                        }
+                        "per_controlled" => {
+                            let args_any = d
+                                .get_item("condition_args")?
+                                .ok_or_else(|| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i] with \
+                                         condition_kind 'per_controlled' \
+                                         requires condition_args",
+                                    )
+                                })?;
+                            let tup = args_any
+                                .downcast::<PyTuple>()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i].\
+                                         condition_args must be a tuple",
+                                    )
+                                })?;
+                            if tup.len() != 1 {
+                                return Err(PyValueError::new_err(format!(
+                                    "external_cost_reductions[i] with \
+                                     condition_kind 'per_controlled' \
+                                     takes 1 arg (predicate token); \
+                                     got {}",
+                                    tup.len(),
+                                )));
+                            }
+                            let pred_token: String = tup
+                                .get_item(0)?
+                                .extract()
+                                .map_err(|_| {
+                                    PyValueError::new_err(
+                                        "external_cost_reductions[i].\
+                                         condition_args[0] must be a \
+                                         string (predicate token)",
+                                    )
+                                })?;
+                            let type_filter = match pred_token.as_str() {
+                                "artifact" => TypeFilter::Artifact,
+                                "creature" => TypeFilter::Creature,
+                                other => {
+                                    return Err(PyValueError::new_err(
+                                        format!(
+                                            "external_cost_reductions[i] \
+                                             Phase-2 'per_controlled' \
+                                             supports only the 'artifact' \
+                                             / 'creature' predicate \
+                                             tokens; got {other:?} \
+                                             (Phase 3+ extends)"
+                                        ),
+                                    ))
+                                }
+                            };
+                            ExternalCondition::PerControlled { type_filter }
+                        }
+                        other => {
+                            return Err(PyValueError::new_err(format!(
+                                "external_cost_reductions[i] Phase-2 does \
+                                 not support condition_kind {other:?} \
+                                 (Phase 3+ extends; the spell-local \
+                                 grammar uses 'cost_reductions', not \
+                                 'external_cost_reductions')"
+                            )))
+                        }
+                    };
+                    out.push(ExternalCostReduction { amount, condition });
+                }
+                out
+            }
+            None => Vec::new(),
+        };
     Ok(CardPrinting {
         name: Arc::from(name),
         mana_cost,
@@ -15417,6 +15697,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         restricts_noncreature_spells_to_one_per_turn,
         enters_tapped_unless_any_player_life_at_most,
         cost_reductions,
+        external_cost_reductions,
     })
 }
 
