@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **367 (77.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 50 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **417 / 475 EoE cards (87.8%) are byte-equal at the Effect+bridge level**; of those, **372 (78.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 45 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **58 (12.2%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 367 | 77.3% |
-| Effect+bridge covered (not individually probed) | 50 | 10.5% |
+| PROBED byte-equal | 372 | 78.3% |
+| Effect+bridge covered (not individually probed) | 45 | 9.5% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -69,6 +69,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Biosynthic Burst
 - Biotech Specialist
 - Blade of the Swarm
+- Blazemire Verge
 - Bleeding Woods
 - Blinkmoth Nexus
 - Blooming Stinger
@@ -154,6 +155,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Fell Gravship
 - Final Vengeance
 - Flight-Deck Coordinator
+- Floodfarm Verge
 - Focus Fire
 - Forest
 - Found Footage
@@ -175,6 +177,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Glassworks // Shattered Yard
 - Glimmerburst
 - Glimmerlight
+- Gloomlake Verge
 - Godless Shrine
 - Grasping Longneck
 - Gravblade Heavy
@@ -192,6 +195,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Honored Knight-Captain
 - House Cartographer
 - Hullcarver
+- Hushwood Verge
 - Hylderblade
 - Hymn of the Faller
 - Icecave Crasher
@@ -368,6 +372,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - The Dominion Bracelet
 - The Endstone
 - The Seriema
+- Thornspire Verge
 - Thrumming Hivepool
 - Ticket Booth // Tunnel of Hate
 - Timeline Culler

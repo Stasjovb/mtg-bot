@@ -2035,6 +2035,77 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_neglected_manor_parity.py",
     REPO_ROOT / "tests" / "test_peculiar_lighthouse_parity.py",
     REPO_ROOT / "tests" / "test_raucous_carnival_parity.py",
+    # **covered-by-construction-probe-writing-p11 (2026-05-25):** Five
+    # per-card real-EoE cross-engine byte-equal probes binding the EoE-
+    # pool Foundations (FDN) verge-land enemy-color cycle (5 enemy-pair
+    # verges; the 5 ally-pair verges are not in the EoE merged pool).
+    # The five new color-pair bindings (one DISTINCT pair per probe;
+    # **distinct shape sub-axis** from the batch 9 + 10 Duskmourn-
+    # painland cycle):
+    #
+    #   * ``test_blazemire_verge_parity.py`` — Blazemire Verge ({B}{R}
+    #     verge, 0 17lands decks).  FIRST B/R color-pair binding on the
+    #     parser-emitted-dual-AA sub-shape (Razortrap Gorge ALSO pinned
+    #     B/R but on the bridge-auto-wire painland sub-shape — the
+    #     orthogonal AA-materialization axis).
+    #   * ``test_floodfarm_verge_parity.py`` — Floodfarm Verge ({W}{U}
+    #     verge, 0 17lands decks).  FIRST W/U color-pair on the
+    #     parser-emit sub-shape (Abandoned Campground pinned W/U on the
+    #     painland bridge-auto-wire sub-shape).
+    #   * ``test_gloomlake_verge_parity.py`` — Gloomlake Verge ({U}{B}
+    #     verge, 0 17lands decks).  FIRST U/B color-pair on the
+    #     parser-emit sub-shape (Murky Sewer pinned U/B on the painland
+    #     bridge-auto-wire sub-shape).
+    #   * ``test_hushwood_verge_parity.py`` — Hushwood Verge ({W}{G}
+    #     verge, 0 17lands decks).  FIRST W/G color-pair on EITHER
+    #     sub-shape (no W/G painland in batch-9 / batch-10 — Etched
+    #     Cornfield was G/W on the painland sub-shape; W/G and G/W are
+    #     the same frozenset so this is a per-slug-attribution slot,
+    #     not a NEW color-pair).
+    #   * ``test_thornspire_verge_parity.py`` — Thornspire Verge
+    #     ({G}{R} verge, 0 17lands decks).  FIRST G/R color-pair on the
+    #     parser-emit sub-shape (Bleeding Woods pinned G/R on the
+    #     painland bridge-auto-wire sub-shape) AND **closes the EoE-
+    #     pool FDN-verge enemy-color cycle** (all 5 enemy-pair verges
+    #     in the EoE merged pool now have dedicated per-slug PROBED-
+    #     tier probes).
+    #
+    # **Shape-axis distinction from the painland cycle.** The Duskmourn
+    # painland probes (batches 9 + 10) go through ``_card_def_to_python_
+    # printing``'s bridge auto-wire path: the parser emits ZERO AAs on
+    # the live painland printing (the conditional gate is on the
+    # ``enters_tapped_unless_any_player_life_at_most`` threshold field
+    # instead), and ``_card_def_to_python_printing`` synthesizes one
+    # ``ActivatedAbility(AddManaToPool({c}, 1))`` per produce-color via
+    # ``cross_engine.py``:14073-14081's auto-wire.  The FDN verges in
+    # this batch invert that path: the parser emits the TWO AAs on the
+    # live printing directly, the ``_printing_is_bridge_nonbasic_mana_
+    # land`` predicate REJECTS on the ``printing.activated_abilities``
+    # non-emptiness check (the parser-emit path is §2-declined at the
+    # admit gate today — no substrate widen here), so the bridge round-
+    # trip pin operates at the per-Effect-dict level via ``_ta_dict_to_
+    # python_effect`` rather than the per-CardDef level via
+    # ``_card_def_to_python_printing``.  This is the SAME bridge
+    # contract the painland sibling probes' (2) Bridge round-trip
+    # section exercises — the painland probes verify the bridge-auto-
+    # wired AAs are byte-equal to ``_ta_dict_to_python_effect``-bridged
+    # AAs.  The verge probes go straight to the parser-emit byte-
+    # equality assertion (skipping the CardDef intermediate).
+    #
+    # Same lane discipline as batches 1-10: per-slug attribution credits
+    # a PROBED slot per-printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it).  Pure measurement-attribution + per-slug credit: no
+    # engine changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction: PROBED 367 → 372;
+    # covered_by_construction 50 → 45; BLOCKED unchanged at 58; pool
+    # total 475 unchanged.
+    REPO_ROOT / "tests" / "test_blazemire_verge_parity.py",
+    REPO_ROOT / "tests" / "test_floodfarm_verge_parity.py",
+    REPO_ROOT / "tests" / "test_gloomlake_verge_parity.py",
+    REPO_ROOT / "tests" / "test_hushwood_verge_parity.py",
+    REPO_ROOT / "tests" / "test_thornspire_verge_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
