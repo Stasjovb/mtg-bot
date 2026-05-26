@@ -24985,6 +24985,88 @@ fn apply_effect(
                 }
             }
         }
+        // **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
+        // `DrawCardsByConditionMultiplier` resolve.** All-Fates Scroll's
+        // AA[1] pilot effect (`{7}, {T}, Sacrifice this artifact: Draw
+        // X cards, where X is the number of differently named lands you
+        // control.`).
+        //
+        // **Mirrors Python's `DrawCardsByConditionMultiplier.resolve`**
+        // at `effects/generic/draw_mill.py:289-306`:
+        //   1. Compute `x = self.condition.multiplier(state,
+        //      controller_id)` — for `per_differently_named_land`, this
+        //      is the count of distinct printed names among the
+        //      viewer's lands.
+        //   2. If `x <= 0`, log a zero-draw line and return (no library
+        //      mutation).
+        //   3. Otherwise call `draw_n_cards(state, controller_id, x)`
+        //      — top-of-library hand transfer with CR-704.5b empty-
+        //      library flag flip.
+        //
+        // **Controller resolution.** Reads
+        // `current_resolve_source_controller` (the per-resolve
+        // transient slot the stack resolver writes around each
+        // `apply_effect` call) with `active_player` fallback — same
+        // pattern as `Effect::DrawCards` / `Effect::GainLife` /
+        // `Effect::AddManaToPool` controller resolution. CR 119.5 /
+        // 608.2: an effect resolves under its source's controller,
+        // not necessarily the active player.
+        //
+        // **Empty-library / partial-fill semantics.** Mirrors
+        // `Effect::DrawCards`: walk the library top-down, transfer one
+        // object at a time, flip `attempted_draw_on_empty` if the
+        // library exhausts mid-draw. The cause-signal latches in the
+        // sticky `has_lost` slot at the next `apply_sbas` pass; CR
+        // 704.5b is observed.
+        //
+        // **No target.** The effect-class `requires_target() = False`
+        // in Python; the variant carries no target field. The
+        // `(condition_tag, condition_args)` opaque tuple alone drives
+        // dispatch.
+        Effect::DrawCardsByConditionMultiplier {
+            condition_tag,
+            condition_args,
+            description_fragment: _,
+        } => {
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            // Use the parallel count dispatcher at
+            // `state_ops_combat::condition_count` — returns u32 (the
+            // distinct-named-land count for the activator).
+            let x = crate::state_ops_combat::condition_count(
+                condition_tag.as_str(),
+                condition_args.as_slice(),
+                state,
+                controller,
+            );
+            if x == 0 {
+                // Python's `if x <= 0: log + return` — zero-draw no-op.
+                // Skip the library walk entirely (matches Python's
+                // early-return at draw_mill.py:296-301).
+                return Ok(());
+            }
+            // Top-down library transfer — same inner loop as
+            // `Effect::DrawCards { count }` at
+            // `state_ops_resolve.rs:2388`. n is a u32 from the count
+            // dispatcher; saturating-cast to usize is a no-op on
+            // 64-bit hosts.
+            let n = x as usize;
+            for _ in 0..n {
+                let player = &mut state.players[controller];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    // CR 704.5b — empty-library draw flags the player.
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                // Post-CE3: top of library = lib[0].
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
     }
     Ok(())
 }

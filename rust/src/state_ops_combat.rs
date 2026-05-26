@@ -778,6 +778,84 @@ pub(crate) fn static_anthem_condition_matches(
     }
 }
 
+/// **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Variable-
+/// amount condition dispatcher — sibling of the boolean
+/// `static_self_bonus_condition_matches` / `static_anthem_condition_
+/// matches` predicates, but returns a `u32` count rather than a bool.
+///
+/// Mirrors Python's `Condition.multiplier(state, viewer_id) -> int`
+/// shape at `effects/conditions.py:69` — the variable-amount sibling
+/// of `Condition.matches`. `DrawCardsByConditionMultiplier` resolves
+/// `x = condition_count(tag, args, state, activator)` and draws `x`
+/// cards.
+///
+/// **Per design doc §4.4.2 ("Audit required: the existing condition
+/// codec returns a BOOLEAN; Phase 4E-2 may need a parallel
+/// `condition_count(tag, args, state, activator) -> u32` dispatcher
+/// that returns the count rather than a bool. Add this parallel
+/// function rather than overloading the existing one.").** The two
+/// dispatch tables are intentionally separate — count-valued
+/// conditions and boolean-valued conditions have different domains
+/// (the same tag may appear in both with different return shapes;
+/// e.g. `per_differently_named_land` is naturally count-valued, but
+/// a future `controls_a_named_land` boolean variant would slot into
+/// the sibling table). Keeping them separate avoids a return-type
+/// overload on a single dispatcher.
+///
+/// **Recognized tags (Cycle 1 vocabulary — one entry):**
+///   * `"per_differently_named_land"` (no args) — count the viewer's
+///     lands with distinct printed names. The land predicate is
+///     `printing.card_types.contains("Land")` (mirrors the round-35
+///     `DealDamageToOpponentCreatureByLandCount` sibling at
+///     `cards.rs:3185`); the distinct-name dedup walks `printing.name`
+///     (an `Arc<str>`); duplicates fold into a single set entry.
+///     Mirrors Python's `PerDifferentlyNamedLand.multiplier` at
+///     `effects/conditions.py:401`. Token-of-printing duplicates are
+///     a non-issue today (no live EoE creature copies a Land with
+///     `BecomesCopyOfTargetLand`; even if one did, both objects share
+///     the same `printing_id` after the copy and the dedup folds them
+///     into one set entry).
+///
+/// An unknown tag returns 0 — a bridge-vs-Rust disagreement the
+/// parser already rejects at registry-build time (the
+/// `draw_cards_by_condition_multiplier` parse arm whitelists the
+/// tag), so this branch is unreachable in practice today but kept
+/// as a defensive catch-all (same shape as the sibling
+/// `static_self_bonus_condition_matches` `_ => false` arm).
+pub(crate) fn condition_count(
+    tag: &str,
+    _args: &[i32],
+    state: &GameState,
+    viewer_idx: usize,
+) -> u32 {
+    let Some(viewer) = state.players.get(viewer_idx) else {
+        return 0;
+    };
+    match tag {
+        "per_differently_named_land" => {
+            let mut names: std::collections::BTreeSet<&str> =
+                std::collections::BTreeSet::new();
+            for obj in viewer.battlefield.iter() {
+                let Some(printing) =
+                    state.registry.lookup(obj.printing_id)
+                else {
+                    continue;
+                };
+                if !printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Land")
+                {
+                    continue;
+                }
+                names.insert(printing.name.as_ref());
+            }
+            names.len() as u32
+        }
+        _ => 0,
+    }
+}
+
 /// **Static / layered abilities substrate — Phase 4 (Memorial Team
 /// Leader Cycle 1 substrate, 2026-05-24).** Walk every anthem on the
 /// SAME controller as the target and fold in the layer-7c additive

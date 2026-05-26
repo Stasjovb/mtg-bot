@@ -13046,6 +13046,58 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # subclasses. This class has no subclasses in the live tree.
         from mtg_bot.effects.generic.exile import ExileAllGraveyards
         return ExileAllGraveyards()
+    if kind == "draw_cards_by_condition_multiplier":
+        # **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Bridge
+        # arm for the new Rust ``Effect::DrawCardsByConditionMultiplier``
+        # variant (cards.rs). Mirrors Python's
+        # ``DrawCardsByConditionMultiplier(condition: Condition,
+        # description_fragment: str = "where X is determined at
+        # resolution")`` frozen dataclass at
+        # ``effects/generic/draw_mill.py:258`` — All-Fates Scroll's AA[1]
+        # pilot effect (``{7}, {T}, Sacrifice this artifact: Draw X
+        # cards, where X is the number of differently named lands you
+        # control.``).
+        #
+        # **Tag-and-args opaque codec.** The Rust side carries the
+        # condition as a stringly-typed ``(condition_tag, condition_args)``
+        # opaque tuple — same precedent the ``StaticSelfBonus`` (Phase 3,
+        # round-81) + ``StaticAnthem`` (Phase 4 — Memorial Team Leader,
+        # round-83) condition codecs established. This reverse arm
+        # dispatches on the tag to construct the corresponding Python
+        # ``Condition`` subclass; the resulting
+        # ``DrawCardsByConditionMultiplier`` instance is byte-equal to
+        # the parser SoT.
+        #
+        # **Cycle 1 vocabulary — one tag.** ``"per_differently_named_
+        # land"`` (no args) → ``PerDifferentlyNamedLand()``. Future
+        # phases extend the dispatch table with new tags; the Rust
+        # parser's whitelist at ``cards.rs::parse_effect`` is the source
+        # of truth for which tags reach this function, so a tag arriving
+        # here that isn't in the table is a bridge-vs-Rust disagreement
+        # that must fail loudly.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY (Rust slice).** Phase 4E Cycle 1
+        # keeps All-Fates Scroll DECLINED at the production-deck loader;
+        # the Effect-class admit-set widen + the is_mana_ability AA-
+        # rider widen both ship C2. This bridge arm is byte-equal for
+        # both the substrate-only and the post-C2 flipped outcomes —
+        # synthetic round-trip tests drive it at C1; the live admit gate
+        # FLIPs at C2.
+        from mtg_bot.effects.generic.draw_mill import (
+            DrawCardsByConditionMultiplier,
+        )
+        cond_tag = str(eff_dict["condition_tag"])
+        cond_args = tuple(
+            int(x) for x in eff_dict.get("condition_args", ())
+        )
+        description_fragment = str(
+            eff_dict.get("description_fragment", "")
+        )
+        cond = _draw_cards_condition_from_tag(cond_tag, cond_args)
+        return DrawCardsByConditionMultiplier(
+            condition=cond,
+            description_fragment=description_fragment,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -14851,6 +14903,19 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.become_type import (
         BecomesCopyOfTargetLand,
     )
+    # **Phase 4E C1 widen (2026-05-26).** Add
+    # ``DrawCardsByConditionMultiplier`` (All-Fates Scroll's AA[1]
+    # pilot Effect — Carrier-AA Phase 4E cycle per design doc §5.7).
+    # Three-key dict: ``{"kind": "draw_cards_by_condition_multiplier",
+    # "condition_tag": <str>, ["condition_args": [int, ...]],
+    # ["description_fragment": <str>]}``. The condition is an opaque
+    # tagged tuple per the design-doc-§4.4.2 parallel
+    # ``condition_count`` codec. The class has no subclasses in the
+    # live tree.
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsByConditionMultiplier,
+    )
+    from mtg_bot.effects.conditions import PerDifferentlyNamedLand
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -14939,6 +15004,65 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # subclasses (consistent with the Phase-3A / 3B specificity
         # contract).
         effect_dict = {"kind": "becomes_copy_of_target_land"}
+    elif isinstance(effect, DrawCardsByConditionMultiplier):
+        # **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Forward-
+        # emit arm for All-Fates Scroll's AA[1] pilot effect (``{7}, {T},
+        # Sacrifice this artifact: Draw X cards, where X is the number
+        # of differently named lands you control.``). Three-key dict on
+        # the wire: ``kind`` + ``condition_tag`` + (optional)
+        # ``condition_args`` + (optional) ``description_fragment``.
+        #
+        # **Tag-and-args opaque codec.** The condition is encoded as a
+        # stringly-typed ``(condition_tag, condition_args)`` pair —
+        # same precedent the ``StaticSelfBonus`` (Phase 3, round-81) +
+        # ``StaticAnthem`` (Phase 4 — Memorial Team Leader, round-83)
+        # condition codecs established. Cycle 1 vocabulary is a single
+        # tag — ``"per_differently_named_land"`` — corresponding to
+        # Python's ``PerDifferentlyNamedLand()`` Condition.
+        #
+        # **Substrate-only: All-Fates Scroll STAYS DECLINED at admit
+        # gate post-Phase-4E-C1.** The forward emit succeeds (Rust
+        # round-trip works), but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live
+        # All-Fates Scroll printing because (a) C1 doesn't widen
+        # ``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect class AND (b) C1 doesn't widen the AA-rider gate to
+        # admit ``is_mana_ability=True`` (AA[0]'s rider); both ship
+        # C2. The forward arm exists at C1 so unit-test pins can
+        # drive the Rust round-trip.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``DrawCardsByConditionMultiplier`` — NOT any parent ``Effect``
+        # class — to avoid silently widening admission to other
+        # ``Effect`` subclasses (consistent with the Phase-3A / 3B /
+        # 3C specificity contract). The class has no subclasses in
+        # the live tree.
+        #
+        # **Condition dispatch.** The forward emit walks
+        # ``effect.condition``'s Python class to produce the
+        # ``(condition_tag, condition_args)`` opaque tuple. Cycle 1's
+        # single tag handles ``PerDifferentlyNamedLand``; an unknown
+        # Condition subclass declines (returns None) — defense in
+        # depth against a future Condition class that doesn't yet
+        # have a matching Rust tag.
+        cond = effect.condition
+        if isinstance(cond, PerDifferentlyNamedLand):
+            cond_tag = "per_differently_named_land"
+            cond_args: tuple[int, ...] = ()
+        else:
+            # Unrecognized Condition class — decline. (A future Cycle's
+            # Condition / tag extension lands its arm here.)
+            return None
+        effect_dict = {
+            "kind": "draw_cards_by_condition_multiplier",
+            "condition_tag": cond_tag,
+        }
+        if cond_args:
+            effect_dict["condition_args"] = list(cond_args)
+        if effect.description_fragment:
+            effect_dict["description_fragment"] = str(
+                effect.description_fragment,
+            )
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.
         return None
@@ -15102,6 +15226,63 @@ def _static_anthem_condition_from_tag(
         return None
     raise ValueError(
         f"unknown anthem-scope conditional static tag: {cond_tag!r}"
+    )
+
+
+def _draw_cards_condition_from_tag(
+    cond_tag: str, cond_args: "tuple[int, ...]",
+):
+    """Rehydrate a :class:`mtg_bot.effects.conditions.Condition` from the
+    bridge's ``(condition_tag, condition_args)`` pair for the
+    ``DrawCardsByConditionMultiplier`` Effect family.
+
+    **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Sibling of
+    the Phase-3 :func:`_static_self_bonus_condition_from_tag` + the
+    Phase-4 anthem :func:`_static_anthem_condition_from_tag` helpers —
+    a third dispatch table dedicated to count-valued
+    (multiplier-shape) conditions consumed by the new
+    :class:`DrawCardsByConditionMultiplier` Effect. Mirrors the Rust
+    side's parallel :func:`state_ops_combat::condition_count`
+    dispatcher (per design doc §4.4.2 — "Add this parallel function
+    rather than overloading the existing one"; the
+    count-vs-bool return-shape split warrants a separate dispatch
+    table).
+
+    Recognized tags (in lockstep with the Rust dispatch table in
+    ``state_ops_combat::condition_count``):
+
+    * ``"per_differently_named_land"`` (no args) →
+      ``PerDifferentlyNamedLand()``. All-Fates Scroll's AA[1] uses
+      this tag.
+
+    An unknown tag raises ``ValueError`` — the Rust parser's
+    whitelist is the source of truth for which tags reach this
+    function, and a tag arriving here that isn't in the table is a
+    bridge-vs-materializer disagreement that must fail loudly.
+
+    **Why a separate dispatch table from the boolean siblings.** The
+    SELF-scope (:func:`_static_self_bonus_condition_from_tag`) and
+    anthem-scope (:func:`_static_anthem_condition_from_tag`) helpers
+    return :class:`Condition` instances used for boolean
+    ``Condition.matches(state, viewer_id)`` checks. This helper
+    returns instances used for variable-amount
+    ``Condition.multiplier(state, viewer_id)`` reads. The same
+    surface form (e.g. ``per_differently_named_land``) is naturally
+    count-valued; folding it into the boolean siblings would risk
+    cross-routing a future bridge slice that adds the same tag to
+    both scopes with different semantics.
+    """
+    from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+
+    if cond_tag == "per_differently_named_land":
+        if cond_args:
+            raise ValueError(
+                f"per_differently_named_land takes no args; got "
+                f"{cond_args!r}"
+            )
+        return PerDifferentlyNamedLand()
+    raise ValueError(
+        f"unknown draw-cards-multiplier conditional tag: {cond_tag!r}"
     )
 
 

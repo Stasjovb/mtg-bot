@@ -9231,6 +9231,91 @@ pub enum Effect {
     /// threaded at activation time (reuses the same payload slot as
     /// the Phase-2a / Phase-3A sibling target-bearing effects).
     BecomesCopyOfTargetLand,
+    /// **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
+    /// `DrawCardsByConditionMultiplier`.** All-Fates Scroll's AA[1]
+    /// pilot effect (`{7}, {T}, Sacrifice this artifact: Draw X cards,
+    /// where X is the number of differently named lands you control.`).
+    /// CR-122 / CR-704 draw effect whose count is dispatched from a
+    /// stringly-typed condition tag — the variable-amount sibling of
+    /// `Effect::DrawCards { count: i32 }`'s static-amount shape.
+    ///
+    /// **Mirrors Python's `DrawCardsByConditionMultiplier`** at
+    /// `effects/generic/draw_mill.py:258`. Python's class carries a
+    /// `condition: Condition` instance (e.g. `PerDifferentlyNamedLand()`)
+    /// + a `description_fragment: str`. On resolve, Python computes
+    /// `x = self.condition.multiplier(state, controller_id)` and calls
+    /// `draw_n_cards(state, controller_id, x)`. The Rust side mirrors
+    /// the same semantics with a stringly-typed `(condition_tag,
+    /// condition_args)` opaque tuple — same precedent the
+    /// `StaticSelfBonus` (Phase 3, round-81) + `StaticAnthem` (Phase 4
+    /// — Memorial Team Leader, round-83) condition codecs established.
+    /// Rather than porting the full Python `Condition` class hierarchy
+    /// into Rust, the bridge encodes each recognized condition as a
+    /// `(tag, args)` pair; the Rust resolve site dispatches on the tag
+    /// to a parallel `condition_count(tag, args, state, viewer)` helper.
+    ///
+    /// **Condition vocabulary (one tag in scope for Cycle 1).**
+    ///   * `"per_differently_named_land"` (no args) — count the
+    ///     activator's lands with distinct printed names. Mirrors
+    ///     Python's `PerDifferentlyNamedLand.multiplier` at
+    ///     `effects/conditions.py:401`. The land predicate is
+    ///     `printing.card_types.contains("Land")` — same convention the
+    ///     `DealDamageToOpponentCreatureByLandCount` round-35 sibling
+    ///     uses (`cards.rs:3185`). The distinct-name dedup walks
+    ///     `printing.name` (an `Arc<str>`); duplicates fold into a single
+    ///     set entry. All-Fates Scroll's AA[1] uses this tag.
+    ///
+    /// **Parallel count dispatcher.** The condition-count primitive at
+    /// `state_ops_combat::condition_count` returns a `u32` rather than
+    /// a bool — distinct from the boolean
+    /// `static_self_bonus_condition_matches` sibling, per design doc
+    /// §4.4.2 ("Add this parallel function rather than overloading the
+    /// existing one"). Both functions share the same `(tag, args)`
+    /// vocabulary discipline but evaluate to different return types
+    /// (count vs predicate).
+    ///
+    /// **Field shape.**
+    ///   * `condition_tag: String` — REQUIRED, non-empty. The Rust
+    ///     parser whitelists the tag against the recognized vocabulary
+    ///     at parse time; an unknown tag raises loudly (defense in depth
+    ///     vs Python-side parser drift).
+    ///   * `condition_args: Vec<i32>` — OPTIONAL integer args; empty for
+    ///     `per_differently_named_land`. Same bridge convention as
+    ///     `StaticSelfBonus.condition_args`.
+    ///   * `description_fragment: String` — OPTIONAL human-readable
+    ///     oracle-text fragment ("where X is the number of differently
+    ///     named lands you control"). Used for log readability only;
+    ///     the dispatch doesn't read this field. Empty string permitted
+    ///     (parses to the empty-string Python default).
+    ///
+    /// **Resolve.** No target (the `requires_target() = False` half of
+    /// Python's class). Compute `x = condition_count(tag, args, state,
+    /// activator)`; if `x == 0`, log a zero-draw line and return; else
+    /// draw `x` cards via the existing draw primitive (the same
+    /// `Arc::make_mut(&mut player.library)` + `player.hand.push` loop
+    /// the `Effect::DrawCards { count }` arm uses at
+    /// `state_ops_resolve.rs:2388`). The activator-of-effect resolves
+    /// from `state.current_resolve_source_controller` (or
+    /// `state.active_player` fallback) — same controller-resolution
+    /// pattern every other no-target draw / mill / mana effect uses.
+    /// Empty-library handling follows CR 704.5b (sets
+    /// `attempted_draw_on_empty`).
+    ///
+    /// **Substrate-only (Cycle 1).** The Phase 4E C1 slice ships the
+    /// Rust variant + parse / to_pydict / resolve + condition_count
+    /// dispatcher + Python bridge arms (reverse + forward); All-Fates
+    /// Scroll STAYS DECLINED at the admit gate because (a) the
+    /// `_carrier_aa_phase_1_effect_classes` Effect-class admit set
+    /// doesn't yet include `DrawCardsByConditionMultiplier` (C2 ships
+    /// the widen) AND (b) the `_python_aa_to_safe_dict` AA-rider gate
+    /// still declines on AA[0]'s `is_mana_ability=True` rider (C2
+    /// ships that widen too). Synthetic Rust unit pins drive the
+    /// round-trip at C1; the live admit FLIP lands at C2.
+    DrawCardsByConditionMultiplier {
+        condition_tag: String,
+        condition_args: Vec<i32>,
+        description_fragment: String,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -13794,6 +13879,117 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // Phase 3C Cycle 1 substrate slot).
         "becomes_copy_of_target_land" => {
             Ok(Effect::BecomesCopyOfTargetLand)
+        }
+        // **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
+        // `draw_cards_by_condition_multiplier` parse arm.** All-Fates
+        // Scroll's AA[1] pilot effect. Tag-and-args opaque codec
+        // mirroring the `StaticSelfBonus` / `StaticAnthem` condition
+        // dispatch pattern from Phase 3 / Phase 4 anthem substrates.
+        //
+        // Three fields:
+        //   * `condition_tag: String` — REQUIRED. Whitelisted to the
+        //     Cycle 1 vocabulary (`"per_differently_named_land"`).
+        //   * `condition_args: Vec<i32>` — OPTIONAL. Defaults to empty
+        //     Vec on missing key. Per-tag arity validation runs after
+        //     the whitelist (defense in depth vs bridge drift).
+        //   * `description_fragment: String` — OPTIONAL. Defaults to
+        //     the empty string on missing key (Python's class also
+        //     defaults to a non-empty string but the bridge omits the
+        //     key when empty; the parse arm accepts both shapes).
+        //
+        // An unknown `condition_tag` raises loudly per the
+        // bridge-vs-Rust drift discipline established by the
+        // `StaticSelfBonus.condition_tag` whitelist at `cards.rs:16542`.
+        // Same arity-validation shape: empty args for the no-arg
+        // `per_differently_named_land` tag (a future N-arg tag would
+        // add its own per-tag arity check sibling).
+        "draw_cards_by_condition_multiplier" => {
+            let condition_tag: String =
+                match dict.get_item("condition_tag")? {
+                    Some(v) => v.extract().map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "draw_cards_by_condition_multiplier.\
+                             condition_tag must be a string (got: {e})"
+                        ))
+                    })?,
+                    None => {
+                        return Err(PyValueError::new_err(
+                            "draw_cards_by_condition_multiplier: \
+                             missing required 'condition_tag' field",
+                        ));
+                    }
+                };
+            // Whitelist the tag to the Cycle 1 vocabulary. A tag we
+            // don't recognize is a bridge-vs-Rust disagreement — fail
+            // loudly so a future Phase / extension can't silently
+            // mis-translate. Same shape as the
+            // `static_self_bonuses[].condition_tag` whitelist at
+            // `cards.rs:16542`.
+            if condition_tag != "per_differently_named_land" {
+                return Err(PyValueError::new_err(format!(
+                    "draw_cards_by_condition_multiplier.condition_tag \
+                     must be 'per_differently_named_land' \
+                     (got: {})",
+                    condition_tag
+                )));
+            }
+            let condition_args: Vec<i32> =
+                match dict.get_item("condition_args")? {
+                    Some(args_any) => {
+                        let args_iter = args_any.try_iter().map_err(|_| {
+                            PyValueError::new_err(
+                                "draw_cards_by_condition_multiplier.\
+                                 condition_args must be an iterable of ints",
+                            )
+                        })?;
+                        let mut args = Vec::new();
+                        for a in args_iter {
+                            let n: i32 = a?.extract().map_err(|_| {
+                                PyValueError::new_err(
+                                    "draw_cards_by_condition_multiplier.\
+                                     condition_args entries must be ints",
+                                )
+                            })?;
+                            args.push(n);
+                        }
+                        args
+                    }
+                    None => Vec::new(),
+                };
+            // Per-tag arity validation (mirrors the StaticSelfBonus
+            // sibling at `cards.rs:16581`+).
+            match condition_tag.as_str() {
+                "per_differently_named_land" => {
+                    if !condition_args.is_empty() {
+                        return Err(PyValueError::new_err(format!(
+                            "draw_cards_by_condition_multiplier.\
+                             condition_args must be empty for tag \
+                             'per_differently_named_land' \
+                             (got: {:?})",
+                            condition_args
+                        )));
+                    }
+                }
+                _ => unreachable!(
+                    "condition_tag whitelisted above",
+                ),
+            }
+            let description_fragment: String =
+                match dict.get_item("description_fragment")? {
+                    Some(v) => v.extract().map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "draw_cards_by_condition_multiplier.\
+                             description_fragment must be a string \
+                             (got: {e})"
+                        ))
+                    })?,
+                    None => String::new(),
+                };
+            Ok(Effect::DrawCardsByConditionMultiplier {
+                condition_tag,
+                condition_args,
+                description_fragment,
+            })
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -19793,6 +19989,45 @@ pub(crate) fn effect_to_pydict<'py>(
         // `state_ops_snapshot.rs`).
         Effect::BecomesCopyOfTargetLand => {
             d.set_item("kind", "becomes_copy_of_target_land")?;
+        }
+        // **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
+        // `DrawCardsByConditionMultiplier.to_pydict`.** All-Fates
+        // Scroll's AA[1] pilot effect. Emits the four-key dict:
+        //   * `kind: "draw_cards_by_condition_multiplier"`
+        //   * `condition_tag: <str>` (e.g. `"per_differently_named_
+        //     land"`)
+        //   * `condition_args: [i32, ...]` — OPTIONAL; emitted only
+        //     when non-empty (mirrors the `static_self_bonuses[]`
+        //     codec's emit-only-if-non-empty discipline + the Python
+        //     parser SoT that emits the key only when args are
+        //     present).
+        //   * `description_fragment: <str>` — OPTIONAL; emitted only
+        //     when non-empty (mirrors the Python forward arm spec at
+        //     `docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md` §5.7
+        //     lines 1394-1399).
+        // This is the inverse of the `draw_cards_by_condition_
+        // multiplier` parse arm above; the emit-skip-empty contract
+        // is byte-equal for both the present-key and absent-key
+        // shapes (the parse arm defaults the missing key to empty).
+        Effect::DrawCardsByConditionMultiplier {
+            condition_tag,
+            condition_args,
+            description_fragment,
+        } => {
+            d.set_item("kind", "draw_cards_by_condition_multiplier")?;
+            d.set_item("condition_tag", condition_tag.as_str())?;
+            if !condition_args.is_empty() {
+                d.set_item(
+                    "condition_args",
+                    condition_args.clone(),
+                )?;
+            }
+            if !description_fragment.is_empty() {
+                d.set_item(
+                    "description_fragment",
+                    description_fragment.as_str(),
+                )?;
+            }
         }
     }
     Ok(d)
