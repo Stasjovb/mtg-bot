@@ -8964,17 +8964,30 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     ``ExileTargetAttackingCreatureUntilEndStep`` (Phase 3A C1
     substrate at ``3de469a3`` / Phase 3A C2 admits Mystifying Maze) +
     ``ExileAllGraveyards`` (Phase 3B C1 substrate at ``51abfd78`` /
-    Phase 3B C2 admits Scavenger Grounds).
+    Phase 3B C2 admits Scavenger Grounds) +
+    ``BecomesCopyOfTargetLand`` (Phase 3C C1 substrate at
+    ``f5a2a1ce`` + C2 Rust Effect at ``6de50d8d`` / Phase 3C C3
+    admits Thespian's Stage — copy-effect substrate).
     Lazily imported so the module import-graph stays light and tests
     that monkeypatch the effect classes (unit pins) see a fresh
     frozenset each call.
 
+    **Phase 3C Cycle 3 (2026-05-26).** Effect-class admit-set widen
+    from 6 → 7 per ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md``
+    §5.4 / §7.3. Combined with the pre-existing Phase-1.5a
+    ``{N}, {T}`` cost-shape gate, the Thespian's Stage's ``{2}, {T}``
+    AA admits at the Carrier-AA admit predicate
+    :func:`_aa_is_phase1_sub_shape_a` — admit-gate FLIPs DECLINED →
+    ADMITTED on this widen alone (ZERO new cost-shape machinery, ZERO
+    new Rust changes — C1 + C2 shipped the substrate + Effect variant
+    + Land-target fan-out + cross-engine bridge arms).
+
     **Phase-3/N extends this set as each Effect class lands cross-
-    engine.** Phase 3+ remaining Carrier-AA Effect candidates per
-    design doc §3:
-    ``BecomesCopyOfTargetLand`` (Thespian's Stage — copy-effect
-    substrate).
+    engine.** No remaining Phase-3 Carrier-AA Effect candidates after
+    C3 (the design doc §3 §6 frontier rolls forward to Phase 4 multi-
+    AA carriers).
     """
+    from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
@@ -8994,6 +9007,7 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         PutBasicLandFromHandOntoBattlefieldTapped,
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
+        BecomesCopyOfTargetLand,
     })
 
 

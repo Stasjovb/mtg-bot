@@ -697,17 +697,19 @@ def test_scavenger_grounds_now_passes_loader_filter():
 
 
 def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
-    """**Phase 3B C2 invariant pin (INVERTED) — admit set widened.**
-    The Carrier-AA Effect-class admit set accessor returns the 6
-    classes post-Phase-3B-C2, including the newly-widened
-    ``ExileAllGraveyards``.
+    """**Phase 3B C2 invariant pin (FURTHER-WIDENED in Phase 3C C3)
+    — admit set widened.** The Carrier-AA Effect-class admit set
+    accessor returns the 7 classes post-Phase-3C-C3, including the
+    Phase-3B-C2-widened ``ExileAllGraveyards`` AND the
+    Phase-3C-C3-widened ``BecomesCopyOfTargetLand``.
 
     Inverts the Phase-3B-C1 substrate-only pin
     ``test_carrier_aa_phase_1_effect_classes_unchanged_post_phase_3b_c1``
-    (expected 5 classes pre-C2). The C2 widen is strictly additive
-    on ``ExileAllGraveyards`` — the other five classes stay in the
-    set bit-identical.
+    (expected 5 classes pre-3B-C2). Updated in Phase-3C-C3 to assert
+    7 classes (the C3 widen adds ``BecomesCopyOfTargetLand`` strictly
+    additively).
     """
+    from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
@@ -731,39 +733,46 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         PutBasicLandFromHandOntoBattlefieldTapped,
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
+        BecomesCopyOfTargetLand,
     })
     classes = _carrier_aa_phase_1_effect_classes()
     assert classes == expected, (
-        "Phase 3B C2 invariant: admit set must contain exactly the 6 "
-        "Effect classes (the C2 widen adds ExileAllGraveyards)."
+        "Phase 3C C3 invariant: admit set must contain exactly the 7 "
+        "Effect classes (Phase-3B-C2 added ExileAllGraveyards; "
+        "Phase-3C-C3 adds BecomesCopyOfTargetLand)."
     )
     assert ExileAllGraveyards in classes, (
         "ExileAllGraveyards must be in the admit set post-Phase-3B-"
         "C2 — that is the C2 widen."
     )
+    assert BecomesCopyOfTargetLand in classes, (
+        "BecomesCopyOfTargetLand must be in the admit set post-"
+        "Phase-3C-C3 — that is the C3 widen."
+    )
 
 
 def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
-    """**Phase 3B C2 invariant pin (INVERTED) — no-silent-auto-grow
-    walk.** Confirms the 30 BLOCKED-SG Carrier-AA cards from design
-    doc §2.1 admit exactly the 6 cards post-Phase-3B-C2 widen:
+    """**Phase 3B C2 invariant pin (FURTHER-WIDENED in Phase 3C C3)
+    — no-silent-auto-grow walk.** Confirms the 30 BLOCKED-SG
+    Carrier-AA cards from design doc §2.1 admit exactly the 7 cards
+    post-Phase-3C-C3 widen:
 
       Deserted Temple + Mystifying Maze + Petrified Field +
-      Scavenger Grounds + Swarmyard + Terrain Generator.
+      Scavenger Grounds + Swarmyard + Terrain Generator +
+      Thespian's Stage.
 
-    Thespian's Stage + all the multi-AA carriers STAY DECLINED (the
-    Phase-3C ``BecomesCopyOfTargetLand`` Effect-class admit gate has
-    not fired yet; the ``sacrifice_another_*`` cost-bools are still
-    gated). Any new Effect class admitted to the set would surface
-    here as a silent auto-grow — investigate before merging.
+    All the multi-AA carriers STAY DECLINED (Mirrorpool / Ghost
+    Vacuum / Keys to the House / All-Fates Scroll / Haunted Screen /
+    The Eternity Elevator — Phase 4 frontier). Any new Effect class
+    admitted to the set (Phase 4+) would surface here as a silent
+    auto-grow — investigate before merging.
 
     Inverts the Phase-3B-C1 substrate-only pin
     ``test_no_silent_auto_grow_admit_set_post_phase_3b_c1``
-    (expected 5 admits pre-C2). The verify-first full-pool audit at
-    2026-05-25 confirmed only Scavenger Grounds carries
-    ``sacrifice_a_desert=True`` across the EoE pool, so the cost-
-    gate widen admits exactly one new card under the Effect-class
-    widen.
+    (expected 5 admits pre-3B-C2 → 6 post-3B-C2 → 7 post-3C-C3).
+    The verify-first full-pool audit at 2026-05-26 confirmed exactly
+    one new card admits under the Phase-3C-C3 widen (Thespian's
+    Stage).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -796,18 +805,23 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
+        "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3B C2 admit-set pin violated: expected "
+        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
         f"admit set = ['Deserted Temple', 'Mystifying Maze', "
         f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator'], got {admits}. A widen in a sibling "
-        f"substrate or predicate would surface here as a silent "
-        f"auto-grow — investigate before merging."
+        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
+        f"A widen in a sibling substrate or predicate would surface "
+        f"here as a silent auto-grow — investigate before merging."
     )
     assert "Scavenger Grounds" in admits, (
         "Scavenger Grounds must ADMIT post-3B-C2; the "
         "ExileAllGraveyards Effect-class admit + cost-gate widen "
         "land in C2."
+    )
+    assert "Thespian's Stage" in admits, (
+        "Thespian's Stage must ADMIT post-3C-C3; the "
+        "BecomesCopyOfTargetLand Effect-class admit widen ships at C3."
     )
 
 

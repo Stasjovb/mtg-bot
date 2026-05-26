@@ -933,18 +933,22 @@ def test_mystifying_maze_now_passes_loader_filter():
 
 
 def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3a_c2():
-    """**Phase 3A C2 invariant pin (FURTHER-WIDENED in Phase 3B C2).**
-    The Carrier-AA Effect-class admit set accessor returns the 6
-    classes post-Phase-3B-C2, including the Phase-3A-C2-widened
-    ``ExileTargetAttackingCreatureUntilEndStep`` AND the Phase-3B-C2-
-    widened ``ExileAllGraveyards``.
+    """**Phase 3A C2 invariant pin (FURTHER-WIDENED in Phase 3B C2 +
+    Phase 3C C3).** The Carrier-AA Effect-class admit set accessor
+    returns the 7 classes post-Phase-3C-C3, including the
+    Phase-3A-C2-widened ``ExileTargetAttackingCreatureUntilEndStep``,
+    the Phase-3B-C2-widened ``ExileAllGraveyards``, AND the
+    Phase-3C-C3-widened ``BecomesCopyOfTargetLand``.
 
     Inverted from the Phase-3A-C1 substrate-only pin
     ``test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1``
     (4 classes pre-3A-C2). Updated in Phase-3B-C2 to assert 6 classes
-    (the C2 widen adds ``ExileAllGraveyards`` strictly additively;
-    the other five classes stay in the set bit-identical).
+    (the C2 widen adds ``ExileAllGraveyards`` strictly additively);
+    further updated in Phase-3C-C3 to assert 7 classes (the C3 widen
+    adds ``BecomesCopyOfTargetLand`` strictly additively; the other
+    six classes stay in the set bit-identical).
     """
+    from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
@@ -968,35 +972,40 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3a_c2():
         PutBasicLandFromHandOntoBattlefieldTapped,
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
+        BecomesCopyOfTargetLand,
     })
     assert _carrier_aa_phase_1_effect_classes() == expected, (
-        "Phase 3B C2 invariant: admit set must contain exactly the 6 "
+        "Phase 3C C3 invariant: admit set must contain exactly the 7 "
         "Effect classes (Phase-3A-C2 added "
-        "ExileTargetAttackingCreatureUntilEndStep; Phase-3B-C2 adds "
-        "ExileAllGraveyards)."
+        "ExileTargetAttackingCreatureUntilEndStep; Phase-3B-C2 added "
+        "ExileAllGraveyards; Phase-3C-C3 adds BecomesCopyOfTargetLand)."
     )
 
 
 def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
-    """**Phase 3A C2 invariant pin (FURTHER-WIDENED in Phase 3B C2)
-    — no-silent-auto-grow walk.** Confirms the 30 BLOCKED-SG
-    Carrier-AA cards from design doc §2.1 admit exactly the 6 cards
-    post-Phase-3B-C2 widen:
+    """**Phase 3A C2 invariant pin (FURTHER-WIDENED in Phase 3B C2 +
+    Phase 3C C3) — no-silent-auto-grow walk.** Confirms the 30
+    BLOCKED-SG Carrier-AA cards from design doc §2.1 admit exactly
+    the 7 cards post-Phase-3C-C3 widen:
 
       Swarmyard + Deserted Temple + Petrified Field + Terrain
-      Generator + Mystifying Maze + Scavenger Grounds.
+      Generator + Mystifying Maze + Scavenger Grounds + Thespian's
+      Stage.
 
-    Thespian's Stage + all the multi-AA carriers STAY DECLINED (the
-    Phase-3C ``BecomesCopyOfTargetLand`` Effect-class admit gate has
-    not fired yet). Mirrors the Phase-3B-C2 sibling walk in
+    All the multi-AA carriers STAY DECLINED (Mirrorpool / Ghost
+    Vacuum / Keys to the House / All-Fates Scroll / Haunted Screen /
+    The Eternity Elevator — Phase 4 frontier per design doc §3) +
+    every other carrier honestly declines on the colored-mana /
+    x-pip cost-shape gate per the verify-first walk at 2026-05-26.
+    Mirrors the Phase-3C-C3 sibling walk in
     ``tests/test_carrier_aa_phase_1_substrate_cycle_2.py`` and the
-    direct C2 sibling pin in
+    direct C3 sibling pin in
     ``tests/test_carrier_aa_phase_3b_substrate_cycle_1.py``.
 
     Inverted from ``test_no_silent_auto_grow_admit_set_post_cycle_1``
-    (4 admits pre-3A-C2 → 5 post-3A-C2 → 6 post-3B-C2). Any new
-    Effect class admitted to the set would surface here as a silent
-    auto-grow — investigate before merging.
+    (4 admits pre-3A-C2 → 5 post-3A-C2 → 6 post-3B-C2 → 7 post-3C-C3).
+    Any new Effect class admitted to the set (Phase 4+) would surface
+    here as a silent auto-grow — investigate before merging.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -1029,11 +1038,12 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
+        "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3B C2 admit-set pin violated: expected "
+        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
         f"admit set = ['Deserted Temple', 'Mystifying Maze', "
         f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator'], got "
+        f"'Terrain Generator', \"Thespian's Stage\"], got "
         f"{admits}. A widen in a sibling substrate or predicate "
         f"would surface here as a silent auto-grow — investigate "
         f"before merging."

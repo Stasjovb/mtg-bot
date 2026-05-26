@@ -651,43 +651,226 @@ def test_resolve_becomes_copy_target_off_bf_silent_fizzle(
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant pins — Thespian's Stage STAYS DECLINED
+# Phase 3C C3 FLIP pins (INVERTED post-Cycle-3) — Thespian's Stage ADMITS
 # ---------------------------------------------------------------------------
 
 
-def test_thespians_stage_stays_declined_post_substrate_cycle_2():
-    """**Substrate-only invariant — Thespian's Stage STAYS DECLINED
-    post-Cycle-2.** The Rust Effect variant + Land-target fan-out +
-    cross-engine bridge arms all landed at C2; the Python admit-set
-    widen + per-card probe ship in C3/C4. The production-deck admit
-    predicate ``_printing_is_bridge_simple_carrier_aa_land``
-    therefore STILL declines Thespian's Stage post-C2.
+def test_aa_is_phase1_sub_shape_a_admits_live_thespians_stage():
+    """**Phase 3C C3 admit-flip pin (INVERTED, live-printing).**
+    Thespian's Stage's live ``OracleParserCardSource`` printing PASSES
+    :func:`_printing_is_bridge_simple_carrier_aa_land` post-Phase-3C-
+    C3 because the Effect-class admit set
+    ``_carrier_aa_phase_1_effect_classes`` is widened to include
+    ``BecomesCopyOfTargetLand`` (the C1 substrate at ``f5a2a1ce`` +
+    C2 Rust Effect variant at ``6de50d8d``).
+
+    Inverts the Phase-3C-C2 substrate-only pin
+    ``test_thespians_stage_stays_declined_post_substrate_cycle_2`` —
+    admit-gate FLIPped DECLINED → ADMITTED on the Python accessor
+    widen alone (Thespian's Stage's ``{2}, {T}`` cost shape already
+    passes the Phase-1.5a ``{N}, {T}`` cost-gate). Mirrors the
+    Phase-3A C2 inversion shape
+    ``test_mystifying_maze_now_admits_at_admit_gate_post_phase_3a``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.parity.trajectory import (
-        _printing_is_bridge_simple_carrier_aa_land,
-    )
+    from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     ts = ps["Thespian's Stage"]
-    # Substrate-only invariant: STAYS DECLINED.
-    assert not _printing_is_bridge_simple_carrier_aa_land(ts), (
-        "Thespian's Stage should STAY DECLINED post-Phase-3C-Cycle-2 "
-        "(Effect-class admit-set widen + per-card probe ship in C3/C4)."
+    assert traj._printing_is_bridge_simple_carrier_aa_land(ts) is True, (
+        "Thespian's Stage must ADMIT at the Carrier-AA admit gate "
+        "post-Phase-3C-C3. The Effect-class admit set "
+        "_carrier_aa_phase_1_effect_classes is widened to include "
+        "BecomesCopyOfTargetLand and the cost-gate already accepts "
+        "the {2}, {T} Phase-1.5a shape."
     )
 
 
-def test_phase_1_effect_classes_unchanged_post_substrate_cycle_2():
-    """**Effect-class admit set UNCHANGED.** Cycle 2 does NOT widen
-    the Python Effect-class allowlist; that's Cycle 3's deliverable.
-    Confirm ``BecomesCopyOfTargetLand`` is NOT in the set
-    post-Cycle-2.
+def test_filter_deck_to_bridge_supported_admits_thespians_stage():
+    """**Phase 3C C3 admit-flip pin (INVERTED, loader-level).** The
+    end-to-end production-deck loader filter ADMITS Thespian's Stage
+    post-Phase-3C-C3 — the Carrier-AA disjunct fires now that the
+    Effect-class admit set is widened.
+
+    Inverts the Phase-3C-C2 substrate-only invariant (the loader-
+    filter sibling check). Mirrors
+    ``test_mystifying_maze_now_passes_loader_filter`` / the
+    Scavenger Grounds Phase-3B-C2 sibling.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    ps = OracleParserCardSource().get_printings()
+    assert "Thespian's Stage" in ps
+    filtered, card_defs = _filter_deck_to_bridge_supported(
+        ["Thespian's Stage"], ps,
+    )
+    assert filtered == ["Thespian's Stage"], (
+        f"Thespian's Stage must PASS the loader filter post-Phase-3C-"
+        f"C3; got filtered={filtered}, card_defs={card_defs}"
+    )
+    assert len(card_defs) == 1
+    assert card_defs[0].name == "Thespian's Stage"
+
+
+def test_effective_lookups_audit_after_stage_copies_mountain_python_engine():
+    """**Phase 3C C3 §6.3 #24 — ``effective_*`` lookup audit pin.**
+    Post-copy ``effective_subtypes`` / ``effective_keywords`` (and
+    the ``printing.card_types`` facet that the codebase exposes
+    directly without an ``effective_card_types`` wrapper today)
+    return the COPIED Land's attributes for the Stage object.
+
+    Uses the live Python engine (no Rust fixture — the C2 Rust pin
+    suite already covers ``printing_subtypes_of`` /
+    ``printing_aa_count_of`` on the Rust side at §6.3 #20). The pin
+    asserts the Python engine's CR-613 effective_* layered-lookup
+    stack picks up the post-copy printing for the Stage:
+
+      * ``effective_subtypes`` includes "Mountain" (the copied
+        Land's subtype flows through layer-3/4 walk on top of the
+        new printing's subtype list).
+      * ``effective_keywords`` is the EMPTY set (Mountain carries no
+        keywords; the Stage's pre-copy printing also carries none).
+      * ``stage.printing.card_types`` is ``("Land",)`` (preserved
+        across the copy — both Stage and Mountain are Lands).
+      * Bonus invariants: ``original_printing`` snapshot captures the
+        Stage's pre-copy identity (``Thespian's Stage``); post-copy
+        ``stage.printing.name`` is the Mountain's name.
+
+    Closes the §6.3 #24 audit pin per the design doc's Cycle 3 spec.
+    Mirrors the existing copy-effect coverage in
+    ``tests/test_stellar_sights_copy_lands.py`` but adds the
+    CR-613-layered ``effective_*`` lookup audit explicitly.
+    """
+    from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
+    from mtg_bot.agents import Agent
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import (
+        GameState, Player, Zone, effective_keywords, effective_subtypes,
+    )
+    from mtg_bot.turn import Step
+
+    class _PickLastAgent(Agent):
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[-1] if legal_targets else None
+
+    ps = get_active_source().get_printings()
+    state = GameState()
+    state.players.append(Player(id=0, agent=_PickLastAgent()))
+    state.players.append(Player(id=1, agent=_PickLastAgent()))
+    state.active_player_idx = 0
+    state.priority_player_idx = 0
+    state.step = Step.PRECOMBAT_MAIN
+
+    def _put(printing, owner_id=0):
+        obj = state.new_object(printing, owner_id, Zone.BATTLEFIELD)
+        state.battlefield.append(obj)
+        return obj
+
+    stage = _put(ps["Thespian's Stage"])
+    # Two Mountains in controller's bf to pay the {2} generic mana cost
+    # via auto-tap (the Stage's own {T} comes from cost.tap_self).
+    for _ in range(2):
+        _put(BASIC_LANDS["Mountain"])
+    # Opponent's Mountain is the copy target (PickLast → last-added).
+    mountain = _put(BASIC_LANDS["Mountain"], owner_id=1)
+
+    # Pre-copy invariants (sanity).
+    assert effective_subtypes(state, stage) == ()
+    assert effective_keywords(state, stage) == frozenset()
+    assert stage.printing.card_types == ("Land",)
+    assert stage.printing.name == "Thespian's Stage"
+    assert stage.original_printing is None
+
+    apply_action(
+        state, 0, ActivateAbility(source_id=stage.id, ability_index=0),
+    )
+    while state.stack:
+        resolve_top_of_stack(state)
+
+    # Post-copy §6.3 #24 audit asserts.
+    eff_subs = effective_subtypes(state, stage)
+    assert "Mountain" in eff_subs, (
+        f"Post-copy effective_subtypes must include 'Mountain' "
+        f"(target's basic-land subtype flows through the CR-613 "
+        f"layered walk); got {eff_subs}"
+    )
+    eff_kws = effective_keywords(state, stage)
+    assert eff_kws == frozenset(), (
+        f"Post-copy effective_keywords must be empty (Mountain "
+        f"carries no keywords; Stage carries none either); got {eff_kws}"
+    )
+    assert "Land" in stage.printing.card_types, (
+        f"Post-copy stage.printing.card_types must include 'Land' "
+        f"(both Stage and Mountain are Lands); got "
+        f"{stage.printing.card_types}"
+    )
+    # The copied Land's NAME flows through too (full printing replace,
+    # not just AAs) — sanity for the copy semantics.
+    assert stage.printing.name == "Mountain", (
+        f"Post-copy stage.printing.name must be 'Mountain'; got "
+        f"{stage.printing.name!r}"
+    )
+    # Snapshot anchor pin: original_printing captures the pre-copy
+    # identity (mirrors the Rust-side original_printing_id snapshot
+    # pin at §6.3 #20).
+    assert stage.original_printing is not None
+    assert stage.original_printing.name == "Thespian's Stage", (
+        f"original_printing snapshot must capture the Stage's pre-"
+        f"copy name; got {stage.original_printing.name!r}"
+    )
+
+
+def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
+    """**Phase 3C C3 Effect-class widen pin (INVERTED).** The
+    Carrier-AA Effect-class admit set accessor returns 7 classes
+    post-Phase-3C-C3, including the new ``BecomesCopyOfTargetLand``
+    class.
+
+    Inverted from the Phase-3C-C2 substrate-only pin
+    ``test_phase_1_effect_classes_unchanged_post_substrate_cycle_2``
+    (the C2 pin asserted 6 classes pre-C3 + ``BecomesCopyOfTargetLand
+    NOT in classes``; the C3 widen flips that assertion). Asserts
+    the full 7-class admit set as an exact equality — any new
+    Effect-class admission (Phase 4+) surfaces here as a silent
+    auto-grow.
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
-    from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetLandFromGraveyardToHand,
+    )
+    from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.exile import (
+        ExileAllGraveyards,
+        ExileTargetAttackingCreatureUntilEndStep,
+    )
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.effects.generic.zone_moves import (
+        PutBasicLandFromHandOntoBattlefieldTapped,
+    )
+    from mtg_bot.parity.trajectory import (
+        _carrier_aa_phase_1_effect_classes,
+    )
 
     classes = _carrier_aa_phase_1_effect_classes()
-    assert BecomesCopyOfTargetLand not in classes, (
-        "BecomesCopyOfTargetLand should NOT be in the admit set "
-        "post-Phase-3C-Cycle-2 (Cycle 3 ships the widen)."
+    assert BecomesCopyOfTargetLand in classes, (
+        "BecomesCopyOfTargetLand MUST be in the admit set "
+        "post-Phase-3C-Cycle-3 (the C3 widen ships this admission)."
+    )
+    expected = frozenset({
+        RegenerateTargetCreature,
+        UntapTargetLand,
+        ReturnTargetLandFromGraveyardToHand,
+        PutBasicLandFromHandOntoBattlefieldTapped,
+        ExileTargetAttackingCreatureUntilEndStep,
+        ExileAllGraveyards,
+        BecomesCopyOfTargetLand,
+    })
+    assert classes == expected, (
+        f"Phase 3C C3 invariant: admit set must contain exactly the 7 "
+        f"Effect classes post-C3 widen. Phase-3A C2 added "
+        f"ExileTargetAttackingCreatureUntilEndStep; Phase-3B C2 added "
+        f"ExileAllGraveyards; Phase-3C C3 adds BecomesCopyOfTargetLand. "
+        f"Got {classes}."
     )

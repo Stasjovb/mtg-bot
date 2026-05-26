@@ -498,37 +498,50 @@ def test_printing_is_bridge_simple_carrier_aa_land_admits_live_deserted_temple()
 # ---------------------------------------------------------------------------
 
 
-def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator_plus_mystifying_maze_plus_scavenger_grounds():
-    """**Phase 3B C2 no-silent-auto-grow pin (INVERTED — admit count
-    5 → 6).** Walks the 30 BLOCKED-SG Carrier-AA cards from design
+def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator_plus_mystifying_maze_plus_scavenger_grounds_plus_thespians_stage():
+    """**Phase 3C C3 no-silent-auto-grow pin (INVERTED — admit count
+    6 → 7).** Walks the 30 BLOCKED-SG Carrier-AA cards from design
     doc §2.1 against :func:`_printing_is_bridge_simple_carrier_aa_land`
-    under the Phase-3B-C2 widened Effect-class admit set
+    under the Phase-3C-C3 widened Effect-class admit set
     (``RegenerateTargetCreature`` + ``UntapTargetLand`` +
     ``ReturnTargetLandFromGraveyardToHand`` +
     ``PutBasicLandFromHandOntoBattlefieldTapped`` +
     ``ExileTargetAttackingCreatureUntilEndStep`` +
-    ``ExileAllGraveyards``) atop the Phase-3B widened cost-gate
-    (bare ``{T}`` OR ``{N}, {T}`` OR ``({T}, Sac:)`` OR
-    ``({N}, {T}, Sac:)`` OR ``({T}, Sac-a-Desert:)`` OR
-    ``({N}, {T}, Sac-a-Desert:)`` under the both-at-once
-    defense-in-depth guard). ONLY Swarmyard + Deserted Temple +
-    Petrified Field + Terrain Generator + Mystifying Maze +
-    Scavenger Grounds admit; every other carrier honestly declines
-    per the verify-first walk.
+    ``ExileAllGraveyards`` + ``BecomesCopyOfTargetLand``) atop the
+    Phase-3B widened cost-gate (bare ``{T}`` OR ``{N}, {T}`` OR
+    ``({T}, Sac:)`` OR ``({N}, {T}, Sac:)`` OR
+    ``({T}, Sac-a-Desert:)`` OR ``({N}, {T}, Sac-a-Desert:)`` under
+    the both-at-once defense-in-depth guard). ONLY Swarmyard +
+    Deserted Temple + Petrified Field + Terrain Generator +
+    Mystifying Maze + Scavenger Grounds + Thespian's Stage admit;
+    every other carrier honestly declines per the verify-first walk
+    at 2026-05-26.
 
-    Sibling-candidate Effect-class teeth remain load-bearing:
-    Thespian's Stage (``BecomesCopyOfTargetLand`` — Phase 3C copy-
-    effect substrate) carries a cost that passes the widened cost-
-    gate but DECLINES on the Phase-3B-C2 Effect-class admit set.
-    Any new Effect class admitted to the set would surface here as
-    a silent auto-grow — investigate before merging.
+    Verify-first walk (2026-05-26 against the live EoE pool with
+    ``BecomesCopyOfTargetLand`` added to the Effect-class admit set):
+    exactly ONE new card admits (Thespian's Stage) under the
+    widened gate — every other carrier honestly declines via the
+    multi-AA gate (Mirrorpool / Ghost Vacuum / Keys to the House /
+    All-Fates Scroll / Haunted Screen / The Eternity Elevator /
+    Sliver Overlord / Robe of Stars / Saw / Atomic Microsizer / etc.)
+    OR the colored-mana / x-pip cost-shape gate (Reflecting Pool /
+    Meteor Crater / Grove of the Burnwillows / Lotus Field /
+    Ancient Tomb / Nesting Grounds / Blast Zone / Lavaclaw Reaches /
+    Wandering Fumarole / Contested War Zone / Pinnacle Starcage /
+    Auxiliary Boosters / Baseball Bat).
 
-    Inverts the Phase-3A-C2 pin
+    Sibling-candidate Effect-class teeth remain load-bearing — no
+    Phase-3 Carrier-AA Effect candidate remains outside the admit
+    set. Any NEW Effect class admitted to the set (Phase 4+) would
+    surface here as a silent auto-grow — investigate before merging.
+
+    Inverts the Phase-3B-C2 pin
     ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
     plus_deserted_temple_plus_petrified_field_plus_terrain_generator_
-    plus_mystifying_maze`` (admit set was ``['Deserted Temple',
-    'Mystifying Maze', 'Petrified Field', 'Swarmyard', 'Terrain
-    Generator']``)."""
+    plus_mystifying_maze_plus_scavenger_grounds`` (admit set was
+    ``['Deserted Temple', 'Mystifying Maze', 'Petrified Field',
+    'Scavenger Grounds', 'Swarmyard', 'Terrain Generator']``).
+    """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -560,13 +573,14 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
+        "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3B C2 admit-set pin violated: expected "
+        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
         f"admit set = ['Deserted Temple', 'Mystifying Maze', "
         f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator'], got {admits}. A widen in a sibling "
-        f"substrate or predicate would surface here as a silent "
-        f"auto-grow — investigate before merging."
+        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
+        f"A widen in a sibling substrate or predicate would surface "
+        f"here as a silent auto-grow — investigate before merging."
     )
 
 

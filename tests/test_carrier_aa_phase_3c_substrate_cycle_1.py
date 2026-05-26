@@ -336,27 +336,25 @@ def test_clone_preserves_default_none_invariant(synthetic_state):
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant pin -- Thespian's Stage STAYS DECLINED
+# Phase 3C C3 FLIP pins (INVERTED post-Cycle-3) -- Thespian's Stage ADMITS
 # ---------------------------------------------------------------------------
 
 
-def test_thespians_stage_stays_declined_post_substrate_cycle_1():
-    """**Substrate-only invariant -- Thespian's Stage STAYS DECLINED.**
-    Post-Phase-3C-Cycle-1 the Rust substrate is in place but the
-    Effect variant + Python admit + per-card probe are NOT landed:
+def test_thespians_stage_admits_post_substrate_cycle_3():
+    """**Phase 3C C3 admit-flip pin (INVERTED).** Thespian's Stage's
+    live ``OracleParserCardSource`` printing PASSES
+    :func:`_printing_is_bridge_simple_carrier_aa_land` post-Phase-3C-
+    C3 because the Effect-class admit set
+    ``_carrier_aa_phase_1_effect_classes`` is widened to include
+    ``BecomesCopyOfTargetLand`` (the C1 substrate at ``f5a2a1ce`` +
+    C2 Rust Effect variant at ``6de50d8d``).
 
-      (a) No ``Effect::BecomesCopyOfTargetLand`` in Rust (Cycle 2
-          ships it).
-      (b) No ``BecomesCopyOfTargetLand`` in
-          ``_carrier_aa_phase_1_effect_classes`` (Cycle 3 ships the
-          widen).
-      (c) No Land-target fan-out arm
-          (``state_ops_legal.rs::activate_ability_dict``) (Cycle 2
-          ships it).
-
-    The production-deck admit predicate
-    ``_printing_is_bridge_simple_carrier_aa_land`` therefore declines
-    Thespian's Stage post-Cycle-1 -- the substrate-only invariant.
+    Inverted from the Phase-3C-C1 substrate-only pin
+    ``test_thespians_stage_stays_declined_post_substrate_cycle_1`` --
+    admit-gate FLIPped DECLINED -> ADMITTED on the Python accessor
+    widen alone (ZERO new cost-shape machinery, ZERO new Rust
+    changes -- C1 + C2 shipped the substrate + Effect variant +
+    Land-target fan-out + cross-engine bridge arms).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -365,28 +363,30 @@ def test_thespians_stage_stays_declined_post_substrate_cycle_1():
 
     ps = OracleParserCardSource().get_printings()
     ts = ps["Thespian's Stage"]
-    # Substrate-only invariant: STAYS DECLINED.
-    assert not _printing_is_bridge_simple_carrier_aa_land(ts), (
-        "Thespian's Stage should STAY DECLINED post-Phase-3C-Cycle-1 "
-        "(Effect variant + Python admit widen ship in C2/C3)."
+    assert _printing_is_bridge_simple_carrier_aa_land(ts), (
+        "Thespian's Stage should ADMIT post-Phase-3C-Cycle-3 "
+        "(_carrier_aa_phase_1_effect_classes widened to include "
+        "BecomesCopyOfTargetLand)."
     )
 
 
-def test_phase_1_effect_classes_unchanged_post_substrate_cycle_1():
-    """**Effect-class admit set UNCHANGED.** Cycle 1 does NOT widen
-    the Python Effect-class allowlist; that's Cycle 3's deliverable.
-    The current entry count from the Phase-3A/3B closures should be
-    preserved exactly (no ``BecomesCopyOfTargetLand`` admit).
+def test_phase_1_effect_classes_widened_post_substrate_cycle_3():
+    """**Phase 3C C3 Effect-class widen pin (INVERTED).** Cycle 3
+    widens the Python Effect-class allowlist to include
+    ``BecomesCopyOfTargetLand`` -- 7-entry final admit set.
+
+    Inverted from the Phase-3C-C1 substrate-only pin
+    ``test_phase_1_effect_classes_unchanged_post_substrate_cycle_1``
+    (the C1 pin asserted ``BecomesCopyOfTargetLand NOT in classes``;
+    the C3 widen flips that assertion).
     """
     from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
 
     classes = _carrier_aa_phase_1_effect_classes()
-    # Confirm no BecomesCopyOfTargetLand in the set (Phase 3C C3
-    # ships the widen, not Cycle 1).
     from mtg_bot.effects.generic.become_type import (
         BecomesCopyOfTargetLand,
     )
-    assert BecomesCopyOfTargetLand not in classes, (
-        "BecomesCopyOfTargetLand should NOT be in the admit set "
-        "post-Phase-3C-Cycle-1 (Cycle 3 ships the widen)."
+    assert BecomesCopyOfTargetLand in classes, (
+        "BecomesCopyOfTargetLand MUST be in the admit set "
+        "post-Phase-3C-Cycle-3 (the C3 widen ships this admission)."
     )
