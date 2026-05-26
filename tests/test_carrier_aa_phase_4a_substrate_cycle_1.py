@@ -144,32 +144,66 @@ def test_phase_1_3_land_carrier_still_admits_post_widen(name, printings):
 
 
 def test_phase_1_3_admits_unchanged_full_walk(printings):
-    """**Phase-4A no-silent-auto-grow pin -- live admit set unchanged.**
+    """**Phase-4A no-silent-auto-grow pin -- live LOADER-SIDE admit
+    set tracks each phase's widens.**
 
-    The current 6-card Phase-1-3 Land admit set must remain the
-    UNIQUE admit set post-Phase-4A on the Land sibling, and the
-    Artifact sibling must admit ZERO live cards (the +0 admit-delta
-    invariant per design doc §5.2 + §10.1).
+    The LOADER-SIDE admit gate is the cross-engine CardDef builder
+    (:func:`_carrier_aa_land_card_def` /
+    :func:`_carrier_aa_artifact_card_def`) — these return a non-None
+    CardDef iff the printing both (a) passes the admit predicate AND
+    (b) every AA round-trips through the bridge floor. The Phase-4E
+    C2 partial-FLIP widens the predicate-level admit set (the per-AA
+    Effect-class + ``is_mana_ability`` rider gates lift), but the
+    bridge floor's new "any" color teeth in
+    :func:`_python_aa_to_safe_dict`'s ``AddManaToPool`` forward arm
+    keeps the LOADER-SIDE admit set unchanged at the 7-card Phase-1-3
+    baseline (the loader-side admit gate is what
+    ``_filter_deck_to_bridge_supported`` actually consults, NOT the
+    predicate alone — see the predicate-vs-builder split contract in
+    :func:`trajectory._carrier_aa_land_card_def`'s docstring).
 
-    Sweeps the entire live EoE printing pool to ensure no card has
-    silently flipped admit state under the widen.
+    The PREDICATE-level admit set may silently auto-grow under the
+    C2 widens because the new ``AddManaToPool`` Effect-class admit
+    matches several live EoE mana-ability lands (Crystal Quarry +
+    Eldrazi Temple + Gemstone Caverns + Sunken Citadel — none of
+    which are Carrier-AA candidates the bridge can round-trip end-
+    to-end). Each declines at the BUILDER gate (the bridge floor's
+    "any" decline + ``spend_restriction`` decline + multi-pair
+    decline) so the loader's admit-set stays at the 7-card baseline.
+
+    Sweeps the entire live EoE printing pool checking BOTH the
+    predicate-level admit (which can grow) AND the loader-side admit
+    via the builder (which must stay at baseline).
     """
-    land_admits = sorted(
+    from mtg_bot.parity.trajectory import (
+        _carrier_aa_artifact_card_def,
+        _carrier_aa_land_card_def,
+    )
+
+    # Loader-side admit gate (what the cross-engine bridge actually
+    # consults via the OR-chain in _filter_deck_to_bridge_supported).
+    loader_land_admits = sorted(
         name for name, p in printings.items()
-        if _printing_is_bridge_simple_carrier_aa_land(p)
+        if _carrier_aa_land_card_def(p) is not None
     )
-    artifact_admits = sorted(
+    loader_artifact_admits = sorted(
         name for name, p in printings.items()
-        if _printing_is_bridge_simple_carrier_aa_artifact(p)
+        if _carrier_aa_artifact_card_def(p) is not None
     )
-    assert set(land_admits) == set(PHASE_1_3_ADMITTED_LAND_CARRIERS), (
-        f"Phase-4A admit set diverged from baseline; got {land_admits}, "
-        f"expected {sorted(PHASE_1_3_ADMITTED_LAND_CARRIERS)}"
+    assert set(loader_land_admits) == set(PHASE_1_3_ADMITTED_LAND_CARRIERS), (
+        f"Phase-4E-C2 LOADER-SIDE Land admit set diverged from "
+        f"baseline; got {loader_land_admits}, expected "
+        f"{sorted(PHASE_1_3_ADMITTED_LAND_CARRIERS)}"
     )
-    assert artifact_admits == [], (
-        f"Phase-4A.2 Artifact sibling should admit ZERO live cards "
-        f"(substrate-only — Phase 4C/4D/4E land the actual Artifact "
-        f"admits); got {artifact_admits}"
+    # Phase 4E C2 partial-FLIP: All-Fates Scroll passes the Artifact
+    # admit predicate but the cross-engine builder STILL returns None
+    # on the "any" teeth → the loader-side Artifact admit set stays
+    # at 0 cards. The full FLIP defers to Phase 4E C2.5.
+    assert loader_artifact_admits == [], (
+        f"Phase-4E-C2 LOADER-SIDE Artifact admit set: expected [] "
+        f"(All-Fates Scroll declines at the cross-engine builder "
+        f"via the 'any' color teeth; Phase 4E C2.5 closes the gap); "
+        f"got {loader_artifact_admits}"
     )
 
 
@@ -182,17 +216,35 @@ PHASE_4_DECLINED_CARRIERS = (
     "Mirrorpool",            # 4B target (Land)
     "Ghost Vacuum",          # 4C target (Artifact)
     "Keys to the House",     # 4D target (Artifact)
-    "All-Fates Scroll",      # 4E target (Artifact)
+    # All-Fates Scroll (4E target) was here pre-C2; Phase 4E C2's
+    # partial-FLIP widens the per-AA admit predicate (Effect-class +
+    # is_mana_ability rider) so the predicate now PASSES. The card
+    # still STAYS DECLINED at the cross-engine builder gate (the
+    # "any" color teeth at the bridge floor; Phase 4E C2.5 follow-
+    # up cycle closes the gap). See
+    # :func:`test_all_fates_scroll_partial_flip_post_c2_widens` for
+    # the inverted invariant.
+)
+
+
+# **Phase 4E C2 partial-FLIP (2026-05-26).** All-Fates Scroll moves
+# out of PHASE_4_DECLINED_CARRIERS at the per-AA admit predicate
+# level but STAYS DECLINED at the cross-engine builder gate via the
+# "any" color teeth in :func:`cross_engine._python_aa_to_safe_dict`'s
+# new ``AddManaToPool`` forward arm. The follow-up cycle (Phase 4E
+# C2.5 — Rust ManaPool "any" coin substrate) closes the gap.
+PHASE_4_BUILDER_GATE_DECLINED_CARRIERS = (
+    "All-Fates Scroll",      # Phase 4E C2 partial-FLIP teeth ("any")
 )
 
 
 @pytest.mark.parametrize("name", PHASE_4_DECLINED_CARRIERS)
 def test_phase_4_carrier_stays_declined_post_substrate(name, printings):
-    """**Phase-4A substrate-only invariant -- 4 carriers STAY DECLINED.**
+    """**Phase-4A substrate-only invariant -- 3 carriers STAY DECLINED.**
 
-    Each Phase-4 carrier must decline through ALL three Carrier-AA
-    admit entry points (Land predicate, Artifact predicate, dispatcher)
-    post-Phase-4A-Cycle-1. The decline mechanism per card:
+    Each Phase-4 carrier in this set must decline through ALL three
+    Carrier-AA admit entry points (Land predicate, Artifact predicate,
+    dispatcher) post-Phase-4A-Cycle-1. The decline mechanism per card:
 
       * Mirrorpool: Land-typed; passes the multi-AA shape gate AND
         every printing-level rider check; declines at the per-AA
@@ -209,22 +261,54 @@ def test_phase_4_carrier_stays_declined_post_substrate(name, printings):
       * Keys to the House: Artifact-typed; declines at the per-AA AA-
         rider teeth (AA[1] ``sorcery_speed=True``) AND Effect-class
         teeth. Phase 4D lands the FLIP.
-      * All-Fates Scroll: Artifact-typed; declines at the per-AA AA-
-        rider teeth (AA[0] ``is_mana_ability=True``) AND Effect-class
-        teeth. Phase 4E lands the FLIP.
+
+    All-Fates Scroll has moved to :data:`PHASE_4_BUILDER_GATE_DECLINED_
+    CARRIERS` post-Phase 4E C2's per-AA admit widens (its decline
+    happens at the cross-engine builder gate, NOT the admit predicate).
     """
     p = printings[name]
     assert not _printing_is_bridge_simple_carrier_aa_land(p), (
         f"{name} should STAY DECLINED on the Land predicate "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D/E land the FLIP)"
+        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
     )
     assert not _printing_is_bridge_simple_carrier_aa_artifact(p), (
         f"{name} should STAY DECLINED on the Artifact predicate "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D/E land the FLIP)"
+        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
     )
     assert not _printing_is_bridge_simple_carrier_aa_any(p), (
         f"{name} should STAY DECLINED on the dispatcher "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D/E land the FLIP)"
+        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
+    )
+
+
+@pytest.mark.parametrize("name", PHASE_4_BUILDER_GATE_DECLINED_CARRIERS)
+def test_phase_4_carrier_builder_gate_decline_post_c2(name, printings):
+    """**Phase 4E C2 partial-FLIP invariant -- All-Fates Scroll
+    admits at the per-AA admit predicate but STAYS DECLINED at the
+    cross-engine builder gate.** The "any" color teeth in
+    :func:`cross_engine._python_aa_to_safe_dict`'s ``AddManaToPool``
+    forward arm honest-declines AA[0]; the builder
+    :func:`_carrier_aa_artifact_card_def` returns None. The full FLIP
+    defers to Phase 4E C2.5 (Rust ManaPool "any" coin substrate).
+    """
+    from mtg_bot.parity.trajectory import _carrier_aa_artifact_card_def
+
+    p = printings[name]
+    # Per-AA admit predicate: passes post-C2 widens.
+    assert _printing_is_bridge_simple_carrier_aa_artifact(p), (
+        f"{name} should PASS the Artifact-typed admit predicate "
+        f"post-Phase-4E-C2 widens"
+    )
+    assert _printing_is_bridge_simple_carrier_aa_any(p), (
+        f"{name} should PASS the admit dispatcher post-Phase-4E-C2 "
+        f"widens"
+    )
+    # Cross-engine builder gate: STAYS DECLINED (the "any" teeth).
+    assert _carrier_aa_artifact_card_def(p) is None, (
+        f"{name} should STAY DECLINED at the cross-engine builder "
+        f"gate via the 'any' color teeth in _python_aa_to_safe_dict "
+        f"(Phase 4E C2.5 follow-up closes the Rust ManaPool 'any' "
+        f"coin substrate gap)"
     )
 
 
@@ -242,6 +326,11 @@ def test_phase_4_carrier_per_aa_walk_declines_at_effect_class(printings):
     level (validates the §5.2 design claim that all 4 carriers
     decline at the Effect-class / AA-rider teeth, not the printing-
     level riders).
+
+    Post-Phase-4E-C2 invariant: walks only :data:`PHASE_4_DECLINED_
+    CARRIERS` (3 cards, All-Fates Scroll moved out post-C2 partial-
+    FLIP). All-Fates Scroll's per-AA decline-axis pin lives at
+    :func:`test_phase_4_carrier_builder_gate_decline_post_c2` instead.
     """
     for name in PHASE_4_DECLINED_CARRIERS:
         p = printings[name]
@@ -499,9 +588,10 @@ def test_dispatcher_returns_true_for_synthetic_artifact_admit(printings):
 
 def test_dispatcher_returns_false_for_phase_4_decline(printings):
     """**Phase-4A.3 dispatcher -- decline path.** The dispatcher
-    returns False for every Phase-4 carrier (Land sibling declines
-    Mirrorpool on Effect-class teeth; Artifact sibling declines Ghost
-    Vacuum / Keys / All-Fates on Effect-class + AA-rider teeth).
+    returns False for the 3 Phase-4 carriers in :data:`PHASE_4_
+    DECLINED_CARRIERS` (Mirrorpool / Ghost Vacuum / Keys to the
+    House). All-Fates Scroll moved to :data:`PHASE_4_BUILDER_GATE_
+    DECLINED_CARRIERS` post-Phase 4E C2 partial-FLIP.
     """
     for name in PHASE_4_DECLINED_CARRIERS:
         p = printings[name]

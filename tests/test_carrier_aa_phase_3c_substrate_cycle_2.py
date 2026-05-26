@@ -823,28 +823,29 @@ def test_effective_lookups_audit_after_stage_copies_mountain_python_engine():
 
 
 def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
-    """**Phase 3C C3 Effect-class widen pin (INVERTED).** The
-    Carrier-AA Effect-class admit set accessor returns 7 classes
-    post-Phase-3C-C3, including the new ``BecomesCopyOfTargetLand``
-    class.
+    """**Phase 3C C3 Effect-class widen pin (INVERTED + extended in
+    Phase 4E C2).** The Carrier-AA Effect-class admit set accessor
+    returns 9 classes post-Phase-4E-C2, including the
+    Phase-3C-C3-widened ``BecomesCopyOfTargetLand`` + the
+    Phase-4E-C2-widened ``DrawCardsByConditionMultiplier`` +
+    ``AddManaToPool``.
 
-    Inverted from the Phase-3C-C2 substrate-only pin
-    ``test_phase_1_effect_classes_unchanged_post_substrate_cycle_2``
-    (the C2 pin asserted 6 classes pre-C3 + ``BecomesCopyOfTargetLand
-    NOT in classes``; the C3 widen flips that assertion). Asserts
-    the full 7-class admit set as an exact equality — any new
-    Effect-class admission (Phase 4+) surfaces here as a silent
-    auto-grow.
+    Each widen is strictly additive; the prior classes stay in the
+    set bit-identical at each Phase close.
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsByConditionMultiplier,
+    )
     from mtg_bot.effects.generic.exile import (
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
+    from mtg_bot.effects.generic.mana import AddManaToPool
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -866,11 +867,14 @@ def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
         BecomesCopyOfTargetLand,
+        DrawCardsByConditionMultiplier,
+        AddManaToPool,
     })
     assert classes == expected, (
-        f"Phase 3C C3 invariant: admit set must contain exactly the 7 "
-        f"Effect classes post-C3 widen. Phase-3A C2 added "
+        f"Phase 4E C2 invariant: admit set must contain exactly the 9 "
+        f"Effect classes post-Phase-4E-C2 widens. Phase-3A C2 added "
         f"ExileTargetAttackingCreatureUntilEndStep; Phase-3B C2 added "
-        f"ExileAllGraveyards; Phase-3C C3 adds BecomesCopyOfTargetLand. "
-        f"Got {classes}."
+        f"ExileAllGraveyards; Phase-3C C3 added BecomesCopyOfTargetLand; "
+        f"Phase-4E C2 added DrawCardsByConditionMultiplier + "
+        f"AddManaToPool. Got {classes}."
     )

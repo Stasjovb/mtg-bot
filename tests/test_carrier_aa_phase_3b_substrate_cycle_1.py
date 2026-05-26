@@ -697,27 +697,30 @@ def test_scavenger_grounds_now_passes_loader_filter():
 
 
 def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
-    """**Phase 3B C2 invariant pin (FURTHER-WIDENED in Phase 3C C3)
-    — admit set widened.** The Carrier-AA Effect-class admit set
-    accessor returns the 7 classes post-Phase-3C-C3, including the
-    Phase-3B-C2-widened ``ExileAllGraveyards`` AND the
-    Phase-3C-C3-widened ``BecomesCopyOfTargetLand``.
+    """**Phase 3B C2 invariant pin (FURTHER-WIDENED in Phase 3C C3 +
+    Phase 4E C2) — admit set widened.** The Carrier-AA Effect-class
+    admit set accessor returns the 9 classes post-Phase-4E-C2,
+    including the Phase-3B-C2-widened ``ExileAllGraveyards``, the
+    Phase-3C-C3-widened ``BecomesCopyOfTargetLand``, AND the
+    Phase-4E-C2-widened ``DrawCardsByConditionMultiplier`` +
+    ``AddManaToPool``.
 
-    Inverts the Phase-3B-C1 substrate-only pin
-    ``test_carrier_aa_phase_1_effect_classes_unchanged_post_phase_3b_c1``
-    (expected 5 classes pre-3B-C2). Updated in Phase-3C-C3 to assert
-    7 classes (the C3 widen adds ``BecomesCopyOfTargetLand`` strictly
-    additively).
+    Each widen is strictly additive — the prior classes stay in the
+    set bit-identical at each Phase close.
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsByConditionMultiplier,
+    )
     from mtg_bot.effects.generic.exile import (
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
+    from mtg_bot.effects.generic.mana import AddManaToPool
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -734,12 +737,15 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
         BecomesCopyOfTargetLand,
+        DrawCardsByConditionMultiplier,
+        AddManaToPool,
     })
     classes = _carrier_aa_phase_1_effect_classes()
     assert classes == expected, (
-        "Phase 3C C3 invariant: admit set must contain exactly the 7 "
+        "Phase 4E C2 invariant: admit set must contain exactly the 9 "
         "Effect classes (Phase-3B-C2 added ExileAllGraveyards; "
-        "Phase-3C-C3 adds BecomesCopyOfTargetLand)."
+        "Phase-3C-C3 added BecomesCopyOfTargetLand; Phase-4E-C2 added "
+        "DrawCardsByConditionMultiplier + AddManaToPool)."
     )
     assert ExileAllGraveyards in classes, (
         "ExileAllGraveyards must be in the admit set post-Phase-3B-"

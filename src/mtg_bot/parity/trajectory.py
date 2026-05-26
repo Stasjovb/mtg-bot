@@ -8982,20 +8982,51 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     new Rust changes — C1 + C2 shipped the substrate + Effect variant
     + Land-target fan-out + cross-engine bridge arms).
 
+    **Phase 4E Cycle 2 (2026-05-26 — partial substrate landing per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.7 + honest-stop
+    on the "any" coin Rust substrate gap).** Effect-class admit-set
+    widen from 7 → 9, adding ``DrawCardsByConditionMultiplier``
+    (All-Fates Scroll's AA[1] pilot — the C1 substrate at
+    ``c50cf8da`` shipped the Rust ``Effect::
+    DrawCardsByConditionMultiplier`` variant + parallel
+    ``condition_count`` dispatcher + cross-engine bridge arms) and
+    ``AddManaToPool`` (All-Fates Scroll's AA[0] pilot — the Rust
+    ``Effect::AddManaToPool`` variant ships from round-21+ for the
+    fixed-color W/U/B/R/G/C mana-ability slice; the reverse arm
+    exists at ``cross_engine.py:7697``; this cycle adds the forward
+    arm in :func:`cross_engine._python_aa_to_safe_dict`). All-Fates
+    Scroll's AA[0] carries ``produces=(("any", 1),)``; Rust's
+    ``validate_mana_symbol`` rejects "any" (closed vocab
+    ``{W,U,B,R,G,C}`` per ``cards.rs:15888``) and the ``ManaPool``
+    primitives in ``state.rs:942`` lack an "any" coin slot. The
+    bridge floor's new forward arm at ``cross_engine.py`` honest-
+    declines any ``AddManaToPool`` whose ``produces`` carries an
+    "any" color discriminator — All-Fates Scroll therefore STAYS
+    DECLINED on the new "any" teeth even though the per-AA admit
+    predicate now passes the Effect-class + ``is_mana_ability``
+    rider gates. The full FLIP defers to a follow-up Rust cycle
+    (Phase 4E C2.5 — ``ManaPool.any`` coin substrate + Rust resolve
+    arm + drain semantics) that closes the gap; see
+    ``docs/SEARCH_LIMITATIONS.md`` for the divergence entry. Sibling
+    of the Phase 4B/4C/4D Effect-class widens for the other 3 multi-
+    AA carriers.
+
     **Phase-3/N extends this set as each Effect class lands cross-
-    engine.** No remaining Phase-3 Carrier-AA Effect candidates after
-    C3 (the design doc §3 §6 frontier rolls forward to Phase 4 multi-
-    AA carriers).
+    engine.**
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsByConditionMultiplier,
+    )
     from mtg_bot.effects.generic.exile import (
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
+    from mtg_bot.effects.generic.mana import AddManaToPool
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -9008,6 +9039,8 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         ExileTargetAttackingCreatureUntilEndStep,
         ExileAllGraveyards,
         BecomesCopyOfTargetLand,
+        DrawCardsByConditionMultiplier,
+        AddManaToPool,
     })
 
 
@@ -9164,8 +9197,26 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     if cost.requires_control_of_subtype:
         return False
     # AA-level rider gate.
-    if aa.is_mana_ability:
-        return False
+    #
+    # **Phase 4E Cycle 2 (2026-05-26 — partial substrate landing per
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.7).** The
+    # ``is_mana_ability=True`` rider was Phase-1 honest-stop until the
+    # Rust ``ActivatedAbility.is_mana_ability`` field round-trips with
+    # the Carrier-AA admit set; Phase 4E-C2 widens the gate to admit
+    # ``is_mana_ability=True`` because the Rust side has been able to
+    # round-trip mana-ability AAs since the round-21 mana-ability
+    # bridge slice (basic-land auto-wire at ``cross_engine.py:14252``).
+    # The combined Effect-class widen
+    # (:func:`_carrier_aa_phase_1_effect_classes`) now also includes
+    # ``AddManaToPool`` so the live mana-ability surface (e.g. All-
+    # Fates Scroll's AA[0]) clears the per-AA admit teeth. The bridge
+    # floor :func:`cross_engine._python_aa_to_safe_dict` honest-
+    # declines any ``AddManaToPool`` whose ``produces`` carries an
+    # "any" color discriminator (Rust's ``validate_mana_symbol``
+    # closed vocab + ``ManaPool`` substrate gap — see Phase 4E C2.5
+    # follow-up cycle in ``docs/SEARCH_LIMITATIONS.md``), so All-Fates
+    # Scroll STAYS DECLINED at the cross-engine builder gate on the
+    # "any" teeth even though the per-AA admit predicate now passes.
     if aa.sorcery_speed:
         return False
     if aa.cost_reductions:

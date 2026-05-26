@@ -14784,8 +14784,17 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # phase that widens the admit predicate widens this gate in
     # lockstep (mirror update — same shape as the
     # ``_python_ta_to_safe_dict`` event-string gate).
-    if aa.is_mana_ability:
-        return None
+    #
+    # **Phase 4E Cycle 2 widen (2026-05-26 — partial substrate landing
+    # per docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.7).** The
+    # ``is_mana_ability=True`` decline is lifted to admit All-Fates
+    # Scroll's AA[0] mana-ability shape ({T}: Add one mana of any
+    # color). Mirrors the per-AA admit predicate widen in
+    # :func:`trajectory._aa_is_phase1_sub_shape_a`. The Rust side has
+    # round-tripped ``ActivatedAbility.is_mana_ability`` since the
+    # round-21 mana-ability bridge slice (basic-land auto-wire at
+    # ``cross_engine.py:14252``); the AA-list parse arm accepts the
+    # bool field already.
     if aa.sorcery_speed:
         return None
     if aa.activate_only_once:
@@ -14916,6 +14925,42 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         DrawCardsByConditionMultiplier,
     )
     from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+    # **Phase 4E C2 widen (2026-05-26).** Add ``AddManaToPool``
+    # (All-Fates Scroll's AA[0] pilot Effect — Carrier-AA Phase 4E
+    # cycle per design doc §5.7). Two-key dict per the round-21 mana-
+    # ability bridge slice contract at ``cross_engine.py:7697``
+    # (reverse arm): ``{"kind": "add_mana_to_pool", "color": <str>,
+    # "amount": <int>}``. The Python class carries a list of
+    # ``(color, count)`` pairs in ``produces``; this forward arm
+    # admits ONLY the single-pair shape (one ``(color, count)``
+    # produce) — multi-color batched-mint shapes (e.g. ``Add WUBRG``
+    # = 5 pairs) decline because the Rust ``Effect::AddManaToPool``
+    # struct-variant carries a SCALAR ``color: String`` + ``amount:
+    # i32`` (one color per Effect instance). The single-pair
+    # restriction matches All-Fates Scroll's AA[0] ``produces=
+    # (("any", 1),)`` shape; future multi-color mana-ability carriers
+    # would need a Rust schema bump first (multi-color batched
+    # Effect::AddManaToPool variant).
+    #
+    # **"any" coin honest-decline (Phase 4E C2 partial-FLIP teeth).**
+    # Rust's ``validate_mana_symbol`` (``cards.rs:15888``) is a closed
+    # vocab over ``{"W","U","B","R","G","C"}`` and rejects "any" at
+    # ``register_printing`` time; the ``ManaPool`` substrate at
+    # ``state.rs:942`` lacks an "any" coin slot in ``push_coins`` (the
+    # ``_ => return`` defensive no-op would silently drop "any" coins
+    # at resolve time). The Python ``ManaCoin`` class supports "any"
+    # as a wildcard color (``game.py:2453-2455``) per All-Fates
+    # Scroll's ``Add one mana of any color`` semantics — minting an
+    # "any" coin that satisfies any colored payment requirement. The
+    # Rust gap is a real substrate divergence, NOT a parser-side
+    # quirk; closing it requires a new Rust ``ManaPool.any`` slot +
+    # ``push_coins`` arm + drain-and-payment semantics for "any" coin
+    # satisfaction. Phase 4E-C2 honest-declines the "any" shape here
+    # so the cross-engine builder gate STAYS DECLINED on All-Fates
+    # Scroll until a follow-up cycle (Phase 4E C2.5 — Rust ManaPool
+    # "any" coin substrate) ships the full substrate. See
+    # ``docs/SEARCH_LIMITATIONS.md`` for the divergence entry.
+    from mtg_bot.effects.generic.mana import AddManaToPool
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -15063,13 +15108,85 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             effect_dict["description_fragment"] = str(
                 effect.description_fragment,
             )
+    elif isinstance(effect, AddManaToPool):
+        # **Carrier-AA substrate Phase 4E Cycle 2 (2026-05-26 — partial
+        # landing).** Forward-emit arm for All-Fates Scroll's AA[0]
+        # pilot effect (``{T}: Add one mana of any color.``). Two-key
+        # dict on the wire per the round-21 mana-ability bridge slice
+        # contract (reverse arm at ``cross_engine.py:7697``): ``kind`` +
+        # ``color`` + ``amount``.
+        #
+        # **Single-pair restriction.** The Python class's ``produces``
+        # is ``tuple[tuple[str, int], ...]`` so it can carry multi-
+        # color batched-mint Effects (e.g. ``Add WUBRG`` = 5 pairs);
+        # Rust's struct-variant carries a SCALAR ``color: String`` +
+        # ``amount: i32`` (one color per Effect instance). The bridge
+        # admits ONLY single-pair shapes today; multi-pair declines
+        # honestly until a Rust schema bump for multi-color batched
+        # mana.
+        #
+        # **"any" color honest-decline (Phase 4E C2 partial-FLIP).**
+        # All-Fates Scroll's AA[0] carries ``produces=(("any", 1),)``.
+        # Rust's ``validate_mana_symbol`` is a closed vocab over
+        # ``{W,U,B,R,G,C}`` (``cards.rs:15888``) and the ``ManaPool``
+        # substrate lacks an "any" coin slot. The forward arm honest-
+        # declines "any" so the cross-engine builder DECLINES All-Fates
+        # Scroll until Phase 4E C2.5 (Rust ManaPool "any" coin
+        # substrate). The per-AA admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` passes for the AA[0] post-C2
+        # widens (Effect-class + ``is_mana_ability``), but the builder
+        # gate :func:`trajectory._carrier_aa_artifact_card_def` reaches
+        # this forward arm next and returns None on the "any" coin.
+        # The net contract: All-Fates Scroll STAYS DECLINED at the
+        # cross-engine deck-filter gate.
+        #
+        # **``spend_restriction`` honest-decline.** Python's
+        # ``AddManaToPool.spend_restriction: str | None`` tags each
+        # minted coin (used by Steelswarm Operator's "Spend this mana
+        # only to cast an artifact spell" and similar); Rust's
+        # ``Effect::AddManaToPool`` carries NO equivalent field today.
+        # A non-``None`` ``spend_restriction`` therefore declines at
+        # this forward arm; All-Fates Scroll's AA[0] carries
+        # ``spend_restriction=None`` (no restriction — see design doc
+        # §2.1 row), so this guard does not affect the FLIP teeth.
+        if effect.spend_restriction is not None:
+            return None
+        if len(effect.produces) != 1:
+            return None
+        color, amount = effect.produces[0]
+        if not isinstance(color, str):
+            return None
+        if color not in ("W", "U", "B", "R", "G", "C"):
+            # "any" or unknown — Rust validate_mana_symbol rejects;
+            # honest-decline at the bridge floor. See Phase 4E C2.5
+            # follow-up cycle (Rust ManaPool "any" coin substrate).
+            return None
+        if not isinstance(amount, int):
+            return None
+        if amount < 0:
+            # Rust parser raises on ``amount < 0`` (``cards.rs:12196``);
+            # the bridge mirrors at the same floor.
+            return None
+        effect_dict = {
+            "kind": "add_mana_to_pool",
+            "color": color,
+            "amount": amount,
+        }
     else:
-        # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.
+        # Effect class not in the Phase-1/1.5a/2a/2b/3/4E admit set — decline.
         return None
-    return {
+    result_dict: dict = {
         "cost": cost_dict,
         "effect": effect_dict,
     }
+    # **Phase 4E C2 widen (2026-05-26).** Emit the ``is_mana_ability``
+    # flag on the AA dict so the Rust round-trip carries the bypass-
+    # stack property. The Rust side has round-tripped this field
+    # since the round-21 mana-ability bridge slice (basic-land auto-
+    # wire at ``cross_engine.py:14252``).
+    if aa.is_mana_ability:
+        result_dict["is_mana_ability"] = True
+    return result_dict
 
 
 def _static_self_bonus_condition_from_tag(

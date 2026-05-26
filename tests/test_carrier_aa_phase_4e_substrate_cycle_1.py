@@ -778,28 +778,35 @@ def test_resolve_draw_cards_by_condition_multiplier_zero_count_no_op(
 # ---------------------------------------------------------------------------
 
 
-def test_all_fates_scroll_stays_declined_at_admit_gate_post_c1():
-    """**Substrate-only invariant — All-Fates Scroll STAYS DECLINED at
-    the admit gate post-Cycle-1.** The Rust Effect variant +
-    condition_count dispatcher + cross-engine bridge arms all landed,
-    but the Python admit gate still declines the live printing
-    because:
+def test_all_fates_scroll_stays_declined_at_loader_gate_post_c2_partial():
+    """**Phase 4E C2 partial-FLIP invariant — All-Fates Scroll STAYS
+    DECLINED at the cross-engine loader gate.** The Phase 4E C2 cycle
+    widens the per-AA admit predicate (Effect-class set + ``is_mana_
+    ability`` rider) so BOTH AAs now pass
+    :func:`_aa_is_phase1_sub_shape_a`; the printing-level admit
+    dispatcher therefore returns True. But the cross-engine builder
+    gate at :func:`trajectory._carrier_aa_artifact_card_def` calls
+    :func:`cross_engine._python_aa_to_safe_dict` to serialize each AA
+    into the bridge dict shape, and that floor honest-declines AA[0]
+    on the new "any" color teeth (Rust's ``validate_mana_symbol``
+    closed vocab + ``ManaPool`` substrate gap — see Phase 4E C2.5
+    follow-up cycle in ``docs/SEARCH_LIMITATIONS.md``).
 
-      (a) ``_carrier_aa_phase_1_effect_classes`` doesn't include
-          ``DrawCardsByConditionMultiplier`` (C2 ships the widen).
-      (b) The AA-rider gate still declines AA[0]'s
-          ``is_mana_ability=True`` rider (C2 ships that widen too).
-
-    Verify via the per-AA + printing-level admit predicates that BOTH
-    AAs decline at Phase 1 sub-shape A; the printing-level dispatcher
-    also declines.
+    Verify both surfaces explicitly:
+      * Per-AA admit predicate: BOTH AAs now PASS (C2 widens shipped).
+      * Printing-level Artifact predicate: now PASSES (per-AA all-
+        pass under the Phase 4A multi-AA contract).
+      * Cross-engine Artifact builder: STILL returns None (the "any"
+        teeth at the bridge floor — closes the partial-FLIP gap).
     """
     import json
 
     from mtg_bot.cards.parser_source import _build_artifact_printing
     from mtg_bot.parity.trajectory import (
         _aa_is_phase1_sub_shape_a,
+        _carrier_aa_artifact_card_def,
         _printing_is_bridge_simple_carrier_aa_any,
+        _printing_is_bridge_simple_carrier_aa_artifact,
     )
 
     with open("data/edge_of_eternities.json", encoding="utf-8") as f:
@@ -810,59 +817,105 @@ def test_all_fates_scroll_stays_declined_at_admit_gate_post_c1():
     printing = _build_artifact_printing(raw)
     aa0, aa1 = printing.activated_abilities
 
-    # Per-AA admit predicate: both decline post-C1.
-    assert _aa_is_phase1_sub_shape_a(aa0) is False, (
-        "AA[0] must decline at the per-AA admit gate post-C1 "
-        "(is_mana_ability=True rider not yet admitted)"
+    # Per-AA admit predicate: BOTH AAs PASS post-C2 widens (AA[0]
+    # passes via the ``is_mana_ability`` rider widen + ``AddManaToPool``
+    # Effect-class widen; AA[1] passes via the
+    # ``DrawCardsByConditionMultiplier`` Effect-class widen).
+    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
+        "AA[0] must PASS the per-AA admit gate post-C2 widens"
     )
-    assert _aa_is_phase1_sub_shape_a(aa1) is False, (
-        "AA[1] must decline at the per-AA admit gate post-C1 "
-        "(DrawCardsByConditionMultiplier not yet in Effect-class "
-        "admit set)"
+    assert _aa_is_phase1_sub_shape_a(aa1) is True, (
+        "AA[1] must PASS the per-AA admit gate post-C2 widens"
     )
-    # Printing-level dispatcher: declines (any-AA-failure short-
-    # circuits per the Phase 4A all-or-nothing contract).
+    # Printing-level admit dispatcher: passes (per-AA all-pass).
     assert (
-        _printing_is_bridge_simple_carrier_aa_any(printing) is False
+        _printing_is_bridge_simple_carrier_aa_any(printing) is True
     ), (
-        "All-Fates Scroll must stay DECLINED at the printing-level "
-        "admit dispatcher post-C1"
+        "All-Fates Scroll must PASS the printing-level admit "
+        "dispatcher post-C2 widens"
+    )
+    assert (
+        _printing_is_bridge_simple_carrier_aa_artifact(printing) is True
+    ), (
+        "All-Fates Scroll must PASS the Artifact sibling admit "
+        "predicate post-C2 widens"
+    )
+    # **Cross-engine builder gate: STAYS DECLINED.** The builder calls
+    # the bridge floor for each AA; AA[0]'s ``AddManaToPool(produces=
+    # (("any", 1),))`` honest-declines on the new "any" teeth.
+    assert _carrier_aa_artifact_card_def(printing) is None, (
+        "Phase 4E C2 partial-FLIP teeth: All-Fates Scroll must STAY "
+        "DECLINED at the cross-engine builder gate via the 'any' "
+        "color honest-decline in _python_aa_to_safe_dict's "
+        "AddManaToPool forward arm (the Rust ManaPool 'any' coin "
+        "substrate is the C2.5 follow-up)"
     )
 
 
-def test_carrier_aa_phase_1_effect_classes_unchanged_post_c1():
-    """**Substrate-only invariant — the Effect-class admit set is
-    UNCHANGED at Phase 4E C1.** ``DrawCardsByConditionMultiplier`` is
-    NOT in the frozenset; the C2 cycle widens it (along with
-    ``AddManaToPool``).
+def test_carrier_aa_phase_1_effect_classes_widened_post_c2():
+    """**Phase 4E C2 widen — the Effect-class admit set grows from
+    7 → 9.** ``DrawCardsByConditionMultiplier`` + ``AddManaToPool``
+    join the set; the prior 7 Phase-1-3 entries stay admitted.
     """
+    from mtg_bot.effects.generic.become_type import (
+        BecomesCopyOfTargetLand,
+    )
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetLandFromGraveyardToHand,
+    )
+    from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.draw_mill import (
         DrawCardsByConditionMultiplier,
     )
+    from mtg_bot.effects.generic.exile import (
+        ExileAllGraveyards,
+        ExileTargetAttackingCreatureUntilEndStep,
+    )
     from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.effects.generic.zone_moves import (
+        PutBasicLandFromHandOntoBattlefieldTapped,
+    )
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
     admitted = _carrier_aa_phase_1_effect_classes()
-    assert DrawCardsByConditionMultiplier not in admitted, (
-        "Phase 4E C1 substrate invariant: "
-        "DrawCardsByConditionMultiplier MUST NOT yet be in the "
-        "Effect-class admit set (C2 ships the widen)."
+    # Phase 4E C2 widens: new entries.
+    assert DrawCardsByConditionMultiplier in admitted, (
+        "Phase 4E C2 widen: DrawCardsByConditionMultiplier MUST be "
+        "in the Effect-class admit set"
     )
-    assert AddManaToPool not in admitted, (
-        "Phase 4E C1 substrate invariant: AddManaToPool MUST NOT "
-        "yet be in the Effect-class admit set (C2 ships the widen)."
+    assert AddManaToPool in admitted, (
+        "Phase 4E C2 widen: AddManaToPool MUST be in the Effect-"
+        "class admit set"
+    )
+    # No regression on the prior 7 entries.
+    for cls in (
+        RegenerateTargetCreature,
+        UntapTargetLand,
+        ReturnTargetLandFromGraveyardToHand,
+        PutBasicLandFromHandOntoBattlefieldTapped,
+        ExileTargetAttackingCreatureUntilEndStep,
+        ExileAllGraveyards,
+        BecomesCopyOfTargetLand,
+    ):
+        assert cls in admitted, (
+            f"Phase 4E C2 no-regression: {cls.__name__} MUST stay in "
+            "the Effect-class admit set"
+        )
+    # Closed-set invariant (no silent auto-grow).
+    assert len(admitted) == 9, (
+        f"Phase 4E C2 admit-set cardinality: expected 9, got "
+        f"{len(admitted)}"
     )
 
 
-def test_all_fates_scroll_declines_at_artifact_admit_predicate_post_c1():
-    """**Substrate-only invariant — the Artifact sibling admit
-    predicate declines All-Fates Scroll post-Cycle-1.** Verifies the
-    sibling Carrier-AA-Artifact admit predicate (added Phase 4A C1)
-    rejects the live printing on per-AA teeth — the live admit gate
-    keeps the printing OUT of the Carrier-AA loader-side admit-set
-    post-C1.
+def test_all_fates_scroll_admits_at_artifact_admit_predicate_post_c2():
+    """**Phase 4E C2 inverted invariant — the Artifact sibling admit
+    predicate now PASSES All-Fates Scroll** (was DECLINED at Phase 4E
+    C1). The cross-engine builder gate is the new teeth (see
+    :func:`test_all_fates_scroll_stays_declined_at_loader_gate_post_c2_partial`).
     """
     import json
 
@@ -879,10 +932,9 @@ def test_all_fates_scroll_declines_at_artifact_admit_predicate_post_c1():
     printing = _build_artifact_printing(raw)
     assert (
         _printing_is_bridge_simple_carrier_aa_artifact(printing)
-        is False
+        is True
     ), (
-        "Phase 4E C1 substrate invariant: All-Fates Scroll must "
-        "decline at the Artifact-typed sibling admit predicate "
-        "post-C1 (the per-AA teeth are still in place — C2 ships "
-        "the widens)."
+        "Phase 4E C2 widen: All-Fates Scroll must PASS the Artifact-"
+        "typed sibling admit predicate post-C2 (the per-AA teeth are "
+        "lifted; the 'any' teeth land at the builder gate)"
     )

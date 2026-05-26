@@ -140,9 +140,15 @@ def test_python_aa_to_safe_dict_round_trips_untap_target_land_no_mana():
 # ---------------------------------------------------------------------------
 
 
-def test_python_aa_to_safe_dict_declines_mana_ability_rider():
-    """**Decline pin.** ``is_mana_ability=True`` is a Phase-2+ rider;
-    the safe-dict helper declines (returns ``None``)."""
+def test_python_aa_to_safe_dict_admits_mana_ability_rider_post_phase_4e_c2():
+    """**Admit pin (was decline pre-Phase-4E-C2).** Phase 4E C2's
+    bridge-floor widen lifted the ``is_mana_ability=True`` AA-rider
+    decline arm; a synthetic AA with the rider now round-trips
+    cleanly and the dict carries ``is_mana_ability=True``. The widen
+    is partial-FLIP scoped (the underlying ``AddManaToPool`` "any"
+    color teeth keeps All-Fates Scroll DECLINED at the builder gate
+    — see Phase 4E C2 SL entry).
+    """
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
@@ -152,7 +158,12 @@ def test_python_aa_to_safe_dict_declines_mana_ability_rider():
         effect=UntapTargetLand(),
         is_mana_ability=True,
     )
-    assert _python_aa_to_safe_dict(aa) is None
+    aa_dict = _python_aa_to_safe_dict(aa)
+    assert aa_dict is not None, (
+        "Phase 4E C2 widen: is_mana_ability=True AA-rider must "
+        "round-trip post-C2"
+    )
+    assert aa_dict.get("is_mana_ability") is True
 
 
 def test_python_aa_to_safe_dict_declines_sorcery_speed_rider():

@@ -16833,6 +16833,41 @@ staying True on `nonsafe_triggered_ability`).
 
 **Pinned by:** `tests/test_carrier_aa_phase_2a_substrate_cycle_1.py` (Phase 2a Rust substrate pins — parse / resolve / fan-out / apply-time validation), `tests/test_carrier_aa_phase_2b_substrate.py` (Phase 2b Rust substrate + Python admit pins — parse / resolve / round-trip + inversion), `tests/test_petrified_field_parity.py` (Phase 2a per-card real-EoE probe), `tests/test_terrain_generator_parity.py` (Phase 2b per-card real-EoE probe).
 
+## Carrier-AA substrate Phase 4E Cycle 2 PARTIAL-FLIP — All-Fates Scroll declines at the cross-engine builder gate via the "any" coin Rust ManaPool substrate gap (HONEST-STOP, 2026-05-26, `feature/carrier-aa-phase-4e-cycle-2-flip-p1`)
+
+**Location:**
+- `src/mtg_bot/parity/cross_engine.py` (`_python_aa_to_safe_dict` `AddManaToPool` forward arm — explicit "any" color decline).
+- `src/mtg_bot/parity/trajectory.py` (`_carrier_aa_phase_1_effect_classes` admit set 7 → 9; `_aa_is_phase1_sub_shape_a` `is_mana_ability=True` rider gate lifted).
+- `rust/src/cards.rs:15888` (`validate_mana_symbol` — Rust closed-vocab gate the Python side defers to).
+- `rust/src/state.rs:942` (`ManaPool::push_coins` — the underlying substrate gap; no "any" coin slot).
+
+**Shortcut:** Phase 4E Cycle 2 was scoped to FLIP All-Fates Scroll DECLINED → ADMITTED at the Carrier-AA admit gate. Verify-first invalidated the design doc §4.4.1 claim that Rust's `Effect::AddManaToPool` admits `produces=(("any", 1),)` via an "any" color discriminator — Rust's `validate_mana_symbol` is a closed vocab over `{W,U,B,R,G,C}` and rejects "any" at `register_printing` time; the `ManaPool` substrate lacks an "any" coin slot in `push_coins` (the `_ => return` defensive no-op would silently drop "any" coins at resolve time). Neither Option A (validator-only widen — would silent-no-op resolve, BREAKING parity) nor Option B (`PendingDecision::ManaColorChoice` fan-out — fundamentally incompatible with `is_mana_ability=True`'s CR-605 bypass-stack property) was a minimal-scope fit for a "Python admit widen" cycle. C2 ships a **PARTIAL-FLIP**: the per-AA admit predicate lifts the `is_mana_ability` rider gate + widens the Effect-class set to include `AddManaToPool` + `DrawCardsByConditionMultiplier`, so All-Fates Scroll FLIPS at the **predicate level** (both per-AA + printing-level Artifact admit predicate now pass). The cross-engine builder gate at `_carrier_aa_artifact_card_def` still returns `None` because the bridge floor's new `AddManaToPool` forward arm honest-declines `produces` carrying the "any" color discriminator. **Net loader-side admit-set: UNCHANGED at C2** — the BLOCKED-SG Carrier-AA tier does not shrink at C2; the +1 admit lands at C2.5 (Rust ManaPool "any" coin substrate cycle).
+
+**Why it's OK:**
+- The honest-decline at the bridge floor is **strictly safer** than the Option A alternative (validator widen + silent-no-op resolve), which would have minted nothing in Rust vs an "any" coin in Python — a hard parity break on every live "any" mana-ability resolve. The C2 substrate keeps cross-engine byte-equality at the loader-side admit set.
+- The C2 widens are **substrate prerequisites** for C2.5 — `_carrier_aa_phase_1_effect_classes` + `_aa_is_phase1_sub_shape_a` widens are reusable by C2.5 without modification (the only Phase 4E C2.5 work is the Rust ManaPool "any" coin substrate + lifting the bridge floor's "any" decline arm).
+- All-Fates Scroll's BLOCKED-SG status persists ONE additional cycle (C2.5); the pool-parity row delta is +0 at C2 close. The 5 design-doc Phase 4E test pins (§6.5 #32-34, #38-39) ALL land at C2 with the partial-FLIP teeth-trace explicitly pinned.
+
+**Failure mode:**
+- A future Carrier-AA candidate whose live AA shape uses `produces=(("any", N),)` (the same shape — see Gemstone Caverns / Sunken Citadel in the live EoE pool — neither of which is currently a Carrier-AA admit target but BOTH match this teeth) stays DECLINED at the bridge floor until C2.5 ships the Rust ManaPool "any" coin substrate. Today this affects only All-Fates Scroll's FLIP timing (one additional cycle).
+- A future card carrying both an "any"-coin mana-ability AND a non-"any" companion AA stays declined under the multi-AA all-or-nothing bridge-floor contract (mirrors All-Fates Scroll's shape — Eldrazi Temple-style 2-AA shapes with all-W/U/B/R/G/C colors round-trip clean; "any" tail kills the whole printing).
+- The per-AA admit predicate diverges from the loader-side admit gate at the predicate level for any card that passes the per-AA gates but carries a bridge-floor-only teeth ("any" coin, multi-pair `AddManaToPool`, `spend_restriction`-tagged `AddManaToPool`, negative amount). The divergence is **bounded by the builder gate** — the cross-engine loader always consults the builder, never the predicate alone — so the loader-side admit set is honest.
+
+**Fix scope:** Phase 4E C2.5 — a Rust ManaPool "any" coin substrate cycle. Required work:
+1. Widen `validate_mana_symbol` (`cards.rs:15888`) to accept "any" (or a sentinel byte like `b'A'`).
+2. Add an `any: u8` slot to `ManaPool` alongside `white/blue/black/red/green/colorless`.
+3. Add a `b'A'` byte arm to `push_coins` (`state.rs:942`) and `drain_first_n_where`.
+4. Update colored-payment drain semantics so an "any" coin satisfies any color request (the spend-flexibility property — mirrors Python's `ManaCoin(color="any")` semantics at `game.py:2453-2455`).
+5. Add a `ManaCoin.color = b'A'` discriminator to `ManaCoin::from_color_str` so the round-trip across the JSON-serialized pool stays byte-equal.
+6. Lift the "any" decline arm in `_python_aa_to_safe_dict`'s `AddManaToPool` forward arm.
+7. Add the per-card real-EoE probe (`tests/test_all_fates_scroll_parity.py`) — the C2-partial probe is in `tests/test_carrier_aa_phase_4e_substrate_cycle_2.py` and uses a W-color synthetic variant as a "FLIP-ready" stand-in.
+
+The Rust ManaPool widen is a self-contained ~1 cycle of Rust work (no Python schema change, no PendingDecision substrate); the "any" coin satisfies-any-color drain semantics fits in `drain_first_n_where`'s existing predicate-driven contract.
+
+**Impact estimate:** +0 cards PROBED tier at Phase 4E C2 close (the partial-FLIP — predicate lifts but builder gate still declines on the "any" teeth); -0 from BLOCKED-SG Carrier-AA row. Phase 4E C2.5 ships +1 (All-Fates Scroll). The C2 substrate work is reusable by C2.5 without modification — Effect-class set + `is_mana_ability` rider gate + bridge floor's `AddManaToPool` forward arm + `is_mana_ability` emit-on-dict + 5 Python unit pins + per-card partial-flip probe all stay landed.
+
+**Pinned by:** `tests/test_carrier_aa_phase_4e_substrate_cycle_2.py` (Phase 4E C2 partial-FLIP pins — Effect-class widen + AA-rider gate widen + bridge-floor `AddManaToPool` forward arm admit/decline gates + `is_mana_ability` round-trip + All-Fates Scroll partial-FLIP teeth-trace + per-card W-color synthetic probe + no-regression on Phase-1-3 admits + no-silent-auto-grow on Mirrorpool/Ghost Vacuum/Keys), `tests/test_carrier_aa_phase_4e_substrate_cycle_1.py` (updated invariants — admit-predicate inversion + builder-gate-stays-None partial-FLIP teeth), `tests/test_carrier_aa_phase_4a_substrate_cycle_1.py` (updated invariants — All-Fates Scroll splits out to `PHASE_4_BUILDER_GATE_DECLINED_CARRIERS` + loader-side admit set unchanged sweep).
+
 ---
 
 ## Carrier-AA substrate Phase 3C CLOSED (Phase 3C C1+C2+C3+C4+C5, 2026-05-26) — CR-613 layer-1 object-copy substrate (`GameObject.original_printing_id: Option<u32>` slot + per-zone-change reset hookup) + `Effect::BecomesCopyOfTargetLand` Rust variant + Python admit widen + per-card real-EoE probe; Thespian's Stage `covered_by_construction` → PROBED
