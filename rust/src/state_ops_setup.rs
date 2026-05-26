@@ -236,6 +236,7 @@ fn push_object(
         // Control-change-UEOT substrate — Cycle 1 (2026-05-21):
         // setup-seeded objects start with no UEOT controller override.
         controller_override: None,
+        original_printing_id: None,
     });
     *next_id += 1;
 }

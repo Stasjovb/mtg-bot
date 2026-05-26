@@ -150,6 +150,7 @@ impl GameState {
                 // deck-loaded library cards start with no UEOT controller
                 // override. Back-compat default.
                 controller_override: None,
+                original_printing_id: None,
             });
             next_id += 1;
         }

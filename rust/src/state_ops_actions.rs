@@ -1522,6 +1522,7 @@ impl GameState {
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     let sac_printing_id = obj.printing_id;
                     let sac_obj_id = obj.id;
@@ -1598,6 +1599,7 @@ impl GameState {
                         obj.damage = 0;
                         obj.counters = 0;
                         obj.attached_to = None;
+                        obj.original_printing_id = None;
                         obj.exiled_with_source = None;
                         let sac_printing_id = obj.printing_id;
                         let sac_obj_id = obj.id;

@@ -433,6 +433,61 @@ pub struct GameObject {
     /// UEOT control override observe the new field's effect, and
     /// those are new behavior in this slice.
     pub controller_override: Option<u8>,
+    /// **Carrier-AA Phase 3C Cycle 1 (2026-05-26) — Thespian's Stage
+    /// substrate: CR-613 layer-1 copy snapshot slot.** When a future
+    /// `Effect::BecomesCopyOfTargetLand` resolve arm (Phase 3C Cycle 2
+    /// — NOT YET LANDED at this commit) mutates this object's
+    /// `printing_id` to point at a copy-derived printing, the
+    /// pre-copy printing-registry id is snapshotted into this slot
+    /// so subsequent re-copy activations can re-derive the "retained
+    /// own abilities" from the ORIGINAL printing's `activated_abilities`
+    /// (rather than the already-mutated post-copy slot). Mirrors
+    /// Python's `GameObject.original_printing: CardPrinting | None`
+    /// (see `src/mtg_bot/game.py`'s GameObject + `become_type.py`'s
+    /// `BecomesCopyOfTargetLand` resolve arm).
+    ///
+    /// **Phase 3C Cycle 1 SUBSTRATE-ONLY semantics.** This slice
+    /// lands the field + defaults + zone-change reset + snapshot
+    /// bridge ONLY — no Effect arm mints `Some(id)` yet. Cycle 2 ships
+    /// the `Effect::BecomesCopyOfTargetLand` resolve arm that performs
+    /// the snapshot. The substrate-only invariant pinned by
+    /// `tests/test_carrier_aa_phase_3c_substrate_cycle_1.py` is:
+    /// every GameObject minted in this cycle starts with
+    /// `original_printing_id = None` (back-compat default), zone-
+    /// change reset clears the slot to `None` (CR 400.7), and the
+    /// snapshot bridge surfaces the slot through `object_to_pydict`
+    /// so Python tests can observe the round-trip.
+    ///
+    /// **Why a distinct field** (vs encoding via printing-registry
+    /// indirection): Python keeps a `CardPrinting | None` pointer
+    /// alongside the mutated `printing` slot for exactly this re-copy
+    /// retention reason. The mirrored Rust shape carries the original
+    /// `printing_id: u32` so resolve-arm code (Cycle 2) can look up
+    /// `state.registry.get(original_printing_id).activated_abilities`
+    /// directly. The post-copy `printing_id` slot has already been
+    /// overwritten and can't be recovered without this snapshot.
+    ///
+    /// **Reset on zone change (CR 400.7).** The copy relationship is
+    /// a battlefield-only concept; once Thespian's Stage leaves the
+    /// battlefield (sacrifice / destroy / bounce / exile / mill),
+    /// `original_printing_id` is cleared back to `None`. If the same
+    /// object id ever re-enters the battlefield (unusual but possible
+    /// — bounce + replay), the copy effect does NOT auto-restore. The
+    /// reset is wired at every bf-leave call site that already clears
+    /// `attached_to = None` (sibling-narrow audit; mirrors the
+    /// `attached_to` round-28 reset hookup pattern).
+    ///
+    /// **Fingerprint elision (back-compat).** NOT in the per-object
+    /// fingerprint 8-tuple today — every pre-substrate pinned
+    /// baseline stays byte-equal. Same elision pattern as
+    /// `stun_counters`, `regeneration_shield`, `warp_exile_pending`,
+    /// `controller_baseline`, `controller_override`,
+    /// `publicly_known_to_caster_bits`. The observable surface for
+    /// the substrate-only Cycle 1 is the snapshot dict round-trip
+    /// (via `object_to_pydict`), not the fingerprint — Cycle 2's
+    /// resolve arm is the first mint site, and Cycle 3's Python-
+    /// side admit widen is the first cross-engine observable surface.
+    pub original_printing_id: Option<u32>,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -3905,6 +3960,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // Override / Threaten shape). Back-compat default; not in
         // the per-object fingerprint tuple.
         controller_override: None,
+        original_printing_id: None,
     }
 }
 

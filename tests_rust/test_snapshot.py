@@ -53,6 +53,13 @@ EXPECTED_KEYS = {
     # ``attached_to`` (None for the universal default; the target id
     # once an Aura/Equipment has been attached).
     "attached_to",
+    # Carrier-AA Phase 3C Cycle 1 (2026-05-26): per-object
+    # CR-613 layer-1 copy snapshot slot. None for the universal
+    # default; the pre-copy printing-registry id once an Effect::
+    # BecomesCopyOfTargetLand resolve arm has minted the snapshot
+    # (Cycle 2 ships the minter -- Cycle 1 is substrate-only,
+    # so the value is None on every freshly-allocated object).
+    "original_printing_id",
 }
 
 _FOREST = {

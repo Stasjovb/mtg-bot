@@ -675,6 +675,7 @@ fn move_aura_post_resolve(
         // `_send_to_graveyard_or_library`.
         obj.zone = ZONE_GRAVEYARD;
         obj.attached_to = None;
+        obj.original_printing_id = None;
         let gy =
             &mut state.players[controller_id as usize].graveyard;
         Arc::make_mut(gy).push(obj);
@@ -2097,6 +2098,7 @@ fn destroy_first_defender_creature_then_draw_if_undamaged(
     // CFI-1 — see the FINDINGS NOTE in
     // tests/test_probe_cross_feature_interaction.py).
     obj.attached_to = None;
+    obj.original_printing_id = None;
     obj.exiled_with_source = None;
     let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
     Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
@@ -2270,6 +2272,7 @@ fn sacrifice_source_inline(
     // counters: NOT cleared (R77-CFI1 byte-equal contract; see the
     // Effect::Sacrifice arm's note).
     obj.attached_to = None;
+    obj.original_printing_id = None;
     obj.exiled_with_source = None;
     let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
     Arc::make_mut(&mut state.players[controller_idx].graveyard).push(obj);
@@ -2537,6 +2540,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
@@ -2707,6 +2711,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
@@ -2791,6 +2796,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 gy_mut.push(obj);
             }
@@ -2882,6 +2888,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
@@ -3157,6 +3164,7 @@ fn apply_effect(
                 // sibling of the destroy arms, same class as the
                 // closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[controller].graveyard).push(obj);
@@ -3360,6 +3368,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
                 // **MMM Pin 2 (11th Rust slice).** Dispatch
@@ -3568,6 +3577,7 @@ fn apply_effect(
                 // (SoT) and Rust's own SBA destroy path; removed
                 // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
@@ -4010,6 +4020,7 @@ fn apply_effect(
                     // (2026-05-21): freshly-minted tokens never start
                     // with a UEOT controller override.
                     controller_override: None,
+                    original_printing_id: None,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -4242,6 +4253,7 @@ fn apply_effect(
                         // (2026-05-21): freshly-minted tokens never
                         // start with a UEOT controller override.
                         controller_override: None,
+                        original_printing_id: None,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -4420,6 +4432,7 @@ fn apply_effect(
                     // (2026-05-21): freshly-minted tokens never start
                     // with a UEOT controller override.
                     controller_override: None,
+                    original_printing_id: None,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -4693,6 +4706,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -5200,6 +5214,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.controller = target_controller;
                 Arc::make_mut(
@@ -5389,6 +5404,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
@@ -5477,6 +5493,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5540,6 +5557,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5605,6 +5623,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5680,6 +5699,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5807,6 +5827,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5919,6 +5940,7 @@ fn apply_effect(
             // distinct from the previous one and starts fresh).
             obj.loyalty_counters = starting_loyalty;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect fix: stamp the reanimated
@@ -6048,6 +6070,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.loyalty_counters = starting_loyalty;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect stamp: reanimated permanent's
@@ -6847,6 +6870,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
@@ -6960,6 +6984,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
@@ -7099,6 +7124,7 @@ fn apply_effect(
                     controller_baseline: None,
                     token_supertype_override: moonlit_override,
                     controller_override: None,
+                    original_printing_id: None,
                 });
             }
             state.pending_etb_dispatches.extend(token_ids);
@@ -7310,6 +7336,7 @@ fn apply_effect(
             // R77-CFI1: counters NOT cleared on the sacrificed object
             // (sibling of Effect::Sacrifice / SBA destroy).
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (sacrificed_printing_id, sacrificed_obj_id) =
                 (obj.printing_id, obj.id);
@@ -7369,6 +7396,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -7559,6 +7587,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -7796,6 +7825,7 @@ fn apply_effect(
                 // (SoT) and Rust's own SBA destroy path; removed
                 // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -7898,6 +7928,7 @@ fn apply_effect(
                 // per CR 400.7.
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -7972,6 +8003,7 @@ fn apply_effect(
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8045,6 +8077,7 @@ fn apply_effect(
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8111,6 +8144,7 @@ fn apply_effect(
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8285,6 +8319,7 @@ fn apply_effect(
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8513,6 +8548,7 @@ fn apply_effect(
                 // STATE_EQ asymmetry).
                 let prior_attached_to = obj.attached_to;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -8640,6 +8676,7 @@ fn apply_effect(
                         // (2026-05-21): freshly-minted tokens never
                         // start with a UEOT controller override.
                         controller_override: None,
+                        original_printing_id: None,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -8771,6 +8808,7 @@ fn apply_effect(
                 // pattern.
                 let prior_attached_to = obj.attached_to;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -8876,6 +8914,7 @@ fn apply_effect(
                     // (2026-05-21): freshly-minted tokens never start
                     // with a UEOT controller override.
                     controller_override: None,
+                    original_printing_id: None,
                 });
                 // Queue ENTERS for the fresh token.
                 state.pending_etb_dispatches.push(new_id);
@@ -9053,6 +9092,7 @@ fn apply_effect(
                         // (2026-05-21): freshly-minted tokens never
                         // start with a UEOT controller override.
                         controller_override: None,
+                        original_printing_id: None,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -9279,6 +9319,7 @@ fn apply_effect(
                     // (CFI-1 closed; see the FINDINGS NOTE in
                     // tests/test_probe_cross_feature_interaction.py).
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     let (printing_id, leaving_obj_id) =
                         (obj.printing_id, obj.id);
@@ -10432,6 +10473,7 @@ fn apply_effect(
                 // shipped `DestroyTargetArtifactOrTappedCreature`
                 // arm).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -10645,6 +10687,7 @@ fn apply_effect(
                 // and doesn't extend to bf→exile.
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -11034,6 +11077,7 @@ fn apply_effect(
                 // object (the established byte-equal contract —
                 // `Effect::DestroyAllCreatures` precedent).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -11569,6 +11613,7 @@ fn apply_effect(
                 // on the dead object). Prior stray `obj.counters = 0;`
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -13931,6 +13976,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             // Owner == the source's controller (Exosuit Savior bounces
@@ -14165,6 +14211,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut player.hand).push(obj);
             // No shuffle (G19 deferral).
@@ -14349,6 +14396,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
@@ -14850,6 +14898,7 @@ fn apply_effect(
                 // (2026-05-21): cloned tokens never start with a
                 // UEOT controller override.
                 controller_override: None,
+                original_printing_id: None,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -14941,6 +14990,7 @@ fn apply_effect(
             // `obj.counters = 0;` removed (R77-CFI1; audited sibling
             // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -15090,6 +15140,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             let lib_mut: &mut Vec<GameObject> =
@@ -15328,6 +15379,7 @@ fn apply_effect(
             // the dead object). Prior stray `obj.counters = 0;`
             // removed (R77-CFI1; same class as the closed CFI-1).
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
@@ -15593,6 +15645,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -15724,6 +15777,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -15833,6 +15887,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -15963,6 +16018,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -16151,6 +16207,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -16388,6 +16445,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -16573,6 +16631,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -17078,6 +17137,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect: reanimated permanent's
@@ -17541,6 +17601,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             // **Cast-from-exile-with-cost-hike substrate (Lightstall
             // Inquisitor residue closure).** Stamp the persistent
@@ -17634,6 +17695,7 @@ fn apply_effect(
                 land_card.damage = 0;
                 land_card.counters = 0;
                 land_card.attached_to = None;
+                land_card.original_printing_id = None;
                 land_card.exiled_with_source = None;
                 let player = &mut state.players[controller_idx];
                 Arc::make_mut(&mut player.hand).push(land_card);
@@ -17833,6 +17895,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
             // Battlefield-exit bookkeeping (mirrors the `Effect::Exile`
@@ -18117,6 +18180,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let id = obj.id;
                 Arc::make_mut(&mut player.exile).push(obj);
@@ -19380,6 +19444,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     moved.push(obj);
                     false
@@ -19769,6 +19834,7 @@ fn apply_effect(
             // `obj.counters = 0;` removed (R77-CFI1; audited sibling
             // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
@@ -20043,6 +20109,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
@@ -20477,6 +20544,7 @@ fn apply_effect(
             obj.tapped = false;
             obj.damage = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             obj.warp_exile_pending = false;
             // Python's `WarpExileSelf.resolve` sets `obj.warped = True`
@@ -20748,6 +20816,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -21013,6 +21082,7 @@ fn apply_effect(
                 // call at `effects/generic/graveyard.py:283`.
                 obj.counters = obj.counters.saturating_add(1);
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 // I83 controller-of-effect: stamp to the reanimation
@@ -21200,6 +21270,7 @@ fn apply_effect(
                 obj.tapped = false;
                 obj.damage = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 // R77-CFI1: counters retained on zone change
                 // (mirrors `DestroyAllCreatures` + SBA destroy path).
@@ -21252,6 +21323,7 @@ fn apply_effect(
                         obj.summoning_sick = true;
                         obj.damage = 0;
                         obj.attached_to = None;
+                        obj.original_printing_id = None;
                         obj.exiled_with_source = None;
                         obj.etb_timestamp = etb_ts;
                         obj.controller = controller; // CR 400.7
@@ -21412,6 +21484,7 @@ fn apply_effect(
                     controller_baseline: None,
                     token_supertype_override: false,
                     controller_override: None,
+                    original_printing_id: None,
                 };
                 // Grant haste UEOT via the established `UeotModifier::
                 // GrantKeyword` push shape (lowercase keyword, mirrors
@@ -21476,6 +21549,7 @@ fn apply_effect(
             obj.tapped = false;
             obj.damage = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             // R77-CFI1: counters intact on the dead object (same as
             // WarpExileSelf / SBA destroy / OptionalSacArtifactForEffect).
@@ -21577,6 +21651,7 @@ fn apply_effect(
                 obj.tapped = false;
                 obj.damage = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
@@ -21653,6 +21728,7 @@ fn apply_effect(
                 obj.tapped = false;
                 obj.damage = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
@@ -22048,6 +22124,7 @@ fn apply_effect(
             // the way to gy — byte-equal cross-engine on the
             // ``_zone_signature`` summoning_sick slot.
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -22232,6 +22309,7 @@ fn apply_effect(
             // pre-leave value. Mutinous-Massacre-aligned + Comet
             // Crawler sibling precedent.
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -22378,6 +22456,7 @@ fn apply_effect(
                 // siblings).
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -22742,6 +22821,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 // 6. Push to that player's graveyard.
                 Arc::make_mut(&mut state.players[pidx].graveyard)
@@ -22937,6 +23017,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 // Check is_land BEFORE pushing — the Vec move is
                 // independent of the printing lookup.
@@ -23055,6 +23136,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             // 4 + 5. Push to exile (the `play_from_exile_requires_kavu`
             // flag is honest-stopped — see docstring).
@@ -23479,6 +23561,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             obj.exiled_with_source = None;
             // 4. Push to hand (no-agent branch — land or non-land
             // both go to hand on this path).
@@ -23636,6 +23719,7 @@ fn apply_effect(
                 // discipline).
                 obj.damage = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -23691,6 +23775,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
@@ -24315,6 +24400,7 @@ fn apply_effect(
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
                 }
@@ -24420,6 +24506,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -24531,6 +24618,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.counters = 0;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             // Maze's exile is UNCONDITIONAL-UNTIL-EOT, NOT until-source-
             // leaves. Do NOT stamp `exiled_with_source`; the return
             // fires via the delayed-trigger machinery regardless of
@@ -24627,6 +24715,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
+                obj.original_printing_id = None;
                 obj.exiled_with_source = None;
                 // CR 302.1 — creature re-entering the battlefield is
                 // summoning-sick this turn. Maze targets ATTACKING
@@ -24755,6 +24844,7 @@ impl GameState {
                     obj.damage = 0;
                     obj.counters = 0;
                     obj.attached_to = None;
+                    obj.original_printing_id = None;
                     obj.exiled_with_source = None;
                     popped.push(obj);
                     false
@@ -25511,6 +25601,12 @@ impl GameState {
             // state had an active UEOT control-grant. Not in the
             // per-object fingerprint tuple.
             controller_override,
+            // Carrier-AA Phase 3C Cycle 1 (2026-05-26) substrate:
+            // freshly-injected objects carry no CR-613 copy snapshot
+            // (the slot is minted by the Effect::BecomesCopyOfTargetLand
+            // resolve arm — NOT YET LANDED at this commit). Back-compat
+            // default; matches the make_object precedent above.
+            original_printing_id: None,
         };
 
         // R76-1: advance the monotonic id counter past this injected
@@ -25677,6 +25773,7 @@ impl GameState {
             // freshly-pushed stack objects start with no UEOT
             // controller override.
             controller_override: None,
+            original_printing_id: None,
         };
         self.stack_objects.push(obj);
         self.stack.push(StackItem {

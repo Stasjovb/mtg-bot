@@ -720,6 +720,7 @@ fn apply_opponent_hand_discard(
     obj.damage = 0;
     obj.counters = 0;
     obj.attached_to = None;
+    obj.original_printing_id = None;
     obj.exiled_with_source = None;
     obj.publicly_known_to_caster_bits = 0;
     std::sync::Arc::make_mut(&mut state.players[target_idx].graveyard)
@@ -927,6 +928,7 @@ fn resolve_manifest_dread_to_battlefield(
         obj.damage = 0;
         obj.counters = 0;
         obj.attached_to = None;
+        obj.original_printing_id = None;
         obj.exiled_with_source = None;
         obj.controller = controller;
         obj.etb_timestamp = etb_ts;

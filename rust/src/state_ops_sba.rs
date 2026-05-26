@@ -325,6 +325,7 @@ fn move_aura_to_owners_graveyard(
     obj.damage = 0;
     obj.tapped = false;
     obj.attached_to = None;
+    obj.original_printing_id = None;
     let target = &mut state.players[owner_id as usize];
     Arc::make_mut(&mut target.graveyard).push(obj);
     // Aura-attachment substrate — Phase 2 S2 (round-79+, 2026-05-20).
@@ -559,6 +560,7 @@ fn perigee_return_tapped_if_marked(
     obj.tapped = true; // "tapped"
     obj.damage = 0;
     obj.attached_to = None;
+    obj.original_printing_id = None;
     obj.exiled_with_source = None;
     obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
     Arc::make_mut(&mut state.players[oidx].battlefield).push(obj);
@@ -978,6 +980,7 @@ impl GameState {
             obj.damage = 0;
             obj.tapped = false;
             obj.attached_to = None;
+            obj.original_printing_id = None;
             let printing_id = obj.printing_id;
             let dying_obj_id = obj.id;
             // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.

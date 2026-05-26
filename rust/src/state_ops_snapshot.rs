@@ -150,6 +150,26 @@ fn object_to_pydict<'py>(
         "publicly_known_to_caster_bits",
         obj.publicly_known_to_caster_bits,
     )?;
+    // **Carrier-AA Phase 3C Cycle 1 (2026-05-26) — Thespian's Stage
+    // substrate landing — CR-613 layer-1 copy snapshot slot surface.**
+    // Surface the per-object original_printing_id Option<u32> so
+    // cross-engine harnesses + substrate tests can observe the Rust
+    // side stamp it (Cycle 1 substrate-only; Cycle 2 wires the
+    // Effect::BecomesCopyOfTargetLand resolve arm that mints the
+    // snapshot; Cycle 3 wires the Python admit + the snapshot codec
+    // arm to round-trip the slot into Python's GameObject.
+    // original_printing: CardPrinting | None on the reverse decoder).
+    // Pre-substrate snapshots observe `None` on every object
+    // (back-compat default — unchanged from the pre-substrate dict);
+    // the new key is additive but the value is invariant on snapshots
+    // that don't exercise the (not-yet-landed) copy-Land resolve arm.
+    //
+    // Emitted as Python `None` when no copy snapshot is active, or as
+    // the original (pre-copy) printing-registry id when set.
+    match obj.original_printing_id {
+        Some(pid) => d.set_item("original_printing_id", pid)?,
+        None => d.set_item("original_printing_id", py.None())?,
+    }
     Ok(d)
 }
 
