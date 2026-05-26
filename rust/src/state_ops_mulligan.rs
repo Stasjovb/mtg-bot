@@ -425,6 +425,7 @@ impl GameState {
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             lib.push(obj);
         }
@@ -631,6 +632,7 @@ impl GameState {
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             lib.push(obj);
         }

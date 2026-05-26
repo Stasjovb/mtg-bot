@@ -9231,6 +9231,70 @@ pub enum Effect {
     /// threaded at activation time (reuses the same payload slot as
     /// the Phase-2a / Phase-3A sibling target-bearing effects).
     BecomesCopyOfTargetLand,
+    /// **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26) —
+    /// `LockOrUnlockDoorOfTargetRoomYouControl`.** Keys to the House's
+    /// AA[1] pilot effect (`{3}, {T}, Sacrifice this artifact: Lock or
+    /// unlock a door of target Room you control. Activate only as a
+    /// sorcery.`). CR-715 Rooms door-state toggle on a Room-subtyped
+    /// permanent the activator controls.
+    ///
+    /// **Mirrors Python's `LockOrUnlockDoorOfTargetRoomYouControl`** at
+    /// `effects/generic/misc.py:198`. On resolve:
+    /// 1. Read the target id from
+    ///    `state.current_resolve_payload_target_id` (the cast-time-
+    ///    bound target threaded onto the StackItem at activation time).
+    ///    If unset, silent fizzle.
+    /// 2. Re-validate target legality per CR 608.2b — the target must
+    ///    STILL be on a battlefield AND its printing's subtypes must
+    ///    STILL contain `"Room"` AND the target's controller must
+    ///    match the resolving source's controller (`You control` rider).
+    ///    If not, silent fizzle.
+    /// 3. Read the door-half index from
+    ///    `state.current_resolve_payload_mode_idx` (the agent-chosen
+    ///    door-half pick at activation time — rides on the action-
+    ///    dict's `mode` slot, NOT a separate target slot). Bound to
+    ///    `[0, 2)` — the printed Room shape has 2 halves.
+    /// 4. Lazily initialize `target.door_states` to `Some(0)` (all
+    ///    locked) on first toggle if currently `None` — every Room
+    ///    enters bf locked per Python's `GameObject.unlocked_halves =
+    ///    set()` default. Then toggle bit `mode_idx`:
+    ///    `door_states ^= (1u8 << mode_idx)`. Bit value `1` means the
+    ///    half is unlocked; `0` means locked (matches Python's
+    ///    `unlocked_halves: set[str]` set-membership semantics — bit
+    ///    set iff half is unlocked).
+    ///
+    /// **Substrate-only Cycle 1 mutator pilot.** Phase 4D Cycle 1 is
+    /// the first Effect in the Carrier-AA Phase 4 wave whose resolve
+    /// arm mutates the new substrate field directly (Phase 3C Cycle 1
+    /// shipped the field + reset; Phase 3C Cycle 2 was the first mint
+    /// site). Phase 4D Cycle 1 combines the substrate landing AND the
+    /// resolve-arm pilot in the same cycle because the door-state slot
+    /// has no other Effect that touches it — the resolve arm IS the
+    /// substrate's pilot mutator. Cycle 2 ships the Python admit +
+    /// bridge arms + Room-target fan-out in
+    /// `state_ops_legal.rs::activate_ability_dict`.
+    ///
+    /// **Re-toggle semantics.** Calling the Effect again on the same
+    /// Room with the same `mode_idx` un-toggles the half (XOR is its
+    /// own inverse). Mirrors Python's `if half.name in unlocked: lock
+    /// else: unlock` ternary.
+    ///
+    /// **Zone-change reset hookup.** CR 400.7 — every bf-leave site
+    /// clears `obj.door_states = None` (wired in this same cycle
+    /// alongside `original_printing_id` per the Phase 3C reset audit
+    /// pattern). If the Room is sacrificed / destroyed / bounced /
+    /// exiled, the door state resets; the doors-locked-state is
+    /// battlefield-only (matches Python's `unlocked_halves` not
+    /// surviving bf-leave).
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `LockOrUnlockDoorOfTargetRoomYouControl()` frozen dataclass.
+    /// Target rides on the StackItem's
+    /// `current_resolve_payload_target_id` slot; the chosen door-half
+    /// index rides on `current_resolve_payload_mode_idx` (the agent-
+    /// chosen `mode` slot, same pattern as Phase 1's `choose_mode`
+    /// rider on multi-mode AAs).
+    LockOrUnlockDoorOfTargetRoomYouControl,
     /// **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
     /// `DrawCardsByConditionMultiplier`.** All-Fates Scroll's AA[1]
     /// pilot effect (`{7}, {T}, Sacrifice this artifact: Draw X cards,
@@ -13987,6 +14051,29 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // Phase 3C Cycle 1 substrate slot).
         "becomes_copy_of_target_land" => {
             Ok(Effect::BecomesCopyOfTargetLand)
+        }
+        // **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26) —
+        // `lock_or_unlock_door_of_target_room_you_control` parse arm.**
+        // Keys to the House's AA[1] pilot effect (`{3}, {T}, Sacrifice
+        // this artifact: Lock or unlock a door of target Room you
+        // control. Activate only as a sorcery.`). Unit variant; no
+        // fields. Mirrors Python's parameterless
+        // `LockOrUnlockDoorOfTargetRoomYouControl()` frozen dataclass at
+        // `effects/generic/misc.py:198`. Extra dict keys silently
+        // dropped (unit-variant contract; same shape as the
+        // Phase-2a/2b/3A/3B/3C unit-variant siblings —
+        // `untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards` / `becomes_copy_of_target_land`). The
+        // Room target rides on the StackItem's
+        // `current_resolve_payload_target_id`; the agent-chosen
+        // door-half index rides on
+        // `current_resolve_payload_mode_idx` (the per-Effect mode
+        // slot, NOT a separate target slot).
+        "lock_or_unlock_door_of_target_room_you_control" => {
+            Ok(Effect::LockOrUnlockDoorOfTargetRoomYouControl)
         }
         // **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
         // `draw_cards_by_condition_multiplier` parse arm.** All-Fates
@@ -20173,6 +20260,33 @@ pub(crate) fn effect_to_pydict<'py>(
         // `state_ops_snapshot.rs`).
         Effect::BecomesCopyOfTargetLand => {
             d.set_item("kind", "becomes_copy_of_target_land")?;
+        }
+        // **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26) —
+        // `LockOrUnlockDoorOfTargetRoomYouControl.to_pydict`.** Keys
+        // to the House's AA[1] pilot effect (`{3}, {T}, Sacrifice this
+        // artifact: Lock or unlock a door of target Room you control.
+        // Activate only as a sorcery.`). Field-free unit-variant; only
+        // `kind` emitted. Mirrors Python's parameterless
+        // `LockOrUnlockDoorOfTargetRoomYouControl()` frozen dataclass
+        // (`effects/generic/misc.py:198`). Same emit shape as the
+        // sibling Carrier-AA unit-variant effects (`untap_target_land`
+        // /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards` / `becomes_copy_of_target_land`).
+        // Target rides on the StackItem's
+        // `current_resolve_payload_target_id` slot threaded at
+        // activation time; the agent-chosen door-half index rides on
+        // `current_resolve_payload_mode_idx` (the per-Effect mode slot,
+        // NOT a separate target slot). The per-object door-state
+        // bitmask rides on `GameObject.door_states` (the Phase 4D
+        // Cycle 1 substrate slot, surfaced via `object_to_pydict` at
+        // `state_ops_snapshot.rs`).
+        Effect::LockOrUnlockDoorOfTargetRoomYouControl => {
+            d.set_item(
+                "kind", "lock_or_unlock_door_of_target_room_you_control",
+            )?;
         }
         // **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26) —
         // `DrawCardsByConditionMultiplier.to_pydict`.** All-Fates

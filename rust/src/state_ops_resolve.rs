@@ -676,6 +676,7 @@ fn move_aura_post_resolve(
         obj.zone = ZONE_GRAVEYARD;
         obj.attached_to = None;
         obj.original_printing_id = None;
+        obj.door_states = None;
         let gy =
             &mut state.players[controller_id as usize].graveyard;
         Arc::make_mut(gy).push(obj);
@@ -2099,6 +2100,7 @@ fn destroy_first_defender_creature_then_draw_if_undamaged(
     // tests/test_probe_cross_feature_interaction.py).
     obj.attached_to = None;
     obj.original_printing_id = None;
+    obj.door_states = None;
     obj.exiled_with_source = None;
     let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
     Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
@@ -2273,6 +2275,7 @@ fn sacrifice_source_inline(
     // Effect::Sacrifice arm's note).
     obj.attached_to = None;
     obj.original_printing_id = None;
+    obj.door_states = None;
     obj.exiled_with_source = None;
     let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
     Arc::make_mut(&mut state.players[controller_idx].graveyard).push(obj);
@@ -2541,6 +2544,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].hand).push(obj);
@@ -2712,6 +2716,7 @@ fn apply_effect(
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
@@ -2797,6 +2802,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 gy_mut.push(obj);
             }
@@ -2889,6 +2895,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].exile).push(obj);
@@ -3165,6 +3172,7 @@ fn apply_effect(
                 // closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[controller].graveyard).push(obj);
@@ -3369,6 +3377,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
                 // **MMM Pin 2 (11th Rust slice).** Dispatch
@@ -3578,6 +3587,7 @@ fn apply_effect(
                 // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
@@ -4021,6 +4031,7 @@ fn apply_effect(
                     // with a UEOT controller override.
                     controller_override: None,
                     original_printing_id: None,
+                    door_states: None,
                 });
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
@@ -4254,6 +4265,7 @@ fn apply_effect(
                         // start with a UEOT controller override.
                         controller_override: None,
                         original_printing_id: None,
+                        door_states: None,
                     });
                     token_ids.push(tok_id);
                     global_token_idx += 1;
@@ -4433,6 +4445,7 @@ fn apply_effect(
                     // with a UEOT controller override.
                     controller_override: None,
                     original_printing_id: None,
+                    door_states: None,
                 });
             }
             // Queue ENTERS per token in stamp order -- mirrors the
@@ -4707,6 +4720,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -5215,6 +5229,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.controller = target_controller;
                 Arc::make_mut(
@@ -5405,6 +5420,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
@@ -5494,6 +5510,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5558,6 +5575,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5624,6 +5642,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5700,6 +5719,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5828,6 +5848,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
@@ -5941,6 +5962,7 @@ fn apply_effect(
             obj.loyalty_counters = starting_loyalty;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect fix: stamp the reanimated
@@ -6071,6 +6093,7 @@ fn apply_effect(
             obj.loyalty_counters = starting_loyalty;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect stamp: reanimated permanent's
@@ -6871,6 +6894,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
@@ -6985,6 +7009,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard)
                     .push(obj);
@@ -7125,6 +7150,7 @@ fn apply_effect(
                     token_supertype_override: moonlit_override,
                     controller_override: None,
                     original_printing_id: None,
+                    door_states: None,
                 });
             }
             state.pending_etb_dispatches.extend(token_ids);
@@ -7337,6 +7363,7 @@ fn apply_effect(
             // (sibling of Effect::Sacrifice / SBA destroy).
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (sacrificed_printing_id, sacrificed_obj_id) =
                 (obj.printing_id, obj.id);
@@ -7397,6 +7424,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -7588,6 +7616,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -7826,6 +7855,7 @@ fn apply_effect(
                 // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -7929,6 +7959,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -8004,6 +8035,7 @@ fn apply_effect(
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8078,6 +8110,7 @@ fn apply_effect(
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8145,6 +8178,7 @@ fn apply_effect(
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8320,6 +8354,7 @@ fn apply_effect(
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -8549,6 +8584,7 @@ fn apply_effect(
                 let prior_attached_to = obj.attached_to;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -8677,6 +8713,7 @@ fn apply_effect(
                         // start with a UEOT controller override.
                         controller_override: None,
                         original_printing_id: None,
+                        door_states: None,
                     });
                     // ETB-trigger Slice 2 (RS4): queue ENTERS for the
                     // fresh token; drained by the surrounding resolver
@@ -8809,6 +8846,7 @@ fn apply_effect(
                 let prior_attached_to = obj.attached_to;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -8915,6 +8953,7 @@ fn apply_effect(
                     // with a UEOT controller override.
                     controller_override: None,
                     original_printing_id: None,
+                    door_states: None,
                 });
                 // Queue ENTERS for the fresh token.
                 state.pending_etb_dispatches.push(new_id);
@@ -9093,6 +9132,7 @@ fn apply_effect(
                         // start with a UEOT controller override.
                         controller_override: None,
                         original_printing_id: None,
+                        door_states: None,
                     });
                     state.pending_etb_dispatches.push(new_id);
                 }
@@ -9320,6 +9360,7 @@ fn apply_effect(
                     // tests/test_probe_cross_feature_interaction.py).
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     let (printing_id, leaving_obj_id) =
                         (obj.printing_id, obj.id);
@@ -10474,6 +10515,7 @@ fn apply_effect(
                 // arm).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -10688,6 +10730,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -11078,6 +11121,7 @@ fn apply_effect(
                 // `Effect::DestroyAllCreatures` precedent).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -11614,6 +11658,7 @@ fn apply_effect(
                 // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
                 Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
@@ -13977,6 +14022,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             // Owner == the source's controller (Exosuit Savior bounces
@@ -14212,6 +14258,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut player.hand).push(obj);
             // No shuffle (G19 deferral).
@@ -14397,6 +14444,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let lib_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].library);
@@ -14899,6 +14947,7 @@ fn apply_effect(
                 // UEOT controller override.
                 controller_override: None,
                 original_printing_id: None,
+                door_states: None,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -14991,6 +15040,7 @@ fn apply_effect(
             // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -15141,6 +15191,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             let lib_mut: &mut Vec<GameObject> =
@@ -15380,6 +15431,7 @@ fn apply_effect(
             // removed (R77-CFI1; same class as the closed CFI-1).
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[tidx].graveyard).push(obj);
@@ -15646,6 +15698,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -15778,6 +15831,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -15888,6 +15942,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = Some(source_obj_id);
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -16019,6 +16074,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
@@ -16208,6 +16264,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 entered_ids.push(obj.id);
@@ -16446,6 +16503,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -16632,6 +16690,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -17138,6 +17197,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             obj.etb_timestamp = etb_ts;
             // I83 controller-of-effect: reanimated permanent's
@@ -17602,6 +17662,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             // **Cast-from-exile-with-cost-hike substrate (Lightstall
             // Inquisitor residue closure).** Stamp the persistent
@@ -17696,6 +17757,7 @@ fn apply_effect(
                 land_card.counters = 0;
                 land_card.attached_to = None;
                 land_card.original_printing_id = None;
+                land_card.door_states = None;
                 land_card.exiled_with_source = None;
                 let player = &mut state.players[controller_idx];
                 Arc::make_mut(&mut player.hand).push(land_card);
@@ -17896,6 +17958,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[opponent_idx].exile).push(obj);
             // Battlefield-exit bookkeeping (mirrors the `Effect::Exile`
@@ -18181,6 +18244,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let id = obj.id;
                 Arc::make_mut(&mut player.exile).push(obj);
@@ -19445,6 +19509,7 @@ fn apply_effect(
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     moved.push(obj);
                     false
@@ -19835,6 +19900,7 @@ fn apply_effect(
             // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
@@ -20110,6 +20176,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].graveyard)
                     .push(obj);
@@ -20545,6 +20612,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             obj.warp_exile_pending = false;
             // Python's `WarpExileSelf.resolve` sets `obj.warped = True`
@@ -20817,6 +20885,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -21083,6 +21152,7 @@ fn apply_effect(
                 obj.counters = obj.counters.saturating_add(1);
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 // I83 controller-of-effect: stamp to the reanimation
@@ -21271,6 +21341,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 // R77-CFI1: counters retained on zone change
                 // (mirrors `DestroyAllCreatures` + SBA destroy path).
@@ -21324,6 +21395,7 @@ fn apply_effect(
                         obj.damage = 0;
                         obj.attached_to = None;
                         obj.original_printing_id = None;
+                        obj.door_states = None;
                         obj.exiled_with_source = None;
                         obj.etb_timestamp = etb_ts;
                         obj.controller = controller; // CR 400.7
@@ -21485,6 +21557,7 @@ fn apply_effect(
                     token_supertype_override: false,
                     controller_override: None,
                     original_printing_id: None,
+                    door_states: None,
                 };
                 // Grant haste UEOT via the established `UeotModifier::
                 // GrantKeyword` push shape (lowercase keyword, mirrors
@@ -21550,6 +21623,7 @@ fn apply_effect(
             obj.damage = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             // R77-CFI1: counters intact on the dead object (same as
             // WarpExileSelf / SBA destroy / OptionalSacArtifactForEffect).
@@ -21652,6 +21726,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
@@ -21729,6 +21804,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
             }
@@ -22125,6 +22201,7 @@ fn apply_effect(
             // ``_zone_signature`` summoning_sick slot.
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -22310,6 +22387,7 @@ fn apply_effect(
             // Crawler sibling precedent.
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
             Arc::make_mut(&mut state.players[cidx].graveyard).push(obj);
@@ -22457,6 +22535,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
                     (obj.printing_id, obj.id);
@@ -22822,6 +22901,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 // 6. Push to that player's graveyard.
                 Arc::make_mut(&mut state.players[pidx].graveyard)
@@ -23018,6 +23098,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 // Check is_land BEFORE pushing — the Vec move is
                 // independent of the printing lookup.
@@ -23137,6 +23218,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             // 4 + 5. Push to exile (the `play_from_exile_requires_kavu`
             // flag is honest-stopped — see docstring).
@@ -23562,6 +23644,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             obj.exiled_with_source = None;
             // 4. Push to hand (no-agent branch — land or non-land
             // both go to hand on this path).
@@ -23720,6 +23803,7 @@ fn apply_effect(
                 obj.damage = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
                 let leaving_obj_id = obj.id;
@@ -23776,6 +23860,7 @@ fn apply_effect(
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     gy_mut.push(obj);
                 }
@@ -24401,6 +24486,7 @@ fn apply_effect(
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
                 }
@@ -24507,6 +24593,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 obj.etb_timestamp = etb_ts;
                 let id = obj.id;
@@ -24619,6 +24706,7 @@ fn apply_effect(
             obj.counters = 0;
             obj.attached_to = None;
             obj.original_printing_id = None;
+            obj.door_states = None;
             // Maze's exile is UNCONDITIONAL-UNTIL-EOT, NOT until-source-
             // leaves. Do NOT stamp `exiled_with_source`; the return
             // fires via the delayed-trigger machinery regardless of
@@ -24716,6 +24804,7 @@ fn apply_effect(
                 obj.counters = 0;
                 obj.attached_to = None;
                 obj.original_printing_id = None;
+                obj.door_states = None;
                 obj.exiled_with_source = None;
                 // CR 302.1 — creature re-entering the battlefield is
                 // summoning-sick this turn. Maze targets ATTACKING
@@ -24982,6 +25071,144 @@ fn apply_effect(
                 );
                 if let Some(src_obj) = src_bf.get_mut(src_bf_idx) {
                     src_obj.printing_id = new_printing_id;
+                }
+            }
+        }
+        // **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26) —
+        // `LockOrUnlockDoorOfTargetRoomYouControl` resolve.** Keys to
+        // the House's AA[1] pilot effect (`{3}, {T}, Sacrifice this
+        // artifact: Lock or unlock a door of target Room you control.
+        // Activate only as a sorcery.`). CR-715 Rooms door-state toggle
+        // on a Room-subtyped permanent the activator controls.
+        //
+        // **Mirrors Python's `LockOrUnlockDoorOfTargetRoomYouControl.
+        // resolve`** at `effects/generic/misc.py:239-287`:
+        //   1. Read the target id from
+        //      `state.current_resolve_payload_target_id` (cast-time-
+        //      bound). If unset, silent fizzle (mirrors Python's `if
+        //      not targets: return` at `misc.py:243`).
+        //   2. Locate the target across both bfs + re-validate per
+        //      CR 608.2b — the target must STILL be on a battlefield
+        //      AND its printing's subtypes must STILL contain
+        //      `"Room"` AND the target's controller must match the
+        //      resolving source's controller (the `You control` rider
+        //      at `misc.py:251`). If not, silent fizzle.
+        //   3. Read the agent-chosen door-half index from
+        //      `state.current_resolve_chosen_mode_idx` (the per-resolve
+        //      transient slot the stack resolver writes around each
+        //      `apply_effect` call from the StackItem's
+        //      `chosen_mode_idx`). Bound to `[0, 8)` — the per-half
+        //      bit width is u8 = 8 bits (Phase 4D ships the 2-bit
+        //      width for the printed 2-half Room shape; a future
+        //      out-of-range mode_idx silent-fizzles). If unset (None),
+        //      default to half-0 (the canonical first half).
+        //   4. Read or lazily initialize `target.door_states`:
+        //      `None -> Some(0)` (all locked — matches Python's
+        //      `GameObject.unlocked_halves = set()` default at Room
+        //      ETB).
+        //   5. Toggle bit `mode_idx`: `door_states ^= (1u8 << mode_idx)`.
+        //      Bit value `1` = unlocked, `0` = locked (matches
+        //      Python's `unlocked_halves: set[str]` set-membership
+        //      semantics — bit set iff the half is unlocked).
+        //
+        // **Controller resolution.** Reads
+        // `current_resolve_source_controller` (the per-resolve
+        // transient slot the stack resolver writes around each
+        // `apply_effect` call) with `active_player` fallback — same
+        // pattern as `Effect::DrawCards` / `Effect::GainLife`.
+        //
+        // **No event dispatch.** Phase 4D ships the bare toggle
+        // without `Event::DoorStateChanged` plumbing per design doc
+        // §4.3 — full-Rooms gameplay triggers defer to Phase 5+.
+        //
+        // **Substrate-only Cycle 1 mutator pilot.** This is the first
+        // Effect in the Carrier-AA Phase 4 wave whose resolve arm
+        // mutates the new substrate field directly. The substrate
+        // landing AND the resolve-arm pilot ship in the same cycle
+        // because the door-state slot has no other Effect that touches
+        // it — this resolve arm IS the substrate's pilot mutator.
+        // Cycle 2 ships the Python admit + bridge arms + Room-target
+        // fan-out in `state_ops_legal.rs::activate_ability_dict` —
+        // Keys to the House STAYS DECLINED post-Cycle-1.
+        Effect::LockOrUnlockDoorOfTargetRoomYouControl => {
+            // Step 1: read the cast-time-bound target id. Silent
+            // fizzle if absent (mirrors Python's `not targets` early
+            // return).
+            let Some(target_id) = state.current_resolve_payload_target_id else {
+                return Ok(());
+            };
+            // Step 2: locate the target across both bfs + re-validate
+            // (CR 608.2b + the `You control` rider). The target's
+            // controller is captured here so the subsequent mutation
+            // doesn't aliase a printing-borrow.
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let target_loc: Option<(usize, usize)> = {
+                let mut found: Option<(usize, usize)> = None;
+                for (pidx, player) in state.players.iter().enumerate() {
+                    if let Some(idx) = player
+                        .battlefield
+                        .iter()
+                        .position(|o| o.id == target_id)
+                    {
+                        let t_obj = &player.battlefield[idx];
+                        // Controller-match rider: the `You control`
+                        // clause requires the target's controller to
+                        // match the resolving source's controller.
+                        if t_obj.controller as usize != controller {
+                            return Ok(()); // not under your control → fizzle
+                        }
+                        // Subtype-Room re-validation per CR 608.2b.
+                        let Some(printing) =
+                            state.registry.lookup(t_obj.printing_id)
+                        else {
+                            return Ok(()); // registry-miss → silent fizzle
+                        };
+                        if !printing.subtypes.iter().any(|s| s == "Room") {
+                            return Ok(()); // no longer a Room → fizzle
+                        }
+                        found = Some((pidx, idx));
+                        break;
+                    }
+                }
+                found
+            };
+            let Some((tgt_pidx, tgt_bf_idx)) = target_loc else {
+                // Target no longer on any bf — silent fizzle per
+                // CR 608.2b. The Phase 4D C1 zone-change reset has
+                // already cleared `door_states` on the leaving Room,
+                // so no stale state is observable.
+                return Ok(());
+            };
+            // Step 3: read the agent-chosen door-half index. Default
+            // to half-0 if unset (a future mode-dispatching action
+            // path will always set it; the default is a defensive
+            // back-compat for resolve arms that don't yet thread the
+            // mode_idx slot).
+            let mode_idx_raw: u8 =
+                state.current_resolve_chosen_mode_idx.unwrap_or(0);
+            // Bit-width guard: u8 has 8 bits; clamp to the printed
+            // Room shape (2-bit width). An out-of-range mode_idx
+            // silent-fizzles per the design-doc-§4.3 bounded shape
+            // (`Phase 4D ships 2-bit width for the 2-half Room shape;
+            // extend if a future Room shape has >2 halves`). Cycle 1
+            // honors the 2-half ceiling — pre-2-half cap.
+            if mode_idx_raw >= 8 {
+                return Ok(()); // beyond u8 bit-width → fizzle
+            }
+            // Step 4-5: lazy-init + toggle the door-half bit. The
+            // toggle is XOR — calling the Effect again with the same
+            // mode_idx un-toggles the half (XOR is its own inverse).
+            {
+                let bf_mut = Arc::make_mut(
+                    &mut state.players[tgt_pidx].battlefield,
+                );
+                if let Some(t_obj) = bf_mut.get_mut(tgt_bf_idx) {
+                    let cur = t_obj.door_states.unwrap_or(0u8);
+                    let new = cur ^ (1u8 << mode_idx_raw);
+                    t_obj.door_states = Some(new);
                 }
             }
         }
@@ -25333,6 +25560,7 @@ impl GameState {
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     popped.push(obj);
                     false
@@ -26095,6 +26323,7 @@ impl GameState {
             // resolve arm — NOT YET LANDED at this commit). Back-compat
             // default; matches the make_object precedent above.
             original_printing_id: None,
+            door_states: None,
         };
 
         // R76-1: advance the monotonic id counter past this injected
@@ -26262,6 +26491,7 @@ impl GameState {
             // controller override.
             controller_override: None,
             original_printing_id: None,
+            door_states: None,
         };
         self.stack_objects.push(obj);
         self.stack.push(StackItem {

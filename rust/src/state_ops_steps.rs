@@ -257,6 +257,7 @@ fn draw_card_inline(state: &mut GameState, player_id: u8) {
     // but reset defensively to mirror the pymethod's `draw_card`.
     obj.attached_to = None;
     obj.original_printing_id = None;
+    obj.door_states = None;
     obj.exiled_with_source = None;
     Arc::make_mut(&mut player.hand).push(obj);
 }

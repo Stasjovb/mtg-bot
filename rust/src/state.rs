@@ -488,6 +488,63 @@ pub struct GameObject {
     /// resolve arm is the first mint site, and Cycle 3's Python-
     /// side admit widen is the first cross-engine observable surface.
     pub original_printing_id: Option<u32>,
+    /// **Carrier-AA Phase 4D Cycle 1 — Rooms/Doors locked-state slot.**
+    /// `Some(states)` on Room-subtyped permanents (CR-715 Rooms), `None`
+    /// on every other GameObject. `states` is a 2-bit bitmask of the
+    /// per-Door-half locked bool — bit 0 = first half (index 0), bit 1
+    /// = second half (index 1). Bit value `0` = locked, `1` = unlocked
+    /// (matches Python's `unlocked_halves: set[str]` set-membership
+    /// semantics — bit set iff the half is unlocked). Phase 4D ships
+    /// the 2-bit width for the printed 2-half Room shape; extend the
+    /// width if a future Room printing has more halves (none in EoE).
+    ///
+    /// **Phase 4D Cycle 1 SUBSTRATE-ONLY semantics.** This slice lands
+    /// the field + defaults + zone-change reset + snapshot bridge
+    /// ONLY — no Effect arm mints `Some(states)` yet beyond the new
+    /// `Effect::LockOrUnlockDoorOfTargetRoomYouControl` resolve arm
+    /// (which DOES toggle bits on the substrate slot — this is Cycle
+    /// 1's pilot mutator). The substrate-only invariant pinned by
+    /// `tests/test_carrier_aa_phase_4d_substrate_cycle_1.py` is:
+    /// every GameObject minted in this cycle starts with
+    /// `door_states = None` (back-compat default), zone-change reset
+    /// clears the slot to `None` (CR 400.7 — Door state is a
+    /// battlefield-only concept), and the snapshot bridge surfaces the
+    /// slot through `object_to_pydict` so Python tests can observe the
+    /// round-trip. Keys to the House STAYS DECLINED at the admit gate
+    /// post-Cycle-1 — Cycle 2 ships the Python admit + bridge arms +
+    /// the Room-target fan-out in `state_ops_legal.rs`.
+    ///
+    /// **Why a u8 bitmask** (vs `Vec<bool>` or a set-typed slot): Python
+    /// keeps a `set[str]` keyed by half name, but the Rust side is
+    /// downstream of the printing-registry — half names are looked up
+    /// via `registry.get(printing_id).room_halves[idx].name`. The
+    /// bitmask carries the per-half state by positional index (`0` /
+    /// `1`), and the snapshot bridge surfaces the integer directly;
+    /// Python's reverse decoder maps `(bit_i, room_halves[i].name)` to
+    /// the `unlocked_halves` set membership. This avoids string
+    /// duplication on the per-object slot.
+    ///
+    /// **Reset on zone change (CR 400.7).** Door state is a
+    /// battlefield-only concept; once the Room leaves the battlefield
+    /// (sacrifice / destroy / bounce / exile / mill), `door_states` is
+    /// cleared back to `None`. If the same object id ever re-enters the
+    /// battlefield (unusual but possible — bounce + replay), the door
+    /// state does NOT auto-restore (matches Python's behavior — the
+    /// `unlocked_halves` set isn't preserved across bf-leave). The
+    /// reset is wired at every bf-leave call site that already clears
+    /// `original_printing_id = None` (sibling-narrow audit; mirrors the
+    /// `original_printing_id` Phase 3C reset hookup pattern).
+    ///
+    /// **Fingerprint elision (back-compat).** NOT in the per-object
+    /// fingerprint 8-tuple today — every pre-substrate pinned baseline
+    /// stays byte-equal. Same elision pattern as `stun_counters`,
+    /// `regeneration_shield`, `warp_exile_pending`,
+    /// `controller_baseline`, `controller_override`,
+    /// `publicly_known_to_caster_bits`, `original_printing_id`. The
+    /// observable surface for the substrate-only Cycle 1 is the
+    /// snapshot dict round-trip (via `object_to_pydict`) plus the
+    /// resolve-arm toggle pin, not the fingerprint.
+    pub door_states: Option<u8>,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -4017,6 +4074,12 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // the per-object fingerprint tuple.
         controller_override: None,
         original_printing_id: None,
+        // Carrier-AA Phase 4D Cycle 1 (2026-05-26): freshly-allocated
+        // objects have no Rooms/Doors locked-state. The slot is stamped
+        // by Effect::LockOrUnlockDoorOfTargetRoomYouControl on Room
+        // permanents only. Back-compat default; not in the per-object
+        // fingerprint tuple.
+        door_states: None,
     }
 }
 

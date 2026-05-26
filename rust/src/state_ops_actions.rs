@@ -1045,6 +1045,29 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::ExileTargetCardFromGraveyard,
                 );
+                // **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26).**
+                // Recognize ``Effect::LockOrUnlockDoorOfTargetRoomYouControl``
+                // as a SIXTH target-shape on the ``target_creature_id``
+                // slot — when an AA's effect is this variant (Keys to
+                // the House's AA[1]), the ``target_creature_id`` slot
+                // acts as the chosen Room id (controller-controlled
+                // only, per the `You control` rider). Validation walks
+                // the activator's battlefield for the target id +
+                // verifies the target is printed with the Room
+                // subtype. The Cycle 2 legal-emit fan-out arm in
+                // ``state_ops_legal.rs::legal_decisions`` (NOT YET
+                // LANDED at this commit) will walk
+                // ``state.players[controller_idx].battlefield`` for
+                // Room-subtyped permanents and emit one
+                // ``ActivateAbility`` per eligible target × per door-
+                // half. Cycle 1 only wires the apply-side
+                // (action-dict → resolve) — the legal-side fan-out is
+                // C2's deliverable; direct-callers / synthetic tests
+                // drive the resolve path.
+                let is_lock_or_unlock_door_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::LockOrUnlockDoorOfTargetRoomYouControl,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1161,6 +1184,67 @@ impl GameState {
                                          a Creature on a battlefield, \
                                          opponent-controlled relative to \
                                          the activator)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
+                    } else if is_lock_or_unlock_door_effect {
+                        // **Carrier-AA substrate Phase 4D Cycle 1
+                        // (2026-05-26).** Room-target validation for
+                        // Keys to the House's AA[1]. Cycle 2 ships the
+                        // legal-emit fan-out arm in
+                        // ``state_ops_legal.rs::legal_decisions``; the
+                        // validator here re-checks the chosen target
+                        // against bf-presence + printed-Room subtype +
+                        // controller-match (``You control`` rider).
+                        // Mirrors Python's
+                        // ``LockOrUnlockDoorOfTargetRoomYouControl.
+                        // legal_targets`` walk over the activator's
+                        // battlefield for ``o.printing.is_room`` at
+                        // ``effects/generic/misc.py:229-237``.
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) is silent-
+                        // fizzle, matching Python's `if not targets:
+                        // return` early-return at `misc.py:243`.
+                        // Direct-callers / synthetic tests rely on
+                        // either passing the chosen Room id or omitting
+                        // it to drive the fizzle path.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                // Must be on the activator's bf AND
+                                // printed with the Room subtype.
+                                let target_legal: bool = {
+                                    let bf = &state
+                                        .players[controller_idx]
+                                        .battlefield;
+                                    let registry = &state.registry;
+                                    bf.iter().any(|obj| {
+                                        if obj.id != target_id {
+                                            return false;
+                                        }
+                                        let Some(printing) = registry
+                                            .printings
+                                            .get(obj.printing_id as usize)
+                                        else {
+                                            return false;
+                                        };
+                                        printing.subtypes
+                                            .iter()
+                                            .any(|s| s == "Room")
+                                    })
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         Room target (must be a Room-subtyped \
+                                         permanent on the activator's bf; \
+                                         CR 715 — Keys to the House's AA[1] \
+                                         requires `target Room you control`)"
                                     )));
                                 }
                                 Some(target_id)
@@ -1679,6 +1763,7 @@ impl GameState {
                     obj.counters = 0;
                     obj.attached_to = None;
                     obj.original_printing_id = None;
+                    obj.door_states = None;
                     obj.exiled_with_source = None;
                     let sac_printing_id = obj.printing_id;
                     let sac_obj_id = obj.id;
@@ -1756,6 +1841,7 @@ impl GameState {
                         obj.counters = 0;
                         obj.attached_to = None;
                         obj.original_printing_id = None;
+                        obj.door_states = None;
                         obj.exiled_with_source = None;
                         let sac_printing_id = obj.printing_id;
                         let sac_obj_id = obj.id;

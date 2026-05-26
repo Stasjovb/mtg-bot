@@ -461,6 +461,7 @@ impl GameState {
         // today, but reset defensively to mirror move_object family.
         obj.attached_to = None;
         obj.original_printing_id = None;
+        obj.door_states = None;
         obj.exiled_with_source = None;
         let drawn_id = obj.id;
         Arc::make_mut(&mut player.hand).push(obj);
@@ -532,6 +533,7 @@ impl GameState {
         // enters unattached.
         obj.attached_to = None;
         obj.original_printing_id = None;
+        obj.door_states = None;
         obj.exiled_with_source = None;
         // CE4 closure: stamp ETB timestamp on this reanimation.
         obj.etb_timestamp = etb_ts;
@@ -606,6 +608,7 @@ impl GameState {
         // relationship on zone change.
         obj.attached_to = None;
         obj.original_printing_id = None;
+        obj.door_states = None;
         obj.exiled_with_source = None;
         Arc::make_mut(&mut player.hand).push(obj);
         Ok(true)

@@ -13008,6 +13008,46 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             BecomesCopyOfTargetLand,
         )
         return BecomesCopyOfTargetLand()
+    if kind == "lock_or_unlock_door_of_target_room_you_control":
+        # **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26).** Bridge
+        # arm for the new Rust ``Effect::
+        # LockOrUnlockDoorOfTargetRoomYouControl`` variant (cards.rs).
+        # Mirrors Python's parameterless
+        # ``LockOrUnlockDoorOfTargetRoomYouControl`` frozen dataclass at
+        # ``effects/generic/misc.py:198`` — Keys to the House's AA[1]
+        # pilot effect (``{3}, {T}, Sacrifice this artifact: Lock or
+        # unlock a door of target Room you control. Activate only as a
+        # sorcery.``). Unit variant — no fields beyond ``kind``. Same
+        # shape as the Phase-2a/2b/3A/3B/3C unit-variant siblings
+        # ``untap_target_land`` /
+        # ``return_target_land_from_graveyard_to_hand`` /
+        # ``put_basic_land_from_hand_onto_battlefield_tapped`` /
+        # ``exile_target_attacking_creature_until_end_step`` /
+        # ``exile_all_graveyards`` /
+        # ``becomes_copy_of_target_land``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY (Rust slice).** Phase 4D Cycle 1
+        # keeps Keys to the House DECLINED at the production-deck
+        # loader; the Effect-class admit-set widen
+        # (``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect) + the Phase 4A multi-AA admit predicate widen + the
+        # sorcery_speed AA-rider widen all ship C2. This bridge arm is
+        # byte-equal for both the substrate-only and the post-C2
+        # flipped outcomes — synthetic round-trip tests drive it at
+        # C1; the live admit gate FLIPs at C2.
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` must use the SPECIFIC class
+        # ``LockOrUnlockDoorOfTargetRoomYouControl`` — NOT any parent
+        # ``Effect`` class — to avoid silently widening admission to
+        # other ``Effect`` subclasses (consistent with the
+        # Phase-3A / 3B / 3C specificity contract). The class has no
+        # subclasses in the live tree, so the isinstance match is
+        # exact — no specificity guard needed.
+        from mtg_bot.effects.generic.misc import (
+            LockOrUnlockDoorOfTargetRoomYouControl,
+        )
+        return LockOrUnlockDoorOfTargetRoomYouControl()
     if kind == "exile_all_graveyards":
         # **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25).** Bridge
         # arm for the new Rust ``Effect::ExileAllGraveyards`` variant
@@ -15038,6 +15078,15 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         DrawCardsByConditionMultiplier,
     )
     from mtg_bot.effects.conditions import PerDifferentlyNamedLand
+    # **Phase 4D C1 widen (2026-05-26).** Add
+    # ``LockOrUnlockDoorOfTargetRoomYouControl`` (Keys to the House's
+    # AA[1] pilot Effect — Carrier-AA Phase 4D cycle per design doc
+    # §5.6). Unit-variant ``{"kind":
+    # "lock_or_unlock_door_of_target_room_you_control"}``; no rider
+    # fields. The class has no subclasses in the live tree.
+    from mtg_bot.effects.generic.misc import (
+        LockOrUnlockDoorOfTargetRoomYouControl,
+    )
     # **Phase 4E C2 widen (2026-05-26).** Add ``AddManaToPool``
     # (All-Fates Scroll's AA[0] pilot Effect — Carrier-AA Phase 4E
     # cycle per design doc §5.7). Two-key dict per the round-21 mana-
@@ -15137,6 +15186,39 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # to avoid silently widening admission to other ``Effect``
         # subclasses (consistent with the Phase-3A specificity contract).
         effect_dict = {"kind": "exile_all_graveyards"}
+    elif isinstance(effect, LockOrUnlockDoorOfTargetRoomYouControl):
+        # **Carrier-AA substrate Phase 4D Cycle 1 (2026-05-26).** Forward-
+        # emit arm for Keys to the House's AA[1] pilot effect (``{3},
+        # {T}, Sacrifice this artifact: Lock or unlock a door of target
+        # Room you control. Activate only as a sorcery.``). Unit variant
+        # — only the ``kind`` discriminator on the wire. Target rides
+        # on the action-dict's ``target_creature_id`` slot at activation
+        # time (the generic single-target object-id slot, reused for
+        # the Phase-2a / Phase-3A / Phase-3C / Phase-4D target-bearing
+        # siblings); the agent-chosen door-half index rides on the
+        # ``chosen_mode_idx`` slot (per-Effect mode pick, NOT a separate
+        # target slot).
+        #
+        # **Substrate-only (Rust slice): Keys to the House STAYS
+        # DECLINED at admit gate post-Phase-4D-C1.** The forward emit
+        # succeeds (Rust round-trip works), but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live Keys
+        # to the House printing because (a) C1 doesn't widen
+        # ``_carrier_aa_phase_1_effect_classes`` to include this Effect
+        # class AND (b) C1 doesn't widen the Phase 4A multi-AA admit
+        # predicate at trajectory.py:9240 AND (c) C1 doesn't widen the
+        # sorcery_speed AA-rider gate; ALL ship C2. The forward arm
+        # exists at C1 so unit-test pins can drive the Rust round-trip.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``LockOrUnlockDoorOfTargetRoomYouControl`` — NOT any parent
+        # ``Effect`` class — to avoid silently widening admission to
+        # other ``Effect`` subclasses (consistent with the Phase-3A /
+        # 3B / 3C specificity contract). The class has no subclasses
+        # in the live tree.
+        effect_dict = {
+            "kind": "lock_or_unlock_door_of_target_room_you_control",
+        }
     elif isinstance(effect, BecomesCopyOfTargetLand):
         # **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).**
         # Forward-emit arm for Thespian's Stage's pilot effect

@@ -151,6 +151,7 @@ impl GameState {
                 // override. Back-compat default.
                 controller_override: None,
                 original_printing_id: None,
+                door_states: None,
             });
             next_id += 1;
         }

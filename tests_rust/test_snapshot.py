@@ -60,6 +60,15 @@ EXPECTED_KEYS = {
     # (Cycle 2 ships the minter -- Cycle 1 is substrate-only,
     # so the value is None on every freshly-allocated object).
     "original_printing_id",
+    # Carrier-AA Phase 4D Cycle 1 (2026-05-26): per-object CR-715
+    # Rooms door-state bitmask slot. None for the universal default
+    # (non-Room objects + freshly-allocated Rooms before any toggle);
+    # Some(bitmask) once the Effect::
+    # LockOrUnlockDoorOfTargetRoomYouControl resolve arm has minted a
+    # toggle on a Room permanent. Cycle 1 ships the substrate + resolve
+    # arm pilot toggle; Cycle 2 ships the Python admit + bridge arms +
+    # Room-target fan-out.
+    "door_states",
 }
 
 _FOREST = {

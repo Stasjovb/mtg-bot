@@ -190,6 +190,30 @@ fn object_to_pydict<'py>(
         Some(sid) => d.set_item("exiled_with_source", sid)?,
         None => d.set_item("exiled_with_source", py.None())?,
     }
+    // **Carrier-AA Phase 4D Cycle 1 (2026-05-26) — Keys to the House
+    // substrate landing — CR-715 Rooms door-state bitmask surface.**
+    // Surface the per-object door_states Option<u8> so cross-engine
+    // harnesses + substrate tests can observe the Rust side stamp it.
+    // Cycle 1 ships substrate + resolve-arm pilot toggle (the
+    // `Effect::LockOrUnlockDoorOfTargetRoomYouControl` resolve arm
+    // mints `Some(bitmask)` on Room targets); Cycle 2 wires the
+    // Python admit + bridge arms + Room-target fan-out. The reverse
+    // decoder side (cross-engine `_decode_safe_aa`) maps the integer
+    // bitmask back to Python's `unlocked_halves: set[str]` via the
+    // printing-registry's `room_halves[i].name` lookup at apply time.
+    //
+    // Pre-substrate snapshots observe `None` on every non-Room object
+    // (back-compat default — unchanged from the pre-substrate dict);
+    // the new key is additive but the value is invariant on snapshots
+    // that don't exercise the Room-toggle resolve arm.
+    //
+    // Emitted as Python `None` when no door-state is stamped, or as
+    // the integer bitmask (0 = all locked, 1 = half-0 unlocked, 2 =
+    // half-1 unlocked, 3 = both unlocked) when set.
+    match obj.door_states {
+        Some(states) => d.set_item("door_states", states)?,
+        None => d.set_item("door_states", py.None())?,
+    }
     Ok(d)
 }
 
