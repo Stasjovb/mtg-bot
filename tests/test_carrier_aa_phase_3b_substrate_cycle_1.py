@@ -721,6 +721,10 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         ExileTargetAttackingCreatureUntilEndStep,
     )
     from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.misc import (
+        LockOrUnlockDoorOfTargetRoomYouControl,
+    )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -739,6 +743,9 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         BecomesCopyOfTargetLand,
         DrawCardsByConditionMultiplier,
         AddManaToPool,
+        # Phase-4D-C2 widens: Keys-to-the-House FLIP.
+        LockOrUnlockDoorOfTargetRoomYouControl,
+        SearchLibraryForCard,
     }
     classes = _carrier_aa_phase_1_effect_classes()
     # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C

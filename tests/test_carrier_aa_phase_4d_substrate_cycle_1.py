@@ -797,19 +797,24 @@ def test_zone_change_keeps_door_states_none_no_minter(
 
 def test_keys_to_the_house_stays_declined_post_substrate_cycle_1():
     """**Phase 4D C1 substrate-only invariant pin.** Keys to the
-    House's live ``OracleParserCardSource`` printing FAILS the per-AA
-    admit predicate ``_aa_is_phase1_sub_shape_a`` post-Phase-4D-C1
-    because:
-      (a) C1 doesn't widen ``_carrier_aa_phase_1_effect_classes`` to
-          include ``LockOrUnlockDoorOfTargetRoomYouControl`` (C2 ships
-          the widen).
-      (b) C1 doesn't widen the Phase 4A multi-AA admit predicate (C2
-          inherits / co-flips the multi-AA gate).
-      (c) C1 doesn't widen the ``sorcery_speed`` AA-rider gate (C2
-          ships the widen).
+    House's live ``OracleParserCardSource`` printing PASSES the per-AA
+    admit predicate ``_aa_is_phase1_sub_shape_a`` post-Phase-4D-C2:
+      (a) ``_carrier_aa_phase_1_effect_classes`` now includes
+          ``LockOrUnlockDoorOfTargetRoomYouControl`` (AA[1]) and
+          ``SearchLibraryForCard`` (AA[0]).
+      (b) The Phase 4A multi-AA admit predicate's per-AA all-or-
+          nothing walk inherits the lifted Effect-class + AA-rider
+          gates.
+      (c) The ``sorcery_speed`` AA-rider gate is lifted at the per-AA
+          predicate AND the bridge floor — AA[1]'s ``sorcery_speed=
+          True`` is admitted; the Rust side gates AA emission at the
+          outer ``is_sorcery_timing`` block (legal-emit at
+          ``state_ops_legal.rs:2780``), so the per-AA rider widen is
+          byte-equivalent.
 
-    Invariant: the live printing remains DECLINED — Cycle 1 is a pure
-    substrate landing, no admit-gate flip.
+    **Phase 4D C2 invariant (2026-05-26 — inverted from the C1
+    STAY-DECLINED contract):** Keys to the House's AAs admit at the
+    per-AA gate; the printing FLIPS DECLINED → ADMITTED.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -822,33 +827,42 @@ def test_keys_to_the_house_stays_declined_post_substrate_cycle_1():
         pytest.skip(
             "Keys to the House not in OracleParserCardSource printings"
         )
-    # Per-AA admit predicate: AA[1] STAYS DECLINED at C1 (the
-    # LockOrUnlockDoorOfTargetRoomYouControl Effect-class is not in the
-    # admit set; the sorcery_speed AA-rider gate isn't widened; the
-    # multi-AA admit predicate isn't widened).
+    # Per-AA admit predicate: BOTH AAs now PASS (C2 widens shipped).
+    aa0 = keys.activated_abilities[0]
     aa1 = keys.activated_abilities[1]
-    assert _aa_is_phase1_sub_shape_a(aa1) is False, (
-        "Keys to the House AA[1] must STAY DECLINED at the per-AA "
-        "admit gate post-Phase-4D-Cycle-1 (no Effect-class widen yet)"
+    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
+        "Keys to the House AA[0] must PASS the per-AA admit gate "
+        "post-Phase-4D-Cycle-2 (the SearchLibraryForCard Effect-class "
+        "widen shipped)"
+    )
+    assert _aa_is_phase1_sub_shape_a(aa1) is True, (
+        "Keys to the House AA[1] must PASS the per-AA admit gate "
+        "post-Phase-4D-Cycle-2 (the LockOrUnlockDoorOfTargetRoomYou"
+        "Control Effect-class widen + sorcery_speed AA-rider widen "
+        "shipped)"
     )
 
 
 def test_phase_1_effect_classes_unchanged_post_substrate_cycle_1():
-    """**Phase 4D C1 Effect-class admit-set unchanged pin.** The
-    ``_carrier_aa_phase_1_effect_classes`` admit set does NOT yet
-    include ``LockOrUnlockDoorOfTargetRoomYouControl`` — C2 ships the
-    widen.
-
-    Inverted to ``... in classes`` at the Phase-4D-C2 widen pin.
+    """**Phase 4D C2 Effect-class admit-set widen pin (inverted from
+    the C1 ``MUST NOT`` contract).** The ``_carrier_aa_phase_1_effect_
+    classes`` admit set NOW includes
+    ``LockOrUnlockDoorOfTargetRoomYouControl`` (Keys to the House's
+    AA[1] pilot) AND ``SearchLibraryForCard`` (Keys to the House's
+    AA[0] pilot).
     """
     from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
     )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
 
     classes = _carrier_aa_phase_1_effect_classes()
-    assert LockOrUnlockDoorOfTargetRoomYouControl not in classes, (
-        "LockOrUnlockDoorOfTargetRoomYouControl MUST NOT be in the "
-        "admit set post-Phase-4D-Cycle-1 (the C2 widen ships this "
-        "admission)"
+    assert LockOrUnlockDoorOfTargetRoomYouControl in classes, (
+        "LockOrUnlockDoorOfTargetRoomYouControl MUST be in the admit "
+        "set post-Phase-4D-Cycle-2 (the C2 widen lands this admission)"
+    )
+    assert SearchLibraryForCard in classes, (
+        "SearchLibraryForCard MUST be in the admit set post-Phase-4D-"
+        "Cycle-2 (Keys to the House's AA[0] Effect-class widen)"
     )

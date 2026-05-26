@@ -846,6 +846,10 @@ def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
         ExileTargetAttackingCreatureUntilEndStep,
     )
     from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.misc import (
+        LockOrUnlockDoorOfTargetRoomYouControl,
+    )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -869,15 +873,21 @@ def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
         BecomesCopyOfTargetLand,
         DrawCardsByConditionMultiplier,
         AddManaToPool,
+        # Phase-4D-C2 widens: Keys-to-the-House FLIP.
+        LockOrUnlockDoorOfTargetRoomYouControl,
+        SearchLibraryForCard,
     }
     # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
-    # C2 grew the admit set 9 -> 11 for Ghost Vacuum's Effect classes)
-    # are strictly additive on this Phase-4E-C2 baseline.
+    # C2 grew the admit set 9 -> 11 for Ghost Vacuum's Effect classes;
+    # Phase 4D C2 added 2 more for Keys to the House) are strictly
+    # additive on this Phase-4E-C2 baseline.
     assert expected_subset.issubset(classes), (
-        f"Phase 4E C2 invariant: admit set must contain (at least) the 9 "
-        f"Effect classes post-Phase-4E-C2 widens. Phase-3A C2 added "
+        f"Phase 4D C2 invariant: admit set must contain (at least) the "
+        f"11 Effect classes post-Phase-4D-C2 widens. Phase-3A C2 added "
         f"ExileTargetAttackingCreatureUntilEndStep; Phase-3B C2 added "
         f"ExileAllGraveyards; Phase-3C C3 added BecomesCopyOfTargetLand; "
         f"Phase-4E C2 added DrawCardsByConditionMultiplier + "
-        f"AddManaToPool. Got {classes}."
+        f"AddManaToPool; Phase-4D C2 added "
+        f"LockOrUnlockDoorOfTargetRoomYouControl + "
+        f"SearchLibraryForCard. Got {classes}."
     )

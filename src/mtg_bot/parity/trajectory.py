@@ -9013,30 +9013,37 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
 
     **Phase 4C Cycle 2 (2026-05-26 — Ghost Vacuum admit + FLIP per
     ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.5 + §6.3 +
-    §7.3).** Effect-class admit-set widen from 9 → 11, adding
+    §7.3).** Effect-class admit-set widen 9 → 11, adding
     ``ExileTargetCardFromGraveyard`` (Ghost Vacuum's AA[0] pilot —
-    the C1 substrate at ``8004d970`` shipped the Rust
-    ``Effect::ExileTargetCardFromGraveyard`` variant + per-player-
-    graveyard fan-out + cross-engine bridge arms) and
+    C1 substrate at ``8004d970``) and
     ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl``
-    (Ghost Vacuum's AA[1] recall pilot — the C1 substrate shipped
-    the Rust variant + zero-target mass-effect resolve arm reading
+    (Ghost Vacuum's AA[1] recall pilot — C1 substrate shipped the
+    Rust variant + zero-target mass-effect resolve arm reading
     ``exiled_with_source``; the recall variant's
     ``grant_flying_counter`` + ``grant_subtype_and_pt`` riders are
     DATA-CARRYING ONLY at Rust resolve today — the layered-grant
-    machinery to actually stamp a flying counter + Spirit subtype +
-    1/1 base P/T at recall is Phase-N; see
-    ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry).
+    machinery is Phase-N; see ``docs/SEARCH_LIMITATIONS.md`` Phase
+    4C entry).
 
-    Combined with the bridge-floor ``sorcery_speed`` AA-rider widen
-    in :func:`cross_engine._python_aa_to_safe_dict` (lifts the
-    ``aa.sorcery_speed: return None`` decline arm at line 14798)
-    plus the new ``sorcery_speed`` slot on Rust's ``ActivatedAbility``
-    struct + parse arm, Ghost Vacuum's two AAs both pass the per-AA
-    admit predicate AND the bridge-floor round-trip — the carrier
-    FLIPs DECLINED → ADMITTED at the production-deck admit gate.
-    Sibling of the Phase 4E C2 widen for All-Fates Scroll's
-    ``is_mana_ability`` rider.
+    **Phase 4D Cycle 2 (2026-05-26 — Keys to the House FLIP per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.6 / §7.4).**
+    Effect-class admit-set widen 11 → 13 (Phase-4C-C2 union), adding
+    ``LockOrUnlockDoorOfTargetRoomYouControl`` (Keys to the House's
+    AA[1] pilot — C1 substrate at ``3c41e4d1`` shipped the new
+    ``GameObject.door_states: Option<u8>`` slot + the Effect variant
+    + resolve-arm pilot toggle + cross-engine bridge arms) and
+    ``SearchLibraryForCard`` (Keys to the House's AA[0] pilot — the
+    Rust ``Effect::SearchLibraryForCard`` variant + round-21 bridge
+    slice at ``cards.rs:14965/18746`` + ``cross_engine.py:5325``
+    reverse arm have been on main since round-21; this cycle adds
+    the forward arm in :func:`cross_engine._python_aa_to_safe_dict`).
+    Pairs with the ``sorcery_speed=True`` AA-rider widen on
+    :func:`_aa_is_phase1_sub_shape_a` (Keys to the House's AA[1] +
+    Ghost Vacuum's AA[1] both carry the rider — shared with Phase
+    4C C2). Plus the Room-target × 2-door-half fan-out arm in
+    ``state_ops_legal.rs::activate_ability_dict`` (Phase 4D C2 Rust
+    slice). Keys to the House FLIPS DECLINED → ADMITTED on the
+    combined widen.
 
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
@@ -9056,6 +9063,10 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
     from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.misc import (
+        LockOrUnlockDoorOfTargetRoomYouControl,
+    )
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -9072,6 +9083,8 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         AddManaToPool,
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+        LockOrUnlockDoorOfTargetRoomYouControl,
+        SearchLibraryForCard,
     })
 
 
@@ -9253,17 +9266,26 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     # "any" teeth even though the per-AA admit predicate now passes.
     #
     # **Phase 4C Cycle 2 (2026-05-26 — Ghost Vacuum admit per
-    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5).** The
-    # ``sorcery_speed=True`` rider was Phase-1 honest-stop until the
-    # Rust ``ActivatedAbility`` struct gained the round-tripping
-    # ``sorcery_speed: bool`` slot at Phase 4C C2 (cards.rs:11091).
-    # The flag is DATA-CARRYING on Rust today — the activation-time
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5) + Phase 4D
+    # Cycle 2 (2026-05-26 — Keys to the House FLIP per
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.6).** The
+    # ``sorcery_speed=True`` rider was Phase-1 honest-stop. Shared
+    # widen ships in lockstep across 4C C2 (Ghost Vacuum's AA[1]
+    # ``{6}, {T}, Sac: ...`` recall) and 4D C2 (Keys to the House's
+    # AA[1] ``{3}, {T}, Sac: Lock or unlock a door of target Room
+    # you control. Activate only as a sorcery.``). The Rust
+    # ``ActivatedAbility`` struct gained the round-tripping
+    # ``sorcery_speed: bool`` slot at Phase 4C C2 (``cards.rs:11091``);
+    # the flag is DATA-CARRYING on Rust — the activation-time
     # legality gate (CR 605.3a sorcery-timing block) defers to a
-    # follow-up cycle per the SL entry; see
-    # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry. The bridge floor
+    # follow-up cycle per the SL entry, AND the Rust legal-emit
+    # floor at ``state_ops_legal.rs:2780`` already gates all AA
+    # emissions through the outer ``is_sorcery_timing`` block, so
+    # the rider is byte-equivalently gated at the outer-block level
+    # in production. The bridge floor
     # :func:`cross_engine._python_aa_to_safe_dict` emits
-    # ``"sorcery_speed": True`` on the AA dict so the Rust round-trip
-    # carries the rider byte-equal.
+    # ``"sorcery_speed": True`` on the AA dict so the Rust round-
+    # trip carries the rider byte-equal.
     if aa.cost_reductions:
         return False
     if aa.room_half is not None:

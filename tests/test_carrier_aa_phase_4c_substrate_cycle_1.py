@@ -509,13 +509,14 @@ def test_bridge_forward_arm_put_each_creature_card_bare_omits_riders():
 
 
 def test_bridge_forward_arm_ghost_vacuum_aa1_with_sorcery_speed_declines_at_c1():
-    """**Inverted post-Phase-4C-C2 invariant — AA[1]'s
+    """**Inverted post-Phase-4C-C2 / Phase-4D-C2 invariant — AA[1]'s
     ``sorcery_speed=True`` rider now ADMITS at the bridge floor.**
-    Pre-Phase-4C-C2, ``_python_aa_to_safe_dict``'s AA-rider gate
-    returned ``None`` for any AA with ``sorcery_speed=True``. C2's
-    bridge-floor widen at ``cross_engine.py:14798`` lifts the
-    decline and emits ``"sorcery_speed": True`` on the AA dict; the
-    Rust ``ActivatedAbility::sorcery_speed`` slot (Phase 4C C2 --
+    Pre-C2, ``_python_aa_to_safe_dict``'s AA-rider gate returned
+    ``None`` for any AA with ``sorcery_speed=True``. Shared C2
+    bridge-floor widen across Phase 4C (Ghost Vacuum) + Phase 4D
+    (Keys to the House) lifts the decline and emits
+    ``"sorcery_speed": True`` on the AA dict; the Rust
+    ``ActivatedAbility::sorcery_speed`` slot (Phase 4C C2,
     ``cards.rs:11091``) round-trips the rider byte-equal.
     """
     from mtg_bot.cards.base import ManaCost
@@ -539,14 +540,17 @@ def test_bridge_forward_arm_ghost_vacuum_aa1_with_sorcery_speed_declines_at_c1()
     )
     d = _python_aa_to_safe_dict(aa)
     assert d is not None, (
-        "Phase 4C C2 invariant: an AA with sorcery_speed=True "
+        "Phase 4C C2 / 4D C2 invariant: an AA with sorcery_speed=True "
         "(Ghost Vacuum's actual AA[1] shape) must now ADMIT at the "
-        "bridge floor post-C2 (sorcery_speed rider widen at "
-        "cross_engine.py:14798)."
+        "bridge floor post-C2 (sorcery_speed rider widen)."
     )
     assert d.get("sorcery_speed") is True, (
         "Phase 4C C2: the sorcery_speed flag must propagate on the "
         "AA dict"
+    )
+    assert d["effect"]["kind"] == (
+        "put_each_creature_card_exiled_with_source_"
+        "onto_battlefield_under_your_control"
     )
 
 

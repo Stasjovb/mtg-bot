@@ -161,6 +161,29 @@ pub enum Action {
         ability_index: u32,
         target_creature_id: Option<u32>,
         sacrifice_target_id: Option<u32>,
+        /// **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26).**
+        /// Agent-chosen mode index for activated abilities whose
+        /// `Effect` carries a multi-mode rider — today the only
+        /// consumer is
+        /// `Effect::LockOrUnlockDoorOfTargetRoomYouControl` (Keys to
+        /// the House's AA[1], where the agent picks one of the
+        /// target Room's two door halves). `None` for every non-
+        /// modal activation (every other AA today); `Some(idx)` for
+        /// the Room-toggle path with `idx in [0, 8)` bound by the
+        /// `u8` door-state bitmask width.
+        ///
+        /// **Round-trip semantics.** Parsed from the action dict's
+        /// `"chosen_mode_idx"` key (missing OR explicit None → None;
+        /// integer → Some). Serialized back to the dict's
+        /// `"chosen_mode_idx"` key. The slot rides on the
+        /// `StackItem.chosen_mode_idx` for the activation's stack
+        /// item; the resolver bracket at
+        /// `state_ops_resolve.rs::resolve_top_of_stack` writes
+        /// `state.current_resolve_chosen_mode_idx` from the top's
+        /// slot before firing `apply_effect`, and the
+        /// `Effect::LockOrUnlockDoorOfTargetRoomYouControl` resolve
+        /// arm reads the transient slot to pick the toggle bit.
+        chosen_mode_idx: Option<u8>,
     },
     /// Cast a spell from hand (CR 601). `card_id` is the GameObject
     /// id in the priority player's hand. The 5 optional fields carry
@@ -481,11 +504,26 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                     Some(v) if !v.is_none() => Some(v.extract()?),
                     _ => None,
                 };
+            // **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26).**
+            // Optional `chosen_mode_idx` carries the agent-chosen
+            // door-half index for
+            // `Effect::LockOrUnlockDoorOfTargetRoomYouControl` (Keys
+            // to the House's AA[1]). Same shape as
+            // `target_creature_id` — missing key OR explicit None
+            // maps to None. The resolve arm at
+            // `state_ops_resolve.rs::Effect::LockOrUnlockDoor...`
+            // defaults to half-0 when the slot is unset.
+            let chosen_mode_idx: Option<u8> =
+                match dict.get_item("chosen_mode_idx")? {
+                    Some(v) if !v.is_none() => Some(v.extract()?),
+                    _ => None,
+                };
             Ok(Action::ActivateAbility {
                 source_id,
                 ability_index,
                 target_creature_id,
                 sacrifice_target_id,
+                chosen_mode_idx,
             })
         }
         "cast_spell" => {
@@ -666,6 +704,7 @@ pub fn action_to_pydict<'py>(
             ability_index,
             target_creature_id,
             sacrifice_target_id,
+            chosen_mode_idx,
         } => {
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
@@ -686,6 +725,12 @@ pub fn action_to_pydict<'py>(
             // CE20 Slice 6: always emit `sacrifice_target_id` for the
             // same round-trip-symmetric reason.
             d.set_item("sacrifice_target_id", *sacrifice_target_id)?;
+            // **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26).**
+            // Always emit `chosen_mode_idx` for round-trip symmetry
+            // (None → Python None / Some(idx) → Python int). The
+            // re-parsed Action is bit-identical (None default for
+            // non-modal activations).
+            d.set_item("chosen_mode_idx", *chosen_mode_idx)?;
         }
         Action::CastSpell {
             card_id,

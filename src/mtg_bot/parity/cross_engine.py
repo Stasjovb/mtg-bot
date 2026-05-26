@@ -14966,17 +14966,24 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # bool field already.
     #
     # **Phase 4C Cycle 2 widen (2026-05-26 — Ghost Vacuum admit per
-    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5).** The
-    # ``sorcery_speed=True`` decline is lifted to admit Ghost Vacuum's
-    # AA[1] recall shape ({6}, {T}, Sacrifice this artifact:
-    # ... — "Activate only as a sorcery."). Mirrors the per-AA admit
-    # predicate widen in :func:`trajectory._aa_is_phase1_sub_shape_a`.
-    # The Rust side gained a ``sorcery_speed: bool`` slot on
-    # ``ActivatedAbility`` + parse arm at Phase 4C Cycle 2
-    # (``cards.rs:11091``); the dict key emitted below threads
-    # through cleanly. The flag is DATA-CARRYING on Rust today —
-    # the activation-time legality gate (CR 605.3a sorcery-timing
-    # block) defers to a follow-up cycle; see
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5) + Phase 4D
+    # Cycle 2 (2026-05-26 — Keys to the House FLIP per
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.6).** The
+    # ``sorcery_speed=True`` decline is lifted to admit Ghost
+    # Vacuum's AA[1] recall (``{6}, {T}, Sac: Recall exiled
+    # creatures. Activate only as a sorcery.``) and Keys to the
+    # House's AA[1] (``{3}, {T}, Sac: Lock or unlock a door of target
+    # Room you control. Activate only as a sorcery.``). Shared widen
+    # ships in lockstep across 4C C2 and 4D C2. The Rust side gained
+    # a ``sorcery_speed: bool`` slot on ``ActivatedAbility`` + parse
+    # arm at Phase 4C C2 (``cards.rs:11091``); the dict key emitted
+    # below threads through cleanly. The flag is DATA-CARRYING on
+    # Rust today — the activation-time legality gate (CR 605.3a
+    # sorcery-timing block) defers to a follow-up cycle, AND the
+    # Rust legal-emit floor at ``state_ops_legal.rs:2780`` already
+    # gates all AA emissions through the outer ``is_sorcery_timing``
+    # block (every emitted ActivateAbility is byte-equivalently
+    # gated at the outer-block level in production); see
     # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry.
     if aa.activate_only_once:
         return None
@@ -15117,6 +15124,19 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
     )
+    # **Phase 4D C2 widen (2026-05-26).** Add ``SearchLibraryForCard``
+    # (Keys to the House's AA[0] pilot Effect — Carrier-AA Phase 4D
+    # cycle per design doc §5.6). Three-key dict on the wire mirroring
+    # the round-21 reverse arm at ``cross_engine.py:5325``: ``kind`` +
+    # ``filter_name`` + (optional) ``max_mv`` + (optional)
+    # ``may_fail``. Keys to the House's AA[0] carries
+    # ``filter_name="basic_land"``, ``max_mv=0``, ``may_fail=True`` —
+    # the canonical pre-wired shape per round-21 (the basic-land
+    # search filter Rust dispatches via the ``"basic_land"`` filter
+    # arm at ``cards.rs:14965/18746``).
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForCard,
+    )
     # **Phase 4E C2 widen (2026-05-26).** Add ``AddManaToPool``
     # (All-Fates Scroll's AA[0] pilot Effect — Carrier-AA Phase 4E
     # cycle per design doc §5.7). Two-key dict per the round-21 mana-
@@ -15248,6 +15268,43 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # in the live tree.
         effect_dict = {
             "kind": "lock_or_unlock_door_of_target_room_you_control",
+        }
+    elif isinstance(effect, SearchLibraryForCard):
+        # **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26).**
+        # Forward-emit arm for Keys to the House's AA[0] pilot effect
+        # (``{1}, {T}, Sacrifice this artifact: Search your library
+        # for a basic land card, put it onto the battlefield, then
+        # shuffle.``). Three-key dict on the wire mirroring the
+        # round-21 reverse arm at ``cross_engine.py:5325``:
+        # ``{"kind": "search_library_for_card", "filter_name": <str>,
+        # "max_mv": <int>, "may_fail": <bool>}``. The reverse arm has
+        # been on main since the round-21 BLOCKED-BRIDGE-ARM slice;
+        # this cycle adds the forward arm.
+        #
+        # **Filter taxonomy.** Python's ``_matches`` (search.py:48-81)
+        # accepts: legendary_creature, basic_<color> (per-color basic),
+        # basic_land (any basic), creature_small (uses max_mv),
+        # artifact, spacecraft, sliver, demon. Rust's filter dispatch
+        # resolves the same string set. The bridge passes
+        # ``filter_name`` verbatim. Keys to the House's AA[0] carries
+        # ``filter_name="basic_land"`` — the round-21 basic-land
+        # filter arm at ``cards.rs:14965/18746`` is the dispatch target.
+        #
+        # **All fields emitted symmetrically.** ``filter_name`` is
+        # required; ``max_mv`` defaults to 0; ``may_fail`` defaults to
+        # True. The forward arm emits ALL three for round-trip
+        # symmetry — a parse-then-serialize pair lands on a dict that
+        # exactly equals the canonical "all-fields-present" shape.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``SearchLibraryForCard`` — NOT any parent ``Effect`` class —
+        # to avoid silently widening admission. The class has no
+        # subclasses in the live tree.
+        effect_dict = {
+            "kind": "search_library_for_card",
+            "filter_name": str(effect.filter_name),
+            "max_mv": int(effect.max_mv),
+            "may_fail": bool(effect.may_fail),
         }
     elif isinstance(effect, BecomesCopyOfTargetLand):
         # **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).**

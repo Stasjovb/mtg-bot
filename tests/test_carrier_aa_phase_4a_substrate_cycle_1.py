@@ -116,6 +116,17 @@ PHASE_1_3_ADMITTED_LAND_CARRIERS = (
     "Thespian's Stage",
 )
 
+# Phase 4D C2 (2026-05-26) FLIPs Keys to the House DECLINED → ADMITTED
+# via the combined Effect-class widen
+# (``LockOrUnlockDoorOfTargetRoomYouControl`` + ``SearchLibraryForCard``)
+# + the ``sorcery_speed`` AA-rider widen. Keys to the House is an
+# Artifact-typed carrier, so it lands on the Artifact sibling, not the
+# Land sibling. Tracked separately from the Land admit set; folded into
+# the loader-side admit walk via the Artifact builder.
+PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS = (
+    "Keys to the House",
+)
+
 
 @pytest.fixture(scope="module")
 def printings():
@@ -197,14 +208,34 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
     )
     # Phase 4E C2 partial-FLIP: All-Fates Scroll passes the Artifact
     # admit predicate but the cross-engine builder STILL returns None
-    # on the "any" teeth — Phase 4E C2.5 closes that gap.
+    # on the "any" teeth → All-Fates Scroll absent from the loader-
+    # side Artifact admit set.
+    #
     # Phase 4C C2 FULL FLIP: Ghost Vacuum's two AAs both round-trip
-    # end-to-end via the bridge floor (Effect-class + sorcery_speed
-    # widens land at C2) — the loader-side Artifact admit set grows
-    # to exactly ["Ghost Vacuum"] at Phase 4C C2 close.
-    assert loader_artifact_admits == ["Ghost Vacuum"], (
-        f"Phase-4C-C2 LOADER-SIDE Artifact admit set: expected "
-        f"['Ghost Vacuum'] (post-FULL FLIP); got {loader_artifact_admits}"
+    # end-to-end via the bridge floor (Effect-class +
+    # sorcery_speed widens land at C2).
+    #
+    # Phase 4D C2 FULL FLIP (2026-05-26): Keys to the House passes the
+    # Artifact admit predicate AND the cross-engine builder (both AAs
+    # round-trip cleanly through the bridge floor — no "any" color
+    # teeth, no spend-restriction teeth; the
+    # ``LockOrUnlockDoorOfTargetRoomYouControl`` + ``SearchLibraryFor
+    # Card`` forward arms emit clean dicts).
+    #
+    # Combined: loader-side Artifact admit set = {Ghost Vacuum, Keys
+    # to the House} post-C2.
+    expected_artifact_admits = sorted(
+        set(PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS) | {"Ghost Vacuum"}
+    )
+    assert set(loader_artifact_admits) == set(
+        expected_artifact_admits
+    ), (
+        f"Phase-4C-C2 + Phase-4D-C2 LOADER-SIDE Artifact admit set: "
+        f"expected {expected_artifact_admits} (Ghost Vacuum + Keys to "
+        f"the House FLIPs via the Phase-4C-C2 + Phase-4D-C2 combined "
+        f"Effect-class + sorcery_speed AA-rider widens); All-Fates "
+        f"Scroll absent on the 'any' color teeth at the bridge floor "
+        f"(Phase 4E C2.5 closes that gap); got {loader_artifact_admits}"
     )
 
 
@@ -215,7 +246,18 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
 
 PHASE_4_DECLINED_CARRIERS = (
     "Mirrorpool",            # 4B target (Land)
-    "Keys to the House",     # 4D target (Artifact)
+    # Ghost Vacuum (4C target) was here pre-Phase-4C-C2; the Phase 4C
+    # C2 combined widen (Effect-class adds ExileTargetCardFromGraveyard
+    # + PutEachCreatureCardExiledWith...; AA-rider lifts sorcery_speed)
+    # FLIPs the printing DECLINED → ADMITTED end-to-end.
+    # Keys to the House (4D target) was here pre-Phase-4D-C2; the
+    # Phase 4D Cycle 2 widen (Effect-class set adds
+    # ``LockOrUnlockDoorOfTargetRoomYouControl`` + ``SearchLibraryFor
+    # Card``, AA-rider gate lifts ``sorcery_speed=True``) FLIPs the
+    # printing DECLINED → ADMITTED end-to-end. See
+    # :data:`PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS` for the new admit
+    # set entry, and the C2 admit-pin walk at
+    # :func:`test_keys_to_the_house_admits_at_artifact_admit_predicate_post_4d_c2`.
     # All-Fates Scroll (4E target) was here pre-C2; Phase 4E C2's
     # partial-FLIP widens the per-AA admit predicate (Effect-class +
     # is_mana_ability rider) so the predicate now PASSES. The card
@@ -448,9 +490,12 @@ def test_synthetic_two_aas_one_failing_declines_at_per_aa_walk(printings):
     passing_aa = base.activated_abilities[0]
     # Build a "failing" AA: same shape but with activate_only_once=True.
     # This is the AA-rider teeth path -- the per-AA gate rejects it.
-    # (Pre-Phase-4C-C2 this used sorcery_speed=True; that rider is
-    # now admitted, so the test switches to the next-in-line AA-rider
-    # axis still in the decline set.)
+    # **Phase 4C C2 + Phase 4D C2 (2026-05-26):** the prior failing
+    # axis here was ``sorcery_speed=True``; the Phase-4C-C2 (Ghost
+    # Vacuum) + Phase-4D-C2 (Keys to the House) widens lifted that
+    # rider. The synthetic decline-rider axis swaps to
+    # ``activate_only_once=True`` (Phase 5+ teeth — not lifted by any
+    # current cycle).
     failing_aa = dataclasses.replace(passing_aa, activate_only_once=True)
     assert _aa_is_phase1_sub_shape_a(passing_aa)
     assert not _aa_is_phase1_sub_shape_a(failing_aa)
@@ -573,6 +618,9 @@ def test_artifact_sibling_declines_on_per_aa_walk_failure(printings):
     import dataclasses
     base = _synthetic_artifact_carrier_from_land(printings, n_aas=1)
     passing_aa = base.activated_abilities[0]
+    # **Phase 4C C2 + Phase 4D C2 (2026-05-26):** swap to
+    # ``activate_only_once`` per the sibling Land-side rationale at
+    # :func:`test_synthetic_two_aas_one_failing_declines_at_per_aa_walk`.
     failing_aa = dataclasses.replace(passing_aa, activate_only_once=True)
     p = dataclasses.replace(
         base,
@@ -684,12 +732,13 @@ def test_artifact_builder_returns_none_when_predicate_rejects(printings):
     builder honest-declines (returns None) when the predicate rejects
     the printing -- mirrors the Land builder's defense-in-depth.
     """
-    # A Phase-4 Artifact carrier (Keys to the House) declines at the
-    # predicate, so the builder must return None. (Ghost Vacuum
-    # previously sat here pre-Phase-4C-C2 but has FLIPped ADMITTED;
-    # Keys to the House is the remaining Phase-4 Artifact carrier
-    # that declines until Phase 4D ships its admit widen.)
-    p = printings["Keys to the House"]
+    # A Phase-4 Artifact carrier that still declines at the predicate
+    # post-Phase-4C-C2 + Phase-4D-C2 is needed. (Ghost Vacuum FLIPped
+    # ADMITTED at Phase 4C C2; Keys to the House FLIPped ADMITTED at
+    # Phase 4D C2.) Haunted Screen is the remaining Phase-N Artifact
+    # carrier that declines on n_aa=3 + activate_only_once teeth
+    # (Phase 5+ deferral).
+    p = printings["Haunted Screen"]
     cd = _carrier_aa_artifact_card_def(p)
     assert cd is None
 

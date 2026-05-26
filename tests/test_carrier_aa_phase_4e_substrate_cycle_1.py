@@ -905,11 +905,14 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_c2():
             "the Effect-class admit set"
         )
     # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
-    # C2 grew the admit set 9 -> 11 for the Ghost Vacuum Effect
-    # classes) are strictly additive on this Phase-4E-C2 baseline.
+    # C2 grew the admit set 9 -> 11 for Ghost Vacuum's Effect classes;
+    # Phase 4D C2 widened to 13 by adding
+    # LockOrUnlockDoorOfTargetRoomYouControl + SearchLibraryForCard
+    # for Keys to the House's AA[0] + AA[1]) are strictly additive
+    # on this Phase-4E-C2 baseline.
     assert len(admitted) >= 9, (
-        f"Phase 4E C2 admit-set cardinality: expected >=9, got "
-        f"{len(admitted)}"
+        f"Phase 4E C2 admit-set cardinality lower bound: expected "
+        f">=9, got {len(admitted)}"
     )
 
 

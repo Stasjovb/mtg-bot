@@ -167,12 +167,14 @@ def test_python_aa_to_safe_dict_admits_mana_ability_rider_post_phase_4e_c2():
 
 
 def test_python_aa_to_safe_dict_declines_sorcery_speed_rider():
-    """**Inverted post-Phase-4C-C2 pin.** ``sorcery_speed=True`` was a
-    Phase-1 decline rider until Phase 4C Cycle 2 (Ghost Vacuum's
-    AA[1] admit teeth) lifted it. The safe-dict helper now ADMITS
-    the rider and emits ``"sorcery_speed": True`` on the AA dict;
-    the activation-time legality gate (CR 605.3a) is a Phase-N
-    follow-up documented in ``docs/SEARCH_LIMITATIONS.md``.
+    """**Inverted post-Phase-4C-C2 / Phase-4D-C2 pin.**
+    ``sorcery_speed=True`` was a Phase-1 decline rider until Phase
+    4C Cycle 2 (Ghost Vacuum's AA[1] admit teeth) + Phase 4D Cycle
+    2 (Keys to the House's AA[1] admit teeth) lifted it. The safe-
+    dict helper now ADMITS the rider and emits ``"sorcery_speed":
+    True`` on the AA dict; the activation-time legality gate (CR
+    605.3a) is a Phase-N follow-up documented in
+    ``docs/SEARCH_LIMITATIONS.md``.
     """
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
@@ -185,8 +187,9 @@ def test_python_aa_to_safe_dict_declines_sorcery_speed_rider():
     )
     d = _python_aa_to_safe_dict(aa)
     assert d is not None, (
-        "Post-Phase-4C-C2: sorcery_speed=True is now admitted at the "
-        "bridge floor (Ghost Vacuum admit teeth)"
+        "Post-Phase-4C-C2 / 4D-C2: sorcery_speed=True is now admitted "
+        "at the bridge floor (Ghost Vacuum + Keys to the House admit "
+        "teeth)"
     )
     assert d.get("sorcery_speed") is True
 

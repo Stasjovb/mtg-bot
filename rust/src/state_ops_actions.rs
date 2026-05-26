@@ -777,6 +777,7 @@ impl GameState {
                 ability_index,
                 target_creature_id,
                 sacrifice_target_id,
+                chosen_mode_idx,
             } => {
                 // CE20 Slice 1 + bridge follow-up dispatch: single
                 // unified path through `printing.activated_abilities`.
@@ -2029,7 +2030,7 @@ impl GameState {
                     // push the legacy `new_trigger` shape (target_id
                     // = None in the payload).
                     let controller = controller_idx as u8;
-                    let stack_item = match validated_target_id {
+                    let mut stack_item = match validated_target_id {
                         Some(tid) => crate::state::StackItem::new_trigger_with_target(
                             source_id,
                             controller,
@@ -2044,6 +2045,24 @@ impl GameState {
                             ability_index,
                         ),
                     };
+                    // **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-
+                    // 26).** Thread the agent-chosen door-half index
+                    // onto the StackItem so the resolver bracket at
+                    // `state_ops_resolve.rs::resolve_top_of_stack` can
+                    // copy it into `state.current_resolve_chosen_mode_
+                    // idx` before firing `apply_effect` — which the
+                    // `Effect::LockOrUnlockDoorOfTargetRoomYouControl`
+                    // resolve arm at `state_ops_resolve.rs:25190` reads
+                    // to pick the toggle bit. The new_trigger / new_
+                    // trigger_with_target constructors leave the slot
+                    // at `None` (Spell-kind-only per the Phase 1
+                    // `ModalChooseOne` envelope), so this is the
+                    // honest post-construction stamp for the activated-
+                    // ability path. For non-modal activations the
+                    // dispatch path passes `chosen_mode_idx = None` →
+                    // the resolve arm defaults to half-0 (no observable
+                    // difference for non-Room effects).
+                    stack_item.chosen_mode_idx = chosen_mode_idx;
                     state.stack.push(stack_item);
                 }
                 // Round-27 G4 closure: priority reset after the

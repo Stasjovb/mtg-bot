@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **184 of 227 Python Effect classes covered (81.1%)** — by distinct-class count.
-- **647 of 690 per-card emissions covered (93.8%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **218 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **185 of 227 Python Effect classes covered (81.5%)** — by distinct-class count.
+- **648 of 690 per-card emissions covered (93.9%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **219 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **WARNING: 1 Rust variant(s) with no Python counterpart**: `Effect::ReturnExiledPermanentToOwnerTapped` -> `ReturnExiledPermanentToOwnerTapped`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **21 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `DealSelfMVDamageToEachCreature`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `RemoveChargeCountersFromSourceDelayed`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `SacrificeSourceDelayed`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`, `WarpExileSelf`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -43,7 +43,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 1 (159 singletons)
 
-- Covered by Rust: **116 / 159** (73.0%)
+- Covered by Rust: **117 / 159** (73.6%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -265,7 +265,8 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 213 | `Effect::ReturnExiledPermanentToOwnerTapped` | `ReturnExiledPermanentToOwnerTapped` | 0 |
 | 214 | `Effect::ExileAllGraveyards` | `ExileAllGraveyards` | 1 |
 | 215 | `Effect::BecomesCopyOfTargetLand` | `BecomesCopyOfTargetLand` | 1 |
-| 216 | `Effect::DrawCardsByConditionMultiplier` | `DrawCardsByConditionMultiplier` | 1 |
-| 217 | `Effect::ExileTargetCardFromGraveyard` | `ExileTargetCardFromGraveyard` | 1 |
-| 218 | `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | 1 |
+| 216 | `Effect::LockOrUnlockDoorOfTargetRoomYouControl` | `LockOrUnlockDoorOfTargetRoomYouControl` | 1 |
+| 217 | `Effect::DrawCardsByConditionMultiplier` | `DrawCardsByConditionMultiplier` | 1 |
+| 218 | `Effect::ExileTargetCardFromGraveyard` | `ExileTargetCardFromGraveyard` | 1 |
+| 219 | `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | 1 |
 

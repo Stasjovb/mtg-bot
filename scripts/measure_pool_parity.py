@@ -3109,6 +3109,84 @@ PROBE_MODULES: tuple[Path, ...] = (
     # the ``test_carrier_aa_30_no_silent_auto_grow_admit_set_...
     # _plus_thespians_stage`` walk at commit ``43ed68e6``.
     REPO_ROOT / "tests" / "test_thespians_stage_parity.py",
+    # **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26 — Keys to the
+    # House combined Rust + Python + probe; CLOSES Phase 4D per
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.6 / §7.4).** The
+    # Phase 4D C1 substrate (commit ``3c41e4d1``) landed the new
+    # ``GameObject.door_states: Option<u8>`` per-Room locked-bitmask
+    # slot + per-zone-change reset hookup at every bf-leave site +
+    # ``Effect::LockOrUnlockDoorOfTargetRoomYouControl`` variant + the
+    # resolve-arm pilot toggle + cross-engine bridge arms + 21 Rust
+    # unit pins. Phase-4D C2 (THIS slice) lands the Rust legal-emit
+    # Room-target × 2-door-half fan-out arm in
+    # ``state_ops_legal.rs::activate_ability_dict`` + the new
+    # ``Action::ActivateAbility.chosen_mode_idx`` field + the
+    # ``StackItem.chosen_mode_idx`` stamp on the activated-ability
+    # dispatch path + the Python admit widens
+    # (``_carrier_aa_phase_1_effect_classes`` adds
+    # ``LockOrUnlockDoorOfTargetRoomYouControl`` + ``SearchLibrary
+    # ForCard``; ``_aa_is_phase1_sub_shape_a`` lifts the
+    # ``sorcery_speed=True`` AA-rider gate; ``_python_aa_to_safe_dict``
+    # adds the ``SearchLibraryForCard`` forward arm and lifts the
+    # ``sorcery_speed`` decline floor). Keys to the House's two AAs
+    # (``{1}, {T}, Sac: Search library for a basic land`` —
+    # ``SearchLibraryForCard(filter_name="basic_land", max_mv=0,
+    # may_fail=True)``; ``{3}, {T}, Sac: Lock or unlock a door of
+    # target Room you control. Activate only as a sorcery.`` —
+    # ``LockOrUnlockDoorOfTargetRoomYouControl()`` with sorcery_speed
+    # rider) both PASS the per-AA admit predicate post-widen; the
+    # Phase 4A multi-AA all-or-nothing contract admits the printing
+    # end-to-end. C2 — THIS registration — closes the tier flip to
+    # PROBED by attaching the per-card cross-engine probe.
+    #
+    #   * ``test_keys_to_the_house_parity.py`` — Keys to the House
+    #     ({1} Artifact, no subtypes); TWO non-mana AAs (AA[0]
+    #     basic-land tutor; AA[1] door-toggle with sorcery_speed
+    #     rider). The FIRST PROBE_MODULES-credited probe binding the
+    #     Keys-to-the-House slug to the Carrier-AA multi-AA
+    #     substrate, AND the FIRST PROBED-tier slot for the
+    #     ``LockOrUnlockDoorOfTargetRoomYouControl`` Effect class via
+    #     the Carrier-AA substrate's multi-AA + sorcery_speed-rider
+    #     widen disjunct. Templates on the sibling Carrier-AA AA
+    #     probes (parse + bridge round-trip + Rust synthetic
+    #     acceptance + end-to-end loader admit + Python-side resolve
+    #     smoke). Drives THREE Python-side resolve scenarios on AA[1]:
+    #       (a) baseline — no Room on bf, ``resolve(targets=())``
+    #           silent-fizzle (no door-state slot mutation, no log
+    #           entry) — mirrors Rust's
+    #           ``state.current_resolve_payload_target_id == None``
+    #           silent-fizzle floor at ``state_ops_resolve.rs:25137``;
+    #       (b) load-bearing door-0 unlock line — Keys + Bottomless
+    #           Pool // Locker Room on bf, resolve picks mode 0
+    #           (door-0) via the agent's ``choose_mode``, toggles
+    #           door-0 to unlocked, appends ``"P0 unlocks <name> on
+    #           Bottomless Pool // Locker Room"`` to the log;
+    #       (c) toggle XOR line — second resolve re-locks door-0
+    #           (Python set-membership add+remove is the XOR
+    #           observable Rust's ``door_states ^= (1 << mode_idx)``
+    #           mirrors at ``state_ops_resolve.rs:25210``).
+    #     Plus the per-card admit-gate FLIP pin at
+    #     ``test_keys_to_the_house_admits_at_artifact_admit_predicate_
+    #     post_4d_c2`` confirming the DECLINED → ADMITTED transition
+    #     at all 4 surfaces (per-AA predicate / Artifact sibling /
+    #     dispatcher / Artifact builder). The CR-715 door-state
+    #     substrate (the new Rust ``GameObject.door_states`` slot
+    #     mirrored by Python's existing ``GameObject.unlocked_halves:
+    #     set[str]`` field) is end-to-end exercised here for the
+    #     FIRST time at PROBED-tier granularity (the C1 substrate's
+    #     21 unit pins exercised the slot at the synthetic-carrier
+    #     level; this probe drives it on the real-EoE printing).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row drops 1. The Phase-4 multi-AA admit set's
+    # Artifact sibling lights up its FIRST loader admit (Keys to the
+    # House) — Phase 4C (Ghost Vacuum) and Phase 4E C2.5 (All-Fates
+    # Scroll) will each ship the next-row admits. The pool-parity
+    # row delta lands when ``loader_admits`` is regened post-merge
+    # (see :func:`scripts.measure_pool_parity.loader_admits` — the
+    # ``_carrier_aa_artifact_card_def`` Artifact-side disjunct now
+    # admits 1 EoE card).
+    REPO_ROOT / "tests" / "test_keys_to_the_house_parity.py",
     # **Aura-attachment substrate Phase 3+ Phase A Cycle 2 (2026-05-26
     # — Chorale of the Void per-card real-EoE probe; closes Phase A
     # per ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §7.3).**

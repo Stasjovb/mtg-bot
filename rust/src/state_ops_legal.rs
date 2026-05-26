@@ -607,12 +607,38 @@ fn activate_ability_dict(
     target_creature_id: Option<u32>,
     sacrifice_target_id: Option<u32>,
 ) -> PyResult<Bound<'_, PyDict>> {
+    activate_ability_dict_with_mode(
+        py,
+        source_id,
+        ability_index,
+        target_creature_id,
+        sacrifice_target_id,
+        None,
+    )
+}
+
+/// **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-26).** Mode-
+/// aware sibling of [`activate_ability_dict`] for Room-target
+/// `LockOrUnlockDoorOfTargetRoomYouControl` activations (Keys to
+/// the House's AA[1]). Emits the full 6-key dict including the
+/// agent-chosen door-half index. Existing call sites that don't
+/// pick a mode keep using [`activate_ability_dict`], which forwards
+/// here with `chosen_mode_idx = None`.
+fn activate_ability_dict_with_mode(
+    py: Python<'_>,
+    source_id: u32,
+    ability_index: u32,
+    target_creature_id: Option<u32>,
+    sacrifice_target_id: Option<u32>,
+    chosen_mode_idx: Option<u8>,
+) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("kind", "activate_ability")?;
     d.set_item("source_id", source_id)?;
     d.set_item("ability_index", ability_index)?;
     d.set_item("target_creature_id", target_creature_id)?;
     d.set_item("sacrifice_target_id", sacrifice_target_id)?;
+    d.set_item("chosen_mode_idx", chosen_mode_idx)?;
     Ok(d)
 }
 
@@ -3719,6 +3745,92 @@ impl GameState {
                             Some(attacker_id),
                             None,
                         )?);
+                    }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::LockOrUnlockDoorOfTargetRoomYouControl,
+                ) {
+                    // **Carrier-AA substrate Phase 4D Cycle 2 (2026-05-
+                    // 26).** Room-target × 2-door-half fan-out arm per
+                    // ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md``
+                    // §4.3 (Keys to the House). For each Room-subtyped
+                    // permanent the activator controls, emit TWO
+                    // `ActivateAbility` dicts — one per door-half mode
+                    // index (`chosen_mode_idx in {0, 1}`). The
+                    // `mode_idx` rides on the action-dict's
+                    // `"chosen_mode_idx"` slot, threaded into
+                    // `StackItem.chosen_mode_idx` at apply time, and
+                    // read by the
+                    // `Effect::LockOrUnlockDoorOfTargetRoomYouControl`
+                    // resolve arm at
+                    // `state_ops_resolve.rs::apply_effect`.
+                    //
+                    // **Target scope — controller's battlefield only.**
+                    // The printed text reads "target Room you control"
+                    // — own-control qualifier strict. Mirrors Python's
+                    // `LockOrUnlockDoorOfTargetRoomYouControl.legal_
+                    // targets` walk over the activator's battlefield
+                    // for `o.printing.is_room` at
+                    // `effects/generic/misc.py:229-237`. The
+                    // apply-time validator at
+                    // `state_ops_actions.rs:1193-1253` re-checks
+                    // bf-presence + Room-subtype + controller-match.
+                    //
+                    // **Two door halves per Room.** Phase 4D ships the
+                    // 2-bit width for the printed 2-half Room shape per
+                    // design doc §4.3. The mode indices are `0` (first
+                    // half) and `1` (second half); the resolve arm at
+                    // `state_ops_resolve.rs:25190` reads
+                    // `current_resolve_chosen_mode_idx` and XORs the
+                    // matching bit on `target.door_states`. A future
+                    // Room shape with >2 halves would extend this
+                    // emission to N×fan-out plus widen the bit-width
+                    // cap at the resolve arm.
+                    //
+                    // **No legal targets → no emission.** A bare Keys
+                    // to the House on bf with no Room-subtyped
+                    // permanents emits zero ``ActivateAbility`` dicts
+                    // (CR 601.2c). Same shape as the
+                    // sacrifice-target / Mystifying Maze / Thespian's
+                    // Stage / Ghost Vacuum no-target fan-out arms.
+                    //
+                    // **Substrate-only Rooms support today.** Phase 4D
+                    // ships the door-state slot + toggle Effect + per-
+                    // target fan-out; full-Rooms gameplay (entering-
+                    // Room triggers / CR-715 win-condition / per-half
+                    // mana costs) defers to Phase 5+ per design doc
+                    // §3.11. The live EoE pool has Room-subtyped
+                    // permanents (Bottomless Pool / Locker Room and
+                    // siblings); whether any are on bf at the activator
+                    // depends on game state — outside the Carrier-AA
+                    // bench corpus, the emit-zero-targets branch is
+                    // the typical case.
+                    for target in self.players[idx].battlefield.iter() {
+                        let Some(t_printing) =
+                            self.registry.lookup(target.printing_id)
+                        else {
+                            continue;
+                        };
+                        if !t_printing
+                            .subtypes
+                            .iter()
+                            .any(|s| s == "Room")
+                        {
+                            continue;
+                        }
+                        // 2× fan-out per Room: door-half 0 then door-
+                        // half 1. Per-Room order is bf-order; per-
+                        // target order is mode_idx ascending.
+                        for mode_idx in 0u8..2u8 {
+                            actions.push(activate_ability_dict_with_mode(
+                                py,
+                                obj.id,
+                                ability_index as u32,
+                                Some(target.id),
+                                None,
+                                Some(mode_idx),
+                            )?);
+                        }
                     }
                 } else if matches!(
                     ability.effect,
