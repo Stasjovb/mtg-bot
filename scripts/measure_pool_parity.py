@@ -264,6 +264,93 @@ RESIDUE_WORKLIST = REPO_ROOT / "docs" / "residue_worklist.json"
 # campaign — every canonical real-EoE byte-equal probe in the test
 # surface is credited).  This is a doc-only audit commit; no
 # attribution counts move.
+#
+# POST-FLIP ATTRIBUTION SWEEP P1 (2026-05-26,
+# ``feature/post-flip-attribution-sweep-2026-05-26-p1``) — re-walk of
+# all five attribution lanes after today's MASSIVE substrate widens
+# since the prior post-flip sweep ``5730b4c8`` on 2026-05-25:
+#
+#   * **Cost-reduction Phase 1+2+3** — 5 PROBED carriers (Gigastorm
+#     Titan / Lashwhip Predator / Uthros Psionicist / Sami Wildcat
+#     Captain / Fungal Colossus).
+#   * **Carrier-AA Phase 1+1.5+2a+2b+3a+3b** — 6 PROBED carriers
+#     (Swarmyard / Deserted Temple / Petrified Field / Terrain
+#     Generator / Mystifying Maze / Scavenger Grounds).
+#   * **Spacecraft Phase 1+2+3A+3B+3C** — 7 PROBED carriers
+#     (Galvanizing Sawship / Lumen-Class Frigate / Larval Scoutlander
+#     / Sledge-Class Seedship / Synthesizer Labship / Entropic
+#     Battlecruiser / Infinite Guideline Station).  Phase 3 CLOSED.
+#   * **Aura Phase 3+** — 3 PROBED carriers (Chorale of the Void /
+#     Cracked Skull / Sporogenic Infection).  Campaign CLOSED.
+#
+# Net session shape: **21 engine tier flips**, helper widened from
+# 17 → 20 disjuncts (the 5 new disjuncts post-prior-sweep:
+# ``_printing_is_bridge_pure_station_spacecraft`` /
+# ``_printing_is_bridge_phase_2_static_anthem_spacecraft`` /
+# ``_printing_is_bridge_phase_3_trigger_spacecraft`` were folded by
+# the Spacecraft cycle-FLIP commits themselves; the carrier-AA arm
+# was already folded by the prior sweep; the cost-reduction +
+# weftwalking + carrier-AA arms were folded by the prior sweep).
+#
+# Findings on this sweep:
+#
+# (1) **PROBE_MODULES registration: CLEAN.** Walk of 124 ``*_parity.py``
+#     files vs the (now 207-entry) ``PROBE_MODULES`` tuple surfaces
+#     the SAME 3 unregistered candidates as the prior sweep —
+#     ``atomic_microsizer`` (honest-stop / blocked-subsystem
+#     attribution pin, NOT a credit-eligible probe),
+#     ``deafening_silence`` (its ``*_parity`` function body uses
+#     synthetic ``CardDef``, NOT the
+#     ``get_active_source().get_printings().get("Deafening Silence")``
+#     real-EoE binding the scanner predicate requires; would not be
+#     credited even if registered — verified by direct invocation of
+#     ``_probe_module_probed_cards`` returning ``set()``), and
+#     ``gravkill`` (already PROBED via
+#     ``test_probe_covered_unprobed_c.py`` — credit lives in a
+#     PROBE_MODULES-registered companion module).  Every probe today's
+#     21 engine tier flips landed was pre-registered in the SAME
+#     commit that landed the flip (Phase 3 trigger-Spacecraft carriers
+#     / Carrier-AA Phase 2+3 lands / Aura Phase 3+ carriers all
+#     landed their per-card real-EoE probes in PROBE_MODULES at
+#     flip-commit time per the post-cycle-4 discipline).  **0 free
+#     PROBED flips from registration.**
+#
+# (2) **loader_admits helper-vs-canonical drift: CLEAN.**
+#     AST-extracted predicate sets from both sides are byte-equal:
+#     20 disjuncts on the helper, 20 on
+#     ``trajectory._filter_deck_to_bridge_supported``, set-equal.
+#     Every cycle-FLIP commit today (Spacecraft Phase 3A C2 /
+#     Carrier-AA Phase 2/3 / Aura Phase 3+) widened the helper in
+#     lockstep with the canonical gate; the structural drift guard
+#     ``test_loader_admits_mirrors_canonical_admit_gate_predicates``
+#     would have fired if any commit had skipped the helper fold.
+#     The drift guard test passes locally.
+#
+# (3) **BLOCKED-SG auto-grow walk: CLEAN.**  Walked all 39 BLOCKED-SG
+#     cards against BOTH the canonical 20-disjunct gate AND the
+#     helper — 0 silently admitted on either path.  Today's substrate
+#     widens have honest decline-on-§2-teeth on every BLOCKED-SG
+#     residue (the §2 teeth: ``carrier_activated_abilities``,
+#     ``non_effect_text``, ``nonsafe_triggered_ability``,
+#     ``effect_uncovered`` keep the 39-card BLOCKED-SG tier honest).
+#
+# (4) **covered_by_construction walk: CLEAN.**  Walked every test
+#     file binding a currently-COVERED card via ``get_printings()``
+#     AND carrying a ``*_parity`` function — single hit
+#     (``test_deafening_silence_parity.py``) verified NOT
+#     credit-eligible by direct scanner invocation (its ``*_parity``
+#     function body uses synthetic ``CardDef``, the parser-SoT pin
+#     binding the real printing lives in a SEPARATE function).
+#
+# (5) **Drift-guard test: GREEN.**
+#     ``test_loader_admits_mirrors_canonical_admit_gate_predicates``
+#     passes; 32/32 ``tests/test_measure_pool_parity.py`` pass.
+#
+# Headline counts unchanged this sweep (PROBED 397 / COVERED 39 /
+# BLOCKED-SG 39 byte-equal pre/post — pure docs-only confirmation).
+# Doc-only commit; no code changes (the helper is already in sync;
+# every credit-eligible probe in today's substrate is already
+# registered via the cycle-FLIP commits).
 PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_a.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",
