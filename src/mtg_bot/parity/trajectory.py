@@ -8473,6 +8473,21 @@ def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
 # admit-effect set (not specifically Phase 1) — mirrors the cost-
 # reduction substrate's ``_cost_reduction_rule_is_phase1_or_3``
 # widened-helper naming.
+#
+# **Carrier-AA substrate Phase 2b (2026-05-25).** The accessor is
+# further widened to include
+# ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain Generator's
+# pilot Effect — combined-cycle Rust substrate + Python admit + FLIP
+# in the Phase-2b cycle per ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_
+# DESIGN.md`` §4.2/§5.2/§6.4 #15). The Rust ``Effect::PutBasicLand
+# FromHandOntoBattlefieldTapped`` variant + parse/resolve/to_pydict
+# arms + cross-engine bridge arms land in the same cycle (no
+# substrate-only intermediate landing — the Effect is a pure
+# no-target hand→bf-tapped zone-move sibling of Anticausal Vestige's
+# may-put-permanent-from-hand-tapped resolve arm at
+# ``state_ops_resolve.rs:15406``). ZERO new target-fan-out surface
+# (Terrain Generator's AA has no target — the activator's hand-
+# search is internal to the resolve).
 def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     """Lazy accessor for the Carrier-AA admitted AA[0] Effect classes.
 
@@ -8481,23 +8496,36 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     (Phase 1 pilot — Swarmyard) + ``UntapTargetLand`` (Phase 1 C1
     substrate / Phase 1.5a admits Deserted Temple) +
     ``ReturnTargetLandFromGraveyardToHand`` (Phase 2a C1 substrate /
-    Phase 2a C2 admits Petrified Field). Lazily imported so the
-    module import-graph stays light and tests that monkeypatch the
-    effect classes (unit pins) see a fresh frozenset each call.
+    Phase 2a C2 admits Petrified Field) +
+    ``PutBasicLandFromHandOntoBattlefieldTapped`` (Phase 2b combined-
+    cycle Rust substrate + Python admit + Terrain Generator FLIP).
+    Lazily imported so the module import-graph stays light and tests
+    that monkeypatch the effect classes (unit pins) see a fresh
+    frozenset each call.
 
-    **Phase-2/3/N extends this set as each Effect class lands cross-
-    engine.** Phase 2b will add
-    ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain Generator).
+    **Phase-3/N extends this set as each Effect class lands cross-
+    engine.** Phase 3+ remaining Carrier-AA Effect candidates per
+    design doc §3:
+    ``BecomesCopyOfTargetLand`` (Thespian's Stage — copy-effect
+    substrate),
+    ``ExileTargetAttackingCreatureUntilEndStep`` (Mystifying Maze —
+    delayed-trigger substrate),
+    ``ExileAllGraveyards`` (Scavenger Grounds — multi-graveyard
+    walk + ``sacrifice_a_desert`` cost gate).
     """
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.effects.generic.zone_moves import (
+        PutBasicLandFromHandOntoBattlefieldTapped,
+    )
     return frozenset({
         RegenerateTargetCreature,
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
+        PutBasicLandFromHandOntoBattlefieldTapped,
     })
 
 

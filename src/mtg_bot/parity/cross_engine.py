@@ -12490,6 +12490,31 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnTargetLandFromGraveyardToHand,
         )
         return ReturnTargetLandFromGraveyardToHand()
+    if kind == "put_basic_land_from_hand_onto_battlefield_tapped":
+        # **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::PutBasicLandFromHandOntoBattle
+        # fieldTapped`` variant (cards.rs). Mirrors Python's
+        # parameterless ``PutBasicLandFromHandOntoBattlefieldTapped``
+        # frozen dataclass at ``effects/generic/zone_moves.py:360``
+        # (Terrain Generator's "You may put a basic land card from
+        # your hand onto the battlefield tapped." simplification —
+        # "may always yes when a basic is in hand" per the class
+        # docstring at ``zone_moves.py:363``). Unit variant — no
+        # fields beyond ``kind``. Same shape as the Phase-2a sibling
+        # ``return_target_land_from_graveyard_to_hand`` arm.
+        #
+        # **Per design doc §5.4** the bridge constructs a bare
+        # zero-arg instance; the class has no constructor args (no
+        # ``may`` rider — Python's class docstring documents the
+        # always-yes simplification, mirrored on the Rust side).
+        # Terrain Generator's printed-AA shape carries no target —
+        # the activator's hand-search is internal to the resolve, so
+        # neither the bridge dict nor the legal-emit fan-out needs a
+        # target field.
+        from mtg_bot.effects.generic.zone_moves import (
+            PutBasicLandFromHandOntoBattlefieldTapped,
+        )
+        return PutBasicLandFromHandOntoBattlefieldTapped()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -14255,10 +14280,21 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # widening admission to sibling ``ReturnFromGraveyard`` subclasses
     # like ``ReturnUpToNNonlandPermanentCardsFromYourGraveyardToHand``
     # (``bounce.py:441``). Design doc §5.3 makes this explicit.
+    #
+    # **Phase 2b widen (2026-05-25).** Add
+    # ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain Generator's
+    # pilot Effect — Carrier-AA Phase 2b cycle per design doc §5.3).
+    # Unit-variant ``{"kind": "put_basic_land_from_hand_onto_battle
+    # field_tapped"}``; no rider fields. The class has no subclasses
+    # in the live tree, so the isinstance match is exact — no
+    # specificity guard needed.
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
+    )
+    from mtg_bot.effects.generic.zone_moves import (
+        PutBasicLandFromHandOntoBattlefieldTapped,
     )
 
     effect = aa.effect
@@ -14273,8 +14309,12 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         effect_dict = {"kind": "untap_target_land"}
     elif isinstance(effect, ReturnTargetLandFromGraveyardToHand):
         effect_dict = {"kind": "return_target_land_from_graveyard_to_hand"}
+    elif isinstance(effect, PutBasicLandFromHandOntoBattlefieldTapped):
+        effect_dict = {
+            "kind": "put_basic_land_from_hand_onto_battlefield_tapped",
+        }
     else:
-        # Effect class not in the Phase-1/1.5a/2a admit set — decline.
+        # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.
         return None
     return {
         "cost": cost_dict,

@@ -2524,6 +2524,55 @@ PROBE_MODULES: tuple[Path, ...] = (
     # scoped in the design doc §7 — ~16-22 cycles across the whole
     # campaign to close all 8 cards / 41,281 decks.
     REPO_ROOT / "tests" / "test_galvanizing_sawship_parity.py",
+    # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
+    # EoE byte-equal probe binding Terrain Generator to the Phase-2b
+    # widened Carrier-AA admit gate. Phase 2b (see
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_DESIGN.md`` §4.2 / §5.2 /
+    # §6.4 #15) widens ``_carrier_aa_phase_1_effect_classes`` to
+    # include ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain
+    # Generator's pilot Effect). The Phase 2b combined-cycle Rust
+    # substrate + Python admit + Terrain Generator FLIP land in
+    # lockstep — new Rust ``Effect::PutBasicLandFromHandOntoBattle
+    # fieldTapped`` variant + parse / resolve / to_pydict arms +
+    # cross-engine bridge arms + Python admit-gate widen. Terrain
+    # Generator admits at Phase 2b on the Effect-class widen alone —
+    # the cost-shape ``{N}, {T}`` was already admitted at Phase
+    # 1.5a. ZERO new Rust cost-shape machinery (Deserted Temple's
+    # ``{1}, {T}`` precedent already exercises the generic-mana
+    # ``{N}, {T}`` cost-pay path); ZERO new target fan-out surface
+    # (Terrain Generator's AA has no target — the activator's hand-
+    # search is internal to the resolve).
+    #
+    #   * ``test_terrain_generator_parity.py`` — Terrain Generator
+    #     ({0} Land); single non-mana AA (``{2}, {T}: You may put a
+    #     basic land card from your hand onto the battlefield
+    #     tapped.``) → ``PutBasicLandFromHandOntoBattlefieldTapped()``
+    #     (unit-variant Effect, zero-arg frozen dataclass). The FIRST
+    #     PROBE_MODULES-credited probe of
+    #     ``PutBasicLandFromHandOntoBattlefieldTapped`` on a real-EoE
+    #     Land + AA carrier; templates on the sibling Carrier-AA AA
+    #     probes (parse + bridge round-trip + Rust synthetic
+    #     acceptance + end-to-end loader admit + Python-side resolve
+    #     smoke covering both the baseline no-basic-in-hand silent-
+    #     fizzle line and the load-bearing put-Forest-from-hand
+    #     line).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 27 → 26 cards. Sibling-candidate cards
+    # (Thespian's Stage, Mystifying Maze, Scavenger Grounds) stay
+    # honestly DECLINED at the Phase-2b Effect-class admit set +
+    # cost-shape gates — the no-silent-auto-grow walk pin
+    # ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
+    # plus_deserted_temple_plus_petrified_field_plus_terrain_
+    # generator`` in ``test_carrier_aa_phase_1_substrate_cycle_2.py``
+    # codifies the exact +4 admit set (Swarmyard + Deserted Temple +
+    # Petrified Field + Terrain Generator). Phase 3+ ships
+    # ``BecomesCopyOfTargetLand`` (Thespian's Stage — copy-effect
+    # substrate) / ``ExileTargetAttackingCreatureUntilEndStep``
+    # (Mystifying Maze — delayed-trigger substrate) /
+    # ``ExileAllGraveyards`` + ``sacrifice_a_desert`` (Scavenger
+    # Grounds).
+    REPO_ROOT / "tests" / "test_terrain_generator_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

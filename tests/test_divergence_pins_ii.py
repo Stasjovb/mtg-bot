@@ -346,51 +346,29 @@ def test_cross_engine_real_eoe_exile_all_graveyards_vs_opponents_only_controller
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_terrain_generator_put_basic_land_bridge_gap_sentinel():
-    """Pin the bridge gap for effect kind
-    ``put_basic_land_from_hand_onto_battlefield_tapped``
-    (Terrain Generator activated ability).
+def test_cross_engine_real_eoe_terrain_generator_put_basic_land_bridge_gap_closed():
+    """**INVERTED — Carrier-AA substrate Phase 2b (2026-05-25).** The
+    bridge gap for effect kind
+    ``put_basic_land_from_hand_onto_battlefield_tapped`` (Terrain
+    Generator activated ability) is CLOSED. The Phase 2b cycle landed
+    the Rust ``Effect::PutBasicLandFromHandOntoBattlefieldTapped``
+    variant + parse / resolve / to_pydict arms + cross-engine bridge
+    arms + Python admit-gate widen in lockstep per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_DESIGN.md`` §4.2/§5.2/§6.4 #15.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py`` — ``_ta_dict_to_python_effect``
-      has no arm for the effect kind
-      ``put_basic_land_from_hand_onto_battlefield_tapped``.  The function
-      falls through to the final ``raise ValueError(...)`` branch.
+    Closure observable:
+      * ``_ta_dict_to_python_effect({"kind": "put_basic_land_from_hand_
+        onto_battlefield_tapped"})`` now returns a fresh
+        ``PutBasicLandFromHandOntoBattlefieldTapped()`` instance (no
+        ValueError).
+      * The Python effect class is unchanged — still an ``Effect``
+        subclass at ``effects/generic/zone_moves.py:360``.
 
-    Python effect class exists:
-      ``PutBasicLandFromHandOntoBattlefieldTapped``
-      (``effects/generic/zone_moves.py:360``, exported from
-      ``effects/generic/__init__.py:274`` and ``effects/__init__.py:172``).
-      It is used by Terrain Generator's activated ability body
-      (``land_builder.py:1635``).
-
-    Observable consequence:
-      Any cross-engine parity probe that reaches the bridge arm for this
-      effect kind — e.g. a hypothetical activated-ability probe for Terrain
-      Generator — would raise ``ValueError`` rather than translating the
-      Rust effect dict to a Python effect object and resolving it.  The
-      probe would crash rather than produce diffs.
-
-    Closure path:
-      Add an arm to ``_ta_dict_to_python_effect`` at
-      ``cross_engine.py`` that handles
-      ``kind == "put_basic_land_from_hand_onto_battlefield_tapped"`` and
-      returns ``PutBasicLandFromHandOntoBattlefieldTapped()``.  When the
-      arm is added, the ``ValueError`` will no longer be raised — this
-      sentinel assertion will fail, signaling that the pin should be
-      promoted to a real parity probe.
-
-    Probe shape:
-      1. Call ``_ta_dict_to_python_effect({"kind":
-         "put_basic_land_from_hand_onto_battlefield_tapped"})`` inside a
-         ``pytest.raises(ValueError)`` context.
-      2. Assert the raised message mentions the unsupported kind
-         (confirming the call reached the correct raise branch).
-      3. Assert the Python effect class ``PutBasicLandFromHandOntoBattlefield
-         Tapped`` is importable and is an ``Effect`` subclass (confirming the
-         bridge gap, not a missing class).
-
-    This pin is pure Python (no Rust extension required).
+    Promotion target — the dedicated per-card real-EoE byte-equal
+    probe at ``tests/test_terrain_generator_parity.py`` (Phase 2b
+    deliverable §6.4 #15). This pin remains as a closure marker — if
+    a future refactor removes the bridge arm or breaks the class, this
+    pin fires.
     """
     from mtg_bot.effects.base import Effect
     from mtg_bot.effects.generic.zone_moves import PutBasicLandFromHandOntoBattlefieldTapped
@@ -398,37 +376,29 @@ def test_cross_engine_real_eoe_terrain_generator_put_basic_land_bridge_gap_senti
 
     # The Python class exists and is a valid Effect subclass.
     assert issubclass(PutBasicLandFromHandOntoBattlefieldTapped, Effect), (
-        "PutBasicLandFromHandOntoBattlefieldTapped should be an Effect subclass; "
-        "the bridge gap is in the cross-engine translation layer, not in the "
-        "effect class itself."
+        "PutBasicLandFromHandOntoBattlefieldTapped should be an Effect "
+        "subclass; if this fails the class itself was removed or "
+        "rebased."
     )
 
     effect_dict = {"kind": "put_basic_land_from_hand_onto_battlefield_tapped"}
 
-    # The bridge raises ValueError for this kind — pin the gap.
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(effect_dict)
-
-    err_msg = str(exc_info.value)
-    assert "put_basic_land_from_hand_onto_battlefield_tapped" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention the "
-        "unsupported effect kind 'put_basic_land_from_hand_onto_battlefield_"
-        "tapped' so the cause is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    # The bridge now ROUND-TRIPS the kind — Phase 2b closure.
+    bridged = _ta_dict_to_python_effect(effect_dict)
+    assert isinstance(bridged, PutBasicLandFromHandOntoBattlefieldTapped), (
+        "Bridge gap closed: ``_ta_dict_to_python_effect`` must return "
+        "a fresh ``PutBasicLandFromHandOntoBattlefieldTapped`` instance "
+        "for the ``put_basic_land_from_hand_onto_battlefield_tapped`` "
+        "kind post-Phase-2b. If this fails the bridge arm was reverted "
+        "or never landed."
     )
 
     # Sanity: the class is instantiable and resolves without TypeError.
-    # (The bridge gap is in the router, not in the class itself.)
     effect_instance = PutBasicLandFromHandOntoBattlefieldTapped()
     assert effect_instance is not None, (
-        "PutBasicLandFromHandOntoBattlefieldTapped() should be instantiable; "
-        "if this fails the class itself is broken, not just the bridge arm."
+        "PutBasicLandFromHandOntoBattlefieldTapped() should be "
+        "instantiable; if this fails the class itself is broken."
     )
-
-    # The pin is active — ValueError IS raised.  Closure: when the bridge
-    # arm is added, re-run this test; the pytest.raises context will fail
-    # (no exception raised), which is the signal to convert this sentinel
-    # to a parity probe for Terrain Generator.
 
 
 # ---------------------------------------------------------------------------

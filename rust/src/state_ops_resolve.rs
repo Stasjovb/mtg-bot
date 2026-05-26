@@ -22915,6 +22915,118 @@ fn apply_effect(
             }
             // else: silent fizzle (no eligible Land in graveyard).
         }
+        // **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25) —
+        // `PutBasicLandFromHandOntoBattlefieldTapped` resolve.**
+        // Mirrors Python's `PutBasicLandFromHandOntoBattlefieldTapped.
+        // resolve` at `effects/generic/zone_moves.py:366-394`. Pilot
+        // effect on Terrain Generator (`{2}, {T}: You may put a basic
+        // land card from your hand onto the battlefield tapped.`).
+        //
+        // **Source-controller resolution.** Same shape as the
+        // sibling Carrier-AA resolve arms (UntapTargetLand /
+        // ReturnTargetLandFromGraveyardToHand): prefer
+        // `state.current_resolve_source_controller`, fall back to
+        // `state.active_player` for back-compat with synthetic
+        // direct-apply callers. CR 119.5 / 608.2 — the effect
+        // resolves under its source's controller; "your hand" is the
+        // SOURCE'S controller's hand.
+        //
+        // **No target.** The AA carries no target (the activator's
+        // hand-search is internal to the resolve). Both engines walk
+        // hand greedily — first basic-land match wins; no
+        // PendingDecision plumbed. Python's class docstring
+        // documents this simplification ("may always yes when a
+        // basic is in hand", `zone_moves.py:363`).
+        //
+        // **Basic-land predicate.** `card_types` contains `Land` AND
+        // `supertypes` contains `Basic` — CR 205.4a. Bit-equivalent
+        // to Python's `c.printing.is_land and "Basic" in
+        // c.printing.supertypes` at `zone_moves.py:377`. Same
+        // predicate the round-23 `SearchLibraryForBasicLandTapped`
+        // arm uses (`state_ops_resolve.rs:4550-4552`).
+        //
+        // **Silent fizzle on empty/no-basic hand.** Python's resolve
+        // early-returns when no basic is found (`if basic is None:
+        // return` at `zone_moves.py:382`). Rust mirrors this with the
+        // None-found early-return — no panic, no state mutation.
+        //
+        // **Battlefield-entry stamping.** Tapped (per the printed
+        // text "onto the battlefield tapped"); summoning_sick=false
+        // for lands (CR 302.1 applies to creatures only; the picked
+        // card MAY be a creature in some future widening, but for
+        // Phase 2b the basic-land predicate restricts to lands).
+        // ETB timestamp reserved BEFORE the player-mut borrow (same
+        // pattern as Anticausal Vestige / Astelli Reclaimer / Famished
+        // Worldsire). Controller = the source's controller.
+        //
+        // **ETB / landfall dispatch.** Queues an `Event::Enters` via
+        // `pending_etb_dispatches` so the caller (resolve_top_of_stack
+        // / `_pause`) drains AFTER this arm returns. Python's
+        // `fire_landfall_triggers(state, basic)` (`zone_moves.py:394`)
+        // is the matching landfall fan-out — Rust's
+        // `Event::Enters` dispatch covers both ETB and landfall (CE13
+        // Slice 5 substrate); the basic-land case has no ETB triggers
+        // of its own, so the ENTERS dispatch fans out landfall on
+        // existing battlefield permanents only.
+        Effect::PutBasicLandFromHandOntoBattlefieldTapped => {
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            let controller_u8 = controller;
+            // Scan controller's hand in original order; pick the
+            // FIRST basic-land match.
+            let pick_idx: Option<usize> = {
+                let hand = &state.players[controller_idx].hand;
+                let mut found: Option<usize> = None;
+                for (i, obj) in hand.iter().enumerate() {
+                    let printing = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    if printing.card_types.iter().any(|t| t == "Land")
+                        && printing.supertypes.iter().any(|s| s == "Basic")
+                    {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            let pick_idx = match pick_idx {
+                Some(i) => i,
+                None => return Ok(()), // silent fizzle — no basic in hand
+            };
+            // Reserve ETB timestamp BEFORE the player-mut borrow.
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // Remove from hand; stamp battlefield entry; push to
+            // controller's battlefield.
+            let entered_id: u32 = {
+                let player = &mut state.players[controller_idx];
+                let hand = Arc::make_mut(&mut player.hand);
+                let mut obj = hand.remove(pick_idx);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                // CR 302.1 — summoning sickness is creature-only; a
+                // basic land has no summoning sickness regardless.
+                obj.summoning_sick = false;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                let id = obj.id;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+                id
+            };
+            // Queue ENTERS (landfall) dispatch — drained AFTER the
+            // resolving stack frame pops. Mirrors Python's
+            // `fire_landfall_triggers(state, basic)` call at
+            // `zone_moves.py:394` (the predicate-style ENTERS
+            // dispatch path).
+            state.pending_etb_dispatches.push(entered_id);
+        }
     }
     Ok(())
 }

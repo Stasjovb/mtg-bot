@@ -16808,6 +16808,33 @@ staying True on `nonsafe_triggered_ability`).
 
 ---
 
+## Carrier-AA substrate Phase 2 LANDED (Phase 2a + Phase 2b, 2026-05-25) — two new Rust Effect variants (`ReturnTargetLandFromGraveyardToHand`, `PutBasicLandFromHandOntoBattlefieldTapped`) + cost-gate widen to admit `sacrifice_self=True` + per-card real-EoE probes; Petrified Field + Terrain Generator `covered_by_construction` → PROBED
+
+**Location:** `rust/src/cards.rs` (Effect enum variants + parse / to_pydict arms) + `rust/src/state_ops_resolve.rs` (resolve arms) + `rust/src/state_ops_legal.rs:3556-3629` (graveyard-Land target fan-out for the Phase-2a arm — Phase-2b has no target so no fan-out arm) + `rust/src/state_ops_actions.rs:980-995` (apply-time validation arm for the Phase-2a graveyard-target) + `src/mtg_bot/parity/cross_engine.py` (bridge arms — forward `_python_aa_to_safe_dict` + reverse `_ta_dict_to_python_effect`) + `src/mtg_bot/parity/trajectory.py:8476-8550` (`_carrier_aa_phase_1_effect_classes` widen to 4 Effect classes + `_aa_is_phase1_sub_shape_a` cost-gate widen to admit `sacrifice_self=True`).
+
+**Phase 2a SL entry — `ReturnTargetLandFromGraveyardToHand`.** Ports the Effect at the minimum graveyard→hand zone-move semantics; CR-608.2b resolution-time target-legality re-check is honored (the re-check fires if the bound target left the graveyard between activation and resolve, silent-fizzling); no replacement-effect interactions modeled (CR 614 — none of the EoE printings trigger replacement effects on graveyard→hand transitions). The cost-gate widens to admit `sacrifice_self=True` under the existing Phase-1.5a generic-mana cost shape; every other cost-bool gate stays bit-identical (`exile_self`, `tap_permanent_you_control`, `sacrifice_a_desert`, `sacrifice_another_*`, `pay_life`, `requires_*`, colored / hybrid / X-pip mana) — the widen is strictly additive on the `sacrifice_self` axis. Same shape as Phase 1's SL entry 2.
+
+**Phase 2b SL entry — `PutBasicLandFromHandOntoBattlefieldTapped`.** Ports the Effect at the minimum first-basic-in-hand greedy semantics ("may always yes when a basic is in hand" — matches Python's behavior at `effects/generic/zone_moves.py:382`); the activator's hand-search is internal to the resolve (no target plumbed, no PendingDecision); ETB / landfall trigger dispatch via `Event::Enters` (queued in `pending_etb_dispatches` for the caller to drain post-resolve, mirroring Python's `fire_landfall_triggers(state, basic)` call at `zone_moves.py:394`). Both engines mirror the "may always yes" simplification; the no-may-yes scenario (player wants to decline a basic-in-hand activation despite having a target) is not yet plumbed — future cycles can plumb a `PendingDecision::MayPutLand` if any printing makes the no-may-yes scenario load-bearing.
+
+**Why it's OK:**
+- The `sacrifice_self` cost-pay path is the existing Lander `{N}, Sac:` token-AA precedent (`state_ops_actions.rs:1190-1224` Phase 5b commit) — ZERO new cost-shape machinery. The cost-gate widen is a pure Python admit-predicate change.
+- Both new Effect variants are pure no-rider zone-moves with a clear CR-608.2b-style resolve-time legality re-check (Phase 2a) or first-legal greedy pick (Phase 2b); no replacement-effect / "may" choice surface to model.
+- ETB / landfall dispatch on the basic-land hand→bf transition uses the same `pending_etb_dispatches` queue every other ETB-aware zone-move (Anticausal Vestige, Astelli Reclaimer, Famished Worldsire, SearchLibraryForBasicLandTapped) consumes; landfall fan-out is byte-equal cross-engine.
+- `_carrier_aa_phase_1_effect_classes` now carries 4 Effect classes; the function name preserves the Phase-1 prefix for back-compat — it's the single source of truth for the Carrier-AA admit-effect set.
+
+**Failure mode:**
+- A future card whose `PutBasicLandFromHandOntoBattlefieldTapped` activation MUST decline despite a basic-in-hand (e.g. a narrow combo where putting a basic onto the battlefield triggers an unwanted opponent effect) would diverge from optimal play under the "may always yes" simplification. The current EoE pool (Terrain Generator only) doesn't surface this.
+- A future replacement-effect engine port could surface graveyard→hand or hand→bf replacements that aren't yet modeled; today no EoE card triggers such a replacement on these transitions.
+- Phase 3 / Phase N candidates (Thespian's Stage `BecomesCopyOfTargetLand` / Mystifying Maze `ExileTargetAttackingCreatureUntilEndStep` / Scavenger Grounds `ExileAllGraveyards` + `sacrifice_a_desert`) stay honestly DECLINED at the Phase-2b Effect-class admit set + cost-shape gates — pinned by `test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator`.
+
+**Fix scope:** CLOSED for Petrified Field + Terrain Generator under the Phase-2 cost-gate + Effect-class admit set. Phase 3+ widens each remaining Carrier-AA Effect on its own per-Effect cycle.
+
+**Impact estimate:** +2 cards (Petrified Field + Terrain Generator) PROBED tier; -2 from BLOCKED-SG Carrier-AA row (28 → 26 cards remaining at Carrier-AA Phase-2 close). Carrier-AA Phase-2 admit set: Swarmyard + Deserted Temple + Petrified Field + Terrain Generator (4 cards). 0 strength cost — the substrate is byte-equal cross-engine; no new divergence introduced (Phase 2a's graveyard-target fan-out + Phase 2b's hand-search both have load-bearing real-EoE probes covering baseline silent-fizzle + load-bearing zone-move lines).
+
+**Pinned by:** `tests/test_carrier_aa_phase_2a_substrate_cycle_1.py` (Phase 2a Rust substrate pins — parse / resolve / fan-out / apply-time validation), `tests/test_carrier_aa_phase_2b_substrate.py` (Phase 2b Rust substrate + Python admit pins — parse / resolve / round-trip + inversion), `tests/test_petrified_field_parity.py` (Phase 2a per-card real-EoE probe), `tests/test_terrain_generator_parity.py` (Phase 2b per-card real-EoE probe).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

@@ -8430,6 +8430,43 @@ pub enum Effect {
     /// **Unit variant** — no fields. Mirrors Python's parameterless
     /// `ReturnTargetLandFromGraveyardToHand()` frozen dataclass.
     ReturnTargetLandFromGraveyardToHand,
+    /// **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25) —
+    /// `PutBasicLandFromHandOntoBattlefieldTapped`.** Mirrors Python's
+    /// `PutBasicLandFromHandOntoBattlefieldTapped` at
+    /// `effects/generic/zone_moves.py:360` ("You may put a basic
+    /// land card from your hand onto the battlefield tapped.").
+    /// Pilot effect on Terrain Generator (`{2}, {T}: You may put a
+    /// basic land card from your hand onto the battlefield tapped.`).
+    ///
+    /// **Semantics (CR 701 — put-onto-battlefield zone move).** The
+    /// AA carries NO target — the activator's hand-search is an
+    /// internal step of the resolve, not a chosen target. The
+    /// resolve arm walks the source-controller's hand in original
+    /// order, finds the first object whose printing is a basic land
+    /// (`card_types` contains `Land` AND `supertypes` contains
+    /// `Basic`), and moves it onto the battlefield tapped.
+    ///
+    /// **"May" simplification.** Python's class docstring documents
+    /// the simplification "may always yes when a basic is in hand"
+    /// (`zone_moves.py:363`). Both engines mirror this — no
+    /// PendingDecision surface; the effect is greedy-yes when a
+    /// basic exists, silent fizzle when one does not. Future cycles
+    /// can plumb a PendingDecision::MayPutLand choice if the
+    /// no-may-yes scenario becomes load-bearing for some printing.
+    ///
+    /// **ETB dispatch.** Queues an `Event::Enters` via the
+    /// `pending_etb_dispatches` ETB-Slice-5 substrate so landfall
+    /// triggers + ETB triggers fan out byte-equal with Python's
+    /// `fire_landfall_triggers(state, basic)` (the `tap_only`
+    /// substrate's enters-dispatch already covers landfall on the
+    /// basic). Same shape as Anticausal Vestige's
+    /// `pending_etb_dispatches.push(entered_id)` at
+    /// `state_ops_resolve.rs:15406` — the unit-variant LTB-shape
+    /// hand→bf-tapped precedent.
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `PutBasicLandFromHandOntoBattlefieldTapped()` frozen dataclass.
+    PutBasicLandFromHandOntoBattlefieldTapped,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -12642,6 +12679,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // `untap_target_land` sibling).
         "return_target_land_from_graveyard_to_hand" => {
             Ok(Effect::ReturnTargetLandFromGraveyardToHand)
+        }
+        // **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25) —
+        // `put_basic_land_from_hand_onto_battlefield_tapped` parse
+        // arm.** Unit variant; no fields. Mirrors Python's
+        // parameterless `PutBasicLandFromHandOntoBattlefieldTapped()`
+        // frozen dataclass at `effects/generic/zone_moves.py:360`.
+        // Extra dict keys silently dropped (unit-variant contract;
+        // same shape as the `return_target_land_from_graveyard_to_hand`
+        // / `untap_target_land` siblings).
+        "put_basic_land_from_hand_onto_battlefield_tapped" => {
+            Ok(Effect::PutBasicLandFromHandOntoBattlefieldTapped)
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -18357,6 +18405,20 @@ pub(crate) fn effect_to_pydict<'py>(
         // as the `UntapTargetLand` sibling.
         Effect::ReturnTargetLandFromGraveyardToHand => {
             d.set_item("kind", "return_target_land_from_graveyard_to_hand")?;
+        }
+        // **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25) —
+        // `PutBasicLandFromHandOntoBattlefieldTapped.to_pydict`.**
+        // Field-free unit-variant; only `kind` emitted. Mirrors
+        // Python's parameterless
+        // `PutBasicLandFromHandOntoBattlefieldTapped()` frozen
+        // dataclass (`effects/generic/zone_moves.py:360`). Same emit
+        // shape as the `UntapTargetLand` /
+        // `ReturnTargetLandFromGraveyardToHand` Phase-2a siblings.
+        Effect::PutBasicLandFromHandOntoBattlefieldTapped => {
+            d.set_item(
+                "kind",
+                "put_basic_land_from_hand_onto_battlefield_tapped",
+            )?;
         }
     }
     Ok(d)
