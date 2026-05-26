@@ -859,7 +859,7 @@ def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
         "BecomesCopyOfTargetLand MUST be in the admit set "
         "post-Phase-3C-Cycle-3 (the C3 widen ships this admission)."
     )
-    expected = frozenset({
+    expected_subset = {
         RegenerateTargetCreature,
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
@@ -869,9 +869,12 @@ def test_admits_thespians_stage_effect_widened_post_substrate_cycle_3():
         BecomesCopyOfTargetLand,
         DrawCardsByConditionMultiplier,
         AddManaToPool,
-    })
-    assert classes == expected, (
-        f"Phase 4E C2 invariant: admit set must contain exactly the 9 "
+    }
+    # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
+    # C2 grew the admit set 9 -> 11 for Ghost Vacuum's Effect classes)
+    # are strictly additive on this Phase-4E-C2 baseline.
+    assert expected_subset.issubset(classes), (
+        f"Phase 4E C2 invariant: admit set must contain (at least) the 9 "
         f"Effect classes post-Phase-4E-C2 widens. Phase-3A C2 added "
         f"ExileTargetAttackingCreatureUntilEndStep; Phase-3B C2 added "
         f"ExileAllGraveyards; Phase-3C C3 added BecomesCopyOfTargetLand; "

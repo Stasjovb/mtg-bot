@@ -11183,10 +11183,23 @@ pub enum ExternalCondition {
 ///
 /// **Slice 1 scope.** The dispatcher reads `cost` (pays it), `effect`
 /// (applies it), and `is_mana_ability` (short-circuits the stack push
-/// when true). The richer Python fields — `sorcery_speed`,
-/// `cost_reductions`, `room_half`, `tier_threshold`,
-/// `activate_only_once` — are deferred to follow-up slices that bring
-/// their gates along.
+/// when true). The richer Python fields — `cost_reductions`,
+/// `room_half`, `activate_only_once` — are deferred to follow-up
+/// slices that bring their gates along.
+///
+/// **Carrier-AA Phase 4C Cycle 2 (2026-05-26).** The `sorcery_speed`
+/// flag landed as an optional struct slot to carry Ghost Vacuum's
+/// AA[1] rider (`{6}, {T}, Sacrifice this artifact: ...` is
+/// activatable only at sorcery-speed timing per CR 605.3a — the
+/// printed-text "Activate only as a sorcery" rider on the recall
+/// AA). Slice scope: data-carrying only — the slot is parsed +
+/// round-trips clean, but the activation-time legality gate that
+/// CONSUMES it (block when not the active player's main phase with
+/// an empty stack) defers to a follow-up cycle. Today Rust admits
+/// both AAs at any timing; the bridge floor's
+/// `_python_aa_to_safe_dict` widen at Phase 4C C2 admits the rider
+/// onto the AA dict so Ghost Vacuum's AA[1] round-trips through the
+/// admit gate. Phase N closes the legality gate.
 #[derive(Clone, Debug)]
 pub struct ActivatedAbility {
     /// Cost to activate the ability. The dispatcher checks
@@ -11226,6 +11239,26 @@ pub struct ActivatedAbility {
     /// Mirrors Python's `ActivatedAbility.tier_threshold: int = 0`
     /// at `effects/base.py:447`.
     pub tier_threshold: i32,
+    /// **Carrier-AA Phase 4C Cycle 2 (2026-05-26).** When `true`,
+    /// the printed text restricts activation to sorcery-speed timing
+    /// (CR 605.3a / 605.3b) — "Activate only as a sorcery."
+    /// Mirrors Python's `ActivatedAbility.sorcery_speed: bool = False`
+    /// at `effects/base.py`. Ghost Vacuum's AA[1] (Carrier-AA Phase
+    /// 4C carrier) is the first EoE printing whose live AA carries
+    /// this rider through the bridge floor.
+    ///
+    /// **Data-carrying only at this slice.** The activation-time
+    /// legality gate (block when not the active player's main phase
+    /// with an empty stack) defers to a follow-up cycle; today Rust
+    /// admits regardless of timing. The slot exists so the bridge
+    /// round-trip stays bit-equal to Python, the parse +
+    /// `to_pydict` arms accept the flag, and the SL entry at
+    /// `docs/SEARCH_LIMITATIONS.md` Phase 4C documents the legality
+    /// gap.
+    ///
+    /// Mirrors Python's `ActivatedAbility.sorcery_speed: bool = False`
+    /// at `effects/base.py:447`.
+    pub sorcery_speed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -16280,6 +16313,7 @@ pub fn apply_mana_produced_bridge(
             },
             is_mana_ability: true,
             tier_threshold: 0,
+            sorcery_speed: false,
         });
     }
     // Prepend so ability_index=0..N-1 refer to the per-color bridged
@@ -17792,11 +17826,28 @@ fn parse_activated_ability(
         }
         None => 0,
     };
+    // **Carrier-AA Phase 4C Cycle 2 (2026-05-26).** Optional
+    // `sorcery_speed: bool`. Missing key defaults to `false` (no
+    // rider — back-compat with every pre-Phase-4C-C2 caller). The
+    // slot is data-carrying only at this slice — the activation-
+    // time legality gate (CR 605.3a sorcery-timing block) defers
+    // to a follow-up cycle, but the parser accepts the flag so
+    // the bridge floor round-trip from Python admits Ghost Vacuum's
+    // AA[1] rider byte-equal.
+    let sorcery_speed = match dict.get_item("sorcery_speed")? {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "activated_ability.sorcery_speed must be a bool",
+            )
+        })?,
+        None => false,
+    };
     Ok(ActivatedAbility {
         cost,
         effect,
         is_mana_ability,
         tier_threshold,
+        sorcery_speed,
     })
 }
 

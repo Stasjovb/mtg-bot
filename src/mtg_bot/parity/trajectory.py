@@ -9011,6 +9011,33 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     of the Phase 4B/4C/4D Effect-class widens for the other 3 multi-
     AA carriers.
 
+    **Phase 4C Cycle 2 (2026-05-26 — Ghost Vacuum admit + FLIP per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.5 + §6.3 +
+    §7.3).** Effect-class admit-set widen from 9 → 11, adding
+    ``ExileTargetCardFromGraveyard`` (Ghost Vacuum's AA[0] pilot —
+    the C1 substrate at ``8004d970`` shipped the Rust
+    ``Effect::ExileTargetCardFromGraveyard`` variant + per-player-
+    graveyard fan-out + cross-engine bridge arms) and
+    ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl``
+    (Ghost Vacuum's AA[1] recall pilot — the C1 substrate shipped
+    the Rust variant + zero-target mass-effect resolve arm reading
+    ``exiled_with_source``; the recall variant's
+    ``grant_flying_counter`` + ``grant_subtype_and_pt`` riders are
+    DATA-CARRYING ONLY at Rust resolve today — the layered-grant
+    machinery to actually stamp a flying counter + Spirit subtype +
+    1/1 base P/T at recall is Phase-N; see
+    ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry).
+
+    Combined with the bridge-floor ``sorcery_speed`` AA-rider widen
+    in :func:`cross_engine._python_aa_to_safe_dict` (lifts the
+    ``aa.sorcery_speed: return None`` decline arm at line 14798)
+    plus the new ``sorcery_speed`` slot on Rust's ``ActivatedAbility``
+    struct + parse arm, Ghost Vacuum's two AAs both pass the per-AA
+    admit predicate AND the bridge-floor round-trip — the carrier
+    FLIPs DECLINED → ADMITTED at the production-deck admit gate.
+    Sibling of the Phase 4E C2 widen for All-Fates Scroll's
+    ``is_mana_ability`` rider.
+
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
     """
@@ -9025,6 +9052,8 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     from mtg_bot.effects.generic.exile import (
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
+        ExileTargetCardFromGraveyard,
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
     from mtg_bot.effects.generic.mana import AddManaToPool
     from mtg_bot.effects.generic.tap import UntapTargetLand
@@ -9041,6 +9070,8 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         BecomesCopyOfTargetLand,
         DrawCardsByConditionMultiplier,
         AddManaToPool,
+        ExileTargetCardFromGraveyard,
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     })
 
 
@@ -9056,11 +9087,14 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
       (sacrifice / pay_life / requires_* / control-of-subtype all
       decline if non-default). Deserted Temple's ``{1}, {T}`` cost
       admits at Phase 1.5a (was Phase-1 honest-stop).
-    * **AA-level rider gate (STRICT no riders):**
-      ``is_mana_ability=False``, ``sorcery_speed=False``,
+    * **AA-level rider gate (Phase 4C C2+ — most riders decline):**
       ``cost_reductions=()``, ``room_half is None``,
-      ``tier_threshold==0``, ``activate_only_once=False``. Every
-      Phase-2+ rider declines.
+      ``tier_threshold==0``, ``activate_only_once=False``.
+      ``is_mana_ability=True`` is admitted at Phase 4E C2;
+      ``sorcery_speed=True`` is admitted at Phase 4C C2 (Ghost Vacuum's
+      AA[1] -- see Phase 4C entry in
+      ``docs/SEARCH_LIMITATIONS.md`` for the activation-time legality
+      gap). Every other Phase-N rider declines.
     * **Effect-class gate (STRICT Phase-1 admit set):**
       ``type(aa.effect) in {RegenerateTargetCreature, UntapTargetLand}``.
       Phase-2/3/N extends this set as each Effect class lands cross-
@@ -9217,8 +9251,19 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     # follow-up cycle in ``docs/SEARCH_LIMITATIONS.md``), so All-Fates
     # Scroll STAYS DECLINED at the cross-engine builder gate on the
     # "any" teeth even though the per-AA admit predicate now passes.
-    if aa.sorcery_speed:
-        return False
+    #
+    # **Phase 4C Cycle 2 (2026-05-26 — Ghost Vacuum admit per
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5).** The
+    # ``sorcery_speed=True`` rider was Phase-1 honest-stop until the
+    # Rust ``ActivatedAbility`` struct gained the round-tripping
+    # ``sorcery_speed: bool`` slot at Phase 4C C2 (cards.rs:11091).
+    # The flag is DATA-CARRYING on Rust today — the activation-time
+    # legality gate (CR 605.3a sorcery-timing block) defers to a
+    # follow-up cycle per the SL entry; see
+    # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry. The bridge floor
+    # :func:`cross_engine._python_aa_to_safe_dict` emits
+    # ``"sorcery_speed": True`` on the AA dict so the Rust round-trip
+    # carries the rider byte-equal.
     if aa.cost_reductions:
         return False
     if aa.room_half is not None:

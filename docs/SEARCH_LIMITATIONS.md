@@ -16833,6 +16833,53 @@ staying True on `nonsafe_triggered_ability`).
 
 **Pinned by:** `tests/test_carrier_aa_phase_2a_substrate_cycle_1.py` (Phase 2a Rust substrate pins — parse / resolve / fan-out / apply-time validation), `tests/test_carrier_aa_phase_2b_substrate.py` (Phase 2b Rust substrate + Python admit pins — parse / resolve / round-trip + inversion), `tests/test_petrified_field_parity.py` (Phase 2a per-card real-EoE probe), `tests/test_terrain_generator_parity.py` (Phase 2b per-card real-EoE probe).
 
+## Carrier-AA substrate Phase 4C Cycle 2 — Ghost Vacuum AA[1] recall variant's `grant_flying_counter` + `grant_subtype_and_pt` riders are data-carrying only at Rust resolve (Phase-N continuous-effect substrate gap, 2026-05-26, `feature/carrier-aa-phase-4c-cycle-2-flip-p1`)
+
+**Location:**
+- `rust/src/state_ops_resolve.rs` (`Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` resolve arm — Phase 4C C1 substrate at commit `8004d970`).
+- `rust/src/cards.rs:11091` (the new `ActivatedAbility::sorcery_speed: bool` slot — Phase 4C C2 — data-carrying only; the CR-605.3a activation-time legality gate is a sibling Phase-N gap, see below).
+- `src/mtg_bot/parity/cross_engine.py` (`_python_aa_to_safe_dict` AA-rider gate widen at line 14798; forward emit arms for both `ExileTargetCardFromGraveyard` + `PutEachCreatureCardExiledWith...UnderYourControl` carry the rider payloads on the wire).
+- `src/mtg_bot/effects/generic/exile.py:993` (Python's `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl.resolve` — the layered-grant-applying side; Rust's mirror DOES NOT apply the grants).
+
+**Shortcut:** Phase 4C Cycle 2 was scoped to FLIP Ghost Vacuum DECLINED → ADMITTED at the Carrier-AA admit gate end-to-end. The Phase 4C C1 substrate (`8004d970`) landed both Rust Effect variants (`ExileTargetCardFromGraveyard` for AA[0] + `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` for AA[1]) + per-player-graveyard fan-out + zero-target mass-effect resolve + cross-engine bridge arms. C2 widens the Python admit gate (Effect-class set 9 → 11 + `sorcery_speed` AA-rider gate lifted) and adds the Rust `ActivatedAbility::sorcery_speed: bool` slot + parse arm. **Two Rust-side gaps remain at Phase 4C C2 close:**
+
+1. **AA[1] recall-variant rider divergence (load-bearing).** The recall Effect's `grant_flying_counter: bool` + `grant_subtype_and_pt: Option<(String, i32, i32)>` payload round-trips bit-equal on the wire (Python forward emit + Rust `parse_effect` extract + Rust `to_pydict` arm + Python reverse arm all handle the riders), but **Rust's `apply_effect` resolve arm DOES NOT apply the grants at recall time** — the recalled creatures land on the activator's bf without a flying counter, without a Spirit subtype overlay, and without a 1/1 base P/T continuous-effect layer. Python's resolve arm DOES apply the grants (`PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl.resolve` at `exile.py:993` stamps flying counters and pushes a `StaticAbility` overlay for the subtype + base P/T). The cross-engine divergence is real but bounded to Ghost Vacuum's AA[1] resolve — a code path no other live EoE printing exercises.
+
+2. **`sorcery_speed` activation-time legality gate (defense-in-depth).** Rust's `ActivatedAbility.sorcery_speed: bool` slot is data-carrying only at C2 — the activation-time legality check (CR 605.3a: a sorcery-timing AA can only be activated during the active player's main phase with an empty stack) is NOT enforced on the Rust side. Today Rust admits the activation regardless of timing; only Python enforces the gate (via the priority-pass machinery + `ActivatedAbility.sorcery_speed` check at activation time). The slot exists so the bridge round-trip stays bit-equal and a follow-up cycle can wire the gate without re-walking the registry.
+
+**Why it's OK:**
+- The bridge-floor + Rust struct + parse arms close the Phase 4C C2 substrate; Ghost Vacuum FLIPs DECLINED → ADMITTED end-to-end at the production-deck admit gate (the predicate + Artifact builder + loader-side admit-set all admit). The Phase 4C C3 PROBED-tier slot lands at `tests/test_ghost_vacuum_parity.py` via AA[0] exile-from-graveyard resolve byte-equality + bridge round-trip + Rust register acceptance.
+- The AA[1] recall-rider divergence affects only Ghost Vacuum's recall activation outcome (the recalled creatures fly + carry Spirit-overlay on Python, plain creatures on Rust); the zone-move + linkage-clear axes (cards exit exile, land on activator's bf, `exiled_with_source` clears) ARE byte-equal cross-engine — those are the load-bearing C1 substrate observables and they ship at C1.
+- The `sorcery_speed` legality-gate gap means Rust accepts a Ghost Vacuum recall activation outside a main-phase / empty-stack window where Python rejects it. In production self-play this surfaces only when the activator chooses a non-sorcery-timing activation window for AA[1]; the AlphaZero-style policy head typically activates at main-phase post-combat-step where the gate doesn't bite. **No production-deck game today exercises this path** because Ghost Vacuum hasn't been admitted to the cross-engine pool until Phase 4C C2 — the divergence is a forward-looking caveat, not a regression.
+- Both gaps are bounded to ONE printing in the EoE pool (Ghost Vacuum's AA[1]) and both have a clean follow-up landing path (the continuous-effect substrate is shared with Phase 5+ layered-grant cards; the sorcery-timing gate is a sibling of the existing tier_threshold timing check in `state_ops_legal.rs`).
+
+**Failure mode:**
+- A Ghost Vacuum AA[1] recall activation under cross-engine self-play: Python's bf carries recalled creatures with `+flying_counter` + `subtype="Spirit"` + base P/T `1/1`; Rust's bf carries the same creatures without those grants. Combat damage, blocker eligibility (flying), and creature-type subtype-gated effects (e.g. Spirit anthem-style statics) will diverge. No live EoE card OTHER than Ghost Vacuum's AA[1] sets `grant_flying_counter` OR `grant_subtype_and_pt` on the recall Effect — the gap is bounded.
+- A Ghost Vacuum AA[1] sorcery-speed activation under cross-engine self-play: Rust permits an activation that Python rejects; the AA fires on Rust but yields no Action on Python, surfacing as a divergence on the next priority round. Bounded to Ghost Vacuum's AA[1] (no other EoE Carrier-AA admit carries `sorcery_speed=True` today; Keys to the House at Phase 4D will be the second admit).
+- A future card with the same `grant_flying_counter` / `grant_subtype_and_pt` Effect-rider shape (no live EoE today) would inherit the divergence until the layered-grant substrate ships.
+
+**Fix scope:** Phase-N — Rust continuous-effect substrate for layered grants:
+1. Add a `flying_counters: u8` slot on `GameObject` (sibling of the existing `loyalty_counters`); stamp it at recall time; consume it in combat-damage / blocker-legality dispatch.
+2. Add a `granted_subtypes: Vec<Arc<str>>` + `base_pt_override: Option<(i16, i16)>` slot on `GameObject`; stamp them at recall time as continuous-effect overlay layers (CR 613 layer 4 + layer 7a); consume them in `effective_subtypes` / `effective_power_toughness` dispatch.
+3. Lift the AA[1] resolve arm's TODO at `state_ops_resolve.rs` (the C1 commit log explicitly notes the "Phase-N gap — logs-and-continues without applying the grants").
+
+Phase-N — Rust `sorcery_speed` activation-time legality gate:
+1. In `legal_decisions` AA emission, gate the AA on `printing.activated_abilities[idx].sorcery_speed && !(state.active_player == activator && state.phase == MAIN && state.stack.is_empty())`.
+2. In `apply_action`'s `ActivateAbility` arm, re-check the gate (defense-in-depth — mirrors the Python tier_threshold check).
+
+Both fixes are small (<5 cycle each) and self-contained — no Python schema change, no new substrate. Defer until either (a) a second EoE carrier with the same rider shape ships, OR (b) a self-play probe surfaces a measurable trajectory-parity divergence from Ghost Vacuum's recall activations.
+
+**Impact estimate:** +1 PROBED tier at Phase 4C C2 close (Ghost Vacuum — the AA[0] exile-from-graveyard resolve byte-equality is the load-bearing observable; AA[1] recall is Python-side resolve-only on this lane). -1 BLOCKED-SG Carrier-AA row. **Phase 4C CLOSED.** Phase-N follow-ups defer the AA[1] resolve-rider divergence + the sorcery-timing legality gate to a continuous-effect substrate cycle.
+
+**Pinned by:**
+- `tests/test_ghost_vacuum_parity.py` (Phase 4C C3 PROBED-tier flip — parser SoT + bridge round-trip on both AAs + loader-end-to-end admit + Rust register acceptance + AA[0] cross-engine byte-equal resolve probes + AA[1] Python-side resolve probe with the documented divergence trace + admit-FLIP regression).
+- `tests/test_carrier_aa_phase_4c_substrate_cycle_2.py` (Phase 4C C2 substrate pins — Effect-class widen 9 → 11 + `sorcery_speed` AA-rider gate widen + Rust `parse_activated_ability` accept + default-false + type-check + reverse arm + AA0/AA1 round-trip + admit-predicate FLIP + builder-gate FLIP + INVERTED Phase-4A no-silent-auto-grow walk over Mirrorpool/Keys/All-Fates).
+- `tests/test_carrier_aa_phase_4c_substrate_cycle_1.py` (updated invariants — Ghost Vacuum admit predicates INVERTED to admit post-C2; the C1 Rust substrate pins stay green).
+- `tests/test_carrier_aa_phase_4a_substrate_cycle_1.py` (updated invariants — Ghost Vacuum drops out of `PHASE_4_DECLINED_CARRIERS`; loader-side Artifact admit set grows from 0 to 1 card `["Ghost Vacuum"]`).
+- `tests/test_carrier_aa_phase_3c_close_decline_walk.py` (updated invariants — Ghost Vacuum FLIPs out of `_PHASE_4_DEFERRAL_CARRIERS` into `_PHASE_4C_C2_FULL_FLIP_CARRIERS`; predicate-level + loader-side admit sets both grow by 1).
+
+---
+
 ## Carrier-AA substrate Phase 4E Cycle 2 PARTIAL-FLIP — All-Fates Scroll declines at the cross-engine builder gate via the "any" coin Rust ManaPool substrate gap (HONEST-STOP, 2026-05-26, `feature/carrier-aa-phase-4e-cycle-2-flip-p1`)
 
 **Location:**

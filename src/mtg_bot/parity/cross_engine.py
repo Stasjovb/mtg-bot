@@ -14847,7 +14847,8 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
 
       ``{"cost": {...},                         # required, cost dict
          "effect": {"kind": ...},               # required, effect dict
-         "is_mana_ability": False}``            # optional, default False
+         "is_mana_ability": False,              # optional, default False
+         "sorcery_speed": False}``              # optional, default False
 
     The ``effect`` dict recurses through the existing
     :func:`_ta_dict_to_python_effect` bridge — so the Lander's
@@ -14860,6 +14861,12 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
     Rust's ``register_printing`` consumes (via its
     ``activated_abilities`` key -> ``parse_activated_ability``), so the
     ability round-trips from ONE CardDef-carried dict, no shape drift.
+
+    **Phase 4C Cycle 2 (2026-05-26).** Optional ``sorcery_speed: bool``
+    key reads through to ``ActivatedAbility.sorcery_speed`` (default
+    ``False`` when absent — back-compat with every pre-Phase-4C-C2
+    serializer). Mirrors the Rust ``parse_activated_ability`` widen
+    at ``cards.rs:17563`` that added the same optional slot.
     """
     from mtg_bot.effects.base import ActivatedAbility
 
@@ -14886,10 +14893,20 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
             "activated_ability.is_mana_ability must be a bool (mirrors "
             "Rust parse_activated_ability)"
         )
+    # **Phase 4C Cycle 2 (2026-05-26).** Optional ``sorcery_speed``
+    # rider — default False; mirrors the Rust parse_activated_ability
+    # widen at cards.rs:17563.
+    sorcery_speed = aa_dict.get("sorcery_speed", False)
+    if not isinstance(sorcery_speed, bool):
+        raise ValueError(
+            "activated_ability.sorcery_speed must be a bool (mirrors "
+            "Rust parse_activated_ability)"
+        )
     return ActivatedAbility(
         cost=cost,
         effect=effect,
         is_mana_ability=is_mana_ability,
+        sorcery_speed=sorcery_speed,
     )
 
 
@@ -14899,14 +14916,15 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     :func:`_aa_dict_to_python_activated_ability` codec.
 
     Returns ``None`` for AAs whose shape isn't on the safe list — i.e.
-    any AA-level rider outside the Phase-1 Carrier-AA admit set
-    (``is_mana_ability=True``, ``sorcery_speed=True``,
-    ``activate_only_once=True``, ``tier_threshold>0``,
-    ``room_half is not None``, ``cost_reductions`` non-empty), or a
-    cost component the Rust ``parse_activation_cost`` doesn't accept
-    (any cost field outside the ``mana`` + :data:`_AA_COST_BOOL_KEYS`
-    set), or an effect class with no ``_ta_dict_to_python_effect`` arm
-    that round-trips byte-equal.
+    any AA-level rider outside the Phase-1+ Carrier-AA admit set
+    (``activate_only_once=True``, ``tier_threshold>0``,
+    ``room_half is not None``, ``cost_reductions`` non-empty —
+    ``is_mana_ability=True`` lifted at Phase 4E C2 and
+    ``sorcery_speed=True`` lifted at Phase 4C C2), or a cost component
+    the Rust ``parse_activation_cost`` doesn't accept (any cost field
+    outside the ``mana`` + :data:`_AA_COST_BOOL_KEYS` set), or an
+    effect class with no ``_ta_dict_to_python_effect`` arm that
+    round-trips byte-equal.
 
     **Carrier-AA substrate Phase 1 Cycle 2 (2026-05-25).** Sibling of
     the existing :func:`trajectory._python_ta_to_safe_dict` (the
@@ -14946,8 +14964,20 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # round-21 mana-ability bridge slice (basic-land auto-wire at
     # ``cross_engine.py:14252``); the AA-list parse arm accepts the
     # bool field already.
-    if aa.sorcery_speed:
-        return None
+    #
+    # **Phase 4C Cycle 2 widen (2026-05-26 — Ghost Vacuum admit per
+    # docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md §5.5).** The
+    # ``sorcery_speed=True`` decline is lifted to admit Ghost Vacuum's
+    # AA[1] recall shape ({6}, {T}, Sacrifice this artifact:
+    # ... — "Activate only as a sorcery."). Mirrors the per-AA admit
+    # predicate widen in :func:`trajectory._aa_is_phase1_sub_shape_a`.
+    # The Rust side gained a ``sorcery_speed: bool`` slot on
+    # ``ActivatedAbility`` + parse arm at Phase 4C Cycle 2
+    # (``cards.rs:11091``); the dict key emitted below threads
+    # through cleanly. The flag is DATA-CARRYING on Rust today —
+    # the activation-time legality gate (CR 605.3a sorcery-timing
+    # block) defers to a follow-up cycle; see
+    # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry.
     if aa.activate_only_once:
         return None
     if aa.tier_threshold:
@@ -15312,9 +15342,18 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             effect_dict["grant_flying_counter"] = True
         if effect.grant_subtype_and_pt is not None:
             sub, p, t = effect.grant_subtype_and_pt
-            effect_dict["grant_subtype_and_pt"] = [
+            # **Phase 4C C2 (2026-05-26).** Emit as a Python tuple
+            # (not a list) -- Rust's ``parse_effect`` arm at
+            # ``cards.rs:14191`` extracts the payload into a Rust
+            # tuple ``(String, i32, i32)`` via PyO3's ``extract()``;
+            # tuple-shape passes the extract cleanly, list-shape fails
+            # with "'list' object cannot be converted to 'PyTuple'".
+            # The reverse arm at ``_ta_dict_to_python_effect`` accepts
+            # either tuple or list for forward-compatibility through a
+            # JSON round-trip (see comment there).
+            effect_dict["grant_subtype_and_pt"] = (
                 str(sub), int(p), int(t),
-            ]
+            )
     elif isinstance(effect, DrawCardsByConditionMultiplier):
         # **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Forward-
         # emit arm for All-Fates Scroll's AA[1] pilot effect (``{7}, {T},
@@ -15452,6 +15491,15 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # wire at ``cross_engine.py:14252``).
     if aa.is_mana_ability:
         result_dict["is_mana_ability"] = True
+    # **Phase 4C C2 widen (2026-05-26).** Emit the ``sorcery_speed``
+    # flag on the AA dict so the Rust round-trip carries the rider.
+    # The Rust side gained a ``sorcery_speed: bool`` slot on
+    # ``ActivatedAbility`` + parse arm at Phase 4C C2; the slot is
+    # data-carrying only today (the CR 605.3a activation-time
+    # legality gate defers to a follow-up cycle). Empty-omit
+    # discipline mirrors ``is_mana_ability`` above.
+    if aa.sorcery_speed:
+        result_dict["sorcery_speed"] = True
     return result_dict
 
 

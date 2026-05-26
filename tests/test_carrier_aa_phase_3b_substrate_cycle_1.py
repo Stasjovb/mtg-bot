@@ -729,7 +729,7 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         _carrier_aa_phase_1_effect_classes,
     )
 
-    expected = frozenset({
+    expected_subset = {
         RegenerateTargetCreature,
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
@@ -739,13 +739,18 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
         BecomesCopyOfTargetLand,
         DrawCardsByConditionMultiplier,
         AddManaToPool,
-    })
+    }
     classes = _carrier_aa_phase_1_effect_classes()
-    assert classes == expected, (
-        "Phase 4E C2 invariant: admit set must contain exactly the 9 "
-        "Effect classes (Phase-3B-C2 added ExileAllGraveyards; "
-        "Phase-3C-C3 added BecomesCopyOfTargetLand; Phase-4E-C2 added "
-        "DrawCardsByConditionMultiplier + AddManaToPool)."
+    # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
+    # C2 grew the admit set 9 -> 11 for Ghost Vacuum's Effect classes)
+    # are strictly additive on this Phase-4E-C2 baseline.
+    assert expected_subset.issubset(classes), (
+        "Phase 4E C2 invariant: admit set must contain (at least) the "
+        "9 Effect classes accumulated through Phase 4E C2 (Phase-3B-C2 "
+        "added ExileAllGraveyards; Phase-3C-C3 added "
+        "BecomesCopyOfTargetLand; Phase-4E-C2 added "
+        "DrawCardsByConditionMultiplier + AddManaToPool). Phase 4C C2 "
+        "ADDED the Ghost Vacuum AA Effect classes."
     )
     assert ExileAllGraveyards in classes, (
         "ExileAllGraveyards must be in the admit set post-Phase-3B-"

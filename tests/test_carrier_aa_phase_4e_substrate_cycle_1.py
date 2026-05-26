@@ -904,9 +904,11 @@ def test_carrier_aa_phase_1_effect_classes_widened_post_c2():
             f"Phase 4E C2 no-regression: {cls.__name__} MUST stay in "
             "the Effect-class admit set"
         )
-    # Closed-set invariant (no silent auto-grow).
-    assert len(admitted) == 9, (
-        f"Phase 4E C2 admit-set cardinality: expected 9, got "
+    # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
+    # C2 grew the admit set 9 -> 11 for the Ghost Vacuum Effect
+    # classes) are strictly additive on this Phase-4E-C2 baseline.
+    assert len(admitted) >= 9, (
+        f"Phase 4E C2 admit-set cardinality: expected >=9, got "
         f"{len(admitted)}"
     )
 

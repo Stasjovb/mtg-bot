@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **440 / 475 EoE cards (92.6%) are byte-equal at the Effect+bridge level**; of those, **398 (83.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 42 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **440 / 475 EoE cards (92.6%) are byte-equal at the Effect+bridge level**; of those, **399 (84.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 41 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **35 (7.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 398 | 83.8% |
-| Effect+bridge covered (not individually probed) | 42 | 8.8% |
+| PROBED byte-equal | 399 | 84.0% |
+| Effect+bridge covered (not individually probed) | 41 | 8.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -180,6 +180,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Genemorph Imago
 - Germinating Wurm
 - Get Out
+- Ghost Vacuum
 - Gigastorm Titan
 - Glacier Godmaw
 - Glassworks // Shattered Yard

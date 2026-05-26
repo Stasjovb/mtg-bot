@@ -3330,6 +3330,31 @@ PROBE_MODULES: tuple[Path, ...] = (
     # level Aura work would be a new design doc per the multi-cycle
     # campaign discipline.
     REPO_ROOT / "tests" / "test_sporogenic_infection_parity.py",
+    # **Carrier-AA substrate Phase 4C C3 (2026-05-26) -- Ghost Vacuum
+    # PROBED-tier flip.** The Phase 4C C2 admit-FLIP at
+    # `feature/carrier-aa-phase-4c-cycle-2-flip-p1` widened the
+    # Effect-class admit set 9 -> 11 (ExileTargetCardFromGraveyard +
+    # PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    # Control) + the sorcery_speed AA-rider gate + the Rust
+    # ActivatedAbility::sorcery_speed slot, FLIPping Ghost Vacuum
+    # DECLINED -> ADMITTED at the production-deck admit gate end-to-
+    # end. This probe (combined C2+C3 per the Phase 4 sub-phase
+    # design doc §7.3 cycle plan) is the FIRST PROBE_MODULES-credited
+    # probe binding the Ghost Vacuum slug to the
+    # ExileTargetCardFromGraveyard +
+    # PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+    # Control Effect+bridge round-trip on the REAL parsed EoE
+    # printing, plus the AA[0] exile-from-graveyard Python-side
+    # resolve byte-equal observable. AA[1] recall resolve carries a
+    # documented Rust-side divergence (grant_flying_counter +
+    # grant_subtype_and_pt riders are data-carrying only at Rust;
+    # the layered-grant continuous-effect substrate is a Phase-N
+    # gap captured in docs/SEARCH_LIMITATIONS.md Phase 4C entry).
+    # Net delta: +1 PROBED / -1 covered_by_construction.
+    # BLOCKED-SG Carrier-AA tier: 1 multi-gated tail -> 0 (Ghost
+    # Vacuum exits BLOCKED). Sibling of the Phase 3 PROBE_MODULES
+    # registrations (e.g. Thespian's Stage's Phase 3C closure).
+    REPO_ROOT / "tests" / "test_ghost_vacuum_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

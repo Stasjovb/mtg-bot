@@ -197,13 +197,14 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
     )
     # Phase 4E C2 partial-FLIP: All-Fates Scroll passes the Artifact
     # admit predicate but the cross-engine builder STILL returns None
-    # on the "any" teeth → the loader-side Artifact admit set stays
-    # at 0 cards. The full FLIP defers to Phase 4E C2.5.
-    assert loader_artifact_admits == [], (
-        f"Phase-4E-C2 LOADER-SIDE Artifact admit set: expected [] "
-        f"(All-Fates Scroll declines at the cross-engine builder "
-        f"via the 'any' color teeth; Phase 4E C2.5 closes the gap); "
-        f"got {loader_artifact_admits}"
+    # on the "any" teeth — Phase 4E C2.5 closes that gap.
+    # Phase 4C C2 FULL FLIP: Ghost Vacuum's two AAs both round-trip
+    # end-to-end via the bridge floor (Effect-class + sorcery_speed
+    # widens land at C2) — the loader-side Artifact admit set grows
+    # to exactly ["Ghost Vacuum"] at Phase 4C C2 close.
+    assert loader_artifact_admits == ["Ghost Vacuum"], (
+        f"Phase-4C-C2 LOADER-SIDE Artifact admit set: expected "
+        f"['Ghost Vacuum'] (post-FULL FLIP); got {loader_artifact_admits}"
     )
 
 
@@ -214,7 +215,6 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
 
 PHASE_4_DECLINED_CARRIERS = (
     "Mirrorpool",            # 4B target (Land)
-    "Ghost Vacuum",          # 4C target (Artifact)
     "Keys to the House",     # 4D target (Artifact)
     # All-Fates Scroll (4E target) was here pre-C2; Phase 4E C2's
     # partial-FLIP widens the per-AA admit predicate (Effect-class +
@@ -224,6 +224,16 @@ PHASE_4_DECLINED_CARRIERS = (
     # up cycle closes the gap). See
     # :func:`test_all_fates_scroll_partial_flip_post_c2_widens` for
     # the inverted invariant.
+    # Ghost Vacuum (4C target) was here pre-Phase-4C-C2; Phase 4C
+    # C2 FLIPs it DECLINED -> ADMITTED at the production-deck admit
+    # gate (the Effect-class admit set widens to include
+    # ExileTargetCardFromGraveyard +
+    # PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl;
+    # the sorcery_speed AA-rider gate at cross_engine.py:14798 is
+    # lifted; the Rust ActivatedAbility struct gains a sorcery_speed
+    # slot + parse arm). See
+    # :func:`test_ghost_vacuum_admit_post_4c_c2_widens` for the
+    # inverted invariant.
 )
 
 
@@ -422,9 +432,11 @@ def test_synthetic_two_aas_one_failing_declines_at_per_aa_walk(printings):
     """**Phase-4A all-or-nothing contract -- decline regression.**
 
     A synthetic Land printing with one passing AA + one failing AA
-    (here, the failing AA carries ``sorcery_speed=True`` which is the
-    AA-rider teeth) must DECLINE under the all-or-nothing contract,
-    even though the sibling AA passes.
+    (here, the failing AA carries ``activate_only_once=True`` which is
+    still in the AA-rider decline set post-Phase-4C-C2 -- the
+    sorcery_speed axis used pre-C2 was lifted as the Ghost Vacuum
+    admit teeth) must DECLINE under the all-or-nothing contract, even
+    though the sibling AA passes.
 
     This is the §5.2 critical-contract-preservation invariant: the
     widen is strictly additive on the ``len(aas)`` axis; every per-AA
@@ -434,9 +446,12 @@ def test_synthetic_two_aas_one_failing_declines_at_per_aa_walk(printings):
     import dataclasses
     base = printings["Petrified Field"]
     passing_aa = base.activated_abilities[0]
-    # Build a "failing" AA: same shape but with sorcery_speed=True.
+    # Build a "failing" AA: same shape but with activate_only_once=True.
     # This is the AA-rider teeth path -- the per-AA gate rejects it.
-    failing_aa = dataclasses.replace(passing_aa, sorcery_speed=True)
+    # (Pre-Phase-4C-C2 this used sorcery_speed=True; that rider is
+    # now admitted, so the test switches to the next-in-line AA-rider
+    # axis still in the decline set.)
+    failing_aa = dataclasses.replace(passing_aa, activate_only_once=True)
     assert _aa_is_phase1_sub_shape_a(passing_aa)
     assert not _aa_is_phase1_sub_shape_a(failing_aa)
     p = dataclasses.replace(
@@ -550,11 +565,15 @@ def test_artifact_sibling_declines_on_per_aa_walk_failure(printings):
     synthetic Artifact carrier with one passing AA + one failing AA
     declines under the all-or-nothing contract; same shape as the
     Land sibling's decline regression.
+
+    Post-Phase-4C-C2: the failing-AA axis switched from
+    ``sorcery_speed=True`` (now admitted) to
+    ``activate_only_once=True`` (still in the decline set).
     """
     import dataclasses
     base = _synthetic_artifact_carrier_from_land(printings, n_aas=1)
     passing_aa = base.activated_abilities[0]
-    failing_aa = dataclasses.replace(passing_aa, sorcery_speed=True)
+    failing_aa = dataclasses.replace(passing_aa, activate_only_once=True)
     p = dataclasses.replace(
         base,
         activated_abilities=(passing_aa, failing_aa),
@@ -665,9 +684,12 @@ def test_artifact_builder_returns_none_when_predicate_rejects(printings):
     builder honest-declines (returns None) when the predicate rejects
     the printing -- mirrors the Land builder's defense-in-depth.
     """
-    # A Phase-4 Artifact carrier (Ghost Vacuum) declines at the
-    # predicate, so the builder must return None.
-    p = printings["Ghost Vacuum"]
+    # A Phase-4 Artifact carrier (Keys to the House) declines at the
+    # predicate, so the builder must return None. (Ghost Vacuum
+    # previously sat here pre-Phase-4C-C2 but has FLIPped ADMITTED;
+    # Keys to the House is the remaining Phase-4 Artifact carrier
+    # that declines until Phase 4D ships its admit widen.)
+    p = printings["Keys to the House"]
     cd = _carrier_aa_artifact_card_def(p)
     assert cd is None
 
@@ -687,19 +709,19 @@ def test_phase_1_effect_classes_unchanged_post_substrate_cycle_1():
 
     classes = _carrier_aa_phase_1_effect_classes()
 
-    # Confirm none of the Phase-4 Effect classes is in the admit set.
+    # Confirm the Phase-4B Effect class (Mirrorpool's pilot Effect)
+    # is NOT in the admit set -- Phase 4B is the next pending sub-
+    # phase that will widen it. The Phase-4C carrier's Effect
+    # classes (ExileTargetCardFromGraveyard +
+    # PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl)
+    # WERE here as the C-pre-Phase-4C-C2 sentinel; post-Phase-4C-C2
+    # they are admitted, so the sentinel checks the next-pending
+    # widen (Mirrorpool / Phase 4B) instead.
     from mtg_bot.effects.generic.stack_control import (
         CopyTargetInstantOrSorceryYouControl,
-    )
-    from mtg_bot.effects.generic.exile import (
-        ExileTargetCardFromGraveyard,
     )
 
     assert CopyTargetInstantOrSorceryYouControl not in classes, (
         "CopyTargetInstantOrSorceryYouControl should NOT be in the "
         "admit set post-Phase-4A-Cycle-1 (Phase 4B ships the widen)"
-    )
-    assert ExileTargetCardFromGraveyard not in classes, (
-        "ExileTargetCardFromGraveyard should NOT be in the admit set "
-        "post-Phase-4A-Cycle-1 (Phase 4C ships the widen)"
     )

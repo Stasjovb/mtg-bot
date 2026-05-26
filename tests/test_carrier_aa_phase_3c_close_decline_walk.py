@@ -79,7 +79,13 @@ _PHASE_3_DECLINE_RESIDUE = tuple(
 
 _PHASE_4_DEFERRAL_CARRIERS = (
     "Mirrorpool",
-    "Ghost Vacuum",
+    # Ghost Vacuum was here pre-Phase-4C-C2; Phase 4C C2's FULL FLIP
+    # (2026-05-26) widens the Effect-class admit set + lifts the
+    # sorcery_speed AA-rider gate + adds the Rust ActivatedAbility
+    # sorcery_speed slot, so Ghost Vacuum ADMITS at the dispatcher,
+    # Artifact sub-predicate, AND the cross-engine builder gate
+    # end-to-end. See `tests/test_carrier_aa_phase_4c_substrate_
+    # cycle_2.py` for the FLIP pins.
     "Keys to the House",
     # All-Fates Scroll was here pre-Phase-4E-C2; Phase 4E C2's partial-
     # FLIP (2026-05-26) widens the per-AA admit predicate so the
@@ -99,6 +105,15 @@ _PHASE_4_DEFERRAL_CARRIERS = (
 # AddManaToPool forward arm).
 _PHASE_4E_C2_BUILDER_DECLINE_CARRIERS = (
     "All-Fates Scroll",
+)
+
+# Phase 4C C2 FULL-FLIP carriers — pass every gate (dispatcher +
+# Artifact sub-predicate + cross-engine builder) post-Phase-4C-C2's
+# Effect-class + sorcery_speed AA-rider widens + Rust
+# ActivatedAbility.sorcery_speed slot. Ghost Vacuum was the only
+# Phase-4 carrier to land its FULL FLIP at Phase 4C C2.
+_PHASE_4C_C2_FULL_FLIP_CARRIERS = (
+    "Ghost Vacuum",
 )
 
 
@@ -198,6 +213,18 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"AddManaToPool forward arm). Phase 4E C2.5 closes the "
             f"Rust ManaPool 'any' coin substrate gap."
         )
+    elif card_name in _PHASE_4C_C2_FULL_FLIP_CARRIERS:
+        # Phase 4C C2 FULL FLIP — Ghost Vacuum admits at every gate
+        # post-Phase-4C-C2.
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post-"
+            f"Phase 4C C2's FULL FLIP (Effect-class + sorcery_speed "
+            f"AA-rider widens land at C2)"
+        )
+        assert traj._carrier_aa_artifact_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Artifact "
+            f"builder gate post-Phase-4C-C2"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -276,12 +303,16 @@ def test_phase_3c_close_carrier_aa_artifact_admit_set_is_empty_over_eoe_pool():
         for name, p in ps.items()
         if traj._carrier_aa_artifact_card_def(p) is not None
     )
-    assert admits == [], (
+    # Post-Phase-4C-C2: Ghost Vacuum FULL FLIPs at the loader-side
+    # Artifact builder gate (Effect-class + sorcery_speed widens
+    # land end-to-end). Phase 4D / 4E C2.5 ship further +1s for Keys
+    # to the House + All-Fates Scroll respectively.
+    assert admits == ["Ghost Vacuum"], (
         f"Phase 3C C5 subsystem-attribution LOADER-SIDE ARTIFACT axis "
-        f"pin violated. _carrier_aa_artifact_card_def must admit ZERO "
-        f"live EoE cards at Phase-3 close / Phase-4E C2 partial-FLIP; "
-        f"got {admits}. Any Phase-4 sub-phase loader-side FLIP MUST "
-        f"flip this assertion in lockstep."
+        f"pin: post-Phase-4C-C2 _carrier_aa_artifact_card_def must "
+        f"admit exactly ['Ghost Vacuum']; got {admits}. Any Phase-4 "
+        f"sub-phase loader-side FLIP MUST flip this assertion in "
+        f"lockstep."
     )
 
 
@@ -313,15 +344,17 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
         for name, p in ps.items()
         if traj._printing_is_bridge_simple_carrier_aa_any(p)
     )
-    # Post-Phase-4E-C2 predicate-level expected set: the 7 LAND
-    # Phase-3-close admits + All-Fates Scroll (C2 partial-FLIP) + 4
-    # live EoE mana-ability lands the AddManaToPool Effect-class
-    # widen admits at the per-AA predicate (each declines at the
-    # cross-engine builder gate via the bridge floor teeth — see
-    # the LOADER-SIDE pins above).
+    # Post-Phase-4E-C2 + Phase-4C-C2 predicate-level expected set: the
+    # 7 LAND Phase-3-close admits + All-Fates Scroll (Phase 4E C2
+    # partial-FLIP) + Ghost Vacuum (Phase 4C C2 FULL FLIP) + 4 live
+    # EoE mana-ability lands the AddManaToPool Effect-class widen
+    # admits at the per-AA predicate (each declines at the cross-
+    # engine builder gate via the bridge floor teeth — see the
+    # LOADER-SIDE pins above).
     expected_post_c2 = sorted(
         set(_PHASE_3_ADMIT_SET) | {
             "All-Fates Scroll",
+            "Ghost Vacuum",  # Phase 4C C2 FULL FLIP
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -442,9 +475,15 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
             or traj._carrier_aa_artifact_card_def(p) is not None
         )
     )
-    assert loader_admit_count == 7, (
+    # Post-Phase-4C-C2: the LOADER-SIDE admit set grows from 7 to 8
+    # (the 7-card Phase-3-close Land admits + Ghost Vacuum's Artifact
+    # admit). All-Fates Scroll passes the Artifact predicate but
+    # honest-declines at the builder gate on "any" teeth (Phase 4E
+    # C2.5 closes that gap).
+    assert loader_admit_count == 8, (
         f"Phase 3C close LOADER-SIDE admit-set size invariant "
-        f"violated: expected exactly 7 cards, got {loader_admit_count}. "
-        f"The design doc §6.4 #26 positive set is exhaustive over the "
-        f"live EoE pool at Phase-3 close / Phase-4E C2 partial-FLIP."
+        f"violated: expected exactly 8 cards post-Phase-4C-C2, got "
+        f"{loader_admit_count}. The design doc §6.4 #26 positive set "
+        f"is exhaustive over the live EoE pool at Phase-3 close + "
+        f"Phase-4C-C2 FULL FLIP / Phase-4E-C2 partial-FLIP."
     )

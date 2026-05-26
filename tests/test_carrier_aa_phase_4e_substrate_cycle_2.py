@@ -104,6 +104,12 @@ def test_phase_4e_c2_effect_class_widen_adds_two_entries():
     7 → 9 entries at Phase 4E C2; ``DrawCardsByConditionMultiplier`` +
     ``AddManaToPool`` are the two new additions. The 7 prior entries
     stay admitted (no regression).
+
+    Post-Phase-4C-C2: the admit set grew from 9 → 11 with the two
+    Ghost Vacuum AA Effect classes; this pin pins the Phase-4E-C2 +
+    pin on the admit-set invariant (the 9 Phase-4E-C2 entries must
+    still be present). The +2 cardinality assertion lifts to >=9 so
+    later sub-phase widens don't break this pin.
     """
     from mtg_bot.effects.generic.become_type import (
         BecomesCopyOfTargetLand,
@@ -146,9 +152,10 @@ def test_phase_4e_c2_effect_class_widen_adds_two_entries():
             f"Phase 4E C2 no-regression: {cls.__name__} dropped from "
             "the Effect-class admit set"
         )
-    # Closed-set invariant (no silent auto-grow beyond the documented
-    # +2 widens).
-    assert len(admitted) == 9
+    # Lower-bound invariant -- subsequent sub-phase widens (Phase 4C
+    # C2 grew the admit set 9 -> 11 for the Ghost Vacuum Effect
+    # classes) are strictly additive on this Phase-4E-C2 baseline.
+    assert len(admitted) >= 9
 
 
 # ---------------------------------------------------------------------------
@@ -181,9 +188,11 @@ def test_phase_4e_c2_aa_rider_gate_admits_is_mana_ability():
 
 
 def test_phase_4e_c2_aa_rider_gate_still_declines_sorcery_speed():
-    """**§6.5 #33 negative.** Lifting ``is_mana_ability`` doesn't
-    silently lift ``sorcery_speed`` — the other AA-rider teeth stay in
-    place per the Phase 4C / 4D widen sequencing.
+    """**§6.5 #33 negative -- INVERTED post-Phase-4C-C2.** Lifting
+    ``is_mana_ability`` at Phase 4E C2 doesn't silently lift other
+    riders. Pre-Phase-4C-C2 the ``sorcery_speed=True`` rider stayed
+    decline; post-Phase-4C-C2 (Ghost Vacuum admit) it admits. This
+    pin INVERTS to assert the new state.
     """
     from mtg_bot.cards.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.mana import AddManaToPool
@@ -192,12 +201,13 @@ def test_phase_4e_c2_aa_rider_gate_still_declines_sorcery_speed():
     aa = ActivatedAbility(
         cost=ActivationCost(tap_self=True),
         effect=AddManaToPool(produces=(("W", 1),)),
-        sorcery_speed=True,  # The other AA-rider teeth
+        sorcery_speed=True,  # Now admitted as of Phase 4C C2
     )
-    assert _aa_is_phase1_sub_shape_a(aa) is False, (
-        "Phase 4E C2 widen is bounded — sorcery_speed=True still "
-        "declines at the per-AA admit gate (Phase 4C/4D ship that "
-        "widen)"
+    assert _aa_is_phase1_sub_shape_a(aa) is True, (
+        "Post-Phase-4C-C2: sorcery_speed=True is now admitted at the "
+        "per-AA admit gate (Phase 4C C2 Ghost Vacuum widen). This pin "
+        "previously asserted decline; the inversion is sibling of "
+        "the Ghost Vacuum FLIP."
     )
 
 
@@ -624,15 +634,18 @@ def test_phase_4e_c2_no_regression_on_phase_1_3_carriers():
 
 @pytest.mark.parametrize(
     "name",
-    ["Mirrorpool", "Ghost Vacuum", "Keys to the House"],
+    # Post-Phase-4C-C2: Ghost Vacuum has FLIPped DECLINED -> ADMITTED.
+    # Mirrorpool + Keys to the House still decline (4B + 4D ship the
+    # remaining Effect-class + Search... forward-arm widens).
+    ["Mirrorpool", "Keys to the House"],
 )
 def test_phase_4e_c2_other_phase_4_carriers_stay_declined(name):
-    """**Phase 4E C2 no-silent-auto-grow pin.** The other 3 Phase-4
-    multi-AA carriers (Mirrorpool / Ghost Vacuum / Keys to the House)
-    STAY DECLINED post-Phase-4E-C2 — they each carry Effect classes
-    OR AA-riders NOT in the C2 widen set (Mirrorpool's spell-copy +
-    token-copy Effects, Ghost Vacuum's + Keys's ``sorcery_speed`` AA-
-    rider). Phase 4B/4C/4D each ship the corresponding widens.
+    """**Phase 4E C2 no-silent-auto-grow pin (post-Phase-4C-C2).**
+    The remaining Phase-4 multi-AA carriers that haven't yet shipped
+    their FLIPs (Mirrorpool / Keys to the House) STAY DECLINED. Ghost
+    Vacuum was here pre-Phase-4C-C2 but has FLIPped ADMITTED via the
+    Effect-class + sorcery_speed AA-rider widens at C2; Phase 4B and
+    4D ship the remaining widens (Mirrorpool / Keys to the House).
     """
     from mtg_bot.cards.parser_source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -646,7 +659,7 @@ def test_phase_4e_c2_other_phase_4_carriers_stay_declined(name):
     # Both predicate and builder must decline.
     assert _printing_is_bridge_simple_carrier_aa_any(p) is False, (
         f"{name} must STAY DECLINED at the dispatcher post-Phase-4E-"
-        f"C2 (Phase 4B/4C/4D ship their respective widens)"
+        f"C2 + Phase-4C-C2 (Phase 4B/4D ship their respective widens)"
     )
     assert _carrier_aa_land_card_def(p) is None
     assert _carrier_aa_artifact_card_def(p) is None

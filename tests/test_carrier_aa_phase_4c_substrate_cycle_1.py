@@ -467,7 +467,14 @@ def test_bridge_forward_arm_put_each_creature_card_full_riders_no_sorcery_speed(
         "battlefield_under_your_control"
     )
     assert d["effect"]["grant_flying_counter"] is True
-    assert d["effect"]["grant_subtype_and_pt"] == ["Spirit", 1, 1]
+    # **Phase 4C C2 (2026-05-26).** Emit shape changed from list
+    # ``["Spirit", 1, 1]`` to tuple ``("Spirit", 1, 1)`` so Rust's
+    # ``parse_effect`` extract accepts the payload (Rust's
+    # ``v.extract::<(String, i32, i32)>()`` rejects lists with
+    # "'list' object cannot be converted to 'PyTuple'"). The reverse
+    # arm accepts either shape for forward-compatibility through any
+    # future JSON serializer.
+    assert d["effect"]["grant_subtype_and_pt"] == ("Spirit", 1, 1)
     # Reverse round-trip — byte-equal at the dataclass __eq__ surface
     # (tuple ↔ list normalization on the rider payload handled by
     # the reverse arm).
@@ -502,15 +509,14 @@ def test_bridge_forward_arm_put_each_creature_card_bare_omits_riders():
 
 
 def test_bridge_forward_arm_ghost_vacuum_aa1_with_sorcery_speed_declines_at_c1():
-    """**Substrate-only invariant — AA[1]'s ``sorcery_speed=True``
-    rider STILL declines at the bridge floor post-Cycle-1.** Ghost
-    Vacuum's printed AA[1] carries ``sorcery_speed=True``; the
-    ``_python_aa_to_safe_dict`` AA-rider gate at line 14789 returns
-    ``None`` for any AA with that rider. C2 widens the gate.
-
-    This is the explicit Phase-4C-C1 substrate-only invariant — the
-    Effect-class round-trip is in place, but the AA-rider gate still
-    blocks Ghost Vacuum from the production-deck admit set.
+    """**Inverted post-Phase-4C-C2 invariant — AA[1]'s
+    ``sorcery_speed=True`` rider now ADMITS at the bridge floor.**
+    Pre-Phase-4C-C2, ``_python_aa_to_safe_dict``'s AA-rider gate
+    returned ``None`` for any AA with ``sorcery_speed=True``. C2's
+    bridge-floor widen at ``cross_engine.py:14798`` lifts the
+    decline and emits ``"sorcery_speed": True`` on the AA dict; the
+    Rust ``ActivatedAbility::sorcery_speed`` slot (Phase 4C C2 --
+    ``cards.rs:11091``) round-trips the rider byte-equal.
     """
     from mtg_bot.cards.base import ManaCost
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
@@ -532,10 +538,15 @@ def test_bridge_forward_arm_ghost_vacuum_aa1_with_sorcery_speed_declines_at_c1()
         sorcery_speed=True,
     )
     d = _python_aa_to_safe_dict(aa)
-    assert d is None, (
-        "Phase 4C C1 substrate invariant: an AA with sorcery_speed="
-        "True (Ghost Vacuum's actual AA[1] shape) must STILL decline "
-        "the bridge floor post-C1. C2 widens the gate."
+    assert d is not None, (
+        "Phase 4C C2 invariant: an AA with sorcery_speed=True "
+        "(Ghost Vacuum's actual AA[1] shape) must now ADMIT at the "
+        "bridge floor post-C2 (sorcery_speed rider widen at "
+        "cross_engine.py:14798)."
+    )
+    assert d.get("sorcery_speed") is True, (
+        "Phase 4C C2: the sorcery_speed flag must propagate on the "
+        "AA dict"
     )
 
 
@@ -1091,22 +1102,18 @@ def test_resolve_exile_target_card_from_graveyard_fizzles_when_target_moved(
 
 
 def test_ghost_vacuum_stays_declined_at_admit_gate_post_c1():
-    """**Substrate-only invariant — Ghost Vacuum STAYS DECLINED at the
-    admit gate post-Cycle-1.** The Rust Effect variants + per-player-
-    graveyard fan-out + cross-engine bridge arms all landed, but the
-    Python admit gate still declines the live printing because:
-
-      (a) ``_carrier_aa_phase_1_effect_classes`` doesn't include
-          ``ExileTargetCardFromGraveyard`` (C2 ships the widen).
-      (b) ``_carrier_aa_phase_1_effect_classes`` doesn't include
-          ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnder
-          YourControl`` (C2 ships the widen).
-      (c) The AA-rider gate still declines AA[1]'s
-          ``sorcery_speed=True`` rider (C2 ships that widen too).
+    """**Inverted post-Phase-4C-C2 invariant — Ghost Vacuum ADMITS at
+    the admit gate post-Cycle-2.** Pre-C2 (the C1 substrate slice
+    alone), the Python admit gate declined the live printing because
+    (a) the Effect-class admit set didn't include the two new
+    Effects, and (b) the AA-rider gate still declined AA[1]'s
+    ``sorcery_speed=True`` rider. Phase 4C Cycle 2 lands those three
+    widens; this pin INVERTS to assert the FLIP through the same
+    surface.
 
     Verify via the per-AA + printing-level admit predicates that BOTH
-    AAs decline at Phase 1 sub-shape A; the printing-level dispatcher
-    also declines.
+    AAs admit at Phase 1 sub-shape A; the printing-level dispatcher
+    admits too.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -1118,33 +1125,36 @@ def test_ghost_vacuum_stays_declined_at_admit_gate_post_c1():
     printing = printings["Ghost Vacuum"]
     aa0, aa1 = printing.activated_abilities
 
-    # Per-AA admit predicate: both decline post-C1.
-    assert _aa_is_phase1_sub_shape_a(aa0) is False, (
-        "AA[0] must decline at the per-AA admit gate post-C1 "
-        "(ExileTargetCardFromGraveyard not yet in Effect-class admit "
-        "set)"
+    # Per-AA admit predicate: both admit post-C2 (the Effect-class
+    # widen + sorcery_speed AA-rider widen + Rust sorcery_speed slot
+    # all land at Phase 4C Cycle 2).
+    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
+        "AA[0] must ADMIT at the per-AA admit gate post-Phase-4C-C2 "
+        "(ExileTargetCardFromGraveyard now in Effect-class admit set)"
     )
-    assert _aa_is_phase1_sub_shape_a(aa1) is False, (
-        "AA[1] must decline at the per-AA admit gate post-C1 "
-        "(sorcery_speed=True rider not yet admitted AND "
+    assert _aa_is_phase1_sub_shape_a(aa1) is True, (
+        "AA[1] must ADMIT at the per-AA admit gate post-Phase-4C-C2 "
+        "(sorcery_speed=True rider now admitted; "
         "PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour"
-        "Control not yet in Effect-class admit set)"
+        "Control now in Effect-class admit set)"
     )
-    # Printing-level dispatcher: declines (any-AA-failure short-
-    # circuits per the Phase 4A all-or-nothing contract).
+    # Printing-level dispatcher: admits (both AAs pass per the Phase
+    # 4A all-or-nothing contract).
     assert (
-        _printing_is_bridge_simple_carrier_aa_any(printing) is False
+        _printing_is_bridge_simple_carrier_aa_any(printing) is True
     ), (
-        "Ghost Vacuum must stay DECLINED at the printing-level admit "
-        "dispatcher post-C1"
+        "Ghost Vacuum must ADMIT at the printing-level admit "
+        "dispatcher post-Phase-4C-C2 (sibling FLIP pin to the C2 "
+        "substrate test)"
     )
 
 
 def test_ghost_vacuum_declines_at_artifact_admit_predicate_post_c1():
-    """**Substrate-only invariant — the Artifact sibling admit
-    predicate declines Ghost Vacuum post-Cycle-1.** Verifies the
-    sibling Carrier-AA-Artifact admit predicate (added Phase 4A C1)
-    rejects the live printing on per-AA teeth.
+    """**Inverted post-Phase-4C-C2 invariant — the Artifact sibling
+    admit predicate ADMITS Ghost Vacuum post-Cycle-2.** Pre-C2 (the
+    C1 substrate slice alone), the sibling Carrier-AA-Artifact admit
+    predicate rejected the live printing on per-AA teeth. Phase 4C
+    Cycle 2's widens flip it to admit.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -1155,19 +1165,20 @@ def test_ghost_vacuum_declines_at_artifact_admit_predicate_post_c1():
     printing = printings["Ghost Vacuum"]
     assert (
         _printing_is_bridge_simple_carrier_aa_artifact(printing)
-        is False
+        is True
     ), (
-        "Phase 4C C1 substrate invariant: Ghost Vacuum must decline "
-        "at the Artifact-typed sibling admit predicate post-C1 (the "
-        "per-AA teeth are still in place — C2 ships the widens)."
+        "Phase 4C C2 invariant: Ghost Vacuum must ADMIT at the "
+        "Artifact-typed sibling admit predicate post-C2 (the per-AA "
+        "teeth are lifted; C2 widens the Effect-class admit set + "
+        "the sorcery_speed AA-rider gate)."
     )
 
 
 def test_carrier_aa_phase_1_effect_classes_unchanged_post_c1():
-    """**Substrate-only invariant — the Effect-class admit set is
-    UNCHANGED at Phase 4C C1.** Neither
-    ``ExileTargetCardFromGraveyard`` nor the recall sibling are in
-    the frozenset; the C2 cycle widens both.
+    """**Inverted post-Phase-4C-C2 invariant — the Effect-class admit
+    set GROWS by 2 at Phase 4C Cycle 2.** Both
+    ``ExileTargetCardFromGraveyard`` and the recall sibling join the
+    frozenset (9 → 11). Pre-C2 (C1 substrate alone) they were absent.
     """
     from mtg_bot.effects.generic.exile import (
         ExileTargetCardFromGraveyard,
@@ -1178,14 +1189,13 @@ def test_carrier_aa_phase_1_effect_classes_unchanged_post_c1():
     )
 
     admitted = _carrier_aa_phase_1_effect_classes()
-    assert ExileTargetCardFromGraveyard not in admitted, (
-        "Phase 4C C1 substrate invariant: ExileTargetCardFromGraveyard "
-        "MUST NOT yet be in the Effect-class admit set (C2 ships the "
-        "widen)."
+    assert ExileTargetCardFromGraveyard in admitted, (
+        "Phase 4C C2 widen: ExileTargetCardFromGraveyard MUST be in "
+        "the Effect-class admit set (C2 ships the widen)."
     )
-    assert PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl not in admitted, (
-        "Phase 4C C1 substrate invariant: "
+    assert PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl in admitted, (
+        "Phase 4C C2 widen: "
         "PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour"
-        "Control MUST NOT yet be in the Effect-class admit set (C2 "
-        "ships the widen)."
+        "Control MUST be in the Effect-class admit set (C2 ships the "
+        "widen)."
     )
