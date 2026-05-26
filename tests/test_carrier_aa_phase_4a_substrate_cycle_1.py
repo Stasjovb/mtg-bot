@@ -109,6 +109,11 @@ PHASE_1_3_ADMITTED_LAND_CARRIERS = (
     "Terrain Generator",
     "Mystifying Maze",
     "Scavenger Grounds",
+    # Phase 3C C3 (Worker A, 2026-05-26) adds Thespian's Stage via the
+    # ``BecomesCopyOfTargetLand`` Effect-class admit widen (the Phase-3
+    # frontier closes at 7 admits; Phase 4+ multi-AA carriers stay
+    # declined per the per-AA gate teeth).
+    "Thespian's Stage",
 )
 
 
