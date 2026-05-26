@@ -24,6 +24,207 @@ historical itemization (genuinely_missing 2→0 via Pain for All + cast-
 from-exile substrate; blocked_non_effect 2→0 via Tractor Beam + Dauntless
 Scrapbot).
 
+### Inventory refresh (2026-05-26 post-multi-substrate closures,
+`feature/inventory-refresh-2026-05-26-post-multi-substrate-p1`)
+
+**Trigger:** today's session shipped four full-campaign substrate
+landings into the BLOCKED tail in parallel — Cost-reduction Phase
+1+2+3 (CLOSED, 5 carriers PROBED), Carrier-AA Phase 1+1.5+2a+2b+3a+3b
+(6 carriers PROBED, Phase 3C C1 substrate landed for Thespian's
+Stage), Spacecraft Phase 1+2+3 (CLOSED, 7 carriers PROBED — the full
+trigger-bearing Spacecraft frontier), and Aura Phase 3+ (CLOSED, 3
+carriers PROBED — the Aura-attachment substrate row dropped to 0).
+The deck-leverage signal of the BLOCKED tail dropped substantially as
+a result, and the body wording below (anchored at the 2026-05-21
+`110/35` refresh and the 2026-05-24 `66/13` refresh) is now stale by
+~27 carrier-flips. This delta-section is the canonical "what does the
+body actually mean today" overlay; older row counts in the body text
+below should be interpreted as historical narrative anchored at their
+dated HEADs.
+
+**Headline post-refresh:** `scripts/scout_r58_subsystem_attribution.py`
+reports **39 subsystem-gated** cards (down from the 2026-05-24
+refresh's 66, down from the deeper body wording 110 / 128) / **5
+single-gated** (down from 13 / 35 / 53). `docs/POOL_PARITY.md` at this
+HEAD reports **PROBED 397 / covered_by_construction 39 / BLOCKED-
+subsystem-gated 39 / pool total 475**. Byte-equal pool percentage:
+**436/475 = 91.8%** at the Effect+bridge level; the PROBED individual-
+pin tier alone is **397/475 = 83.6%** of pool — both numbers up
+substantially from the 2026-05-24 refresh's PROBED 287 / covered 122 /
+BLOCKED-SG 66 baseline (Δ +110 PROBED across the four campaigns plus
+the parallel covered-by-construction probe-writing lane).
+
+**Per-row deltas vs. the 2026-05-24 refresh body (`66/13`):**
+
+  * **Cost-reduction** — **5 → 0 single-gated, row CLOSED** (Phase
+    1: Gigastorm Titan + Lashwhip Predator FLIP at `8593b0fb` and
+    per-card probes at `1f13f092` / `6c4ee310`; Phase 2: Uthros
+    Psionicist + Sami Wildcat Captain FLIP at `c370cee4` and probes
+    at `809d546c` / `4b683928`; Phase 3: Fungal Colossus FLIP at
+    `7036c191` and probe at `456108df`). All 5 cost-reduction
+    single-gated carriers PROBED end-to-end; ~53,648 cumulative
+    17lands-deck attribution-credit (the largest single-gated row in
+    the BLOCKED tail prior to today, documented DEFERRED at the
+    2026-05-21 audit and re-opened by the 2026-05-24
+    `cost-reduction-subsystem-decline-revisit-p1` 5/5 GENUINELY-
+    DEFERRED audit `added6db`). Row drops from the BLOCKED-SG table
+    entirely.
+  * **Aura-attachment substrate** — **3 → 0 multi-gated, row
+    CLOSED** (Phase A: Chorale of the Void substrate at `53c6bc2a` +
+    FLIP at `63ef90b6`; Phase B: Cracked Skull substrate at
+    `1e0788ff` + FLIP at `56cddeb4`; Phase C: Sporogenic Infection
+    combined substrate+FLIP at `bc740e3b`). All 3 multi-gated S4-
+    triggered-effect Aura residues PROBED end-to-end; the
+    Aura-attachment row was the last 3-card residue from the
+    2026-05-19/20 massive Aura closure session and is now fully
+    drained. Row drops from the BLOCKED-SG table entirely.
+  * **Carrier activated abilities** — **30 → ~24 multi-gated**, **0
+    single-gated**. Six carriers PROBED across Phase 1+1.5+2a+2b+3a+
+    3b (Swarmyard at `da761ad1`, Deserted Temple at `e0707d88`,
+    Petrified Field at `8a31b12b`, Terrain Generator at `03fdc3e6`,
+    Mystifying Maze at `143c95d7`, Scavenger Grounds at `aa1ebe22`).
+    Phase 3C is in flight — Thespian's Stage Rust substrate landed at
+    `f5a2a1ce` (GameObject.original_printing_id slot + per-zone-change
+    reset hookup audit + snapshot bridge), Thespian's Stage STAYS
+    DECLINED at the admit gate post-Cycle-1 (per the substrate-only
+    invariant; Worker A's parallel Phase 3C C2 owns the bridge
+    round-trip + admit predicate + FLIP). Row stays multi-gated only,
+    no single-gated cards remain.
+  * **Station / Spacecraft** — **8 → 1 multi-gated**, **0 single-
+    gated**. Seven carriers PROBED across Phase 1+2+3 (Galvanizing
+    Sawship at `7e07400f`, Lumen-Class Frigate at `086f86fc`, Larval
+    Scoutlander at `67fe1f76`, Sledge-Class Seedship at `3d0bc74a`,
+    Synthesizer Labship at `277ad6d6`, Entropic Battlecruiser at
+    `e24df399`, Infinite Guideline Station at `dc1e7210`). The
+    Spacecraft substrate is closed end-to-end across the un-stationed
+    creature/anthem/trigger-bearing axes; the only Spacecraft left in
+    BLOCKED-SG is **The Eternity Elevator** (threshold=None — a non-
+    Spacecraft-stationed land carrier orthogonal to the Phase-1/2/3
+    admit shape, documented DEFERRED in the §3 BLOCKED-SG body text).
+  * **Static / layered abilities** — **9 → 7 multi-gated**, **2 → 2
+    single-gated** (Rampaging Soulrager, Wildfire Wickerfolk — both
+    still EoE-snapshot-absent honest-stops at
+    `rust/src/cards.rs:6831` for the `UnlockedDoorsAmongRoomsAtLeast`
+    / `DeliriumActive` Conditions not in the dispatch table; closure
+    requires a per-Condition Rust slice regardless and stays
+    DEFERRED). Drift tracks effect-uncovered + carrier-AA closures
+    that drained multi-gated combinations.
+  * **Non-basic land substrate** — **2 → 2 single-gated** (Echoing
+    Deeps clone substrate + Secluded Starforge activated-abilities
+    substrate; both documented DEFERRED in the body — orthogonal to
+    every campaign that landed today). Unchanged from the 2026-05-24
+    refresh.
+  * **Effect-uncovered** — **50 → 31 multi-gated**, **2 → 0 single-
+    gated** (Archenemy's Charm closed via `7088c9bd`, Coordinated
+    Clobbering closed via `ef9abb8d`, plus the broader closure wave
+    `c32f07f9` Anticausal Vestige + `0017d9c1` Weftwalking +
+    `722d4dde`-vicinity covered-by-construction probe lane p1-p13
+    flipped ~50 covered cards to PROBED). Row stays multi-gated only.
+  * **Carrier activated abilities (multi)** — net `30 → ~24`
+    reflects the 6 Phase 1+1.5+2a+2b+3a+3b carrier-AA closures
+    co-resolving multi-gated cards (their classifier carrier-AA
+    multi-gate stays True for un-resolved cards but each of the 6
+    moved to PROBED individually).
+  * **Non-safe triggered ability (multi-gated)** — `23 → 12`
+    multi-gated co-blocker row; drift tracks the effect-uncovered +
+    Aura Phase 3 closure chain draining multi-gated combinations.
+  * **Unclassified** — unchanged (`1/1`; Leyline of Mutation
+    parser-honest residual — its parser TRULY does not surface
+    either opening-hand-leyline or 5-color alternative-cost; a real
+    parser-side widen scope that stays DEFERRED).
+
+**Live single-gated by subsystem (the canonical "what to grind"
+column, 5 cards — down from 13 at the 2026-05-24 refresh):**
+
+| Subsystem | Single-gated members |
+|---|---|
+| `nonbasic_land_substrate` | Echoing Deeps, Secluded Starforge (2) |
+| `static_abilities_layered` | Rampaging Soulrager, Wildfire Wickerfolk (2) |
+| `unclassified` | Leyline of Mutation (1) |
+
+All 5 remaining single-gated cards have **0 17lands decks** at this
+HEAD — the EoE-pool single-gate-leverage frontier has bottomed out
+even further than the 2026-05-24 refresh's "13 single-gated cards at
+0 decks" claim. Every remaining single-gated closure is substrate-
+cost paid against effectively-zero in-pool leverage. The campaign's
+deck-leverage signal lives **entirely in the multi-gated tail** (34
+multi-gated cards; the remaining named multi-gated rows are
+**Carrier-AA (24)**, **Non-safe triggered ability (12)**,
+**Effect-uncovered (31)**, **Static/layered (5)**, **Rooms/doors
+(3)**, **warp_cost (3)**, **Spacecraft (1 — Eternity Elevator)**,
+**Planeswalker (1)**, **Kicker/Impending (1)**). Note that
+multi-gated cards count under every gate they trip, so the per-row
+counts do not sum to the 39-card tier total — the row reconciliation
+is `39 = 5 single + 34 multi`.
+
+**BLOCKED-SG composition snapshot (the full 39-card list):**
+
+The full BLOCKED-SG card list is regenerable from `docs/POOL_PARITY.md`
+at this HEAD (lines 477-515). The 39 cards partition into the named
+gates above; the §3 body text below remains the canonical "which gate
+applies to which card" reference for everything that wasn't touched
+by today's campaigns (the 4 cost-reduction cards moved out of §3 row
+2; the 3 Aura-attachment cards moved out of §3 row 3; the 6 Carrier-AA
++ 7 Spacecraft cards moved out of §3 row 4 / row 5).
+
+**Engine surface change in THIS lane: NONE.** Zero edits to `rust/`,
+zero edits to `src/mtg_bot/parity/trajectory.py` or any production
+module — this is a pure docs-only refresh capturing today's massive
+substrate landings. The engine surface change attribution lives in the
+27+ substrate / FLIP / probe commits listed above, each of which
+carries its own SEARCH_LIMITATIONS entry + cross-engine probe
+attribution.
+
+**Recommended next-target priorities** (post-this-refresh leverage
+signal):
+
+  1. **Carrier-AA Phase 3C C2** (Worker A parallel, in flight) — finish
+     Thespian's Stage admit widen + FLIP + per-card probe on top of
+     the C1 substrate `f5a2a1ce`; the 24-card Carrier-AA multi-gated
+     tail is the single largest named row remaining.
+  2. **Carrier-AA Phase 4** (multi-AA carriers — Mirrorpool / Ghost
+     Vacuum / Keys to the House / All-Fates Scroll) — the Phase 2
+     `{T}, Sac:` cost gate is now wired (Phase-2a / Phase-2b closed);
+     prerequisite met, design doc at `9fc70637` scopes the multi-AA
+     admit predicate widen as the next sub-phase.
+  3. **Effect-uncovered drain** — 31-card multi-gated row; the
+     covered-by-construction probe-writing lane p13 closed at
+     `0ee31b27` ("the LAST 2 covered_by_construction cards") so the
+     pure probe-writing leverage is exhausted; remaining is per-card
+     bespoke Effect ports.
+  4. **Non-safe triggered ability** (12 multi-gated co-blockers) — 
+     usually drained as a side-effect of effect-uncovered closures
+     (the round-trip event bridges co-resolve once the carrier's
+     Effect arms ship); not a primary target.
+  5. **Rooms/doors (3) + warp_cost (3) + Kicker/Impending (1)** —
+     small multi-gated tails per their own per-subsystem design docs;
+     each is a multi-cycle bespoke substrate.
+
+**Cross-references for this refresh:**
+
+  * Cost-reduction Phase 1+2+3 design docs: `4b94f844` (Phase 1) /
+    `f75dbf0e` (Phase 2) / `2c18aae0` (Phase 3); closure commits per
+    the per-row deltas above.
+  * Carrier-AA design docs: `4eed9554` (Phase 1) / `aabda1ee` (Phase
+    1.5) / `9fc70637` (Phase 2) / `604de874` (Phase 3); closure
+    commits per the per-row deltas above.
+  * Spacecraft Phase 1+2+3 design docs: `35be45bb` (Phase 1) /
+    `b191475e` (Phase 2) / `09094051` (Phase 3); closure commits per
+    the per-row deltas above.
+  * Aura Phase 3+ design doc: `245823d9`; closure commits per the
+    per-row delta above.
+  * Predecessor refreshes: `feature/inventory-refresh-2026-05-24-p1`
+    (§ at line 105-254 above) / `feature/inventory-refresh-and-close-
+    p1` (§ at line 27-103 above) / `ce564786` (original inventory).
+  * Live snapshot scripts: `scripts/scout_r58_subsystem_attribution.py`
+    (re-runnable; 39 cards / 5 single-gated / 34 multi-gated at this
+    HEAD) / `docs/POOL_PARITY.md` (PROBED 397 / covered 39 /
+    BLOCKED-SG 39 at this HEAD).
+
+**Sanity-gate runs (this lane):** `tests/test_measure_pool_parity.py`
+31/31 — no test regression (this is a docs-only lane; zero engine
+surface change).
+
 ### Inventory refresh + ground-truth audit (2026-05-21,
 `feature/inventory-refresh-and-close-p1`)
 
