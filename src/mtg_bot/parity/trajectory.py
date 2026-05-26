@@ -3609,6 +3609,23 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.combinators import (
         OptionalSacLandOrLanderForBasicLandRamp,
     )
+    # **Spacecraft Phase 3B Cycle 1 (2026-05-25).** Reverse-serializer
+    # leaf import for ``OptionalPutCreatureFromHandOntoBattlefield`` —
+    # Sledge-Class Seedship's ATTACKS trigger Effect (
+    # ``effects/combinators.py:205``). Substrate-only landing — the
+    # arm below recognizes the Effect class and constructs the round-
+    # trip dict, but the kind string is NOT in any (event, predicate)
+    # ``safe_effect_kinds`` set yet (the Phase-3 admit predicate has
+    # its OWN dispatch path separate from ``_python_ta_to_safe_dict``
+    # per design doc §5.3a). Sledge-Class Seedship STAYS DECLINED at
+    # the ``_python_ta_to_safe_dict`` gate post-Cycle-1. Cycle 2 widens
+    # ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` to include this
+    # Effect class + extends ``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_
+    # SHAPES`` with ``(ATTACKS, IsSelf())`` + the FLIP per design doc
+    # §7.2.
+    from mtg_bot.effects.combinators import (
+        OptionalPutCreatureFromHandOntoBattlefield,
+    )
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -4538,6 +4555,34 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         eff_dict = {
             "kind": "optional_sac_land_or_lander_for_basic_land_ramp",
             "land_count": int(eff.land_count),
+        }
+    elif isinstance(eff, OptionalPutCreatureFromHandOntoBattlefield):
+        # **Spacecraft Phase 3B Cycle 1 (2026-05-25).** Reverse-
+        # serializer arm for Sledge-Class Seedship's ATTACKS trigger
+        # Effect ``OptionalPutCreatureFromHandOntoBattlefield()`` (
+        # ``effects/combinators.py:205``). Round-trip pair with the
+        # Rust ``Effect::OptionalPutCreatureFromHandOntoBattlefield``
+        # unit variant's to_pydict + parse arms (cards.rs) and the
+        # cross_engine.py ``_ta_dict_to_python_effect`` bridge arm
+        # (added in C1). Unit Effect — no fields; the dict carries
+        # ONLY the ``kind`` discriminator.
+        #
+        # **Substrate-only — Sledge-Class Seedship STAYS DECLINED at
+        # this gate post-Cycle-1.** The kind string
+        # ``optional_put_creature_from_hand_onto_battlefield`` is
+        # intentionally NOT added to any (event, predicate)
+        # ``safe_effect_kinds`` set this cycle; the ``eff_kind not in
+        # safe_effect_kinds`` gate below this dispatch cascade returns
+        # None, so :func:`_python_ta_to_safe_dict` declines Sledge-
+        # Class Seedship even with the recognition arm in place. The
+        # round-trip dict construction is pre-positioned for Cycle 2
+        # (which widens the Phase-3 admit-class allowlist + event-shape
+        # table per design doc §7.2 — a SEPARATE dispatch path from
+        # ``_python_ta_to_safe_dict``; this leaf is the dict-emit
+        # primitive both paths can consume).
+        eff_kind = "optional_put_creature_from_hand_onto_battlefield"
+        eff_dict = {
+            "kind": "optional_put_creature_from_hand_onto_battlefield",
         }
     else:
         return None

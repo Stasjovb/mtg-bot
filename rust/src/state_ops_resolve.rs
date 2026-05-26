@@ -7018,6 +7018,147 @@ fn apply_effect(
             // (sibling of SearchLibraryForBasicLandTapped's tail).
             state.pending_etb_dispatches.extend(entered_ids);
         }
+        // **Spacecraft Phase 3B Cycle 1 (2026-05-25).** Sledge-Class
+        // Seedship's ATTACKS trigger Effect — resolve arm for the new
+        // `Effect::OptionalPutCreatureFromHandOntoBattlefield` unit
+        // variant. Mirrors Python's
+        // `OptionalPutCreatureFromHandOntoBattlefield.resolve` at
+        // `effects/combinators.py:215-240`.
+        //
+        // **Compositional resolve.** This arm composes (a) Phase-2b's
+        // `Optional*` decision-point dispatch pattern, (b) the hand-
+        // search-and-pick-creature primitive (sibling of
+        // `Effect::PutBasicLandFromHandOntoBattlefieldTapped` resolve
+        // at line 23242 — widened from basic-land predicate to creature
+        // predicate), (c) the hand→bf zone move + UNTAPPED entry (NOT
+        // tapped — Sledge-Class Seedship's printed text is "put a
+        // creature card from your hand onto the battlefield" without a
+        // "tapped" rider; compare Phase 2b's tapped emit), (d)
+        // `pending_etb_dispatches.push(entered_id)` ETB queue per the
+        // established CE13 / Phase-2b substrate. Per design doc §4.3.
+        //
+        // **Resolve dispatch (sibling of PutBasicLandFromHandOntoBattle
+        // fieldTapped arm):**
+        //   1. Source-controller resolution: prefer
+        //      `state.current_resolve_source_controller` (set by the
+        //      stack resolver), fall back to `state.active_player` for
+        //      back-compat with synthetic direct-apply callers (I69
+        //      pattern). "Your hand" is the SOURCE'S controller's hand.
+        //   2. Optional decision point: scan source-controller's hand
+        //      for eligible Creature cards. If NO eligible card exists,
+        //      silent no-op (Python parity with `if not options:
+        //      return` at `effects/combinators.py:222-224`). When an
+        //      eligible card exists, the no-agent default-yes
+        //      deterministic-first-slice convention picks the first
+        //      eligible card (mirrors every other `Optional*` arm's
+        //      no-agent default-yes path — Phase-2b's
+        //      PutBasicLandFromHandOntoBattlefieldTapped, the round-20
+        //      OptionalSacArtifactForEffect, Phase-3A's
+        //      OptionalSacLandOrLanderForBasicLandRamp). Real MTG lets
+        //      the controller choose; deferred until decision callbacks
+        //      exist.
+        //   3. Pre-commit validation is implicit: the eligibility scan
+        //      restricts to in-hand Creature cards by construction.
+        //   4. Reserve ETB timestamp; move hand→bf UNTAPPED with
+        //      summoning_sick=true (CR 302.1 — any creature entering
+        //      the battlefield has summoning sickness, including the
+        //      put-from-hand path; mirrors
+        //      `Effect::ReturnCreatureFromYourGraveyardToBattlefield`'s
+        //      summoning-sickness emit). Controller = the source's
+        //      controller.
+        //   5. Queue `Event::Enters` via `pending_etb_dispatches` so
+        //      the caller (resolve_top_of_stack / ATTACKS-trigger fan-
+        //      out) drains AFTER this arm returns. Mirrors Python's
+        //      `put_into_battlefield(state, card, controller_id)` call
+        //      at `effects/combinators.py:236` which threads through the
+        //      same ENTERS dispatch chokepoint as the cast-spell ETB
+        //      path. The entering creature has no inherent ETB triggers
+        //      printed in the EoE pool today for the Sledge-Class
+        //      Seedship probe targets (Grizzly Bears scenario per
+        //      design doc §6.3); the ENTERS dispatch still fires for
+        //      observer-side triggers on existing bf permanents.
+        //
+        // **Eligibility predicate.** A hand card is eligible iff its
+        // printing carries `Creature` in `card_types` (mirror of
+        // Python's `c.printing.is_creature` at
+        // `effects/combinators.py:222`).
+        //
+        // **Substrate-only landing (Phase 3B Cycle 1).** Sledge-Class
+        // Seedship STAYS DECLINED at the production-deck loader filter
+        // post-Cycle-1. Cycle 2 ships the Phase-3 admit-class allowlist
+        // widen (`OptionalPutCreatureFromHandOntoBattlefield` joins
+        // `_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`) + the
+        // `(ATTACKS, IsSelf())` event-shape admit + the Sledge-Class
+        // Seedship FLIP per design doc §7.2.
+        Effect::OptionalPutCreatureFromHandOntoBattlefield => {
+            // Source-controller resolution: I69 pattern (mirrors
+            // PutBasicLandFromHandOntoBattlefieldTapped / Phase-3A
+            // OptionalSacLandOrLanderForBasicLandRamp arms).
+            let controller_idx = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let controller_u8 = controller_idx as u8;
+            // Eligibility scan: find the first eligible Creature card
+            // in the controller's hand. Mirror of Python's
+            // `options = [c for c in p.hand if c.printing.is_creature]`
+            // at effects/combinators.py:222 + the no-agent default-yes
+            // first-slice deterministic pick.
+            let pick_idx: Option<usize> = {
+                let hand = &state.players[controller_idx].hand;
+                let mut found: Option<usize> = None;
+                for (i, obj) in hand.iter().enumerate() {
+                    let printing = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            let pick_idx = match pick_idx {
+                Some(i) => i,
+                None => return Ok(()), // silent no-op — no eligible creature
+            };
+            // Reserve ETB timestamp BEFORE the player-mut borrow. Same
+            // pattern as PutBasicLandFromHandOntoBattlefieldTapped /
+            // ReturnCreatureFromYourGraveyardToBattlefield.
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // Remove from hand; stamp battlefield entry; push to
+            // controller's battlefield.
+            let entered_id: u32 = {
+                let player = &mut state.players[controller_idx];
+                let hand = Arc::make_mut(&mut player.hand);
+                let mut obj = hand.remove(pick_idx);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = false; // UNTAPPED entry per printed text
+                // CR 302.1 — any creature entering the battlefield has
+                // summoning sickness, including the put-from-hand path.
+                // Mirror of ReturnCreatureFromYourGraveyardToBattlefield's
+                // summoning_sick=true emit.
+                obj.summoning_sick = true;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                let id = obj.id;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+                id
+            };
+            // Queue ENTERS dispatch — drained AFTER the resolving stack
+            // frame pops. Mirrors Python's `put_into_battlefield(state,
+            // card, controller_id)` call at
+            // `effects/combinators.py:236` which threads through the
+            // same ENTERS dispatch chokepoint as the cast-spell ETB
+            // path. Same shape as Phase 2b PutBasicLandFromHandOntoBattle
+            // fieldTapped's ENTERS push.
+            state.pending_etb_dispatches.push(entered_id);
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.

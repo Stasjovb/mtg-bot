@@ -1692,6 +1692,33 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return OptionalSacLandOrLanderForBasicLandRamp(
             land_count=land_count,
         )
+    if kind == "optional_put_creature_from_hand_onto_battlefield":
+        # **Spacecraft Phase 3B Cycle 1 (2026-05-25).** Bridge arm for
+        # the new Rust ``Effect::OptionalPutCreatureFromHandOntoBattle
+        # field`` unit variant (cards.rs). Mirrors Python's
+        # ``OptionalPutCreatureFromHandOntoBattlefield()`` unit
+        # dataclass at ``effects/combinators.py:205`` — Sledge-Class
+        # Seedship's ATTACKS trigger effect ("You may put a creature
+        # card from your hand onto the battlefield.").
+        #
+        # **Unit Effect — no fields.** No riders on either engine; the
+        # Rust to_pydict arm emits ONLY ``{"kind": "..."}`` and this
+        # bridge arm constructs the unit instance unconditionally.
+        # Sibling of the existing unit-Effect bridge arms (e.g.
+        # destroy_all_creatures path).
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 3B Cycle 1 keeps Sledge-
+        # Class Seedship DECLINED at the production-deck loader; the
+        # new admit-class allowlist widen (which adds
+        # ``OptionalPutCreatureFromHandOntoBattlefield`` to
+        # ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES``) + the
+        # ``(ATTACKS, IsSelf())`` event-shape admit + the FLIP ship in
+        # Cycle 2 per design doc §7.2. This bridge arm is byte-equal
+        # for both the substrate-only and post-C2 flipped outcomes.
+        from mtg_bot.effects.combinators import (
+            OptionalPutCreatureFromHandOntoBattlefield,
+        )
+        return OptionalPutCreatureFromHandOntoBattlefield()
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the
