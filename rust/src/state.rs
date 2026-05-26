@@ -2449,6 +2449,68 @@ pub enum PendingDecision {
         target_player_id: u8,
         candidates: Vec<u32>,
     },
+    /// **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic Infection
+    /// substrate landing.** Resolve-time "target opponent picks a
+    /// creature to sacrifice" decision for
+    /// `Effect::TargetOpponentSacrificesCreatureOtherThanEnchanted`.
+    /// Pushed when Sporogenic Infection's ETB resolves, after the
+    /// candidate enumeration has filtered the target opponent's
+    /// battlefield to creatures whose id != the source Aura's
+    /// `attached_to` (the "other than enchanted creature" clause).
+    ///
+    /// **Why a dedicated variant.** Mirrors Python's
+    /// `target.agent.choose_sacrifice(state, target_id, options)` call
+    /// at `effects/generic/opponent_punishers.py:130-132` — the
+    /// TARGET opponent (NOT the resolving controller) picks their own
+    /// creature to sacrifice. The `excluded_object_id` slot pins the
+    /// Aura's enchanted host so the exclusion is observable via the
+    /// pending-decisions surface (test pin) and so submit dispatchers
+    /// can re-validate the host exclusion if needed. The
+    /// `target_player_id` slot routes the agent-callout to the right
+    /// player (the answerer is the target opponent, not the resolving
+    /// controller).
+    ///
+    /// **Payload.** Carries the source id (the resolving Aura), the
+    /// controller (the resolving-effect's controller — used for log
+    /// correlation, NOT the player who picks), the target player id
+    /// (the opponent who PICKS their own sac), the `candidates: Vec<u32>`
+    /// (creature ids on the target's bf, with the host already
+    /// excluded — the snapshot taken at resolve time), and
+    /// `excluded_object_id: Option<u32>` (the Aura's `attached_to`
+    /// host id; `None` when the Aura had no host at resolve time,
+    /// defensive — production push sites only push when the candidate
+    /// set is non-empty so this is observability not gating).
+    ///
+    /// **Submit.** `submit_sacrifice_decision(Some(card_id))` consumes
+    /// the head, validates `card_id` is in `candidates`, sacrifices
+    /// that creature (moves from the target's bf to their graveyard
+    /// with the standard `sacrifice_inline` shape: zone-stamp, LTB
+    /// fan-out push, token-cease queue, IS_SACRIFICED dispatch push).
+    /// Mirrors Python's `_sacrifice(state, obj)` at
+    /// `opponent_punishers.py:138`. An unknown card_id raises
+    /// `ValueError` transactionally (no mutation on failure).
+    /// `submit_sacrifice_decision(None)` is the explicit "decline"
+    /// path — silent fizzle (defensive; the production push path
+    /// won't hit this because the resolve arm gates entry on
+    /// `candidates` non-empty).
+    ///
+    /// **Auto-resolve default.** `"default"` / `"sacrifice_first"`
+    /// picks `candidates[0]` (the deterministic-first legal target
+    /// in player-id-then-position order — mirrors the
+    /// `GraveyardCardChoice` / `OpponentHandCardChoice` /
+    /// `EnchantTargetChoice` convention every other trigger-time
+    /// target picker uses).
+    ///
+    /// **Substrate landing (Phase C).** This is a combined Rust +
+    /// Python + probe slice: the decision-pump pin lands alongside
+    /// the admit-gate widen and the per-card real-EoE probe.
+    SacrificeChoice {
+        source_obj_id: u32,
+        controller: u8,
+        target_player_id: u8,
+        candidates: Vec<u32>,
+        excluded_object_id: Option<u32>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

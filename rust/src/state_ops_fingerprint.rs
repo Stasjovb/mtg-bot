@@ -663,6 +663,30 @@ impl GameState {
                             candidates.iter().map(|id| json!(*id)).collect(),
                         ),
                     ]),
+                    // **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic
+                    // Infection substrate landing — sacrifice-choice
+                    // fingerprint.** Same `target_player_id` +
+                    // `candidates` + `excluded_object_id` payload as
+                    // the surface dict.
+                    PendingDecision::SacrificeChoice {
+                        source_obj_id,
+                        controller,
+                        target_player_id,
+                        candidates,
+                        excluded_object_id,
+                    } => Value::Array(vec![
+                        Value::String("SacrificeChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        json!(*target_player_id),
+                        Value::Array(
+                            candidates.iter().map(|id| json!(*id)).collect(),
+                        ),
+                        match excluded_object_id {
+                            Some(eid) => json!(*eid),
+                            None => Value::Null,
+                        },
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

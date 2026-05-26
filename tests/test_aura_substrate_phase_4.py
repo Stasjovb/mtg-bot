@@ -364,10 +364,11 @@ def test_chorale_of_the_void_loader_admits_post_phase_3_phase_a_cycle_2():
 
     The loader now admits Chorale (the +2,783 17lands deck flip).
     Phase B Cycle 2 (2026-05-26) added Cracked Skull (the +0-deck
-    positive-control flip; Shape A + Tail-X1 widen in lockstep);
-    Sporogenic Infection still declines (Phase C closes its
-    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` ENTERS
-    half).
+    Phase-B positive-control flip; Shape A + Tail-X1 widen in
+    lockstep). Phase C (2026-05-26, combined slice) added Sporogenic
+    Infection (the +0-deck Phase-C positive-control flip; ENTERS-half
+    widen — the Tail-X1 widen shipped with Phase B Cycle 2 and is
+    shared). Aura Phase 3+ campaign COMPLETE.
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_aura

@@ -178,20 +178,22 @@ def test_phase3_safe_rejects_unsafe_effect():
     """An Aura trigger with an effect outside the Phase-3 safe set
     is rejected — the gate is the §2 positive allowlist. (Phase B
     Cycle 2 added DestroyEnchantedPermanent to the safe set on
-    Tail-X1; this test now uses Sporogenic's
-    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` Effect
-    class — the Phase C carrier-specific Effect that STAYS outside
-    the safe set until Phase C closure.)"""
+    Tail-X1; Phase C added Sporogenic's
+    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` to the
+    safe set. This test now uses a clearly-outside-safe-set Effect —
+    ``EnchantedCreatureFightsTargetEffect`` (Meltstrider's Resolve
+    Fight; a separate follow-up Rust slice would be required to
+    close that).)"""
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.predicates import Event, IsSelf
-    from mtg_bot.effects.generic.opponent_punishers import (
-        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    from mtg_bot.effects.bespoke import (
+        EnchantedCreatureFightsTargetEffect,
     )
 
     ta = TriggeredAbility(
         event=Event.ENTERS,
         predicate=IsSelf(),
-        effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
+        effect=EnchantedCreatureFightsTargetEffect(),
     )
     assert _aura_triggers_are_phase3_safe((ta,)) is False
 
@@ -597,14 +599,18 @@ def test_predicate_admits_cracked_skull_post_phase_b_cycle_2():
     assert _printing_is_bridge_simple_aura(p) is True
 
 
-def test_predicate_declines_sporogenic_infection():
-    """Sporogenic Infection has ENTERS + TargetOpponentSacrifices...
-    + DEALT_DAMAGE + DestroyEnchantedPermanent — neither in safe set."""
+def test_predicate_admits_sporogenic_infection_post_phase_c_closure():
+    """**Phase 3+ Phase C closure (2026-05-26) — flipped in-place
+    from declines.** Sporogenic Infection has ENTERS +
+    TargetOpponentSacrificesCreatureOtherThanEnchanted + DEALT_DAMAGE
+    + DestroyEnchantedPermanent. The ENTERS half landed in the safe
+    set with this slice; the Tail-X1 half shipped with Phase B Cycle
+    2. Both halves now pass the all-or-nothing gate -> admit."""
     from mtg_bot.cards.source import get_active_source
 
     p = get_active_source().get_printings()["Sporogenic Infection"]
     assert p.is_aura is True
-    assert _printing_is_bridge_simple_aura(p) is False
+    assert _printing_is_bridge_simple_aura(p) is True
 
 
 def test_predicate_declines_meltstriders_resolve():

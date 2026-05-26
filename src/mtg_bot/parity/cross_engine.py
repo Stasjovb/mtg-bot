@@ -10292,6 +10292,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             TargetOpponentLookHandMayDiscard,
         )
         return TargetOpponentLookHandMayDiscard()
+    if kind == "target_opponent_sacrifices_creature_other_than_enchanted":
+        # **Aura Phase 3+ Phase C (2026-05-26) -- Sporogenic Infection
+        # substrate landing -- bridge arm.** Rust's
+        # ``Effect::TargetOpponentSacrificesCreatureOtherThanEnchanted``
+        # (cards.rs unit variant added in this slice; parse + to_pydict
+        # arms in cards.rs; resolve arm in ``state_ops_resolve.rs``
+        # immediately after the Phase B
+        # ``target_opponent_look_hand_may_discard`` arm) mirrors
+        # Python's ``TargetOpponentSacrificesCreatureOtherThanEnchanted``
+        # (``effects/generic/opponent_punishers.py:68-144``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``TargetOpponentSacrificesCreatureOtherThanEnchanted()``
+        # reconstructs the Python class (``@dataclass(frozen=True)``,
+        # no fields). Mirrors the sibling Phase A
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard`` +
+        # Phase B ``TargetOpponentLookHandMayDiscard`` unit-variant
+        # bridge shape.
+        #
+        # **Full closure -- NOT honest-stop.** The Rust resolve arm
+        # ships full byte-equal semantics with Python: 5-zone source-
+        # controller resolution (reads source.attached_to for the
+        # excluded host); 2-player target opponent = 1 - controller;
+        # candidate enumeration filters target's bf to creatures
+        # whose id != excluded_id; empty -> silent fizzle; otherwise
+        # push ``PendingDecision::SacrificeChoice`` carrying source +
+        # controller + target_player_id + candidates +
+        # ``excluded_object_id``. The follow-up sac choice is handled
+        # by the decision pump in
+        # ``state_ops_decisions.rs::auto_resolve_pending`` (default
+        # picks candidates[0] -- the TARGET opponent's deterministic-
+        # first; matches Python's
+        # ``target.agent.choose_sacrifice(...)`` no-agent fallback at
+        # opponent_punishers.py:130-132) +
+        # ``submit_sacrifice_decision(Some(card_id))`` -- preserving
+        # Python's resolve-time agent-callout byte-equal.
+        #
+        # **Aura admit boundary.** Sporogenic Infection (the sole EoE
+        # carrier of this Effect family; 0 17lands decks -- the Phase
+        # C positive-control) FLIPS DECLINED -> ADMITTED in this
+        # combined slice (Rust + Python + probe). The all-or-nothing
+        # gate's Tail-X1 widen shipped with Phase B Cycle 2 (Cracked
+        # Skull); this slice adds the matching ENTERS long-pole admit
+        # shape to close the gate for Sporogenic. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3 + §8
+        # row 6.
+        from mtg_bot.effects.generic.opponent_punishers import (
+            TargetOpponentSacrificesCreatureOtherThanEnchanted,
+        )
+        return TargetOpponentSacrificesCreatureOtherThanEnchanted()
     if kind == "sacrifice_self_unless_void_active":
         # **Aura Phase 4 (Chorale of the Void substrate landing) --
         # SacrificeSelfUnlessVoidActive bridge arm.** Rust's

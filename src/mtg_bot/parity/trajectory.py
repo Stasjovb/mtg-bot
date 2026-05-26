@@ -7621,6 +7621,9 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
     from mtg_bot.effects.generic.graveyard import (
         ReanimateTargetCreatureCardFromDefendersGraveyard,
     )
+    from mtg_bot.effects.generic.opponent_punishers import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
     from mtg_bot.effects.generic.tap import TapEnchantedPermanent
 
     if not triggered_abilities:
@@ -7732,6 +7735,36 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
             and isinstance(ta.effect, TargetOpponentLookHandMayDiscard)
         ):
             continue
+        # **Aura Phase 3+ Phase C (2026-05-26).** Sporogenic Infection
+        # admit-gate widen — adds the ENTERS long-pole shape that
+        # closes the Phase 3+ Phase C carrier. The Tail-X1 widen
+        # shipped with Phase B Cycle 2 (Cracked Skull) and is shared
+        # with Sporogenic per design doc §3, so closing Sporogenic
+        # only requires its ENTERS half to land. Per
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3 + §7
+        # row 5 + §8 row 6.
+        #
+        # Phase-3+ admit shape 7: Sporogenic Infection ENTERS long
+        # pole — ``ENTERS + IsSelf(subject=None) +
+        # TargetOpponentSacrificesCreatureOtherThanEnchanted``. The
+        # Rust ``Effect::TargetOpponentSacrificesCreatureOtherThan
+        # Enchanted`` resolve arm (landed in this slice at
+        # ``state_ops_resolve.rs``) pushes a
+        # ``PendingDecision::SacrificeChoice`` carrying the target-
+        # opponent slot + candidate creature ids (host pre-excluded)
+        # + ``excluded_object_id`` slot; the decision-pump dispatcher
+        # (``submit_sacrifice_decision``) drains the choice byte-equal
+        # with Python's ``target.agent.choose_sacrifice`` call at
+        # ``effects/generic/opponent_punishers.py:130-132``.
+        if (
+            ta.event is Event.ENTERS
+            and isinstance(ta.predicate, IsSelf)
+            and ta.predicate.subject is None
+            and isinstance(
+                ta.effect, TargetOpponentSacrificesCreatureOtherThanEnchanted
+            )
+        ):
+            continue
         # Phase-3+ Tail-X1: Cracked Skull + Sporogenic Infection shared
         # damage-echo destroy tail — ``DEALT_DAMAGE + IsHost(subject=
         # None) + DestroyEnchantedPermanent``. The
@@ -7833,6 +7866,15 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
     # closure; Sporogenic stays DECLINED until Phase C also widens its
     # ENTERS half ``TargetOpponentSacrificesCreatureOtherThanEnchanted``).
     from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    # **Aura Phase 3+ Phase C (2026-05-26).** Reverse-serializer leaf
+    # import for Sporogenic Infection's ENTERS long-pole Effect
+    # (``TargetOpponentSacrificesCreatureOtherThanEnchanted`` at
+    # ``effects/generic/opponent_punishers.py:68-144``). Phase C
+    # closes Sporogenic by adding this ENTERS-half Effect class to the
+    # safe set; the Tail-X1 emitter arm shipped with Phase B Cycle 2.
+    from mtg_bot.effects.generic.opponent_punishers import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
 
     if isinstance(ta.effect, PainForAllETBEffect):
         # Shape 2: Pain for All ETB.
@@ -7936,6 +7978,27 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
             "predicate": {"kind": "source_is_self"},
             "effect": {
                 "kind": "target_opponent_look_hand_may_discard",
+            },
+            "once_per_turn": False,
+        }
+    if isinstance(
+        ta.effect, TargetOpponentSacrificesCreatureOtherThanEnchanted
+    ):
+        # **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic Infection
+        # substrate landing — reverse-serializer leaf.** Shape:
+        # ``ENTERS + IsSelf(subject=None) +
+        # TargetOpponentSacrificesCreatureOtherThanEnchanted``. The
+        # predicate is the standard self-trigger ``IsSelf``
+        # (subject=None) used by every Aura-ETB substrate today;
+        # round-trips via the existing ``source_is_self`` bridge arm
+        # in cross_engine.py. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 Phase
+        # C shape (lines 717-727).
+        return {
+            "event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {
+                "kind": "target_opponent_sacrifices_creature_other_than_enchanted",
             },
             "once_per_turn": False,
         }

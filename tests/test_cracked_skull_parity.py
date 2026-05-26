@@ -253,23 +253,27 @@ def test_cracked_skull_printed_attrs():
 # ---------------------------------------------------------------------------
 
 
-def test_sporogenic_infection_stays_declined_post_phase_b_cycle_2():
-    """**No-silent-auto-grow guard.** Sporogenic Infection shares
-    Tail-X1 (DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent) with
-    Cracked Skull and is positioned for Phase C closure by THIS
-    slice's Tail-X1 widen — but its ENTERS half carries
-    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` which is
-    NOT in the Phase-3 safe set yet (Phase C adds it). The all-or-
-    nothing gate keeps Sporogenic DECLINED until Phase C closure.
+def test_sporogenic_infection_now_admits_post_phase_c_closure():
+    """**Phase C closure follow-up (inverted in-place from C2's
+    stays-declined invariant).** Sporogenic Infection shares Tail-X1
+    (DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent) with Cracked
+    Skull AND its ENTERS-half
+    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` has now
+    landed in the Phase 3+ safe set (Phase C closure, combined slice).
+    The all-or-nothing gate flips for Sporogenic; Sporogenic admits at
+    the bridge-simple-aura loader filter.
+
+    Aura Phase 3+ campaign COMPLETE (Chorale + Cracked Skull +
+    Sporogenic Infection all PROBED).
     """
     from mtg_bot.parity import trajectory
 
     p = _PRINTINGS["Sporogenic Infection"]
     assert (
         trajectory._aura_triggers_are_phase3_safe(p.triggered_abilities)
-        is False
+        is True
     )
-    assert trajectory._printing_is_bridge_simple_aura(p) is False
+    assert trajectory._printing_is_bridge_simple_aura(p) is True
 
 
 def test_cryoshatter_stays_declined_post_phase_b_cycle_2():

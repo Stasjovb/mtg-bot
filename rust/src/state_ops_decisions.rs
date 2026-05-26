@@ -168,6 +168,7 @@ pub(crate) fn auto_resolve_pending(
         | "may_discard_no"
         | "opponent_hand_card_first"
         | "graveyard_card_first"
+        | "sacrifice_first"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -179,7 +180,8 @@ pub(crate) fn auto_resolve_pending(
                  scry_keep_top, scry_send_bottom, tap_permanent_decline, \
                  tap_permanent_first, enchant_target_first, \
                  may_discard_yes, may_discard_no, \
-                 opponent_hand_card_first, graveyard_card_first, default"
+                 opponent_hand_card_first, graveyard_card_first, \
+                 sacrifice_first, default"
             )))
         }
     }
@@ -652,6 +654,36 @@ pub(crate) fn auto_resolve_pending(
                         apply_opponent_hand_discard(
                             state, tgt_idx, chosen_id,
                         );
+                    }
+                }
+            }
+            PendingDecision::SacrificeChoice {
+                source_obj_id: _,
+                controller: _,
+                target_player_id,
+                candidates,
+                excluded_object_id: _,
+            } => {
+                // **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic
+                // Infection substrate landing — auto-resolve.**
+                //
+                // "default" / "sacrifice_first" / unrelated -> pick
+                // candidates[0] (the deterministic-first legal target —
+                // mirrors the OpponentHandCardChoice / GraveyardCardChoice
+                // / EnchantTargetChoice convention). The chosen creature
+                // is sacrificed (moved from the target's bf to their
+                // graveyard via the standard sacrifice_inline shape).
+                //
+                // The push arm only enqueues this decision when the
+                // candidate set is non-empty; empty-candidates is
+                // therefore an absorbing no-op (defensive).
+                if !candidates.is_empty() {
+                    let chosen_id = candidates[0];
+                    let tgt_idx = target_player_id as usize;
+                    if tgt_idx < state.players.len() {
+                        crate::state_ops_resolve::sacrifice_target_inline(
+                            state, tgt_idx, chosen_id,
+                        )?;
                     }
                 }
             }
@@ -1493,6 +1525,35 @@ impl GameState {
                     d.set_item("controller", *controller)?;
                     d.set_item("target_player_id", *target_player_id)?;
                     d.set_item("candidates", candidates.clone())?;
+                }
+                PendingDecision::SacrificeChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    candidates,
+                    excluded_object_id,
+                } => {
+                    // **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic
+                    // Infection substrate landing — pending-decisions
+                    // surface dict.** `candidates` is the flat list of
+                    // creature ids on the target opponent's battlefield
+                    // (with the Aura's host already excluded). The
+                    // target opponent drains via
+                    // `submit_sacrifice_decision(Some(id))` — the id is
+                    // sacrificed (moved from the target's bf to their
+                    // graveyard via the standard sacrifice_inline
+                    // shape). The `excluded_object_id` slot surfaces
+                    // the Aura's host id for observability +
+                    // assertion-side test pins.
+                    d.set_item("kind", "SacrificeChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("target_player_id", *target_player_id)?;
+                    d.set_item("candidates", candidates.clone())?;
+                    match excluded_object_id {
+                        Some(eid) => d.set_item("excluded_object_id", *eid)?,
+                        None => d.set_item("excluded_object_id", py.None())?,
+                    }
                 }
             }
             out.append(d)?;
@@ -2593,6 +2654,87 @@ impl GameState {
             let tgt_idx = target_player_id as usize;
             if tgt_idx < self.players.len() {
                 apply_opponent_hand_discard(self, tgt_idx, id);
+            }
+        }
+        // None -> silent fizzle (defensive; production won't push this
+        // path with no candidates).
+        Ok(())
+    }
+
+    /// **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic Infection
+    /// substrate landing — sacrifice-choice submit.** Consume the
+    /// head `SacrificeChoice` on the pending-decisions queue.
+    ///
+    /// On `Some(chosen_id)`, validates `chosen_id` is in the
+    /// `candidates` list, then sacrifices the creature (moves from
+    /// `state.players[target_player_id].battlefield` to their
+    /// graveyard via the standard `sacrifice_target_inline` shape:
+    /// zone-stamp, LTB fan-out push, token-cease queue,
+    /// IS_SACRIFICED dispatch push). Mirrors Python's `_sacrifice(
+    /// state, obj)` at `opponent_punishers.py:138`.
+    ///
+    /// On `None`, simply consumes the head — silent fizzle (defensive
+    /// — the production push path won't hit this because the resolve
+    /// arm gates entry on non-empty `candidates`).
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `SacrificeChoice`
+    /// - `chosen_id = Some(id)` and `id` is not in the candidate set
+    #[pyo3(signature = (chosen_id=None))]
+    fn submit_sacrifice_decision(
+        &mut self,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_sacrifice_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        match &self.pending_decisions[0] {
+            PendingDecision::SacrificeChoice { candidates, .. } => {
+                if let Some(id) = chosen_id {
+                    if !candidates.contains(&id) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_sacrifice_decision: \
+                             chosen_id {id} is not one of the candidate \
+                             creature ids {:?}",
+                            candidates
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_sacrifice_decision: head of \
+                     pending-decisions queue is not a \
+                     SacrificeChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let PendingDecision::SacrificeChoice {
+            source_obj_id: _,
+            controller: _,
+            target_player_id,
+            candidates: _,
+            excluded_object_id: _,
+        } = decision
+        else {
+            // Unreachable: the head was just matched.
+            return Ok(());
+        };
+        if let Some(id) = chosen_id {
+            let tgt_idx = target_player_id as usize;
+            if tgt_idx < self.players.len() {
+                crate::state_ops_resolve::sacrifice_target_inline(
+                    self, tgt_idx, id,
+                )?;
             }
         }
         // None -> silent fizzle (defensive; production won't push this

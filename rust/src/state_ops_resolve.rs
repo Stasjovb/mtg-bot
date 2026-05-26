@@ -2204,6 +2204,25 @@ pub(crate) fn sacrifice_source_for_tap_decline(
     sacrifice_source_inline(state, controller_idx, source_obj_id)
 }
 
+/// **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic Infection
+/// substrate landing — shared sacrifice helper for the
+/// `SacrificeChoice` PendingDecision auto-resolve + submit
+/// dispatchers.** Sacrifice the creature at `target_id` on
+/// `state.players[sac_player_idx].battlefield`. Mirrors
+/// `sacrifice_source_inline` verbatim — same `Arc::make_mut` pop +
+/// GY push + LTB / IS_SACRIFICED / token-cease queuing pattern —
+/// but parameterized on the sacrificing-player slot (the TARGET
+/// opponent, not the resolving controller). Silent no-op if
+/// `target_id` is no longer on the bf (defensive — covers race-with-
+/// mid-flight-bf-change case).
+pub(crate) fn sacrifice_target_inline(
+    state: &mut GameState,
+    sac_player_idx: usize,
+    target_id: u32,
+) -> PyResult<()> {
+    sacrifice_source_inline(state, sac_player_idx, target_id)
+}
+
 /// 20th Rust slice (VVV Pin 2 closure) — shared sacrifice helper for
 /// the `SacrificeSelfUnlessTapPermanent` Effect arm and the
 /// `submit_tap_permanent_decision` decline branch.
@@ -17228,6 +17247,117 @@ fn apply_effect(
                     controller,
                     target_player_id,
                     nonland_card_ids,
+                },
+            );
+        }
+        // **Aura Phase 3+ Phase C (2026-05-26) — Sporogenic Infection
+        // substrate landing — TargetOpponentSacrificesCreatureOther
+        // ThanEnchanted.** Mirrors Python's
+        // `TargetOpponentSacrificesCreatureOtherThanEnchanted.resolve`
+        // (`effects/generic/opponent_punishers.py:100-138`) STEP-FOR-
+        // STEP so the post-resolve state is byte-equal under matching
+        // inputs.
+        //
+        // **Target derivation (2-player simplification).** Python's
+        // `legal_targets` returns every opponent (not "target player"
+        // per the printed text — the standard EoE / DSK target-player
+        // simplification). For the 2-player engine this collapses to
+        // `1 - controller`. Same shortcut the sibling
+        // `Effect::TargetOpponentLookHandMayDiscard` arm uses.
+        //
+        // **Step 1: Source-controller resolution** (5-zone walk +
+        // stack scan, sibling of TargetOpponentLookHandMayDiscard).
+        //
+        // **Step 2: Excluded-id derivation.** Locate the source Aura
+        // (5-zone walk) and read its `attached_to`. The host is
+        // excluded from the target's sac options. Mirrors Python's
+        // `aura = state.resolving_source; excluded_id = aura.attached
+        // _to if aura is not None else None` at
+        // `opponent_punishers.py:120-121`.
+        //
+        // **Step 3: Candidate enumeration.** Walk the target opponent's
+        // bf filtered to creatures whose id != excluded_id. Empty ->
+        // silent fizzle (Python parity: `if not legal or target.agent
+        // is None: return` at opponent_punishers.py:128-129).
+        //
+        // **Step 4: SacrificeChoice push.** Push
+        // `PendingDecision::SacrificeChoice` carrying source +
+        // controller (logging) + target_player_id (the answerer) +
+        // candidates + excluded_object_id. The target opponent drains
+        // via `submit_sacrifice_decision(Some(card_id))`.
+        Effect::TargetOpponentSacrificesCreatureOtherThanEnchanted => {
+            // Step 1: Source-controller resolution.
+            let mut source_controller: Option<u8> = None;
+            let mut source_attached_to: Option<u32> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            source_attached_to = obj.attached_to;
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player: target opponent = 1 - controller.
+            let target_player_id: u8 = 1 - controller;
+            let target_idx = target_player_id as usize;
+            if target_idx >= state.players.len() {
+                return Ok(());
+            }
+            // Step 2: Excluded-id derivation. The Aura's attached_to
+            // host. None when the Aura was never attached (defensive —
+            // a triggered-Aura ETB only fires when the Aura entered
+            // the battlefield, which under normal cast resolution
+            // means it has been attached to a legal target).
+            let excluded_id: Option<u32> = source_attached_to;
+            // Step 3: Candidate enumeration. Walk the target's bf
+            // filtered to creatures whose id != excluded_id.
+            let candidates: Vec<u32> = state.players[target_idx]
+                .battlefield
+                .iter()
+                .filter(|o| {
+                    state
+                        .registry
+                        .lookup(o.printing_id)
+                        .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                        .unwrap_or(false)
+                        && Some(o.id) != excluded_id
+                })
+                .map(|o| o.id)
+                .collect();
+            if candidates.is_empty() {
+                // Python parity: `if not legal or target.agent is None:
+                // return` at opponent_punishers.py:128-129. Silent fizzle.
+                return Ok(());
+            }
+            // Step 4: SacrificeChoice push.
+            state.pending_decisions.push(
+                crate::state::PendingDecision::SacrificeChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    candidates,
+                    excluded_object_id: excluded_id,
                 },
             );
         }

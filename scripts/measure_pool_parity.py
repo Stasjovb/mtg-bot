@@ -3113,6 +3113,71 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ThanEnchanted`` Effect — the Tail-X1 admit shape is shared and
     # already lands here).
     REPO_ROOT / "tests" / "test_cracked_skull_parity.py",
+    # **Aura-attachment substrate Phase 3+ Phase C closure (Sporogenic
+    # Infection, 2026-05-26).** Sporogenic Infection is the Phase C
+    # positive-control carrier (0 17lands decks per design doc §0 row
+    # 4 — the deck-count signal is on substrate correctness, not deck
+    # volume). Live trigger surface: TWO TAs — (1) ENTERS +
+    # IsSelf(subject=None) +
+    # TargetOpponentSacrificesCreatureOtherThanEnchanted (the ENTERS
+    # long pole); (2) DEALT_DAMAGE + IsHost(subject=None) +
+    # DestroyEnchantedPermanent (Tail-X1, shared with Cracked Skull
+    # per design doc §3). The Phase C combined slice (Rust + Python
+    # + probe) ports the ENTERS-half Effect class through Rust +
+    # bridge + admit-gate widen + per-card probe in lockstep — the
+    # Tail-X1 widen shipped with Phase B Cycle 2 and is shared.
+    # Sporogenic Infection FLIPS DECLINED -> ADMITTED -> PROBED.
+    #
+    #   * ``test_sporogenic_infection_parity.py`` — Sporogenic
+    #     Infection ({1}{B} Enchantment — Aura, Enchant creature),
+    #     TWO triggered abilities. The FIRST PROBE_MODULES-credited
+    #     probe binding BOTH ``TargetOpponentSacrificesCreatureOther
+    #     ThanEnchanted`` (the new Phase C Rust Effect) AND
+    #     ``DestroyEnchantedPermanent`` (the pre-substrate destroy
+    #     arm) Effect classes on a real-EoE Aura carrier — the LOAD-
+    #     BEARING probe-tier flip evidence. Drives THREE scenarios
+    #     per design doc §7 row 5:
+    #       (1) ETB resolve + target opponent sacrifices a non-host
+    #           creature — Python-engine real-EoE smoke (the load-
+    #           bearing scenario): Sporogenic on p0's bf attached to
+    #           p1's host bear; p1's bf has TWO additional bears
+    #           (sac candidates); ENTERS trigger fires; the
+    #           candidate enumeration excludes the host; target
+    #           opponent's agent picks the first non-host candidate;
+    #           that bear lands on p1's graveyard. The host stays.
+    #       (2) ETB resolve when target controls ONLY the host —
+    #           silent no-op (candidate enumeration empty, host
+    #           excluded).
+    #       (3) Combat damage path — Tail-X1
+    #           DestroyEnchantedPermanent: Sporogenic attached to
+    #           p0's host bear; call ``_fire_enchanted_dealt_damage_
+    #           triggers(state, host_bear, 1)`` (the same dispatch
+    #           combat code uses); IsHost matches; the Destroy effect
+    #           reads ``state.resolving_source`` (Sporogenic) and
+    #           destroys its ``attached_to`` (host bear); CR 704.5n
+    #           SBA then sweeps Sporogenic off the bf.
+    #
+    # **Cross-engine pin (Scenarios 1 + 3 ETB push site + Tail-X1
+    # dispatch).** This slice is Python-only on the Aura-driven path;
+    # the cross-engine byte-equal pins for Scenarios 1 (Rust ETB
+    # push site of ``PendingDecision::SacrificeChoice`` via
+    # ``first_legal_trigger_target``) and 3 (Tail-X1 DEALT_DAMAGE
+    # dispatch into ``Effect::DestroyEnchantedPermanent`` resolve from
+    # an Aura source) are deferred to a follow-up Rust slice — same
+    # honest-stop shape Phase A's Chorale parity and Phase B's
+    # Cracked Skull parity both took. The Rust substrate-side pins
+    # (resolve-arm push of SacrificeChoice via a synthetic Sorcery
+    # source + submit dispatcher + auto-resolve + fingerprint + the
+    # cross-engine register-acceptance pin) close the substrate
+    # correctness leg of the load-bearing evidence.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Aura-
+    # attachment BLOCKED-SG row: 1 multi-gated tail -> 0. **Aura
+    # Phase 3+ campaign COMPLETE.** No further Phase D / Phase 4+
+    # Aura cycle is planned in the design doc; the next substrate-
+    # level Aura work would be a new design doc per the multi-cycle
+    # campaign discipline.
+    REPO_ROOT / "tests" / "test_sporogenic_infection_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
