@@ -938,75 +938,85 @@ def test_resolve_optional_sac_searched_lands_enter_tapped(engine):
 # ---------------------------------------------------------------------------
 
 
-def test_larval_scoutlander_stays_declined_at_admit_gate_post_cycle_1():
-    """**Substrate-only invariant pin — the LOAD-BEARING C1 contract.**
+def test_larval_scoutlander_now_admits_at_admit_gate_post_cycle_2():
+    """**C1 substrate-only invariant pin — INVERTED in-place for
+    Cycle 2 (Larval Scoutlander DECLINED → ADMITTED, 2026-05-25).**
 
-    Larval Scoutlander STAYS DECLINED at the production-deck loader
-    filter post-Cycle-1. The cycle adds the Rust Effect variant +
-    bridge round-trip arms + reverse-serializer leaf recognition,
-    but does NOT widen any admit gate.
+    Post-Cycle-2 Larval Scoutlander ADMITS at the new Phase-3 admit
+    predicate. The new
+    :func:`_printing_is_bridge_phase_3_trigger_spacecraft` predicate +
+    OR-chain disjunct registration + per-card builder closes the FLIP.
 
-    Concrete observables (sibling of the Spacecraft Phase 2 C1
-    invariant pin pattern + the Carrier-AA Phase 3A C1 sibling):
+    Concrete observables (mirror inversion of the C1 invariant pin):
 
-      1. Phase 1 ``_printing_is_bridge_pure_station_spacecraft``
+      1. Phase 1 ``_printing_is_bridge_pure_station_spacecraft`` STILL
          declines Larval Scoutlander (the zero-ability gate refuses
-         the trigger-bearing carrier).
+         the trigger-bearing carrier — unchanged from C1).
       2. Phase 2 ``_printing_is_bridge_phase_2_static_anthem_
-         spacecraft`` declines Larval Scoutlander (the single-static
-         gate refuses the no-static + triggered-ability carrier).
-      3. The Phase-3 admit predicate
-         ``_printing_is_bridge_phase_3_trigger_spacecraft`` does NOT
-         exist at HEAD (Cycle 2 ships it).
-      4. The Phase-1 path's
-         ``_python_ta_to_safe_dict`` declines the live Larval
-         Scoutlander trigger (the safe-kinds gate refuses the new
-         kind — pinned in the sibling test above).
+         spacecraft`` STILL declines Larval Scoutlander (the single-
+         static gate refuses the no-static + triggered-ability
+         carrier — unchanged from C1).
+      3. **NEW IN C2:** the Phase-3 admit predicate
+         ``_printing_is_bridge_phase_3_trigger_spacecraft`` EXISTS and
+         ADMITS Larval Scoutlander (the FLIP).
+      4. The Phase-1 path's ``_python_ta_to_safe_dict`` STILL declines
+         the live Larval Scoutlander trigger (unchanged from C1 — the
+         Phase-3 admit predicate has its OWN dispatch path separate
+         from ``_python_ta_to_safe_dict`` per design doc §5.3a).
 
-    Cycle 2 widens (a) builds the new admit predicate + OR-chain
-    disjunct registration; (b) Larval Scoutlander FLIPs from
-    DECLINED → ADMITTED at the loader filter.
+    Cycle 2 widen NET deltas:
+      * +1 admit predicate (``_printing_is_bridge_phase_3_trigger_
+        spacecraft``).
+      * +1 disjunct in ``_filter_deck_to_bridge_supported`` (18 →
+        19 admit arms in canonical loader filter).
+      * +1 disjunct in ``measure_pool_parity.py::loader_admits``
+        (mirror widen).
+      * Pool-parity regen: PROBED 388 → 389 (Larval Scoutlander
+        gains per-card real-EoE probe credit); covered_by_
+        construction 40 → 39 (Larval Scoutlander promoted out).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_phase_2_static_anthem_spacecraft,
+        _printing_is_bridge_phase_3_trigger_spacecraft,
         _printing_is_bridge_pure_station_spacecraft,
     )
 
     ps = OracleParserCardSource().get_printings()
     ls = ps["Larval Scoutlander"]
 
-    # Phase-1 path declines (the zero-ability gate).
+    # Phase-1 path STILL declines (the zero-ability gate; unchanged).
     assert _printing_is_bridge_pure_station_spacecraft(ls) is False, (
         "Phase-1 _printing_is_bridge_pure_station_spacecraft must "
-        "DECLINE Larval Scoutlander (it carries a triggered "
-        "ability — not the zero-ability shape Phase 1 admits)."
+        "STILL DECLINE Larval Scoutlander post-Cycle-2 (the zero-"
+        "ability gate refuses the trigger-bearing carrier — "
+        "unchanged from C1)."
     )
-    # Phase-2 path declines (the single-static gate).
+    # Phase-2 path STILL declines (the single-static gate; unchanged).
     assert _printing_is_bridge_phase_2_static_anthem_spacecraft(ls) is False, (
         "Phase-2 _printing_is_bridge_phase_2_static_anthem_spacecraft "
-        "must DECLINE Larval Scoutlander (it carries NO static "
-        "ability + DOES carry a triggered ability — neither half of "
-        "the Phase 2 single-static contract)."
+        "must STILL DECLINE Larval Scoutlander post-Cycle-2 (it carries "
+        "NO static ability + DOES carry a triggered ability — neither "
+        "half of the Phase 2 single-static contract; unchanged from C1)."
     )
 
-    # Phase-3 admit predicate does NOT exist at HEAD — confirm by
-    # absence in the trajectory module namespace.
-    import mtg_bot.parity.trajectory as traj_mod
-    assert not hasattr(
-        traj_mod, "_printing_is_bridge_phase_3_trigger_spacecraft"
-    ), (
-        "Phase-3 admit predicate `_printing_is_bridge_phase_3_trigger_"
-        "spacecraft` must NOT exist at HEAD — Cycle 2 ships it. "
-        "If this test fails, the substrate-only invariant has been "
-        "violated and Larval Scoutlander may now silently auto-grow."
+    # **THE FLIP** — Phase-3 admit predicate ADMITS Larval Scoutlander.
+    assert _printing_is_bridge_phase_3_trigger_spacecraft(ls) is True, (
+        "**THE FLIP** — Phase-3 admit predicate "
+        "`_printing_is_bridge_phase_3_trigger_spacecraft` MUST admit "
+        "Larval Scoutlander post-Cycle-2 (the inverted C1 invariant). "
+        "Verify-first walked the live printing's "
+        "(event, predicate, effect) tuple matches the Phase-3A 1-shape "
+        "allowlist {(ENTERS, IsSelf(subject=None))} + 1-class "
+        "Effect allowlist {OptionalSacLandOrLanderForBasicLandRamp}."
     )
 
 
-def test_loader_filter_declines_larval_scoutlander_post_cycle_1():
-    """**Loader-level invariant pin (end-to-end).** The
-    ``_filter_deck_to_bridge_supported`` loader gate declines Larval
-    Scoutlander post-Cycle-1 (no Phase-3 disjunct registered yet).
+def test_loader_filter_admits_larval_scoutlander_post_cycle_2():
+    """**Loader-level FLIP pin (end-to-end).** The
+    ``_filter_deck_to_bridge_supported`` loader gate ADMITS Larval
+    Scoutlander post-Cycle-2 (inverted C1 invariant). The new
+    Phase-3 disjunct is registered in the OR-chain.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -1017,20 +1027,41 @@ def test_loader_filter_declines_larval_scoutlander_post_cycle_1():
     assert "Larval Scoutlander" in ps
 
     # Build a synthetic single-card deck (by name) containing only
-    # Larval Scoutlander; the filter drops the name if the card is
-    # declined.
+    # Larval Scoutlander; the filter admits the name post-Cycle-2.
     filtered_names, card_defs = _filter_deck_to_bridge_supported(
         ["Larval Scoutlander"],
         ps,
     )
-    assert filtered_names == [], (
-        "Larval Scoutlander must be DECLINED by "
-        "_filter_deck_to_bridge_supported post-Cycle-1; the Phase-3 "
-        "admit predicate ships in Cycle 2. Got filtered names: "
+    assert filtered_names == ["Larval Scoutlander"], (
+        "**THE FLIP (loader site)** — Larval Scoutlander must be "
+        "ADMITTED by _filter_deck_to_bridge_supported post-Cycle-2; "
+        "the Phase-3 admit predicate + OR-chain disjunct ships in "
+        "Cycle 2. Got filtered names: "
         f"{filtered_names}"
     )
-    # And no CardDef is emitted for the declined card.
-    assert all(cd.name != "Larval Scoutlander" for cd in card_defs)
+    # And a CardDef is emitted for the admitted card.
+    matched_defs = [cd for cd in card_defs if cd.name == "Larval Scoutlander"]
+    assert len(matched_defs) == 1, (
+        "Expected exactly one Larval Scoutlander CardDef post-FLIP."
+    )
+    cd = matched_defs[0]
+    # Sanity: CardDef carries Phase-3A trigger shape.
+    assert cd.card_type == "Artifact"
+    assert "Spacecraft" in cd.subtypes
+    assert cd.station_threshold == 7
+    assert tuple(cd.stationed_keywords) == ("flying",)
+    assert cd.power == 3 and cd.toughness == 3
+    # Triggered abilities tuple carries the Phase-3A ETB shape.
+    assert len(cd.triggered_abilities) == 1
+    (ta,) = cd.triggered_abilities
+    assert ta == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "optional_sac_land_or_lander_for_basic_land_ramp",
+            "land_count": 2,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

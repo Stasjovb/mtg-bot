@@ -9368,6 +9368,336 @@ def _phase_2_static_anthem_spacecraft_card_def(printing) -> "Optional[CardDef]":
     )
 
 
+# ---------------------------------------------------------------------------
+# Spacecraft Station substrate — Phase 3A Cycle 2 (Larval Scoutlander
+# admit gate + builder + FLIP, 2026-05-25). Sibling shape of the Phase-1
+# pure-station + Phase-2 static-anthem admit predicates above. See
+# docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md §5.3 (predicate),
+# §5.4 (per-sub-phase Effect-class gate; 3A allows only 1 of 7), §5.5
+# (admit-predicate registration as a new OR-disjunct). Phase 3 is the
+# trigger-bearing Spacecraft sub-shape C (5 cards total — Larval
+# Scoutlander 3A; Sledge-Class Seedship 3B; Synthesizer Labship +
+# Entropic Battlecruiser + Infinite Guideline Station 3C). The 3A
+# Cycle-2 gate is strictly the 1-class Effect allowlist +
+# (ENTERS, IsSelf()) shape — every other Phase-3 carrier fails the
+# event/effect product (Sledge-Class Seedship has ATTACKS event;
+# Synthesizer Labship has BEGINNING_OF_COMBAT + Controlled predicate;
+# Entropic Battlecruiser has different effect classes; Infinite
+# Guideline Station has a non-allowlisted effect class). Phase 3B/3C
+# extend the allowlist + event-shapes table per design doc §5.4 in
+# subsequent flips.
+# ---------------------------------------------------------------------------
+
+
+# Phase-3A admit Effect-class allowlist — closed at exactly the new
+# Larval Scoutlander Effect class. Phase 3B widens to add
+# OptionalPutCreatureFromHandOntoBattlefield (Sledge-Class Seedship);
+# Phase 3C widens further (Synthesizer Labship's
+# TargetArtifactBecomesCreatureUEOT, Entropic Battlecruiser's
+# EachOpponentDiscardsOrLosesLife + TargetPlayerLosesLife, Infinite
+# Guideline Station's CreateTokenPerMulticoloredPermanent +
+# DrawCardPerMulticoloredPermanent). The tuple form below is consumed
+# by ``isinstance()`` in the helper below so each Phase-N landing is a
+# one-entry append.
+_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES: tuple = ()
+"""Phase-3A Effect-class allowlist for the new Phase-3 admit predicate.
+Populated lazily on first call to
+:func:`_triggered_ability_is_phase_3_spacecraft_admitted` so the import
+cycle stays bounded (combinators import is deferred). Phase 3A: exactly
+``OptionalSacLandOrLanderForBasicLandRamp``."""
+
+
+# Phase-3A admit (event, predicate)-shape allowlist — closed at exactly
+# the Larval Scoutlander ETB shape. Phase 3B adds (ATTACKS, IsSelf());
+# Phase 3C adds (BEGINNING_OF_COMBAT, Controlled(YOU)) and
+# (DISCARDS_CARD, Controlled(OPPONENT)). The shape-tuple is consumed by
+# membership-check in the helper below; equality on Event + IsSelf is
+# well-defined (Event is an Enum, IsSelf is a frozen dataclass with the
+# default ``subject=None`` slot — instances are equal by value).
+_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES: tuple = ()
+"""Phase-3A (event, predicate)-shape allowlist for the new Phase-3
+admit predicate. Populated lazily on first call (sibling of the
+class-allowlist above). Phase 3A: exactly
+``(Event.ENTERS, IsSelf(subject=None))``."""
+
+
+def _phase_3a_lazy_init_allowlists():
+    """Lazy initializer for the Phase-3A allowlists. Defers the
+    Effect / Event / Predicate imports until first call so the module
+    import cycle stays bounded (mirror of the ``_python_ta_to_safe_dict``
+    inline-import convention)."""
+    global _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES
+    global _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES
+    if _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES:
+        return
+    from mtg_bot.effects.combinators import (
+        OptionalSacLandOrLanderForBasicLandRamp,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES = (
+        OptionalSacLandOrLanderForBasicLandRamp,
+    )
+    _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES = (
+        (Event.ENTERS, IsSelf(subject=None)),
+    )
+
+
+def _triggered_ability_is_phase_3_spacecraft_admitted(trig) -> bool:
+    """True iff ``trig`` is a Phase-3 (sub-phase 3A) bridge-admittable
+    Spacecraft trigger.
+
+    **Spacecraft Station substrate — Phase 3A Cycle 2 (2026-05-25; spec
+    at docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md §5.3).**
+    Positive gates:
+
+    * ``(trig.event, trig.predicate)`` is in the closed
+      :data:`_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES` table (Phase 3A:
+      ``{(ENTERS, IsSelf(subject=None))}``).
+    * ``isinstance(trig.effect,
+      _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES)`` (Phase 3A:
+      ``{OptionalSacLandOrLanderForBasicLandRamp}``).
+    * ``trig.tier_threshold >= 0`` (back-compat default; the
+      per-card admit set for Phase 3A is exactly ``tier_threshold=0``).
+    * ``trig.once_per_turn is False`` (no Phase-3A carrier sets it).
+
+    Per design doc §5.4 the Phase-3 admit-class set is the **union** of
+    all sub-phase Effect classes, but the per-sub-phase gate restricts
+    to the **current sub-phase's set** to keep the admit narrow during a
+    sub-phase landing. The Phase 3A gate is the 1-class allowlist
+    (Larval Scoutlander only); Phase 3B widens the allowlist by one
+    entry + the event-shapes table by one entry.
+    """
+    _phase_3a_lazy_init_allowlists()
+    ev_pred = (trig.event, trig.predicate)
+    if ev_pred not in _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES:
+        return False
+    if not isinstance(
+        trig.effect, _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES,
+    ):
+        return False
+    if trig.tier_threshold < 0:
+        return False
+    if trig.once_per_turn:
+        return False
+    return True
+
+
+def _printing_is_bridge_phase_3_trigger_spacecraft(printing) -> bool:
+    """True iff a CardPrinting is a Phase-3 bridge-supported
+    trigger-bearing Spacecraft — the Phase-1 sub-shape A clauses EXCEPT
+    ``triggered_abilities`` is replaced with a positive 1-or-2
+    ``TriggeredAbility`` allowlist via
+    :func:`_triggered_ability_is_phase_3_spacecraft_admitted`.
+
+    **Spacecraft Station substrate — Phase 3 sub-shape C (spec at
+    docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md §5.3).** Sibling
+    of :func:`_printing_is_bridge_pure_station_spacecraft` (Phase-1
+    zero-ability carrier) and
+    :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`
+    (Phase-2 single-static-anthem carrier). Phase 3 admits the 5
+    trigger-bearing Spacecraft (Larval Scoutlander, Sledge-Class
+    Seedship, Synthesizer Labship, Entropic Battlecruiser, Infinite
+    Guideline Station); per-cycle, the positive admit set grows from
+    1 (Phase 3A) → 2 (3B) → 3/4/5 (3C cycles 2/3/4).
+
+    **Phase 3A Cycle 2 pilot:** Larval Scoutlander ({2}{G} Artifact —
+    Spacecraft, 3/3, station_threshold=7, stationed_keywords={flying},
+    single ETB+IsSelf+OptionalSacLandOrLanderForBasicLandRamp(2)
+    trigger at tier_threshold=0). The verify-first walk against the
+    live EoE pool confirmed exactly ONE Spacecraft passes every clause
+    under the strict 1-class / 1-shape Phase-3A allowlist; the other 4
+    deferred Phase-3 carriers each fail at least one clause (Sledge-
+    Class Seedship has ATTACKS event; Synthesizer Labship has
+    BEGINNING_OF_COMBAT + Controlled predicate; Entropic Battlecruiser
+    has different effect classes; Infinite Guideline Station has a
+    non-allowlisted effect class).
+
+    **§2 teeth (must reject):**
+
+    * Non-Spacecraft (no ``"Spacecraft"`` subtype).
+    * ``station_threshold is None`` — The Eternity Elevator (Phase 4).
+    * ``station_threshold <= 0`` — defense-in-depth against a future
+      parser/registry-dict regression.
+    * Any ``static_abilities`` — Phase 2 path covers single-anthem.
+    * Any ``activated_abilities`` — Phase 4 (The Eternity Elevator).
+    * Empty ``triggered_abilities`` — Phase 1 path covers zero-trigger
+      (Galvanizing Sawship); this predicate REQUIRES at least one.
+    * More than 2 triggered abilities — no EoE Spacecraft carries >2
+      triggers; reject as no-silent-auto-grow.
+    * Any ``triggered_abilities`` entry that fails
+      :func:`_triggered_ability_is_phase_3_spacecraft_admitted` (which
+      checks against the current sub-phase's Effect-class allowlist +
+      (event, predicate)-shape table).
+    * ``spell_effect is not None`` (Spacecraft are permanents —
+      defense-in-depth against a mistranslation regression).
+    * ``room_halves`` non-empty / ``loyalty`` set / any
+      ``cost_reductions`` or ``external_cost_reductions`` /
+      ``warp_cost`` / ``kicker_cost`` / ``impending_cost`` /
+      ``dynamic_pt_formula`` / ``ward_cost`` — sibling substrates whose
+      interaction with Spacecraft station is Phase-N.
+    * Non-empty baseline ``keywords`` — Phase-3 carrier has empty
+      baseline keywords; any baseline keyword would require a layer-6
+      timestamp interleave the ``stationed_keywords`` fold doesn't
+      yet model (Phase-2+ substrate-extension; mirror of Phase-1 +
+      Phase-2 teeth).
+    * Empty ``stationed_keywords`` — admits carriers by gating on the
+      substrate's actual leverage (a Spacecraft with no keyword grant
+      has no Phase-1/2/3 reason to bridge through this predicate).
+    * Any ``stationed_keywords`` member NOT in :data:`_SAFE_KEYWORDS`.
+    * ``grants_toughness_as_station_power_for_creatures_you_control``
+      Tapestry Warden flag — Phase-2+ widen per design doc §3.5.
+    * Unparseable ``mana_cost_str`` — defense-in-depth (Larval
+      Scoutlander is ``{2}{G}`` which parses; any future Spacecraft
+      with a hybrid / phyrexian / X cost is honest-stopped).
+    """
+    if "Spacecraft" not in printing.subtypes:
+        return False
+    if printing.station_threshold is None:
+        return False  # Phase 4 only (The Eternity Elevator)
+    if printing.station_threshold <= 0:
+        return False
+    if printing.static_abilities:
+        return False  # Phase 2 (Lumen-Class Frigate)
+    if printing.activated_abilities:
+        return False  # Phase 4 (The Eternity Elevator)
+    if not printing.triggered_abilities:
+        return False  # Phase-1 path covers zero-trigger
+    if len(printing.triggered_abilities) > 2:
+        return False  # No EoE Spacecraft carries >2 triggers
+    for trig in printing.triggered_abilities:
+        if not _triggered_ability_is_phase_3_spacecraft_admitted(trig):
+            return False
+    # Carry-through Phase 1 / Phase 2 shape clauses.
+    if printing.spell_effect is not None:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if printing.keywords:
+        return False
+    if not printing.stationed_keywords:
+        return False
+    for kw in printing.stationed_keywords:
+        if kw not in _SAFE_KEYWORDS:
+            return False
+    if getattr(
+        printing,
+        "grants_toughness_as_station_power_for_creatures_you_control",
+        False,
+    ):
+        return False  # Tapestry Warden flag — Phase-2+ widen
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Phase-3-admitted trigger-bearing
+    Spacecraft printing.
+
+    **Spacecraft Station substrate — Phase 3A Cycle 2 (Larval
+    Scoutlander, 2026-05-25; spec at
+    docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md §5.5).**
+    Sibling of :func:`_station_spacecraft_card_def` (Phase-1
+    zero-ability carrier) and
+    :func:`_phase_2_static_anthem_spacecraft_card_def` (Phase-2
+    single-anthem carrier). Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_phase_3_trigger_spacecraft`.
+
+    The synthesized CardDef carries every Phase-1 field PLUS a
+    ``triggered_abilities`` tuple — each entry is the
+    ``_python_ta_to_safe_dict``-shaped dict the cross-engine bridge
+    consumes (round-trips to ``mtg_bot_engine.Registry`` on the Rust
+    side + ``cross_engine._ta_dict_to_python_triggered_ability`` on
+    the Python rehydrator side). For the Phase-3A pilot the dict is
+    ``{"event": "enters", "predicate": {"kind": "source_is_self"},
+    "effect": {"kind": "optional_sac_land_or_lander_for_basic_land_
+    ramp", "land_count": 2}}`` (verified against the C1 substrate's
+    parser arm + bridge arm + reverse-serializer leaf).
+
+    NOTE: we DO NOT thread the trigger through
+    :func:`_python_ta_to_safe_dict` here — that function gates the
+    new effect-kind via ``_SAFE_TRIGGERS`` (kept dormant per C1 per
+    design doc §5.3a to avoid auto-admit via the Phase-1 path). The
+    Phase-3 admit predicate has its own dispatch + this builder emits
+    the dict directly, matching the parser SoT shape and the C1
+    substrate's bridge round-trip arms.
+    """
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+    from mtg_bot.effects.combinators import (
+        OptionalSacLandOrLanderForBasicLandRamp,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+
+    if not _printing_is_bridge_phase_3_trigger_spacecraft(printing):
+        return None
+    try:
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "",
+        )
+    except ValueError:
+        return None
+    # Build the triggered_abilities tuple — for each admitted trigger,
+    # emit the round-trip dict the bridge contract expects. Phase 3A's
+    # 1-shape allowlist makes this a single dispatch arm per Effect
+    # class; future sub-phases append additional arms (sibling to the
+    # ``_python_ta_to_safe_dict`` cascade above but scoped to the
+    # Phase-3-admit set).
+    ta_dicts: list[dict] = []
+    for trig in printing.triggered_abilities:
+        # Event string mapping mirrors _python_ta_to_safe_dict above.
+        if trig.event is Event.ENTERS:
+            event_str = "enters"
+        else:
+            # Phase 3A only admits ENTERS; this is defense-in-depth.
+            return None
+        # Predicate dict (Phase 3A only: IsSelf -> source_is_self).
+        if isinstance(trig.predicate, IsSelf) and trig.predicate.subject is None:
+            pred_dict = {"kind": "source_is_self"}
+        else:
+            return None  # defense-in-depth
+        # Effect dict — emit the canonical Rust-parser-claimed kind +
+        # land_count int. Mirrors the C1 substrate's reverse-serializer
+        # leaf at lines 4510-4523 + the Rust parse_effect arm.
+        if isinstance(trig.effect, OptionalSacLandOrLanderForBasicLandRamp):
+            eff_dict = {
+                "kind": "optional_sac_land_or_lander_for_basic_land_ramp",
+                "land_count": int(trig.effect.land_count),
+            }
+        else:
+            return None  # defense-in-depth (admit predicate gated this)
+        ta_dicts.append({
+            "event": event_str,
+            "predicate": pred_dict,
+            "effect": eff_dict,
+        })
+    return _CardDef(
+        name=printing.name,
+        card_type="Artifact",
+        mana_cost_generic=generic,
+        mana_cost_colored=colored,
+        subtypes=tuple(printing.subtypes),
+        supertypes=tuple(printing.supertypes or ()),
+        power=printing.power,
+        toughness=printing.toughness,
+        station_threshold=int(printing.station_threshold),
+        stationed_keywords=tuple(sorted(printing.stationed_keywords)),
+        triggered_abilities=tuple(ta_dicts),
+    )
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -10684,6 +11014,29 @@ def _printing_to_card_def(printing) -> CardDef:
         # + the OR-disjunct registration below. Pilot: Lumen-Class
         # Frigate.
         card_def = _phase_2_static_anthem_spacecraft_card_def(printing)
+        if card_def is not None:
+            return card_def
+    if _printing_is_bridge_phase_3_trigger_spacecraft(printing):
+        # **Spacecraft Station substrate Phase 3A Cycle 2 (Larval
+        # Scoutlander, 2026-05-25; spec at
+        # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md`` §5.5).**
+        # A trigger-bearing Spacecraft (Phase 3A admits exactly Larval
+        # Scoutlander) flattens to an Artifact CardDef carrying
+        # ``station_threshold`` + ``stationed_keywords`` + a
+        # ``triggered_abilities`` tuple of round-trip dicts the bridge
+        # contract consumes. Cycle 1 substrate (``83d775cf``) shipped
+        # the Rust ``Effect::OptionalSacLandOrLanderForBasicLandRamp``
+        # variant + parse / to_pydict / resolve arms + the cross-
+        # engine bridge dict-to-Python arm; this cycle (C2) adds the
+        # admit predicate + builder + OR-disjunct registration.
+        # Returning ``None`` from the builder is defense-in-depth
+        # (admit predicate gates everything the builder needs);
+        # we fall through to ``_printing_to_card_def``'s tail on an
+        # unexpected None so the disagreement surfaces loudly. In
+        # practice every printing reaching this branch passes the
+        # predicate by construction (the OR-chain routes here only
+        # when the predicate returned True).
+        card_def = _phase_3_trigger_spacecraft_card_def(printing)
         if card_def is not None:
             return card_def
     if _printing_is_bridge_pure_warp_creature(printing):
@@ -12554,6 +12907,37 @@ def _filter_deck_to_bridge_supported(
             # A & B ship alongside Cycle 2 (Scenarios C & D + composed-
             # shape pins ship in Cycle 3 per design doc §7).
             or _printing_is_bridge_phase_2_static_anthem_spacecraft(printing)
+            # **Spacecraft Station substrate Phase 3A Cycle 2 (Larval
+            # Scoutlander, 2026-05-25; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md``
+            # §5.5).** The bridge-supported trigger-bearing Spacecraft
+            # disjunct. Phase 3A admits EXACTLY Larval Scoutlander in
+            # the EoE pool — the sole single-trigger ETB+IsSelf carrier
+            # whose Effect class is in the Phase-3A 1-class allowlist
+            # ``{OptionalSacLandOrLanderForBasicLandRamp}`` (Sledge-
+            # Class Seedship has ATTACKS event; Synthesizer Labship has
+            # BEGINNING_OF_COMBAT + Controlled predicate; Entropic
+            # Battlecruiser has different effect classes; Infinite
+            # Guideline Station has a non-allowlisted effect class —
+            # all four stay DECLINED under Phase 3A and flip via
+            # Phase 3B / 3C). Routed AFTER the Phase-1 and Phase-2
+            # disjuncts so a zero-trigger printing (Galvanizing Sawship)
+            # or a single-anthem printing (Lumen-Class Frigate) is
+            # short-circuited by the earlier arms. The §2 teeth on
+            # :func:`_triggered_ability_is_phase_3_spacecraft_admitted`
+            # + :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
+            # reject every multi-static / composed-shape / extra-
+            # trigger-count carrier — sub-phases 3B/3C widen the
+            # allowlist per design doc §5.4. Cycle 1 substrate landed
+            # ``83d775cf`` (new ``Effect::OptionalSacLandOrLanderFor
+            # BasicLandRamp`` Rust variant + parse / to_pydict /
+            # resolve arms + cross-engine bridge dict-to-Python arm +
+            # reverse-serializer leaf at ``trajectory.py:4510``); Cycle
+            # 2 (this slice) adds the Python admit predicate + the
+            # :func:`_phase_3_trigger_spacecraft_card_def` builder +
+            # this OR-in. Per-card real-EoE probe Scenarios A & B ship
+            # alongside Cycle 2 per design doc §6.2 #9.
+            or _printing_is_bridge_phase_3_trigger_spacecraft(printing)
         ):
             # Resolved but passes none of the bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

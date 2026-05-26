@@ -404,11 +404,22 @@ def test_admit_set_size_bumps_post_cycle_3():
     invariant being affirmed (Sawship still admits via the Phase-1
     path).
 
+    **Phase 3A Cycle 2 update (2026-05-25).** Post-Phase-3A-C2 the
+    Phase-3 sibling disjunct
+    :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
+    additionally admits Larval Scoutlander (1 card, the sole
+    single-trigger ETB+IsSelf+OptionalSacLandOrLanderForBasicLand
+    Ramp Spacecraft per the strict Phase-3A 1-class / 1-shape
+    allowlist). The cardinality this pin asserts is therefore
+    EXACTLY {Sawship, Lumen-Class Frigate, Larval Scoutlander}
+    post-Phase-3A-C2; Sawship still admits via the Phase-1 path
+    (the load-bearing post-Phase-1-C3 invariant).
+
     Bench-aggregate cross-check: walks every printing in the active
     source, counts those that admit through the deck-level filter
-    AND carry the Spacecraft subtype. Post-Phase-2-FLIP the set is
-    {Sawship, Lumen-Class Frigate}. Any OTHER Spacecraft admitting
-    is a silent auto-grow honest-stop.
+    AND carry the Spacecraft subtype. Post-Phase-3A-FLIP the set is
+    {Sawship, Lumen-Class Frigate, Larval Scoutlander}. Any OTHER
+    Spacecraft admitting is a silent auto-grow honest-stop.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -425,12 +436,14 @@ def test_admit_set_size_bumps_post_cycle_3():
             admitted_spacecraft.append(name)
     assert sorted(admitted_spacecraft) == [
         "Galvanizing Sawship",
+        "Larval Scoutlander",
         "Lumen-Class Frigate",
     ], (
-        "Admit-set count bump: exactly TWO Spacecraft must admit at "
-        "the deck-level filter post-Phase-2-Cycle-2 — Galvanizing "
+        "Admit-set count bump: exactly THREE Spacecraft must admit "
+        "at the deck-level filter post-Phase-3A-Cycle-2 — Galvanizing "
         "Sawship (Phase-1 sub-shape A) + Lumen-Class Frigate "
-        "(Phase-2 static-anthem). Got: "
+        "(Phase-2 static-anthem) + Larval Scoutlander (Phase-3A "
+        "trigger-bearing). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 

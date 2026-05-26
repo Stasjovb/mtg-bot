@@ -227,6 +227,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Killer's Mask
 - Knight Luminary
 - Lakeside Shack
+- Larval Scoutlander
 - Lashwhip Predator
 - Lightless Evangel
 - Lightstall Inquisitor

@@ -331,10 +331,21 @@ def test_lumen_class_frigate_admits_at_deck_filter_post_cycle_2():
 def test_admit_set_size_bumps_post_cycle_2():
     """Pin #5 — **Admit-set count bump.** Pre-C2 the only admitted
     Spacecraft was Galvanizing Sawship (Phase-1 sub-shape A). Post-
-    C2 exactly TWO Spacecraft admit at the deck-level filter:
+    Phase-2-C2 exactly TWO Spacecraft admit at the deck-level filter:
     Galvanizing Sawship (Phase-1) + Lumen-Class Frigate (Phase-2).
     Bench-aggregate cross-check walks every printing in the active
     source.
+
+    **Phase 3A Cycle 2 update (2026-05-25).** Post-Phase-3A-C2 the
+    Phase-3 sibling disjunct
+    :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
+    additionally admits Larval Scoutlander (the sole ETB+IsSelf+
+    OptionalSacLandOrLanderForBasicLandRamp Spacecraft under the
+    strict Phase-3A 1-class / 1-shape allowlist). The cardinality
+    this pin asserts is therefore EXACTLY {Sawship, Lumen-Class
+    Frigate, Larval Scoutlander} post-Phase-3A-C2; Lumen-Class
+    Frigate still admits via the Phase-2 path (the load-bearing
+    post-Phase-2-C2 invariant being affirmed).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -351,11 +362,13 @@ def test_admit_set_size_bumps_post_cycle_2():
             admitted_spacecraft.append(name)
     assert sorted(admitted_spacecraft) == [
         "Galvanizing Sawship",
+        "Larval Scoutlander",
         "Lumen-Class Frigate",
     ], (
-        "Admit-set count bump: exactly TWO Spacecraft must admit at "
-        "the deck-level filter post-Cycle-2 — Galvanizing Sawship "
-        "(Phase-1) + Lumen-Class Frigate (Phase-2). Got: "
+        "Admit-set count bump: exactly THREE Spacecraft must admit "
+        "at the deck-level filter post-Phase-3A-Cycle-2 — Galvanizing "
+        "Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
+        "Scoutlander (Phase-3A). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 

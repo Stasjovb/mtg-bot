@@ -2571,6 +2571,45 @@ PROBE_MODULES: tuple[Path, ...] = (
     # resets + station+anthem-both-open) + composed-shape pins ship
     # in Cycle 3 per design doc §7.
     REPO_ROOT / "tests" / "test_lumen_class_frigate_parity.py",
+    # **Spacecraft Station substrate Phase 3A Cycle 2 (2026-05-25):**
+    # Per-card real-EoE byte-equal probe binding Larval Scoutlander to
+    # the Phase-3A widened Station/trigger admit gate. Phase 3A Cycle 1
+    # landed the Rust substrate (commit ``83d775cf`` — new
+    # ``Effect::OptionalSacLandOrLanderForBasicLandRamp`` variant + parse
+    # / to_pydict / resolve arms + cross-engine bridge dict-to-Python
+    # arm + reverse-serializer leaf in ``trajectory.py:4510``); Cycle 2
+    # (this slice) adds the Python admit predicate
+    # :func:`_printing_is_bridge_phase_3_trigger_spacecraft` +
+    # :func:`_phase_3_trigger_spacecraft_card_def` builder + OR-chain
+    # disjunct registration in ``_filter_deck_to_bridge_supported``.
+    #
+    #   * ``test_larval_scoutlander_parity.py`` — Larval Scoutlander
+    #     (``{2}{G}`` Artifact — Spacecraft, 3/3, station_threshold=7,
+    #     stationed_keywords={flying}, ONE ETB trigger
+    #     ENTERS+IsSelf+OptionalSacLandOrLanderForBasicLandRamp(2) at
+    #     tier_threshold=0); the FIRST PROBE_MODULES-credited probe
+    #     binding the new ``OptionalSacLandOrLanderForBasicLandRamp``
+    #     Effect class + the new Phase-3 trigger-bearing Spacecraft
+    #     admit gate. Drives BOTH engines through TWO scenarios across
+    #     the eligible-target axis per design doc §6.2 #9: (A) empty bf
+    #     no Lands/Landers (silent no-op decline path), and (B) THE
+    #     LOAD-BEARING 1-Forest + 1-Lander on bf (optional-accept;
+    #     deterministic-first-pick sacrifices Forest; 2 Plains enter
+    #     tapped from library). Uses the optional-cost-mirror shim
+    #     ``_PayOptionalSacFirstAgent`` (sibling of the Selfcraft Mechan
+    #     ``OptionalSacArtifactForEffect`` probe convention).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Larval
+    # Scoutlander joins Sawship + Lumen-Class Frigate as the THIRD
+    # PROBED Spacecraft). The other 4 EoE Phase-3 Spacecraft (Sledge-
+    # Class Seedship, Synthesizer Labship, Entropic Battlecruiser,
+    # Infinite Guideline Station) stay honestly DECLINED on the strict
+    # Phase-3A 1-class / 1-shape allowlist — the §6.4 decline-set bench
+    # check in ``test_spacecraft_phase_3a_cycle_2_flip.py`` pins this
+    # exhaustively. Phase 3B (Sledge-Class Seedship) and Phase 3C
+    # (Synthesizer Labship + Entropic Battlecruiser + Infinite
+    # Guideline Station) are the next FLIP cycles per design doc §7.
+    REPO_ROOT / "tests" / "test_larval_scoutlander_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see
@@ -3435,6 +3474,26 @@ def loader_admits(printing) -> bool:
             # Scenarios C & D + composed-shape pins ship in Cycle 3
             # per design doc §7.
             or traj._printing_is_bridge_phase_2_static_anthem_spacecraft(
+                printing,
+            )
+            # **Spacecraft Station substrate Phase 3A Cycle 2 (Larval
+            # Scoutlander, 2026-05-25; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md``
+            # §5.5).** Mirrors the real loader's new admit arm in
+            # ``_filter_deck_to_bridge_supported``. Admits exactly
+            # Larval Scoutlander in the EoE pool — the sole single-
+            # trigger ETB+IsSelf carrier whose Effect class is in the
+            # Phase-3A 1-class allowlist
+            # ``{OptionalSacLandOrLanderForBasicLandRamp}``. The other
+            # 4 Phase-3 Spacecraft (Sledge-Class Seedship, Synthesizer
+            # Labship, Entropic Battlecruiser, Infinite Guideline
+            # Station) stay DECLINED here per the strict Phase-3A
+            # gate; they flip in Phase 3B/3C per design doc §5.4.
+            # Per-card real-EoE probe Scenarios A & B land alongside
+            # Cycle 2 (``tests/test_larval_scoutlander_parity.py``);
+            # this fold lifts the metric from COVERED-by-construction
+            # to PROBED post-FLIP.
+            or traj._printing_is_bridge_phase_3_trigger_spacecraft(
                 printing,
             )
         )
