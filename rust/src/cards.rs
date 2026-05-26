@@ -9944,9 +9944,21 @@ fn find_object_attached_to(
 /// **Slice 1 scope.** Only the predicate-style path is wired
 /// (`event` is required and never `None` on the Rust side; Python's
 /// optional shape is the legacy string-key path Slice 1 doesn't
-/// mirror). `requires_void`, `tier_threshold`, `room_half` from
-/// Python are omitted here — defaults of "always fire" suffice for
-/// the smoke probe; they land alongside their gates in Slice 3+.
+/// mirror). `requires_void`, `room_half` from Python are still
+/// omitted here — defaults of "always fire" suffice for the smoke
+/// probe; they land alongside their gates in follow-up slices.
+///
+/// **Spacecraft Phase 3C Cycle 1 (2026-05-26).** Adds the
+/// `tier_threshold: i32` slot — the EoE Spacecraft tier gate.
+/// Mirrors Python's `TriggeredAbility.tier_threshold: int = 0` at
+/// `effects/base.py:718`. Default 0 = always fire (back-compat with
+/// every pre-Phase-3 trigger). The gate at trigger-firing time in
+/// `state_ops_resolve::dispatch_event` skips the firing when
+/// `tier_threshold > 0` and the source's `charge_counters <
+/// tier_threshold`, mirroring Python's `should_fire_trigger` at
+/// `turn.py:469-473`. Sibling of `ActivatedAbility.tier_threshold`
+/// (`cards.rs:10490`); the two gates share the source.charge_counters
+/// >= threshold semantics + the parse/encode shape.
 #[derive(Clone, Debug)]
 pub struct TriggeredAbility {
     /// The event family this ability listens for (today only
@@ -9971,6 +9983,24 @@ pub struct TriggeredAbility {
     /// canonical IsSelf-enters trigger fires at most once per
     /// permanent's life anyway).
     pub once_per_turn: bool,
+    /// **Spacecraft Phase 3C Cycle 1 — tier gate.** Minimum
+    /// `GameObject.charge_counters` the source must have for this
+    /// trigger to fire. Defaults to `0` (no gate); Spacecraft
+    /// printings that gate per-tier (Synthesizer Labship's tier=2,
+    /// Entropic Battlecruiser mode-1's tier=1) stamp this to the
+    /// printed tier value.
+    ///
+    /// **Trigger-firing gate, not a cost.** The source's
+    /// `charge_counters` is COMPARED against this value at
+    /// trigger-firing time in `state_ops_resolve::dispatch_event`;
+    /// the firing does NOT decrement charge counters (sub-tier
+    /// firings are simply suppressed). Mirrors Python's
+    /// `should_fire_trigger` at `turn.py:469-473`.
+    ///
+    /// Mirrors Python's `TriggeredAbility.tier_threshold: int = 0`
+    /// at `effects/base.py:718`. Sibling of
+    /// `ActivatedAbility.tier_threshold` at `cards.rs:10490`.
+    pub tier_threshold: i32,
 }
 
 // --- Activated-ability substrate (CE20 Slice 1) ------------------
@@ -15367,6 +15397,10 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
             predicate: Predicate::SourceIsSelf,
             effect: effect.clone(),
             once_per_turn: false,
+            // Spacecraft Phase 3C Cycle 1 (2026-05-26): synthesized
+            // etb_effects shims carry the back-compat default tier
+            // gate (no tier gate, fire on every ENTERS).
+            tier_threshold: 0,
         });
     }
     // CE20 Slice 1 substrate: `activated_abilities` defaults to empty
@@ -16937,11 +16971,36 @@ fn parse_triggered_ability(
         })?,
         None => false,
     };
+    // Spacecraft Phase 3C Cycle 1 (2026-05-26) — optional
+    // `tier_threshold: int >= 0`. Missing key defaults to 0 (no
+    // gate — back-compat with every pre-Phase-3 caller). Mirrors
+    // the sibling `ActivatedAbility.tier_threshold` parse arm at
+    // `cards.rs:16604` (CE20 follow-up). Mirrors Python's
+    // `TriggeredAbility.tier_threshold: int = 0` at
+    // `effects/base.py:718`.
+    let tier_threshold = match dict.get_item("tier_threshold")? {
+        Some(v) => {
+            let n: i32 = v.extract().map_err(|_| {
+                PyValueError::new_err(
+                    "triggered_ability.tier_threshold must be a non-negative int",
+                )
+            })?;
+            if n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "triggered_ability.tier_threshold must be \
+                     non-negative, got {n}"
+                )));
+            }
+            n
+        }
+        None => 0,
+    };
     Ok(TriggeredAbility {
         event,
         predicate,
         effect,
         once_per_turn,
+        tier_threshold,
     })
 }
 

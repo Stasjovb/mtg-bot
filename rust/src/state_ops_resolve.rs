@@ -941,6 +941,39 @@ pub(crate) fn dispatch_event(
                 {
                     continue;
                 }
+                // **Spacecraft Phase 3C Cycle 1 (2026-05-26) — tier
+                // gate.** Mirrors Python's `should_fire_trigger` at
+                // `turn.py:469-473`. When `tier_threshold > 0`, the
+                // source GameObject (on the battlefield) must carry
+                // at least `tier_threshold` charge counters or the
+                // trigger does NOT fire. Off-battlefield sources
+                // (zone-changed between dispatch and trigger walk;
+                // e.g. a DIES trigger of a now-graveyard creature)
+                // bypass the gate — the gate only applies to
+                // currently-on-bf sources (sibling to Python's
+                // `next((o for o in state.battlefield if o.id ==
+                // source_id), None)` lookup; missing source means
+                // None means False -> skip). Sibling of
+                // `ActivatedAbility.tier_threshold` usability check
+                // at `state_ops_legal.rs:3367-3380`.
+                if ability.tier_threshold > 0 {
+                    let mut source_charge: Option<i32> = None;
+                    for player in &state.players {
+                        for obj in player.battlefield.iter() {
+                            if obj.id == *source_id {
+                                source_charge = Some(obj.charge_counters);
+                                break;
+                            }
+                        }
+                        if source_charge.is_some() {
+                            break;
+                        }
+                    }
+                    match source_charge {
+                        Some(c) if c >= ability.tier_threshold => {}
+                        _ => continue,
+                    }
+                }
                 firings.push((
                     *source_id,
                     *source_controller,

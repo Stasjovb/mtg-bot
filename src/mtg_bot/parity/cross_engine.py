@@ -13544,11 +13544,22 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         predicate = _rewrite_predicate_for_plays_land(predicate)
     effect = _ta_dict_to_python_effect(ta_dict["effect"])
     once_per_turn = ta_dict.get("once_per_turn", False)
+    # **Spacecraft Phase 3C Cycle 1 (2026-05-26) — tier_threshold
+    # bridge thread-through.** Mirror of Rust's
+    # `parse_triggered_ability` `tier_threshold` arm
+    # (`cards.rs:16944`). Missing key defaults to 0 (no gate — back-
+    # compat with every pre-Phase-3 trigger dict that omits this
+    # key). The Python `TriggeredAbility.tier_threshold` slot at
+    # `effects/base.py:718` consumes this value; Python's
+    # `should_fire_trigger` at `turn.py:469-473` honors it
+    # symmetrically with Rust's `dispatch_event` gate.
+    tier_threshold = int(ta_dict.get("tier_threshold", 0))
     return TriggeredAbility(
         event=event,
         predicate=predicate,
         effect=effect,
         once_per_turn=once_per_turn,
+        tier_threshold=tier_threshold,
     )
 
 
