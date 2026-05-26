@@ -8719,6 +8719,180 @@ def _carrier_aa_land_card_def(printing) -> "Optional[CardDef]":
     )
 
 
+def _printing_is_bridge_pure_station_spacecraft(printing) -> bool:
+    """True iff a CardPrinting is a Phase-1 bridge-supported Spacecraft.
+
+    **Spacecraft Station substrate — Phase 1 Cycle 3 (2026-05-25;
+    spec at ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_1_DESIGN.md``
+    §5.4).** Sibling of :func:`_printing_is_bridge_pure_cost_reduction_
+    creature` / :func:`_printing_is_bridge_pure_warp_creature` /
+    :func:`_printing_is_bridge_simple_carrier_aa_land`. Pilot:
+    Galvanizing Sawship (``station_threshold=3``,
+    ``stationed_keywords={flying, haste}``, 6/5, ``{5}{R}``, 5,938
+    17lands decks — the SOLE single-gated AND zero-ability Spacecraft
+    in the EoE pool; every other Spacecraft carries at least one
+    static / triggered / activated co-gate that Phase 1 explicitly
+    defers to Phase 2 / 3 / 4 per design doc §3).
+
+    **§2 teeth (must reject):**
+
+      * Non-Spacecraft (no ``"Spacecraft"`` subtype).
+      * ``station_threshold is None`` — The Eternity Elevator
+        (the only Phase-4 Spacecraft with ``threshold=None``,
+        deferred per design doc §3).
+      * ``station_threshold <= 0`` — defense-in-depth against a
+        future parser/registry-dict regression (Rust parse arm
+        hard-errors on this too, see Cycle 1 substrate teeth at
+        ``rust/src/cards.rs:15922-15933``).
+      * Any static / triggered / activated ability — Phase 2 / 3 / 4
+        defer the 7 multi-gated Spacecraft (Lumen-Class Frigate /
+        Larval Scoutlander / Sledge-Class Seedship / Synthesizer
+        Labship / Entropic Battlecruiser / Infinite Guideline
+        Station / The Eternity Elevator + 14 other ability-carrying
+        Spacecraft per the live EoE walk).
+      * ``spell_effect is not None`` (Spacecraft are permanents —
+        defense-in-depth against a mistranslation regression).
+      * ``room_halves`` non-empty / ``loyalty`` set / any
+        ``cost_reductions`` or ``external_cost_reductions`` /
+        ``warp_cost`` / ``kicker_cost`` / ``impending_cost`` /
+        ``dynamic_pt_formula`` / ``ward_cost`` — sibling substrates
+        whose interaction with Spacecraft station is Phase-N.
+      * Non-empty baseline ``keywords`` — Phase-1 carrier has
+        empty baseline keywords; any baseline keyword would
+        require a layer-6 timestamp interleave that the
+        ``stationed_keywords`` fold doesn't yet model (Phase-2+
+        substrate-extension).
+      * Empty ``stationed_keywords`` — admits Sawship by gating
+        on the substrate's actual leverage (a Spacecraft with no
+        keyword grant has no Phase-1 reason to bridge through
+        this predicate; the printed P/T animation alone is still
+        admit-relevant but would route through a future
+        ``_printing_is_bridge_simple_animating_spacecraft``
+        sibling. The pilot card Sawship grants
+        ``{flying, haste}`` so this gate is honest-tight here).
+      * Any ``stationed_keywords`` member NOT in
+        :data:`_SAFE_KEYWORDS` — the bridge-correct keyword set
+        (Cycle 2 substrate landed the ``battlefield_has_keyword``
+        fold to surface stationed keywords on the Rust side, but
+        the per-keyword combat/static-reader parity is still
+        gated by ``_SAFE_KEYWORDS``).
+      * ``grants_toughness_as_station_power_for_creatures_you_control``
+        flag — Tapestry Warden flag, Phase-2+ widen per design doc
+        §4.4 / SL §9 entry #2.
+      * Unparseable ``mana_cost_str`` — defense-in-depth (Sawship
+        is ``{5}{R}`` which parses; any future Spacecraft with a
+        hybrid / phyrexian / X cost is honest-stopped).
+
+    The positive Phase-1 admit set is **exactly Galvanizing Sawship**
+    (the verify-first walk against the live EoE pool confirmed no
+    other Spacecraft matches every clause; 22 live Spacecraft —
+    21 carry one or more abilities, The Eternity Elevator has
+    ``station_threshold=None``).
+    """
+    if "Spacecraft" not in printing.subtypes:
+        return False
+    if printing.station_threshold is None:
+        return False
+    if printing.station_threshold <= 0:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if printing.keywords:
+        return False
+    if not printing.stationed_keywords:
+        return False
+    for kw in printing.stationed_keywords:
+        if kw not in _SAFE_KEYWORDS:
+            return False
+    if getattr(
+        printing,
+        "grants_toughness_as_station_power_for_creatures_you_control",
+        False,
+    ):
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _station_spacecraft_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Phase-1-admitted Spacecraft printing.
+
+    **Spacecraft Station substrate — Phase 1 Cycle 3 (2026-05-25).**
+    Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_pure_station_spacecraft`. The
+    synthesized CardDef carries:
+
+    * ``card_type="Artifact"`` — Spacecraft are printed Artifacts that
+      animate as Artifact Creatures only while stationed (CR 311
+      Spacecraft). Sub-typed as ``("Spacecraft",)`` so the Rust
+      registry-dict consumer at ``rust/src/cards.rs:parse_printing``
+      sees the printed subtype.
+    * ``power`` / ``toughness`` — Sawship is 6/5 (the printed P/T
+      while stationed; Rust's ``battlefield_creature_power`` /
+      ``battlefield_creature_toughness`` only reads these when
+      ``is_creature_now`` returns True).
+    * ``mana_cost_generic`` / ``mana_cost_colored`` — parsed from
+      ``printing.mana_cost_str`` via the same
+      :func:`_parse_mana_cost_string` codec the admit predicate's
+      mana-cost teeth use.
+    * ``station_threshold`` + ``stationed_keywords`` — threaded
+      through to the registry dict via the C3 forward-emit arm in
+      ``cross_engine.py::_spec_card_to_printing_dict`` (omitted when
+      default per back-compat).
+    * NO baseline ``keywords`` (the admit predicate rejects any
+      baseline keyword), NO ``activated_abilities``, NO
+      ``triggered_abilities``, NO ``static_abilities``, NO
+      ``spell_effect``, NO ``cost_reductions`` (the admit predicate
+      rejects all these). The Rust ``Action::ActivateStation`` resolver
+      lands via the Cycle 2 substrate (``62e10ff9``) — the CardDef
+      itself doesn't carry the station action; it's emitted by Rust's
+      legal-action emitter at ``state_ops_legal.rs::legal_decisions``
+      tail when ``is_sorcery_timing && own Spacecraft && eligible
+      crew`` (mirror of Python's ``legal.py:831-852``).
+    """
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+
+    if not _printing_is_bridge_pure_station_spacecraft(printing):
+        return None
+    try:
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return None
+    return _CardDef(
+        name=printing.name,
+        card_type="Artifact",
+        mana_cost_generic=generic,
+        mana_cost_colored=colored,
+        subtypes=tuple(printing.subtypes),
+        supertypes=tuple(printing.supertypes or ()),
+        power=printing.power,
+        toughness=printing.toughness,
+        station_threshold=int(printing.station_threshold),
+        stationed_keywords=tuple(sorted(printing.stationed_keywords)),
+    )
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -9990,6 +10164,26 @@ def _printing_to_card_def(printing) -> CardDef:
         # branch passes the predicate by construction (the OR-chain
         # above only routes here when the predicate returned True).
         card_def = _carrier_aa_land_card_def(printing)
+        if card_def is not None:
+            return card_def
+    if _printing_is_bridge_pure_station_spacecraft(printing):
+        # **Spacecraft Station substrate Phase 1 Cycle 3 (2026-05-25).**
+        # A zero-ability Spacecraft (sole admit = Galvanizing Sawship)
+        # flattens to an Artifact CardDef carrying ``station_threshold``
+        # + ``stationed_keywords`` through the C3 bridge forward-emit
+        # arm in ``cross_engine.py::_spec_card_to_printing_dict``. The
+        # Rust substrate landed Parts A+B (``ea9aa996`` + ``62e10ff9``)
+        # — ``CardPrinting`` fields + parse arm + ``is_stationed``
+        # predicate + ``Action::ActivateStation`` resolver + sorcery-
+        # speed legal emitter + ``is_creature_now`` extension +
+        # ``battlefield_has_keyword`` fold. Returning ``None`` from the
+        # builder is defense-in-depth (admit predicate gates everything
+        # the builder needs); we fall through to ``_printing_to_card_
+        # def``'s tail on an unexpected None so the disagreement
+        # surfaces loudly. In practice every printing reaching this
+        # branch passes the predicate by construction (the OR-chain
+        # routes here only when the predicate returned True).
+        card_def = _station_spacecraft_card_def(printing)
         if card_def is not None:
             return card_def
     if _printing_is_bridge_pure_warp_creature(printing):
@@ -11803,8 +11997,36 @@ def _filter_deck_to_bridge_supported(
             # Cycle 3 alongside the Swarmyard real-EoE probe per
             # ``docs/SEARCH_LIMITATIONS.md``).
             or _printing_is_bridge_simple_carrier_aa_land(printing)
+            # **Spacecraft Station substrate Phase 1 Cycle 3
+            # (2026-05-25).** The bridge-pure station Spacecraft
+            # disjunct. Admits EXACTLY Galvanizing Sawship in the EoE
+            # pool — the SOLE single-gated AND zero-ability Spacecraft
+            # per the verify-first walk against the live 22-Spacecraft
+            # set (every other Spacecraft carries one or more static /
+            # triggered / activated abilities; The Eternity Elevator
+            # additionally has ``station_threshold=None``). The §2
+            # teeth in :func:`_printing_is_bridge_pure_station_
+            # spacecraft` reject every Phase-2+ shape (static /
+            # triggered / activated abilities, spell_effect /
+            # room_halves / loyalty / cost_reductions / warp /
+            # kicker / impending / dynamic_pt_formula / ward_cost /
+            # non-empty baseline keywords / empty stationed_keywords /
+            # non-``_SAFE_KEYWORDS`` member /
+            # ``grants_toughness_as_station_power_for_creatures_you_
+            # control`` Tapestry-Warden flag — per design doc §5.4).
+            # Rust-side substrate landed Parts A+B (Cycle 1 ``ea9aa996``
+            # — fields + parse + ``is_stationed`` predicate; Cycle 2
+            # ``62e10ff9`` — ``Action::ActivateStation`` resolver +
+            # sorcery-speed legal emitter + ``is_creature_now``
+            # extension + ``battlefield_has_keyword`` fold of
+            # ``stationed_keywords``); C3 adds the Python bridge
+            # round-trip arms in ``cross_engine.py`` +
+            # :func:`_station_spacecraft_card_def` builder + this
+            # OR-in. Per-card real-EoE probe (Scenarios A/B/C) ships
+            # in Cycle 4 per design doc §6.3.
+            or _printing_is_bridge_pure_station_spacecraft(printing)
         ):
-            # Resolved but passes none of the 5 bridge-admit disjuncts.
+            # Resolved but passes none of the bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:
                 raise NonAdmittedCardError(name, resolved=True)
             if not_bridged_sink is not None:

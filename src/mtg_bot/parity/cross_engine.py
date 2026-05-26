@@ -667,6 +667,49 @@ class CardDef:
     # Vec<ExternalCostReduction>`` at ``rust/src/cards.rs`` (added
     # 2026-05-25, Phase 2 Cycle 1).
     external_cost_reductions: tuple[tuple[int, str, tuple], ...] = ()
+    # **Spacecraft Station substrate — Phase 1 Cycle 3 (2026-05-25).**
+    # The threshold-of-charge-counters at which a Spacecraft animates
+    # as an Artifact Creature (CR 311 Spacecraft + station mechanic).
+    # ``None`` for every non-Spacecraft CardDef + The Eternity Elevator
+    # (the only Phase-4 Spacecraft with ``station_threshold=None`` —
+    # honest-stopped at the Phase-1 admit predicate).
+    #
+    # Round-trips Python ↔ Rust through :func:`_spec_card_to_printing_
+    # dict` (forward emit: omitted when ``None`` per back-compat
+    # precedent of ``warp_cost`` / ``cost_reductions``) and
+    # :func:`_card_def_to_python_printing` (reverse re-materialization
+    # onto Python's ``CardPrinting.station_threshold: int | None`` at
+    # ``cards/base.py:564``). The Rust mirror is
+    # ``CardPrinting.station_threshold: Option<i32>`` at
+    # ``rust/src/cards.rs:10782`` (substrate Part A, 2026-05-25,
+    # ``ea9aa996``); the C1 parse arm hard-errors on non-positive
+    # ``int`` values (the §2 teeth — Phase 1 admit predicate guards
+    # ``station_threshold > 0``).
+    station_threshold: int | None = None
+    # **Spacecraft Station substrate — Phase 1 Cycle 3 (2026-05-25).**
+    # The set of keywords a Spacecraft GAINS while stationed
+    # (``charge_counters >= station_threshold``). Empty tuple = no
+    # extra keywords (the back-compat default — every pre-Phase-1
+    # CardDef omits it; The Eternity Elevator also reads empty per
+    # the live parser). Values are lowercase space-form keyword
+    # strings (e.g. ``"flying"``, ``"haste"``, ``"first strike"``)
+    # matching the wire convention Rust's ``parse_printing`` ingests
+    # (see ``rust/src/cards.rs:15944-15965`` — lowercase normalized,
+    # ``stationed_keywords[i] must be a string``) and the existing
+    # bridge ``keywords`` arm convention.
+    #
+    # Round-trips Python ↔ Rust through :func:`_spec_card_to_printing_
+    # dict` (forward emit: omitted when ``()`` per back-compat
+    # precedent) and :func:`_card_def_to_python_printing` (reverse
+    # re-materialization onto Python's ``CardPrinting.stationed_
+    # keywords: frozenset[str]`` at ``cards/base.py:565``). Rust mirror
+    # is ``CardPrinting.stationed_keywords: Vec<String>`` at
+    # ``rust/src/cards.rs:10803`` (substrate Part A, 2026-05-25).
+    # Phase 1 admits only ``stationed_keywords`` whose entries are in
+    # ``trajectory._SAFE_KEYWORDS`` (the predicate guardrail at
+    # :func:`mtg_bot.parity.trajectory._printing_is_bridge_pure_station_
+    # spacecraft`); Galvanizing Sawship ships ``("flying", "haste")``.
+    stationed_keywords: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -13814,6 +13857,27 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
                 card.external_cost_reductions
             )
         ]
+    # **Spacecraft Station substrate — Phase 1 Cycle 3 (2026-05-25).**
+    # Forward-emit ``station_threshold`` + ``stationed_keywords`` to the
+    # Rust registry dict. Both keys are OMITTED when default
+    # (``None`` / ``()``) for back-compat — every pre-Phase-1 CardDef
+    # registry dict omits both, which the Rust parser maps to
+    # ``Option::None`` / ``Vec::new()`` per the substrate Part A landing
+    # at ``rust/src/cards.rs:15908-15965`` (commit ``ea9aa996``,
+    # 2026-05-25). Sibling mirror of the ``cost_reductions`` /
+    # ``warp_cost`` emit-when-set precedent above. The §2 Phase-1 admit
+    # predicate (:func:`mtg_bot.parity.trajectory._printing_is_bridge_
+    # pure_station_spacecraft`) gates on ``station_threshold > 0`` AND
+    # ``stationed_keywords`` non-empty + every member in
+    # ``trajectory._SAFE_KEYWORDS``, so only well-formed payloads reach
+    # this emit path through the production bridge. Values are passed
+    # as a sorted list of lowercase strings for deterministic emit
+    # (the Rust parse arm normalizes to lowercase regardless; sorting
+    # makes the emitted registry dict bit-stable across runs).
+    if card.station_threshold is not None:
+        printing_dict["station_threshold"] = int(card.station_threshold)
+    if card.stationed_keywords:
+        printing_dict["stationed_keywords"] = sorted(card.stationed_keywords)
     if card.static_self_bonuses:
         bonus_entries: list[dict] = []
         for (
@@ -14979,6 +15043,24 @@ def _card_def_to_python_printing(card: "CardDef"):
         # ``actions._apply_external_cost_reductions`` at cast time +
         # legal-side affordability probe.
         external_cost_reductions=external_cost_reductions,
+        # **Spacecraft Station substrate — Phase 1 Cycle 3
+        # (2026-05-25).** Threads the optional
+        # ``station_threshold`` int (None = non-Spacecraft / non-
+        # animating Spacecraft per The Eternity Elevator Phase-4
+        # honest-stop) and the ``stationed_keywords`` frozenset onto
+        # Python's CardPrinting (`cards/base.py:564-565`). The
+        # ``stationed_keywords`` tuple-of-strings on CardDef is
+        # frozen-hashable for dataclass(frozen=True); we
+        # materialize it back to ``frozenset`` to match Python's
+        # native `CardPrinting.stationed_keywords: frozenset[str]`
+        # storage (the parser at `parser/__init__.py` emits a
+        # frozenset; Python's `game._is_stationed` + the
+        # `battlefield_has_keyword` reader at `game.py:1191-1193`
+        # consume it as a frozenset for fast membership tests).
+        # Default `None` / `frozenset()` keeps every pre-Cycle-3
+        # CardDef bit-identical to before this slice landed.
+        station_threshold=card.station_threshold,
+        stationed_keywords=frozenset(card.stationed_keywords),
     )
 
 

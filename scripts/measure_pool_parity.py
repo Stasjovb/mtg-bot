@@ -3117,6 +3117,18 @@ def loader_admits(printing) -> bool:
             # ``tests/test_deserted_temple_parity.py``); this fold is
             # pure metric-truthfulness (tier counts unchanged).
             or traj._printing_is_bridge_simple_carrier_aa_land(printing)
+            # **Spacecraft Station substrate Phase 1 Cycle 3
+            # (2026-05-25).** Mirrors the real loader's new admit arm
+            # in ``_filter_deck_to_bridge_supported``. Admits exactly
+            # Galvanizing Sawship in the EoE pool — the sole single-
+            # gated AND zero-ability Spacecraft per the verify-first
+            # walk against the 22-Spacecraft live set. Per-card
+            # real-EoE probe is Cycle 4 deliverable
+            # (Scenarios A/B/C across the charge-counter axis per
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_1_DESIGN.md``
+            # §6.3); this fold lifts the metric from ADMITTED to
+            # COVERED-by-construction post-FLIP.
+            or traj._printing_is_bridge_pure_station_spacecraft(printing)
         )
     except Exception:
         return False

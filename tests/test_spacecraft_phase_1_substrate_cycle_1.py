@@ -397,28 +397,23 @@ def test_rust_parser_rejects_invalid_station_payload(
 # ---------------------------------------------------------------------------
 
 
-def test_galvanizing_sawship_stays_declined_at_admit_gate_post_cycle_1():
-    """Pin #7 — Substrate-only invariant — Galvanizing Sawship STAYS
-    DECLINED.
+def test_galvanizing_sawship_now_admits_at_admit_gate_post_cycle_3():
+    """Pin #7 — **INVERTED IN-PLACE BY CYCLE 3 (2026-05-25).**
 
-    **The load-bearing closure marker.** Cycle 1 ships only the
-    substrate Part A (fields + parse + predicate). Without the
-    Cycle-2 ``Action::ActivateStation`` resolver, the Cycle-3 bridge
-    round-trip, and the Cycle-3 dedicated admit predicate
-    ``_printing_is_bridge_pure_station_spacecraft``, admitting
-    Galvanizing Sawship now would ship a guaranteed game-state
-    divergence (Python sees a Spacecraft with a Station action; Rust
-    has no way to fire ActivateStation).
+    Original C1 pin (substrate-only invariant) asserted Galvanizing
+    Sawship STAYS DECLINED post-Cycle-1+2. Cycle 3 landed the Python
+    bridge round-trip + new admit predicate
+    :func:`mtg_bot.parity.trajectory._printing_is_bridge_pure_station_
+    spacecraft` + OR-chain disjunct registration — Sawship now
+    ADMITS at the deck-level filter through the new dedicated
+    disjunct. The load-bearing
+    ``if printing.station_threshold: return False`` guard at
+    :func:`_printing_is_bridge_simple_creature` STAYS — the new
+    predicate is the routing site, not a widen of the simple-creature
+    predicate. THE FLIP.
 
-    The sibling guard ``if printing.station_threshold: return False``
-    at ``trajectory.py:4698`` is therefore load-bearing this cycle;
-    this pin defends the substrate-only invariant. **The pin's
-    failure means the substrate ALONE auto-flipped the admit gate**
-    — which would replicate the Archenemy's Charm Cycle 1 honest-
-    stop situation (commit ``8f8bc77b``).
-
-    Cycle 3 inverts this pin when the new admit predicate +
-    OR-chain disjunct land together.
+    Post-C3 admit-set count for Spacecraft = 1 (Galvanizing Sawship);
+    5,938 17lands decks newly bridge-admitted.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -428,31 +423,39 @@ def test_galvanizing_sawship_stays_declined_at_admit_gate_post_cycle_1():
     if sawship is None:
         pytest.skip("Galvanizing Sawship absent from active CardSource")
 
-    # The existing simple-creature predicate must STILL reject the
-    # Sawship — the `station_threshold` guard at trajectory.py:4698
-    # is sibling-load-bearing this cycle. (Sawship is also rejected
-    # for other reasons — it's an Artifact, not a Creature — but the
-    # `station_threshold` guard is the substrate-relevant one and
-    # the one Cycle 3 will hold-in-place when adding the dedicated
-    # predicate.)
+    # The simple-creature predicate must STILL reject the Sawship —
+    # the load-bearing ``station_threshold`` guard at
+    # ``trajectory.py:4698`` is unchanged by C3. (Sawship is also
+    # rejected by the ``"Creature" not in printing.card_types`` gate
+    # — Sawship is an Artifact.) The C3 FLIP does NOT widen the
+    # simple-creature predicate; it adds a sibling dedicated
+    # predicate routed in parallel through
+    # ``_filter_deck_to_bridge_supported``'s OR-chain.
     assert trajectory._printing_is_bridge_simple_creature(sawship) is False, (
-        "Galvanizing Sawship must STAY DECLINED at the simple-"
-        "creature admit gate post-Cycle-1. If True, the substrate's "
-        "field landing somehow flipped the admit predicate without "
-        "the C2 action and C3 bridge round-trip — honest-stop on "
-        "C2 / C3 review."
+        "Galvanizing Sawship must STILL be declined at the simple-"
+        "creature admit gate post-C3 — the new dedicated disjunct "
+        "is the routing site, not a widen of the simple-creature "
+        "predicate. The load-bearing ``station_threshold`` guard "
+        "stays in place."
     )
-    # And the deck-level filter likewise: a 1-card deck containing
-    # only Galvanizing Sawship filters to (0-name, 0-CardDef-list).
+    # The new C3 predicate ADMITS the Sawship.
+    assert trajectory._printing_is_bridge_pure_station_spacecraft(sawship), (
+        "Galvanizing Sawship must ADMIT through the C3 dedicated "
+        "Spacecraft admit predicate post-FLIP."
+    )
+    # And the deck-level filter NOW admits the Sawship — a 1-card
+    # deck containing only Galvanizing Sawship filters to
+    # (1-name, 1-CardDef-list).
     filtered_names, card_defs = trajectory._filter_deck_to_bridge_supported(
         ["Galvanizing Sawship"], src,
     )
-    assert filtered_names == [], (
-        "Galvanizing Sawship must STAY DECLINED at the deck-level "
-        "filter post-Cycle-1 — the substrate-only invariant. Got "
-        f"filtered_names={filtered_names!r}."
+    assert filtered_names == ["Galvanizing Sawship"], (
+        "THE FLIP — Galvanizing Sawship must ADMIT at the deck-level "
+        f"filter post-C3. Got filtered_names={filtered_names!r}."
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    assert card_defs[0].name == "Galvanizing Sawship"
+    assert card_defs[0].station_threshold == 3
 
 
 # ---------------------------------------------------------------------------
@@ -460,41 +463,46 @@ def test_galvanizing_sawship_stays_declined_at_admit_gate_post_cycle_1():
 # ---------------------------------------------------------------------------
 
 
-def test_admit_set_size_unchanged_post_cycle_1():
-    """Pin #8 — bench-aggregate sibling of Pin #7.
+def test_admit_set_size_bumps_post_cycle_3():
+    """Pin #8 — **INVERTED IN-PLACE BY CYCLE 3 (2026-05-25).**
 
-    The number of bridge-admitted EoE printings under
-    ``_printing_is_bridge_simple_creature`` is the same post-Cycle-1
-    as pre-Cycle-1 — zero auto-grow. The substrate-only invariant's
-    aggregate cross-check; if a NEW EoE printing has somehow flipped
-    DECLINED → ADMITTED on the back of just the C1 substrate
-    landing, this count drifts.
+    Original C1 pin asserted ZERO Spacecraft printings admit through
+    any disjunct of the deck-level filter (the bench-aggregate
+    sibling of pin #7 holding the substrate-only invariant). Cycle 3
+    landed the FLIP — the bench-aggregate count for Spacecraft is
+    now exactly 1 (Galvanizing Sawship). Any OTHER Spacecraft
+    admitting is a silent auto-grow honest-stop.
 
-    Asserts an exact integer count is intentionally avoided —
-    the pin instead drives the filter against the entire active
-    source twice (a no-op call + a comparison call) to ensure the
-    filter shape is stable in a single test session. The structural
-    cross-check that no Spacecraft has slipped through is the
-    important invariant; sibling Pin #7 already guards the named
-    pilot.
+    The simple-creature predicate STILL declines every Spacecraft
+    (the load-bearing ``station_threshold`` guard at
+    ``trajectory.py:4698`` is unchanged by C3); the new dedicated
+    disjunct ``_printing_is_bridge_pure_station_spacecraft`` is the
+    sole routing site for the Phase-1 admit.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     src = get_active_source().get_printings()
-    # Walk every printing name; count those that admit under the
-    # SIMPLE-creature predicate. Any Spacecraft (subtypes contains
-    # "Spacecraft") should NOT admit through this predicate post-
-    # Cycle-1.
-    admitted_spacecraft = []
+    # Walk every printing; count Spacecraft that admit under EITHER
+    # the simple-creature predicate (must be zero — unchanged by C3)
+    # OR the new C3 dedicated predicate (must be 1 — Sawship).
+    admitted_via_simple_creature = []
+    admitted_via_station_predicate = []
     for name, printing in src.items():
         if "Spacecraft" not in printing.subtypes:
             continue
         if trajectory._printing_is_bridge_simple_creature(printing):
-            admitted_spacecraft.append(name)
-    assert admitted_spacecraft == [], (
-        "Post-Cycle-1 no Spacecraft printing should admit through "
-        "the simple-creature filter — that would mean the new "
-        "substrate-only fields somehow flipped a Spacecraft DECLINED "
-        f"→ ADMITTED without the C2 + C3 closures. Got: {admitted_spacecraft!r}."
+            admitted_via_simple_creature.append(name)
+        if trajectory._printing_is_bridge_pure_station_spacecraft(printing):
+            admitted_via_station_predicate.append(name)
+    assert admitted_via_simple_creature == [], (
+        "Post-C3 no Spacecraft printing should admit through the "
+        "simple-creature predicate — C3 routes through the dedicated "
+        f"disjunct, not via widening the simple-creature gate. Got: "
+        f"{admitted_via_simple_creature!r}."
+    )
+    assert admitted_via_station_predicate == ["Galvanizing Sawship"], (
+        "Post-C3 EXACTLY ONE Spacecraft printing admits through the "
+        "new dedicated predicate — Galvanizing Sawship (admit-set "
+        f"count +1 vs Cycle 1/2). Got: {admitted_via_station_predicate!r}."
     )
