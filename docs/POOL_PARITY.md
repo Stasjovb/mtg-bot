@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **429 / 475 EoE cards (90.3%) are byte-equal at the Effect+bridge level**; of those, **388 (81.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 41 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **429 / 475 EoE cards (90.3%) are byte-equal at the Effect+bridge level**; of those, **389 (81.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 40 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **46 (9.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 388 | 81.7% |
-| Effect+bridge covered (not individually probed) | 41 | 8.6% |
+| PROBED byte-equal | 389 | 81.9% |
+| Effect+bridge covered (not individually probed) | 40 | 8.4% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -317,6 +317,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Sami's Curiosity
 - Sami, Wildcat Captain
 - Savior of the Small
+- Scavenger Grounds
 - Scorching Dragonfire
 - Scour for Scrap
 - Scout for Survivors

@@ -2681,6 +2681,56 @@ PROBE_MODULES: tuple[Path, ...] = (
     # GameObject.original_printing_id field for the CR-613 layer-1
     # copy substrate).
     REPO_ROOT / "tests" / "test_mystifying_maze_parity.py",
+    # Phase 3B Cycle 3 (2026-05-25 — Scavenger Grounds per-card real-
+    # EoE byte-equal probe; closes Phase 3B per
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §7.2). The
+    # Phase-3B C1 substrate (commit ``51abfd78``) landed the new Rust
+    # ``Effect::ExileAllGraveyards`` variant (zero-target mass-zone-
+    # move; per-pidx graveyard → exile drain, byte-equal per-owner
+    # routing) + parse / resolve / to_pydict arms + the 2 cross-engine
+    # bridge arms. Phase 3B Cycle 2 (commit ``a0f21384``) widened
+    # ``_carrier_aa_phase_1_effect_classes`` to include
+    # ``ExileAllGraveyards`` AND ``_aa_is_phase1_sub_shape_a`` on the
+    # ``sacrifice_a_desert`` axis (defense-in-depth: declines
+    # ``sacrifice_self`` + ``sacrifice_a_desert`` both-at-once — no
+    # carrier in EoE has both). Scavenger Grounds's live AA shape is
+    # ``{2}, {T}, sacrifice_a_desert`` — the combined Effect-class +
+    # cost-axis widen FLIPped the admit-gate DECLINED → ADMITTED on
+    # the C2 widen alone (covered_by_construction tier). C3 — THIS
+    # registration — closes the tier flip to PROBED by attaching the
+    # per-card cross-engine probe.
+    #
+    #   * ``test_scavenger_grounds_parity.py`` — Scavenger Grounds
+    #     ({0} ``Land — Desert``); single non-mana AA (``{2}, {T},
+    #     Sacrifice a Desert: Exile all graveyards.``) →
+    #     ``ExileAllGraveyards()`` (unit-variant Effect, zero-arg
+    #     frozen dataclass; ``requires_target() == False`` — zero-
+    #     target mass effect; resolve walks ``state.players[0..2]``
+    #     graveyards into the matching player's exile, preserving
+    #     owner attribution). The FIRST PROBE_MODULES-credited probe
+    #     of the ``ExileAllGraveyards`` Effect class on a real-EoE
+    #     Land + AA carrier; templates on the sibling Carrier-AA AA
+    #     probes (parse + bridge round-trip + Rust synthetic
+    #     acceptance + end-to-end loader admit + Python-side resolve
+    #     smoke covering the baseline empty-graveyards no-op line, the
+    #     LOAD-BEARING both-graveyards-populated mass-exile line with
+    #     5-card total + per-owner cross-routing guards, and the one-
+    #     sided per-owner-routing invariant). The mass-zone-move +
+    #     per-owner routing invariant is the structural mile over the
+    #     simpler ``Petrified Field`` / ``Terrain Generator`` single-
+    #     resolve probes — the C3 probe walks the resolve's full
+    #     ``for p in state.players: for c in list(p.graveyard)`` loop
+    #     and pins the cross-routing-guard invariant Rust's per-pidx
+    #     drain at ``state_ops_resolve.rs:23553`` mirrors.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 24 → 23 cards. Sibling-candidate card
+    # (Thespian's Stage) stays honestly DECLINED at the Phase-3B
+    # Effect-class admit set — Phase 3C ships ``BecomesCopyOfTarget
+    # Land`` (Thespian's Stage — heaviest sub-phase, ~5 cycles, new
+    # GameObject.original_printing_id field for the CR-613 layer-1
+    # copy substrate). Phase 3B is CLOSED with this probe.
+    REPO_ROOT / "tests" / "test_scavenger_grounds_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
