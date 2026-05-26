@@ -9316,6 +9316,114 @@ pub enum Effect {
         condition_args: Vec<i32>,
         description_fragment: String,
     },
+    /// **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).** Ghost
+    /// Vacuum's AA[0] pilot effect — `{T}: Exile target card from a
+    /// graveyard.`
+    ///
+    /// **Mirrors Python's `ExileTargetCardFromGraveyard`** at
+    /// `src/mtg_bot/effects/generic/exile.py:289`. Single-target effect
+    /// — the target is a `GameObject` in EITHER player's graveyard
+    /// (Ghost Vacuum's printed text reads "target card from a
+    /// graveyard", no controller qualifier). On resolve, the chosen
+    /// card moves from its owner's graveyard to its owner's exile
+    /// zone, stamping `obj.zone = ZONE_EXILE` AND
+    /// `obj.exiled_with_source = Some(source.id)` so a sibling
+    /// activated ability on the same source (Ghost Vacuum's
+    /// `{6}, {T}, Sacrifice this artifact` recall — Phase 4C-2 sibling
+    /// variant) can find every card the same source exiled later.
+    ///
+    /// **Unit variant** — no fields. The target rides on the
+    /// `StackItem.payload`'s `target_id` slot threaded at activation
+    /// time (the same slot the Phase-2a/3A/3C sibling target-bearing
+    /// variants use). Cost machinery (`{T}` tap-self) rides the
+    /// pre-existing Phase 1.5a cost gate; no new cost-shape Rust
+    /// machinery this cycle.
+    ///
+    /// **Target enumeration in `state_ops_legal.rs`.** New per-player-
+    /// graveyard single-target fan-out arm enumerates every GameObject
+    /// across BOTH players' graveyards (sibling of the Phase-2a
+    /// `ReturnTargetLandFromGraveyardToHand` single-player-graveyard
+    /// fan-out, widened to both players + dropping the Land-type
+    /// filter — the printed text reads "target card from a graveyard",
+    /// no card-type filter).
+    ///
+    /// **Substrate-only (Cycle 1).** The Phase 4C C1 slice ships the
+    /// Rust variant + parse / to_pydict / resolve + per-player-
+    /// graveyard fan-out + Python bridge arms (reverse + forward);
+    /// Ghost Vacuum STAYS DECLINED at the admit gate because (a) the
+    /// `_carrier_aa_phase_1_effect_classes` Effect-class admit set
+    /// doesn't yet include this Effect (C2 ships the widen) AND
+    /// (b) the `_python_aa_to_safe_dict` AA-rider gate still declines
+    /// on AA[1]'s `sorcery_speed=True` rider (C2 ships that widen
+    /// too). Synthetic Rust unit pins drive the round-trip at C1;
+    /// the live admit FLIP lands at C2.
+    ExileTargetCardFromGraveyard,
+    /// **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).** Ghost
+    /// Vacuum's AA[1] pilot effect — `{6}, {T}, Sacrifice this
+    /// artifact: Put each creature card exiled with this artifact onto
+    /// the battlefield under your control with a flying counter on it.
+    /// Each of them is a 1/1 Spirit in addition to its other types.`
+    ///
+    /// **Mirrors Python's
+    /// `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl`**
+    /// at `src/mtg_bot/effects/generic/exile.py:994`. Zero-target mass
+    /// effect — no `current_resolve_payload_target_id` read; the
+    /// SOURCE itself drives enumeration via the
+    /// `exiled_with_source == Some(source.id)` filter on every
+    /// player's exile zone.
+    ///
+    /// **Field shape.**
+    ///   * `grant_flying_counter: bool` — OPTIONAL. When `true`, each
+    ///     returned creature would receive a flying counter (Python
+    ///     stamps `card.flying_counters += 1`). **Substrate-only
+    ///     limitation:** Rust has no `GameObject.flying_counters` slot
+    ///     yet (Phase-N — the layered-grant machinery hasn't been
+    ///     ported); the field is captured on the parse/to_pydict
+    ///     round-trip but the resolve arm logs-and-continues without
+    ///     stamping the counter. This is a documented divergence
+    ///     captured for the Phase 4C SL entry — the C3 real-EoE probe
+    ///     will tag the substrate-gap if/when Ghost Vacuum's recall
+    ///     line goes live.
+    ///   * `grant_subtype_and_pt: Option<(String, i32, i32)>` —
+    ///     OPTIONAL. When `Some((subtype, p, t))`, each returned
+    ///     creature would gain a layer-4 add-subtype + layer-7
+    ///     sublayer-1 set-base-pt continuous effect. **Same
+    ///     substrate-only limitation** as the flying-counter rider —
+    ///     Rust has no `continuous_effects` slot today; the field is
+    ///     captured on round-trip but the resolve arm logs-and-
+    ///     continues without applying the overlay.
+    ///
+    /// **Resolve.** Walk every player's `exile`. For every
+    /// `GameObject` with `obj.exiled_with_source == Some(source.id)`
+    /// AND `registry.get(obj.printing_id).card_types.contains("Creature")`:
+    /// move to `state.players[activator_idx].battlefield`, stamp
+    /// `obj.zone = ZONE_BATTLEFIELD`, `obj.controller = activator`,
+    /// `obj.tapped = false`, `obj.summoning_sick = true`,
+    /// `obj.exiled_with_source = None` (per-zone reset per CR 400.7 +
+    /// round-28 attach foundation pattern at
+    /// `state_ops_resolve.rs:25086`'s `return_paired_exiles_for`
+    /// sibling). Dispatch ETB events per CR 603.6a via
+    /// `pending_etb_dispatches` + `drain_pending_etb_dispatches` — same
+    /// shape as `return_paired_exiles_for`. The
+    /// `grant_flying_counter` + `grant_subtype_and_pt` riders are
+    /// recognized on parse/to_pydict but NOT applied at resolve time
+    /// per the substrate-only limitations documented above.
+    ///
+    /// **No target.** The effect has no target slot; cost machinery
+    /// (`{6}, {T}, Sacrifice this artifact`) rides the Phase 2a
+    /// `sacrifice_self` cost gate already wired.
+    ///
+    /// **Substrate-only (Cycle 1).** The Phase 4C C1 slice ships the
+    /// Rust variant + parse / to_pydict / resolve + Python bridge arms
+    /// (reverse + forward); Ghost Vacuum STAYS DECLINED at the admit
+    /// gate per the same C1/C2 separation as the sibling
+    /// `ExileTargetCardFromGraveyard` variant above. The forward
+    /// serializer + Rust round-trip both succeed at C1 — driven by
+    /// synthetic unit pins; the live admit FLIP lands at C2.
+    PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl {
+        grant_flying_counter: bool,
+        grant_subtype_and_pt: Option<(String, i32, i32)>,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -13989,6 +14097,82 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 condition_tag,
                 condition_args,
                 description_fragment,
+            })
+        }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `exile_target_card_from_graveyard` parse arm.** Unit variant;
+        // no fields. Mirrors Python's parameterless
+        // `ExileTargetCardFromGraveyard()` frozen dataclass at
+        // `effects/generic/exile.py:289`. Ghost Vacuum's AA[0] pilot
+        // effect (`{T}: Exile target card from a graveyard.`). Extra
+        // dict keys silently dropped (unit-variant contract; same shape
+        // as the Phase-2a/2b/3A/3B/3C unit-variant siblings —
+        // `untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards` /
+        // `becomes_copy_of_target_land`). Target rides on the
+        // StackItem's `current_resolve_payload_target_id` slot threaded
+        // at activation time.
+        "exile_target_card_from_graveyard" => {
+            Ok(Effect::ExileTargetCardFromGraveyard)
+        }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `put_each_creature_card_exiled_with_source_onto_battlefield_
+        // under_your_control` parse arm.** Ghost Vacuum's AA[1] recall
+        // effect.
+        //
+        // Two-rider shape:
+        //   * `grant_flying_counter: bool` — OPTIONAL. Defaults to
+        //     `false` on missing key. Captured on round-trip; the
+        //     resolve arm logs-and-continues without applying the
+        //     counter (Phase-N — no `flying_counters` slot in Rust).
+        //   * `grant_subtype_and_pt: (String, i32, i32)` — OPTIONAL.
+        //     Defaults to `None` on missing key. Captured on round-
+        //     trip; the resolve arm logs-and-continues without
+        //     applying the layered grant (Phase-N — no
+        //     `continuous_effects` slot in Rust).
+        //
+        // Mirrors Python's `PutEachCreatureCardExiledWithSourceOntoBattle
+        // fieldUnderYourControl(grant_flying_counter, grant_subtype_
+        // and_pt)` frozen dataclass at `effects/generic/exile.py:994`.
+        // The riders are captured for forward-correctness — a future
+        // Rust slice porting the layered-grant machinery can read the
+        // values without re-parsing. Until then the substrate-only
+        // recall path moves cards exile→bf with the per-zone reset
+        // (mirrors `return_paired_exiles_for` at
+        // `state_ops_resolve.rs:25086`).
+        "put_each_creature_card_exiled_with_source_onto_battlefield_under_your_control" => {
+            let grant_flying_counter: bool =
+                match dict.get_item("grant_flying_counter")? {
+                    Some(v) => v.extract().map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "put_each_creature_card_exiled_with_source_\
+                             onto_battlefield_under_your_control.\
+                             grant_flying_counter must be a bool (got: {e})"
+                        ))
+                    })?,
+                    None => false,
+                };
+            let grant_subtype_and_pt: Option<(String, i32, i32)> =
+                match dict.get_item("grant_subtype_and_pt")? {
+                    Some(v) => {
+                        let tup: (String, i32, i32) = v.extract().map_err(|e| {
+                            PyValueError::new_err(format!(
+                                "put_each_creature_card_exiled_with_source_\
+                                 onto_battlefield_under_your_control.\
+                                 grant_subtype_and_pt must be a (str, int, int) \
+                                 tuple (got: {e})"
+                            ))
+                        })?;
+                        Some(tup)
+                    }
+                    None => None,
+                };
+            Ok(Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl {
+                grant_flying_counter,
+                grant_subtype_and_pt,
             })
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
@@ -20026,6 +20210,52 @@ pub(crate) fn effect_to_pydict<'py>(
                 d.set_item(
                     "description_fragment",
                     description_fragment.as_str(),
+                )?;
+            }
+        }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `ExileTargetCardFromGraveyard.to_pydict`.** Field-free unit-
+        // variant; only `kind` emitted. Mirrors Python's parameterless
+        // `ExileTargetCardFromGraveyard()` frozen dataclass at
+        // `effects/generic/exile.py:289`. Same emit shape as the
+        // sibling Carrier-AA unit-variant effects (`untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards` / `becomes_copy_of_target_land`).
+        // Target rides on the StackItem's
+        // `current_resolve_payload_target_id` slot threaded at
+        // activation time.
+        Effect::ExileTargetCardFromGraveyard => {
+            d.set_item("kind", "exile_target_card_from_graveyard")?;
+        }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+        // Control.to_pydict`.** Ghost Vacuum's AA[1] recall effect.
+        // Emits the dict with empty-omit discipline:
+        //   * `kind: "put_each_creature_card_exiled_with_source_onto_
+        //     battlefield_under_your_control"` (always)
+        //   * `grant_flying_counter: true` (only when non-default)
+        //   * `grant_subtype_and_pt: (str, int, int)` (only when Some)
+        //
+        // Mirrors the `static_self_bonuses[]` codec's emit-only-if-
+        // non-empty discipline + the Python forward arm spec at
+        // `docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md` §5.5.
+        Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl {
+            grant_flying_counter,
+            grant_subtype_and_pt,
+        } => {
+            d.set_item(
+                "kind",
+                "put_each_creature_card_exiled_with_source_onto_battlefield_under_your_control",
+            )?;
+            if *grant_flying_counter {
+                d.set_item("grant_flying_counter", true)?;
+            }
+            if let Some((subtype, p, t)) = grant_subtype_and_pt {
+                d.set_item(
+                    "grant_subtype_and_pt",
+                    (subtype.as_str(), *p, *t),
                 )?;
             }
         }

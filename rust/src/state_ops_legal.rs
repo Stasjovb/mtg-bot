@@ -3722,6 +3722,53 @@ impl GameState {
                     }
                 } else if matches!(
                     ability.effect,
+                    crate::cards::Effect::ExileTargetCardFromGraveyard,
+                ) {
+                    // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-
+                    // 26).** Both-players-graveyard single-target
+                    // fan-out arm per
+                    // ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md``
+                    // §4.2.1 (Ghost Vacuum). Walks BOTH players'
+                    // graveyards for eligible target ids — every
+                    // `GameObject` whose zone is GRAVEYARD on either
+                    // player is a legal target. Mirrors Python's
+                    // ``ExileTargetCardFromGraveyard.legal_targets``
+                    // at ``effects/generic/exile.py:307-317`` where
+                    // the for-comprehension walks every player's
+                    // graveyard.
+                    //
+                    // **Target scope — both players' graveyards.**
+                    // Ghost Vacuum's printed text reads "target card
+                    // from a graveyard" — no controller qualifier;
+                    // either player's graveyard is a legal target
+                    // source. Sibling of the Phase-2a
+                    // ``ReturnTargetLandFromGraveyardToHand`` arm but
+                    // widened to BOTH players + dropping the Land-
+                    // type filter (printed text has no card-type
+                    // filter — any card type is eligible).
+                    //
+                    // **No legal targets → no emission.** A bare
+                    // Ghost Vacuum on a bf with no cards in any
+                    // graveyard emits zero ``ActivateAbility`` dicts
+                    // (CR 601.2c).
+                    //
+                    // **Target dict slot.** Reuses
+                    // ``target_creature_id`` as the generic single-
+                    // target object-id slot — same shape as the
+                    // Phase-2a / Phase-3A / Phase-3C sibling arms.
+                    for player in self.players.iter() {
+                        for target in player.graveyard.iter() {
+                            actions.push(activate_ability_dict(
+                                py,
+                                obj.id,
+                                ability_index as u32,
+                                Some(target.id),
+                                None,
+                            )?);
+                        }
+                    }
+                } else if matches!(
+                    ability.effect,
                     crate::cards::Effect::BecomesCopyOfTargetLand,
                 ) {
                     // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-

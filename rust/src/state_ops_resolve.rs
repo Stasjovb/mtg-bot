@@ -25067,6 +25067,221 @@ fn apply_effect(
                 Arc::make_mut(&mut player.hand).push(obj);
             }
         }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `ExileTargetCardFromGraveyard` resolve.** Ghost Vacuum's AA[0]
+        // pilot effect (`{T}: Exile target card from a graveyard.`).
+        //
+        // **Mirrors Python's `ExileTargetCardFromGraveyard.resolve`**
+        // at `effects/generic/exile.py:319-349`:
+        //   1. Read the target from `current_resolve_payload_target_id`
+        //      (the cast-time-bound target id threaded onto the
+        //      StackItem at activation time). Silent fizzle if unset
+        //      (mirrors Python's `if not targets: return`).
+        //   2. Locate the target across BOTH players' graveyards. Per
+        //      the printed text "target card from a graveyard" the
+        //      target source is graveyard-typed; the printed-text
+        //      ambiguity on the OWNER (either player) is honored by
+        //      walking every player's graveyard.
+        //   3. Move from graveyard to OWNER's exile (the same player
+        //      whose graveyard it sat in — cards stay with their owner
+        //      per CR 400.3). Stamp `obj.zone = ZONE_EXILE` AND
+        //      `obj.exiled_with_source = Some(source.id)` so the
+        //      sibling AA[1] recall effect can find every card the
+        //      same source exiled later.
+        //
+        // **No CR 400.7 per-zone reset of other slots.** Python's
+        // resolve only stamps `card.zone = Zone.EXILE` +
+        // `card.exiled_by_source = source.id` (the linkage stamp;
+        // see `exile.py:344`) and does NOT clear
+        // tapped/damage/counters/etc. — graveyard cards already carry
+        // the zone-default values from their prior transition. The
+        // Rust arm matches byte-equal — only `obj.zone = ZONE_EXILE`
+        // + `obj.exiled_with_source = Some(source.id)` are stamped so
+        // cross-engine fingerprint parity holds.
+        //
+        // **No LEAVES / DIES / ETB dispatch.** Graveyard→exile is not
+        // a bf-leave (the cards are not on the battlefield); no LTB
+        // fires, no DIES fires, no ETB fires. Mirrors Python's resolve
+        // byte-equal.
+        Effect::ExileTargetCardFromGraveyard => {
+            // Step 1: read the cast-time-bound target id. Silent
+            // fizzle if absent (mirrors Python's `if not targets:
+            // return` early return).
+            let Some(target_id) = state.current_resolve_payload_target_id else {
+                return Ok(());
+            };
+            // Step 2: locate target across both players' graveyards.
+            // If not found (target moved between activation and
+            // resolve), silent fizzle.
+            let mut found: Option<(usize, usize)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(gy_idx) = player
+                    .graveyard
+                    .iter()
+                    .position(|o| o.id == target_id)
+                {
+                    found = Some((pidx, gy_idx));
+                    break;
+                }
+            }
+            let Some((owner_pidx, gy_idx)) = found else {
+                return Ok(());
+            };
+            // Step 3: move from owner's graveyard → owner's exile,
+            // stamping the zone + the `exiled_with_source` linkage.
+            // The source id is the AA's source object (the activated
+            // permanent — Ghost Vacuum in this case); we receive it
+            // via the `source_id` arg of `apply_effect`.
+            let mut obj = {
+                let gy_mut = Arc::make_mut(
+                    &mut state.players[owner_pidx].graveyard,
+                );
+                gy_mut.remove(gy_idx)
+            };
+            obj.zone = ZONE_EXILE;
+            obj.exiled_with_source = Some(source_obj_id);
+            Arc::make_mut(&mut state.players[owner_pidx].exile)
+                .push(obj);
+        }
+        // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26) —
+        // `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+        // Control` resolve.** Ghost Vacuum's AA[1] recall effect.
+        //
+        // **Mirrors Python's
+        // `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl.resolve`**
+        // at `effects/generic/exile.py:1038-1101`:
+        //   1. Walk every player's exile zone for objects with
+        //      `obj.exiled_with_source == Some(source_id)` AND
+        //      `registry.lookup(obj.printing_id).card_types.contains
+        //      ("Creature")` (the printed text filters to "each
+        //      creature card").
+        //   2. For each match: remove from owner's exile, stamp
+        //      `obj.zone = ZONE_BATTLEFIELD`, `obj.controller =
+        //      activator`, `obj.tapped = false`,
+        //      `obj.summoning_sick = true`, `obj.exiled_with_source
+        //      = None` (per-zone reset per CR 400.7 + round-28 attach
+        //      foundation pattern from `return_paired_exiles_for`).
+        //   3. Push to activator's battlefield with a fresh
+        //      `etb_timestamp` per the CE4 monotonic block.
+        //   4. Queue ETB dispatch via `pending_etb_dispatches` +
+        //      `drain_pending_etb_dispatches` — same shape as the
+        //      sibling `return_paired_exiles_for` at
+        //      `state_ops_resolve.rs:25086`.
+        //
+        // **Substrate-only riders — `grant_flying_counter` +
+        // `grant_subtype_and_pt`.** Python's resolve overlays a flying
+        // counter + Spirit subtype + base 1/1 P/T on every recalled
+        // creature. Rust has no `flying_counters` slot AND no
+        // `continuous_effects` slot today (Phase-N — layered-grant
+        // machinery hasn't been ported); the riders are captured on
+        // the variant and round-trip through parse/to_pydict but the
+        // resolve arm logs-and-continues without applying them. This
+        // is a documented Phase-N gap captured for the Phase 4C SL
+        // entry — the C3 real-EoE probe will tag the divergence if/
+        // when Ghost Vacuum's recall line goes live.
+        //
+        // **Activator resolution.** Reads
+        // `current_resolve_source_controller` (the per-resolve
+        // transient slot the stack resolver writes around each
+        // `apply_effect` call) with `active_player` fallback — same
+        // pattern as `Effect::DrawCardsByConditionMultiplier` /
+        // `Effect::AddManaToPool`. CR 119.5 / 608.2.
+        Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl {
+            grant_flying_counter: _,
+            grant_subtype_and_pt: _,
+        } => {
+            let activator = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            // Collect (owner_pidx, exile_idx, object id) for every
+            // tagged + creature-typed object across both exile zones.
+            // Built as a Vec to avoid the borrow conflict of mutating
+            // a player's exile while iterating another player's.
+            let mut to_move: Vec<(usize, u32)> = Vec::new();
+            for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.exile.iter() {
+                    if obj.exiled_with_source != Some(source_obj_id) {
+                        continue;
+                    }
+                    let Some(printing) =
+                        state.registry.lookup(obj.printing_id)
+                    else {
+                        continue;
+                    };
+                    if !printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature")
+                    {
+                        continue;
+                    }
+                    to_move.push((pidx, obj.id));
+                }
+            }
+            if to_move.is_empty() {
+                return Ok(());
+            }
+            // Pull each moved object out of its owner's exile, apply
+            // the per-zone reset, and collect into a Vec to push onto
+            // the activator's bf in monotonic timestamp order. Done
+            // per-owner-player so the Arc::make_mut borrow is local.
+            let mut popped: Vec<GameObject> =
+                Vec::with_capacity(to_move.len());
+            for owner_pidx in 0..state.players.len() {
+                let ids_for_owner: Vec<u32> = to_move
+                    .iter()
+                    .filter(|(p, _)| *p == owner_pidx)
+                    .map(|(_, id)| *id)
+                    .collect();
+                if ids_for_owner.is_empty() {
+                    continue;
+                }
+                let exile_mut = Arc::make_mut(
+                    &mut state.players[owner_pidx].exile,
+                );
+                exile_mut.retain(|o| {
+                    if ids_for_owner.contains(&o.id) {
+                        let mut obj = o.clone();
+                        obj.zone = ZONE_BATTLEFIELD;
+                        obj.controller = activator as u8;
+                        obj.tapped = false;
+                        obj.summoning_sick = true;
+                        obj.damage = 0;
+                        obj.counters = 0;
+                        obj.attached_to = None;
+                        obj.original_printing_id = None;
+                        obj.exiled_with_source = None;
+                        popped.push(obj);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+            // Reserve a contiguous block of ETB timestamps so each
+            // recalled permanent gets a strictly-monotonic timestamp
+            // matching the in-loop drain order. Mirrors the CE4
+            // closure shape in `return_paired_exiles_for`.
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state
+                .next_etb_timestamp
+                .saturating_add(popped.len() as u32);
+            let mut entered_ids: Vec<u32> = Vec::with_capacity(popped.len());
+            let bf_mut = Arc::make_mut(
+                &mut state.players[activator].battlefield,
+            );
+            for (i, mut obj) in popped.into_iter().enumerate() {
+                obj.etb_timestamp = bf_etb_base.saturating_add(i as u32);
+                entered_ids.push(obj.id);
+                bf_mut.push(obj);
+            }
+            // Queue ETB dispatch + drain. Re-entrant ETB chains land
+            // correctly via the same deferred-dispatch pattern as
+            // `return_paired_exiles_for`.
+            state.pending_etb_dispatches.extend(entered_ids);
+            drain_pending_etb_dispatches(state)?;
+        }
     }
     Ok(())
 }

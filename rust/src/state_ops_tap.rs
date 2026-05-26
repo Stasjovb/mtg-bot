@@ -220,6 +220,95 @@ impl GameState {
         .unwrap_or(false)
     }
 
+    /// **Carrier-AA Phase 4C Cycle 1 (2026-05-26) — test helper.**
+    /// Force-set the ``exiled_with_source`` slot on the object with
+    /// ``obj_id`` to ``Some(source_id)``. Scans every zone (bf,
+    /// graveyard, exile, hand, library) and returns ``true`` if the
+    /// state changed.
+    ///
+    /// Why this exists: the Phase 4C C1 substrate tests need to seed
+    /// the ``exiled_with_source`` linkage on objects already injected
+    /// into a player's exile zone, simulating a prior resolve of
+    /// Ghost Vacuum's AA[0] without driving the full activate-then-
+    /// resolve pipeline. Mirrors ``force_set_summoning_sick``'s
+    /// test-helper convention — not a production primitive (real
+    /// linkage stamps happen via the
+    /// ``Effect::ExileTargetCardFromGraveyard`` resolve arm at
+    /// ``state_ops_resolve.rs``).
+    ///
+    /// **Scan order: every zone on every player.** The slot lives on
+    /// ``GameObject``, not on a zone-specific table; the helper walks
+    /// every zone slot to find the object. Mirrors the
+    /// ``state_ops_zones.rs::move_object`` per-zone search the
+    /// production move-primitive uses.
+    fn set_exiled_with_source(
+        &mut self, obj_id: u32, source_id: u32,
+    ) -> bool {
+        for player in self.players.iter_mut() {
+            // Battlefield
+            if player.battlefield.iter().any(|o| o.id == obj_id) {
+                let zone = Arc::make_mut(&mut player.battlefield);
+                for obj in zone.iter_mut() {
+                    if obj.id == obj_id {
+                        let changed =
+                            obj.exiled_with_source != Some(source_id);
+                        obj.exiled_with_source = Some(source_id);
+                        return changed;
+                    }
+                }
+            }
+            // Graveyard
+            if player.graveyard.iter().any(|o| o.id == obj_id) {
+                let zone = Arc::make_mut(&mut player.graveyard);
+                for obj in zone.iter_mut() {
+                    if obj.id == obj_id {
+                        let changed =
+                            obj.exiled_with_source != Some(source_id);
+                        obj.exiled_with_source = Some(source_id);
+                        return changed;
+                    }
+                }
+            }
+            // Exile
+            if player.exile.iter().any(|o| o.id == obj_id) {
+                let zone = Arc::make_mut(&mut player.exile);
+                for obj in zone.iter_mut() {
+                    if obj.id == obj_id {
+                        let changed =
+                            obj.exiled_with_source != Some(source_id);
+                        obj.exiled_with_source = Some(source_id);
+                        return changed;
+                    }
+                }
+            }
+            // Hand
+            if player.hand.iter().any(|o| o.id == obj_id) {
+                let zone = Arc::make_mut(&mut player.hand);
+                for obj in zone.iter_mut() {
+                    if obj.id == obj_id {
+                        let changed =
+                            obj.exiled_with_source != Some(source_id);
+                        obj.exiled_with_source = Some(source_id);
+                        return changed;
+                    }
+                }
+            }
+            // Library
+            if player.library.iter().any(|o| o.id == obj_id) {
+                let zone = Arc::make_mut(&mut player.library);
+                for obj in zone.iter_mut() {
+                    if obj.id == obj_id {
+                        let changed =
+                            obj.exiled_with_source != Some(source_id);
+                        obj.exiled_with_source = Some(source_id);
+                        return changed;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Read the `charge_counters` slot on a battlefield permanent.
     /// Returns `None` if the object isn't on any battlefield. Pairs
     /// with `set_charge_counters` for test assertions.

@@ -170,6 +170,26 @@ fn object_to_pydict<'py>(
         Some(pid) => d.set_item("original_printing_id", pid)?,
         None => d.set_item("original_printing_id", py.None())?,
     }
+    // **Carrier-AA Phase 4C Cycle 1 (2026-05-26) — Ghost Vacuum
+    // substrate landing — `exiled_with_source` slot surface.** The
+    // slot itself has been on every `GameObject` since round-28
+    // attach foundation (`state.rs:122`), but it was previously
+    // unsurfaced in the snapshot — the Phase 4C C1 resolve arms for
+    // `Effect::ExileTargetCardFromGraveyard` (producer) +
+    // `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnder
+    // YourControl` (consumer) need the slot observable for
+    // substrate-test verification + cross-engine parity. Pre-substrate
+    // snapshots observe `None` on every object (back-compat default
+    // — unchanged from the pre-substrate dict), so the new key is
+    // additive but the value is invariant on snapshots that don't
+    // exercise an exile-with-source linkage.
+    //
+    // Emitted as Python `None` when no linkage is active, or as the
+    // exiling source's object id when set.
+    match obj.exiled_with_source {
+        Some(sid) => d.set_item("exiled_with_source", sid)?,
+        None => d.set_item("exiled_with_source", py.None())?,
+    }
     Ok(d)
 }
 

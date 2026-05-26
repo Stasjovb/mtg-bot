@@ -13046,6 +13046,117 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # subclasses. This class has no subclasses in the live tree.
         from mtg_bot.effects.generic.exile import ExileAllGraveyards
         return ExileAllGraveyards()
+    if kind == "exile_target_card_from_graveyard":
+        # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).** Bridge
+        # arm for the new Rust ``Effect::ExileTargetCardFromGraveyard``
+        # variant (cards.rs). Mirrors Python's parameterless
+        # ``ExileTargetCardFromGraveyard`` frozen dataclass at
+        # ``effects/generic/exile.py:289`` — Ghost Vacuum's AA[0] pilot
+        # effect (``{T}: Exile target card from a graveyard.``). Unit
+        # variant — no fields beyond ``kind``. Same shape as the Phase-
+        # 2a/2b/3A/3B/3C unit-variant siblings ``untap_target_land`` /
+        # ``return_target_land_from_graveyard_to_hand`` /
+        # ``put_basic_land_from_hand_onto_battlefield_tapped`` /
+        # ``exile_target_attacking_creature_until_end_step`` /
+        # ``exile_all_graveyards`` / ``becomes_copy_of_target_land``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY (Rust slice).** Phase 4C Cycle 1
+        # keeps Ghost Vacuum DECLINED at the production-deck loader;
+        # the Effect-class admit-set widen
+        # (``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect AND the sibling
+        # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+        # Control``) AND the AA-rider gate widen for
+        # ``sorcery_speed=True`` (AA[1]'s rider) both ship C2. This
+        # bridge arm is byte-equal for both the substrate-only and the
+        # post-C2 flipped outcomes — synthetic round-trip tests drive
+        # it at C1; the live admit gate FLIPs at C2.
+        #
+        # **Target rides on action-dict slot.** Single-target effect
+        # — the chosen graveyard-card id rides on the action-dict's
+        # ``target_creature_id`` slot at activation time, NOT the
+        # effect dict. Same shape as the Phase-2a / Phase-3A /
+        # Phase-3C target-bearing siblings.
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` uses the SPECIFIC class
+        # ``ExileTargetCardFromGraveyard`` — NOT any parent ``Effect``
+        # class — to avoid silently widening admission to other
+        # ``Effect`` subclasses. The class has no subclasses in the
+        # live tree.
+        from mtg_bot.effects.generic.exile import (
+            ExileTargetCardFromGraveyard,
+        )
+        return ExileTargetCardFromGraveyard()
+    if kind == (
+        "put_each_creature_card_exiled_with_source_"
+        "onto_battlefield_under_your_control"
+    ):
+        # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).** Bridge
+        # arm for the new Rust
+        # ``Effect::PutEachCreatureCardExiledWithSourceOntoBattlefield
+        # UnderYourControl`` variant (cards.rs). Mirrors Python's
+        # ``PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYour
+        # Control(grant_flying_counter, grant_subtype_and_pt)``
+        # frozen dataclass at ``effects/generic/exile.py:994`` —
+        # Ghost Vacuum's AA[1] recall effect (``{6}, {T}, Sacrifice
+        # this artifact: Put each creature card exiled with this
+        # artifact onto the battlefield under your control with a
+        # flying counter on it. Each of them is a 1/1 Spirit in
+        # addition to its other types.``).
+        #
+        # Two-rider shape:
+        #   * ``grant_flying_counter: bool`` — OPTIONAL. Defaults to
+        #     ``False`` on missing key.
+        #   * ``grant_subtype_and_pt: (str, int, int)`` — OPTIONAL.
+        #     Defaults to ``None`` on missing key.
+        #
+        # **Substrate-only riders.** Rust has no
+        # ``flying_counters`` slot AND no ``continuous_effects`` slot
+        # today; the Rust resolve arm captures the rider values on
+        # the variant + round-trips them through parse/to_pydict but
+        # the actual flying-counter / Spirit-overlay grants are
+        # Phase-N. The Python ``resolve`` (when invoked via the
+        # Python engine, not the Rust path) applies the riders
+        # normally. Bridge consumers (the Carrier-AA substrate)
+        # never run Ghost Vacuum's AA[1] resolve through the Rust
+        # path post-C2 unless the layered-grant machinery lands; for
+        # now the bridge round-trip is purely for the AA-dict
+        # admit-gate flow.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY (Rust slice).** Phase 4C Cycle 1
+        # keeps Ghost Vacuum DECLINED at the production-deck loader.
+        # Both the Effect-class admit-set widen and the sorcery_speed
+        # AA-rider widen ship C2.
+        #
+        # **No target.** The effect is a zero-target mass effect —
+        # the source itself drives enumeration via the
+        # ``exiled_with_source`` linkage.
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` uses the SPECIFIC class — NOT
+        # any parent ``Effect`` class — to avoid silently widening
+        # admission to other ``Effect`` subclasses. The class has no
+        # subclasses in the live tree.
+        from mtg_bot.effects.generic.exile import (
+            PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+        )
+        grant_flying_counter = bool(eff_dict.get(
+            "grant_flying_counter", False,
+        ))
+        grant_subtype_and_pt = None
+        if "grant_subtype_and_pt" in eff_dict:
+            sub_payload = eff_dict["grant_subtype_and_pt"]
+            # Accept either tuple or list (Rust to_pydict emits
+            # a Python tuple, but for forward-correctness through
+            # any future serializer that round-trips through JSON
+            # the bridge tolerates lists too).
+            sub, p, t = sub_payload
+            grant_subtype_and_pt = (str(sub), int(p), int(t))
+        return PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl(
+            grant_flying_counter=grant_flying_counter,
+            grant_subtype_and_pt=grant_subtype_and_pt,
+        )
     if kind == "draw_cards_by_condition_multiplier":
         # **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Bridge
         # arm for the new Rust ``Effect::DrawCardsByConditionMultiplier``
@@ -14902,6 +15013,8 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.exile import (
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
+        ExileTargetCardFromGraveyard,
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
     # **Phase 3C C2 widen (2026-05-26).** Add
     # ``BecomesCopyOfTargetLand`` (Thespian's Stage's pilot Effect —
@@ -15049,6 +15162,77 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # subclasses (consistent with the Phase-3A / 3B specificity
         # contract).
         effect_dict = {"kind": "becomes_copy_of_target_land"}
+    elif isinstance(effect, ExileTargetCardFromGraveyard):
+        # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).**
+        # Forward-emit arm for Ghost Vacuum's AA[0] pilot effect
+        # (``{T}: Exile target card from a graveyard.``). Unit variant
+        # — only the ``kind`` discriminator on the wire. Target rides
+        # on the action-dict's ``target_creature_id`` slot at
+        # activation time (the generic single-target object-id slot,
+        # reused for the Phase-2a / Phase-3A / Phase-3C / Phase-4C
+        # target-bearing siblings).
+        #
+        # **Substrate-only: Ghost Vacuum STAYS DECLINED at admit
+        # gate post-Phase-4C-C1.** The forward emit succeeds (Rust
+        # round-trip works), but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live
+        # Ghost Vacuum printing because (a) C1 doesn't widen
+        # ``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect class AND (b) C1 doesn't widen the AA-rider gate to
+        # admit AA[1]'s ``sorcery_speed=True`` rider — both ship C2.
+        # The forward arm exists at C1 so unit-test pins can drive
+        # the Rust round-trip.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``ExileTargetCardFromGraveyard`` — NOT any parent ``Effect``
+        # class — to avoid silently widening admission to other
+        # ``Effect`` subclasses (consistent with the Phase-3A / 3B /
+        # 3C specificity contract). The class has no subclasses in
+        # the live tree.
+        effect_dict = {"kind": "exile_target_card_from_graveyard"}
+    elif isinstance(
+        effect,
+        PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
+    ):
+        # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).**
+        # Forward-emit arm for Ghost Vacuum's AA[1] recall effect
+        # (``{6}, {T}, Sacrifice this artifact: Put each creature
+        # card exiled with this artifact onto the battlefield under
+        # your control with a flying counter on it. Each of them is
+        # a 1/1 Spirit in addition to its other types.``).
+        #
+        # Two-rider shape:
+        #   * ``grant_flying_counter: bool`` — EMITTED ONLY when
+        #     ``True`` (empty-omit discipline mirrors the
+        #     ``static_self_bonuses[]`` codec's emit-only-if-non-empty
+        #     pattern + the Rust to_pydict arm).
+        #   * ``grant_subtype_and_pt: (str, int, int)`` — EMITTED ONLY
+        #     when not None.
+        #
+        # **Zero-target mass effect.** No target field on the dict
+        # — the source itself drives enumeration via the
+        # ``exiled_with_source`` linkage stamped by the sibling
+        # AA[0] (``ExileTargetCardFromGraveyard``) at resolve time.
+        #
+        # **Substrate-only: Ghost Vacuum STAYS DECLINED at admit
+        # gate post-Phase-4C-C1.** Same C1/C2 separation as the
+        # sibling ``ExileTargetCardFromGraveyard`` forward arm above.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class — NOT
+        # any parent ``Effect`` class — to avoid silently widening
+        # admission. The class has no subclasses in the live tree.
+        effect_dict = {
+            "kind":
+                "put_each_creature_card_exiled_with_source_"
+                "onto_battlefield_under_your_control",
+        }
+        if effect.grant_flying_counter:
+            effect_dict["grant_flying_counter"] = True
+        if effect.grant_subtype_and_pt is not None:
+            sub, p, t = effect.grant_subtype_and_pt
+            effect_dict["grant_subtype_and_pt"] = [
+                str(sub), int(p), int(t),
+            ]
     elif isinstance(effect, DrawCardsByConditionMultiplier):
         # **Carrier-AA substrate Phase 4E Cycle 1 (2026-05-26).** Forward-
         # emit arm for All-Fates Scroll's AA[1] pilot effect (``{7}, {T},

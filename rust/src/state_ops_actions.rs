@@ -1028,6 +1028,23 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::BecomesCopyOfTargetLand,
                 );
+                // **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).**
+                // Recognize ``Effect::ExileTargetCardFromGraveyard`` as
+                // a FIFTH target-shape on the ``target_creature_id``
+                // slot — when an AA's effect is this variant (Ghost
+                // Vacuum's AA[0] pilot), the ``target_creature_id``
+                // slot acts as the chosen graveyard-card id (either
+                // player's graveyard). Validation walks BOTH players'
+                // graveyards for the target id. The legal-emit fan-
+                // out arm at
+                // ``state_ops_legal.rs::legal_decisions`` walks both
+                // graveyards and emits one ``ActivateAbility`` per
+                // eligible target with ``target_creature_id =
+                // Some(card_id)``.
+                let is_exile_target_card_from_gy_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::ExileTargetCardFromGraveyard,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1213,6 +1230,59 @@ impl GameState {
                                          copy-Land target (must be a Land on \
                                          a battlefield; CR 109.3 / 613 — \
                                          Thespian's Stage targets ANY Land)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
+                    } else if is_exile_target_card_from_gy_effect {
+                        // **Carrier-AA substrate Phase 4C Cycle 1
+                        // (2026-05-26).** Graveyard-card target
+                        // validation for Ghost Vacuum's AA[0]. The
+                        // legal-emit fan-out arm in
+                        // `state_ops_legal.rs::legal_decisions` walks
+                        // BOTH players' graveyards (no card-type
+                        // filter, no controller restriction — the
+                        // printed text reads "target card from a
+                        // graveyard"). The validator here re-checks
+                        // the chosen target against graveyard-
+                        // presence on EITHER player.
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) is silent
+                        // fizzle, matching Python's
+                        // `ExileTargetCardFromGraveyard.resolve` at
+                        // `exile.py:325-326`'s `if not targets:
+                        // return` early-return.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                // Must be on SOME player's graveyard.
+                                // No card-type filter — printed text
+                                // accepts any card type.
+                                let target_legal: bool = {
+                                    let mut ok = false;
+                                    for player in state.players.iter() {
+                                        if player
+                                            .graveyard
+                                            .iter()
+                                            .any(|o| o.id == target_id)
+                                        {
+                                            ok = true;
+                                            break;
+                                        }
+                                    }
+                                    ok
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         graveyard-card target (must be a \
+                                         card in SOME player's graveyard; \
+                                         Ghost Vacuum's AA[0] targets \
+                                         either player's graveyard)"
                                     )));
                                 }
                                 Some(target_id)
