@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **427 / 475 EoE cards (89.9%) are byte-equal at the Effect+bridge level**; of those, **387 (81.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 40 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **427 / 475 EoE cards (89.9%) are byte-equal at the Effect+bridge level**; of those, **388 (81.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 39 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **48 (10.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 387 | 81.5% |
-| Effect+bridge covered (not individually probed) | 40 | 8.4% |
+| PROBED byte-equal | 388 | 81.7% |
+| Effect+bridge covered (not individually probed) | 39 | 8.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -266,6 +266,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Murky Sewer
 - Mutavault
 - Mutinous Massacre
+- Mystifying Maze
 - Nanoform Sentinel
 - Nebula Dragon
 - Neglected Manor

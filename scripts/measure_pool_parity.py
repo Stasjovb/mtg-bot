@@ -2620,6 +2620,67 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``ExileAllGraveyards`` + ``sacrifice_a_desert`` (Scavenger
     # Grounds).
     REPO_ROOT / "tests" / "test_terrain_generator_parity.py",
+    # Phase 3A Cycle 3 (2026-05-25 — Mystifying Maze per-card real-EoE
+    # byte-equal probe; closes Phase 3A per
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §7.1). The
+    # Phase-3A C1 substrate (commit ``3de469a3``) landed the two new
+    # Rust ``Effect`` variants ``ExileTargetAttackingCreatureUntilEnd
+    # Step`` + ``ReturnExiledPermanentToOwnerTapped`` (delayed-trigger
+    # PRODUCER + paired return-tapped arm) plus the attacking-creature
+    # target fan-out + the 4 bridge arms. Phase 3A Cycle 2 (commit
+    # ``d1fd2037``) widened ``_carrier_aa_phase_1_effect_classes`` to
+    # include ``ExileTargetAttackingCreatureUntilEndStep`` — Mystifying
+    # Maze's live AA shape is ``{4}, {T}`` (Phase-1.5a cost-gate
+    # already wired), so the admit-gate FLIPped DECLINED → ADMITTED on
+    # the C2 widen alone (covered_by_construction tier). C3 — THIS
+    # registration — closes the tier flip to PROBED by attaching the
+    # per-card cross-engine probe.
+    #
+    #   * ``test_mystifying_maze_parity.py`` — Mystifying Maze ({0}
+    #     Land); single non-mana AA (``{4}, {T}: Exile target attacking
+    #     creature an opponent controls. At the beginning of the next
+    #     end step, that player returns it to the battlefield under
+    #     its owner's control tapped.``) →
+    #     ``ExileTargetAttackingCreatureUntilEndStep()`` (unit-variant
+    #     Effect, zero-arg frozen dataclass; requires_target=True +
+    #     legal_targets walks state.battlefield for opponent-controlled
+    #     attacking creatures). The FIRST PROBE_MODULES-credited probe
+    #     of BOTH the ``ExileTargetAttackingCreatureUntilEndStep`` AND
+    #     the paired ``ReturnExiledPermanentToOwnerTapped`` Effect
+    #     classes on a real-EoE Land + AA carrier; templates on the
+    #     sibling Carrier-AA AA probes (parse + bridge round-trip +
+    #     paired-arm bridge round-trip + Rust synthetic acceptance +
+    #     end-to-end loader admit + Python-side resolve smoke covering
+    #     both the baseline no-attacker silent-fizzle line and the
+    #     LOAD-BEARING full end-to-end exile-then-return-tapped-on-EoT
+    #     chain through state.delayed_triggers +
+    #     run_delayed_end_step_triggers +
+    #     ReturnExiledPermanentToOwnerTapped resolve →
+    #     put_into_battlefield + tapped — the genuine real-EoE delayed-
+    #     trigger observable Rust's paired arms also produce). The
+    #     end-to-end exile-then-return chain is the structural extra
+    #     mile over the simpler ``Terrain Generator`` / ``Petrified
+    #     Field`` single-resolve probes — the C3 probe walks the
+    #     delayed-trigger PRODUCER through ``run_delayed_end_step_
+    #     triggers`` (turn.py:773) and a stack-resolved
+    #     ``ReturnExiledPermanentToOwnerTapped`` in lockstep.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 25 → 24 cards. Sibling-candidate cards
+    # (Thespian's Stage, Scavenger Grounds) stay honestly DECLINED at
+    # the Phase-3A Effect-class admit set — the no-silent-auto-grow
+    # walk pin ``test_carrier_aa_30_no_silent_auto_grow_admit_set_
+    # swarmyard_plus_deserted_temple_plus_petrified_field_plus_
+    # terrain_generator_plus_mystifying_maze`` in
+    # ``test_carrier_aa_phase_1_substrate_cycle_2.py`` codifies the
+    # exact +5 admit set (Swarmyard + Deserted Temple + Petrified
+    # Field + Terrain Generator + Mystifying Maze). Phase 3B ships
+    # ``ExileAllGraveyards`` + ``sacrifice_a_desert`` (Scavenger
+    # Grounds — next dispatch); Phase 3C ships ``BecomesCopyOfTarget
+    # Land`` (Thespian's Stage — heaviest sub-phase, ~5 cycles, new
+    # GameObject.original_printing_id field for the CR-613 layer-1
+    # copy substrate).
+    REPO_ROOT / "tests" / "test_mystifying_maze_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
