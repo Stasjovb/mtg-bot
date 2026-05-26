@@ -6747,6 +6747,277 @@ fn apply_effect(
                 )?;
             }
         }
+        // **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Larval
+        // Scoutlander's ETB ramp Effect — resolve arm for the new
+        // `Effect::OptionalSacLandOrLanderForBasicLandRamp { land_count }`
+        // variant. Mirrors Python's
+        // `OptionalSacLandOrLanderForBasicLandRamp.resolve` at
+        // `effects/combinators.py:713`.
+        //
+        // **Composite resolve.** This arm composes (a) Phase-2b's
+        // `Optional*` decision-point dispatch pattern, (b) the
+        // `Effect::Sacrifice` battlefield→graveyard primitive, and (c)
+        // the `Effect::SearchLibraryForBasicLandTapped` `land_count`-fold
+        // deterministic-first-match + post-search shuffle. Per design
+        // doc §4.2.
+        //
+        // **Resolve dispatch (sibling of EachOpponentDiscards / Search /
+        // Sacrifice arms):**
+        //   1. Source-controller resolution: prefer
+        //      `state.current_resolve_source_controller` (set by the
+        //      stack resolver), fall back to `state.active_player` for
+        //      back-compat with direct `apply_effect_pub` callers (I69
+        //      pattern).
+        //   2. Optional decision point: scan source-controller's
+        //      battlefield for eligible Land-or-Lander permanents. If
+        //      NO eligible target exists, silent no-op (Python parity
+        //      with `if not options: return`). When an eligible target
+        //      exists, the no-agent default-yes deterministic first-
+        //      slice convention (mirrors round-20's
+        //      `OptionalSacArtifactForEffect` / Phase-2b's
+        //      `PutBasicLandFromHandOntoBattlefieldTapped` decision-
+        //      point default-yes path).
+        //   3. Target pick: smallest-index eligible permanent in the
+        //      source-controller's battlefield. Real MTG lets the
+        //      controller choose; deferred until decision callbacks
+        //      exist (sibling of `Effect::Sacrifice`'s `bf[0]`
+        //      convention).
+        //   4. Sacrifice the target: pop from source-controller's
+        //      battlefield, stamp graveyard zone + CR-400.7 zone-change
+        //      reset (preserving +1/+1 counters per R77-CFI1), push
+        //      onto source-controller's graveyard, queue LEAVES + IS_
+        //      SACRIFICED dispatches.
+        //   5. Search the library for up to `land_count` basic Land
+        //      cards, put each onto the battlefield tapped (sibling of
+        //      `Effect::SearchLibraryForBasicLandTapped` resolve site;
+        //      loop `land_count` times). Each entered land queues
+        //      `Event::Enters` via `pending_etb_dispatches`.
+        //   6. Shuffle the library (CR 701.19 / 701.22 — always shuffle
+        //      after a search), using `state.rng` if installed,
+        //      xorshift64 fallback otherwise. Sibling of the post-search
+        //      shuffle block in `Effect::SearchLibraryForBasicLand
+        //      Tapped`.
+        //
+        // **Eligibility predicate.** A target permanent is eligible
+        // iff:
+        //   - It is on `source_controller.battlefield`.
+        //   - Its printing carries `Land` in `card_types` OR `Lander` in
+        //     `subtypes` (mirror of Python's `o.printing.is_land or
+        //     "Lander" in effective_subtypes(...)`). Rust has no
+        //     `effective_subtypes` substrate today — read the printing's
+        //     `subtypes` directly.
+        //
+        // **land_count<0 raises** (defense-in-depth; `parse_effect`
+        // catches at register time). **land_count=0** the conservative
+        // interpretation is to silent no-op (no sacrifice, no search):
+        // the OUTER decision asks whether to sacrifice for a benefit
+        // that is zero-iteration, so the "yes" path is semantically a
+        // sacrifice-for-nothing — mirror Python's compositional shape
+        // by treating it as the "decline" path. Larval Scoutlander
+        // prints `land_count=2`; the zero case is defense-in-depth.
+        //
+        // **Substrate-only landing (Phase 3A Cycle 1).** Larval
+        // Scoutlander STAYS DECLINED at the production-deck loader
+        // filter post-Cycle-1. Cycle 2 ships the Python admit predicate
+        // widen + the Larval Scoutlander FLIP per design doc §7.1.
+        Effect::OptionalSacLandOrLanderForBasicLandRamp { land_count } => {
+            if *land_count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "OptionalSacLandOrLanderForBasicLandRamp land_count must be non-negative, got {land_count}"
+                )));
+            }
+            if *land_count == 0 {
+                // Conservative no-op: a zero-iteration search after a
+                // sacrifice is semantically a sacrifice-for-nothing,
+                // mirroring Python's compositional "decline" path.
+                return Ok(());
+            }
+            // Source-controller resolution: I69 pattern (mirrors
+            // EachOpponentDiscards / SearchLibraryForBasicLandTapped /
+            // Sacrifice arms).
+            let controller_idx = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let controller_u8 = controller_idx as u8;
+            // Eligibility scan: find the first eligible Land-or-Lander
+            // on the controller's battlefield. Mirror of Python's
+            // `options = [o for o in state.battlefield
+            //              if o.controller_id == controller_id
+            //              and (o.printing.is_land
+            //                   or "Lander" in effective_subtypes(...))]`
+            // at effects/combinators.py:720-727. The first-slice
+            // deterministic pick is `options[0]` (smallest-bf-index);
+            // real MTG lets the controller choose, deferred until
+            // decision callbacks exist (sibling of Effect::Sacrifice's
+            // bf[0] convention).
+            let target_id: Option<u32> = {
+                let bf = &state.players[controller_idx].battlefield;
+                let mut found: Option<u32> = None;
+                for obj in bf.iter() {
+                    let printing = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let is_land =
+                        printing.card_types.iter().any(|t| t == "Land");
+                    let is_lander =
+                        printing.subtypes.iter().any(|s| s == "Lander");
+                    if is_land || is_lander {
+                        found = Some(obj.id);
+                        break;
+                    }
+                }
+                found
+            };
+            let target_id = match target_id {
+                Some(id) => id,
+                None => return Ok(()), // no eligible target: silent no-op
+            };
+            // Step 1: Sacrifice the target. Sibling of `Effect::
+            // Sacrifice { AnyCreature }` resolve site at
+            // state_ops_resolve.rs:2975-3087 — same Arc::make_mut +
+            // pop-from-bf + push-to-graveyard + CR-400.7 reset (preserve
+            // counters per R77-CFI1) + queue LEAVES + IS_SACRIFICED
+            // dispatches + Void LTB tracking + token-cease.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].battlefield);
+            let pos = match bf_mut.iter().position(|o| o.id == target_id) {
+                Some(p) => p,
+                None => return Ok(()), // race-protected: vanished mid-resolve
+            };
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_GRAVEYARD;
+            obj.tapped = false;
+            // CR 302.1: summoning_sick is NOT cleared on bf-exit (CE13
+            // closure; sibling of Effect::Sacrifice).
+            obj.damage = 0;
+            // R77-CFI1: counters NOT cleared on the sacrificed object
+            // (sibling of Effect::Sacrifice / SBA destroy).
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            let (sacrificed_printing_id, sacrificed_obj_id) =
+                (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[controller_idx].graveyard)
+                .push(obj);
+            // Round-29 Void LTB tracking (sibling of Effect::Sacrifice).
+            mark_left_battlefield_if_nonland(state, sacrificed_printing_id);
+            // LEAVES + IS_SACRIFICED + token-cease queue (sibling of
+            // Effect::Sacrifice).
+            state
+                .pending_leaves_dispatches
+                .push(sacrificed_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, sacrificed_obj_id);
+            state
+                .pending_is_sacrificed_dispatches
+                .push(sacrificed_obj_id);
+            // Step 2: Search the library for up to `land_count` basic
+            // Land cards, put each onto the battlefield tapped. Sibling
+            // of the `Effect::SearchLibraryForBasicLandTapped` resolve
+            // site at state_ops_resolve.rs:4471-4583 — same
+            // deterministic top-to-bottom first-match + basic-land
+            // predicate (card_types Land AND supertypes Basic) +
+            // reserve_etb_timestamp + push-to-bf-tapped + queue
+            // ENTERS dispatch via pending_etb_dispatches.
+            let n = *land_count as usize;
+            let mut entered_ids: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let pos: Option<usize> = {
+                    let lib = &state.players[controller_idx].library;
+                    let mut found: Option<usize> = None;
+                    for (i, obj) in lib.iter().enumerate() {
+                        let printing = match state.registry.lookup(obj.printing_id) {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if printing.card_types.iter().any(|t| t == "Land")
+                            && printing.supertypes.iter().any(|s| s == "Basic")
+                        {
+                            found = Some(i);
+                            break;
+                        }
+                    }
+                    found
+                };
+                let p = match pos {
+                    Some(p) => p,
+                    None => break, // no more basic lands — stop early silently
+                };
+                let etb_ts = crate::state::reserve_etb_timestamp(state);
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut obj = lib.remove(p);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                obj.summoning_sick = false;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                entered_ids.push(obj.id);
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            // Step 3: Post-search shuffle. CR 701.19 + 701.22 — always
+            // shuffle after a search regardless of outcome. Mirror the
+            // SearchLibraryForBasicLandTapped post-search shuffle block
+            // verbatim: use external rng if installed
+            // (`state.rng_ref()`), xorshift64 fallback otherwise. Seed
+            // mixes (turn / active_player / source_obj_id / lib_len)
+            // for determinism.
+            let lib_len = state.players[controller_idx].library.len();
+            if lib_len >= 2 {
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            lib.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (lib_len as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
+                    }
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    let mut x = seed;
+                    for i in (1..n).rev() {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        lib.swap(i, j);
+                    }
+                }
+            }
+            // Queue ENTERS dispatches for each entered basic land
+            // (sibling of SearchLibraryForBasicLandTapped's tail).
+            state.pending_etb_dispatches.extend(entered_ids);
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.

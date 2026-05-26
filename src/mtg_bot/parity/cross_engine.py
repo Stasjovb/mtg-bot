@@ -1654,6 +1654,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return EachOpponentDiscards(
             count=eff_dict.get("count", 1),
         )
+    if kind == "optional_sac_land_or_lander_for_basic_land_ramp":
+        # **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Bridge arm for
+        # the new Rust ``Effect::OptionalSacLandOrLanderForBasicLandRamp
+        # { land_count: i32 }`` variant (cards.rs). Mirrors Python's
+        # ``OptionalSacLandOrLanderForBasicLandRamp(land_count: int = 2)``
+        # frozen dataclass at ``effects/combinators.py:699`` — Larval
+        # Scoutlander's ETB ramp effect ("You may sacrifice a land or
+        # Lander. If you do, search your library for up to ``land_count``
+        # basic land cards, put them onto the battlefield tapped, then
+        # shuffle.").
+        #
+        # **Field shape (no rename).** Single ``land_count: int`` field
+        # with default 2 (Larval Scoutlander's printed value); IDENTICAL
+        # spelling on both engines (no ``amount``/``count`` discrepancy
+        # like the search/discard arms). Mirror Rust's parse_effect
+        # contract: missing ``land_count`` defaults to 2; negative
+        # raises (defense-in-depth on the Python side too).
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 3A Cycle 1 keeps Larval
+        # Scoutlander DECLINED at the production-deck loader; the new
+        # ``_printing_is_bridge_phase_3_trigger_spacecraft`` admit
+        # predicate (which extends to admit the
+        # OptionalSacLandOrLanderForBasicLandRamp Effect class) ships
+        # Cycle 2. This bridge arm is byte-equal for both the substrate-
+        # only and post-C2 flipped outcomes.
+        from mtg_bot.effects.combinators import (
+            OptionalSacLandOrLanderForBasicLandRamp,
+        )
+        land_count = int(eff_dict.get("land_count", 2))
+        if land_count < 0:
+            raise ValueError(
+                "optional_sac_land_or_lander_for_basic_land_ramp bridge "
+                f"arm: land_count must be non-negative, got {land_count} "
+                "(mirrors Rust parse_effect contract)"
+            )
+        return OptionalSacLandOrLanderForBasicLandRamp(
+            land_count=land_count,
+        )
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the

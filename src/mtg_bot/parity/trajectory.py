@@ -3593,6 +3593,22 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         Sequence,
     )
     from mtg_bot.effects.generic.zone_moves import ShuffleZonesIntoLibrary
+    # **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Reverse-serializer
+    # leaf import for ``OptionalSacLandOrLanderForBasicLandRamp`` — the
+    # Larval Scoutlander ETB ramp Effect (
+    # ``effects/combinators.py:699``). Substrate-only landing — the
+    # arm below recognizes the Effect class and constructs the round-
+    # trip dict, but the kind string is NOT in any (event, predicate)
+    # ``safe_effect_kinds`` set yet, so the ``eff_kind not in
+    # safe_effect_kinds`` gate below the dispatch cascade returns None
+    # and Larval Scoutlander STAYS DECLINED at the
+    # ``_python_ta_to_safe_dict`` gate post-Cycle-1. Cycle 2 ships the
+    # Phase-3 admit predicate (which uses its own dispatch separate
+    # from ``_python_ta_to_safe_dict`` per design doc §5.3) + the FLIP.
+    # Import kept narrow per the established convention.
+    from mtg_bot.effects.combinators import (
+        OptionalSacLandOrLanderForBasicLandRamp,
+    )
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -4490,6 +4506,38 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
                     {"kind": "draw_cards", "count": 7},
                 ],
             },
+        }
+    elif isinstance(eff, OptionalSacLandOrLanderForBasicLandRamp):
+        # **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Reverse-
+        # serializer arm for Larval Scoutlander's ETB ramp Effect
+        # ``OptionalSacLandOrLanderForBasicLandRamp(land_count: int =
+        # 2)`` (``effects/combinators.py:699``). Round-trip pair with
+        # the Rust ``Effect::OptionalSacLandOrLanderForBasicLandRamp
+        # { land_count: i32 }`` to_pydict + parse arms (cards.rs) and
+        # the cross_engine.py ``_ta_dict_to_python_effect`` bridge arm
+        # (added in C1). Single ``land_count`` field — IDENTICAL field
+        # spelling on both engines (no ``amount``/``count`` discrepancy
+        # like the search/discard arms); the dict round-trip preserves
+        # the int verbatim.
+        #
+        # **Substrate-only — Larval Scoutlander STAYS DECLINED at this
+        # gate post-Cycle-1.** The kind string
+        # ``optional_sac_land_or_lander_for_basic_land_ramp`` is
+        # intentionally NOT added to any (event, predicate)
+        # ``safe_effect_kinds`` set this cycle; the ``eff_kind not in
+        # safe_effect_kinds`` gate below this dispatch cascade returns
+        # None, so :func:`_python_ta_to_safe_dict` declines Larval
+        # Scoutlander even with the recognition arm in place. The
+        # round-trip dict construction is pre-positioned for Cycle 2
+        # (which ships the new Phase-3 admit predicate
+        # ``_printing_is_bridge_phase_3_trigger_spacecraft`` per design
+        # doc §5.3 — a SEPARATE dispatch path from
+        # ``_python_ta_to_safe_dict``; this leaf is the dict-emit
+        # primitive both paths can consume).
+        eff_kind = "optional_sac_land_or_lander_for_basic_land_ramp"
+        eff_dict = {
+            "kind": "optional_sac_land_or_lander_for_basic_land_ramp",
+            "land_count": int(eff.land_count),
         }
     else:
         return None

@@ -1187,6 +1187,68 @@ pub enum Effect {
     /// (mirrors GainLife / LoseLife / TargetOpponentLosesLife
     /// zero-amount conventions).
     TargetPlayerLosesLife { amount: i32 },
+    /// **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Larval Scoutlander's
+    /// ETB ramp effect: "You may sacrifice a land or Lander. If you do,
+    /// search your library for up to `land_count` basic land cards, put
+    /// them onto the battlefield tapped, then shuffle." Mirrors Python's
+    /// `OptionalSacLandOrLanderForBasicLandRamp(land_count: int = 2)`
+    /// at `effects/combinators.py:699`.
+    ///
+    /// **Single carrier today.** Larval Scoutlander is the only EoE
+    /// printing carrying this Effect class (`land_count=2`); the variant
+    /// carries the count as an i32 field to mirror the Python dataclass
+    /// shape exactly (`land_count: int = 2`).
+    ///
+    /// **Compositional shape.** The resolve arm is the composite of
+    /// (a) Phase-2b's `OptionalSac*` decision-point dispatch pattern,
+    /// (b) `Effect::Sacrifice` (battlefield → graveyard, LEAVES + IS_
+    /// SACRIFICED dispatches), and (c) `Effect::SearchLibraryForBasic
+    /// LandTapped` (the `land_count`-fold deterministic-first-match +
+    /// post-search Fisher-Yates shuffle). Per design doc
+    /// `docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md` §4.2.
+    ///
+    /// **First-slice deterministic decision points:**
+    /// 1. The optional "may sacrifice" decision: take the first eligible
+    ///    Land-or-Lander you control (mirrors the no-agent-default-yes
+    ///    convention every other `Optional*` arm uses — Phase-2b's
+    ///    `PutBasicLandFromHandOntoBattlefieldTapped`, the round-20
+    ///    `OptionalSacArtifactForEffect`). When NO eligible target
+    ///    exists, the silent no-fire path runs (per Python's
+    ///    `if not options: return`).
+    /// 2. The target pick: the topmost (smallest-index) eligible
+    ///    permanent in the source-controller's battlefield. Real MTG
+    ///    lets the controller choose; deferred until decision callbacks
+    ///    exist (sibling of `Effect::Sacrifice`'s `bf[0]` convention).
+    ///
+    /// **Eligibility predicate.** A target permanent is eligible iff:
+    /// - It is on `source_controller.battlefield`.
+    /// - Its printing carries `Land` in `card_types` OR `Lander` in
+    ///   `subtypes` (mirror of Python's
+    ///   `o.printing.is_land or "Lander" in effective_subtypes(...)`).
+    ///   Rust has no `effective_subtypes` substrate today — read the
+    ///   printing's `subtypes` directly (covers the EoE Lander token
+    ///   + any future Lander-subtyped printed permanent).
+    ///
+    /// **Substrate-only landing (Phase 3A Cycle 1).** This C1 lands the
+    /// Rust enum variant + parse + to_pydict + resolve arms; the Python
+    /// `_printing_is_bridge_phase_3_trigger_spacecraft` admit predicate
+    /// + the OR-chain registration ship in Cycle 2. Larval Scoutlander
+    /// STAYS DECLINED at the production-deck loader filter post-Cycle-1.
+    ///
+    /// **land_count<0 raises** loudly (defense-in-depth — `parse_effect`
+    /// catches at register time). **land_count=0** is a legal no-op
+    /// (the search runs zero iterations; the sacrifice does NOT fire
+    /// because Python's `SearchLibraryForBasicLandTapped(count=0)`
+    /// composition is `for _ in range(0)` — but the OUTER decision
+    /// still asks whether to sacrifice. Mirror Python: if `land_count
+    /// == 0` the optional declines unconditionally — no sacrifice, no
+    /// search, since the Python class is the COMPOSITE whose "yes"
+    /// would result in a zero-iteration search. The conservative
+    /// interpretation: at `land_count=0`, the silent no-op is the
+    /// "decline" path, not a "sacrifice for no benefit" path.
+    /// Larval Scoutlander prints `land_count=2`; the zero case is
+    /// defense-in-depth, not a real-EoE consumer).
+    OptionalSacLandOrLanderForBasicLandRamp { land_count: i32 },
     /// Each opponent of the source's controller discards a card (CR
     /// 701.8). Let's Play a Game pattern — 2 cards in the EoE pool
     /// per round-20 measurement. Mirrors Python's
@@ -11768,6 +11830,39 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::TargetPlayerLosesLife { amount })
         }
+        "optional_sac_land_or_lander_for_basic_land_ramp" => {
+            // **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Larval
+            // Scoutlander's ETB ramp Effect — parse arm for the new
+            // `Effect::OptionalSacLandOrLanderForBasicLandRamp { land_
+            // count: i32 }` variant. Mirrors Python's
+            // `OptionalSacLandOrLanderForBasicLandRamp(land_count: int
+            // = 2)` at `effects/combinators.py:699`.
+            //
+            // **Field shape.** Single `land_count: i32` field with
+            // default 2 (Larval Scoutlander's printed shape). Mirror the
+            // `each_opponent_discards` / `search_library_for_basic_land
+            // _tapped` default-handling shape: missing key defaults to
+            // 2 (the printed Larval Scoutlander value); present key
+            // extracts as i32 with the standard error message.
+            //
+            // **Negative land_count raises** at register time (defense-
+            // in-depth; the resolve arm re-checks). Mirrors the sibling
+            // search/discard/etc. negative-raise convention.
+            let land_count: i32 = match dict.get_item("land_count")? {
+                Some(c) => c.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "optional_sac_land_or_lander_for_basic_land_ramp.land_count must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 2,
+            };
+            if land_count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "optional_sac_land_or_lander_for_basic_land_ramp: land_count must be non-negative, got {land_count}"
+                )));
+            }
+            Ok(Effect::OptionalSacLandOrLanderForBasicLandRamp { land_count })
+        }
         "each_opponent_discards" => {
             // Python's `EachOpponentDiscards(count: int = 1)` dataclass
             // has a `count` field defaulting to 1. Mirror that here:
@@ -14719,7 +14814,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp"
         ))),
     }
 }
@@ -17259,6 +17354,18 @@ pub(crate) fn effect_to_pydict<'py>(
             // `target_player_loses_life` parse_effect arm.
             d.set_item("kind", "target_player_loses_life")?;
             d.set_item("amount", *amount)?;
+        }
+        Effect::OptionalSacLandOrLanderForBasicLandRamp { land_count } => {
+            // **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Round-trip
+            // pair with the `optional_sac_land_or_lander_for_basic_land_
+            // ramp` parse_effect arm. Single `land_count` int field
+            // mirrors Python's `OptionalSacLandOrLanderForBasicLandRamp(
+            // land_count: int = 2)` shape. Always emit the field (the
+            // search/discard arms do likewise) so the dict round-trip is
+            // byte-deterministic regardless of whether the parser
+            // consumed the default-2 or an explicit value.
+            d.set_item("kind", "optional_sac_land_or_lander_for_basic_land_ramp")?;
+            d.set_item("land_count", *land_count)?;
         }
         Effect::EachOpponentDiscards { count } => {
             d.set_item("kind", "each_opponent_discards")?;
