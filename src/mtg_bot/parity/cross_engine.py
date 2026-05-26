@@ -9982,6 +9982,57 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PainForAllDamageEchoEffect,
         )
         return PainForAllDamageEchoEffect()
+    if kind == "reanimate_target_creature_card_from_defenders_graveyard":
+        # **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) -- Chorale of the
+        # Void substrate landing -- bridge arm.** Rust's
+        # ``Effect::ReanimateTargetCreatureCardFromDefendersGraveyard``
+        # (cards.rs unit variant added in Cycle 1; parse + to_pydict
+        # arms immediately after the Phase-4
+        # ``sacrifice_self_unless_void_active`` arm; resolve arm in
+        # ``state_ops_resolve.rs`` immediately after the
+        # ``SacrificeSelfUnlessVoidActive`` arm) mirrors Python's
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard``
+        # (``effects/generic/graveyard.py:474-554``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard()``
+        # reconstructs the Python class (no ``@dataclass`` decorator,
+        # no fields). Mirrors the sibling Pain for All / Chorale Phase
+        # 4 unit-variant bridge shape.
+        #
+        # **Full closure -- NOT honest-stop.** The Rust resolve arm
+        # ships full byte-equal semantics with Python: read the bound
+        # target via ``current_resolve_payload_target_id``; re-validate
+        # the chosen card STILL lives in some opponent's graveyard and
+        # STILL has card_types containing "Creature"; remove from
+        # graveyard; reset CR 400.7 zone-change state; stamp ``tapped
+        # = True``, ``summoning_sick = False``, ``controller`` per
+        # I83; push onto the resolving controller's battlefield with
+        # the reserved ``etb_timestamp``; push the entered id onto
+        # ``state.attackers`` (the in-progress combat-phase "already
+        # attacking" stamp -- Rust tracks attacking via the per-state
+        # attackers Vec, not a per-object field); queue ENTERS dispatch
+        # via ``pending_etb_dispatches``. Mirrors Python's
+        # ``graveyard.py:521-547`` step-for-step.
+        #
+        # **Aura admit boundary.** Chorale of the Void (the only EoE
+        # carrier of this Effect; 2,783 17lands decks) STAYS DECLINED
+        # at the production-deck loader filter post-Cycle-1 because
+        # ``_aura_triggers_are_phase3_safe`` does NOT widen to admit
+        # the ATTACKS + IsHost(subject="attacker") + Reanimate shape
+        # yet (Cycle 2 ships the widen + the trigger-fire push of
+        # ``PendingDecision::GraveyardCardChoice``). The tail
+        # ``BEGINNING_OF_END_STEP + Controlled(YOU) +
+        # SacrificeSelfUnlessVoidActive`` half is also not yet widened
+        # (sibling Tail-X2 admit ships with the Chorale long-pole
+        # cycle); the all-or-nothing gate refuses to admit a card whose
+        # other trigger isn't in the safe set. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3 + §8
+        # row 2 + §8 row 1.
+        from mtg_bot.effects.generic.graveyard import (
+            ReanimateTargetCreatureCardFromDefendersGraveyard,
+        )
+        return ReanimateTargetCreatureCardFromDefendersGraveyard()
     if kind == "sacrifice_self_unless_void_active":
         # **Aura Phase 4 (Chorale of the Void substrate landing) --
         # SacrificeSelfUnlessVoidActive bridge arm.** Rust's

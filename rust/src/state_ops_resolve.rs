@@ -16228,6 +16228,167 @@ fn apply_effect(
             //    combinators.py:197).
             sacrifice_source_inline(state, controller_idx, source_obj_id)?;
         }
+        // **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) — Chorale of the
+        // Void substrate landing —
+        // ReanimateTargetCreatureCardFromDefendersGraveyard.** Mirrors
+        // Python's `ReanimateTargetCreatureCardFromDefendersGraveyard
+        // .resolve` (`effects/generic/graveyard.py:521-547`) STEP-FOR-
+        // STEP so the post-resolve state is byte-equal under matching
+        // inputs.
+        //
+        // **Target binding.** Reads
+        // `state.current_resolve_payload_target_id` — the engine-wide
+        // resolver-bound target slot used by every "trigger-time /
+        // cast-time bound single target" resolve arm (sibling of
+        // `ReturnTargetArtifactCardFromYourGraveyardToHand` at
+        // `state_ops_resolve.rs:5614+`). For Cycle-1 substrate the
+        // production push site is not wired yet (Cycle 2 ships the
+        // admit gate + the trigger-fire push of
+        // `PendingDecision::GraveyardCardChoice`); synthetic tests
+        // populate the slot via `submit_graveyard_card_decision(Some(
+        // id))` or directly set it before calling `apply_effect_pub`.
+        // When the slot is `None`, silent fizzle (Python parity:
+        // `if not targets: return` at graveyard.py:527-528).
+        //
+        // **Re-validation at resolve (CR 608.2b).** The bound target id
+        // must STILL live in SOME opponent's graveyard AND STILL be a
+        // creature card. If the target left the graveyard (e.g. another
+        // effect moved it) or stopped being a creature card, silent
+        // fizzle — byte-equal with Python's
+        // `card = next((c for c in p.graveyard if c.id == target_id),
+        // None); if card is None: continue` shape (the for-loop
+        // exhausts without finding a hit and returns).
+        //
+        // **Controller-of-effect.** Inherits the I83 contract:
+        // `controller_idx` from `current_resolve_source_controller`,
+        // fallback to `active_player`. For the Chorale ATTACKS-trigger
+        // path the controller IS the Aura's controller (the resolving
+        // controller per CR 119.5 / 608.2 — effect resolves under the
+        // source's controller). Mirrors the
+        // `ReturnCreatureFromYourGraveyardToBattlefield` controller-
+        // resolution pattern at `state_ops_resolve.rs:5741-5743`.
+        //
+        // **Zone-change reset (CR 400.7).** Same shape as the sibling
+        // reanimation arms BUT with three diff-stamps after the move:
+        // `tapped = true` (Chorale puts the new permanent in tapped),
+        // `summoning_sick = false` (it's already attacking — bypasses
+        // the standard ETB summoning-sick clamp), and `attacking =
+        // true` (joins the in-progress combat phase). Other resets
+        // (`damage=0`, `counters=0`, `attached_to=None`,
+        // `exiled_with_source=None`) match the standard reanimation
+        // arms.
+        //
+        // **Substrate-only landing (Cycle 1).** The Rust resolve arm
+        // ships full byte-equal semantics — this is NOT a honest-stop
+        // fizzle (contrast Pain for All / Meltstrider's). The arm IS
+        // reachable today via `apply_effect_pub` + a populated payload
+        // slot (synthetic test path). Chorale of the Void STAYS
+        // DECLINED at the production-deck loader filter post-Cycle-1
+        // because the `_aura_triggers_are_phase3_safe` Python gate
+        // doesn't admit the ATTACKS+IsHost(attacker)+Reanimate shape
+        // yet — Cycle 2 widens the gate AND wires the trigger-fire
+        // push of `PendingDecision::GraveyardCardChoice` in the same
+        // slice.
+        Effect::ReanimateTargetCreatureCardFromDefendersGraveyard => {
+            let _ = source_obj_id;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            // 1. Read the bound target id from the engine-wide
+            //    payload slot. None -> silent fizzle (Python parity:
+            //    `if not targets: return`).
+            let Some(target_id) = state.current_resolve_payload_target_id else {
+                return Ok(());
+            };
+            // 2. Re-validate the target STILL lives in SOME non-
+            //    controller player's graveyard AND its printing STILL
+            //    has card_types containing "Creature". Capture which
+            //    player's slot owns it (the player-index in the array).
+            let mut from_pidx: Option<usize> = None;
+            for (idx, player) in state.players.iter().enumerate() {
+                if idx == controller_idx {
+                    continue;
+                }
+                let found_creature = player.graveyard.iter().any(|o| {
+                    if o.id != target_id {
+                        return false;
+                    }
+                    state
+                        .registry
+                        .lookup(o.printing_id)
+                        .map(|p| {
+                            p.card_types.iter().any(|t| t == "Creature")
+                        })
+                        .unwrap_or(false)
+                });
+                if found_creature {
+                    from_pidx = Some(idx);
+                    break;
+                }
+            }
+            let Some(from_pidx) = from_pidx else {
+                // Target left the graveyard, stopped being a creature
+                // card, or never was in an opponent's graveyard.
+                // Silent fizzle — byte-equal with Python's
+                // `if card is None: continue` ladder exhausting.
+                return Ok(());
+            };
+            // 3. Reserve ETB timestamp BEFORE the player-mut borrow
+            //    (matches the sibling reanimation arms' borrow
+            //    discipline — `state_ops_resolve.rs:5768`).
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // 4. Remove the chosen object from the from-player's
+            //    graveyard.
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[from_pidx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just validated; cannot disappear under &mut");
+            let mut obj = graveyard_mut.remove(pos);
+            // 6. Stamp the per-zone state per the design doc §4.3
+            //    spec + CR 400.7 zone-change reset.
+            obj.zone = ZONE_BATTLEFIELD;
+            obj.tapped = true;
+            obj.summoning_sick = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            obj.etb_timestamp = etb_ts;
+            // I83 controller-of-effect: reanimated permanent's
+            // `controller` stamps to the reanimation-effect's
+            // controller per CR 110.2 / 614.x. Mirrors
+            // `ReturnCreatureFromYourGraveyardToBattlefield` at
+            // `state_ops_resolve.rs:5823`.
+            obj.controller = controller_idx as u8;
+            let entered_id = obj.id;
+            Arc::make_mut(&mut state.players[controller_idx].battlefield)
+                .push(obj);
+            // 7. "Already attacking." The reanimated permanent joins
+            //    the in-progress combat phase as a NEW attacker. In
+            //    Rust the attacking flag lives on `state.attackers:
+            //    Vec<u32>` (NOT a per-object field) — push the new
+            //    id so it participates in the combat-damage step's
+            //    walk. Mirrors `state_ops_combat.rs:1722`'s
+            //    declare-attacker shape (no DECLARE_ATTACKERS event
+            //    fan-out here — the printed text says "onto the
+            //    battlefield ... tapped and attacking," not "attack"
+            //    — bypassing the ATTACKS trigger fan-out by design,
+            //    matching Python's
+            //    `actions.put_into_battlefield_as_attacker` skipping
+            //    the `_fire_attacks_triggers` call).
+            state.attackers.push(entered_id);
+            // 8. Queue ENTERS dispatch for the reanimated creature.
+            //    Drained by the surrounding resolver after the resolving
+            //    trigger's stack item pops. Same shape as every other
+            //    ETB-from-graveyard arm.
+            state.pending_etb_dispatches.push(entered_id);
+            // 9. Clear the payload slot so a subsequent un-bound resolve
+            //    on this same source doesn't accidentally consume the
+            //    leftover id. Mirrors the cast-time-bound discipline.
+            state.current_resolve_payload_target_id = None;
+        }
         // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
         // "sacrifice this unless you tap an untapped permanent you
         // control".** Mirrors Python's

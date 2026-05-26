@@ -599,6 +599,26 @@ impl GameState {
                             candidates.iter().map(|id| json!(*id)).collect(),
                         ),
                     ]),
+                    // **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) —
+                    // Chorale of the Void substrate landing — graveyard-
+                    // creature trigger-time target decision fingerprint.**
+                    // Candidate ids fully determine the pending-state
+                    // shape (re-resolving with a different candidate set
+                    // surfaces a different choice). Flat u32 list mirrors
+                    // `TapPermanentChoice` / `EnchantTargetChoice`'s
+                    // shape.
+                    PendingDecision::GraveyardCardChoice {
+                        source_obj_id,
+                        controller,
+                        candidates,
+                    } => Value::Array(vec![
+                        Value::String("GraveyardCardChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        Value::Array(
+                            candidates.iter().map(|id| json!(*id)).collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

@@ -2226,6 +2226,48 @@ pub enum PendingDecision {
         controller: u8,
         candidates: Vec<u32>,
     },
+    /// **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) — Chorale of the
+    /// Void substrate landing.** Trigger-time graveyard-creature target
+    /// choice for `Effect::ReanimateTargetCreatureCardFromDefendersGraveyard`.
+    /// Pushed when the Chorale ATTACKS trigger resolves and needs a
+    /// graveyard-creature target (the controller picks WHICH opponent's
+    /// graveyard creature card to reanimate). Mirrors the
+    /// `TapPermanentChoice` / `EnchantTargetChoice` substrate shape
+    /// (flat `Vec<u32>` of candidate ids).
+    ///
+    /// **Payload.** Carries the source id (the resolving Aura), the
+    /// controller (the resolving-effect's controller — who picks), and
+    /// the candidate ids (every creature card in every opponent's
+    /// graveyard, enumerated at push time per the design doc §4.2
+    /// `legal_targets` shape). Same `Vec<u32>` idiom as the sibling
+    /// `TapPermanentChoice` / `EnchantTargetChoice` variants — the
+    /// resolve arm re-locates the chosen object by id at submit time.
+    ///
+    /// **Submit.** `submit_graveyard_card_decision(Some(chosen_id))`
+    /// writes the chosen target into
+    /// `current_resolve_payload_target_id` so the resolve arm reads it.
+    /// `chosen_id` MUST be one of the candidate ids; an unknown id
+    /// raises `ValueError` transactionally (no mutation on failure).
+    /// `submit_graveyard_card_decision(None)` is the explicit "no
+    /// target chosen" path — the resolve arm fizzles silently.
+    ///
+    /// **Auto-resolve default.** `"default"` /
+    /// `"graveyard_card_first"` picks `candidates[0]` (the
+    /// deterministic-first legal target in player-id-then-position
+    /// order — mirrors the `_PickFirstLegalTargetAgent` /
+    /// `enchant_target_first` convention every other trigger-time
+    /// target picker uses).
+    ///
+    /// **Substrate-only landing (Cycle 1).** The decision-pump pin is
+    /// in place but no production code path pushes it yet — the
+    /// admit-gate widen ships in Cycle 2 + the per-card probe in a
+    /// later cycle. Synthetic tests exercise the push + drain shape
+    /// directly via the `submit_graveyard_card_decision` entry point.
+    GraveyardCardChoice {
+        source_obj_id: u32,
+        controller: u8,
+        candidates: Vec<u32>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares

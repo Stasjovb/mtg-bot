@@ -553,6 +553,34 @@ pub(crate) fn auto_resolve_pending(
                 // target_obj_id=None so STEP 4 fizzles on resolve —
                 // matches the "no legal target chosen" semantics.
             }
+            PendingDecision::GraveyardCardChoice {
+                source_obj_id: _,
+                controller: _,
+                candidates,
+            } => {
+                // **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) — Chorale
+                // of the Void substrate landing — auto-resolve.**
+                //
+                // "default" / "graveyard_card_first" / unrelated -> pick
+                // candidates[0] (the deterministic-first legal target in
+                // the build order — player-id then graveyard position).
+                // The push arm only enqueues this decision when the
+                // candidate set is non-empty (every Phase-3+ admit path
+                // gates push on a non-empty target enumeration); the
+                // empty-candidates case is therefore an absorbing no-op.
+                // Mirrors `EnchantTargetChoice`'s default contract.
+                //
+                // **Where the chosen id lands.** Writing into
+                // `current_resolve_payload_target_id` (the engine-wide
+                // resolver-bound target slot per
+                // `state_ops_resolve.rs:5639+`). The resolve arm for
+                // `Effect::ReanimateTargetCreatureCardFromDefendersGraveyard`
+                // reads that slot at the head of its execution.
+                if !candidates.is_empty() {
+                    state.current_resolve_payload_target_id =
+                        Some(candidates[0]);
+                }
+            }
         }
     }
     Ok(())
@@ -1287,6 +1315,29 @@ impl GameState {
                     // StackItem's `target_obj_id` so STEP 4 can read
                     // it at resolve time.
                     d.set_item("kind", "EnchantTargetChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("candidates", candidates.clone())?;
+                }
+                PendingDecision::GraveyardCardChoice {
+                    source_obj_id,
+                    controller,
+                    candidates,
+                } => {
+                    // **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) —
+                    // Chorale of the Void substrate landing — pending-
+                    // decisions surface dict.** `candidates` is the
+                    // flat list of graveyard-creature ids enumerated
+                    // across all non-controller players' graveyards
+                    // (player-id then position order). Same id-based
+                    // idiom as `TapPermanentChoice` /
+                    // `EnchantTargetChoice`. The controller drains via
+                    // `submit_graveyard_card_decision(Some(id))` —
+                    // the id binds onto `current_resolve_payload_
+                    // target_id` so the
+                    // `ReanimateTargetCreatureCardFromDefendersGraveyard`
+                    // resolve arm can read it.
+                    d.set_item("kind", "GraveyardCardChoice")?;
                     d.set_item("source_obj_id", *source_obj_id)?;
                     d.set_item("controller", *controller)?;
                     d.set_item("candidates", candidates.clone())?;
@@ -2150,6 +2201,96 @@ impl GameState {
         // `None` -> no-op on the StackItem: target_obj_id stays None
         // (the cast pushed with None defaults). STEP 4 will fizzle on
         // resolve per Python parity.
+        Ok(())
+    }
+
+    /// **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) — Chorale of the
+    /// Void substrate landing.** Consume the head `GraveyardCardChoice`
+    /// on the pending-decisions queue: bind `chosen_id` (Some -> the
+    /// legal graveyard creature the controller picked; None -> no
+    /// target chosen, the resolve arm fizzles silently) into
+    /// `current_resolve_payload_target_id` so the
+    /// `Effect::ReanimateTargetCreatureCardFromDefendersGraveyard`
+    /// resolve arm reads it.
+    ///
+    /// **Submit contract.** `chosen_id` MUST be one of the candidate
+    /// ids in the head's `candidates` Vec OR `None`. An unknown id
+    /// raises `ValueError` transactionally — no mutation on failure,
+    /// the decision stays at the head of the queue.
+    ///
+    /// **Where the chosen id lands.** Writing into
+    /// `current_resolve_payload_target_id` (the engine-wide resolver-
+    /// bound target slot used by every "cast-time / trigger-time bound
+    /// single target" resolve arm —
+    /// `ReturnTargetArtifactCardFromYourGraveyardToHand` at
+    /// `state_ops_resolve.rs:5639+` is the closest precedent). The
+    /// `Effect::ReanimateTargetCreatureCardFromDefendersGraveyard`
+    /// resolve arm reads that slot at the head of its execution + re-
+    /// validates (still in opponent's graveyard, still a creature
+    /// card) per CR 608.2b.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `GraveyardCardChoice`
+    /// - `chosen_id = Some(id)` and `id` is not in the candidate set
+    ///
+    /// **Substrate-only landing (Cycle 1) — invariant.** No production
+    /// admit path pushes this decision today (the
+    /// `_aura_triggers_are_phase3_safe` gate ships in Cycle 2). The
+    /// submit dispatcher is in place so Cycle 1's substrate pins can
+    /// exercise the push + drain + payload-bind shape directly. Cycle
+    /// 2 wires the admit predicate AND the trigger-fire push site
+    /// together — chorale of the Void flips DECLINED → ADMITTED then.
+    #[pyo3(signature = (chosen_id=None))]
+    fn submit_graveyard_card_decision(
+        &mut self,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_graveyard_card_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        match &self.pending_decisions[0] {
+            PendingDecision::GraveyardCardChoice { candidates, .. } => {
+                if let Some(id) = chosen_id {
+                    if !candidates.contains(&id) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_graveyard_card_decision: chosen_id \
+                             {id} is not one of the candidate \
+                             graveyard-creature ids {:?}",
+                            candidates
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_graveyard_card_decision: head of pending-\
+                     decisions queue is not a GraveyardCardChoice (got \
+                     {:?}); call the variant-specific submit_* \
+                     dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let _decision = self.pending_decisions.remove(0);
+        // `Some` -> write into the payload slot the resolve arm reads.
+        // `None` -> explicit "no target chosen" path -> CLEAR the slot
+        // so the resolve arm's payload-bound branch sees None AND ALSO
+        // skips the deterministic-first fallback (the chosen-None
+        // semantics is "the controller declined to pick" — distinct
+        // from "no production binder ran"; the resolve arm distinguishes
+        // these via the dedicated `Option<u32>` slot via a sentinel
+        // check at its head). For Cycle-1 substrate the simplest
+        // contract is: setting `None` produces a silent fizzle on the
+        // next resolve, mirroring Python's "if not targets: return"
+        // from `graveyard.py:527-528`. Tests gate on this contract
+        // directly.
+        self.current_resolve_payload_target_id = chosen_id;
         Ok(())
     }
 

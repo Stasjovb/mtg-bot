@@ -7651,6 +7651,24 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
         PainForAllETBEffect,
     )
     from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    # **Aura Phase 3+ Phase A Cycle 1 (2026-05-25).** Reverse-serializer
+    # leaf import for Chorale of the Void's ATTACKS-trigger long-pole
+    # Effect (``ReanimateTargetCreatureCardFromDefendersGraveyard`` at
+    # ``effects/generic/graveyard.py:474-554``). Substrate-only landing
+    # — the recognizer arm below produces the dict, but the
+    # ``_aura_triggers_are_phase3_safe`` gate does NOT widen to admit
+    # the ATTACKS+IsHost(subject="attacker")+Reanimate shape yet
+    # (Cycle 2 ships the widen + the trigger-fire push of
+    # ``PendingDecision::GraveyardCardChoice`` in the same slice). The
+    # all-or-nothing gate refuses to admit Chorale's full trigger
+    # surface today, so this recognizer arm is DORMANT in production:
+    # `_python_ta_to_safe_dict_aura_phase3` is only invoked when the
+    # gate has admitted, so the new branch only fires once Cycle 2
+    # widens the gate. Chorale STAYS DECLINED at the loader gate
+    # post-Cycle-1.
+    from mtg_bot.effects.generic.graveyard import (
+        ReanimateTargetCreatureCardFromDefendersGraveyard,
+    )
 
     if isinstance(ta.effect, PainForAllETBEffect):
         # Shape 2: Pain for All ETB.
@@ -7684,6 +7702,45 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
             "event": "enters",
             "predicate": {"kind": "source_is_self"},
             "effect": {"kind": "tap_enchanted_permanent"},
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, ReanimateTargetCreatureCardFromDefendersGraveyard):
+        # **Aura Phase 3+ Phase A Cycle 1 (2026-05-25) — Chorale of the
+        # Void substrate landing — reverse-serializer leaf.** Shape:
+        # ``ATTACKS + IsHost(subject="attacker") + Reanimate...
+        # FromDefendersGraveyard``. The predicate's ``subject="attacker"``
+        # threads through (Rust's ``Predicate::IsHost { subject:
+        # Option<String> }`` carries the same Optional<String> slot,
+        # the cross_engine.py ``is_host`` bridge already round-trips
+        # the subject slot per Pain for All's wiring at
+        # ``cross_engine.py:12878``). Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 Phase A
+        # shape.
+        #
+        # **Dormant-by-construction in Cycle 1.** This branch only
+        # fires when ``_aura_triggers_are_phase3_safe`` admits the
+        # carrier's full trigger surface; Cycle 1 does NOT widen that
+        # gate (the gate stays gate-shape-3 = Pain for All + Tractor
+        # Beam closure only). Chorale's two-trigger surface (ATTACKS
+        # long pole + BEGINNING_OF_END_STEP tail) fails the
+        # all-or-nothing gate today, so the
+        # ``_python_ta_to_safe_dict_aura_phase3`` function is never
+        # called on a Chorale TA in Cycle 1. The leaf is here ahead of
+        # Cycle 2 to keep the recognizer + admit-gate widens additive
+        # in Cycle 2 (Cycle 2 only edits the gate; the emitter already
+        # knows how to translate the shape).
+        pred_dict: dict = {"kind": "is_host"}
+        if (
+            isinstance(ta.predicate, IsHost)
+            and ta.predicate.subject is not None
+        ):
+            pred_dict["subject"] = ta.predicate.subject
+        return {
+            "event": "attacks",
+            "predicate": pred_dict,
+            "effect": {
+                "kind": "reanimate_target_creature_card_from_defenders_graveyard",
+            },
             "once_per_turn": False,
         }
     # Should be unreachable when pre-gated by
