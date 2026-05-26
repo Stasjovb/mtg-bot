@@ -176,16 +176,22 @@ def test_phase3_safe_rejects_once_per_turn():
 
 def test_phase3_safe_rejects_unsafe_effect():
     """An Aura trigger with an effect outside the Phase-3 safe set
-    (e.g. ``DestroyEnchantedPermanent`` from Cracked Skull) is
-    rejected — the gate is the §2 positive allowlist."""
+    is rejected — the gate is the §2 positive allowlist. (Phase B
+    Cycle 2 added DestroyEnchantedPermanent to the safe set on
+    Tail-X1; this test now uses Sporogenic's
+    ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` Effect
+    class — the Phase C carrier-specific Effect that STAYS outside
+    the safe set until Phase C closure.)"""
     from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import Event, IsHost
-    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.opponent_punishers import (
+        TargetOpponentSacrificesCreatureOtherThanEnchanted,
+    )
 
     ta = TriggeredAbility(
-        event=Event.DEALT_DAMAGE,
-        predicate=IsHost(),
-        effect=DestroyEnchantedPermanent(),
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=TargetOpponentSacrificesCreatureOtherThanEnchanted(),
     )
     assert _aura_triggers_are_phase3_safe((ta,)) is False
 
@@ -577,15 +583,18 @@ def test_predicate_admits_chorale_of_the_void_post_phase_a_cycle_2():
     assert _printing_is_bridge_simple_aura(p) is True
 
 
-def test_predicate_declines_cracked_skull():
-    """Cracked Skull has ENTERS + TargetOpponentLookHandMayDiscard +
-    DEALT_DAMAGE + DestroyEnchantedPermanent triggers — neither
-    effect is in the Phase-3 safe set."""
+def test_predicate_admits_cracked_skull_post_phase_b_cycle_2():
+    """**INVERTED-IN-PLACE post Phase B Cycle 2 (2026-05-26).** Cracked
+    Skull has ENTERS + TargetOpponentLookHandMayDiscard + DEALT_DAMAGE
+    + DestroyEnchantedPermanent triggers — BOTH effects are now in the
+    Phase-3 safe set (Shape A + Tail-X1 widen in lockstep). The +0
+    17lands-deck flip (positive-control carrier per design doc §0 row
+    2)."""
     from mtg_bot.cards.source import get_active_source
 
     p = get_active_source().get_printings()["Cracked Skull"]
     assert p.is_aura is True
-    assert _printing_is_bridge_simple_aura(p) is False
+    assert _printing_is_bridge_simple_aura(p) is True
 
 
 def test_predicate_declines_sporogenic_infection():

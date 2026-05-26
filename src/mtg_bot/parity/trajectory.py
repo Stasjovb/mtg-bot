@@ -7614,6 +7614,10 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
         PainForAllETBEffect,
     )
     from mtg_bot.effects.combinators import SacrificeSelfUnlessVoidActive
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.effects.generic.discard import (
+        TargetOpponentLookHandMayDiscard,
+    )
     from mtg_bot.effects.generic.graveyard import (
         ReanimateTargetCreatureCardFromDefendersGraveyard,
     )
@@ -7696,6 +7700,61 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
             and isinstance(ta.effect, SacrificeSelfUnlessVoidActive)
         ):
             continue
+        # **Aura Phase 3+ Phase B Cycle 2 (2026-05-26).** Cracked Skull
+        # admit-gate widen — TWO shapes ride in this slice together (the
+        # all-or-nothing gate refuses partial admission; Cracked Skull's
+        # ENTERS long pole + DEALT_DAMAGE Tail-X1 MUST widen in lockstep
+        # or the carrier stays DECLINED). Per
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 + §7 row
+        # 3 + §8 row 4. The Tail-X1 widen also positions Sporogenic
+        # Infection for Phase C closure (Sporogenic shares the same
+        # DEALT_DAMAGE + IsHost(None) + DestroyEnchantedPermanent Tail-
+        # X1 shape per design doc §3; Phase C adds Sporogenic's ENTERS
+        # long-pole ``TargetOpponentSacrificesCreatureOtherThanEnchanted``
+        # shape to close the gate for Sporogenic).
+        #
+        # Phase-3+ admit shape 6: Cracked Skull ENTERS long pole —
+        # ``ENTERS + IsSelf(subject=None) +
+        # TargetOpponentLookHandMayDiscard``. The Rust ``Effect::
+        # TargetOpponentLookHandMayDiscard`` resolve arm (landed in C1 at
+        # ``state_ops_resolve.rs``) pushes a
+        # ``PendingDecision::MayDiscardChoice`` carrying the bound
+        # target-player slot + a nonland_card_ids snapshot of the
+        # target's hand; the decision-pump dispatcher
+        # (``submit_may_discard_decision`` / ``submit_opponent_hand_
+        # card_decision``) drains the two-decision flow byte-equal with
+        # Python's ``Agent.choose_yes_no`` + ``choose_card_from_opponent_
+        # hand`` calls at ``effects/generic/discard.py:364-378``.
+        if (
+            ta.event is Event.ENTERS
+            and isinstance(ta.predicate, IsSelf)
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, TargetOpponentLookHandMayDiscard)
+        ):
+            continue
+        # Phase-3+ Tail-X1: Cracked Skull + Sporogenic Infection shared
+        # damage-echo destroy tail — ``DEALT_DAMAGE + IsHost(subject=
+        # None) + DestroyEnchantedPermanent``. The
+        # ``DestroyEnchantedPermanent`` Effect class is fully Rust-
+        # bridged (``rust/src/cards.rs::Effect::DestroyEnchantedPermanent``
+        # at line 4380, sibling of Cryoshatter's becomes-tapped destroy
+        # arm at cards.rs:4367, parse arm at 13062, resolve arm at
+        # 18440); the ``DEALT_DAMAGE`` event is already wired in Rust's
+        # dispatcher; ``IsHost(subject=None)`` round-trips via the
+        # existing ``is_host`` bridge arm. NB: Cryoshatter ALSO carries
+        # Tail-X1, but its OTHER trigger is
+        # ``BECOMES_TAPPED + IsHost(None) + DestroyEnchantedPermanent``
+        # — BECOMES_TAPPED is NOT in the safe set today, so the all-or-
+        # nothing gate keeps Cryoshatter DECLINED (no silent auto-grow;
+        # verified by ``test_cryoshatter_stays_declined_post_phase_b_
+        # cycle_2``).
+        if (
+            ta.event is Event.DEALT_DAMAGE
+            and isinstance(ta.predicate, IsHost)
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, DestroyEnchantedPermanent)
+        ):
+            continue
         return False
     return True
 
@@ -7765,6 +7824,15 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
     from mtg_bot.effects.generic.discard import (
         TargetOpponentLookHandMayDiscard,
     )
+    # **Aura Phase 3+ Phase B Cycle 2 (2026-05-26).** Reverse-serializer
+    # leaf import for the Cracked Skull / Sporogenic Infection shared
+    # Tail-X1 Effect (``DestroyEnchantedPermanent`` at
+    # ``effects/generic/destroy.py:213-249``). Used by both Phase B
+    # (Cracked Skull's DEALT_DAMAGE tail; this slice flips the admit
+    # gate ON) and Phase C (Sporogenic Infection's DEALT_DAMAGE tail
+    # closure; Sporogenic stays DECLINED until Phase C also widens its
+    # ENTERS half ``TargetOpponentSacrificesCreatureOtherThanEnchanted``).
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
 
     if isinstance(ta.effect, PainForAllETBEffect):
         # Shape 2: Pain for All ETB.
@@ -7850,22 +7918,51 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
         # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 Phase B
         # shape.
         #
-        # **Dormant-by-construction in Cycle 1.** This branch only fires
-        # when ``_aura_triggers_are_phase3_safe`` admits the carrier's
-        # full trigger surface; Cycle 1 does NOT widen that gate.
-        # Cracked Skull has TWO triggers (ENTERS look-may-discard long
-        # pole + DEALT_DAMAGE destroy-host tail) and Cycle 1 widens
-        # NEITHER, so ``_python_ta_to_safe_dict_aura_phase3`` is never
-        # called on a Cracked Skull TA in Cycle 1. The leaf is here
-        # ahead of Cycle 2 to keep the recognizer + admit-gate widens
-        # additive in Cycle 2 (Cycle 2 only edits the gate; the emitter
-        # already knows how to translate the shape).
+        # **Aura Phase 3+ Phase B Cycle 2 (2026-05-26) — predicate-kind
+        # fix.** Cycle 1's dormant leaf emitted ``"is_self"``, but Rust's
+        # ``parse_predicate`` only recognizes ``"source_is_self"`` for
+        # the ``IsSelf(subject=None)`` predicate (sibling of Pain for
+        # All's ETB recognizer at line 7841 + the Tap-Enchanted-
+        # Permanent recognizer at line 7867 + Tractor Beam's emitter at
+        # line 7497). The mismatch was harmless in C1 (the gate was
+        # DECLINED so the emitter was never invoked end-to-end), but
+        # Cycle 2 flips the admit gate ON and the bench-loader feeds
+        # Rust the emitted dict — fix the kind string in-place. The C1
+        # substrate test ``test_python_ta_to_safe_dict_phase3_recognizes
+        # _look_hand_may_discard`` is updated in lockstep to assert the
+        # corrected shape.
         return {
             "event": "enters",
-            "predicate": {"kind": "is_self"},
+            "predicate": {"kind": "source_is_self"},
             "effect": {
                 "kind": "target_opponent_look_hand_may_discard",
             },
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, DestroyEnchantedPermanent):
+        # **Aura Phase 3+ Phase B Cycle 2 (2026-05-26) — Cracked Skull
+        # admit-gate flip — reverse-serializer leaf for Tail-X1.** Shape:
+        # ``DEALT_DAMAGE + IsHost(subject=None) +
+        # DestroyEnchantedPermanent``. Shared by Cracked Skull (this
+        # slice) and Sporogenic Infection (Phase C; Sporogenic stays
+        # DECLINED until Phase C closes its ENTERS long-pole). The Rust
+        # ``Effect::DestroyEnchantedPermanent`` shipped pre-substrate
+        # (Cryoshatter's becomes-tapped destroy arm at ``cards.rs:4380``);
+        # the ``DealtDamage`` event is in Rust's dispatcher; the
+        # ``is_host`` bridge arm round-trips the IsHost(subject=None)
+        # predicate. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 Phase B
+        # Tail-X1 shape (lines 753-761).
+        pred_dict: dict = {"kind": "is_host"}
+        if (
+            isinstance(ta.predicate, IsHost)
+            and ta.predicate.subject is not None
+        ):
+            pred_dict["subject"] = ta.predicate.subject
+        return {
+            "event": "dealt_damage",
+            "predicate": pred_dict,
+            "effect": {"kind": "destroy_enchanted_permanent"},
             "once_per_turn": False,
         }
     if isinstance(ta.effect, SacrificeSelfUnlessVoidActive):

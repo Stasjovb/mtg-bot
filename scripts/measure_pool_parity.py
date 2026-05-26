@@ -2955,6 +2955,71 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Skull) + Phase C (Sporogenic Infection) are separate cycles
     # per design doc §8 row 3-7.
     REPO_ROOT / "tests" / "test_chorale_of_the_void_parity.py",
+    # **Aura-attachment substrate Phase 3+ Phase B Cycle 2 (Cracked
+    # Skull, 2026-05-26).** Cracked Skull is the Phase B positive-
+    # control carrier (0 17lands decks per design doc §0 row 2 — the
+    # deck-count signal is on substrate correctness, not deck volume).
+    # Live trigger surface: TWO TAs — (1) ENTERS + IsSelf(subject=None)
+    # + TargetOpponentLookHandMayDiscard (the ETB long pole); (2)
+    # DEALT_DAMAGE + IsHost(subject=None) + DestroyEnchantedPermanent
+    # (Tail-X1, shared with Sporogenic Infection per design doc §3).
+    # The admit-gate FLIPped DECLINED → ADMITTED in lockstep (the all-
+    # or-nothing gate required BOTH halves to widen together). C2 —
+    # THIS registration — closes the tier flip to PROBED by attaching
+    # the per-card real-EoE probe.
+    #
+    #   * ``test_cracked_skull_parity.py`` — Cracked Skull ({1}{B}
+    #     Enchantment — Aura, Enchant creature), TWO triggered
+    #     abilities. The FIRST PROBE_MODULES-credited probe binding
+    #     BOTH ``TargetOpponentLookHandMayDiscard`` (the new Phase B
+    #     Cycle 1 Rust Effect) AND ``DestroyEnchantedPermanent`` (the
+    #     pre-substrate destroy arm) Effect classes on a real-EoE Aura
+    #     carrier — the LOAD-BEARING probe-tier flip evidence. Drives
+    #     THREE scenarios per design doc §7 row 3:
+    #       (1) ETB resolve + may-discard YES — Python-engine real-EoE
+    #           smoke (the load-bearing scenario): Cracked Skull on
+    #           bf attached to p0's host bear; p1's hand has TWO
+    #           nonland creatures + ONE land; ENTERS trigger fires
+    #           (via ``_trigger_etb_abilities``); the look-step stamps
+    #           ``publicly_known_to`` with p0 on every hand card (one-
+    #           way reveal); the nonland-options gate passes; caster
+    #           agent (``_YesPickFirstAgent``) says yes + picks the
+    #           first nonland id; that bear lands on p1's graveyard.
+    #       (2) ETB resolve + may-discard NO — same setup; caster
+    #           agent (``_NoDeclineAgent``) declines the may-gate;
+    #           silent fizzle (look-step still stamps publicly_known_
+    #           to BEFORE the gate, but no card moves).
+    #       (3) Combat damage path — Tail-X1
+    #           DestroyEnchantedPermanent: Cracked Skull attached to
+    #           p0's host bear; call ``_fire_enchanted_dealt_damage_
+    #           triggers(state, host_bear, 1)`` (the same dispatch
+    #           combat code uses); IsHost matches; the Destroy effect
+    #           reads ``state.resolving_source`` (Cracked Skull) and
+    #           destroys its ``attached_to`` (host bear); CR 704.5n
+    #           SBA then sweeps Cracked Skull off the bf.
+    #
+    # **Cross-engine pin (Tail-X1 + ETB push site).** This slice is
+    # Python-only per the Worker A delivery scope (per spec); the
+    # cross-engine byte-equal pins for Scenarios 1 (Rust ETB push
+    # site of ``PendingDecision::MayDiscardChoice`` via
+    # ``first_legal_trigger_target``) and 3 (Tail-X1 DEALT_DAMAGE
+    # dispatch into ``Effect::DestroyEnchantedPermanent`` resolve) are
+    # deferred to a follow-up Rust slice. Same honest-stop shape Phase
+    # A's Chorale parity took (Scenario 1 cross-engine deferred).
+    # The admit-gate flip + the per-card real-EoE Python-engine probe
+    # are the load-bearing Cycle 2 evidence.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Aura-
+    # attachment BLOCKED-SG row: 2 multi-gated tail → 1 (Sporogenic
+    # Infection STILL DECLINED at the admit gate — its
+    # ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` ENTERS
+    # half is outside the safe set until Phase C closes it; Cracked
+    # Skull is no longer blocked). The Tail-X1 widen this slice ALSO
+    # positions Sporogenic for Phase C closure (Phase C only needs
+    # the ENTERS half ``TargetOpponentSacrificesCreatureOther
+    # ThanEnchanted`` Effect — the Tail-X1 admit shape is shared and
+    # already lands here).
+    REPO_ROOT / "tests" / "test_cracked_skull_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

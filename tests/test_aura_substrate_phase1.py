@@ -314,23 +314,29 @@ def test_predicate_declines_non_aura():
 
 
 def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
-    """**Phase 4 S3 closure (Moonlit Meditation, 2026-05-21).** The
-    closure adds Moonlit Meditation to the admit set (the Rust
-    CreateToken arms now consult the controller's attached Moonlit
-    Aura via ``moonlit_token_substitution`` and swap to the host's
-    printing with a per-object Token-supertype override). Combined
-    with the prior Phase 1/Phase 2/Phase 3 first deliverable
-    widenings + Phase 3+ Phase A Cycle 2 (2026-05-26), the bench-
-    loader admits SEVEN live EoE Auras:
+    """**Phase 3+ Phase B Cycle 2 closure (Cracked Skull, 2026-05-26).**
+    The closure adds Cracked Skull to the admit set (the
+    ``_aura_triggers_are_phase3_safe`` widen with TWO new shapes in
+    lockstep: ENTERS+IsSelf+TargetOpponentLookHandMayDiscard (Shape
+    A) AND DEALT_DAMAGE+IsHost+DestroyEnchantedPermanent (Tail-X1,
+    shared with Sporogenic Infection per design doc §3). Cracked
+    Skull's full two-trigger surface now passes the all-or-nothing
+    gate). Combined with the prior Phase 1/Phase 2/Phase 3 first
+    deliverable widenings + Phase 3+ Phase A Cycle 2 (2026-05-26),
+    the bench-loader admits EIGHT live EoE Auras:
     Frantic Strength + Shardmage's Rescue (S1 — keyword + P/T),
     Duskmourn's Domination (S2 — control + lose-abilities), Tractor
     Beam (S2 — control + prevents_untap), Pain for All (S4 —
     triggered, the Phase 3 closure), Moonlit Meditation (S3 —
-    replacement, the Phase 4 S3 closure), and Chorale of the Void
-    (S4 — triggered, the Phase 3+ Phase A Cycle 2 closure; the +2,783
-    17lands deck flip). Every other S4 carrier (Cracked Skull,
-    Sporogenic Infection) stays declined on their non-Phase-3-safe
-    trigger shape; Meltstrider's Resolve stays declined on its
+    replacement, the Phase 4 S3 closure), Chorale of the Void (S4 —
+    triggered, the Phase 3+ Phase A Cycle 2 closure; the +2,783
+    17lands deck flip), and Cracked Skull (S4 — triggered, the
+    Phase 3+ Phase B Cycle 2 closure; +0 17lands decks — the
+    positive-control carrier per design doc §0 row 2). Every other
+    S4 carrier (Sporogenic Infection) stays declined on its non-
+    Phase-3-safe ENTERS half (Phase C closure); Cryoshatter stays
+    declined on its BECOMES_TAPPED half (different sub-shape, not in
+    safe set); Meltstrider's Resolve stays declined on its
     ``EnchantedCreatureFightsTargetEffect`` trigger (separate
     follow-up slice).
 
@@ -347,11 +353,11 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
             admitted.append(name)
         else:
             declined.append((name, "declined"))
-    # Phase 3+ Phase A Cycle 2 closure admit set: S1 carriers + S2
+    # Phase 3+ Phase B Cycle 2 closure admit set: S1 carriers + S2
     # Duskmourn-shape + Tractor Beam + Pain for All + Moonlit
-    # Meditation + Chorale of the Void. If this set changes (parser
-    # drift, future widen), update both this pin AND the deck-count
-    # expectations in the plan.
+    # Meditation + Chorale of the Void + Cracked Skull. If this set
+    # changes (parser drift, future widen), update both this pin AND
+    # the deck-count expectations in the plan.
     assert sorted(admitted) == sorted([
         "Frantic Strength",
         "Shardmage's Rescue",
@@ -360,8 +366,9 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
         "Pain for All",
         "Moonlit Meditation",
         "Chorale of the Void",
+        "Cracked Skull",
     ]), (
-        f"Phase 3+ Phase A Cycle 2 closure expected seven carriers "
+        f"Phase 3+ Phase B Cycle 2 closure expected eight carriers "
         f"to admit; got {sorted(admitted)!r}. If this is intentional "
         f"(a later Phase widen of the predicate's admit shape), "
         f"update this pin to assert the new expected admit list "
@@ -750,14 +757,20 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
         "Admitted set: %r" % (admitted_auras,)
     )
     must_decline = {
-        "Cracked Skull",             # S4 triggered_abilities (non-Phase-3-safe)
-        "Sporogenic Infection",      # S4 triggered_abilities (non-Phase-3-safe)
+        # Cracked Skull: ADMITTED post Phase 3+ Phase B Cycle 2
+        # (2026-05-26) — the C2 admit-gate widen added Shape A
+        # (ENTERS + IsSelf + TargetOpponentLookHandMayDiscard) +
+        # Tail-X1 (DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent)
+        # to ``_aura_triggers_are_phase3_safe``. The +0 17lands deck
+        # flip (positive-control carrier per design doc §0 row 2).
+        "Sporogenic Infection",      # S4 triggered_abilities — ENTERS half (TargetOpponentSacrificesCreatureOtherThanEnchanted) still outside Phase-3-safe set; Phase C closure
         # Chorale of the Void: ADMITTED post Phase 3+ Phase A Cycle 2
         # (2026-05-26) — the C2 admit-gate widen added Shape A
         # (ATTACKS + IsHost(subject="attacker") + Reanimate) + Tail-X2
         # (BEGINNING_OF_END_STEP + Controlled(YOU) +
         # SacrificeSelfUnlessVoidActive) to ``_aura_triggers_are_
         # phase3_safe``. The +2,783 17lands deck flip.
+        "Cryoshatter",               # S4 triggered_abilities — BECOMES_TAPPED half (DestroyEnchantedPermanent) still outside safe set; the Tail-X1 widen here is shared shape but BECOMES_TAPPED is not the same event (separate slice if/when desired)
         "Meltstrider's Resolve",     # residue triggered_abilities (non-Phase-3-safe — Fight effect)
     }
     leaked = must_decline & set(admitted_auras)

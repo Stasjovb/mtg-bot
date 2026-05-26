@@ -182,9 +182,17 @@ def test_bridge_arm_unit_variant_round_trip():
 
 
 def test_python_ta_to_safe_dict_phase3_recognizes_look_hand_may_discard():
-    """**Recognition arm pin.** The Aura-phase3 emitter recognizes
-    ``TargetOpponentLookHandMayDiscard`` and emits the canonical
-    dict shape (ENTERS + IsSelf + target_opponent_look_hand_may_discard).
+    """**Recognition arm pin (Cycle 2 fix).** The Aura-phase3 emitter
+    recognizes ``TargetOpponentLookHandMayDiscard`` and emits the
+    canonical dict shape (ENTERS + IsSelf + target_opponent_look_hand_
+    may_discard). Cycle 2 fixed the predicate kind string from the
+    Cycle 1 placeholder ``"is_self"`` to the canonical
+    ``"source_is_self"`` that Rust's ``parse_predicate`` recognizes
+    (sibling of Pain for All / Tap-Enchanted-Permanent emitters at
+    ``trajectory.py:7497 / 7841 / 7867``). The Cycle 1 dormant leaf
+    was never invoked end-to-end so the mismatch was harmless; Cycle
+    2 flips the admit gate ON and the bench-loader feeds Rust the
+    emitted dict, so the kind string MUST match.
     """
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.generic.discard import (
@@ -204,7 +212,7 @@ def test_python_ta_to_safe_dict_phase3_recognizes_look_hand_may_discard():
     d = _python_ta_to_safe_dict_aura_phase3(ta)
     assert d == {
         "event": "enters",
-        "predicate": {"kind": "is_self"},
+        "predicate": {"kind": "source_is_self"},
         "effect": {"kind": "target_opponent_look_hand_may_discard"},
         "once_per_turn": False,
     }
@@ -231,30 +239,41 @@ def test_aura_phase3_emitter_arm_present_in_source():
     )
 
 
-def test_aura_triggers_phase3_safe_declines_cracked_skull():
-    """**Substrate-only invariant pin.** Cracked Skull's full trigger
-    surface fails the Phase-3 safe-trigger gate post-Cycle-1 -- both
-    halves are unwidened.
+def test_aura_triggers_phase3_safe_admits_cracked_skull_post_cycle_2():
+    """**INVERTED-IN-PLACE post Phase B Cycle 2 (2026-05-26).**
+    Cracked Skull's full trigger surface now PASSES the Phase-3
+    safe-trigger gate — both halves widened in lockstep:
+
+      * ENTERS + IsSelf(subject=None) + TargetOpponentLookHandMayDiscard
+        (Shape A — Cracked Skull's ETB long pole)
+      * DEALT_DAMAGE + IsHost(subject=None) + DestroyEnchantedPermanent
+        (Tail-X1 — shared with Sporogenic Infection per design doc §3)
+
+    The all-or-nothing gate required both halves to widen together;
+    Phase C will reuse the Tail-X1 admit and close Sporogenic by widening
+    the ENTERS half (``TargetOpponentSacrificesCreatureOtherThanEnchanted``).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _aura_triggers_are_phase3_safe
 
     ps = OracleParserCardSource().get_printings()
     cracked = ps["Cracked Skull"]
-    assert _aura_triggers_are_phase3_safe(cracked.triggered_abilities) is False
+    assert _aura_triggers_are_phase3_safe(cracked.triggered_abilities) is True
 
 
-def test_cracked_skull_stays_declined_at_admit_gate_post_cycle_1():
-    """**Substrate-only invariant pin.** Cracked Skull stays declined
-    at the production-deck loader filter post-Cycle-1. Cycle 2 widens
-    + wires the ETB-trigger push of MayDiscardChoice in the SAME slice.
+def test_cracked_skull_now_admits_at_admit_gate_post_cycle_2():
+    """**INVERTED-IN-PLACE post Phase B Cycle 2 (2026-05-26) — THE FLIP.**
+    Cracked Skull now admits at the production-deck loader filter. The
+    +0 17lands-deck flip (Cracked Skull is a positive-control carrier
+    with 0 EoE decks; the deck-count signal is purely on substrate
+    correctness, not deck volume — design doc §0 row 2).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_aura
 
     ps = OracleParserCardSource().get_printings()
     cracked = ps["Cracked Skull"]
-    assert _printing_is_bridge_simple_aura(cracked) is False
+    assert _printing_is_bridge_simple_aura(cracked) is True
 
 
 # ---------------------------------------------------------------------------
