@@ -421,6 +421,21 @@ pub enum UeotModifier {
     /// `color_or_subtype` for first-slice. Future expansion can
     /// split into separate layer-4 / layer-7b variants once the
     /// effective-subtype consumer surface lands.
+    ///
+    /// **Spacecraft Phase 3C Cycle 2 (2026-05-26) follow-up.** The
+    /// variant is now ALSO the substrate for "target artifact you
+    /// control becomes a P/T artifact creature UEOT"
+    /// (`Effect::TargetArtifactBecomesCreatureUEOT`, Synthesizer
+    /// Labship's BEGINNING_OF_COMBAT trigger). The mechanism is
+    /// generic — the variant doubles as (a) the layer-7B base-P/T
+    /// set, (b) the "is-creature-now" flag — so a non-creature
+    /// artifact target gains creature status for the duration via
+    /// `ueot_is_creature_via_become`. The `color_or_subtype` is
+    /// empty for the artifact-target case (the Python emit adds no
+    /// creature subtype; only the type "creature" + the base P/T).
+    /// The variant name is historical; rename deferred to keep the
+    /// substrate-only invariant landing minimal (sibling-narrow
+    /// precedent rather than rename).
     BecomesLandCreature {
         power: i32,
         toughness: i32,

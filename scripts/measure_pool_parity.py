@@ -2660,6 +2660,50 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Entropic Battlecruiser + Infinite Guideline Station) is the
     # next set of FLIP cycles per design doc §7.
     REPO_ROOT / "tests" / "test_sledge_class_seedship_parity.py",
+    # **Spacecraft Phase 3C Cycle 2 (2026-05-26):** Per-card real-EoE
+    # cross-engine byte-equal probe binding Synthesizer Labship to the
+    # combined Rust + Python admit gate post-Phase-3C-Cycle-2 FLIP per
+    # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md`` §6.4 #14.
+    # First consumer of the Phase 3C Cycle 1 tier-gate substrate
+    # (``TriggeredAbility.tier_threshold: i32`` slot + trigger-firing-
+    # time gate at ``state_ops_resolve.rs::dispatch_event`` chokepoint).
+    #
+    #   * ``test_synthesizer_labship_parity.py`` — Synthesizer Labship
+    #     (``{U}`` Artifact — Spacecraft, 4/4, station_threshold=9,
+    #     stationed_keywords={flying, vigilance}, ONE BEGINNING_OF_
+    #     COMBAT trigger BEGINNING_OF_COMBAT+Controlled(YOU)+
+    #     TargetArtifactBecomesCreatureUEOT(2,2,{flying}) at
+    #     tier_threshold=2 — load-bearing tier-gate carrier); the FIRST
+    #     PROBE_MODULES-credited probe binding the new
+    #     ``TargetArtifactBecomesCreatureUEOT`` Effect class + the new
+    #     BEGINNING_OF_COMBAT+Controlled(YOU) event-shape on the
+    #     Phase-3 trigger-bearing Spacecraft admit gate + the C1
+    #     tier-gate substrate's first real-EoE consumer. Drives BOTH
+    #     engines through TWO scenarios across the CHARGE-COUNTER axis
+    #     (the load-bearing tier-gate axis) per design doc §6.4 #14:
+    #     (A) tier-gate-CLOSED (charge=1 < tier=2): the BEGINNING_OF_
+    #     COMBAT trigger does NOT fire — silent decline path proves the
+    #     C1 gate correctly REJECTS firing below threshold, and (B) THE
+    #     LOAD-BEARING tier-gate-OPEN (charge=2 == tier=2): the trigger
+    #     FIRES + resolves through the new
+    #     ``TargetArtifactBecomesCreatureUEOT`` arm; the target Lander
+    #     gains creature-now status + base P/T 2/2 + the "flying"
+    #     keyword UEOT (the layer-7B P/T set + layer-6 keyword grant
+    #     compose). Synthesizer Labship is excluded from being a target
+    #     by the "other" filter.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Synthesizer
+    # Labship joins Sawship + Lumen-Class Frigate + Larval Scoutlander
+    # + Sledge-Class Seedship as the FIFTH PROBED Spacecraft). The
+    # other 2 EoE Phase-3C Spacecraft (Entropic Battlecruiser +
+    # Infinite Guideline Station) stay honestly DECLINED on the
+    # Phase-3C-Cycle-2 3-class / 3-shape allowlist — the §6.6 decline-
+    # set bench check in ``test_spacecraft_phase_3a_cycle_2_flip.py``
+    # (updated this slice to drop Synthesizer Labship from the decline
+    # list) pins this exhaustively. Phase 3C Cycles 3 + 4 (Entropic
+    # Battlecruiser + Infinite Guideline Station) are the next FLIP
+    # cycles per design doc §7.3.
+    REPO_ROOT / "tests" / "test_synthesizer_labship_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see

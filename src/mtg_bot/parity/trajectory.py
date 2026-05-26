@@ -9602,22 +9602,32 @@ def _phase_3a_lazy_init_allowlists():
         OptionalPutCreatureFromHandOntoBattlefield,
         OptionalSacLandOrLanderForBasicLandRamp,
     )
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.become_type import (
+        TargetArtifactBecomesCreatureUEOT,
+    )
+    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
-    # Phase 3B Cycle 2 widen (2026-05-25; this slice): append
-    # ``OptionalPutCreatureFromHandOntoBattlefield`` (Sledge-Class
-    # Seedship) to the Effect-class allowlist and ``(ATTACKS,
-    # IsSelf(subject=None))`` to the (event, predicate)-shape table.
-    # Per design doc §5.4 / §7.2 — the per-cycle admit set grows from
-    # the Phase-3A 1-class / 1-shape pilot to the Phase-3B 2-class /
-    # 2-shape allowlist.
+    # Phase 3C Cycle 2 widen (2026-05-26; this slice): append
+    # ``TargetArtifactBecomesCreatureUEOT`` (Synthesizer Labship) to
+    # the Effect-class allowlist and ``(BEGINNING_OF_COMBAT,
+    # Controlled(by=YOU, subject=None))`` to the (event, predicate)-
+    # shape table. Per design doc §5.4 / §7.3 — the per-cycle admit set
+    # grows from the Phase-3B 2-class / 2-shape allowlist to the
+    # Phase-3C-Cycle-2 3-class / 3-shape allowlist. Synthesizer Labship
+    # is the FIRST Phase-3 consumer of the C1 tier-gate substrate (its
+    # BEGINNING_OF_COMBAT trigger carries ``tier_threshold=2``; the
+    # Rust dispatch chokepoint gate at
+    # ``state_ops_resolve.rs::dispatch_event`` only fires the trigger
+    # when the source's ``charge_counters >= 2``).
     _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES = (
         OptionalSacLandOrLanderForBasicLandRamp,
         OptionalPutCreatureFromHandOntoBattlefield,
+        TargetArtifactBecomesCreatureUEOT,
     )
     _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES = (
         (Event.ENTERS, IsSelf(subject=None)),
         (Event.ATTACKS, IsSelf(subject=None)),
+        (Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None)),
     )
 
 
@@ -9818,7 +9828,10 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
         OptionalPutCreatureFromHandOntoBattlefield,
         OptionalSacLandOrLanderForBasicLandRamp,
     )
-    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.become_type import (
+        TargetArtifactBecomesCreatureUEOT,
+    )
+    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
 
     if not _printing_is_bridge_phase_3_trigger_spacecraft(printing):
         return None
@@ -9829,28 +9842,46 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
     except ValueError:
         return None
     # Build the triggered_abilities tuple — for each admitted trigger,
-    # emit the round-trip dict the bridge contract expects. Phase 3B's
-    # 2-shape allowlist widens the Phase-3A single-shape dispatch with
-    # the ATTACKS event arm + OptionalPutCreatureFromHandOntoBattlefield
-    # Effect-emit arm (Sledge-Class Seedship FLIP, this slice). Future
-    # sub-phases append additional arms (sibling to the
-    # ``_python_ta_to_safe_dict`` cascade above but scoped to the
-    # Phase-3-admit set).
+    # emit the round-trip dict the bridge contract expects. Phase 3C
+    # Cycle 2 widens the 2-shape allowlist with the BEGINNING_OF_COMBAT
+    # event arm + Controlled(YOU) predicate arm +
+    # TargetArtifactBecomesCreatureUEOT Effect-emit arm (Synthesizer
+    # Labship FLIP, this slice). The Effect emit arm threads the new
+    # ``tier_threshold`` slot (the C1 substrate) so Synthesizer
+    # Labship's tier=2 BEGINNING_OF_COMBAT trigger is rebuildable in
+    # the cross-engine bridge. Future sub-phases append additional arms
+    # (sibling to the ``_python_ta_to_safe_dict`` cascade above but
+    # scoped to the Phase-3-admit set).
     ta_dicts: list[dict] = []
     for trig in printing.triggered_abilities:
         # Event string mapping mirrors _python_ta_to_safe_dict above.
         if trig.event is Event.ENTERS:
             event_str = "enters"
         elif trig.event is Event.ATTACKS:
-            # Phase 3B Cycle 2 widen — Sledge-Class Seedship's
-            # self-attack trigger event.
             event_str = "attacks"
+        elif trig.event is Event.BEGINNING_OF_COMBAT:
+            # Phase 3C Cycle 2 widen — Synthesizer Labship's
+            # beginning-of-your-combat trigger event.
+            event_str = "beginning_of_combat"
         else:
-            # Phase 3B admits ENTERS + ATTACKS only; defense-in-depth.
+            # Phase 3C-Cycle-2 admits ENTERS + ATTACKS +
+            # BEGINNING_OF_COMBAT only; defense-in-depth.
             return None
-        # Predicate dict (Phase 3B: IsSelf -> source_is_self).
+        # Predicate dict — IsSelf -> source_is_self, Controlled(YOU)
+        # -> controlled_by_you (sibling of Phase-3B's narrower
+        # dispatch).
         if isinstance(trig.predicate, IsSelf) and trig.predicate.subject is None:
             pred_dict = {"kind": "source_is_self"}
+        elif (
+            isinstance(trig.predicate, Controlled)
+            and trig.predicate.by is YOU
+            and trig.predicate.subject is None
+        ):
+            # Phase 3C Cycle 2 widen — Synthesizer Labship's
+            # "during your combat" predicate. Mirrors Rust's
+            # `Predicate::ControlledByYou { slot: None }` parse arm
+            # (cards.rs:17053).
+            pred_dict = {"kind": "controlled_by_you"}
         else:
             return None  # defense-in-depth
         # Effect dict — emit the canonical Rust-parser-claimed kind +
@@ -9870,13 +9901,43 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
             eff_dict = {
                 "kind": "optional_put_creature_from_hand_onto_battlefield",
             }
+        elif isinstance(trig.effect, TargetArtifactBecomesCreatureUEOT):
+            # Phase 3C Cycle 2 widen — Synthesizer Labship's effect.
+            # Struct-shape Effect carrying power/toughness ints +
+            # granted_keywords list. Mirrors the Cycle-2 Rust to_pydict
+            # arm at cards.rs + the cross-engine bridge dict-to-Python
+            # arm in cross_engine.py. The granted_keywords frozenset is
+            # emitted as a sorted list so the bridge dict is byte-
+            # deterministic regardless of frozenset hash iteration
+            # order (sibling-narrow precedent of Rust's parse-time sort
+            # on the same field).
+            eff_dict = {
+                "kind": "target_artifact_becomes_creature_ueot",
+                "power": int(trig.effect.power),
+                "toughness": int(trig.effect.toughness),
+                "granted_keywords": sorted(trig.effect.granted_keywords),
+            }
         else:
             return None  # defense-in-depth (admit predicate gated this)
-        ta_dicts.append({
+        ta_dict: dict = {
             "event": event_str,
             "predicate": pred_dict,
             "effect": eff_dict,
-        })
+        }
+        # Phase 3C Cycle 2 — thread the C1 tier_threshold substrate.
+        # Synthesizer Labship's BEGINNING_OF_COMBAT trigger carries
+        # tier_threshold=2 (the only tier-gated trigger in the
+        # Phase-3-Cycle-2 admit set). Sledge-Class Seedship's ATTACKS
+        # trigger + Larval Scoutlander's ENTERS trigger carry
+        # tier_threshold=0; emit positively only when > 0 so the Phase-
+        # 3A/3B round-trip dicts stay byte-equal to their pre-C2 shape
+        # (back-compat with the bridge's "missing key defaults to 0"
+        # contract — see cross_engine.py::
+        # _ta_dict_to_python_triggered_ability and Rust's
+        # parse_triggered_ability arm at cards.rs).
+        if trig.tier_threshold > 0:
+            ta_dict["tier_threshold"] = int(trig.tier_threshold)
+        ta_dicts.append(ta_dict)
     return _CardDef(
         name=printing.name,
         card_type="Artifact",

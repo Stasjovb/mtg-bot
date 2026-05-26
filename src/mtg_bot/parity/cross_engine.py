@@ -1692,6 +1692,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return OptionalSacLandOrLanderForBasicLandRamp(
             land_count=land_count,
         )
+    if kind == "target_artifact_becomes_creature_ueot":
+        # **Spacecraft Phase 3C Cycle 2 (2026-05-26).** Bridge arm for
+        # the new Rust ``Effect::TargetArtifactBecomesCreatureUEOT``
+        # struct variant (cards.rs). Mirrors Python's
+        # ``TargetArtifactBecomesCreatureUEOT(power, toughness,
+        # granted_keywords)`` at ``effects/generic/become_type.py:36``
+        # — Synthesizer Labship's BEGINNING_OF_COMBAT trigger effect
+        # ("up to one other target artifact you control becomes a
+        # `power`/`toughness` artifact creature with the listed
+        # `granted_keywords` until end of turn").
+        #
+        # **Field shape.** Rust's struct-variant carries REQUIRED
+        # ``power: i32`` + ``toughness: i32`` (parser raises on
+        # missing fields) and OPTIONAL ``granted_keywords:
+        # Vec<String>`` defaulting to empty when absent. Mirrors
+        # Python's dataclass:
+        #
+        #   ``power: int = 0``
+        #   ``toughness: int = 0``
+        #   ``granted_keywords: frozenset[str] = frozenset()``
+        #
+        # **Required-fields contract.** Mirror of the round-25
+        # ``become_land_creature_ueot`` bridge arm's required-fields
+        # parity — KeyError on missing power / toughness. The Rust
+        # parser raises ``PyValueError`` on missing fields; the bridge
+        # raises ``KeyError`` for the same shape (matches the
+        # become_land_creature_ueot precedent).
+        #
+        # **Keyword list conversion.** Rust emits granted_keywords as
+        # a (parse-time-sorted) ``Vec<String>``; Python's dataclass
+        # uses ``frozenset[str]``. The bridge folds the list into a
+        # frozenset — set membership is the relevant ordering for the
+        # downstream resolve (the Python class iterates the frozenset
+        # in arbitrary order; the Rust resolve walks the sorted Vec).
+        # Set semantics are byte-equal regardless of iteration order.
+        #
+        # **Negative P/T legal.** No raise-on-negative on either side;
+        # mirrors the round-25 become_land_creature_ueot precedent.
+        from mtg_bot.effects.generic.become_type import (
+            TargetArtifactBecomesCreatureUEOT,
+        )
+        if "power" not in eff_dict:
+            raise KeyError(
+                "target_artifact_becomes_creature_ueot bridge arm: "
+                "missing required 'power' field"
+            )
+        if "toughness" not in eff_dict:
+            raise KeyError(
+                "target_artifact_becomes_creature_ueot bridge arm: "
+                "missing required 'toughness' field"
+            )
+        kw_raw = eff_dict.get("granted_keywords", ())
+        granted_keywords = frozenset(kw_raw) if kw_raw else frozenset()
+        return TargetArtifactBecomesCreatureUEOT(
+            power=int(eff_dict["power"]),
+            toughness=int(eff_dict["toughness"]),
+            granted_keywords=granted_keywords,
+        )
     if kind == "optional_put_creature_from_hand_onto_battlefield":
         # **Spacecraft Phase 3B Cycle 1 (2026-05-25).** Bridge arm for
         # the new Rust ``Effect::OptionalPutCreatureFromHandOntoBattle

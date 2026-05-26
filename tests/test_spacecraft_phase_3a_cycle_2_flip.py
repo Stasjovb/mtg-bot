@@ -174,11 +174,14 @@ def test_larval_scoutlander_admits_at_deck_filter_post_cycle_2():
 
 
 def test_admit_set_size_bumps_to_3_spacecraft_post_cycle_2():
-    """Pin #3 — **Admit-set count bump.** Pre-C2 admitted Spacecraft
-    were Galvanizing Sawship (Phase 1) + Lumen-Class Frigate (Phase 2).
-    Post-C2 exactly THREE Spacecraft admit at the deck-level filter:
-    + Larval Scoutlander (Phase 3A). Bench-aggregate cross-check walks
-    every printing in the active source.
+    """Pin #3 — **Admit-set count bump.** Pre-Phase-3C-C2 admitted
+    Spacecraft were Galvanizing Sawship (Phase 1) + Lumen-Class Frigate
+    (Phase 2) + Larval Scoutlander (Phase 3A) + Sledge-Class Seedship
+    (Phase 3B). Post-Phase-3C-Cycle-2 (2026-05-26; this campaign slice)
+    exactly FIVE Spacecraft admit at the deck-level filter: + Synthesizer
+    Labship (Phase 3C C2 — the first consumer of the tier-gate
+    substrate). Bench-aggregate cross-check walks every printing in the
+    active source.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -198,25 +201,28 @@ def test_admit_set_size_bumps_to_3_spacecraft_post_cycle_2():
         "Larval Scoutlander",
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
+        "Synthesizer Labship",
     ], (
-        "Admit-set count bump: exactly FOUR Spacecraft must admit at "
-        "the deck-level filter post-Phase-3B-Cycle-2 — Galvanizing "
+        "Admit-set count bump: exactly FIVE Spacecraft must admit at "
+        "the deck-level filter post-Phase-3C-Cycle-2 — Galvanizing "
         "Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
         "Scoutlander (Phase-3A ETB) + Sledge-Class Seedship (Phase-"
-        "3B ATTACKS). Got: "
+        "3B ATTACKS) + Synthesizer Labship (Phase-3C C2 BEGINNING_OF_"
+        "COMBAT tier-gate). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 
 
-def test_phase_3a_admit_set_is_exactly_larval_scoutlander_and_sledge_class_seedship():
-    """Pin #3b — Subsystem-attribution: exactly TWO EoE printings
+def test_phase_3a_admit_set_is_exactly_three_phase_3_carriers_post_cycle_2():
+    """Pin #3b — Subsystem-attribution: exactly THREE EoE printings
     pass :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
-    under the Phase-3B 2-class / 2-shape allowlist (Larval Scoutlander
-    + Sledge-Class Seedship). The Phase-3B admit set is exhaustive
-    AND positively exclusive of every other Spacecraft. The other 3
-    Phase-3 Spacecraft each fail at least one (event, predicate,
-    effect) clause and are pinned at the per-cycle decline-set walk
-    below.
+    under the Phase-3C-Cycle-2 3-class / 3-shape allowlist (Larval
+    Scoutlander + Sledge-Class Seedship + Synthesizer Labship). The
+    Phase-3C-Cycle-2 admit set is exhaustive AND positively exclusive
+    of every other Spacecraft. The remaining 2 Phase-3 Spacecraft
+    (Entropic Battlecruiser + Infinite Guideline Station) each fail at
+    least one (event, predicate, effect) clause and are pinned at the
+    per-cycle decline-set walk below.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -229,12 +235,14 @@ def test_phase_3a_admit_set_is_exactly_larval_scoutlander_and_sledge_class_seeds
     assert phase_3_admit == [
         "Larval Scoutlander",
         "Sledge-Class Seedship",
+        "Synthesizer Labship",
     ], (
-        "Phase-3B admit set must be exactly Larval Scoutlander + "
-        f"Sledge-Class Seedship; got {phase_3_admit!r}. Any other "
-        "admit is a silent auto-grow honest-stop — verify the "
-        "Phase-3B allowlist (2 Effect classes + 2 (event, predicate) "
-        "shapes) hasn't been widened accidentally."
+        "Phase-3C-Cycle-2 admit set must be exactly Larval Scoutlander + "
+        "Sledge-Class Seedship + Synthesizer Labship; got "
+        f"{phase_3_admit!r}. Any other admit is a silent auto-grow "
+        "honest-stop — verify the Phase-3C-Cycle-2 allowlist (3 Effect "
+        "classes + 3 (event, predicate) shapes) hasn't been widened "
+        "accidentally."
     )
 
 
@@ -249,19 +257,16 @@ def test_phase_3a_admit_set_is_exactly_larval_scoutlander_and_sledge_class_seeds
     "card_name,decline_reason",
     [
         (
-            "Synthesizer Labship",
-            "BEGINNING_OF_COMBAT event + Controlled predicate + "
-            "TargetArtifactBecomesCreatureUEOT effect (Phase 3C)",
-        ),
-        (
             "Entropic Battlecruiser",
             "EachOpponentDiscardsOrLosesLife / TargetPlayerLosesLife "
-            "effects + 2 triggers including DISCARDS_CARD (Phase 3C)",
+            "effects + 2 triggers including DISCARDS_CARD (Phase 3C "
+            "Cycle 3 territory)",
         ),
         (
             "Infinite Guideline Station",
             "CreateTokenPerMulticoloredPermanent / "
-            "DrawCardPerMulticoloredPermanent effects (Phase 3C)",
+            "DrawCardPerMulticoloredPermanent effects (Phase 3C Cycle "
+            "4 territory)",
         ),
         (
             "The Eternity Elevator",
@@ -273,12 +278,14 @@ def test_phase_3a_predicate_declines_each_deferred_spacecraft(
     card_name, decline_reason,
 ):
     """Pin #4 — Per design doc §6.6 #19 decline-set walk. Each of the
-    3 still-deferred Phase-3C Spacecraft carriers + The Eternity
-    Elevator stays DECLINED at the Phase-3B admit predicate (Sledge-
-    Class Seedship is promoted out of this decline set post-Phase-3B-
-    C2; see ``test_sledge_class_seedship_now_admits_at_admit_gate_
-    post_cycle_2`` in test_spacecraft_phase_3b_substrate_cycle_1.py
-    for the new admit-side invariant). Silent auto-grow honest-stop.
+    2 still-deferred Phase-3C Spacecraft carriers + The Eternity
+    Elevator stays DECLINED at the Phase-3C-Cycle-2 admit predicate
+    (Synthesizer Labship is promoted out of this decline set
+    post-Phase-3C-Cycle-2 — 2026-05-26; see the INVERTED admit-side
+    invariant pin
+    ``test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2``
+    in test_spacecraft_phase_3c_substrate_cycle_1.py). Silent auto-
+    grow honest-stop.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory

@@ -787,6 +787,33 @@ impl GameState {
         Ok(())
     }
 
+    /// **Test-helper (Spacecraft Phase 3C Cycle 2 follow-up,
+    /// 2026-05-26).** Fire the BEGINNING_OF_COMBAT dispatch event
+    /// directly, mirroring the dispatch site at `advance_phase` line
+    /// 693 (`dispatch_event(self, Event::BeginningOfCombat,
+    /// player_subject)`). The active-player sentinel is computed the
+    /// same way (PLAYER_SUBJECT_OFFSET + active_player).
+    ///
+    /// Why this exists: probe-side tests need to drive a
+    /// BEGINNING_OF_COMBAT trigger fan-out (Synthesizer Labship's
+    /// tier-2 trigger) without sequencing through the full
+    /// advance_phase path's mana-pool / untap / priority side effects.
+    /// The production dispatch site fires the SAME `dispatch_event`
+    /// call this helper invokes, so probe behavior is byte-equal to
+    /// the advance_phase-driven path at the trigger dispatch layer
+    /// (which is the layer the parity probe asserts on).
+    ///
+    /// Sibling of `set_phase`'s "raw state mutation — does NOT trigger
+    /// the side-effect cascade" convention. Production code should
+    /// drive BEGINNING_OF_COMBAT triggers via `advance_phase` to keep
+    /// the cross-slice composition (mana-pool empty, untap sweep,
+    /// priority swap) firing.
+    fn dispatch_beginning_of_combat(&mut self) -> PyResult<()> {
+        let player_subject =
+            PLAYER_SUBJECT_OFFSET + self.active_player as u32;
+        dispatch_event(self, Event::BeginningOfCombat, player_subject)
+    }
+
     /// Python-Step-name string for the current phase. Round 22 Phase
     /// 2b bridge expansion — `scripts/parity_smoke.py:hash_state`
     /// reads `state.step.name` (or falls back to `state.step` if

@@ -439,14 +439,16 @@ def test_admit_set_size_bumps_post_cycle_3():
         "Larval Scoutlander",
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
+        "Synthesizer Labship",
     ], (
-        "Admit-set count bump: exactly FOUR Spacecraft must admit "
-        "at the deck-level filter post-Phase-3B-Cycle-2 — Galvanizing "
+        "Admit-set count bump: exactly FIVE Spacecraft must admit "
+        "at the deck-level filter post-Phase-3C-Cycle-2 — Galvanizing "
         "Sawship (Phase-1 sub-shape A) + Lumen-Class Frigate "
         "(Phase-2 static-anthem) + Larval Scoutlander (Phase-3A "
         "trigger-bearing ETB) + Sledge-Class Seedship (Phase-3B "
-        "trigger-bearing ATTACKS). Got: "
-        f"{sorted(admitted_spacecraft)!r}."
+        "trigger-bearing ATTACKS) + Synthesizer Labship (Phase-3C "
+        "Cycle-2 trigger-bearing BEGINNING_OF_COMBAT, tier-gated). "
+        f"Got: {sorted(admitted_spacecraft)!r}."
     )
 
 

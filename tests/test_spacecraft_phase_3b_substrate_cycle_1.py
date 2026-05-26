@@ -955,15 +955,24 @@ def test_phase_3a_allowlist_now_includes_optional_put_creature():
         "Phase 3A pilot class is preserved — C2 is a pure append, "
         "not a replace)."
     )
-    # Exactly the 2-entry Phase-3B admit set today (sibling-narrow;
-    # Phase 3C cycles extend further).
+    # Post-Phase-3C-Cycle-2 (2026-05-26) the allowlist has 3 entries —
+    # the C2-FLIP slice appended ``TargetArtifactBecomesCreatureUEOT``
+    # (Synthesizer Labship). The Phase 3B 2-class pin invariant
+    # (Phase 3A pilot + this Phase 3B class) is preserved as the
+    # subset assertion above; the exact set check moves to a 3-element
+    # set post-C2.
+    from mtg_bot.effects.generic.become_type import (
+        TargetArtifactBecomesCreatureUEOT,
+    )
     assert set(classes) == {
         OptionalSacLandOrLanderForBasicLandRamp,
         OptionalPutCreatureFromHandOntoBattlefield,
+        TargetArtifactBecomesCreatureUEOT,
     }, (
-        "Phase 3B admit-class allowlist must be exactly the 2-class "
-        "set (Phase 3A pilot + the new Phase 3B class) — Phase 3C "
-        "cycles extend further. Silent auto-grow honest-stop."
+        "Phase 3C-Cycle-2 admit-class allowlist must be exactly the "
+        "3-class set (Phase 3A pilot + Phase 3B class + Phase 3C "
+        "Cycle 2 TargetArtifactBecomesCreatureUEOT) — Phase 3C Cycles "
+        "3+ extend further. Silent auto-grow honest-stop."
     )
 
 
@@ -997,11 +1006,25 @@ def test_phase_3a_event_shape_now_includes_attacks():
         "3A pilot shape is preserved — C2 is a pure append, not a "
         "replace)."
     )
-    # Exactly the 2-shape Phase-3B admit set today.
-    assert set(shapes) == {enters_isself, attacks_isself}, (
-        "Phase 3B event-shape allowlist must be exactly the 2-shape "
-        "set (Phase 3A pilot + the new Phase 3B shape) — Phase 3C "
-        "cycles extend further. Silent auto-grow honest-stop."
+    # Post-Phase-3C-Cycle-2 (2026-05-26) the event-shape table has 3
+    # entries — the C2-FLIP slice appended
+    # ``(Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None))``
+    # (Synthesizer Labship). The Phase 3B 2-shape pin invariant is
+    # preserved as the subset assertions above; the exact set check
+    # moves to a 3-element set post-C2.
+    from mtg_bot.effects.predicates import Controlled, YOU
+    beginning_of_combat_controlled_you = (
+        Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None),
+    )
+    assert set(shapes) == {
+        enters_isself,
+        attacks_isself,
+        beginning_of_combat_controlled_you,
+    }, (
+        "Phase 3C-Cycle-2 event-shape allowlist must be exactly the "
+        "3-shape set (Phase 3A pilot + Phase 3B shape + Phase 3C "
+        "Cycle 2 BEGINNING_OF_COMBAT + Controlled(YOU)) — Phase 3C "
+        "Cycles 3+ extend further. Silent auto-grow honest-stop."
     )
 
 

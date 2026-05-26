@@ -7192,6 +7192,166 @@ fn apply_effect(
             // fieldTapped's ENTERS push.
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **Spacecraft Phase 3C Cycle 2 (2026-05-26).** Synthesizer
+        // Labship's BEGINNING_OF_COMBAT trigger Effect — resolve arm
+        // for `Effect::TargetArtifactBecomesCreatureUEOT { power,
+        // toughness, granted_keywords }`. Mirrors Python's
+        // `TargetArtifactBecomesCreatureUEOT.resolve` at
+        // `effects/generic/become_type.py:76-112` (per design doc
+        // `docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md` §4.4).
+        //
+        // **Resolve dispatch (sibling of SetBasePTUntilEOT arm):**
+        //   1. Source-controller resolution: 5-zone walk (mirror of
+        //      `Effect::SetBasePTUntilEOT` resolve at line 18129); the
+        //      source object's controller drives the target-fan-out.
+        //      Off-bf source → silent fizzle (mirrors Python's
+        //      legal_targets walking `state.battlefield` for the source
+        //      controller's artifacts; an evicted source returns an
+        //      empty list).
+        //   2. Target fan-out + first-eligible pick: walk source-
+        //      controller's battlefield for the FIRST artifact that is
+        //      NOT the source itself (the "other" semantics from
+        //      Python's `o.id != source_id and o.printing.is_artifact`
+        //      filter). Sibling of `SetBasePTUntilEOT`'s first-creature
+        //      pick but with the artifact-not-source filter.
+        //   3. No eligible target → silent fizzle (mirror of Python's
+        //      `target_count_range = (0, 1)` "up to one"; with zero
+        //      eligible targets the effect resolves with `targets=()`
+        //      and the resolve method early-returns). This is byte-
+        //      equal with Python's no-eligible-target path on the
+        //      "up to one" target_count_range — both engines return
+        //      without mutation.
+        //   4. Push the layer-7B base-P/T set + per-keyword layer-6
+        //      grant UEOT modifiers onto the target's
+        //      `ueot_modifiers` Vec:
+        //        - ONE `UeotModifier::BecomesLandCreature { power,
+        //          toughness, color_or_subtype: "" }` (CR 613.4 — base
+        //          P/T set AND the "is-creature-now" flag for non-
+        //          creature artifact targets). The variant is named
+        //          after its original manland-animate use case but the
+        //          mechanism is generic: it both (a) registers the
+        //          layer-7B base-P/T override via
+        //          `ueot_becomes_land_creature_pt` and (b) flips
+        //          `ueot_is_creature_via_become` true so the
+        //          effective-creature-now reader treats a target
+        //          non-creature artifact as a creature for the
+        //          duration. Sibling of Python's
+        //          `BecomeType(types_to_add=("creature",), base_pt=
+        //          (power, toughness))` composition at `become_type.py
+        //          :93-99` (the layer-4 add_type "creature" + layer-7
+        //          set_base_pt registry writes folded into a single
+        //          UEOT modifier on the Rust side).
+        //        - ONE `UeotModifier::GrantKeyword { keyword }` per
+        //          string in `granted_keywords` (CR 613.6 — keyword
+        //          grant; lowercased to match the printing-side
+        //          keyword vocab).
+        //      Both classes auto-expire at the next CR 514.3 UEOT-
+        //      clear pass (cleanup step) per the standard
+        //      `UeotModifier` lifetime contract.
+        //
+        // **Layer-7B P/T set + layer-6 keyword grant compose**: the
+        // target is treated as a creature-now for the duration via
+        // the `BecomesLandCreature` modifier (sibling of the manland-
+        // animate semantics); effective-keyword readers fold the
+        // `GrantKeyword` entries into the active keyword set. Layer-
+        // 7c additive bonuses (`PowerToughnessBonus`) still stack on
+        // top of the set base per CR 613.7c. An already-creature
+        // artifact target also gets its base P/T overridden via the
+        // same modifier (the reader prefers the UEOT base over the
+        // printed base, mirroring CR 613.4 layer-7b last-applied).
+        //
+        // **"Other" semantics — source excluded.** Critical for
+        // Synthesizer Labship's wording: the source is the Synthesizer
+        // Labship itself (Spacecraft); the "other" filter prevents the
+        // source from targeting itself (which would set its own P/T to
+        // 2/2, undoing the station-charge-creature transition). The
+        // `obj.id != source_obj_id` filter on the bf scan enforces
+        // this — sibling of Python's `o.id != source_id` filter at
+        // `become_type.py:73`.
+        //
+        // **Empty `granted_keywords` is a legal no-op.** The keyword
+        // loop is keyword-set-agnostic; an empty input set pushes
+        // zero `GrantKeyword` modifiers. The `BecomesLandCreature`
+        // push is unconditional (target becomes a P/T-defined
+        // creature even without keyword riders).
+        Effect::TargetArtifactBecomesCreatureUEOT {
+            power,
+            toughness,
+            granted_keywords,
+        } => {
+            // Source-controller resolution (5-zone walk).
+            let mut src_controller: Option<u8> = None;
+            'outer_tabc: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer_tabc;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Target fan-out + first-eligible pick: source-controller's
+            // bf, FIRST artifact that is NOT the source itself.
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if obj.id == source_obj_id {
+                        return None; // "other" filter
+                    }
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Artifact") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible target → silent fizzle ("up to one")
+            };
+            // Push UEOT modifiers onto the target.
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    // Layer-7B base-P/T set + creature-now flip (CR
+                    // 613.4 + the becomes-creature implicit add_type).
+                    // The `color_or_subtype` field is empty — Python's
+                    // BecomeType emits subtypes_to_add=() for the
+                    // Synthesizer Labship target_artifact path so no
+                    // creature subtype is added. The effective-creature
+                    // readers honor this modifier directly via
+                    // `ueot_is_creature_via_become` AND
+                    // `ueot_becomes_land_creature_pt` (the latter
+                    // provides the layer-7b base P/T).
+                    obj.ueot_modifiers.push(UeotModifier::BecomesLandCreature {
+                        power: *power,
+                        toughness: *toughness,
+                        color_or_subtype: String::new(),
+                    });
+                    // Layer-6 per-keyword grant (CR 613.6). Iteration
+                    // order matches the parse-time-sorted Vec so the
+                    // push order is byte-deterministic across bridge
+                    // round-trips.
+                    for keyword in granted_keywords.iter() {
+                        obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                            keyword: keyword.clone(),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
         // Round-24: DestroyAllCreatures. CR 701.7 + 701.4 AOE — Wrath
         // of God pattern. Destroys every creature on the battlefield
         // (both players), honoring indestructible (CR 702.12) inline.

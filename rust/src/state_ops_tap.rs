@@ -234,6 +234,38 @@ impl GameState {
         None
     }
 
+    /// **Test-helper (Spacecraft Phase 3C Cycle 2 follow-up,
+    /// 2026-05-26).** Count the UEOT modifiers currently on a
+    /// battlefield permanent. Returns 0 for missing ids (loud-but-
+    /// safe; missing object means zero modifiers — same convention as
+    /// `get_charge_counters`'s `None`-on-missing folded to 0 for the
+    /// scalar count case). Pairs with the per-card real-EoE
+    /// Synthesizer Labship probe's UEOT-modifier byte-equal assertion
+    /// at Scenario B (post-trigger animation pushes 1 BecomesLand-
+    /// Creature + 1 GrantKeyword onto the target's modifier Vec — the
+    /// count assertion validates the Rust resolve arm fired the right
+    /// number of pushes).
+    ///
+    /// Why this exists: probe-side test assertions on Rust UEOT
+    /// state. The production Rust code reads modifier state via
+    /// `ueot_base_pt_override` / `ueot_becomes_land_creature_pt` /
+    /// `ueot_is_creature_via_become` / `battlefield_has_keyword` —
+    /// each scoped to a specific reader semantics. The count-of-
+    /// modifiers query is purely structural (did the resolve arm
+    /// push the expected number of entries?) and has no production
+    /// reader — it's a test-only pin on the resolve arm's mutation
+    /// shape.
+    fn ueot_modifier_count(&self, obj_id: u32) -> usize {
+        for player in &self.players {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return obj.ueot_modifiers.len();
+                }
+            }
+        }
+        0
+    }
+
     /// **Test-helper convention** (CE20 Slice 5 — Walker loyalty).
     /// Set `loyalty_counters` on a battlefield permanent. Returns
     /// `true` iff a value was changed. Real loyalty-counter changes
