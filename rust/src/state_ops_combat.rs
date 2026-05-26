@@ -687,15 +687,21 @@ pub(crate) fn static_anthem_grants_keyword_to(
             if !admits {
                 continue;
             }
-            // **Phase 4 (Memorial Team Leader Cycle 1, 2026-05-24).**
+            // **Phase 4 (Memorial Team Leader Cycle 1, 2026-05-24;
+            // Spacecraft Station Phase 2 Cycle 1, 2026-05-25 widen).**
             // Condition gate. Empty condition_tag = unconditional
             // (Phase-1 default — Tannuk Steadfast Second). A non-empty
             // tag dispatches through `static_anthem_condition_matches`
-            // (today: only `"during_your_turn"`).
+            // (today: `"during_your_turn"` or
+            // `"source_charge_counters_at_least"`). The dispatcher
+            // takes the SOURCE `GameObject` so the new
+            // `source_charge_counters_at_least` arm can read the
+            // source's charge-counter axis.
             if !anthem.condition_tag.is_empty()
                 && !static_anthem_condition_matches(
                     state,
                     target_controller_idx,
+                    source,
                     anthem,
                 )
             {
@@ -728,6 +734,19 @@ pub(crate) fn static_anthem_grants_keyword_to(
 ///     (`src/mtg_bot/effects/conditions.py:301-302`): the rider
 ///     compares `state.active_player().id == viewer_id`. The
 ///     `condition_args` Vec is empty for this tag (no parameter).
+///   * `"source_charge_counters_at_least"` — **Spacecraft Station
+///     substrate Phase 2 Cycle 1 (Lumen-Class Frigate, 2026-05-25).**
+///     Anthem fires iff the SOURCE object's `charge_counters >=
+///     condition_args[0]` (the static's `tier_threshold` from the
+///     Python parser SoT). For Lumen-Class Frigate (the sole
+///     Phase-2 admit), threshold = 2. Mirrors the bridge round-trip
+///     where the parser-emitted `StaticAbility.tier_threshold=N,
+///     condition=None` re-encodes through the 6-tuple as
+///     `(condition_tag="source_charge_counters_at_least",
+///     condition_args=(N,))`. The signature takes the SOURCE
+///     `GameObject` reference precisely because this arm reads the
+///     source's per-object counter axis (other arms today read
+///     game-wide state).
 ///
 /// An unknown tag returns `false` — a bridge-vs-Rust disagreement
 /// the parser already rejects at registry-build time
@@ -737,11 +756,24 @@ pub(crate) fn static_anthem_grants_keyword_to(
 pub(crate) fn static_anthem_condition_matches(
     state: &GameState,
     viewer_idx: usize,
+    source: &GameObject,
     anthem: &crate::cards::StaticAnthem,
 ) -> bool {
     match anthem.condition_tag.as_str() {
         "" => true,
         "during_your_turn" => state.active_player as usize == viewer_idx,
+        // **Spacecraft Station substrate — Phase 2 Cycle 1
+        // (Lumen-Class Frigate, 2026-05-25).** Source-relative
+        // charge-counter gate. `condition_args[0]` is the
+        // `tier_threshold`; the parser whitelist at
+        // `cards.rs:15191` rejects shapes with no args, so
+        // `get(0)` defensively defaults to 0 (an unreachable arm
+        // today but bit-equivalent to "always fire" — strictly
+        // safer than panicking on a future bridge bug).
+        "source_charge_counters_at_least" => {
+            let threshold = anthem.condition_args.get(0).copied().unwrap_or(0);
+            source.charge_counters >= threshold
+        }
         _ => false,
     }
 }
@@ -803,6 +835,7 @@ pub(crate) fn static_anthem_pt_bonus_for(
                 && !static_anthem_condition_matches(
                     state,
                     target_controller_idx,
+                    source,
                     anthem,
                 )
             {

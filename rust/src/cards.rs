@@ -15229,18 +15229,25 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                 // Whitelist the condition_tag to today's known
                 // dispatch arms. Empty string = unconditional (Phase
                 // 1). `"during_your_turn"` = Phase-4 anthem
-                // active-player gate (Memorial Team Leader). An
-                // unknown tag is a bridge-vs-Rust disagreement that
-                // would silently no-op the gate (everything still
-                // looks correct but the P/T fold would either
+                // active-player gate (Memorial Team Leader).
+                // `"source_charge_counters_at_least"` = **Spacecraft
+                // Station substrate Phase 2 Cycle 1 (Lumen-Class
+                // Frigate, 2026-05-25)** source-relative
+                // charge-counter gate; `condition_args` carries the
+                // `tier_threshold` as a single int. An unknown tag
+                // is a bridge-vs-Rust disagreement that would
+                // silently no-op the gate (everything still looks
+                // correct but the P/T fold would either
                 // always-fire or never-fire) — fail loudly so a
                 // future tag extension can't silently mis-translate.
                 if !condition_tag.is_empty()
                     && condition_tag != "during_your_turn"
+                    && condition_tag != "source_charge_counters_at_least"
                 {
                     return Err(PyValueError::new_err(format!(
-                        "static_anthems[].condition_tag must be empty \
-                         or 'during_your_turn' (got: {})",
+                        "static_anthems[].condition_tag must be empty, \
+                         'during_your_turn', or \
+                         'source_charge_counters_at_least' (got: {})",
                         condition_tag
                     )));
                 }
