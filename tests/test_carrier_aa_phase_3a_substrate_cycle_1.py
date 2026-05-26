@@ -874,40 +874,47 @@ def test_rust_apply_action_raises_on_own_attacker_target(engine):
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant — Mystifying Maze STAYS DECLINED post-Cycle-1
+# Phase 3A C2 invariant (INVERTED) — Mystifying Maze NOW ADMITS post-C2
 # ---------------------------------------------------------------------------
 
 
-def test_mystifying_maze_stays_declined_post_cycle_1():
-    """**Substrate-only Cycle-1 invariant pin.** Mystifying Maze's live
-    ``OracleParserCardSource`` printing FAILS
-    :func:`_printing_is_bridge_simple_carrier_aa_land` post-Cycle-1
-    because the Effect-class admit set
-    ``_carrier_aa_phase_1_effect_classes`` does NOT yet include
-    ``ExileTargetAttackingCreatureUntilEndStep``.
+def test_mystifying_maze_now_admits_at_admit_gate_post_phase_3a():
+    """**Phase 3A C2 invariant pin (INVERTED).** Mystifying Maze's live
+    ``OracleParserCardSource`` printing PASSES
+    :func:`_printing_is_bridge_simple_carrier_aa_land` post-Phase-3A-
+    C2 because the Effect-class admit set
+    ``_carrier_aa_phase_1_effect_classes`` is widened to include
+    ``ExileTargetAttackingCreatureUntilEndStep`` (the C1 substrate's
+    Rust Effect variant at ``3de469a3``).
 
-    C2 inverts this pin to
-    ``test_mystifying_maze_now_admits_at_admit_gate_post_phase_3a``.
+    Inverts the Phase-3A-C1 substrate-only pin
+    ``test_mystifying_maze_stays_declined_post_cycle_1`` — admit-gate
+    FLIPped DECLINED → ADMITTED on the Python accessor widen alone
+    (Mystifying Maze's ``{4}, {T}`` cost shape already passes the
+    Phase-1.5a ``{N}, {T}`` cost-gate).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     mm = ps["Mystifying Maze"]
-    assert traj._printing_is_bridge_simple_carrier_aa_land(mm) is False, (
-        "Mystifying Maze must STAY DECLINED at the Carrier-AA admit "
-        "gate post-Cycle-1 (substrate-only landing). The Effect-class "
-        "admit set _carrier_aa_phase_1_effect_classes is not yet "
-        "widened to include ExileTargetAttackingCreatureUntilEndStep "
-        "— Cycle 2 ships the widen."
+    assert traj._printing_is_bridge_simple_carrier_aa_land(mm) is True, (
+        "Mystifying Maze must ADMIT at the Carrier-AA admit gate "
+        "post-Phase-3A-C2. The Effect-class admit set "
+        "_carrier_aa_phase_1_effect_classes is widened to include "
+        "ExileTargetAttackingCreatureUntilEndStep and the cost-gate "
+        "already accepts the {4}, {T} Phase-1.5a shape."
     )
 
 
-def test_mystifying_maze_stays_declined_at_loader_filter():
-    """**Substrate-only Cycle-1 invariant pin (loader-level).** The
-    end-to-end production-deck loader filter declines Mystifying Maze
-    post-Cycle-1 — the Carrier-AA disjunct does not fire because the
-    Effect-class admit set isn't widened. C2 inverts this pin.
+def test_mystifying_maze_now_passes_loader_filter():
+    """**Phase 3A C2 invariant pin (INVERTED, loader-level).** The
+    end-to-end production-deck loader filter ADMITS Mystifying Maze
+    post-Phase-3A-C2 — the Carrier-AA disjunct fires now that the
+    Effect-class admit set is widened.
+
+    Inverts the Phase-3A-C1 pin
+    ``test_mystifying_maze_stays_declined_at_loader_filter``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
@@ -917,23 +924,33 @@ def test_mystifying_maze_stays_declined_at_loader_filter():
     filtered, card_defs = _filter_deck_to_bridge_supported(
         ["Mystifying Maze"], ps,
     )
-    assert filtered == [], (
-        f"Mystifying Maze must STAY DECLINED at the loader filter "
-        f"post-Cycle-1; got filtered={filtered}, card_defs={card_defs}"
+    assert filtered == ["Mystifying Maze"], (
+        f"Mystifying Maze must PASS the loader filter post-Phase-3A-"
+        f"C2; got filtered={filtered}, card_defs={card_defs}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    assert card_defs[0].name == "Mystifying Maze"
 
 
-def test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1():
-    """**Substrate-only Cycle-1 invariant pin — admit set unchanged.**
-    The Phase-1 Effect-class admit set accessor returns the same 4
-    classes as before Cycle 1 (no auto-grow). C2 ships the widen to
-    include ``ExileTargetAttackingCreatureUntilEndStep``.
+def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3a_c2():
+    """**Phase 3A C2 invariant pin (INVERTED) — admit set widened.**
+    The Carrier-AA Effect-class admit set accessor returns the 5
+    classes post-Phase-3A-C2, including the newly-widened
+    ``ExileTargetAttackingCreatureUntilEndStep``.
+
+    Inverts the Phase-3A-C1 substrate-only pin
+    ``test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1``
+    (expected 4 classes pre-C2). The C2 widen is strictly additive on
+    ``ExileTargetAttackingCreatureUntilEndStep`` — the other four
+    classes stay in the set bit-identical.
     """
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetAttackingCreatureUntilEndStep,
+    )
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -947,27 +964,34 @@ def test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1():
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
         PutBasicLandFromHandOntoBattlefieldTapped,
+        ExileTargetAttackingCreatureUntilEndStep,
     })
     assert _carrier_aa_phase_1_effect_classes() == expected, (
-        "Substrate-only invariant: Phase-1 admit set must stay at "
-        "exactly the 4 classes; Cycle 2 ships the widen."
+        "Phase 3A C2 invariant: admit set must contain exactly the 5 "
+        "Effect classes (the C2 widen adds "
+        "ExileTargetAttackingCreatureUntilEndStep)."
     )
 
 
-def test_no_silent_auto_grow_admit_set_post_cycle_1():
-    """**Substrate-only Cycle-1 invariant pin — no-silent-auto-grow
+def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
+    """**Phase 3A C2 invariant pin (INVERTED) — no-silent-auto-grow
     walk.** Confirms the 30 BLOCKED-SG Carrier-AA cards from design
-    doc §2.1 admit exactly the same 4 cards post-C1 substrate landing
-    as before:
+    doc §2.1 admit exactly the 5 cards post-Phase-3A-C2 widen:
 
-      Swarmyard + Deserted Temple + Petrified Field + Terrain Generator.
+      Swarmyard + Deserted Temple + Petrified Field + Terrain
+      Generator + Mystifying Maze.
 
-    Mystifying Maze + Thespian's Stage + Scavenger Grounds + all the
-    multi-AA carriers STAY DECLINED. Mirrors the Phase-2b
-    ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_
-    deserted_temple_plus_petrified_field_plus_terrain_generator``
-    walk; this pin guards against the C1 substrate accidentally
-    widening the admit set.
+    Thespian's Stage + Scavenger Grounds + all the multi-AA carriers
+    STAY DECLINED (the Phase-3+ Effect-class admit gates have not
+    fired yet for ``BecomesCopyOfTargetLand`` /
+    ``ExileAllGraveyards``; the ``sacrifice_a_desert`` cost-bool is
+    still gated). Mirrors the Phase-3A-C2 sibling walk in
+    ``tests/test_carrier_aa_phase_1_substrate_cycle_2.py``.
+
+    Inverts ``test_no_silent_auto_grow_admit_set_post_cycle_1``
+    (expected 4 admits pre-C2). Any new Effect class admitted to the
+    set would surface here as a silent auto-grow — investigate
+    before merging.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -995,13 +1019,15 @@ def test_no_silent_auto_grow_admit_set_post_cycle_1():
     )
     assert admits == [
         "Deserted Temple",
+        "Mystifying Maze",
         "Petrified Field",
         "Swarmyard",
         "Terrain Generator",
     ], (
-        f"Carrier-AA Phase 3A C1 substrate-only admit-set pin "
-        f"violated: expected admit set = ['Deserted Temple', "
+        f"Carrier-AA Phase 3A C2 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Mystifying Maze', "
         f"'Petrified Field', 'Swarmyard', 'Terrain Generator'], got "
-        f"{admits}. A widen in the C1 substrate would surface here "
-        f"as a silent auto-grow — investigate before merging."
+        f"{admits}. A widen in a sibling substrate or predicate "
+        f"would surface here as a silent auto-grow — investigate "
+        f"before merging."
     )

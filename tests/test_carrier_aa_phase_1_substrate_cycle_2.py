@@ -444,35 +444,35 @@ def test_printing_is_bridge_simple_carrier_aa_land_admits_live_deserted_temple()
 # ---------------------------------------------------------------------------
 
 
-def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator():
-    """**Phase 2b no-silent-auto-grow pin (INVERTED — admit count 3 →
-    4).** Walks the 30 BLOCKED-SG Carrier-AA cards from design doc
-    §2.1 against :func:`_printing_is_bridge_simple_carrier_aa_land`
-    under the Phase-2b widened Effect-class admit set
+def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator_plus_mystifying_maze():
+    """**Phase 3A C2 no-silent-auto-grow pin (INVERTED — admit count
+    4 → 5).** Walks the 30 BLOCKED-SG Carrier-AA cards from design
+    doc §2.1 against :func:`_printing_is_bridge_simple_carrier_aa_land`
+    under the Phase-3A-C2 widened Effect-class admit set
     (``RegenerateTargetCreature`` + ``UntapTargetLand`` +
     ``ReturnTargetLandFromGraveyardToHand`` +
-    ``PutBasicLandFromHandOntoBattlefieldTapped``) atop the Phase-2a
+    ``PutBasicLandFromHandOntoBattlefieldTapped`` +
+    ``ExileTargetAttackingCreatureUntilEndStep``) atop the Phase-2a
     widened cost-gate (bare ``{T}`` OR ``{N}, {T}`` OR
     ``({T}, Sac:)`` OR ``({N}, {T}, Sac:)``). ONLY Swarmyard +
-    Deserted Temple + Petrified Field + Terrain Generator admit;
-    every other carrier honestly declines per the verify-first walk
-    recorded in the Phase 2b commit message.
+    Deserted Temple + Petrified Field + Terrain Generator +
+    Mystifying Maze admit; every other carrier honestly declines per
+    the verify-first walk recorded in the Phase 3A C2 commit message.
 
     Sibling-candidate Effect-class teeth remain load-bearing:
     Thespian's Stage (``BecomesCopyOfTargetLand`` — Phase 3+ copy-
-    effect substrate) and Mystifying Maze
-    (``ExileTargetAttackingCreatureUntilEndStep`` — Phase 3+ delayed-
-    trigger substrate) carry costs that pass the widened cost-gate
-    but DECLINE on the Phase-2b Effect-class admit set. Scavenger
-    Grounds (Phase 3 — ``sacrifice_a_desert`` cost shape) still
-    declines on the non-admitted ``sacrifice_a_desert`` cost-bool
-    gate. Any new Effect class admitted to the set would surface
+    effect substrate) carries a cost that passes the widened cost-
+    gate but DECLINES on the Phase-3A-C2 Effect-class admit set.
+    Scavenger Grounds (Phase 3 — ``sacrifice_a_desert`` cost shape)
+    still declines on the non-admitted ``sacrifice_a_desert`` cost-
+    bool gate. Any new Effect class admitted to the set would surface
     here as a silent auto-grow — investigate before merging.
 
-    Inverts the Phase-2a pin
+    Inverts the Phase-2b pin
     ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
-    plus_deserted_temple_plus_petrified_field`` (admit set was
-    ``['Deserted Temple', 'Petrified Field', 'Swarmyard']``)."""
+    plus_deserted_temple_plus_petrified_field_plus_terrain_generator``
+    (admit set was ``['Deserted Temple', 'Petrified Field',
+    'Swarmyard', 'Terrain Generator']``)."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -499,15 +499,17 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
     )
     assert admits == [
         "Deserted Temple",
+        "Mystifying Maze",
         "Petrified Field",
         "Swarmyard",
         "Terrain Generator",
     ], (
-        f"Carrier-AA Phase 2b admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Petrified Field', "
-        f"'Swarmyard', 'Terrain Generator'], got {admits}. A widen in "
-        f"a sibling substrate or predicate would surface here as a "
-        f"silent auto-grow — investigate before merging."
+        f"Carrier-AA Phase 3A C2 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Mystifying Maze', "
+        f"'Petrified Field', 'Swarmyard', 'Terrain Generator'], got "
+        f"{admits}. A widen in a sibling substrate or predicate "
+        f"would surface here as a silent auto-grow — investigate "
+        f"before merging."
     )
 
 

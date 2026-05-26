@@ -8511,6 +8511,22 @@ def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
 # ``state_ops_resolve.rs:15406``). ZERO new target-fan-out surface
 # (Terrain Generator's AA has no target — the activator's hand-
 # search is internal to the resolve).
+#
+# **Carrier-AA substrate Phase 3A Cycle 2 (2026-05-25).** The
+# accessor is further widened to include
+# ``ExileTargetAttackingCreatureUntilEndStep`` (Mystifying Maze's
+# pilot Effect — Phase 3A C1 substrate landing at ``3de469a3``
+# shipped the Rust ``Effect::ExileTargetAttackingCreatureUntilEndStep``
+# variant + paired ``Effect::ReturnExiledPermanentToOwnerTapped``
+# delayed-trigger + parse/resolve/to_pydict arms + cross-engine
+# bridge arms + attacking-creature target fan-out arm per
+# ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §4.1/§5.2/§7.1).
+# Mystifying Maze's live AA shape is ``{4}, {T}`` (Phase-1.5a
+# ``{N}, {T}`` cost-shape — already wired) + the now-admitted
+# ``ExileTargetAttackingCreatureUntilEndStep`` effect class, so the
+# admit-gate FLIPs DECLINED → ADMITTED on this widen alone (no
+# further admit-side wiring needed). Sibling of the Phase-2b widen
+# for ``PutBasicLandFromHandOntoBattlefieldTapped``.
 def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     """Lazy accessor for the Carrier-AA admitted AA[0] Effect classes.
 
@@ -8521,7 +8537,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     ``ReturnTargetLandFromGraveyardToHand`` (Phase 2a C1 substrate /
     Phase 2a C2 admits Petrified Field) +
     ``PutBasicLandFromHandOntoBattlefieldTapped`` (Phase 2b combined-
-    cycle Rust substrate + Python admit + Terrain Generator FLIP).
+    cycle Rust substrate + Python admit + Terrain Generator FLIP) +
+    ``ExileTargetAttackingCreatureUntilEndStep`` (Phase 3A C1
+    substrate at ``3de469a3`` / Phase 3A C2 admits Mystifying Maze).
     Lazily imported so the module import-graph stays light and tests
     that monkeypatch the effect classes (unit pins) see a fresh
     frozenset each call.
@@ -8531,8 +8549,6 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     design doc §3:
     ``BecomesCopyOfTargetLand`` (Thespian's Stage — copy-effect
     substrate),
-    ``ExileTargetAttackingCreatureUntilEndStep`` (Mystifying Maze —
-    delayed-trigger substrate),
     ``ExileAllGraveyards`` (Scavenger Grounds — multi-graveyard
     walk + ``sacrifice_a_desert`` cost gate).
     """
@@ -8540,6 +8556,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetAttackingCreatureUntilEndStep,
+    )
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
@@ -8549,6 +8568,7 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
         PutBasicLandFromHandOntoBattlefieldTapped,
+        ExileTargetAttackingCreatureUntilEndStep,
     })
 
 
