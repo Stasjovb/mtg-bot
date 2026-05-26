@@ -9169,34 +9169,47 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
 
 
 def _printing_is_bridge_simple_carrier_aa_land(printing) -> bool:
-    """True iff a CardPrinting is a PURE single-``{T}`` / ``{N}, {T}``
-    / ``({T}, Sac:)`` / ``({N}, {T}, Sac:)`` cost, single-bridged-
-    Effect, no-rider non-token Land Carrier-AA carrier whose AA the
-    Phase-2a Carrier-AA substrate round-trips byte-equal.
+    """True iff a CardPrinting is a PURE Carrier-AA Land carrier whose
+    AAs the Phase-4A Carrier-AA substrate round-trips byte-equal.
 
-    Motivating Phase-2a admit set: Swarmyard + Deserted Temple +
-    Petrified Field (3 EoE cards). The §2 Class-1 guardrail: admits
-    ONLY the bare Carrier-AA Land profile under the Phase-2a cost
-    gate AND MUST reject every multi-AA, every ``<empty-cost>``
-    carrier, every mana-ability, every sorcery-speed, every
-    triggered-ability-co-gated carrier, every Creature carrier,
+    Motivating Phase-3 admit set: Swarmyard + Deserted Temple +
+    Petrified Field + Terrain Generator + Mystifying Maze +
+    Scavenger Grounds (6 EoE cards; Thespian's Stage admits at Phase
+    3C C2). The §2 Class-1 guardrail: admits ONLY the bare Carrier-AA
+    Land profile under the Phase-3 cost gate AND MUST reject every
+    ``<empty-cost>`` carrier, every mana-ability, every sorcery-speed,
+    every triggered-ability-co-gated carrier, every Creature carrier,
     every Equipment carrier, every ``BecomeLandCreatureUEOT``-with-
-    rider carrier — sub-shapes deferred to Phase 2b / 3 / N (design
-    doc §3).
+    rider carrier — sub-shapes deferred to Phase 4+ (design doc §3).
 
     Phase 1.5a widen adds Deserted Temple via the ``{N}, {T}``
-    cost-shape; Phase 2a widen (this cycle) adds Petrified Field via
-    the ``({T}, Sac:)`` cost-shape PLUS the new
-    ``ReturnTargetLandFromGraveyardToHand`` Effect-class admit — see
-    :func:`_aa_is_phase1_sub_shape_a` for the cost-axis details and
-    :func:`_carrier_aa_phase_1_effect_classes` for the Effect-class
-    admit set. Effect-class + cost teeth still gate sibling candidates
-    (Terrain Generator on the
-    ``PutBasicLandFromHandOntoBattlefieldTapped`` Effect-class teeth /
-    Thespian's Stage on the ``BecomesCopyOfTargetLand`` Effect-class
-    teeth / Mystifying Maze on the
-    ``ExileTargetAttackingCreatureUntilEndStep`` Effect-class teeth)
-    out at Phase 2a.
+    cost-shape; Phase 2a widen adds Petrified Field via the
+    ``({T}, Sac:)`` cost-shape PLUS the new
+    ``ReturnTargetLandFromGraveyardToHand`` Effect-class admit. Phase
+    3 widens add Terrain Generator + Mystifying Maze + Scavenger
+    Grounds via their Effect-class + cost-axis admits.
+
+    **Phase 4A widen (2026-05-26 — substrate-only keystone landing per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.2).** The single-
+    AA invariant (``len(aas) != 1: return False``) widens to a multi-
+    AA all-or-nothing per-AA walk — every AA on the printing must
+    independently pass :func:`_aa_is_phase1_sub_shape_a`. The widen is
+    strictly additive on the ``len(aas)`` axis; every per-AA gate
+    stays bit-identical. A printing with N>=2 AAs whose AA[i] fails
+    the per-AA predicate still declines under the all-or-nothing
+    contract (mirrors the token-AA Lander's per-AA contract per Phase
+    2 §3.4 of the Phase-4 design doc). The widen is admit-set-neutral
+    at Phase 4A close — all 4 multi-AA Phase-4 carriers (Mirrorpool /
+    Ghost Vacuum / Keys to the House / All-Fates Scroll) still
+    decline at the per-AA Effect-class teeth + AA-rider teeth
+    (``sorcery_speed`` / ``is_mana_ability``); the +4 admits land via
+    4B/4C/4D/4E.
+
+    See :func:`_aa_is_phase1_sub_shape_a` for the cost-axis details
+    and :func:`_carrier_aa_phase_1_effect_classes` for the Effect-
+    class admit set. See
+    :func:`_printing_is_bridge_simple_carrier_aa_artifact` for the
+    Artifact-typed sibling predicate landed at Phase 4A.2.
     """
     if "Land" not in printing.card_types:
         return False
@@ -9235,13 +9248,130 @@ def _printing_is_bridge_simple_carrier_aa_land(printing) -> bool:
         return False
     if getattr(printing, "ward_cost", None) is not None:
         return False
-    # STRICT AA gate: EXACTLY one AA, sub-shape A.
+    # **Phase 4A multi-AA admit substrate (2026-05-26).** Widened from
+    # STRICT single-AA ``len(aas) != 1`` to a multi-AA all-or-nothing
+    # per-AA walk; every AA must independently pass the sub-shape-A
+    # predicate. Zero-AA carriers still decline (not a carrier).
     aas = tuple(printing.activated_abilities or ())
-    if len(aas) != 1:
+    if len(aas) == 0:
         return False
-    if not _aa_is_phase1_sub_shape_a(aas[0]):
-        return False
+    for aa in aas:
+        if not _aa_is_phase1_sub_shape_a(aa):
+            return False
     return True
+
+
+def _printing_is_bridge_simple_carrier_aa_artifact(printing) -> bool:
+    """Sibling of :func:`_printing_is_bridge_simple_carrier_aa_land`
+    for Carrier-AA Artifact carriers.
+
+    **Carrier-AA substrate Phase 4A.2 (2026-05-26 — substrate-only
+    keystone landing per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.3).** Opens
+    the admit gate to single-card-type Artifact carriers with the
+    same per-AA + bridge-floor gates as the Land sibling, plus the
+    §5.2 multi-AA widen of the per-AA walk. Pilot trio (3 of 4
+    Phase-4 carriers are Artifact, not Land): Ghost Vacuum / Keys
+    to the House / All-Fates Scroll. Phase 4A admits NONE of them
+    (substrate-only — they still decline at the per-AA Effect-class
+    teeth and AA-rider teeth); 4C/4D/4E land the actual carrier
+    admissions.
+
+    **§2 teeth (must reject):**
+
+      * Non-Artifact — wrong card type entirely.
+      * Multi-card-type — no Artifact-Creature overlap; no
+        Land-Artifact overlap; no Spacecraft via the
+        ``Artifact—Spacecraft`` overlap (Spacecraft Station substrate
+        is the canonical Spacecraft path).
+      * Non-empty ``subtypes`` — Equipment / Vehicle / Spacecraft /
+        Food / Treasure subtypes carry their own rider clusters that
+        Phase 4 explicitly defers to Phase N per design doc §3.
+      * Every Phase-2+ rider field on the printing (keywords /
+        triggered / static / spell_effect / warp / kicker / impending
+        / room_halves / loyalty / cost_reductions / station_threshold
+        / dynamic_pt_formula / ward_cost / non-default P/T) — the
+        same exclusion-set as the Land sibling.
+      * Zero AAs — not a carrier.
+      * Any AA failing :func:`_aa_is_phase1_sub_shape_a` — the §5.2
+        multi-AA all-or-nothing contract.
+    """
+    if "Artifact" not in printing.card_types:
+        return False
+    extra_card_types = tuple(
+        t for t in printing.card_types if t != "Artifact"
+    )
+    if extra_card_types:
+        return False
+    # Equipment / Vehicle / Spacecraft / Food / Treasure subtypes are
+    # Phase N — strict empty-subtypes guard for Phase 4A.
+    if printing.subtypes:
+        return False
+    # Defense-in-depth on P/T — an Artifact-only carrier should never
+    # carry a power or toughness; an Artifact—Creature would have
+    # been rejected at the ``extra_card_types`` guard above. This
+    # mirrors the Land sibling's symmetric guard.
+    if printing.power is not None or printing.toughness is not None:
+        return False
+    # Same per-printing rider guards as the Land sibling.
+    if printing.keywords:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # **Phase 4A multi-AA admit substrate (2026-05-26).** Same multi-
+    # AA all-or-nothing per-AA walk as the Land sibling.
+    aas = tuple(printing.activated_abilities or ())
+    if len(aas) == 0:
+        return False
+    for aa in aas:
+        if not _aa_is_phase1_sub_shape_a(aa):
+            return False
+    return True
+
+
+def _printing_is_bridge_simple_carrier_aa_any(printing) -> bool:
+    """Top-level Carrier-AA admit dispatcher across the Land + Artifact
+    sibling predicates.
+
+    **Carrier-AA substrate Phase 4A (2026-05-26 — keystone landing per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.3).** Returns
+    True iff the printing is either a Carrier-AA Land admit
+    (:func:`_printing_is_bridge_simple_carrier_aa_land`) or a
+    Carrier-AA Artifact admit
+    (:func:`_printing_is_bridge_simple_carrier_aa_artifact`). The
+    dispatcher exists so the ``_filter_deck_to_bridge_supported``
+    OR-chain has a single call site that subsumes both card-type
+    siblings — future Carrier-AA siblings (e.g., Carrier-AA Enchantment
+    in Phase N) bolt on here without further OR-chain edits.
+
+    The two sibling predicates are mutually exclusive (a printing
+    cannot carry both ``"Land"`` and ``"Artifact"`` in its
+    ``card_types`` and still pass either sibling — both reject
+    multi-card-type carriers via their ``extra_card_types`` guards),
+    so the OR short-circuit semantics are well-defined.
+    """
+    return (
+        _printing_is_bridge_simple_carrier_aa_land(printing)
+        or _printing_is_bridge_simple_carrier_aa_artifact(printing)
+    )
 
 
 def _carrier_aa_land_card_def(printing) -> "Optional[CardDef]":
@@ -9282,17 +9412,75 @@ def _carrier_aa_land_card_def(printing) -> "Optional[CardDef]":
 
     if not _printing_is_bridge_simple_carrier_aa_land(printing):
         return None
-    aa = printing.activated_abilities[0]
-    aa_dict = _python_aa_to_safe_dict(aa)
-    if aa_dict is None:
-        return None
+    # **Phase 4A multi-AA admit substrate (2026-05-26).** Iterate all
+    # AAs into the bridge dict tuple — the admit predicate's per-AA
+    # walk guarantees every AA serializes; any AA failing
+    # ``_python_aa_to_safe_dict`` is a builder-vs-predicate
+    # disagreement and we honest-decline (return None).
+    aa_dicts: list = []
+    for aa in printing.activated_abilities:
+        aa_dict = _python_aa_to_safe_dict(aa)
+        if aa_dict is None:
+            return None
+        aa_dicts.append(aa_dict)
     return _CardDef(
         name=printing.name,
         card_type="Land",
         supertypes=tuple(printing.supertypes or ()),
         subtypes=tuple(printing.subtypes or ()),
         keywords=(),  # Phase 1 admits NO keywords (predicate gate).
-        activated_abilities=(aa_dict,),
+        activated_abilities=tuple(aa_dicts),
+    )
+
+
+def _carrier_aa_artifact_card_def(printing) -> "Optional[CardDef]":
+    """Sibling of :func:`_carrier_aa_land_card_def` for Carrier-AA
+    Artifact carriers (Phase 4A.2 keystone landing per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.3).
+
+    Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_simple_carrier_aa_artifact`. This
+    builder trusts that guardrail and serializes every AA into the
+    bridge dict shape via the round-trip-floor helper
+    :func:`cross_engine._python_aa_to_safe_dict`. Returns ``None`` if
+    any AA fails the safe-dict round-trip (a defense-in-depth honest
+    decline — the admit predicate should already have rejected such
+    shapes, so reaching this branch is a builder-vs-predicate
+    disagreement that fails silent rather than constructing a CardDef
+    the bridge would mistranslate).
+
+    The synthesized CardDef carries:
+
+    * ``card_type="Artifact"`` (single-typed — admit predicate
+      rejects any extra card type and any subtype).
+    * ``activated_abilities=tuple(aa_dicts)`` carrying every AA in
+      the bridge dict shape.
+
+    Phase 4A admits NO Artifact in the live EoE pool (all 4 Phase-4
+    Artifact candidates decline at the per-AA Effect-class teeth or
+    AA-rider teeth); this builder is the substrate-only forward path
+    that future Phase 4C/4D/4E widens light up.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef as _CardDef,
+        _python_aa_to_safe_dict,
+    )
+
+    if not _printing_is_bridge_simple_carrier_aa_artifact(printing):
+        return None
+    aa_dicts: list = []
+    for aa in printing.activated_abilities:
+        aa_dict = _python_aa_to_safe_dict(aa)
+        if aa_dict is None:
+            return None
+        aa_dicts.append(aa_dict)
+    return _CardDef(
+        name=printing.name,
+        card_type="Artifact",
+        supertypes=tuple(printing.supertypes or ()),
+        subtypes=tuple(printing.subtypes or ()),
+        keywords=(),  # Phase 4A admits NO keywords (predicate gate).
+        activated_abilities=tuple(aa_dicts),
     )
 
 
@@ -11542,6 +11730,23 @@ def _printing_to_card_def(printing) -> CardDef:
         card_def = _carrier_aa_land_card_def(printing)
         if card_def is not None:
             return card_def
+    if _printing_is_bridge_simple_carrier_aa_artifact(printing):
+        # **Carrier-AA substrate Phase 4A.2 (2026-05-26 — keystone
+        # landing per ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md``
+        # §5.3).** Artifact-typed sibling of the Land builder above.
+        # Phase 4A admits NO Artifact (the per-AA Effect-class teeth
+        # decline all 4 Phase-4 Artifact candidates — Ghost Vacuum /
+        # Keys to the House / All-Fates Scroll on Effect-class +
+        # ``sorcery_speed`` + ``is_mana_ability`` AA-rider teeth); the
+        # builder dispatch is wired now so Phase 4C/4D/4E carrier
+        # FLIPs land without further OR-chain edits. Routed AFTER the
+        # Land sibling so a printing only falls through here if the
+        # Land predicate declines (Land and Artifact predicates are
+        # mutually exclusive by their ``extra_card_types`` guards, so
+        # the OR short-circuit is well-defined).
+        card_def = _carrier_aa_artifact_card_def(printing)
+        if card_def is not None:
+            return card_def
     if _printing_is_bridge_pure_station_spacecraft(printing):
         # **Spacecraft Station substrate Phase 1 Cycle 3 (2026-05-25).**
         # A zero-ability Spacecraft (sole admit = Galvanizing Sawship)
@@ -13417,31 +13622,34 @@ def _filter_deck_to_bridge_supported(
             or _printing_is_bridge_nonbasic_painland_conditional(
                 printing,
             )
-            # **Carrier-AA substrate Phase 1.5a (2026-05-25).** The
-            # bridge-simple Carrier-AA Land disjunct. Admits EXACTLY
-            # the bare ``{T}: <Phase-1-Effect>`` OR ``{N}, {T}:
-            # <Phase-1-Effect>`` single-AA Land profile — Swarmyard +
-            # Deserted Temple in the EoE pool post-Phase-1.5a (was
-            # Swarmyard-only at strict bare-``{T}`` per C2). Routed
-            # AFTER every other Land disjunct (basic / nonbasic-mana /
-            # tapped-mana / keyword-colorless / painland-conditional)
-            # so a printing only falls through here if the preceding
-            # land disjuncts decline. The §2 teeth in
+            # **Carrier-AA substrate Phase 4A (2026-05-26 — keystone
+            # landing per
+            # ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.3).**
+            # The bridge-simple Carrier-AA dispatcher disjunct covers
+            # BOTH the Land sibling (Phase 1.5a / 2a / 3 admits —
+            # Swarmyard / Deserted Temple / Petrified Field / Terrain
+            # Generator / Mystifying Maze / Scavenger Grounds) AND
+            # the Phase 4A.2 Artifact sibling (no live admit at Phase
+            # 4A — substrate-only landing; Phase 4C/4D/4E carrier
+            # FLIPs light up Ghost Vacuum / Keys to the House / All-
+            # Fates Scroll once their Effect-class + AA-rider widens
+            # land). The Phase 4A multi-AA admit substrate widens the
+            # per-AA walk from STRICT single-AA to multi-AA all-or-
+            # nothing — every AA must independently pass
+            # :func:`_aa_is_phase1_sub_shape_a`. Routed AFTER every
+            # other Land disjunct (basic / nonbasic-mana / tapped-
+            # mana / keyword-colorless / painland-conditional) so a
+            # printing only falls through here if the preceding land
+            # disjuncts decline. The §2 teeth in
             # :func:`_aa_is_phase1_sub_shape_a`
             # + :func:`_printing_is_bridge_simple_carrier_aa_land`
-            # reject every multi-AA, every ``{T}, Sac:`` carrier,
-            # every ``<empty-cost>`` carrier, every mana-ability,
-            # every sorcery-speed, every triggered-ability-co-gated
-            # carrier — Phase-2/3/N widens the gate per design doc §3.
-            # Rust-side gate rides the Cycle-1 substrate
-            # (``226c9738``) — non-token ``CardDef.activated_abilities``
-            # field + two new Rust ``Effect`` variants
-            # (``RegenerateTargetCreature`` / ``UntapTargetLand``) +
-            # ``GameObject.regeneration_shield`` field; the resolve
-            # arms ship SET-only (zone-change reset deferred to
-            # Cycle 3 alongside the Swarmyard real-EoE probe per
-            # ``docs/SEARCH_LIMITATIONS.md``).
-            or _printing_is_bridge_simple_carrier_aa_land(printing)
+            # + :func:`_printing_is_bridge_simple_carrier_aa_artifact`
+            # reject every ``<empty-cost>`` carrier, every mana-
+            # ability (until 4E widens), every sorcery-speed (until
+            # 4C/4D widen), every triggered-ability-co-gated carrier
+            # — Phase-4B/C/D/E widen the per-AA Effect-class admit
+            # set in lockstep per design doc §5.4-§5.7.
+            or _printing_is_bridge_simple_carrier_aa_any(printing)
             # **Spacecraft Station substrate Phase 1 Cycle 3
             # (2026-05-25).** The bridge-pure station Spacecraft
             # disjunct. Admits EXACTLY Galvanizing Sawship in the EoE

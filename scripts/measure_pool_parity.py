@@ -3938,15 +3938,18 @@ def loader_admits(printing) -> bool:
             )
             # **Carrier-AA substrate Phase 1.5a (2026-05-25).** Mirrors
             # the real loader's admit arm in
-            # ``_filter_deck_to_bridge_supported``. Admits the bare
-            # ``{T}: <Phase-1-Effect>`` OR ``{N}, {T}: <Phase-1-Effect>``
-            # single-AA Land profile — Swarmyard + Deserted Temple in
-            # the EoE pool post-Phase-1.5a. Both already PROBED via
-            # dedicated per-card probes
+            # ``_filter_deck_to_bridge_supported``. The Phase 4A
+            # keystone (2026-05-26) replaced the bare Land disjunct
+            # with the ``_any`` dispatcher that wraps the Land sibling
+            # plus the Phase 4A.2 Artifact sibling — admit set
+            # unchanged at Phase 4A close (Phase 4C/4D/4E light up the
+            # Artifact admits). Per-card real-EoE probes for the
+            # admitted carriers live in dedicated per-card test files
             # (``tests/test_swarmyard_parity.py`` +
-            # ``tests/test_deserted_temple_parity.py``); this fold is
-            # pure metric-truthfulness (tier counts unchanged).
-            or traj._printing_is_bridge_simple_carrier_aa_land(printing)
+            # ``tests/test_deserted_temple_parity.py`` + siblings);
+            # this fold is pure metric-truthfulness (tier counts
+            # unchanged).
+            or traj._printing_is_bridge_simple_carrier_aa_any(printing)
             # **Spacecraft Station substrate Phase 1 Cycle 3
             # (2026-05-25).** Mirrors the real loader's new admit arm
             # in ``_filter_deck_to_bridge_supported``. Admits exactly

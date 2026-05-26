@@ -580,25 +580,35 @@ def test_swarmyard_now_admits_at_admit_gate_post_cycle_2():
     # The Carrier-AA Phase 1 disjunct admits Swarmyard (the FLIP).
     assert traj._printing_is_bridge_simple_carrier_aa_land(swarmyard) is True
 
-    # No sibling disjunct admits Swarmyard — only the new Carrier-
-    # AA arm. Walk every ``_printing_is_bridge_*`` predicate and
-    # confirm exactly ONE returns True.
+    # No sibling disjunct admits Swarmyard — only the Carrier-AA arm
+    # (plus the Phase 4A dispatcher that wraps it). Walk every
+    # ``_printing_is_bridge_*`` predicate and confirm only the
+    # Carrier-AA admit pair returns True. The Phase 4A keystone
+    # (2026-05-26) added ``_printing_is_bridge_simple_carrier_aa_any``
+    # as the dispatcher over the Land + Artifact siblings; it
+    # delegates to the Land sibling for Swarmyard, so it MUST also
+    # admit. The expected set widens from {Land} to {Land,
+    # dispatcher} — both are the SAME Carrier-AA substrate, not a
+    # sibling-predicate spillover.
     candidate_predicates = [
         (name, getattr(traj, name))
         for name in dir(traj)
         if name.startswith("_printing_is_bridge_")
     ]
-    admits = [
+    admits = sorted(
         name
         for name, pred in candidate_predicates
         if callable(pred) and pred(swarmyard)
-    ]
-    assert admits == ["_printing_is_bridge_simple_carrier_aa_land"], (
+    )
+    expected_admits = sorted([
+        "_printing_is_bridge_simple_carrier_aa_land",
+        "_printing_is_bridge_simple_carrier_aa_any",
+    ])
+    assert admits == expected_admits, (
         f"Carrier-AA Phase 1 Cycle 2 FLIP invariant violated: "
         f"Swarmyard is admitted by {admits} — expected exactly "
-        f"['_printing_is_bridge_simple_carrier_aa_land']. A sibling "
-        f"predicate spillover means a different substrate has "
-        f"widened — investigate before merging Cycle 2."
+        f"{expected_admits}. A sibling predicate spillover means a "
+        f"different substrate has widened — investigate before merging."
     )
 
 
@@ -629,25 +639,28 @@ def test_deserted_temple_now_admits_at_admit_gate_post_phase_1_5a():
         traj._printing_is_bridge_simple_carrier_aa_land(dt) is True
     )
 
-    # No sibling disjunct admits Deserted Temple — only the Carrier-AA
-    # arm. Walk every ``_printing_is_bridge_*`` predicate and confirm
-    # exactly ONE returns True (mirrors the Swarmyard FLIP shape).
+    # No sibling disjunct admits Deserted Temple — only the Carrier-
+    # AA arm (plus the Phase 4A dispatcher). See the Swarmyard FLIP
+    # pin above for the dispatcher-widen rationale.
     candidate_predicates = [
         (name, getattr(traj, name))
         for name in dir(traj)
         if name.startswith("_printing_is_bridge_")
     ]
-    admits = [
+    admits = sorted(
         name
         for name, pred in candidate_predicates
         if callable(pred) and pred(dt)
-    ]
-    assert admits == ["_printing_is_bridge_simple_carrier_aa_land"], (
+    )
+    expected_admits = sorted([
+        "_printing_is_bridge_simple_carrier_aa_land",
+        "_printing_is_bridge_simple_carrier_aa_any",
+    ])
+    assert admits == expected_admits, (
         f"Carrier-AA Phase 1.5a FLIP invariant violated: "
         f"Deserted Temple is admitted by {admits} — expected exactly "
-        f"['_printing_is_bridge_simple_carrier_aa_land']. A sibling "
-        f"predicate spillover means a different substrate has "
-        f"widened — investigate before merging Phase 1.5a."
+        f"{expected_admits}. A sibling predicate spillover means a "
+        f"different substrate has widened — investigate before merging."
     )
 
 
