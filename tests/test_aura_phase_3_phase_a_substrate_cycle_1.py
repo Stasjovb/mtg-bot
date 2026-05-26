@@ -314,11 +314,14 @@ def test_python_ta_to_safe_dict_aura_phase3_arm_recognizes_effect_class():
     }
 
 
-def test_aura_triggers_are_phase3_safe_declines_chorale_attacks_half():
-    """**The §2 no-silent-auto-grow load-bearing pin.** The
-    ``_aura_triggers_are_phase3_safe`` gate does NOT admit the
-    ATTACKS + IsHost(subject="attacker") + Reanimate shape in C1.
-    Synthetic single-TA fixture confirms.
+def test_aura_triggers_are_phase3_safe_admits_chorale_attacks_half_post_cycle_2():
+    """**Inverted Cycle-2 admit-gate widen pin.** The
+    ``_aura_triggers_are_phase3_safe`` gate now ADMITS the
+    ATTACKS + IsHost(subject="attacker") + Reanimate shape post-Cycle-2.
+    Synthetic single-TA fixture confirms (the synthetic single-TA is a
+    sub-shape of Chorale's full surface; the full surface ALSO admits
+    via the Tail-X2 widen, exercised in the live-printing pin
+    ``test_chorale_of_the_void_now_admits_at_admit_gate_post_cycle_2``).
     """
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.generic.graveyard import (
@@ -332,8 +335,8 @@ def test_aura_triggers_are_phase3_safe_declines_chorale_attacks_half():
         predicate=IsHost(subject="attacker"),
         effect=ReanimateTargetCreatureCardFromDefendersGraveyard(),
     )
-    # Substrate-only invariant: gate refuses.
-    assert _aura_triggers_are_phase3_safe((chorale_attacks_ta,)) is False
+    # Cycle 2 admit-set flip: gate accepts.
+    assert _aura_triggers_are_phase3_safe((chorale_attacks_ta,)) is True
 
 
 def test_aura_phase3_emitter_arm_present_in_source():
@@ -820,16 +823,25 @@ def test_resolve_stamps_controller_to_resolving_controller(engine):
 # ---------------------------------------------------------------------------
 
 
-def test_chorale_of_the_void_stays_declined_at_admit_gate_post_cycle_1():
-    """**Substrate-only invariant pin.** Chorale of the Void STAYS
-    DECLINED at the production-deck loader filter post-Cycle-1.
+def test_chorale_of_the_void_now_admits_at_admit_gate_post_cycle_2():
+    """**Inverted-in-place admit-set flip pin (Cycle 2, 2026-05-26).**
+    Chorale of the Void now ADMITS at the production-deck loader
+    filter post-Cycle-2.
 
-    The all-or-nothing ``_aura_triggers_are_phase3_safe`` gate refuses
-    Chorale's full trigger surface because NEITHER the ATTACKS long-
-    pole NOR the BEGINNING_OF_END_STEP tail half is in the safe set
-    yet (Cycle 2 ships both widens in the same slice + wires the
-    trigger-fire push). The loader's
-    ``_printing_is_bridge_simple_aura`` therefore declines admission.
+    The all-or-nothing ``_aura_triggers_are_phase3_safe`` gate widened
+    in Cycle 2 to accept BOTH of Chorale's halves in the same slice:
+
+    * Shape A — ATTACKS + IsHost(subject="attacker") +
+      ReanimateTargetCreatureCardFromDefendersGraveyard (the long
+      pole).
+    * Shape B — BEGINNING_OF_END_STEP + Controlled(by=YOU, subject=
+      None) + SacrificeSelfUnlessVoidActive (Tail-X2).
+
+    The loader's ``_printing_is_bridge_simple_aura`` therefore admits
+    Chorale (the +2,783 17lands deck flip). The pin's prior name
+    (``test_chorale_of_the_void_stays_declined_at_admit_gate_post_
+    cycle_1``) inverted in-place — both pre- and post-state are
+    observable in git history at commit ``53c6bc2a``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -840,14 +852,14 @@ def test_chorale_of_the_void_stays_declined_at_admit_gate_post_cycle_1():
     ps = OracleParserCardSource().get_printings()
     chorale = ps["Chorale of the Void"]
 
-    # All-or-nothing gate refuses (substrate-only invariant).
+    # All-or-nothing gate admits (Cycle 2 widen).
     assert (
         _aura_triggers_are_phase3_safe(chorale.triggered_abilities)
-        is False
+        is True
     )
-    # Loader declines (the load-bearing observable for the admit-set
-    # invariant).
-    assert _printing_is_bridge_simple_aura(chorale) is False
+    # Loader admits (the load-bearing observable for the admit-set
+    # invariant flip).
+    assert _printing_is_bridge_simple_aura(chorale) is True
 
 
 # ---------------------------------------------------------------------------

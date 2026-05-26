@@ -7602,10 +7602,20 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
     tests).
     """
     from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import Event, IsHost, IsSelf
+    from mtg_bot.effects.predicates import (
+        Controlled,
+        Event,
+        IsHost,
+        IsSelf,
+        YOU as _Controller_YOU,
+    )
     from mtg_bot.effects.bespoke import (
         PainForAllDamageEchoEffect,
         PainForAllETBEffect,
+    )
+    from mtg_bot.effects.combinators import SacrificeSelfUnlessVoidActive
+    from mtg_bot.effects.generic.graveyard import (
+        ReanimateTargetCreatureCardFromDefendersGraveyard,
     )
     from mtg_bot.effects.generic.tap import TapEnchantedPermanent
 
@@ -7639,6 +7649,51 @@ def _aura_triggers_are_phase3_safe(triggered_abilities) -> bool:
             and isinstance(ta.predicate, IsHost)
             and ta.predicate.subject is None
             and isinstance(ta.effect, PainForAllDamageEchoEffect)
+        ):
+            continue
+        # **Aura Phase 3+ Phase A Cycle 2 (2026-05-26).** Chorale of
+        # the Void admit-gate widen — the two shapes ride in this slice
+        # together (the all-or-nothing gate refuses partial admission —
+        # widening only one of Chorale's two TAs would still keep
+        # Chorale declined). Per
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3 + §7 row 2.
+        #
+        # Phase-3+ admit shape 4: Chorale of the Void ATTACKS half —
+        # ``ATTACKS + IsHost(subject="attacker") + Reanimate...
+        # FromDefendersGraveyard``. The predicate's
+        # ``subject="attacker"`` slot threads through Rust's
+        # ``Predicate::IsHost { subject: Option<String> }`` via the
+        # existing ``is_host`` bridge arm (no new bridge code — landed
+        # in C1). The Rust resolve arm
+        # ``Effect::ReanimateTargetCreatureCardFromDefendersGraveyard``
+        # (landed in C1 at ``state_ops_resolve.rs:16433``) reads
+        # ``current_resolve_payload_target_id`` to bind its target.
+        if (
+            ta.event is Event.ATTACKS
+            and isinstance(ta.predicate, IsHost)
+            and ta.predicate.subject == "attacker"
+            and isinstance(
+                ta.effect, ReanimateTargetCreatureCardFromDefendersGraveyard
+            )
+        ):
+            continue
+        # Phase-3+ Tail-X2: Chorale EoT void-sustain tail —
+        # ``BEGINNING_OF_END_STEP + Controlled(by=YOU, subject=None) +
+        # SacrificeSelfUnlessVoidActive``. The
+        # ``SacrificeSelfUnlessVoidActive`` Effect class shipped as the
+        # Phase 4 first-deliverable (Rust
+        # ``Effect::SacrificeSelfUnlessVoidActive`` at
+        # ``cards.rs:4972``); the ``BEGINNING_OF_END_STEP`` event is
+        # already wired in Rust's dispatcher (slice 14 / round-14).
+        # ``Controlled(by=YOU, subject=None)`` round-trips via the
+        # existing ``controlled_by_you`` bridge arm
+        # (``cross_engine.py:12879``).
+        if (
+            ta.event is Event.BEGINNING_OF_END_STEP
+            and isinstance(ta.predicate, Controlled)
+            and ta.predicate.by is _Controller_YOU
+            and ta.predicate.subject is None
+            and isinstance(ta.effect, SacrificeSelfUnlessVoidActive)
         ):
             continue
         return False
@@ -7695,22 +7750,15 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
         PainForAllDamageEchoEffect,
         PainForAllETBEffect,
     )
+    from mtg_bot.effects.combinators import SacrificeSelfUnlessVoidActive
     from mtg_bot.effects.generic.tap import TapEnchantedPermanent
     # **Aura Phase 3+ Phase A Cycle 1 (2026-05-25).** Reverse-serializer
     # leaf import for Chorale of the Void's ATTACKS-trigger long-pole
     # Effect (``ReanimateTargetCreatureCardFromDefendersGraveyard`` at
-    # ``effects/generic/graveyard.py:474-554``). Substrate-only landing
-    # — the recognizer arm below produces the dict, but the
-    # ``_aura_triggers_are_phase3_safe`` gate does NOT widen to admit
-    # the ATTACKS+IsHost(subject="attacker")+Reanimate shape yet
-    # (Cycle 2 ships the widen + the trigger-fire push of
-    # ``PendingDecision::GraveyardCardChoice`` in the same slice). The
-    # all-or-nothing gate refuses to admit Chorale's full trigger
-    # surface today, so this recognizer arm is DORMANT in production:
-    # `_python_ta_to_safe_dict_aura_phase3` is only invoked when the
-    # gate has admitted, so the new branch only fires once Cycle 2
-    # widens the gate. Chorale STAYS DECLINED at the loader gate
-    # post-Cycle-1.
+    # ``effects/generic/graveyard.py:474-554``). Cycle 2 (2026-05-26)
+    # flips the admit gate ON and adds the Tail-X2 emitter arm for
+    # ``SacrificeSelfUnlessVoidActive``; both arms are now LIVE in
+    # production (Chorale of the Void admits at the loader filter).
     from mtg_bot.effects.generic.graveyard import (
         ReanimateTargetCreatureCardFromDefendersGraveyard,
     )
@@ -7786,6 +7834,24 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
             "effect": {
                 "kind": "reanimate_target_creature_card_from_defenders_graveyard",
             },
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, SacrificeSelfUnlessVoidActive):
+        # **Aura Phase 3+ Phase A Cycle 2 (2026-05-26) — Chorale of
+        # the Void admit-gate flip — reverse-serializer leaf for
+        # Tail-X2.** Shape: ``BEGINNING_OF_END_STEP + Controlled(by=
+        # YOU, subject=None) + SacrificeSelfUnlessVoidActive``. The
+        # Rust ``Effect::SacrificeSelfUnlessVoidActive`` shipped as
+        # the Phase 4 first-deliverable (cards.rs:4972), the
+        # ``BeginningOfEndStep`` event is in Rust's dispatcher allowlist
+        # (round-14), and ``Controlled(by=YOU)`` round-trips via the
+        # existing ``controlled_by_you`` bridge arm. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 (line
+        # 737-745).
+        return {
+            "event": "beginning_of_end_step",
+            "predicate": {"kind": "controlled_by_you"},
+            "effect": {"kind": "sacrifice_self_unless_void_active"},
             "once_per_turn": False,
         }
     # Should be unreachable when pre-gated by

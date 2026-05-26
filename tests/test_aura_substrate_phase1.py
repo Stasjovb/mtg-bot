@@ -320,15 +320,17 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
     Aura via ``moonlit_token_substitution`` and swap to the host's
     printing with a per-object Token-supertype override). Combined
     with the prior Phase 1/Phase 2/Phase 3 first deliverable
-    widenings, the bench-loader admits SIX live EoE Auras:
+    widenings + Phase 3+ Phase A Cycle 2 (2026-05-26), the bench-
+    loader admits SEVEN live EoE Auras:
     Frantic Strength + Shardmage's Rescue (S1 — keyword + P/T),
     Duskmourn's Domination (S2 — control + lose-abilities), Tractor
     Beam (S2 — control + prevents_untap), Pain for All (S4 —
-    triggered, the Phase 3 closure), and Moonlit Meditation (S3 —
-    replacement, the Phase 4 S3 closure). Every other S4 carrier
-    (Chorale of the Void, Cracked Skull, Sporogenic Infection)
-    stays declined on their non-Phase-3-safe trigger shape;
-    Meltstrider's Resolve stays declined on its
+    triggered, the Phase 3 closure), Moonlit Meditation (S3 —
+    replacement, the Phase 4 S3 closure), and Chorale of the Void
+    (S4 — triggered, the Phase 3+ Phase A Cycle 2 closure; the +2,783
+    17lands deck flip). Every other S4 carrier (Cracked Skull,
+    Sporogenic Infection) stays declined on their non-Phase-3-safe
+    trigger shape; Meltstrider's Resolve stays declined on its
     ``EnchantedCreatureFightsTargetEffect`` trigger (separate
     follow-up slice).
 
@@ -345,10 +347,11 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
             admitted.append(name)
         else:
             declined.append((name, "declined"))
-    # Phase 4 S3 closure admit set: S1 carriers + S2 Duskmourn-shape +
-    # Tractor Beam + Pain for All + Moonlit Meditation. If this set
-    # changes (parser drift, future widen), update both this pin AND
-    # the deck-count expectations in the plan.
+    # Phase 3+ Phase A Cycle 2 closure admit set: S1 carriers + S2
+    # Duskmourn-shape + Tractor Beam + Pain for All + Moonlit
+    # Meditation + Chorale of the Void. If this set changes (parser
+    # drift, future widen), update both this pin AND the deck-count
+    # expectations in the plan.
     assert sorted(admitted) == sorted([
         "Frantic Strength",
         "Shardmage's Rescue",
@@ -356,11 +359,13 @@ def test_predicate_admits_live_eoe_s1_auras_post_phase_4_s3_closure():
         "Tractor Beam",
         "Pain for All",
         "Moonlit Meditation",
+        "Chorale of the Void",
     ]), (
-        f"Phase 4 S3 closure expected six carriers to admit; got "
-        f"{sorted(admitted)!r}. If this is intentional (a later Phase "
-        f"widen of the predicate's admit shape), update this pin to "
-        f"assert the new expected admit list explicitly."
+        f"Phase 3+ Phase A Cycle 2 closure expected seven carriers "
+        f"to admit; got {sorted(admitted)!r}. If this is intentional "
+        f"(a later Phase widen of the predicate's admit shape), "
+        f"update this pin to assert the new expected admit list "
+        f"explicitly."
     )
     # Sanity: the parser pool has at least the 14 Auras the scout
     # documented (round-61 N1 + round-63 N4 drift extensions).
@@ -747,7 +752,12 @@ def test_loader_admits_at_least_one_live_eoe_aura_post_phase_2():
     must_decline = {
         "Cracked Skull",             # S4 triggered_abilities (non-Phase-3-safe)
         "Sporogenic Infection",      # S4 triggered_abilities (non-Phase-3-safe)
-        "Chorale of the Void",       # S4 triggered_abilities (non-Phase-3-safe)
+        # Chorale of the Void: ADMITTED post Phase 3+ Phase A Cycle 2
+        # (2026-05-26) — the C2 admit-gate widen added Shape A
+        # (ATTACKS + IsHost(subject="attacker") + Reanimate) + Tail-X2
+        # (BEGINNING_OF_END_STEP + Controlled(YOU) +
+        # SacrificeSelfUnlessVoidActive) to ``_aura_triggers_are_
+        # phase3_safe``. The +2,783 17lands deck flip.
         "Meltstrider's Resolve",     # residue triggered_abilities (non-Phase-3-safe — Fight effect)
     }
     leaked = must_decline & set(admitted_auras)

@@ -346,16 +346,25 @@ def test_sacrifice_self_unless_void_active_python_parity():
 # ---------------------------------------------------------------------
 
 
-def test_chorale_of_the_void_loader_still_declined():
-    """**Chorale of the Void stays declined at the bench loader.**
+def test_chorale_of_the_void_loader_admits_post_phase_3_phase_a_cycle_2():
+    """**Inverted in-place — Chorale of the Void admits at the bench
+    loader post Phase 3+ Phase A Cycle 2 (2026-05-26).**
 
-    Even with ``SacrificeSelfUnlessVoidActive`` now Rust-bridged,
-    Chorale's OTHER triggered ability —
-    ``ReanimateTargetCreatureCardFromDefendersGraveyard`` on
-    ATTACKS — needs targeted-graveyard substrate not yet in Rust.
-    The ``_aura_triggers_are_phase3_safe`` gate is all-or-nothing:
-    every trigger must be safe-shape, else the entire Aura is
-    refused. Chorale stays declined here.
+    Phase 3+ Phase A Cycle 1 (commit ``53c6bc2a``) landed the Rust
+    ``Effect::ReanimateTargetCreatureCardFromDefendersGraveyard``
+    substrate + ``PendingDecision::GraveyardCardChoice``; the C1 gate
+    DECLINED Chorale (substrate-only invariant). Cycle 2 (THIS slice)
+    widens ``_aura_triggers_are_phase3_safe`` with BOTH of Chorale's
+    halves in the same all-or-nothing-gate-compliant slice:
+
+      * Shape A — ATTACKS + IsHost(subject="attacker") +
+        ``ReanimateTargetCreatureCardFromDefendersGraveyard``.
+      * Tail-X2 — BEGINNING_OF_END_STEP + Controlled(by=YOU,
+        subject=None) + ``SacrificeSelfUnlessVoidActive``.
+
+    The loader now admits Chorale (the +2,783 17lands deck flip).
+    Cracked Skull + Sporogenic Infection still decline (Phase B +
+    Phase C are separate cycles).
     """
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_aura
@@ -369,13 +378,9 @@ def test_chorale_of_the_void_loader_still_declined():
     assert printing.is_aura, (
         "Pre-condition: Chorale of the Void must parse to is_aura=True."
     )
-    assert _printing_is_bridge_simple_aura(printing) is False, (
-        "Phase 4 honest-stop: Chorale of the Void must STAY declined "
-        "at the bench loader — the ATTACKS-event "
-        "ReanimateTargetCreatureCardFromDefendersGraveyard trigger "
-        "has no Rust Effect parity yet. Admitting Chorale here "
-        "would silently mistranslate that trigger to an effectless "
-        "no-op on Rust while Python reanimates."
+    assert _printing_is_bridge_simple_aura(printing) is True, (
+        "Phase 3+ Phase A Cycle 2 flip: Chorale of the Void admits "
+        "at the bench loader; the +2,783 17lands deck flip."
     )
 
 

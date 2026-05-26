@@ -554,15 +554,27 @@ def test_carddef_emits_pain_for_all_triggers_to_registry_dict():
 # ---------------------------------------------------------------------------
 
 
-def test_predicate_declines_chorale_of_the_void():
-    """Chorale of the Void has ATTACKS + Reanimate +
-    BEGINNING_OF_END_STEP + SacrificeSelfUnlessVoidActive triggers
-    — none in the Phase-3 safe set. Stays declined post-Phase-3."""
+def test_predicate_admits_chorale_of_the_void_post_phase_a_cycle_2():
+    """**Aura Phase 3+ Phase A Cycle 2 (2026-05-26).** Chorale of
+    the Void now ADMITS post Cycle 2 (the +2,783 17lands deck flip).
+    The Phase 3+ Phase A widen added both of Chorale's halves to the
+    safe set in the same slice:
+
+      * Shape A — ATTACKS + IsHost(subject="attacker") +
+        ``ReanimateTargetCreatureCardFromDefendersGraveyard``.
+      * Tail-X2 — BEGINNING_OF_END_STEP + Controlled(by=YOU,
+        subject=None) + ``SacrificeSelfUnlessVoidActive``.
+
+    The C1 substrate-only invariant pin (this test's prior name was
+    ``test_predicate_declines_chorale_of_the_void``) inverted
+    in-place by the Cycle 2 slice. Cracked Skull + Sporogenic
+    Infection still decline (Phase B + Phase C are separate cycles).
+    """
     from mtg_bot.cards.source import get_active_source
 
     p = get_active_source().get_printings()["Chorale of the Void"]
     assert p.is_aura is True
-    assert _printing_is_bridge_simple_aura(p) is False
+    assert _printing_is_bridge_simple_aura(p) is True
 
 
 def test_predicate_declines_cracked_skull():

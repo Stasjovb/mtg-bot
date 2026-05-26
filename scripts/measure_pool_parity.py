@@ -2820,6 +2820,97 @@ PROBE_MODULES: tuple[Path, ...] = (
     # GameObject.original_printing_id field for the CR-613 layer-1
     # copy substrate). Phase 3B is CLOSED with this probe.
     REPO_ROOT / "tests" / "test_scavenger_grounds_parity.py",
+    # **Aura-attachment substrate Phase 3+ Phase A Cycle 2 (2026-05-26
+    # — Chorale of the Void per-card real-EoE probe; closes Phase A
+    # per ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §7.3).**
+    # The Phase 3+ Phase A C1 substrate (commit ``53c6bc2a``) landed
+    # the new Rust ``Effect::ReanimateTargetCreatureCardFromDefenders
+    # Graveyard`` variant + the new ``PendingDecision::GraveyardCard
+    # Choice`` + the submit dispatcher + cross-engine bridge arms +
+    # reverse-serializer leaf (DORMANT-by-construction —
+    # ``_aura_triggers_are_phase3_safe`` declined Chorale post-C1).
+    # Phase 3+ Phase A C2 (THIS slice) widens
+    # ``_aura_triggers_are_phase3_safe`` with TWO new admit shapes
+    # (the all-or-nothing gate refuses partial admission — Chorale's
+    # two TAs MUST widen together): Shape A — ATTACKS + IsHost(subject
+    # ="attacker") + Reanimate; Tail-X2 — BEGINNING_OF_END_STEP +
+    # Controlled(YOU, None) + SacrificeSelfUnlessVoidActive. The
+    # admit-gate FLIPped DECLINED → ADMITTED — the +2,783 17lands
+    # deck flip. C2 — THIS registration — closes the tier flip to
+    # PROBED by attaching the per-card cross-engine probe.
+    #
+    #   * ``test_chorale_of_the_void_parity.py`` — Chorale of the Void
+    #     ({3}{B} Enchantment — Aura, Enchant creature), TWO triggered
+    #     abilities (ATTACKS + IsHost(subject="attacker") + Reanimate
+    #     ...FromDefendersGraveyard AND BEGINNING_OF_END_STEP +
+    #     Controlled(YOU) + SacrificeSelfUnlessVoidActive). The FIRST
+    #     PROBE_MODULES-credited probe binding BOTH the
+    #     ``ReanimateTargetCreatureCardFromDefendersGraveyard`` AND the
+    #     ``SacrificeSelfUnlessVoidActive`` Effect classes on a real-
+    #     EoE Aura carrier. Drives THREE scenarios per design doc
+    #     §7.3:
+    #       (1) ATTACKS reanimate happy path — Python-engine real-EoE
+    #           smoke (the load-bearing scenario): Chorale on bf
+    #           attached to p0's host bear; p1's graveyard has a bear
+    #           creature card; declare host as attacker; ATTACKS
+    #           trigger queues + resolves; Reanimate effect picks the
+    #           opponent's graveyard creature (scripted
+    #           ``_PickFirstAgent``) and puts it onto p0's bf TAPPED
+    #           + ATTACKING (CR 400.7 zone reset + the printed text's
+    #           explicit ``tapped=True / attacking=True / summoning_
+    #           sick=False`` stamps).
+    #       (2) End-step Void-active no-sac — Python-engine real-EoE
+    #           smoke: Chorale on caster's bf with
+    #           ``permanent_left_battlefield_this_turn=True`` (Void
+    #           active); ``run_beginning_of_end_step_triggers`` +
+    #           drain stack; Chorale stays on bf (the SacrificeSelf
+    #           UnlessVoidActive arm sees Void active and silent-no-
+    #           ops).
+    #       (3) End-step Void-inactive sac — Python-engine real-EoE
+    #           smoke: Chorale on caster's bf with Void inactive;
+    #           end-step trigger fires; Chorale sacrifices (the
+    #           resolve arm sees Void inactive and removes Chorale
+    #           from bf).
+    #     PLUS a cross-engine byte-equal pin for the Tail-X2 half
+    #     (``test_cross_engine_real_eoe_chorale_of_the_void_end_step
+    #     _byte_equal_tail_x2_parity``): drives BOTH engines through
+    #     the end-step Void-inactive sacrifice path via Python's
+    #     ``run_beginning_of_end_step_triggers`` + Rust's
+    #     ``set_phase(9) + advance_phase()`` (which fires the
+    #     centralized ``Event::BeginningOfEndStep`` dispatch — round-
+    #     14 substrate at ``state_ops_steps.rs:714+``); Chorale leaves
+    #     bf on BOTH engines, host stays.
+    #
+    # **Scenario 1 cross-engine note.** Scenario 1 (ATTACKS reanimate)
+    # is **Python-engine only** in this slice — the Rust
+    # ``Effect::ReanimateTargetCreatureCardFromDefendersGraveyard``
+    # resolve arm is fully landed (``state_ops_resolve.rs:16433``)
+    # but the **production push site** for
+    # ``PendingDecision::GraveyardCardChoice`` at the ATTACKS-trigger
+    # fan-out is **deferred to a follow-up Rust slice** (C1 landed
+    # the PendingDecision variant + the submit dispatcher + the
+    # resolve arm, but ``first_legal_trigger_target`` has no arm for
+    # ``ReanimateTargetCreatureCardFromDefendersGraveyard`` yet, so
+    # the trigger pushes onto the stack with ``target_obj_id=None``
+    # and the resolve arm silent-fizzles on the unset payload slot).
+    # The admit-gate flip + the Tail-X2 cross-engine pin are the
+    # load-bearing Cycle 2 evidence; Scenario 1's cross-engine byte-
+    # equal pin will land in the follow-up slice. This is the same
+    # honest-stop shape every staged substrate uses (Pain for All
+    # closure landed the half-admit-set first; the bench-strategy-
+    # specific cross-engine pin closed downstream).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Aura-
+    # attachment BLOCKED-SG row: 3 multi-gated tail → 2 (Cracked Skull
+    # + Sporogenic Infection still DECLINED at the admit gate —
+    # neither uses Reanimate / SacrificeSelfUnlessVoidActive, both
+    # carry uncovered ``TargetOpponentLookHandMayDiscard`` /
+    # ``TargetOpponentSacrificesCreatureOtherThanEnchanted`` /
+    # ``DestroyEnchantedPermanent`` Effect classes Phase 3+ Phase B/C
+    # ships). Phase A is CLOSED with this probe. Phase B (Cracked
+    # Skull) + Phase C (Sporogenic Infection) are separate cycles
+    # per design doc §8 row 3-7.
+    REPO_ROOT / "tests" / "test_chorale_of_the_void_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
