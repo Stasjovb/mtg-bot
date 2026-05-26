@@ -12574,6 +12574,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PutBasicLandFromHandOntoBattlefieldTapped,
         )
         return PutBasicLandFromHandOntoBattlefieldTapped()
+    if kind == "exile_all_graveyards":
+        # **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::ExileAllGraveyards`` variant
+        # (cards.rs). Mirrors Python's parameterless
+        # ``ExileAllGraveyards`` frozen dataclass at
+        # ``effects/generic/exile.py:661`` — Scavenger Grounds's pilot
+        # effect (``{2}, {T}, Sacrifice a Desert: Exile all
+        # graveyards.``). Unit variant — no fields beyond ``kind``.
+        # Same shape as the Phase-2a/2b/3A unit-variant siblings
+        # ``untap_target_land`` /
+        # ``return_target_land_from_graveyard_to_hand`` /
+        # ``put_basic_land_from_hand_onto_battlefield_tapped`` /
+        # ``exile_target_attacking_creature_until_end_step``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 3B Cycle 1 keeps Scavenger
+        # Grounds DECLINED at the production-deck loader: the Effect-
+        # class admit-set widen
+        # (``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect) AND the cost-gate widen (``_aa_is_phase1_sub_shape_a``
+        # removes the strict ``sacrifice_a_desert`` decline arm) both
+        # ship C2. This bridge arm is byte-equal for both the
+        # substrate-only and the post-C2 flipped outcomes.
+        #
+        # **Zero-target mass effect.** No target field on the dict and
+        # no AA-shape target seat — the Rust ``state_ops_legal.rs``
+        # emits a single ``ActivateAbility`` with no target field; the
+        # ``sacrifice_a_desert`` cost itself fans out over the
+        # activator's Desert lands via the existing Lander-precedent
+        # cost-pay path (already wired at
+        # ``state_ops_legal.rs:3522`` + ``state_ops_actions.rs:1179``).
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` uses the SPECIFIC class
+        # ``ExileAllGraveyards`` — NOT any parent ``Effect`` class —
+        # to avoid silently widening admission to other ``Effect``
+        # subclasses. This class has no subclasses in the live tree.
+        from mtg_bot.effects.generic.exile import ExileAllGraveyards
+        return ExileAllGraveyards()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -14356,6 +14394,7 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         PutBasicLandFromHandOntoBattlefieldTapped,
     )
     from mtg_bot.effects.generic.exile import (
+        ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
 
@@ -14395,6 +14434,32 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         effect_dict = {
             "kind": "exile_target_attacking_creature_until_end_step",
         }
+    elif isinstance(effect, ExileAllGraveyards):
+        # **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25).** Forward-
+        # emit arm for Scavenger Grounds's pilot effect (``{2}, {T},
+        # Sacrifice a Desert: Exile all graveyards.``). Unit variant —
+        # only the ``kind`` discriminator on the wire. Zero-target mass
+        # effect — no target field on the dict (the
+        # ``sacrifice_a_desert`` cost itself fans out over the
+        # activator's Desert lands at activation time; the EFFECT
+        # carries no target).
+        #
+        # **Substrate-only: Scavenger Grounds STAYS DECLINED at admit
+        # gate.** The forward emit succeeds (Rust round-trip works),
+        # but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live
+        # Scavenger Grounds printing because (a) C1 doesn't widen
+        # ``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect class AND (b) C1 doesn't remove the cost-gate's
+        # ``sacrifice_a_desert`` strict decline arm — both ship C2.
+        # The forward arm exists at C1 so unit-test pins can drive
+        # the round-trip.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``ExileAllGraveyards`` — NOT any parent ``Effect`` class —
+        # to avoid silently widening admission to other ``Effect``
+        # subclasses (consistent with the Phase-3A specificity contract).
+        effect_dict = {"kind": "exile_all_graveyards"}
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.
         return None

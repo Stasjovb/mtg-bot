@@ -8554,6 +8554,34 @@ pub enum Effect {
         /// only the target-card id, decoupled from the Maze source).
         exile_card_id: u32,
     },
+    /// **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25).** Scavenger
+    /// Grounds's pilot effect — `{2}, {T}, Sacrifice a Desert: Exile all
+    /// graveyards.`
+    ///
+    /// **Mirrors Python's `ExileAllGraveyards`**
+    /// (`src/mtg_bot/effects/generic/exile.py:661`). Zero-target mass
+    /// effect — no `requires_target`, no fan-out target enumeration in
+    /// `state_ops_legal.rs`. On resolve, walks every player's graveyard
+    /// in order and moves every `GameObject` into that same player's
+    /// exile zone, stamping `obj.zone = ZONE_EXILE`. Per-zone CR-400.7
+    /// resets are NOT applied — Python's resolve only stamps
+    /// `c.zone = Zone.EXILE` (see `exile.py:670-679`), so the Rust arm
+    /// mirrors byte-equal to preserve cross-engine fingerprint parity
+    /// (graveyard cards already carry the zone-default field values
+    /// from their bf→graveyard transition).
+    ///
+    /// **Cost machinery (already wired, design doc §4.2 audit).** The
+    /// `{2}, {T}, Sac-a-Desert:` cost shape rides the existing
+    /// `ActivationCost.sacrifice_a_desert` bool (`cards.rs:9943`), the
+    /// `parse_activation_cost` `sacrifice_a_desert` arm
+    /// (`cards.rs:16435`+), the `state_ops_legal.rs:3522` Desert-target
+    /// fan-out, and the `state_ops_actions.rs:1179` cost-pay commit —
+    /// all from the CE20 / Lander precedent. The Phase 3B Rust slice
+    /// is ONE new Effect variant; ZERO new cost-shape machinery.
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `ExileAllGraveyards()` frozen dataclass.
+    ExileAllGraveyards,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -12824,6 +12852,26 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 }
             };
             Ok(Effect::ReturnExiledPermanentToOwnerTapped { exile_card_id })
+        }
+        // **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25) —
+        // `exile_all_graveyards` parse arm.** Unit variant; no fields.
+        // Mirrors Python's parameterless `ExileAllGraveyards()` frozen
+        // dataclass at `effects/generic/exile.py:661`. Scavenger
+        // Grounds's pilot effect (`{2}, {T}, Sac-a-Desert: Exile all
+        // graveyards.`). Extra dict keys silently dropped (unit-variant
+        // contract; same shape as the Phase-2a/2b/3A unit-variant
+        // siblings — `untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step`).
+        //
+        // **No target field.** Zero-target mass effect — neither the
+        // AA-shape carrier nor the parsed effect-dict carries a target
+        // payload. Cost machinery (`sacrifice_a_desert` Desert-target
+        // fan-out) handles the per-Desert target-pick at activation
+        // time; the EFFECT itself walks every graveyard at resolve.
+        "exile_all_graveyards" => {
+            Ok(Effect::ExileAllGraveyards)
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -18592,6 +18640,18 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::ReturnExiledPermanentToOwnerTapped { exile_card_id } => {
             d.set_item("kind", "return_exiled_permanent_to_owner_tapped")?;
             d.set_item("exile_card_id", *exile_card_id)?;
+        }
+        // **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25) —
+        // `ExileAllGraveyards.to_pydict`.** Field-free unit-variant;
+        // only `kind` emitted. Mirrors Python's parameterless
+        // `ExileAllGraveyards()` frozen dataclass
+        // (`effects/generic/exile.py:661`). Same emit shape as the
+        // sibling Carrier-AA unit-variant effects (`UntapTargetLand`
+        // / `ReturnTargetLandFromGraveyardToHand` /
+        // `PutBasicLandFromHandOntoBattlefieldTapped` /
+        // `ExileTargetAttackingCreatureUntilEndStep`).
+        Effect::ExileAllGraveyards => {
+            d.set_item("kind", "exile_all_graveyards")?;
         }
     }
     Ok(d)

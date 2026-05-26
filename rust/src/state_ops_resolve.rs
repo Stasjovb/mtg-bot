@@ -23237,6 +23237,68 @@ fn apply_effect(
             // BattlefieldTapped` sibling.
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25) —
+        // `ExileAllGraveyards` resolve.** Mirrors Python's
+        // `ExileAllGraveyards.resolve` at
+        // `effects/generic/exile.py:667-680`. Pilot effect on Scavenger
+        // Grounds (`{2}, {T}, Sacrifice a Desert: Exile all
+        // graveyards.`).
+        //
+        // **Zero-target mass effect.** No `current_resolve_payload_
+        // target_id` read; no per-target re-validation. The AA-shape
+        // legal-emit fan-out emits a single `ActivateAbility` action
+        // with no target field (the `sacrifice_a_desert` cost itself
+        // fans out over the activator's Desert lands at activation
+        // time, but the EFFECT carries no target — design doc §4.2).
+        //
+        // **Walk semantics.** Mirrors Python's `for p in state.players:
+        // for c in list(p.graveyard): p.graveyard.remove(c); c.zone =
+        // Zone.EXILE; p.exile.append(c)` byte-equal. Each card stays
+        // with its OWNER (= the player whose graveyard it sat in;
+        // EoE has no ownership-changing effects — same convention as
+        // the Phase-3A `ReturnExiledPermanentToOwnerTapped` sibling).
+        //
+        // **No CR 400.7 zone-change resets.** Python's resolve only
+        // stamps `c.zone = Zone.EXILE` and does NOT clear
+        // tapped/damage/counters/etc. — graveyard cards already carry
+        // the zone-default values from their prior bf→graveyard /
+        // hand→graveyard transition (any creature that died was
+        // already reset on the bf→graveyard move). The Rust arm
+        // matches byte-equal — only `obj.zone = ZONE_EXILE` is stamped
+        // so cross-engine fingerprint parity holds (any superfluous
+        // reset here would diverge from Python's behavior).
+        //
+        // **No LEAVES / token-cease / ETB dispatch.** Graveyard→exile
+        // is not a bf-leave (the cards are not on the battlefield);
+        // no LTB fires, no token-cease fires, no ETB fires. Mirrors
+        // Python's resolve byte-equal (no `move_off_battlefield` /
+        // `fire_*_triggers` calls).
+        //
+        // **Drain into a Vec first.** The two-step (drain → push)
+        // shape avoids borrow-checker friction with the two-Arc-make-
+        // mut pattern (one for `graveyard`, one for `exile`). Same
+        // shape as `Vec::drain(..)` over `Arc::make_mut`'d slots in
+        // the existing graveyard-to-exile sibling resolve arms.
+        Effect::ExileAllGraveyards => {
+            for pidx in 0..state.players.len() {
+                let drained: Vec<GameObject> = {
+                    let player_gy = Arc::make_mut(
+                        &mut state.players[pidx].graveyard,
+                    );
+                    player_gy.drain(..).collect()
+                };
+                if drained.is_empty() {
+                    continue;
+                }
+                let player_exile = Arc::make_mut(
+                    &mut state.players[pidx].exile,
+                );
+                for mut obj in drained {
+                    obj.zone = ZONE_EXILE;
+                    player_exile.push(obj);
+                }
+            }
+        }
     }
     Ok(())
 }
