@@ -8575,6 +8575,21 @@ def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
 # admit-gate FLIPs DECLINED → ADMITTED on this widen alone (no
 # further admit-side wiring needed). Sibling of the Phase-2b widen
 # for ``PutBasicLandFromHandOntoBattlefieldTapped``.
+#
+# **Carrier-AA substrate Phase 3B Cycle 2 (2026-05-25).** The
+# accessor is further widened to include ``ExileAllGraveyards``
+# (Scavenger Grounds's pilot Effect — Phase 3B C1 substrate landing
+# at ``51abfd78`` shipped the Rust ``Effect::ExileAllGraveyards``
+# unit variant + parse/resolve/to_pydict arms + cross-engine
+# bridge arms per
+# ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §4.2/§5.3/§7.2).
+# Scavenger Grounds's live AA shape is ``{2}, {T}, Sac-a-Desert``
+# — the Phase-1.5a ``{N}, {T}`` cost-shape is already wired; this
+# cycle pairs the Effect-class widen with a strictly-additive
+# cost-gate widen on the ``sacrifice_a_desert`` axis (in
+# :func:`_aa_is_phase1_sub_shape_a`) so the admit-gate FLIPs
+# DECLINED → ADMITTED on the combined widen. Sibling of the
+# Phase-3A C2 widen for ``ExileTargetAttackingCreatureUntilEndStep``.
 def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     """Lazy accessor for the Carrier-AA admitted AA[0] Effect classes.
 
@@ -8587,7 +8602,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     ``PutBasicLandFromHandOntoBattlefieldTapped`` (Phase 2b combined-
     cycle Rust substrate + Python admit + Terrain Generator FLIP) +
     ``ExileTargetAttackingCreatureUntilEndStep`` (Phase 3A C1
-    substrate at ``3de469a3`` / Phase 3A C2 admits Mystifying Maze).
+    substrate at ``3de469a3`` / Phase 3A C2 admits Mystifying Maze) +
+    ``ExileAllGraveyards`` (Phase 3B C1 substrate at ``51abfd78`` /
+    Phase 3B C2 admits Scavenger Grounds).
     Lazily imported so the module import-graph stays light and tests
     that monkeypatch the effect classes (unit pins) see a fresh
     frozenset each call.
@@ -8596,15 +8613,14 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     engine.** Phase 3+ remaining Carrier-AA Effect candidates per
     design doc §3:
     ``BecomesCopyOfTargetLand`` (Thespian's Stage — copy-effect
-    substrate),
-    ``ExileAllGraveyards`` (Scavenger Grounds — multi-graveyard
-    walk + ``sacrifice_a_desert`` cost gate).
+    substrate).
     """
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.exile import (
+        ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
     from mtg_bot.effects.generic.tap import UntapTargetLand
@@ -8617,6 +8633,7 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         ReturnTargetLandFromGraveyardToHand,
         PutBasicLandFromHandOntoBattlefieldTapped,
         ExileTargetAttackingCreatureUntilEndStep,
+        ExileAllGraveyards,
     })
 
 
@@ -8670,14 +8687,31 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     (``state_ops_actions.rs:1300-1391``); ZERO new Rust cost-shape
     machinery needed.
 
+    **Carrier-AA substrate Phase 3B Cycle 2 (2026-05-25).** Cost-gate
+    widen on the ``sacrifice_a_desert`` axis per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3. The strict
+    ``sacrifice_a_desert`` decline arm is removed; a defense-in-depth
+    both-at-once guard remains (``sacrifice_a_desert and
+    sacrifice_self`` declines because no live carrier carries both
+    sacrifice axes — confirmed by full-pool verify-first audit, only
+    Scavenger Grounds carries ``sacrifice_a_desert=True`` and its
+    ``sacrifice_self`` is ``False``). The Rust ``ActivationCost.
+    sacrifice_a_desert`` parse + Desert-target fan-out
+    (``state_ops_legal.rs:3522``) + cost-pay commit
+    (``state_ops_actions.rs:1287``) are wired end-to-end since the
+    CE20 / Lander precedent; ZERO new Rust cost-shape machinery
+    needed. Pairs with the Phase-3B C2 Effect-class widen for
+    ``ExileAllGraveyards`` (Scavenger Grounds FLIPs DECLINED →
+    ADMITTED on the combined widen).
+
     **§2 contract preservation:** every other cost-bool gate
     (``exile_self``, ``tap_permanent_you_control``,
-    ``sacrifice_a_desert``, ``sacrifice_another_*``, ``pay_life``,
-    ``requires_*``, etc.) stays bit-identical. The widen is strictly
-    additive on the ``sacrifice_self`` axis; no other field's
-    contract loosens. Colored / hybrid / X-pip mana costs stay
-    Phase-N honest-stops; ``sacrifice_a_desert`` stays Phase 3+;
-    ``sacrifice_another_*`` stays Phase N.
+    ``sacrifice_another_*``, ``pay_life``, ``requires_*``, etc.)
+    stays bit-identical. The Phase-3B C2 widen is strictly additive
+    on the ``sacrifice_a_desert`` axis under the both-at-once guard;
+    no other field's contract loosens. Colored / hybrid / X-pip mana
+    costs stay Phase-N honest-stops; ``sacrifice_another_*`` stays
+    Phase N.
 
     Mirrors the SoT-flip pattern of the token-AA Lander helper at
     ``trajectory.py:3208`` and the Phase-2 Eldrazi Scion helper at
@@ -8687,8 +8721,11 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
 
     if not isinstance(aa, ActivatedAbility):
         return False
-    # Cost gate — Phase 2a: bare {T} OR {N}, {T} OR ({T}, Sac:) OR
-    # ({N}, {T}, Sac:) — generic-only mana, optional sacrifice_self.
+    # Cost gate — Phase 3B: bare {T} OR {N}, {T} OR ({T}, Sac:) OR
+    # ({N}, {T}, Sac:) OR ({T}, Sac-a-Desert:) OR ({N}, {T},
+    # Sac-a-Desert:) — generic-only mana, optional sacrifice_self
+    # OR sacrifice_a_desert (the both-at-once combo declines via the
+    # defense-in-depth guard below; no live EoE carrier sets both).
     cost = aa.cost
     if not cost.tap_self:
         return False
@@ -8707,11 +8744,13 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
             # depth so a malformed cost never sneaks through.
             return False
     # Phase 2a admits ``sacrifice_self=True`` under the cost-gate widen.
-    # Lander's ``{N}, Sac:`` token-AA precedent already wired the Rust
-    # ``ActivationCost.sacrifice_self`` parse + Phase 5b cost-pay
-    # commit (``state_ops_actions.rs:1300-1391``); no Rust change
-    # needed. Other sacrifice variants (``sacrifice_a_desert``,
-    # ``sacrifice_another_*``) still decline below.
+    # Phase 3B admits ``sacrifice_a_desert=True`` under the cost-gate
+    # widen. Lander's ``{N}, Sac:`` token-AA precedent already wired
+    # the Rust ``ActivationCost.sacrifice_self`` parse + Phase 5b
+    # cost-pay commit; the CE20 / Lander precedent already wired
+    # ``ActivationCost.sacrifice_a_desert`` parse + Desert-target
+    # fan-out + cost-pay commit. Other sacrifice variants
+    # (``sacrifice_another_*``) still decline below.
     if cost.exile_self:
         return False
     if cost.tap_permanent_you_control:
@@ -8728,7 +8767,13 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
         return False
     if cost.sacrifice_a_land:
         return False
-    if cost.sacrifice_a_desert:
+    # Phase 3B C2 defense-in-depth: the both-at-once
+    # ``sacrifice_a_desert + sacrifice_self`` combo declines. No live
+    # EoE carrier carries both (verify-first full-pool audit at
+    # 2026-05-25); the guard exists so a future carrier carrying both
+    # axes fails honestly rather than silently auto-admitting under
+    # the Phase-3B widen.
+    if cost.sacrifice_a_desert and cost.sacrifice_self:
         return False
     if cost.remove_plus_one_counter_from_your_creature:
         return False

@@ -210,18 +210,20 @@ def test_aa_is_phase1_sub_shape_a_admits_swarmyard_pilot_shape():
 @pytest.mark.parametrize("cost_kwargs,reason", [
     # Phase 2a INVERTED ``sacrifice_self`` — moved to the admit pin
     # ``test_aa_is_phase2a_sub_shape_a_now_admits_T_plus_sac_after_widen``.
+    # Phase 3B C2 INVERTED ``sacrifice_a_desert`` — moved to the
+    # admit pin
+    # ``test_aa_is_phase3b_sub_shape_a_now_admits_T_plus_sac_a_desert_after_widen``.
     ({"tap_self": True, "pay_life": 1}, "pay_life"),
-    ({"tap_self": True, "sacrifice_a_desert": True}, "sacrifice_a_desert"),
     ({"tap_self": False}, "missing tap_self"),
 ])
 def test_aa_is_phase1_sub_shape_a_declines_non_bare_T_costs(
     cost_kwargs, reason,
 ):
     """**Decline pin (cost-gate teeth).** Every cost-shape outside
-    the Phase-2a admit set still declines. Phase 2a widens the
-    ``sacrifice_self`` axis only — other cost-bools
-    (``pay_life``, ``sacrifice_a_desert``, missing ``tap_self``)
-    keep their Phase-N honest-stops."""
+    the Phase-3B admit set still declines. Phase 2a widened the
+    ``sacrifice_self`` axis; Phase 3B C2 widens the
+    ``sacrifice_a_desert`` axis; other cost-bools (``pay_life``,
+    missing ``tap_self``) keep their Phase-N honest-stops."""
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
@@ -231,6 +233,58 @@ def test_aa_is_phase1_sub_shape_a_declines_non_bare_T_costs(
         effect=UntapTargetLand(),
     )
     assert _aa_is_phase1_sub_shape_a(aa) is False, reason
+
+
+def test_aa_is_phase3b_sub_shape_a_now_admits_T_plus_sac_a_desert_after_widen():
+    """**Phase 3B C2 INVERSION admit pin (sacrifice_a_desert axis).**
+    The Phase-3B C2 cost-gate widen accepts
+    ``cost.sacrifice_a_desert=True`` alongside ``tap_self`` (with
+    or without generic mana) — Scavenger Grounds's printed cost
+    ``{2}, {T}, Sac-a-Desert`` now ADMITS at the cost-gate level
+    (was Phase-1/1.5/2a honest-stop on the strict
+    ``sacrifice_a_desert`` decline). Pairs with the Effect-class
+    widen for ``ExileAllGraveyards`` so the end-to-end admit-gate
+    FLIPs DECLINED → ADMITTED on Scavenger Grounds.
+
+    The both-at-once defense-in-depth guard
+    (``sacrifice_a_desert and sacrifice_self``) still declines —
+    see ``test_aa_is_phase3b_sub_shape_a_declines_both_sacrifice_axes_at_once``.
+    """
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.exile import ExileAllGraveyards
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            tap_self=True,
+            sacrifice_a_desert=True,
+        ),
+        effect=ExileAllGraveyards(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is True
+
+
+def test_aa_is_phase3b_sub_shape_a_declines_both_sacrifice_axes_at_once():
+    """**Phase 3B C2 defense-in-depth guard pin.** The cost-gate
+    declines synthetic carriers with BOTH ``sacrifice_a_desert=True``
+    AND ``sacrifice_self=True`` set. No live EoE carrier carries both
+    axes (verify-first full-pool audit at 2026-05-25); the guard
+    exists so a future-carrier carrying both axes fails honestly
+    rather than silently auto-admitting under the Phase-3B widen.
+    """
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.effects.generic.exile import ExileAllGraveyards
+    from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
+
+    aa = ActivatedAbility(
+        cost=ActivationCost(
+            tap_self=True,
+            sacrifice_a_desert=True,
+            sacrifice_self=True,
+        ),
+        effect=ExileAllGraveyards(),
+    )
+    assert _aa_is_phase1_sub_shape_a(aa) is False
 
 
 # ---------------------------------------------------------------------------
@@ -444,35 +498,37 @@ def test_printing_is_bridge_simple_carrier_aa_land_admits_live_deserted_temple()
 # ---------------------------------------------------------------------------
 
 
-def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator_plus_mystifying_maze():
-    """**Phase 3A C2 no-silent-auto-grow pin (INVERTED — admit count
-    4 → 5).** Walks the 30 BLOCKED-SG Carrier-AA cards from design
+def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field_plus_terrain_generator_plus_mystifying_maze_plus_scavenger_grounds():
+    """**Phase 3B C2 no-silent-auto-grow pin (INVERTED — admit count
+    5 → 6).** Walks the 30 BLOCKED-SG Carrier-AA cards from design
     doc §2.1 against :func:`_printing_is_bridge_simple_carrier_aa_land`
-    under the Phase-3A-C2 widened Effect-class admit set
+    under the Phase-3B-C2 widened Effect-class admit set
     (``RegenerateTargetCreature`` + ``UntapTargetLand`` +
     ``ReturnTargetLandFromGraveyardToHand`` +
     ``PutBasicLandFromHandOntoBattlefieldTapped`` +
-    ``ExileTargetAttackingCreatureUntilEndStep``) atop the Phase-2a
-    widened cost-gate (bare ``{T}`` OR ``{N}, {T}`` OR
-    ``({T}, Sac:)`` OR ``({N}, {T}, Sac:)``). ONLY Swarmyard +
-    Deserted Temple + Petrified Field + Terrain Generator +
-    Mystifying Maze admit; every other carrier honestly declines per
-    the verify-first walk recorded in the Phase 3A C2 commit message.
+    ``ExileTargetAttackingCreatureUntilEndStep`` +
+    ``ExileAllGraveyards``) atop the Phase-3B widened cost-gate
+    (bare ``{T}`` OR ``{N}, {T}`` OR ``({T}, Sac:)`` OR
+    ``({N}, {T}, Sac:)`` OR ``({T}, Sac-a-Desert:)`` OR
+    ``({N}, {T}, Sac-a-Desert:)`` under the both-at-once
+    defense-in-depth guard). ONLY Swarmyard + Deserted Temple +
+    Petrified Field + Terrain Generator + Mystifying Maze +
+    Scavenger Grounds admit; every other carrier honestly declines
+    per the verify-first walk.
 
     Sibling-candidate Effect-class teeth remain load-bearing:
-    Thespian's Stage (``BecomesCopyOfTargetLand`` — Phase 3+ copy-
+    Thespian's Stage (``BecomesCopyOfTargetLand`` — Phase 3C copy-
     effect substrate) carries a cost that passes the widened cost-
-    gate but DECLINES on the Phase-3A-C2 Effect-class admit set.
-    Scavenger Grounds (Phase 3 — ``sacrifice_a_desert`` cost shape)
-    still declines on the non-admitted ``sacrifice_a_desert`` cost-
-    bool gate. Any new Effect class admitted to the set would surface
-    here as a silent auto-grow — investigate before merging.
+    gate but DECLINES on the Phase-3B-C2 Effect-class admit set.
+    Any new Effect class admitted to the set would surface here as
+    a silent auto-grow — investigate before merging.
 
-    Inverts the Phase-2b pin
+    Inverts the Phase-3A-C2 pin
     ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
-    plus_deserted_temple_plus_petrified_field_plus_terrain_generator``
-    (admit set was ``['Deserted Temple', 'Petrified Field',
-    'Swarmyard', 'Terrain Generator']``)."""
+    plus_deserted_temple_plus_petrified_field_plus_terrain_generator_
+    plus_mystifying_maze`` (admit set was ``['Deserted Temple',
+    'Mystifying Maze', 'Petrified Field', 'Swarmyard', 'Terrain
+    Generator']``)."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -501,15 +557,16 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Deserted Temple",
         "Mystifying Maze",
         "Petrified Field",
+        "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
     ], (
-        f"Carrier-AA Phase 3A C2 admit-set pin violated: expected "
+        f"Carrier-AA Phase 3B C2 admit-set pin violated: expected "
         f"admit set = ['Deserted Temple', 'Mystifying Maze', "
-        f"'Petrified Field', 'Swarmyard', 'Terrain Generator'], got "
-        f"{admits}. A widen in a sibling substrate or predicate "
-        f"would surface here as a silent auto-grow — investigate "
-        f"before merging."
+        f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
+        f"'Terrain Generator'], got {admits}. A widen in a sibling "
+        f"substrate or predicate would surface here as a silent "
+        f"auto-grow — investigate before merging."
     )
 
 

@@ -630,49 +630,55 @@ def test_resolve_exile_all_graveyards_one_sided_graveyard(
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant pins — Scavenger Grounds STAYS DECLINED
+# Phase 3B C2 invariant pins (INVERTED) — Scavenger Grounds NOW ADMITS
 # ---------------------------------------------------------------------------
 
 
-def test_scavenger_grounds_stays_declined_post_cycle_1():
-    """**Phase 3B C1 substrate-only invariant pin.** Scavenger Grounds's
-    live ``OracleParserCardSource`` printing STAYS DECLINED by
+def test_scavenger_grounds_now_admits_post_cycle_2():
+    """**Phase 3B C2 invariant pin (INVERTED).** Scavenger Grounds's
+    live ``OracleParserCardSource`` printing PASSES
     :func:`_printing_is_bridge_simple_carrier_aa_land` post-Phase-3B-
-    C1.
+    C2 because the combined Effect-class + cost-gate widen
+    admits the live ``{2}, {T}, Sac-a-Desert: ExileAllGraveyards``
+    shape end-to-end.
 
-    Two independent reasons keep it DECLINED:
+    The two C1-substrate-only declines are both lifted in C2:
       (a) The Effect-class admit set
-          ``_carrier_aa_phase_1_effect_classes`` does NOT yet include
-          ``ExileAllGraveyards`` (C2 ships that widen, per design
-          doc §5.1).
-      (b) The cost-gate ``_aa_is_phase1_sub_shape_a`` strictly
-          declines ``sacrifice_a_desert=True`` (C2 ships the cost-
-          gate widen, per design doc §5.3).
+          ``_carrier_aa_phase_1_effect_classes`` is widened to
+          include ``ExileAllGraveyards`` (per design doc §5.1).
+      (b) The cost-gate ``_aa_is_phase1_sub_shape_a`` removes the
+          strict ``sacrifice_a_desert`` decline and replaces it with
+          a defense-in-depth both-at-once guard
+          (``sacrifice_a_desert and sacrifice_self`` — no live EoE
+          carrier sets both; the guard exists for future-carrier
+          safety) per design doc §5.3.
 
-    This pin INVERTS in C2 to assert Scavenger Grounds ADMITS.
+    Inverts the Phase-3B-C1 substrate-only pin
+    ``test_scavenger_grounds_stays_declined_post_cycle_1``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     sg = ps["Scavenger Grounds"]
-    assert traj._printing_is_bridge_simple_carrier_aa_land(sg) is False, (
-        "Scavenger Grounds must STAY DECLINED at the Carrier-AA admit "
-        "gate post-Phase-3B-C1. Both the Effect-class admit set AND "
-        "the cost-gate strictly decline the live shape — C2 ships "
-        "both widens to FLIP this pin."
+    assert traj._printing_is_bridge_simple_carrier_aa_land(sg) is True, (
+        "Scavenger Grounds must ADMIT at the Carrier-AA admit gate "
+        "post-Phase-3B-C2. The Effect-class admit set is widened to "
+        "include ExileAllGraveyards AND the cost-gate accepts the "
+        "{2}, {T}, Sac-a-Desert shape under the Phase-3B widen."
     )
 
 
-def test_scavenger_grounds_stays_declined_at_loader_filter():
-    """**Phase 3B C1 substrate-only invariant pin (loader-level).** The
-    end-to-end production-deck loader filter DECLINES Scavenger Grounds
-    post-Phase-3B-C1 because the admit gate's two C2-pending widens
-    haven't fired yet.
+def test_scavenger_grounds_now_passes_loader_filter():
+    """**Phase 3B C2 invariant pin (INVERTED, loader-level).** The
+    end-to-end production-deck loader filter ADMITS Scavenger Grounds
+    post-Phase-3B-C2 — the Carrier-AA disjunct fires now that both
+    the Effect-class admit set and the cost-gate are widened.
 
-    Mirrors the Phase-3A-C1 sibling pin
-    ``test_mystifying_maze_stays_declined_at_loader_filter`` (the
-    inverted version landed in C2).
+    Inverts the Phase-3B-C1 pin
+    ``test_scavenger_grounds_stays_declined_at_loader_filter``.
+    Mirrors the Phase-3A-C2 sibling pin
+    ``test_mystifying_maze_now_passes_loader_filter``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
@@ -682,22 +688,25 @@ def test_scavenger_grounds_stays_declined_at_loader_filter():
     filtered, card_defs = _filter_deck_to_bridge_supported(
         ["Scavenger Grounds"], ps,
     )
-    assert filtered == [], (
-        f"Scavenger Grounds must FAIL the loader filter post-Phase-"
-        f"3B-C1; got filtered={filtered}, card_defs={card_defs}"
+    assert filtered == ["Scavenger Grounds"], (
+        f"Scavenger Grounds must PASS the loader filter post-Phase-"
+        f"3B-C2; got filtered={filtered}, card_defs={card_defs}"
     )
-    assert card_defs == []
+    assert len(card_defs) == 1
+    assert card_defs[0].name == "Scavenger Grounds"
 
 
-def test_carrier_aa_phase_1_effect_classes_unchanged_post_phase_3b_c1():
-    """**Phase 3B C1 substrate-only invariant pin — admit set unchanged.**
-    The Carrier-AA Effect-class admit set accessor returns EXACTLY the
-    5 classes it carried post-Phase-3A-C2 — ``ExileAllGraveyards`` is
-    NOT in the set yet (C2 ships that widen).
+def test_carrier_aa_phase_1_effect_classes_widened_post_phase_3b_c2():
+    """**Phase 3B C2 invariant pin (INVERTED) — admit set widened.**
+    The Carrier-AA Effect-class admit set accessor returns the 6
+    classes post-Phase-3B-C2, including the newly-widened
+    ``ExileAllGraveyards``.
 
-    Pins both the upper bound (no silent auto-grow) AND the lower
-    bound (no regression on Phase-3A's admit). Inverts to a 6-class
-    set in C2.
+    Inverts the Phase-3B-C1 substrate-only pin
+    ``test_carrier_aa_phase_1_effect_classes_unchanged_post_phase_3b_c1``
+    (expected 5 classes pre-C2). The C2 widen is strictly additive
+    on ``ExileAllGraveyards`` — the other five classes stay in the
+    set bit-identical.
     """
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
@@ -721,32 +730,40 @@ def test_carrier_aa_phase_1_effect_classes_unchanged_post_phase_3b_c1():
         ReturnTargetLandFromGraveyardToHand,
         PutBasicLandFromHandOntoBattlefieldTapped,
         ExileTargetAttackingCreatureUntilEndStep,
+        ExileAllGraveyards,
     })
     classes = _carrier_aa_phase_1_effect_classes()
     assert classes == expected, (
-        "Phase 3B C1 invariant: admit set must contain exactly the 5 "
-        "Effect classes it carried post-Phase-3A-C2 (C2 ships the "
-        "ExileAllGraveyards widen)."
+        "Phase 3B C2 invariant: admit set must contain exactly the 6 "
+        "Effect classes (the C2 widen adds ExileAllGraveyards)."
     )
-    assert ExileAllGraveyards not in classes, (
-        "ExileAllGraveyards must NOT be in the admit set yet — C2 "
-        "ships that widen, not C1."
+    assert ExileAllGraveyards in classes, (
+        "ExileAllGraveyards must be in the admit set post-Phase-3B-"
+        "C2 — that is the C2 widen."
     )
 
 
-def test_no_silent_auto_grow_admit_set_post_phase_3b_c1():
-    """**Phase 3B C1 substrate-only invariant pin — no-silent-auto-grow
+def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
+    """**Phase 3B C2 invariant pin (INVERTED) — no-silent-auto-grow
     walk.** Confirms the 30 BLOCKED-SG Carrier-AA cards from design
-    doc §2.1 admit exactly the 5 cards post-Phase-3B-C1:
+    doc §2.1 admit exactly the 6 cards post-Phase-3B-C2 widen:
 
-      Deserted Temple + Mystifying Maze + Petrified Field + Swarmyard
-      + Terrain Generator.
+      Deserted Temple + Mystifying Maze + Petrified Field +
+      Scavenger Grounds + Swarmyard + Terrain Generator.
 
-    Scavenger Grounds + Thespian's Stage + all the multi-AA carriers
-    STAY DECLINED. Any new Effect class admitted to the set would
-    surface here as a silent auto-grow — investigate before merging.
+    Thespian's Stage + all the multi-AA carriers STAY DECLINED (the
+    Phase-3C ``BecomesCopyOfTargetLand`` Effect-class admit gate has
+    not fired yet; the ``sacrifice_another_*`` cost-bools are still
+    gated). Any new Effect class admitted to the set would surface
+    here as a silent auto-grow — investigate before merging.
 
-    Inverts to a 6-card admit set in C2 (``+ Scavenger Grounds``).
+    Inverts the Phase-3B-C1 substrate-only pin
+    ``test_no_silent_auto_grow_admit_set_post_phase_3b_c1``
+    (expected 5 admits pre-C2). The verify-first full-pool audit at
+    2026-05-25 confirmed only Scavenger Grounds carries
+    ``sacrifice_a_desert=True`` across the EoE pool, so the cost-
+    gate widen admits exactly one new card under the Effect-class
+    widen.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -776,17 +793,61 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c1():
         "Deserted Temple",
         "Mystifying Maze",
         "Petrified Field",
+        "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
     ], (
-        f"Carrier-AA Phase 3B C1 admit-set pin violated: expected "
+        f"Carrier-AA Phase 3B C2 admit-set pin violated: expected "
         f"admit set = ['Deserted Temple', 'Mystifying Maze', "
-        f"'Petrified Field', 'Swarmyard', 'Terrain Generator'], got "
-        f"{admits}. A widen in a sibling substrate or predicate "
-        f"would surface here as a silent auto-grow — investigate "
-        f"before merging."
+        f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
+        f"'Terrain Generator'], got {admits}. A widen in a sibling "
+        f"substrate or predicate would surface here as a silent "
+        f"auto-grow — investigate before merging."
     )
-    assert "Scavenger Grounds" not in admits, (
-        "Scavenger Grounds must STAY DECLINED post-3B-C1; the "
-        "ExileAllGraveyards admit + cost-gate widen ship C2."
+    assert "Scavenger Grounds" in admits, (
+        "Scavenger Grounds must ADMIT post-3B-C2; the "
+        "ExileAllGraveyards Effect-class admit + cost-gate widen "
+        "land in C2."
+    )
+
+
+def test_no_other_carrier_has_both_sacrifice_axes():
+    """**Phase 3B C2 verify-first audit pin.** The cost-gate's new
+    defense-in-depth guard at
+    :func:`_aa_is_phase1_sub_shape_a`
+    (``cost.sacrifice_a_desert and cost.sacrifice_self`` declines)
+    has no live consumer in the EoE pool: no carrier carries both
+    sacrifice axes at once. Scavenger Grounds is the SOLE carrier
+    carrying ``sacrifice_a_desert=True`` AND its ``sacrifice_self``
+    is ``False``; the guard exists for future-carrier safety so a
+    new card carrying both axes fails honestly rather than silently
+    auto-admitting under the Phase-3B widen.
+
+    This pin confirms (a) Scavenger Grounds is the only
+    ``sacrifice_a_desert=True`` carrier in the pool and (b) zero
+    carriers carry both ``sacrifice_a_desert=True`` AND
+    ``sacrifice_self=True`` at once.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    ps = OracleParserCardSource().get_printings()
+    both_at_once = []
+    sad_only = []
+    for name, p in ps.items():
+        for aa in (p.activated_abilities or ()):
+            if aa.cost.sacrifice_a_desert and aa.cost.sacrifice_self:
+                both_at_once.append(name)
+            elif aa.cost.sacrifice_a_desert:
+                sad_only.append(name)
+    assert both_at_once == [], (
+        f"Phase 3B C2 defense-in-depth guard invariant: no carrier "
+        f"may carry both sacrifice_a_desert AND sacrifice_self; got "
+        f"both_at_once={both_at_once}. If a new carrier surfaces "
+        f"here, the cost-gate's both-at-once guard fires honestly "
+        f"— widen the gate intentionally."
+    )
+    assert sorted(sad_only) == ["Scavenger Grounds"], (
+        f"Phase 3B C2 verify-first audit: Scavenger Grounds must be "
+        f"the SOLE sacrifice_a_desert carrier in the EoE pool; got "
+        f"{sorted(sad_only)}."
     )
