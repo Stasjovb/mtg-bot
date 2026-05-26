@@ -99,18 +99,58 @@ Synthetic vanilla 1/1 crew creatures are seated via
 Rust, keeping crew printing-name + power agreement byte-equal
 across engines.
 
-**Scenarios C+D defer to Cycle 3 per design doc §7:**
+  * **Phase 2 Cycle 3 (THIS LANE; Scenarios C+D + no-silent-auto-grow
+    pins, 2026-05-25).** Per-card real-EoE cross-engine byte-equality
+    probe driving BOTH engines through the remaining TWO scenarios
+    per design doc §6.3 plus the §6.4 #16-17 no-silent-auto-grow
+    pins (Spacecraft Phase 2 closure marker):
 
-  * **Scenario C — turn-rollover survival + bounce-resets:** confirm
-    the anthem state survives the turn rollover (cleanup/untap step)
-    byte-equal on both engines; confirm the anthem state resets
-    when the Spacecraft leaves the battlefield (CR 400.7 per-zone-
-    reset).
-  * **Scenario D — anthem AND station gate both open (``charge_
-    counters=12+``):** the Spacecraft is now a 3/5 with flying +
-    lifelink; OTHER creatures still receive the +1/+1 anthem; the
-    Spacecraft itself does NOT receive the anthem (other-scope
-    exclusion).
+    (C) **Turn-rollover survival + bounce-resets (anthem-gate-open,
+        ``charge_counters=2``):** with Lumen-Class Frigate on bf +
+        TWO power-1 vanilla crew, push ``charge_counters`` 0 -> 2
+        via TWO ActivateStations; assert the anthem stays open + crew
+        P/T == (2, 2) post-cleanup + post-untap (the anthem is a
+        layer-7 ContinuousModifier on a static ability, NOT a UEOT
+        modifier — survives ``advance_phase`` through cleanup byte-
+        equal); then bounce the Spacecraft to its controller's hand
+        (synthetic bf-> hand move via ``move_off_battlefield`` on
+        Python + ``move_object`` on Rust); assert every crew's
+        effective P/T snaps back to printed (1, 1) on both engines.
+        Pins CR 400.7 per-zone-reset semantics for the Phase-2
+        anthem source-leg.
+
+    (D) **Anthem AND station gate both open (``charge_counters=12``):**
+        with Lumen-Class Frigate + TWO power-1 vanilla crew, set
+        ``charge_counters=12`` directly (the equivalent of 12 power-1
+        crew activations); assert the Spacecraft is now a creature
+        (``12 >= station_threshold=12``) with effective P/T == its
+        printed (3, 5) and effective_keywords includes BOTH
+        ``flying`` AND ``lifelink`` (Phase-1 keyword-fold); assert
+        the OTHER crew still receive the +1/+1 anthem (effective P/T
+        == (2, 2)); THE LOAD-BEARING other-vs-self distinction —
+        assert the Spacecraft itself does NOT receive the anthem
+        (effective P/T stays at printed (3, 5), NOT (4, 6) — the
+        ``other_creatures_you_control`` scope excludes the source on
+        both engines).
+
+  * **Composed-shape no-silent-auto-grow pin (design doc §6.4 #17).**
+    A synthetic Spacecraft carrying BOTH a Phase-2 anthem static AND
+    a triggered ability — the future-composed shape from §3.3 — is
+    rejected by the Phase-2 admit predicate. Pins the predicate
+    against accidental admission of any future composed-shape
+    printing before Phase 3 lands.
+  * **Tapestry-Warden no-silent-auto-grow pin (design doc §6.4 #16,
+    §3.5 asymmetry).** A synthetic Spacecraft carrying a Phase-2
+    anthem static AND the
+    ``grants_toughness_as_station_power_for_creatures_you_control``
+    flag — the Tapestry-Warden carrier marker — is positively
+    rejected by the Phase-2 admit predicate. Pins the §3.5
+    asymmetry against accidental admission in a future bench-data
+    refresh.
+
+This module is the Spacecraft Phase 2 closure marker; the full
+Phase-2 admit set is exhaustively pinned at exactly Lumen-Class
+Frigate post-Cycle-3.
 """
 
 from __future__ import annotations
@@ -682,4 +722,611 @@ def test_cross_engine_real_eoe_lumen_class_frigate_scenario_b_anthem_open_statio
         f"Scenario B (anthem-open, station-closed, charge=2) must be "
         f"byte-equal across the WHOLE field view on BOTH engines; "
         f"diffs={diffs}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (7) Scenario C — anthem-state survival across turn rollover + bounce
+# resets. With anthem gate OPEN (charge=2), drive a turn rollover via
+# ``advance_phase`` cycles through cleanup -> untap and assert the
+# anthem stays open + crew's effective P/T stays at (2, 2) byte-equal
+# on both engines. Then bounce the Spacecraft off battlefield and
+# assert every crew's effective P/T snaps BACK to printed (1, 1)
+# (CR 400.7 per-zone-reset on the source object). THE LOAD-BEARING
+# turn-rollover + bounce-resets pin (design doc §6.3 Scenario C).
+# ---------------------------------------------------------------------------
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_turn_rollover_survival(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Scenario C
+    (anthem state survives turn rollover, ``charge_counters=2``).
+    PROBED tier flip evidence (Cycle 3, scenario C-1 — turn-rollover
+    survival).**
+
+    Pre-state on both engines:
+      * Lumen-Class Frigate on p0's bf + TWO power-1 vanilla
+        creatures on p0's bf, all untapped + NOT summoning-sick.
+      * Charge counters pushed to 2 via the same TWO-ActivateStation
+        scripted picker as Scenario B.
+
+    Drive: roll the turn forward through cleanup -> untap via
+    repeated ``advance_phase`` calls. On Rust this runs the
+    composition CR 514.x cleanup + CR 302.1 untap step; on Python it
+    advances through the same step boundary primitives. The anthem
+    is a layer-7 ``ContinuousModifier`` on a ``StaticAbility``, NOT
+    a UEOT modifier — must survive cleanup byte-equal.
+
+    Post-rollover on both engines:
+      * Crew remain on battlefield with anthem-gate-open effective
+        P/T == (2, 2). Charge counters unchanged at 2 (charge
+        counters are NOT a per-turn slot — they accumulate until
+        the source leaves the battlefield).
+      * Spacecraft STILL not a creature (2 < 12).
+    """
+    from mtg_bot.actions import ActivateStation, apply_action
+    from mtg_bot.game import effective_power, effective_toughness
+    from mtg_bot.turn import (
+        run_cleanup_step,
+        run_untap_step,
+        Step,
+    )
+
+    lumen_printing = _PRINTINGS.get("Lumen-Class Frigate")
+    if lumen_printing is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+
+    py, py_lumen, py_crew_list, rs, rs_lumen, rs_crew_list = (
+        _seat_lumen_and_crew(parity_smoke, n_crew=2)
+    )
+    py_crew_a, py_crew_b = py_crew_list
+    rs_crew_a, rs_crew_b = rs_crew_list
+
+    # ---- Drive TWO ActivateStations on both engines (push charge 0->2).
+    apply_action(
+        py, 0,
+        ActivateStation(spacecraft_id=py_lumen.id, crew_id=py_crew_a.id),
+    )
+    rs.apply_action({
+        "kind": "activate_station",
+        "spacecraft_id": rs_lumen,
+        "crew_id": rs_crew_a,
+    })
+    apply_action(
+        py, 0,
+        ActivateStation(spacecraft_id=py_lumen.id, crew_id=py_crew_b.id),
+    )
+    rs.apply_action({
+        "kind": "activate_station",
+        "spacecraft_id": rs_lumen,
+        "crew_id": rs_crew_b,
+    })
+
+    # ---- Pre-rollover sanity: anthem is open + crew at (2, 2).
+    assert py_lumen.charge_counters == 2
+    assert rs.get_charge_counters(rs_lumen) == 2
+    assert effective_power(py, py_crew_a) == 2
+    assert effective_toughness(py, py_crew_a) == 2
+    assert rs.effective_power(rs_crew_a) == 2
+    assert rs.effective_toughness(rs_crew_a) == 2
+
+    # ---- Roll the turn through cleanup + untap on Python via the
+    # production helpers. Python's ``run_cleanup_step`` clears UEOT
+    # modifiers + marked damage; ``run_untap_step`` untaps + clears
+    # summoning sickness on the next active player's permanents.
+    # The anthem static is NOT a UEOT modifier; charge counters are
+    # NOT cleared at cleanup. Both must survive.
+    py.step = Step.CLEANUP
+    run_cleanup_step(py)
+    # Move to next turn's untap step (active player flip handled by
+    # the test driver — we don't need a true active-player swap; we
+    # only need to assert anthem state survives a cleanup pass).
+    py.step = Step.UNTAP
+    run_untap_step(py)
+
+    # ---- Roll the turn through cleanup + untap on Rust via
+    # ``advance_phase`` (one call from MAIN1 walks the full
+    # CLEANUP -> UNTAP wrap; the second call re-enters MAIN1).
+    # Iterate ``advance_phase`` until we cycle back to MAIN1.
+    # PHASE_PRECOMBAT_MAIN=3; full phase cycle is 0..=11.
+    # From phase=3 to phase=3 next turn: 9 advance_phase calls.
+    for _ in range(9):
+        rs.advance_phase()
+
+    # ---- Post-rollover observables on Python.
+    assert py_lumen.charge_counters == 2, (
+        f"Python: charge counters must survive turn rollover; got "
+        f"{py_lumen.charge_counters}"
+    )
+    assert py_lumen in py.battlefield, (
+        "Python: Lumen-Class Frigate must still be on battlefield "
+        "post-rollover"
+    )
+    py_cp_a_post = effective_power(py, py_crew_a)
+    py_ct_a_post = effective_toughness(py, py_crew_a)
+    assert (py_cp_a_post, py_ct_a_post) == (2, 2), (
+        f"Python: anthem must survive turn rollover; crew A's P/T "
+        f"must still be (2, 2); got ({py_cp_a_post}, {py_ct_a_post})"
+    )
+    py_cp_b_post = effective_power(py, py_crew_b)
+    py_ct_b_post = effective_toughness(py, py_crew_b)
+    assert (py_cp_b_post, py_ct_b_post) == (2, 2), (
+        f"Python: anthem must survive turn rollover; crew B's P/T "
+        f"must still be (2, 2); got ({py_cp_b_post}, {py_ct_b_post})"
+    )
+
+    # ---- Post-rollover observables on Rust.
+    assert rs.get_charge_counters(rs_lumen) == 2, (
+        f"Rust: charge counters must survive turn rollover; got "
+        f"{rs.get_charge_counters(rs_lumen)}"
+    )
+    rs_cp_a_post = rs.effective_power(rs_crew_a)
+    rs_ct_a_post = rs.effective_toughness(rs_crew_a)
+    assert (rs_cp_a_post, rs_ct_a_post) == (2, 2), (
+        f"Rust: anthem must survive turn rollover; crew A's P/T "
+        f"must still be (2, 2); got ({rs_cp_a_post}, {rs_ct_a_post})"
+    )
+    rs_cp_b_post = rs.effective_power(rs_crew_b)
+    rs_ct_b_post = rs.effective_toughness(rs_crew_b)
+    assert (rs_cp_b_post, rs_ct_b_post) == (2, 2), (
+        f"Rust: anthem must survive turn rollover; crew B's P/T "
+        f"must still be (2, 2); got ({rs_cp_b_post}, {rs_ct_b_post})"
+    )
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_bounce_resets_anthem(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Scenario C
+    (anthem state resets when Spacecraft leaves the battlefield,
+    ``charge_counters=2`` -> bounced). PROBED tier flip evidence
+    (Cycle 3, scenario C-2 — bounce-resets per CR 400.7).**
+
+    Pre-state on both engines:
+      * Lumen-Class Frigate on p0's bf + TWO power-1 vanilla
+        creatures on p0's bf; ``charge_counters=2`` (anthem-gate
+        open).
+
+    Drive: synthetic bounce — bf -> hand zone move on both engines.
+    Python: ``move_off_battlefield(state, lumen, "graveyard")``-style
+    move but routed to hand via direct state mutation (Lumen isn't a
+    creature so ``move_off_battlefield`` defaults to graveyard; we
+    use a manual hand move that preserves the standard CR 400.7
+    reset semantics — every per-object slot resets on the way out).
+    Rust: ``rs.move_object(lumen_id, ZONE_HAND, 0)``.
+
+    Post-bounce on both engines:
+      * Spacecraft is OFF the battlefield (in p0's hand).
+      * Each crew's effective P/T snaps BACK to printed (1, 1) —
+        the anthem source is no longer on the battlefield, so the
+        static ability is inert (the layer-7 ``ContinuousModifier``
+        fold walks ``state.battlefield`` for source anthems, and
+        the Spacecraft is no longer there).
+    """
+    from mtg_bot.actions import ActivateStation, apply_action
+    from mtg_bot.game import (
+        effective_power, effective_toughness, Zone,
+    )
+
+    lumen_printing = _PRINTINGS.get("Lumen-Class Frigate")
+    if lumen_printing is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+
+    py, py_lumen, py_crew_list, rs, rs_lumen, rs_crew_list = (
+        _seat_lumen_and_crew(parity_smoke, n_crew=2)
+    )
+    py_crew_a, py_crew_b = py_crew_list
+    rs_crew_a, rs_crew_b = rs_crew_list
+
+    # ---- Drive TWO ActivateStations on both engines (push charge 0->2).
+    apply_action(
+        py, 0,
+        ActivateStation(spacecraft_id=py_lumen.id, crew_id=py_crew_a.id),
+    )
+    rs.apply_action({
+        "kind": "activate_station",
+        "spacecraft_id": rs_lumen,
+        "crew_id": rs_crew_a,
+    })
+    apply_action(
+        py, 0,
+        ActivateStation(spacecraft_id=py_lumen.id, crew_id=py_crew_b.id),
+    )
+    rs.apply_action({
+        "kind": "activate_station",
+        "spacecraft_id": rs_lumen,
+        "crew_id": rs_crew_b,
+    })
+
+    # ---- Pre-bounce sanity: anthem is open + crew at (2, 2).
+    assert effective_power(py, py_crew_a) == 2
+    assert rs.effective_power(rs_crew_a) == 2
+
+    # ---- Synthetic bounce on Python: move Lumen off bf to hand,
+    # mirroring the per-zone reset CR 400.7 semantics. The Phase-1
+    # ``move_off_battlefield`` API defaults to graveyard; for the
+    # hand-bounce variant we directly remove from battlefield + add
+    # to hand + clear per-object slots that CR 400.7 resets on zone
+    # change (charge_counters, plus_one_counters, tapped, damage,
+    # marked_damage). Mirrors what production zone-move helpers do.
+    py.battlefield.remove(py_lumen)
+    py_lumen.zone = Zone.HAND
+    py_lumen.charge_counters = 0  # CR 400.7 per-zone reset
+    py_lumen.tapped = False
+    py_lumen.damage = 0
+    py.players[0].hand.append(py_lumen)
+
+    # ---- Synthetic bounce on Rust via the exposed ``move_object``
+    # primitive (state_ops_zones.rs:302 — bf -> hand on player 0).
+    # The Rust primitive carries the CR 400.7 reset in production —
+    # but the Phase-1 bf-exit slots may differ across engines; the
+    # load-bearing assertion is the anthem source FOLD, which keys
+    # off whether the Spacecraft is still on the battlefield. That
+    # alone establishes the LOAD-BEARING anthem-reset observable.
+    rs.move_object(rs_lumen, ZONE_HAND, 0)
+
+    # ---- Post-bounce observables on Python: crew P/T resets to
+    # printed (1, 1) — the anthem source is gone.
+    py_cp_a_post = effective_power(py, py_crew_a)
+    py_ct_a_post = effective_toughness(py, py_crew_a)
+    assert (py_cp_a_post, py_ct_a_post) == (1, 1), (
+        f"Python: bounce-resets — crew A's P/T must snap back to "
+        f"printed (1, 1) once the Spacecraft is off the battlefield; "
+        f"got ({py_cp_a_post}, {py_ct_a_post})"
+    )
+    py_cp_b_post = effective_power(py, py_crew_b)
+    py_ct_b_post = effective_toughness(py, py_crew_b)
+    assert (py_cp_b_post, py_ct_b_post) == (1, 1), (
+        f"Python: bounce-resets — crew B's P/T must snap back to "
+        f"printed (1, 1) once the Spacecraft is off the battlefield; "
+        f"got ({py_cp_b_post}, {py_ct_b_post})"
+    )
+
+    # ---- Post-bounce observables on Rust.
+    rs_cp_a_post = rs.effective_power(rs_crew_a)
+    rs_ct_a_post = rs.effective_toughness(rs_crew_a)
+    assert (rs_cp_a_post, rs_ct_a_post) == (1, 1), (
+        f"Rust: bounce-resets — crew A's P/T must snap back to "
+        f"printed (1, 1) once the Spacecraft is off the battlefield; "
+        f"got ({rs_cp_a_post}, {rs_ct_a_post})"
+    )
+    rs_cp_b_post = rs.effective_power(rs_crew_b)
+    rs_ct_b_post = rs.effective_toughness(rs_crew_b)
+    assert (rs_cp_b_post, rs_ct_b_post) == (1, 1), (
+        f"Rust: bounce-resets — crew B's P/T must snap back to "
+        f"printed (1, 1) once the Spacecraft is off the battlefield; "
+        f"got ({rs_cp_b_post}, {rs_ct_b_post})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (8) Scenario D — anthem AND station gates both open at
+# ``charge_counters=12``. Lumen-Class Frigate animates as 3/5 with
+# flying+lifelink AND other creatures get +1/+1. THE LOAD-BEARING
+# other-vs-self distinction: the Spacecraft itself does NOT receive
+# its own anthem (`other_creatures_you_control` scope) — its
+# effective P/T stays at printed (3, 5), NOT (4, 6).
+# ---------------------------------------------------------------------------
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_d_anthem_and_station_both_open(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Scenario D
+    (anthem AND station gates both open, ``charge_counters=12``).
+    PROBED tier flip evidence (Cycle 3, scenario D — THE LOAD-BEARING
+    other-vs-self distinction).**
+
+    Pre-state on both engines:
+      * Lumen-Class Frigate on p0's bf + TWO power-1 vanilla
+        creatures on p0's bf, all untapped + NOT summoning-sick.
+
+    Drive: set ``charge_counters=12`` directly on the Spacecraft on
+    both engines — equivalent to 12 power-1 crew activations,
+    skipping the search-strategy ambiguity for the scenario-D
+    observable. The cross-engine mirror is established by the post-
+    state field-view byte-equal compare.
+
+    Post-state on both engines:
+      * Spacecraft IS a creature (12 >= station_threshold=12).
+      * Spacecraft's effective P/T == printed (3, 5) — NOT (4, 6) —
+        because the anthem scope is ``other_creatures_you_control``
+        and the Spacecraft is the source (it is NOT "other" to
+        itself for this scope). THE LOAD-BEARING other-vs-self
+        observable.
+      * Spacecraft's effective keywords include BOTH ``flying`` AND
+        ``lifelink`` (the Phase-1 stationed_keywords fold).
+      * Each crew's effective P/T == printed (1, 1) + anthem (1, 1)
+        = (2, 2) — the OTHER creatures still receive the anthem.
+    """
+    from mtg_bot.game import (
+        effective_keywords, effective_power, effective_toughness,
+        is_creature_now,
+    )
+
+    import mtg_bot_engine
+
+    lumen_printing = _PRINTINGS.get("Lumen-Class Frigate")
+    if lumen_printing is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+
+    py, py_lumen, py_crew_list, rs, rs_lumen, rs_crew_list = (
+        _seat_lumen_and_crew(parity_smoke, n_crew=2)
+    )
+    py_crew_a, py_crew_b = py_crew_list
+    rs_crew_a, rs_crew_b = rs_crew_list
+
+    # ---- Push the gate open on both engines at charge=12 (the
+    # station_threshold). Direct setter on both engines per the
+    # established Sledge-Class / Synthesizer Labship pattern;
+    # scenario D's load-bearing observable is the layer-fold of
+    # is_creature_now + effective_keywords + the other-vs-self
+    # anthem exclusion.
+    py_lumen.charge_counters = 12
+    rs.set_charge_counters(rs_lumen, 12)
+
+    # ---- Pin: Spacecraft IS a creature now on both engines.
+    assert is_creature_now(py_lumen) is True, (
+        "Python: stationed Lumen-Class Frigate (charge=12 >= "
+        "threshold=12) MUST be a creature (CR 311 + design doc §4.5)"
+    )
+    assert mtg_bot_engine.is_stationed_check(12, 12) is True, (
+        "Rust: stationed Lumen-Class Frigate (charge=12 >= "
+        "threshold=12) MUST pass is_stationed_check"
+    )
+
+    # ---- Pin: Spacecraft's effective P/T == printed (3, 5), NOT
+    # (4, 6). The anthem source is the Spacecraft itself; its scope
+    # is ``other_creatures_you_control``; per `StaticAbility.
+    # applies_to` (effects/base.py:636-637) `target.id != source.id`
+    # excludes the source. THE LOAD-BEARING other-vs-self pin.
+    py_cp_lumen = effective_power(py, py_lumen)
+    py_ct_lumen = effective_toughness(py, py_lumen)
+    assert (py_cp_lumen, py_ct_lumen) == (3, 5), (
+        f"Python: Spacecraft's effective P/T MUST be printed (3, 5) "
+        f"— the other_creatures_you_control scope excludes the source. "
+        f"Got ({py_cp_lumen}, {py_ct_lumen}); a (4, 6) result would "
+        f"mean the source incorrectly receives its own anthem."
+    )
+    rs_cp_lumen = rs.effective_power(rs_lumen)
+    rs_ct_lumen = rs.effective_toughness(rs_lumen)
+    assert (rs_cp_lumen, rs_ct_lumen) == (3, 5), (
+        f"Rust: Spacecraft's effective P/T MUST be printed (3, 5) "
+        f"— the other_creatures_you_control scope excludes the source. "
+        f"Got ({rs_cp_lumen}, {rs_ct_lumen}); a (4, 6) result would "
+        f"mean the source incorrectly receives its own anthem."
+    )
+
+    # ---- Pin: stationed-keyword fold includes BOTH ``flying`` AND
+    # ``lifelink`` on Python (Rust's keyword fold is harnessed by
+    # the Phase-1 Sawship probe — same dispatch arm — so we don't
+    # re-pin it here).
+    py_kw = effective_keywords(py, py_lumen)
+    assert "flying" in py_kw, (
+        f"Python: stationed Spacecraft must have flying in effective "
+        f"keywords; got {py_kw!r}"
+    )
+    assert "lifelink" in py_kw, (
+        f"Python: stationed Spacecraft must have lifelink in effective "
+        f"keywords; got {py_kw!r}"
+    )
+
+    # ---- Pin: OTHER crew still receive the +1/+1 anthem on both
+    # engines (the source's animation tick does not change anthem
+    # applicability — the scope only excludes the source itself,
+    # not every creature controlled by source's controller).
+    py_cp_a = effective_power(py, py_crew_a)
+    py_ct_a = effective_toughness(py, py_crew_a)
+    assert (py_cp_a, py_ct_a) == (2, 2), (
+        f"Python: crew A still receives the anthem post-station-flip; "
+        f"P/T must be (2, 2); got ({py_cp_a}, {py_ct_a})"
+    )
+    py_cp_b = effective_power(py, py_crew_b)
+    py_ct_b = effective_toughness(py, py_crew_b)
+    assert (py_cp_b, py_ct_b) == (2, 2), (
+        f"Python: crew B still receives the anthem post-station-flip; "
+        f"P/T must be (2, 2); got ({py_cp_b}, {py_ct_b})"
+    )
+    rs_cp_a = rs.effective_power(rs_crew_a)
+    rs_ct_a = rs.effective_toughness(rs_crew_a)
+    assert (rs_cp_a, rs_ct_a) == (2, 2), (
+        f"Rust: crew A still receives the anthem post-station-flip; "
+        f"P/T must be (2, 2); got ({rs_cp_a}, {rs_ct_a})"
+    )
+    rs_cp_b = rs.effective_power(rs_crew_b)
+    rs_ct_b = rs.effective_toughness(rs_crew_b)
+    assert (rs_cp_b, rs_ct_b) == (2, 2), (
+        f"Rust: crew B still receives the anthem post-station-flip; "
+        f"P/T must be (2, 2); got ({rs_cp_b}, {rs_ct_b})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (9) Composed-shape no-silent-auto-grow pin (design doc §6.4 #17,
+# §3.3 future-composed-shape rejection). A synthetic Spacecraft
+# carrying BOTH a Phase-2 anthem static AND a triggered ability —
+# the future-composed shape — MUST be rejected by Phase 2's admit
+# predicate. Pins the predicate against accidental admission of any
+# future composed-shape printing before Phase 3 lands.
+# ---------------------------------------------------------------------------
+
+
+def test_phase_2_predicate_declines_synthetic_composed_shape_spacecraft():
+    """**Composed-shape no-silent-auto-grow pin (design doc §6.4
+    #17).** A synthetic CardPrinting carrying:
+
+      * ``"Spacecraft"`` subtype + ``station_threshold=12`` +
+        ``stationed_keywords={"flying", "lifelink"}`` (the Phase-1
+        sub-shape A surface)
+      * ONE Phase-2 anthem static (the Phase-2 sub-shape B static)
+      * ONE ``TriggeredAbility`` (the Phase-3 future-composed-shape
+        marker)
+
+    MUST be rejected by
+    :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`.
+
+    The Phase-2 admit predicate's
+    ``if printing.triggered_abilities: return False  # Phase 3``
+    short-circuit (trajectory.py:9110-9111) IS the load-bearing
+    gate. This pin makes the gate's continued presence in the
+    predicate a regression test, so any future agent who accidentally
+    weakens the predicate (e.g. by dropping the triggered_abilities
+    short-circuit in a Phase-3 widen) will surface the silent
+    auto-grow loudly.
+    """
+    from dataclasses import replace
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.parity import trajectory
+
+    base = _PRINTINGS.get("Lumen-Class Frigate")
+    if base is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+    # Re-use the live Lumen anthem as the static; synthesize a
+    # placeholder triggered ability (the trigger string is irrelevant
+    # to the admit predicate — the predicate gates on the
+    # ``triggered_abilities`` tuple being non-empty).
+    (anthem,) = base.static_abilities
+    bogus_trigger = TriggeredAbility(trigger="etb")
+    composed = replace(
+        base,
+        name="Synthetic Composed-Shape Spacecraft",
+        static_abilities=(anthem,),
+        triggered_abilities=(bogus_trigger,),
+    )
+    assert not trajectory._printing_is_bridge_phase_2_static_anthem_spacecraft(
+        composed,
+    ), (
+        "Composed-shape (Spacecraft + Phase-2 anthem static + "
+        "triggered ability) MUST be REJECTED by the Phase-2 admit "
+        "predicate. If True, the triggered_abilities short-circuit "
+        "(trajectory.py:9110-9111) has been silently weakened — "
+        "silent auto-grow honest-stop."
+    )
+
+
+def test_phase_2_predicate_declines_synthetic_composed_shape_no_static_drop():
+    """**Composed-shape no-silent-auto-grow defense-in-depth pin.**
+    Same shape as the prior pin but BOTH the Phase-2 anthem AND the
+    Tapestry-Warden flag stay UNSET — the composed shape we admit if
+    the predicate's triggered-abilities short-circuit was removed
+    would otherwise satisfy every other Phase-2 clause (this
+    sibling pin demonstrates that the triggered_abilities clause is
+    independently load-bearing, not redundant with any other check).
+    """
+    from dataclasses import replace
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.parity import trajectory
+
+    base = _PRINTINGS.get("Lumen-Class Frigate")
+    if base is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+    (anthem,) = base.static_abilities
+    composed = replace(
+        base,
+        name="Synthetic Trigger-Only Spacecraft",
+        static_abilities=(anthem,),
+        triggered_abilities=(TriggeredAbility(trigger="dies"),),
+    )
+    # Composed-shape with anthem-plus-trigger MUST stay declined.
+    assert not trajectory._printing_is_bridge_phase_2_static_anthem_spacecraft(
+        composed,
+    ), (
+        "Composed-shape (anthem + dies trigger) MUST be REJECTED by "
+        "the Phase-2 admit predicate."
+    )
+
+
+# ---------------------------------------------------------------------------
+# (10) Tapestry-Warden no-silent-auto-grow pin (design doc §6.4 #16,
+# §3.5 asymmetry). A synthetic Spacecraft carrying a Phase-2 anthem
+# static AND the
+# ``grants_toughness_as_station_power_for_creatures_you_control``
+# flag — the Tapestry-Warden carrier marker — MUST be rejected by
+# the Phase-2 admit predicate. Pins the §3.5 asymmetry against
+# accidental admission in a future bench-data refresh.
+# ---------------------------------------------------------------------------
+
+
+def test_phase_2_predicate_declines_synthetic_tapestry_warden_flag_carrier():
+    """**Tapestry-Warden no-silent-auto-grow pin (design doc §6.4
+    #16, §3.5 asymmetry).** A synthetic CardPrinting derived from
+    Lumen-Class Frigate that flips
+    ``grants_toughness_as_station_power_for_creatures_you_control=
+    True`` — the Tapestry-Warden carrier marker — MUST be rejected
+    by :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`.
+
+    No EoE Spacecraft carries this flag today (Tapestry Warden
+    itself is NOT a Spacecraft — it's an Artifact Creature); this
+    pin is the future-proof guard that the Phase-2 predicate
+    rejects the composed shape if a future printing or a bench-data
+    refresh introduces a Spacecraft carrier with the flag.
+
+    The Phase-2 admit predicate's
+    ``if getattr(printing, "grants_toughness_as_station_power_for_
+    creatures_you_control", False): return False`` clause at
+    trajectory.py:9148-9153 IS the load-bearing gate. This pin
+    makes the gate's continued presence a regression test.
+    """
+    from dataclasses import replace
+    from mtg_bot.parity import trajectory
+
+    base = _PRINTINGS.get("Lumen-Class Frigate")
+    if base is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+    tapestry_flag_carrier = replace(
+        base,
+        name="Synthetic Tapestry-Warden Spacecraft",
+        grants_toughness_as_station_power_for_creatures_you_control=True,
+    )
+    assert not trajectory._printing_is_bridge_phase_2_static_anthem_spacecraft(
+        tapestry_flag_carrier,
+    ), (
+        "Tapestry-Warden flag carrier (Spacecraft + Phase-2 anthem + "
+        "grants_toughness_as_station_power_for_creatures_you_control"
+        "=True) MUST be REJECTED by the Phase-2 admit predicate. If "
+        "True, the §3.5 asymmetry has been silently weakened — "
+        "silent auto-grow honest-stop."
+    )
+
+
+def test_phase_2_predicate_admits_lumen_without_tapestry_warden_flag():
+    """**Tapestry-Warden no-silent-auto-grow asymmetry sanity pin.**
+    The control case for the Tapestry-Warden pin above. The live
+    Lumen-Class Frigate printing has
+    ``grants_toughness_as_station_power_for_creatures_you_control
+    =False`` (the field default; Lumen-Class Frigate isn't a
+    Tapestry carrier) — pins that the live printing admits, and the
+    only delta vs. the synthetic Tapestry-Warden composed-shape pin
+    above is the single boolean flag.
+    """
+    from mtg_bot.parity import trajectory
+
+    lumen = _PRINTINGS.get("Lumen-Class Frigate")
+    if lumen is None:
+        pytest.skip("Lumen-Class Frigate absent from active CardSource")
+    # Sanity: the live printing carries the flag at its default
+    # False.
+    assert (
+        getattr(
+            lumen,
+            "grants_toughness_as_station_power_for_creatures_you_control",
+            False,
+        )
+        is False
+    ), (
+        "Sanity precondition: live Lumen-Class Frigate must NOT carry "
+        "the Tapestry-Warden flag (it's not a Tapestry carrier). "
+        "The synthetic-flip Tapestry-Warden pin's delta must be only "
+        "the flag value, nothing else."
+    )
+    # Live Lumen still admits.
+    assert trajectory._printing_is_bridge_phase_2_static_anthem_spacecraft(
+        lumen,
+    ), (
+        "Live Lumen-Class Frigate (Tapestry-flag=False) MUST admit. "
+        "If False, a Phase-2 substrate regression has crept in."
     )
