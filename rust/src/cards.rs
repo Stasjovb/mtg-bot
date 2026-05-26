@@ -9172,6 +9172,65 @@ pub enum Effect {
     /// **Unit variant** — no fields. Mirrors Python's parameterless
     /// `ExileAllGraveyards()` frozen dataclass.
     ExileAllGraveyards,
+    /// **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26) —
+    /// `BecomesCopyOfTargetLand`.** Thespian's Stage's pilot effect
+    /// (`{2}, {T}: This land becomes a copy of target land, except it
+    /// has this ability.`). CR-613 layer-1 object-copy effect that
+    /// persists until the source leaves the battlefield (CR 400.7).
+    ///
+    /// **Mirrors Python's `BecomesCopyOfTargetLand`**
+    /// (`effects/generic/become_type.py:246`). On resolve:
+    /// 1. Read the target from
+    ///    `state.current_resolve_payload_target_id` (the cast-time-
+    ///    bound target threaded onto the StackItem at activation time
+    ///    via `state_ops_actions.rs`'s ActivateAbility apply pipeline).
+    /// 2. Re-validate target legality per CR 608.2b — the target must
+    ///    STILL be on a battlefield AND its printing must STILL be a
+    ///    Land. If not, silent fizzle (no mutation).
+    /// 3. Locate the source object across both bfs (the Stage).
+    /// 4. If `source.original_printing_id` is `None`, snapshot:
+    ///    `source.original_printing_id = Some(source.printing_id)`
+    ///    (the pre-copy printing-registry id). This snapshot is the
+    ///    "this ability" anchor — re-copies re-derive retained own AAs
+    ///    from the ORIGINAL printing's `activated_abilities`, not from
+    ///    the already-mutated post-copy slot. Mirrors Python's
+    ///    `if source.original_printing is None: source.original_
+    ///    printing = source.printing` at `become_type.py:295-296`.
+    /// 5. Build a new `CardPrinting` derived from the TARGET's printing
+    ///    via `.clone()`, then OVERWRITE `activated_abilities` to be
+    ///    `target.activated_abilities ++
+    ///    original_printing.activated_abilities`. The target's name +
+    ///    card_types + subtypes + supertypes + mana_produced +
+    ///    power/toughness + every other CardPrinting field flow through
+    ///    unchanged from the clone — `_dc.replace` shape from Python's
+    ///    `effects/generic/become_type.py:298-302`.
+    /// 6. Push the new printing onto the registry via
+    ///    `Arc::make_mut(&mut state.registry).push_printing(new_printing)`
+    ///    — get back a fresh `printing_id`.
+    /// 7. Mutate `source.printing_id = new_printing_id`. All subsequent
+    ///    `effective_*` reads (subtypes / card_types / mana-ability /
+    ///    P/T / effects) walk the registry by this id and see the
+    ///    copied printing transparently.
+    ///
+    /// **Re-copy semantics.** Calling `BecomesCopyOfTargetLand` on a
+    /// source whose `original_printing_id` is already `Some(orig_id)`:
+    /// the "retained own abilities" snapshot is the ORIGINAL printing's
+    /// AAs (looked up via the snapshot id), NOT the most-recent post-
+    /// copy slot. This prevents AA accumulation across multiple copies
+    /// (mirrors Python's invariant at `become_type.py:293-296`).
+    ///
+    /// **Zone-change reset hookup (already wired in Phase 3C Cycle 1).**
+    /// CR 400.7 — every bf-leave site clears
+    /// `obj.original_printing_id = None`. If the Stage is sacrificed /
+    /// destroyed / bounced / exiled, the snapshot resets; the copy
+    /// relationship is battlefield-only.
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `BecomesCopyOfTargetLand()` frozen dataclass. Target rides on
+    /// the StackItem's `current_resolve_payload_target_id` slot
+    /// threaded at activation time (reuses the same payload slot as
+    /// the Phase-2a / Phase-3A sibling target-bearing effects).
+    BecomesCopyOfTargetLand,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -11754,6 +11813,24 @@ impl RegistryData {
         self.printings.len()
     }
 
+    /// **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).** Append a
+    /// new `CardPrinting` to the in-state registry data and return its
+    /// freshly-issued u32 id. Used by the
+    /// `Effect::BecomesCopyOfTargetLand` resolve arm to mint a per-
+    /// resolve copy printing derived from the target's printing + the
+    /// activator's pre-copy AAs.
+    ///
+    /// The state-side registry is held in an `Arc<RegistryData>` for
+    /// share-on-clone semantics across `GameState` snapshots; callers
+    /// pre-`Arc::make_mut(&mut state.registry)` before calling this
+    /// method so the mutation is isolated to the resolving state.
+    /// Sibling of `Registry::push_printing` on the builder side.
+    pub fn push_printing(&mut self, printing: CardPrinting) -> u32 {
+        let id = self.printings.len() as u32;
+        self.printings.push(printing);
+        id
+    }
+
     /// Round-55 token-identity bit. Mirrors Python's
     /// `CardPrinting.is_token` (`cards/base.py:1036`), which is
     /// `"Token" in self.supertypes`. Rust's `CardPrinting` already
@@ -13697,6 +13774,26 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // time; the EFFECT itself walks every graveyard at resolve.
         "exile_all_graveyards" => {
             Ok(Effect::ExileAllGraveyards)
+        }
+        // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26) —
+        // `becomes_copy_of_target_land` parse arm.** Unit variant; no
+        // fields. Mirrors Python's parameterless
+        // `BecomesCopyOfTargetLand()` frozen dataclass at
+        // `effects/generic/become_type.py:246`. Thespian's Stage's
+        // pilot effect (`{2}, {T}: This land becomes a copy of target
+        // land, except it has this ability.`). Extra dict keys
+        // silently dropped (unit-variant contract; same shape as the
+        // Phase-2a/2b/3A/3B unit-variant siblings —
+        // `untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards`). Target rides on the StackItem's
+        // `current_resolve_payload_target_id`; the per-object pre-copy
+        // snapshot rides on `GameObject.original_printing_id` (the
+        // Phase 3C Cycle 1 substrate slot).
+        "becomes_copy_of_target_land" => {
+            Ok(Effect::BecomesCopyOfTargetLand)
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -19677,6 +19774,25 @@ pub(crate) fn effect_to_pydict<'py>(
         // `ExileTargetAttackingCreatureUntilEndStep`).
         Effect::ExileAllGraveyards => {
             d.set_item("kind", "exile_all_graveyards")?;
+        }
+        // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26) —
+        // `BecomesCopyOfTargetLand.to_pydict`.** Field-free unit-
+        // variant; only `kind` emitted. Mirrors Python's parameterless
+        // `BecomesCopyOfTargetLand()` frozen dataclass
+        // (`effects/generic/become_type.py:246`). Same emit shape as
+        // the sibling Carrier-AA unit-variant effects
+        // (`untap_target_land` /
+        // `return_target_land_from_graveyard_to_hand` /
+        // `put_basic_land_from_hand_onto_battlefield_tapped` /
+        // `exile_target_attacking_creature_until_end_step` /
+        // `exile_all_graveyards`). Target rides on the StackItem's
+        // `current_resolve_payload_target_id` slot threaded at
+        // activation time; the per-object pre-copy printing snapshot
+        // rides on `GameObject.original_printing_id` (the Phase 3C
+        // Cycle 1 substrate slot, surfaced via `object_to_pydict` at
+        // `state_ops_snapshot.rs`).
+        Effect::BecomesCopyOfTargetLand => {
+            d.set_item("kind", "becomes_copy_of_target_land")?;
         }
     }
     Ok(d)

@@ -3720,6 +3720,79 @@ impl GameState {
                             None,
                         )?);
                     }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::BecomesCopyOfTargetLand,
+                ) {
+                    // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-
+                    // 26).** Land-target fan-out arm per
+                    // ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md``
+                    // §4.3 (Thespian's Stage). Enumerates every
+                    // battlefield ``GameObject`` whose printing has
+                    // card_type Land — ANY controller (CR 109.3 /
+                    // 613: a copy effect picks targets from any
+                    // player's battlefield; the printed text reads
+                    // "target land", no own-control qualifier).
+                    //
+                    // **Both bfs walked.** Mirrors Python's
+                    // ``BecomesCopyOfTargetLand.legal_targets`` at
+                    // ``effects/generic/become_type.py:269-276``:
+                    // ``return [("permanent", o.id) for o in
+                    // state.battlefield if o.printing.is_land]`` —
+                    // ``state.battlefield`` walks BOTH players' bfs
+                    // (the Python helper is the union). Rust mirrors
+                    // by iterating ``self.players`` and unioning each
+                    // player's bf.
+                    //
+                    // **No legal targets → no emission.** A bare
+                    // Thespian's Stage on a bf with no other Lands
+                    // anywhere (NOR itself eligible? — the printed
+                    // "target land" includes self in Python's
+                    // ``legal_targets`` walk since ``state.battlefield``
+                    // includes the Stage itself; the resolve arm's
+                    // re-validation likewise admits self as the chosen
+                    // target). Rust mirrors the lenient SELF-eligibility
+                    // — the Stage itself is enumerated by the
+                    // bf-walk and emitted as a legal target. This is
+                    // Python-parity: ``become_type.py:269-276`` does
+                    // not exclude ``source.id``; a self-copy is a no-
+                    // op at resolve since the target's printing equals
+                    // the source's pre-copy printing.
+                    //
+                    // **Target dict slot.** Reuses
+                    // ``target_creature_id`` as the generic single-
+                    // target object-id slot — same shape as the Phase-
+                    // 2a / Phase-3A sibling arms (the slot is morally
+                    // an "object-id" slot, not a creature-only slot).
+                    // The apply-time validator at
+                    // ``state_ops_actions.rs`` re-validates the chosen
+                    // target's Land card-type + bf presence before
+                    // allowing the activation; the resolve arm at
+                    // ``state_ops_resolve.rs`` reads
+                    // ``state.current_resolve_payload_target_id``.
+                    for player in self.players.iter() {
+                        for target in player.battlefield.iter() {
+                            let Some(t_printing) =
+                                self.registry.lookup(target.printing_id)
+                            else {
+                                continue;
+                            };
+                            if !t_printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Land")
+                            {
+                                continue;
+                            }
+                            actions.push(activate_ability_dict(
+                                py,
+                                obj.id,
+                                ability_index as u32,
+                                Some(target.id),
+                                None,
+                            )?);
+                        }
+                    }
                 } else {
                     actions.push(activate_ability_dict(
                         py,

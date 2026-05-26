@@ -24794,6 +24794,197 @@ fn apply_effect(
                 }
             }
         }
+        // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26) —
+        // `BecomesCopyOfTargetLand` resolve.** Thespian's Stage's
+        // pilot effect. CR-613 layer-1 object-copy effect that
+        // persists until the source leaves the battlefield (CR 400.7).
+        //
+        // **Mirrors Python's `BecomesCopyOfTargetLand.resolve`** at
+        // `effects/generic/become_type.py:278-306`:
+        //
+        // 1. Read the target from
+        //    `state.current_resolve_payload_target_id` (the cast-time-
+        //    bound target threaded onto the StackItem at activation
+        //    time). If unset, silent fizzle (mirrors Python's
+        //    `if source is None or not targets: return` at
+        //    `become_type.py:285-286`).
+        // 2. Re-validate target legality per CR 608.2b — the target
+        //    must STILL be on a battlefield AND its printing must
+        //    STILL be a Land. If not, silent fizzle.
+        // 3. Locate the source object across both bfs.
+        // 4. If `source.original_printing_id` is `None`, snapshot the
+        //    pre-copy printing-registry id into the slot. The Phase 3C
+        //    Cycle 1 substrate slot is the anchor that re-copy
+        //    activations read for "retained own abilities".
+        // 5. Read the retained-own AAs from the printing at
+        //    `source.original_printing_id` (post-snapshot, this is the
+        //    Stage's printed AAs even on re-copies — no AA
+        //    accumulation across multiple copies).
+        // 6. Build a new `CardPrinting` by cloning the TARGET's
+        //    printing and overwriting `activated_abilities` to
+        //    `target.activated_abilities ++ original_AAs`. Every other
+        //    CardPrinting field (name + card_types + subtypes +
+        //    supertypes + mana_produced + power/toughness + effects +
+        //    static/triggered abilities + ...) flows from the target's
+        //    printing verbatim — `_dc.replace` shape from Python's
+        //    `become_type.py:298-302`.
+        // 7. Push the new printing onto the in-state registry via
+        //    `Arc::make_mut(&mut state.registry).push_printing(new)`
+        //    — get back a fresh `printing_id`.
+        // 8. Mutate `source.printing_id = new_printing_id`. All
+        //    subsequent `effective_*` reads through the registry by
+        //    this id see the copied printing transparently — no other
+        //    state-side caches to invalidate (the indirect-through-
+        //    registry path is the canonical Rust mechanism).
+        //
+        // **Re-copy semantics.** The `if obj.original_printing_id is
+        // None` snapshot is sticky — re-copies always re-derive
+        // retained own AAs from the ORIGINAL printing, NOT the
+        // already-mutated post-copy slot. Mirrors Python's invariant
+        // at `become_type.py:293-296`.
+        //
+        // **No LEAVES / token-cease / ETB dispatch.** The Stage doesn't
+        // leave any zone; its printing is mutated in place. No CR
+        // 603.6a Enters fire (the Stage was already on bf), no LTB
+        // fires (no bf-leave). The copy effect is a continuous
+        // CR-613 layer-1 change, not a zone move.
+        Effect::BecomesCopyOfTargetLand => {
+            // Step 1: read the cast-time-bound target id. Silent
+            // fizzle if absent (mirrors Python's `not targets` early
+            // return).
+            let Some(target_id) = state.current_resolve_payload_target_id else {
+                return Ok(());
+            };
+            // Step 2: locate the target across both bfs + re-validate
+            // (CR 608.2b). The target's printing_id is captured here
+            // so the subsequent registry mutation doesn't aliase the
+            // target's printing borrow.
+            let target_printing_id: u32 = {
+                let mut found_pid: Option<u32> = None;
+                for player in state.players.iter() {
+                    if let Some(t_obj) =
+                        player.battlefield.iter().find(|o| o.id == target_id)
+                    {
+                        let Some(printing) =
+                            state.registry.lookup(t_obj.printing_id)
+                        else {
+                            return Ok(()); // registry-miss → silent fizzle
+                        };
+                        if !printing.card_types.iter().any(|t| t == "Land") {
+                            return Ok(()); // no longer a Land → fizzle
+                        }
+                        found_pid = Some(t_obj.printing_id);
+                        break;
+                    }
+                }
+                let Some(pid) = found_pid else {
+                    return Ok(()); // off-bf → silent fizzle
+                };
+                pid
+            };
+            // Step 3: locate source. (CR 608.2b applies to targets;
+            // the source-already-left-bf path is handled by the
+            // implicit no-bf-source bail below — if the Stage was
+            // bounced between activation and resolve, the snapshot
+            // slot was cleared on bf-leave per Cycle 1, and we
+            // wouldn't find the source on a bf.)
+            let source_loc: Option<(usize, usize)> = {
+                let mut found: Option<(usize, usize)> = None;
+                for (pidx, player) in state.players.iter().enumerate() {
+                    if let Some(idx) =
+                        player.battlefield.iter().position(|o| o.id == source_obj_id)
+                    {
+                        found = Some((pidx, idx));
+                        break;
+                    }
+                }
+                found
+            };
+            let Some((src_pidx, src_bf_idx)) = source_loc else {
+                // Source no longer on any bf — silent fizzle. The
+                // Phase 3C C1 zone-change reset has already cleared
+                // `original_printing_id`, so no snapshot is leaked.
+                return Ok(());
+            };
+            // Step 4: snapshot the pre-copy printing-registry id (if
+            // not already snapshotted). The snapshot is sticky across
+            // re-copies — mirrors Python's invariant at
+            // `become_type.py:295-296`.
+            let original_printing_id: u32 = {
+                let src_obj =
+                    &state.players[src_pidx].battlefield[src_bf_idx];
+                match src_obj.original_printing_id {
+                    Some(pid) => pid,
+                    None => src_obj.printing_id,
+                }
+            };
+            // Stamp the snapshot (no-op when already set — same value
+            // by virtue of the match above; an explicit assign keeps
+            // the field hydrated even if a future first-copy path
+            // reaches here without the resolve having pre-snapshotted).
+            {
+                let src_bf = Arc::make_mut(
+                    &mut state.players[src_pidx].battlefield,
+                );
+                if let Some(src_obj) = src_bf.get_mut(src_bf_idx) {
+                    if src_obj.original_printing_id.is_none() {
+                        src_obj.original_printing_id =
+                            Some(original_printing_id);
+                    }
+                }
+            }
+            // Step 5: read the retained-own AAs from the original
+            // printing (NOT the post-copy slot — this is the
+            // re-copy invariant).
+            let retained_aas: Vec<crate::cards::ActivatedAbility> = {
+                let Some(orig_printing) =
+                    state.registry.lookup(original_printing_id)
+                else {
+                    // Registry miss on the snapshotted id (should
+                    // never happen — the snapshot was taken from a
+                    // valid printing). Silent fizzle to avoid
+                    // mutation.
+                    return Ok(());
+                };
+                orig_printing.activated_abilities.clone()
+            };
+            // Step 6: build a new CardPrinting by cloning the target's
+            // printing and overwriting activated_abilities.
+            let new_printing: crate::cards::CardPrinting = {
+                let Some(target_printing) =
+                    state.registry.lookup(target_printing_id)
+                else {
+                    return Ok(());
+                };
+                let mut new_p = target_printing.clone();
+                let mut combined =
+                    Vec::with_capacity(new_p.activated_abilities.len() + retained_aas.len());
+                combined.extend(new_p.activated_abilities.iter().cloned());
+                combined.extend(retained_aas);
+                new_p.activated_abilities = combined;
+                new_p
+            };
+            // Step 7: push onto the in-state registry. Arc::make_mut
+            // copy-on-writes the RegistryData when other GameStates
+            // share the Arc (snapshot semantics), so this mutation
+            // is isolated to the resolving state.
+            let new_printing_id: u32 = {
+                let reg_mut = Arc::make_mut(&mut state.registry);
+                reg_mut.push_printing(new_printing)
+            };
+            // Step 8: mutate source.printing_id. The bf was
+            // Arc::make_mut'd above for the snapshot stamp; re-borrow
+            // to write the printing_id under the same make_mut
+            // discipline.
+            {
+                let src_bf = Arc::make_mut(
+                    &mut state.players[src_pidx].battlefield,
+                );
+                if let Some(src_obj) = src_bf.get_mut(src_bf_idx) {
+                    src_obj.printing_id = new_printing_id;
+                }
+            }
+        }
     }
     Ok(())
 }

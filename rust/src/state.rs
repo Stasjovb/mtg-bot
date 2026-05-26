@@ -3759,6 +3759,62 @@ impl GameState {
         })
     }
 
+    /// **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).** Resolve a
+    /// GameObject id to its current printing's `subtypes` Vec via the
+    /// in-state registry. Used by C2 substrate tests to confirm post-
+    /// copy effective_subtypes flips through (e.g. after Thespian's
+    /// Stage copies a Mountain, the Stage's printing_id points at a
+    /// new registry entry whose subtypes contain "Mountain"). Sibling
+    /// of `printing_name_of`; same zone-walk shape.
+    fn printing_subtypes_of(&self, obj_id: u32) -> Option<Vec<String>> {
+        for player in &self.players {
+            for zone in [
+                &player.hand,
+                &player.library,
+                &player.battlefield,
+                &player.graveyard,
+            ] {
+                for obj in zone.iter() {
+                    if obj.id == obj_id {
+                        return self
+                            .registry
+                            .lookup(obj.printing_id)
+                            .map(|p| p.subtypes.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).** Resolve a
+    /// GameObject id to its current printing's
+    /// `activated_abilities.len()` count via the in-state registry.
+    /// Used by C2 substrate tests to confirm the re-copy retention
+    /// invariant — after a re-copy, the AA count is `target_AAs +
+    /// original_own_AAs`, NOT the unbounded accumulation across all
+    /// copies. Sibling of `printing_name_of`; same zone-walk shape.
+    fn printing_aa_count_of(&self, obj_id: u32) -> Option<usize> {
+        for player in &self.players {
+            for zone in [
+                &player.hand,
+                &player.library,
+                &player.battlefield,
+                &player.graveyard,
+            ] {
+                for obj in zone.iter() {
+                    if obj.id == obj_id {
+                        return self
+                            .registry
+                            .lookup(obj.printing_id)
+                            .map(|p| p.activated_abilities.len());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Test-only setter for the EoE Void condition flags. Sets
     /// `permanent_left_battlefield_this_turn` and
     /// `spell_warped_this_turn` directly. Mirrors Python's

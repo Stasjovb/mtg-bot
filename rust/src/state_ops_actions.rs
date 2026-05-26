@@ -1011,6 +1011,23 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::ExileTargetAttackingCreatureUntilEndStep,
                 );
+                // **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).**
+                // Recognize ``Effect::BecomesCopyOfTargetLand`` as a
+                // FOURTH target-shape on the ``target_creature_id``
+                // slot — when an AA's effect is this variant (Thespian's
+                // Stage's pilot AA), the ``target_creature_id`` slot
+                // acts as the chosen Land id (own or opponent
+                // controlled). Validation walks BOTH players'
+                // battlefields for the target id + verifies the
+                // target is printed as a Land. The legal-emit fan-out
+                // arm at ``state_ops_legal.rs::legal_decisions`` (this
+                // cycle's other deliverable) walks both bfs and emits
+                // one ``ActivateAbility`` per eligible Land target
+                // with ``target_creature_id = Some(land_id)``.
+                let is_becomes_copy_of_land_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::BecomesCopyOfTargetLand,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1127,6 +1144,75 @@ impl GameState {
                                          a Creature on a battlefield, \
                                          opponent-controlled relative to \
                                          the activator)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
+                    } else if is_becomes_copy_of_land_effect {
+                        // **Carrier-AA substrate Phase 3C Cycle 2
+                        // (2026-05-26).** Land-target validation for
+                        // Thespian's Stage. The legal-emit fan-out arm
+                        // in `state_ops_legal.rs::legal_decisions`
+                        // walks BOTH players' battlefields for printed-
+                        // Land objects and emits one `ActivateAbility`
+                        // per eligible target with
+                        // `target_creature_id = Some(land_id)`. The
+                        // validator here re-checks the chosen target
+                        // against bf-presence + printed-Land + own-or-
+                        // opponent (no own-control restriction, per
+                        // CR 109.3 / 613 and Python's
+                        // `BecomesCopyOfTargetLand.legal_targets` walk
+                        // over `state.battlefield` at
+                        // `effects/generic/become_type.py:269-276`).
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) is silent
+                        // fizzle, matching Python's `if source is None
+                        // or not targets: return` early-return at
+                        // `become_type.py:285-286`. Direct-callers /
+                        // synthetic tests rely on either passing the
+                        // chosen land id or omitting it to drive the
+                        // fizzle path.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                // Must be on SOME battlefield AND
+                                // printed Land. ANY controller (own
+                                // or opponent) — no `pidx ==
+                                // controller_idx` exclusion.
+                                let target_legal: bool = {
+                                    let registry = &state.registry;
+                                    let mut ok = false;
+                                    for player in state.players.iter() {
+                                        if let Some(t_obj) = player
+                                            .battlefield
+                                            .iter()
+                                            .find(|o| o.id == target_id)
+                                        {
+                                            let Some(printing) = registry
+                                                .printings
+                                                .get(t_obj.printing_id as usize)
+                                            else {
+                                                break;
+                                            };
+                                            ok = printing
+                                                .card_types
+                                                .iter()
+                                                .any(|t| t == "Land");
+                                            break;
+                                        }
+                                    }
+                                    ok
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         copy-Land target (must be a Land on \
+                                         a battlefield; CR 109.3 / 613 — \
+                                         Thespian's Stage targets ANY Land)"
                                     )));
                                 }
                                 Some(target_id)

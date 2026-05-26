@@ -12972,6 +12972,42 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PutBasicLandFromHandOntoBattlefieldTapped,
         )
         return PutBasicLandFromHandOntoBattlefieldTapped()
+    if kind == "becomes_copy_of_target_land":
+        # **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).** Bridge
+        # arm for the new Rust ``Effect::BecomesCopyOfTargetLand``
+        # variant (cards.rs). Mirrors Python's parameterless
+        # ``BecomesCopyOfTargetLand`` frozen dataclass at
+        # ``effects/generic/become_type.py:246`` — Thespian's Stage's
+        # pilot effect (``{2}, {T}: This land becomes a copy of target
+        # land, except it has this ability.``). Unit variant — no
+        # fields beyond ``kind``. Same shape as the Phase-2a/2b/3A/3B
+        # unit-variant siblings ``untap_target_land`` /
+        # ``return_target_land_from_graveyard_to_hand`` /
+        # ``put_basic_land_from_hand_onto_battlefield_tapped`` /
+        # ``exile_target_attacking_creature_until_end_step`` /
+        # ``exile_all_graveyards``.
+        #
+        # **Cycle 2 SUBSTRATE-ONLY (Rust slice).** Phase 3C Cycle 2
+        # keeps Thespian's Stage DECLINED at the production-deck
+        # loader; the Effect-class admit-set widen
+        # (``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect) ships C3. This bridge arm is byte-equal for both the
+        # substrate-only and the post-C3 flipped outcomes — synthetic
+        # round-trip tests drive it at C2; the live admit gate FLIPs
+        # at C3.
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` must use the SPECIFIC class
+        # ``BecomesCopyOfTargetLand`` — NOT any parent ``Effect``
+        # class — to avoid silently widening admission to other
+        # ``Effect`` subclasses (consistent with the Phase-3A / 3B
+        # specificity contract). The class has no subclasses in the
+        # live tree, so the isinstance match is exact — no specificity
+        # guard needed.
+        from mtg_bot.effects.generic.become_type import (
+            BecomesCopyOfTargetLand,
+        )
+        return BecomesCopyOfTargetLand()
     if kind == "exile_all_graveyards":
         # **Carrier-AA substrate Phase 3B Cycle 1 (2026-05-25).** Bridge
         # arm for the new Rust ``Effect::ExileAllGraveyards`` variant
@@ -14806,6 +14842,15 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         ExileAllGraveyards,
         ExileTargetAttackingCreatureUntilEndStep,
     )
+    # **Phase 3C C2 widen (2026-05-26).** Add
+    # ``BecomesCopyOfTargetLand`` (Thespian's Stage's pilot Effect —
+    # Carrier-AA Phase 3C cycle per design doc §5.4). Unit-variant
+    # ``{"kind": "becomes_copy_of_target_land"}``; no rider fields.
+    # The class has no subclasses in the live tree, so the isinstance
+    # match is exact — no specificity guard needed.
+    from mtg_bot.effects.generic.become_type import (
+        BecomesCopyOfTargetLand,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -14869,6 +14914,31 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # to avoid silently widening admission to other ``Effect``
         # subclasses (consistent with the Phase-3A specificity contract).
         effect_dict = {"kind": "exile_all_graveyards"}
+    elif isinstance(effect, BecomesCopyOfTargetLand):
+        # **Carrier-AA substrate Phase 3C Cycle 2 (2026-05-26).**
+        # Forward-emit arm for Thespian's Stage's pilot effect
+        # (``{2}, {T}: This land becomes a copy of target land, except
+        # it has this ability.``). Unit variant — only the ``kind``
+        # discriminator on the wire. Target rides on the action-dict's
+        # ``target_creature_id`` slot at activation time (the generic
+        # single-target object-id slot, reused for the Phase-2a /
+        # Phase-3A / Phase-3C target-bearing siblings).
+        #
+        # **Substrate-only (Rust slice): Thespian's Stage STAYS DECLINED
+        # at admit gate post-Phase-3C-C2.** The forward emit succeeds
+        # (Rust round-trip works), but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live
+        # Thespian's Stage printing because C2 doesn't widen
+        # ``_carrier_aa_phase_1_effect_classes`` to include this Effect
+        # class (Cycle 3 ships the widen). The forward arm exists at
+        # C2 so unit-test pins can drive the Rust round-trip.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``BecomesCopyOfTargetLand`` — NOT any parent ``Effect`` class
+        # — to avoid silently widening admission to other ``Effect``
+        # subclasses (consistent with the Phase-3A / 3B specificity
+        # contract).
+        effect_dict = {"kind": "becomes_copy_of_target_land"}
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.
         return None
