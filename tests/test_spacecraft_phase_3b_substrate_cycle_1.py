@@ -955,24 +955,33 @@ def test_phase_3a_allowlist_now_includes_optional_put_creature():
         "Phase 3A pilot class is preserved — C2 is a pure append, "
         "not a replace)."
     )
-    # Post-Phase-3C-Cycle-2 (2026-05-26) the allowlist has 3 entries —
-    # the C2-FLIP slice appended ``TargetArtifactBecomesCreatureUEOT``
-    # (Synthesizer Labship). The Phase 3B 2-class pin invariant
-    # (Phase 3A pilot + this Phase 3B class) is preserved as the
-    # subset assertion above; the exact set check moves to a 3-element
-    # set post-C2.
+    # Post-Phase-3C-Cycle-3 (2026-05-26; THIS slice) the allowlist has
+    # 5 entries — Cycle 3 appended both
+    # ``EachOpponentDiscardsOrLosesLife`` (Entropic Battlecruiser mode-0
+    # ATTACKS) AND ``TargetPlayerLosesLife`` (Entropic Battlecruiser
+    # mode-1 DISCARDS_CARD tier=1). The Phase 3B 2-class pin invariant
+    # (Phase 3A pilot + Phase 3B class) is preserved as the subset
+    # assertion above; the exact set check moves to a 5-element set
+    # post-C3.
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
+    )
+    from mtg_bot.effects.generic.life import (
+        EachOpponentDiscardsOrLosesLife,
+        TargetPlayerLosesLife,
     )
     assert set(classes) == {
         OptionalSacLandOrLanderForBasicLandRamp,
         OptionalPutCreatureFromHandOntoBattlefield,
         TargetArtifactBecomesCreatureUEOT,
+        EachOpponentDiscardsOrLosesLife,
+        TargetPlayerLosesLife,
     }, (
-        "Phase 3C-Cycle-2 admit-class allowlist must be exactly the "
-        "3-class set (Phase 3A pilot + Phase 3B class + Phase 3C "
-        "Cycle 2 TargetArtifactBecomesCreatureUEOT) — Phase 3C Cycles "
-        "3+ extend further. Silent auto-grow honest-stop."
+        "Phase 3C-Cycle-3 admit-class allowlist must be exactly the "
+        "5-class set (Phase 3A pilot + Phase 3B class + Phase 3C "
+        "Cycle 2 TargetArtifactBecomesCreatureUEOT + Phase 3C Cycle 3 "
+        "EachOpponentDiscardsOrLosesLife + TargetPlayerLosesLife) — "
+        "Phase 3C Cycle 4 extends further. Silent auto-grow honest-stop."
     )
 
 
@@ -1006,25 +1015,30 @@ def test_phase_3a_event_shape_now_includes_attacks():
         "3A pilot shape is preserved — C2 is a pure append, not a "
         "replace)."
     )
-    # Post-Phase-3C-Cycle-2 (2026-05-26) the event-shape table has 3
-    # entries — the C2-FLIP slice appended
-    # ``(Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None))``
-    # (Synthesizer Labship). The Phase 3B 2-shape pin invariant is
-    # preserved as the subset assertions above; the exact set check
-    # moves to a 3-element set post-C2.
-    from mtg_bot.effects.predicates import Controlled, YOU
+    # Post-Phase-3C-Cycle-3 (2026-05-26; THIS slice) the event-shape
+    # table has 4 entries — Cycle 3 appended ``(Event.DISCARDS_CARD,
+    # Controlled(by=OPPONENT, subject=None))`` (Entropic Battlecruiser
+    # mode-1). The Phase 3B 2-shape pin invariant is preserved as the
+    # subset assertions above; the exact set check moves to a 4-element
+    # set post-C3.
+    from mtg_bot.effects.predicates import Controlled, OPPONENT, YOU
     beginning_of_combat_controlled_you = (
         Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None),
+    )
+    discards_card_controlled_opponent = (
+        Event.DISCARDS_CARD, Controlled(by=OPPONENT, subject=None),
     )
     assert set(shapes) == {
         enters_isself,
         attacks_isself,
         beginning_of_combat_controlled_you,
+        discards_card_controlled_opponent,
     }, (
-        "Phase 3C-Cycle-2 event-shape allowlist must be exactly the "
-        "3-shape set (Phase 3A pilot + Phase 3B shape + Phase 3C "
-        "Cycle 2 BEGINNING_OF_COMBAT + Controlled(YOU)) — Phase 3C "
-        "Cycles 3+ extend further. Silent auto-grow honest-stop."
+        "Phase 3C-Cycle-3 event-shape allowlist must be exactly the "
+        "4-shape set (Phase 3A pilot + Phase 3B shape + Phase 3C "
+        "Cycle 2 BEGINNING_OF_COMBAT + Controlled(YOU) + Phase 3C "
+        "Cycle 3 DISCARDS_CARD + Controlled(OPPONENT)) — Phase 3C "
+        "Cycle 4 extends further. Silent auto-grow honest-stop."
     )
 
 

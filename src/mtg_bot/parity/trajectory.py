@@ -9734,29 +9734,39 @@ def _phase_3a_lazy_init_allowlists():
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
     )
-    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
+    from mtg_bot.effects.generic.life import (
+        EachOpponentDiscardsOrLosesLife,
+        TargetPlayerLosesLife,
+    )
+    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, OPPONENT, YOU
 
-    # Phase 3C Cycle 2 widen (2026-05-26; this slice): append
-    # ``TargetArtifactBecomesCreatureUEOT`` (Synthesizer Labship) to
-    # the Effect-class allowlist and ``(BEGINNING_OF_COMBAT,
-    # Controlled(by=YOU, subject=None))`` to the (event, predicate)-
+    # Phase 3C Cycle 3 widen (2026-05-26; this slice): append the
+    # Entropic Battlecruiser two-trigger Effect classes
+    # ``EachOpponentDiscardsOrLosesLife`` (mode-0, ATTACKS, tier=0)
+    # + ``TargetPlayerLosesLife`` (mode-1, DISCARDS_CARD,
+    # tier_threshold=1 — the SECOND consumer of the C1 tier-gate
+    # substrate) to the Effect-class allowlist + ``(DISCARDS_CARD,
+    # Controlled(by=OPPONENT, subject=None))`` to the (event, predicate)-
     # shape table. Per design doc §5.4 / §7.3 — the per-cycle admit set
-    # grows from the Phase-3B 2-class / 2-shape allowlist to the
-    # Phase-3C-Cycle-2 3-class / 3-shape allowlist. Synthesizer Labship
-    # is the FIRST Phase-3 consumer of the C1 tier-gate substrate (its
-    # BEGINNING_OF_COMBAT trigger carries ``tier_threshold=2``; the
-    # Rust dispatch chokepoint gate at
+    # grows from the Phase-3C-Cycle-2 3-class / 3-shape allowlist to
+    # the Phase-3C-Cycle-3 5-class / 4-shape allowlist. Entropic
+    # Battlecruiser's mode-1 trigger is the SECOND tier-gate consumer
+    # of the C1 substrate (its DISCARDS_CARD trigger carries
+    # ``tier_threshold=1``; the Rust dispatch chokepoint gate at
     # ``state_ops_resolve.rs::dispatch_event`` only fires the trigger
-    # when the source's ``charge_counters >= 2``).
+    # when the source's ``charge_counters >= 1``).
     _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES = (
         OptionalSacLandOrLanderForBasicLandRamp,
         OptionalPutCreatureFromHandOntoBattlefield,
         TargetArtifactBecomesCreatureUEOT,
+        EachOpponentDiscardsOrLosesLife,
+        TargetPlayerLosesLife,
     )
     _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES = (
         (Event.ENTERS, IsSelf(subject=None)),
         (Event.ATTACKS, IsSelf(subject=None)),
         (Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None)),
+        (Event.DISCARDS_CARD, Controlled(by=OPPONENT, subject=None)),
     )
 
 
@@ -9960,7 +9970,11 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
     )
-    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, YOU
+    from mtg_bot.effects.generic.life import (
+        EachOpponentDiscardsOrLosesLife,
+        TargetPlayerLosesLife,
+    )
+    from mtg_bot.effects.predicates import Controlled, Event, IsSelf, OPPONENT, YOU
 
     if not _printing_is_bridge_phase_3_trigger_spacecraft(printing):
         return None
@@ -9992,9 +10006,15 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
             # Phase 3C Cycle 2 widen — Synthesizer Labship's
             # beginning-of-your-combat trigger event.
             event_str = "beginning_of_combat"
+        elif trig.event is Event.DISCARDS_CARD:
+            # Phase 3C Cycle 3 widen — Entropic Battlecruiser's
+            # mode-1 "whenever an opponent discards a card" trigger
+            # event. Mirrors Rust's `Event::DiscardsCard` (MMM Pin 2;
+            # subject = PLAYER_SUBJECT_OFFSET + discarding_pidx).
+            event_str = "discards_card"
         else:
-            # Phase 3C-Cycle-2 admits ENTERS + ATTACKS +
-            # BEGINNING_OF_COMBAT only; defense-in-depth.
+            # Phase 3C-Cycle-3 admits ENTERS + ATTACKS +
+            # BEGINNING_OF_COMBAT + DISCARDS_CARD only; defense-in-depth.
             return None
         # Predicate dict — IsSelf -> source_is_self, Controlled(YOU)
         # -> controlled_by_you (sibling of Phase-3B's narrower
@@ -10011,6 +10031,16 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
             # `Predicate::ControlledByYou { slot: None }` parse arm
             # (cards.rs:17053).
             pred_dict = {"kind": "controlled_by_you"}
+        elif (
+            isinstance(trig.predicate, Controlled)
+            and trig.predicate.by is OPPONENT
+            and trig.predicate.subject is None
+        ):
+            # Phase 3C Cycle 3 widen — Entropic Battlecruiser's mode-1
+            # "Whenever an opponent discards a card" predicate. Mirrors
+            # Rust's `Predicate::ControlledByOpponent { slot: None }`
+            # parse arm at the MMM Pin 3 bridge slice.
+            pred_dict = {"kind": "controlled_by_opponent"}
         else:
             return None  # defense-in-depth
         # Effect dict — emit the canonical Rust-parser-claimed kind +
@@ -10045,6 +10075,33 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
                 "power": int(trig.effect.power),
                 "toughness": int(trig.effect.toughness),
                 "granted_keywords": sorted(trig.effect.granted_keywords),
+            }
+        elif isinstance(trig.effect, EachOpponentDiscardsOrLosesLife):
+            # Phase 3C Cycle 3 widen — Entropic Battlecruiser's mode-0
+            # ATTACKS-trigger effect ("Each opponent discards a card.
+            # Each opponent who can't loses 3 life."). Mirrors the
+            # Cycle-3 Rust to_pydict arm at cards.rs + the cross-engine
+            # bridge dict-to-Python arm in cross_engine.py. Single
+            # ``life_if_cant`` rider (3 on Entropic Battlecruiser's
+            # printed text).
+            eff_dict = {
+                "kind": "each_opponent_discards_or_loses_life",
+                "life_if_cant": int(trig.effect.life_if_cant),
+            }
+        elif isinstance(trig.effect, TargetPlayerLosesLife):
+            # Phase 3C Cycle 3 widen — Entropic Battlecruiser's mode-1
+            # DISCARDS_CARD-trigger effect ("that player loses 3 life";
+            # the discarding player is wired as the pre-fixed target
+            # via Rust's `resolving_discards_card_player_id` slot at
+            # dispatch time / Python's `fire_opponent_discards_triggers`
+            # `fixed_targets=(("player", id),)` thread-through). Mirrors
+            # the existing PPP-Pin-1 `target_player_loses_life` parse +
+            # to_pydict + bridge arms in Rust + cross_engine.py. Single
+            # ``amount`` rider (3 on Entropic Battlecruiser's printed
+            # text).
+            eff_dict = {
+                "kind": "target_player_loses_life",
+                "amount": int(trig.effect.amount),
             }
         else:
             return None  # defense-in-depth (admit predicate gated this)

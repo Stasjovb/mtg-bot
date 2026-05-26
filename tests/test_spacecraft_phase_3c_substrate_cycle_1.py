@@ -384,19 +384,22 @@ def test_three_phase_3c_carriers_stay_declined_at_python_ta_to_safe_dict_post_cy
 
 
 def test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2():
-    """**INVERTED invariant pin — Cycle 2 closure marker.**
-    Synthesizer Labship now ADMITS at the Phase-3 admit predicate
-    (``_printing_is_bridge_phase_3_trigger_spacecraft``) post-
-    Cycle-2 (2026-05-26). This is the FLIP — the C1 substrate pin
-    pinned a 3-card decline set; Cycle 2 ships
-    ``Effect::TargetArtifactBecomesCreatureUEOT`` + the admit-class
-    allowlist widen + the BEGINNING_OF_COMBAT/Controlled(YOU)
-    event-shape admit, flipping Synthesizer Labship DECLINED -> ADMITTED.
+    """**INVERTED invariant pin — Cycle 3 closure marker (this slice;
+    2026-05-26).**
 
-    Entropic Battlecruiser + Infinite Guideline Station STAY DECLINED
-    until Cycle 3 + Cycle 4 (the EachOpponentDiscardsOrLosesLife +
-    CreateTokenPerMulticoloredPermanent + DrawCardPerMulticoloredPermanent
-    Effect classes are NOT yet in the allowlist).
+    Post-Cycle-3 (the Entropic Battlecruiser FLIP) Synthesizer Labship
+    AND Entropic Battlecruiser BOTH admit at the Phase-3 admit
+    predicate (``_printing_is_bridge_phase_3_trigger_spacecraft``).
+    This is the FLIP — the C2 closure pin pinned 1 admit + 2 declined;
+    Cycle 3 ships ``Effect::EachOpponentDiscardsOrLosesLife`` +
+    ``TargetPlayerLosesLife`` + ``(DISCARDS_CARD,
+    Controlled(OPPONENT))`` event-shape + the admit-class allowlist
+    widen, flipping Entropic Battlecruiser DECLINED -> ADMITTED.
+
+    Infinite Guideline Station STAYS DECLINED until Cycle 4 (the
+    CreateTokenPerMulticoloredPermanent +
+    DrawCardPerMulticoloredPermanent Effect classes are NOT yet in
+    the allowlist).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -404,32 +407,35 @@ def test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2():
     )
 
     ps = OracleParserCardSource().get_printings()
-    # Synthesizer Labship FLIPS to ADMITTED post-Cycle-2.
-    assert _printing_is_bridge_phase_3_trigger_spacecraft(
-        ps["Synthesizer Labship"]
-    ), (
-        "Synthesizer Labship MUST admit at the Phase-3 admit gate "
-        "post-Cycle-2 (Cycle 2 closure marker)"
-    )
-    # The other 2 Phase-3C carriers STAY DECLINED post-Cycle-2.
-    for name in ("Entropic Battlecruiser", "Infinite Guideline Station"):
-        printing = ps[name]
-        assert not _printing_is_bridge_phase_3_trigger_spacecraft(printing), (
-            f"{name}: MUST stay DECLINED post-Cycle-2 (Effect classes "
-            f"not yet in the Phase-3C-Cycle-2 admit allowlist)"
+    # Synthesizer Labship + Entropic Battlecruiser both ADMITTED post-Cycle-3.
+    for name in ("Synthesizer Labship", "Entropic Battlecruiser"):
+        assert _printing_is_bridge_phase_3_trigger_spacecraft(ps[name]), (
+            f"{name} MUST admit at the Phase-3 admit gate post-Cycle-3 "
+            "(Synthesizer Labship: Cycle 2 closure marker; Entropic "
+            "Battlecruiser: Cycle 3 closure marker — THIS slice)."
         )
+    # Infinite Guideline Station STAYS DECLINED post-Cycle-3.
+    assert not _printing_is_bridge_phase_3_trigger_spacecraft(
+        ps["Infinite Guideline Station"]
+    ), (
+        "Infinite Guideline Station: MUST stay DECLINED post-Cycle-3 "
+        "(CreateTokenPerMulticoloredPermanent + "
+        "DrawCardPerMulticoloredPermanent Effect classes not yet in "
+        "the Phase-3C-Cycle-3 admit allowlist; Cycle 4 ships them)."
+    )
 
 
 def test_two_phase_3c_carriers_still_decline_at_production_loader_filter_post_cycle_2():
-    """**Loader-filter pin (INVERTED — Cycle 2 closure marker).**
-    Post-Cycle-2, the production-deck loader's bridge-filter
+    """**Loader-filter pin (INVERTED — Cycle 3 closure marker; 2026-05-26).**
+    Post-Cycle-3, the production-deck loader's bridge-filter
     (``_filter_deck_to_bridge_supported``) ADMITS Synthesizer Labship
-    via the Phase-3 OR-disjunct AND rejects each of the other 2
-    Phase-3C carriers (which land in the ``not_bridged_sink``).
+    AND Entropic Battlecruiser via the Phase-3 OR-disjunct AND rejects
+    Infinite Guideline Station (which lands in the ``not_bridged_sink``).
 
-    The C1 substrate pinned all 3 carriers declined; Cycle 2 flips
-    Synthesizer Labship to admit. Entropic Battlecruiser + Infinite
-    Guideline Station stay declined until C3 + C4.
+    The C1 substrate pinned all 3 carriers declined; Cycle 2 flipped
+    Synthesizer Labship to admit; Cycle 3 (this slice) flips Entropic
+    Battlecruiser to admit. Infinite Guideline Station stays declined
+    until C4.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -450,19 +456,17 @@ def test_two_phase_3c_carriers_still_decline_at_production_loader_filter_post_cy
         unresolved_sink=unresolved,
         not_bridged_sink=not_bridged,
     )
-    # Synthesizer Labship admits; the other 2 are filtered out.
-    assert filtered_names == ["Synthesizer Labship"], (
-        f"Synthesizer Labship MUST admit (Cycle 2 FLIP); the other 2 "
-        f"Phase-3C carriers MUST decline. Got filtered={filtered_names!r}"
+    # Synthesizer Labship + Entropic Battlecruiser admit; Infinite
+    # Guideline Station is filtered out.
+    assert filtered_names == ["Synthesizer Labship", "Entropic Battlecruiser"], (
+        f"Synthesizer Labship (Cycle 2) AND Entropic Battlecruiser "
+        f"(Cycle 3 FLIP) MUST admit; Infinite Guideline Station MUST "
+        f"decline. Got filtered={filtered_names!r}"
     )
     # None are unresolved — they exist in the printings dict.
     assert unresolved == []
-    # Entropic Battlecruiser + Infinite Guideline Station land in the
-    # not-bridged sink.
-    assert set(not_bridged) == {
-        "Entropic Battlecruiser",
-        "Infinite Guideline Station",
-    }
+    # Infinite Guideline Station lands in the not-bridged sink.
+    assert set(not_bridged) == {"Infinite Guideline Station"}
 
 
 # ---------------------------------------------------------------------------

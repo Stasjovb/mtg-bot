@@ -986,19 +986,47 @@ pub(crate) fn dispatch_event(
         firings
     };
 
+    // **Spacecraft Phase 3C Cycle 3 (2026-05-26).** For DISCARDS_CARD
+    // events, seat the discarding player id in the transient
+    // `resolving_discards_card_player_id` slot so `first_legal_trigger_target`
+    // can wire it as the fixed target for `Effect::TargetPlayerLosesLife`
+    // (Entropic Battlecruiser's mode-1 "Whenever an opponent discards a
+    // card, they lose 3 life"). Sibling-narrow precedent of
+    // `resolving_combat_damage_target_player_id` + the JJJ Pin 2
+    // `PutPoisonCountersOnTargetPlayer` shape. Python's analogue is
+    // `fire_opponent_discards_triggers`'s `fixed_targets=(("player",
+    // discarding_player_id),)` thread-through (turn.py:409-433). The
+    // subject_id is `PLAYER_SUBJECT_OFFSET + discarding_pidx` per
+    // `Effect::EachOpponentDiscards` / `EachOpponentDiscardsOrLosesLife`
+    // dispatch convention.
+    let prev_discards_pid = state.resolving_discards_card_player_id;
+    if event == Event::DiscardsCard
+        && subject_id >= crate::cards::PLAYER_SUBJECT_OFFSET
+    {
+        state.resolving_discards_card_player_id =
+            (subject_id - crate::cards::PLAYER_SUBJECT_OFFSET) as u8;
+    }
     // Push each matching firing onto the stack. Order matches the
     // bf walk (Python's "no APNAP simplification" — audit §2.5).
+    let mut push_result: PyResult<()> = Ok(());
     for (source_id, controller, ability_index, effect, once_per_turn) in firings {
-        push_triggered_ability(
+        if let Err(e) = push_triggered_ability(
             state,
             source_id,
             controller,
             ability_index,
             effect,
             once_per_turn,
-        )?;
+        ) {
+            push_result = Err(e);
+            break;
+        }
     }
-    Ok(())
+    // Restore the discarding-player slot to its prior value (typically
+    // the `u8::MAX` sentinel for non-nested dispatches; nested DISCARD
+    // dispatches stack correctly with this swap-restore convention).
+    state.resolving_discards_card_player_id = prev_discards_pid;
+    push_result
 }
 
 /// **Round-58 BECOMES_TAPPED event bridge — the centralized "tap a
@@ -1379,6 +1407,37 @@ fn first_legal_trigger_target(
             let pid = state.resolving_combat_damage_target_player_id;
             if pid == u8::MAX {
                 None  // no active combat-damage target; resolve arm no-ops
+            } else {
+                Some(pid as u32)
+            }
+        }
+        // **Spacecraft Phase 3C Cycle 3 (2026-05-26).** Entropic
+        // Battlecruiser's mode-1 trigger payload — TargetPlayerLosesLife
+        // fired by a `DISCARDS_CARD` observer needs the DISCARDING
+        // player as its fixed target. The discarding player id was
+        // seated into `state.resolving_discards_card_player_id` by
+        // `dispatch_event`'s `Event::DiscardsCard` branch immediately
+        // before this `push_triggered_ability` call (sibling-narrow
+        // precedent of the JJJ Pin 2 `PutPoisonCountersOnTargetPlayer`
+        // arm above). Mirrors Python's `fire_opponent_discards_triggers`
+        // (turn.py:409-433) which threads
+        // `fixed_targets=(("player", discarding_player_id),)` into the
+        // DISPATCH call.
+        //
+        // **Sentinel `u8::MAX` = "no active discarding player".** Push
+        // sites outside `DISCARDS_CARD` dispatch (e.g. a synthetic test
+        // pushing TargetPlayerLosesLife directly via a non-DISCARD
+        // event) return `None`, and the resolve arm silent-fizzles via
+        // the pre-existing "no payload target" early-return at
+        // `state_ops_resolve.rs::Effect::TargetPlayerLosesLife`.
+        //
+        // **Player ids fit in u32 trivially.** Like PutPoisonCounters'
+        // pattern, we cast `u8 -> u32`; the resolve arm casts back
+        // (`payload_target as u8`).
+        Effect::TargetPlayerLosesLife { .. } => {
+            let pid = state.resolving_discards_card_player_id;
+            if pid == u8::MAX {
+                None
             } else {
                 Some(pid as u32)
             }
@@ -6777,6 +6836,121 @@ fn apply_effect(
                 // the discarding opponent. Same per-card firing
                 // convention as `Effect::DiscardSelf`. Subject =
                 // PLAYER_SUBJECT_OFFSET + opponent_idx.
+                let discarding_player_subject =
+                    crate::cards::PLAYER_SUBJECT_OFFSET + opponent_idx as u32;
+                dispatch_event(
+                    state,
+                    crate::cards::Event::DiscardsCard,
+                    discarding_player_subject,
+                )?;
+            }
+        }
+        // **Spacecraft Phase 3C Cycle 3 (2026-05-26).** Entropic
+        // Battlecruiser's ATTACKS-trigger Effect — resolve arm for
+        // `Effect::EachOpponentDiscardsOrLosesLife { life_if_cant }`.
+        // Mirrors Python's `EachOpponentDiscardsOrLosesLife.resolve`
+        // at `effects/generic/life.py:124-148`.
+        //
+        // **Sibling of `EachOpponentDiscards` resolve.** Same 5-zone +
+        // stack-scan source-controller resolution. Iterates every
+        // opponent of the source's controller (in 2-player land,
+        // exactly one opponent). For each opponent:
+        //   - **Empty hand branch:** the opponent loses `life_if_cant`
+        //     life via saturating-sub on life. NO Event::DiscardsCard
+        //     is dispatched (the alternative branch fires INSTEAD of
+        //     the discard, mirroring Python's "each opponent who can't
+        //     loses N life" semantics where the discard is replaced by
+        //     the life loss).
+        //   - **Non-empty hand branch:** the opponent's hand[0] is
+        //     popped to graveyard with CR 400.7 state reset (sibling
+        //     of `EachOpponentDiscards` per-discard primitive). Then
+        //     `Event::DiscardsCard` is dispatched on the discarding
+        //     player subject — this load-bears Entropic Battlecruiser's
+        //     mode-1 DISCARDS_CARD trigger chain (the mode-1
+        //     TargetPlayerLosesLife trigger reads the discarding
+        //     player as its fixed target via
+        //     `resolving_discards_card_player_id`).
+        //
+        // **`count` is implicit `1`.** No per-opponent loop count —
+        // each opponent discards EXACTLY ONE card (or loses life on
+        // empty hand). Mirrors Python's `EachOpponentDiscardsOrLosesLife`
+        // (no `count` field on the dataclass).
+        //
+        // **life_if_cant<0 raises** (defense-in-depth; `parse_effect`
+        // catches at register time). **life_if_cant=0** is a legal
+        // no-op on the empty-hand branch — the discard branch still
+        // fires normally (mirrors `LoseLife` / `GainLife` zero-amount
+        // conventions). **Source not found = silent fizzle** (mirrors
+        // `EachOpponentDiscards`).
+        Effect::EachOpponentDiscardsOrLosesLife { life_if_cant } => {
+            if *life_if_cant < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "EachOpponentDiscardsOrLosesLife life_if_cant must be non-negative, got {life_if_cant}"
+                )));
+            }
+            // Source-controller resolution (5-zone + stack scan;
+            // sibling of `EachOpponentDiscards`).
+            let mut source_controller: Option<u8> = None;
+            'outer_eodll: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_eodll;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player "each opponent" reduces to "the one opponent".
+            let opponent_idx = (1 - controller) as usize;
+            if state.players[opponent_idx].hand.is_empty() {
+                // Empty hand branch — opponent loses life_if_cant life.
+                // NO DiscardsCard event dispatched (the alternative
+                // branch fires INSTEAD of the discard).
+                state.players[opponent_idx].life = state.players[opponent_idx]
+                    .life
+                    .saturating_sub(*life_if_cant);
+            } else {
+                // Non-empty hand branch — opponent discards hand[0].
+                // CR 400.7 state reset; sibling of EachOpponentDiscards
+                // per-discard primitive.
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[opponent_idx].hand);
+                let mut obj = hand_mut.remove(0);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                Arc::make_mut(&mut state.players[opponent_idx].graveyard)
+                    .push(obj);
+                // Dispatch DISCARDS_CARD on the discarding player.
+                // Subject = PLAYER_SUBJECT_OFFSET + opponent_idx
+                // (sibling of EachOpponentDiscards dispatch). The
+                // `resolving_discards_card_player_id` slot is seated
+                // by dispatch_event itself so mode-1 trigger consumers
+                // (TargetPlayerLosesLife) wire the discarding player
+                // as their fixed target at trigger-push time.
                 let discarding_player_subject =
                     crate::cards::PLAYER_SUBJECT_OFFSET + opponent_idx as u32;
                 dispatch_event(

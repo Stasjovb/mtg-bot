@@ -2768,6 +2768,26 @@ pub struct GameState {
     /// Initialized to `u8::MAX` (= "no active target") at game start.
     /// Not serialized into the fingerprint (transient resolve-time slot).
     pub resolving_combat_damage_target_player_id: u8,
+    /// **Spacecraft Phase 3C Cycle 3 (2026-05-26).** The player id (0 or 1)
+    /// that just discarded a card during a `DISCARDS_CARD` dispatch.
+    /// Written by `dispatch_event` (Event::DiscardsCard branch) before
+    /// `push_triggered_ability` is called for each match, and reset to
+    /// `u8::MAX` (sentinel "no active discarding player") after the
+    /// inner push loop returns.
+    ///
+    /// Read by `first_legal_trigger_target` for
+    /// `Effect::TargetPlayerLosesLife` to seat the discarding-player
+    /// fixed target at trigger push time (sibling-narrow precedent of
+    /// `resolving_combat_damage_target_player_id` for
+    /// `Effect::PutPoisonCountersOnTargetPlayer`). Matches Python's
+    /// `fire_opponent_discards_triggers` at `turn.py:409-433` which
+    /// passes `fixed_targets=(("player", discarding_player_id),)` into
+    /// `dispatch_event` for the same purpose.
+    ///
+    /// Initialized to `u8::MAX` (= "no active discarding player") at
+    /// game start. Not serialized into the fingerprint (transient
+    /// resolve-time slot).
+    pub resolving_discards_card_player_id: u8,
     /// **CE12 closure — sticky winner_id shadow.** Mirrors Python's
     /// `GameState.winner_id`: a write-once `Option<u8>` field set by
     /// `apply_sbas` the FIRST time the SBA pass observes "exactly one
@@ -3370,6 +3390,7 @@ impl Clone for GameState {
             // safety on mid-resolution clones.
             resolving_counter_amount: self.resolving_counter_amount,
             resolving_combat_damage_target_player_id: self.resolving_combat_damage_target_player_id,
+            resolving_discards_card_player_id: self.resolving_discards_card_player_id,
             winner_id_sticky: self.winner_id_sticky,
             rng,
             triggered_this_turn: self.triggered_this_turn.clone(),
@@ -4342,6 +4363,12 @@ pub fn make_synthetic_state(
         // setter is the entry point until the dispatch path lands).
         resolving_counter_amount: 0,
         resolving_combat_damage_target_player_id: u8::MAX,
+        // **Spacecraft Phase 3C Cycle 3 (2026-05-26).** Transient
+        // discarding-player slot; initialized to the "no active
+        // discarding player" sentinel. Set by `dispatch_event`'s
+        // `Event::DiscardsCard` branch before the trigger push loop;
+        // reset to `u8::MAX` after the loop returns.
+        resolving_discards_card_player_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))`.

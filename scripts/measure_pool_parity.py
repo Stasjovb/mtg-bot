@@ -2704,6 +2704,54 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Battlecruiser + Infinite Guideline Station) are the next FLIP
     # cycles per design doc §7.3.
     REPO_ROOT / "tests" / "test_synthesizer_labship_parity.py",
+    # **Spacecraft Phase 3C Cycle 3 (2026-05-26):** Per-card real-EoE
+    # cross-engine byte-equal probe binding Entropic Battlecruiser to
+    # the combined Rust + Python admit gate post-Phase-3C-Cycle-3 FLIP
+    # per ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md`` §6.4
+    # #15. SECOND consumer of the Phase 3C Cycle 1 tier-gate substrate
+    # (``TriggeredAbility.tier_threshold: i32`` slot + trigger-firing-
+    # time gate at ``state_ops_resolve.rs::dispatch_event`` chokepoint).
+    #
+    #   * ``test_entropic_battlecruiser_parity.py`` — Entropic
+    #     Battlecruiser (``{3}{B}`` Artifact — Spacecraft, 3/10,
+    #     station_threshold=8, stationed_keywords={deathtouch, flying},
+    #     TWO triggers: (mode 0) ATTACKS+IsSelf+
+    #     EachOpponentDiscardsOrLosesLife(life_if_cant=3) at tier=0;
+    #     (mode 1) DISCARDS_CARD+Controlled(OPPONENT)+
+    #     TargetPlayerLosesLife(amount=3) at tier_threshold=1 — the
+    #     LOAD-BEARING SECOND tier-gate consumer); the SECOND
+    #     PROBE_MODULES-credited probe of the C1 tier-gate substrate.
+    #     Drives BOTH engines through THREE scenarios per design doc
+    #     §6.4 #15: (A) Mode-0 ATTACKS tier=0 with p1 hand EMPTY —
+    #     mode-0 alternative life-loss branch fires (p1 loses 3 life);
+    #     no DISCARDS_CARD dispatched. (B) THE LOAD-BEARING tier-1 gate
+    #     OPEN (charge=1 == tier=1): mode-0 fires + p1 discards hand[0]
+    #     → DISCARDS_CARD dispatches → mode-1's tier-gate ADMITS the
+    #     firing → p1 (discarding player) is pre-fixed target via the
+    #     new ``resolving_discards_card_player_id`` slot →
+    #     TargetPlayerLosesLife(3) resolves; p1 loses 3 more life. This
+    #     proves the C1 tier-gate substrate FIRES correctly under real
+    #     charge counters for the DISCARDS_CARD family. (C) tier-1 gate
+    #     CLOSED (charge=0 < tier=1): mode-0 fires + p1 discards, BUT
+    #     mode-1 does NOT fire (tier-gate closed); p1 stays at 20 life.
+    #     Bridge-wise this slice adds the new sibling-variant
+    #     ``Effect::EachOpponentDiscardsOrLosesLife { life_if_cant }``
+    #     per design doc §4.5 / §9.9 (NOT a widen of
+    #     ``Effect::EachOpponentDiscards`` — preserves the 9 existing
+    #     EoE production callers); ``Effect::TargetPlayerLosesLife``
+    #     was already shipped at PPP Pin 1.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Entropic
+    # Battlecruiser joins Sawship + Lumen-Class Frigate + Larval
+    # Scoutlander + Sledge-Class Seedship + Synthesizer Labship as the
+    # SIXTH PROBED Spacecraft). The remaining EoE Phase-3C Spacecraft
+    # (Infinite Guideline Station) stays honestly DECLINED on the
+    # Phase-3C-Cycle-3 5-class / 4-shape allowlist — the §6.6 decline-
+    # set bench check pins this exhaustively. Phase 3C Cycle 4
+    # (Infinite Guideline Station) is the next FLIP cycle per design
+    # doc §7.3 (CreateTokenPerMulticoloredPermanent +
+    # DrawCardPerMulticoloredPermanent Effect classes).
+    REPO_ROOT / "tests" / "test_entropic_battlecruiser_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see

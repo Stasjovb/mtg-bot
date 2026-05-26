@@ -361,18 +361,21 @@ def test_admit_set_size_bumps_post_cycle_2():
         if filtered:
             admitted_spacecraft.append(name)
     assert sorted(admitted_spacecraft) == [
+        "Entropic Battlecruiser",
         "Galvanizing Sawship",
         "Larval Scoutlander",
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
     ], (
-        "Admit-set count bump: exactly FIVE Spacecraft must admit "
-        "at the deck-level filter post-Phase-3C-Cycle-2 — Galvanizing "
+        "Admit-set count bump: exactly SIX Spacecraft must admit "
+        "at the deck-level filter post-Phase-3C-Cycle-3 — Galvanizing "
         "Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
         "Scoutlander (Phase-3A ETB) + Sledge-Class Seedship (Phase-"
         "3B ATTACKS) + Synthesizer Labship (Phase-3C C2 BEGINNING_OF_"
-        "COMBAT tier-gated). Got: "
+        "COMBAT tier-gated) + Entropic Battlecruiser (Phase-3C C3 "
+        "ATTACKS + DISCARDS_CARD tier-1 gate, the SECOND tier-gate "
+        "consumer). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 

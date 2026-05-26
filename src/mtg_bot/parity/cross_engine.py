@@ -1654,6 +1654,57 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return EachOpponentDiscards(
             count=eff_dict.get("count", 1),
         )
+    if kind == "each_opponent_discards_or_loses_life":
+        # **Spacecraft Phase 3C Cycle 3 (2026-05-26).** Bridge arm for
+        # the new Rust ``Effect::EachOpponentDiscardsOrLosesLife
+        # { life_if_cant: i32 }`` sibling-variant (cards.rs). Mirrors
+        # Python's ``EachOpponentDiscardsOrLosesLife(life_if_cant: int
+        # = 3)`` at ``effects/generic/life.py:114`` — Entropic
+        # Battlecruiser's mode-0 ATTACKS-trigger effect ("Each opponent
+        # discards a card. Each opponent who can't loses 3 life.").
+        #
+        # **Sibling-variant of EachOpponentDiscards (NOT a widen).** Per
+        # design doc §4.5 + §9.9: a sibling enum entry is preferred
+        # over in-place widening of `EachOpponentDiscards` to (a)
+        # preserve the 9 existing EoE production callers of
+        # `EachOpponentDiscards` at their byte-equal shape, (b) mirror
+        # Python's two-class split (`EachOpponentDiscards` at
+        # `effects/generic/discard.py:132` and
+        # `EachOpponentDiscardsOrLosesLife` at `effects/generic/life.py
+        # :114` — distinct frozen dataclasses with distinct resolve
+        # methods), and (c) avoid the no-silent-auto-grow risk of
+        # forcing a default `life_if_cant=0` semantic on every legacy
+        # `EachOpponentDiscards` call site.
+        #
+        # **Field shape (default-handling).** ``life_if_cant`` is
+        # OPTIONAL, default 3 (Entropic Battlecruiser's printed value /
+        # Python class default). Negative ``life_if_cant`` raises
+        # (mirrors the Rust parse_effect contract). Missing key on the
+        # bridge dict registers as 3.
+        #
+        # **Resolve semantics.** Both engines walk every opponent of
+        # the source's controller. For each opponent: empty-hand →
+        # opponent loses ``life_if_cant`` life (NO ``Event::Discards
+        # Card`` dispatched on the empty-hand branch). Non-empty-hand →
+        # opponent discards a card → ``Event::DiscardsCard`` dispatched
+        # on the discarding player subject (this load-bears the mode-1
+        # DISCARDS_CARD trigger chain). The bridge translator is
+        # value-equal: both engines' resolve methods produce the same
+        # observable post-state.
+        from mtg_bot.effects.generic.life import (
+            EachOpponentDiscardsOrLosesLife,
+        )
+        if "life_if_cant" in eff_dict:
+            life_if_cant = int(eff_dict["life_if_cant"])
+        else:
+            life_if_cant = 3
+        if life_if_cant < 0:
+            raise ValueError(
+                "each_opponent_discards_or_loses_life bridge arm: "
+                f"life_if_cant must be non-negative, got {life_if_cant} "
+                "(mirrors Rust parse_effect contract)"
+            )
+        return EachOpponentDiscardsOrLosesLife(life_if_cant=life_if_cant)
     if kind == "optional_sac_land_or_lander_for_basic_land_ramp":
         # **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Bridge arm for
         # the new Rust ``Effect::OptionalSacLandOrLanderForBasicLandRamp
