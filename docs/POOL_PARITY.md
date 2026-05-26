@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **424 / 475 EoE cards (89.3%) are byte-equal at the Effect+bridge level**; of those, **384 (80.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 40 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **424 / 475 EoE cards (89.3%) are byte-equal at the Effect+bridge level**; of those, **385 (81.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 39 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **51 (10.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 384 | 80.8% |
-| Effect+bridge covered (not individually probed) | 40 | 8.4% |
+| PROBED byte-equal | 385 | 81.1% |
+| Effect+bridge covered (not individually probed) | 39 | 8.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -282,6 +282,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Patched Plaything
 - Peculiar Lighthouse
 - Perigee Beckoner
+- Petrified Field
 - Piggy Bank
 - Pinnacle Emissary
 - Pinnacle Kill-Ship

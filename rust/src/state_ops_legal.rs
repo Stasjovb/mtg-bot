@@ -3553,6 +3553,80 @@ impl GameState {
                             Some(target.id),
                         )?);
                     }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::ReturnTargetLandFromGraveyardToHand,
+                ) {
+                    // **Carrier-AA substrate Phase 2a Cycle 2 (2026-05-
+                    // 25).** Graveyard-Land target fan-out arm per
+                    // ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_DESIGN.md``
+                    // §4.1.2. Mirrors the existing
+                    // ``sacrifice_*``/``requires_target_creature_you_
+                    // control`` fan-out arms above, but walks the
+                    // activator's GRAVEYARD instead of the activator's
+                    // battlefield, and filters on Land card-type
+                    // instead of Creature / Artifact / Land-on-bf.
+                    //
+                    // **Target scope — controller's graveyard only.**
+                    // Mirrors Python's ``ReturnFromGraveyard.legal_
+                    // targets`` at ``effects/generic/graveyard.py:
+                    // 183-191`` where ``p = state.player_by_id
+                    // (controller_id)`` is controller-only. Petrified
+                    // Field's printed text reads "from your graveyard";
+                    // Python's implementation honors that strict
+                    // reading; Rust mirrors it.
+                    //
+                    // **Emit-before-cost-pay.** The legal-emit fan-out
+                    // runs BEFORE the apply-time cost-pay (Phase 5b
+                    // sacrifice_self commit at
+                    // ``state_ops_actions.rs:1300-1391``), so the
+                    // source is STILL on the activator's bf — NOT yet
+                    // in the graveyard — at emission. The source
+                    // therefore can't appear in the target pool here,
+                    // matching CR 117.10 / 119 (costs pay before
+                    // effects resolve) PLUS the standard "you choose
+                    // legal targets before paying costs" target-
+                    // selection sequencing.
+                    //
+                    // **No legal targets → no emission.** A bare
+                    // Petrified Field with no Land cards in the
+                    // controller's graveyard emits zero
+                    // ``ActivateAbility`` dicts (CR 601.2c).
+                    //
+                    // **Target dict slot.** Reuses the
+                    // ``target_creature_id`` field as the generic
+                    // single-target object-id slot. The dict-shape
+                    // contract is the same — apply-time threads it
+                    // into ``current_resolve_payload_target_id`` via
+                    // the ``new_trigger_with_target`` StackItem path
+                    // at ``state_ops_actions.rs:1622``, which the
+                    // ``ReturnTargetLandFromGraveyardToHand`` resolve
+                    // arm at ``state_ops_resolve.rs:22838`` reads for
+                    // the cast-time-bound target selection. The
+                    // ``target_creature_id`` slot is morally an
+                    // "object-id" slot, not a creature-only slot —
+                    // this fan-out keeps the dict shape stable.
+                    for target in self.players[idx].graveyard.iter() {
+                        let Some(t_printing) =
+                            self.registry.lookup(target.printing_id)
+                        else {
+                            continue;
+                        };
+                        if !t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Land")
+                        {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            Some(target.id),
+                            None,
+                        )?);
+                    }
                 } else {
                     actions.push(activate_ability_dict(
                         py,

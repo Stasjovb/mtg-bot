@@ -208,7 +208,8 @@ def test_aa_is_phase1_sub_shape_a_admits_swarmyard_pilot_shape():
 
 
 @pytest.mark.parametrize("cost_kwargs,reason", [
-    ({"tap_self": True, "sacrifice_self": True}, "sacrifice_self"),
+    # Phase 2a INVERTED ``sacrifice_self`` — moved to the admit pin
+    # ``test_aa_is_phase2a_sub_shape_a_now_admits_T_plus_sac_after_widen``.
     ({"tap_self": True, "pay_life": 1}, "pay_life"),
     ({"tap_self": True, "sacrifice_a_desert": True}, "sacrifice_a_desert"),
     ({"tap_self": False}, "missing tap_self"),
@@ -216,8 +217,11 @@ def test_aa_is_phase1_sub_shape_a_admits_swarmyard_pilot_shape():
 def test_aa_is_phase1_sub_shape_a_declines_non_bare_T_costs(
     cost_kwargs, reason,
 ):
-    """**Decline pin (cost-gate teeth).** Every cost-shape outside the
-    STRICT bare-``{T}`` Phase-1 admit set declines."""
+    """**Decline pin (cost-gate teeth).** Every cost-shape outside
+    the Phase-2a admit set still declines. Phase 2a widens the
+    ``sacrifice_self`` axis only — other cost-bools
+    (``pay_life``, ``sacrifice_a_desert``, missing ``tap_self``)
+    keep their Phase-N honest-stops."""
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
@@ -339,11 +343,21 @@ def test_aa_is_phase1_5_sub_shape_a_declines_x_pip_mana_cost():
     assert _aa_is_phase1_sub_shape_a(aa) is False
 
 
-def test_aa_is_phase1_5_sub_shape_a_still_declines_T_plus_sac_after_widen():
-    """**Phase 1.5a regression pin (non-mana cost axis intact).** Bare
-    ``{T}`` + ``sacrifice_self=True`` still declines under Phase 1.5a
-    — the widen is strictly additive on the cost-mana axis; sacrifice /
-    pay_life / etc. teeth bite untouched."""
+def test_aa_is_phase2a_sub_shape_a_now_admits_T_plus_sac_after_widen():
+    """**Phase 2a INVERSION pin (cost-gate widen on ``sacrifice_self``
+    axis).** Bare ``{T}`` + ``sacrifice_self=True`` now ADMITS under
+    Phase 2a (Effect must be in the Phase-2a admit set — pair with
+    ``UntapTargetLand`` for the cost-axis pin; the Effect-class teeth
+    are exercised separately in the Phase-2a Petrified Field probe
+    + the Phase-2a sub-shape unit pins).
+
+    Inverts the Phase-1.5a pin
+    ``test_aa_is_phase1_5_sub_shape_a_still_declines_T_plus_sac_after_
+    widen``. The widen is strictly additive on the ``sacrifice_self``
+    axis; other cost-bools (``pay_life``, ``sacrifice_a_desert``,
+    ``sacrifice_another_*``, ``exile_self``,
+    ``tap_permanent_you_control``, etc.) still decline — see the
+    sibling regression pins."""
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
@@ -352,7 +366,7 @@ def test_aa_is_phase1_5_sub_shape_a_still_declines_T_plus_sac_after_widen():
         cost=ActivationCost(tap_self=True, sacrifice_self=True),
         effect=UntapTargetLand(),
     )
-    assert _aa_is_phase1_sub_shape_a(aa) is False
+    assert _aa_is_phase1_sub_shape_a(aa) is True
 
 
 def test_aa_is_phase1_5_sub_shape_a_round_trips_deserted_temple_synthetic():
@@ -430,28 +444,33 @@ def test_printing_is_bridge_simple_carrier_aa_land_admits_live_deserted_temple()
 # ---------------------------------------------------------------------------
 
 
-def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple():
-    """**Phase 1.5a no-silent-auto-grow pin.** Walks the 30 BLOCKED-SG
+def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_temple_plus_petrified_field():
+    """**Phase 2a no-silent-auto-grow pin.** Walks the 30 BLOCKED-SG
     Carrier-AA cards from design doc §2.1 against
     :func:`_printing_is_bridge_simple_carrier_aa_land` under the
-    Phase-1.5a widened cost-gate (bare ``{T}`` OR ``{N}, {T}``). ONLY
-    Swarmyard + Deserted Temple admit; every other carrier honestly
-    declines per the verify-first walk recorded in the Phase 1.5a
-    commit message.
+    Phase-2a widened cost-gate (bare ``{T}`` OR ``{N}, {T}`` OR
+    ``({T}, Sac:)`` OR ``({N}, {T}, Sac:)``) + widened Effect-class
+    admit set (``RegenerateTargetCreature`` + ``UntapTargetLand`` +
+    ``ReturnTargetLandFromGraveyardToHand``). ONLY Swarmyard +
+    Deserted Temple + Petrified Field admit; every other carrier
+    honestly declines per the verify-first walk recorded in the
+    Phase 2a commit message.
 
-    Sibling-candidate Effect-class teeth are load-bearing: Terrain
-    Generator (``PutBasicLandFromHandOntoBattlefieldTapped``),
-    Thespian's Stage (``BecomesCopyOfTargetLand``), and Mystifying Maze
-    (``ExileTargetAttackingCreatureUntilEndStep``) all carry
-    ``{N}, {T}`` costs that pass the widened cost-gate but DECLINE on
-    the Phase-1 Effect-class admit set
-    ``{RegenerateTargetCreature, UntapTargetLand}``. Any new Effect
-    class admitted to that set would surface here as a silent auto-grow
-    — investigate before merging.
+    Sibling-candidate Effect-class teeth remain load-bearing: Terrain
+    Generator (``PutBasicLandFromHandOntoBattlefieldTapped`` —
+    Phase 2b ports this), Thespian's Stage (``BecomesCopyOfTargetLand``
+    — Phase 3+), and Mystifying Maze
+    (``ExileTargetAttackingCreatureUntilEndStep`` — Phase 3+) all
+    carry costs that pass the widened cost-gate but DECLINE on the
+    Phase-2a Effect-class admit set. Scavenger Grounds (Phase 3 —
+    ``sacrifice_a_desert`` cost shape) still declines on the
+    non-admitted ``sacrifice_a_desert`` cost-bool gate. Any new
+    Effect class admitted to the set would surface here as a silent
+    auto-grow — investigate before merging.
 
-    Inverts the C2 pin
-    ``test_carrier_aa_30_no_silent_auto_grow_admit_set_exactly_
-    swarmyard``."""
+    Inverts the Phase-1.5a pin
+    ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
+    plus_deserted_temple``."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_land,
@@ -476,11 +495,12 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         for name in carrier_aa_30
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
     )
-    assert admits == ["Deserted Temple", "Swarmyard"], (
-        f"Carrier-AA Phase 1.5a admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Swarmyard'], got {admits}. "
-        f"A widen in a sibling substrate or predicate would surface "
-        f"here as a silent auto-grow — investigate before merging."
+    assert admits == ["Deserted Temple", "Petrified Field", "Swarmyard"], (
+        f"Carrier-AA Phase 2a admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Petrified Field', "
+        f"'Swarmyard'], got {admits}. A widen in a sibling substrate "
+        f"or predicate would surface here as a silent auto-grow — "
+        f"investigate before merging."
     )
 
 

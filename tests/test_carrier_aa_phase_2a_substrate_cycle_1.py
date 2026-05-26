@@ -694,64 +694,51 @@ def test_resolve_return_target_land_silent_fizzle_when_no_land_in_graveyard(
 # ---------------------------------------------------------------------------
 
 
-def test_petrified_field_stays_declined_post_cycle_1():
-    """**Substrate-only invariant pin — Phase 2a Cycle 1.** Petrified
-    Field's live printing STAYS DECLINED at the production-deck admit
-    gate post-Cycle-1. The Rust substrate widen + bridge round-trip
-    extension don't widen the admit predicate
-    ``_aa_is_phase1_sub_shape_a`` — it still declines
-    ``sacrifice_self=True`` on the cost-gate clause at
-    ``trajectory.py:8549``.
+def test_petrified_field_now_admits_at_admit_gate_post_phase_2a():
+    """**Phase 2a INVERSION admit pin (Petrified Field's live printing).**
+    Petrified Field's live ``OracleParserCardSource`` printing now
+    PASSES :func:`_printing_is_bridge_simple_carrier_aa_land` post-
+    Phase-2a cost-gate widen (cost-gate at ``trajectory.py:8549``
+    widened to admit ``sacrifice_self=True``) + Effect-class admit-
+    set widen (``_carrier_aa_phase_1_effect_classes`` now includes
+    ``ReturnTargetLandFromGraveyardToHand``).
 
-    Cycle 2 will INVERT this pin to
-    ``test_petrified_field_now_admits_at_admit_gate_post_phase_2a`` —
-    same shape as Phase-1 Cycle-2's Swarmyard inversion and Phase-1.5a's
+    Inverts the C1 pin
+    ``test_petrified_field_stays_declined_post_cycle_1``. Same shape
+    as Phase-1 Cycle-2's Swarmyard inversion and Phase-1.5a's
     Deserted Temple inversion.
 
     Verifies:
-      (a) No ``_printing_is_bridge_*`` sibling predicate admits Petrified
-          Field (the substrate-only floor — admit set unchanged).
-      (b) The Carrier-AA disjunct
-          ``_printing_is_bridge_simple_carrier_aa_land`` specifically
-          DECLINES Petrified Field — the cost-gate teeth bite.
-      (c) The cost-axis clause is the load-bearing decline: confirm
-          the live AA's cost shape (verify-first) includes
-          ``sacrifice_self=True``.
+      (a) The Carrier-AA disjunct
+          ``_printing_is_bridge_simple_carrier_aa_land`` now ADMITS
+          Petrified Field — the cost-gate widen + Effect-class widen
+          land in lockstep.
+      (b) Verify-first load-bearing-clause anchor: the live AA's
+          cost shape carries ``sacrifice_self=True`` AND the Effect
+          is ``ReturnTargetLandFromGraveyardToHand`` — the two
+          previously-load-bearing-decline axes now both admit.
+      (c) The admit predicate ``_aa_is_phase1_sub_shape_a`` returns
+          True on the AA shape.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetLandFromGraveyardToHand,
+    )
     from mtg_bot.parity import trajectory as traj
 
     ps = OracleParserCardSource().get_printings()
     pf = ps["Petrified Field"]
 
-    # (b) Carrier-AA disjunct declines.
-    assert traj._printing_is_bridge_simple_carrier_aa_land(pf) is False, (
-        "Petrified Field MUST stay declined at the Carrier-AA "
-        "admit gate post-Cycle-1 — Cycle 2 widens the cost gate. "
-        "This invariant pin is the load-bearing substrate-only "
-        "guarantee."
+    # (a) Carrier-AA disjunct admits.
+    assert traj._printing_is_bridge_simple_carrier_aa_land(pf) is True, (
+        "Petrified Field MUST now ADMIT at the Carrier-AA admit gate "
+        "post-Phase-2a — the cost-gate widen (admits "
+        "``sacrifice_self=True``) + Effect-class widen (admits "
+        "``ReturnTargetLandFromGraveyardToHand``) land the FLIP."
     )
 
-    # (a) No sibling bridge predicate admits. Walk every
-    # ``_printing_is_bridge_*`` predicate.
-    candidate_predicates = [
-        (name, getattr(traj, name))
-        for name in dir(traj)
-        if name.startswith("_printing_is_bridge_")
-    ]
-    admits = [
-        name
-        for name, pred in candidate_predicates
-        if callable(pred) and pred(pf)
-    ]
-    assert admits == [], (
-        f"Petrified Field unexpectedly admits at predicate(s) "
-        f"{admits} — Cycle 1 substrate must not change the admit "
-        f"surface."
-    )
-
-    # (c) Verify-first load-bearing-clause anchor: the cost-gate
-    # decline is on ``sacrifice_self``. Walk the carrier AA's cost.
+    # (b) Verify-first anchor: the two previously-load-bearing-decline
+    # axes both admit now. Walk the carrier AA's cost + effect.
     non_mana_aas = [
         aa for aa in (pf.activated_abilities or ())
         if not aa.is_mana_ability
@@ -759,47 +746,340 @@ def test_petrified_field_stays_declined_post_cycle_1():
     assert len(non_mana_aas) == 1
     aa = non_mana_aas[0]
     assert aa.cost.sacrifice_self is True, (
-        "The load-bearing decline is on cost.sacrifice_self — if "
-        "Petrified Field's parsed shape changes, the C2 widen target "
-        "may need updating."
+        "The previously-load-bearing decline axis is "
+        "cost.sacrifice_self — Phase 2a admits this shape."
+    )
+    assert isinstance(aa.effect, ReturnTargetLandFromGraveyardToHand), (
+        "Petrified Field's AA effect must be "
+        "ReturnTargetLandFromGraveyardToHand (the C1-substrate-shipped "
+        "Effect class now in the Carrier-AA Phase-2a admit set)."
     )
 
-    # The admit predicate explicitly declines on this clause.
-    assert traj._aa_is_phase1_sub_shape_a(aa) is False, (
-        "Admit predicate ``_aa_is_phase1_sub_shape_a`` must decline "
-        "Petrified Field's AA shape post-Cycle-1 (cost-gate clause "
-        "rejects ``sacrifice_self=True``). Cycle 2 inverts."
+    # (c) The admit predicate explicitly admits on this clause.
+    assert traj._aa_is_phase1_sub_shape_a(aa) is True, (
+        "Admit predicate ``_aa_is_phase1_sub_shape_a`` must ADMIT "
+        "Petrified Field's AA shape post-Phase-2a (cost-gate widen +"
+        " Effect-class widen). Phase 2a Cycle 2 FLIP."
     )
 
 
-def test_petrified_field_stays_declined_at_loader_filter():
-    """**Loader-side invariant pin.** Walking Petrified Field through
-    ``_filter_deck_to_bridge_supported`` with
-    ``on_non_admitted=LoaderAdmitPolicy.RAISE`` raises (Petrified Field
-    is not on the admit roster post-Cycle-1).
+def test_petrified_field_now_passes_loader_filter():
+    """**Phase 2a INVERSION wiring pin.** The loader ADMITS Petrified
+    Field end-to-end post-Phase-2a — the Carrier-AA disjunct fires
+    under the widened cost gate + widened Effect-class admit set. The
+    returned CardDef carries the Carrier-AA builder's output for the
+    ``ReturnTargetLandFromGraveyardToHand`` Effect.
 
-    This is the same shape as the loader-side pins for other
-    substrate-only invariants — pins what production code observes,
-    not just the predicate floor.
+    Inverts the C1 pin
+    ``test_petrified_field_stays_declined_at_loader_filter``. Same
+    shape as Phase-1.5a's Deserted Temple inversion pin
+    ``test_filter_deck_to_bridge_supported_admits_deserted_temple``.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
-    from mtg_bot.parity.trajectory import (
-        LoaderAdmitPolicy,
-        NonAdmittedCardError,
-        _filter_deck_to_bridge_supported,
-    )
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
-    # Ensure Petrified Field exists in the parser source.
     ps = OracleParserCardSource().get_printings()
     assert "Petrified Field" in ps
 
-    # Walk Petrified Field through the loader filter on RAISE policy.
-    with pytest.raises(NonAdmittedCardError) as excinfo:
-        _filter_deck_to_bridge_supported(
-            ["Petrified Field"],
-            ps,
-            on_non_admitted=LoaderAdmitPolicy.RAISE,
+    filtered, card_defs = _filter_deck_to_bridge_supported(
+        ["Petrified Field"], ps,
+    )
+    assert filtered == ["Petrified Field"]
+    assert len(card_defs) == 1
+    card_def = card_defs[0]
+    assert card_def.name == "Petrified Field"
+    assert card_def.card_type == "Land"
+    aas = card_def.activated_abilities
+    assert len(aas) == 1
+    aa_dict = aas[0]
+    # Cost is `{T}, Sac:` (no mana — Petrified Field's printed cost).
+    assert aa_dict["cost"] == {
+        "tap_self": True,
+        "sacrifice_self": True,
+    }
+    assert aa_dict["effect"] == {
+        "kind": "return_target_land_from_graveyard_to_hand",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2a Cycle 2 — Rust legal-emit fan-out arm pins (graveyard-Land
+# target enumeration). The new fan-out arm at
+# ``state_ops_legal.rs::activate_ability_dict`` (sibling of the
+# Equipment / sacrifice-target fan-out arms) walks the activator's
+# graveyard for Land cards and emits one ``ActivateAbility`` dict per
+# eligible target. The dict's ``target_creature_id`` slot carries the
+# chosen graveyard-Land card id; the apply-time validation arm at
+# ``state_ops_actions.rs`` accepts it under the new Phase-2a branch
+# (the ``is_return_land_from_gy_effect`` branch — gates on Effect
+# variant ``Effect::ReturnTargetLandFromGraveyardToHand``).
+# ---------------------------------------------------------------------------
+
+
+# Phase enum index for PRECOMBAT_MAIN — matches the Rust state enum
+# discriminant. Mirrors the constant exported in tests_rust/test_legal.py:48.
+PHASE_MAIN1 = 3
+
+
+def _build_pf_petrified_field_state(engine_module, gy_dicts):
+    """Helper — build a synthetic state with Petrified Field on p0's bf
+    (untapped, not summoning-sick) and the provided objects in p0's
+    graveyard. Returns ``(state, pf_id, gy_ids)``.
+
+    ``gy_dicts`` is a list of registry-dict shapes — each gets injected
+    into p0's graveyard in order. Common shapes:
+
+    * ``_forest_dict()`` — Land card-type (eligible target).
+    * a Creature dict (non-Land — declines under the graveyard-Land
+      filter).
+    """
+    state = engine_module.make_synthetic_state(0, 0, 0)
+    pf_id = state.register_and_inject_object(
+        _synthetic_petrified_field_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    state.force_set_summoning_sick(pf_id, False)
+    gy_ids = []
+    for d in gy_dicts:
+        gy_ids.append(
+            state.register_and_inject_object(d, 0, ZONE_GRAVEYARD)
         )
-    # The exception message confirms Petrified Field is the rejected
-    # card.
-    assert "Petrified Field" in str(excinfo.value)
+    state.set_phase(PHASE_MAIN1)
+    state.give_priority_to(0)
+    return state, pf_id, gy_ids
+
+
+def test_rust_legal_emit_fan_out_one_aa_per_eligible_graveyard_land(engine):
+    """**Phase 2a C2 legal-emit pin — fan-out cardinality (1 Land
+    target).** With Petrified Field on bf + one Forest in p0's
+    graveyard, ``legal_decisions(0)`` emits exactly ONE
+    ``ActivateAbility`` dict for the Petrified Field source, carrying
+    ``target_creature_id = forest_id`` (the generic single-target
+    object-id slot — see the apply-time
+    ``is_return_land_from_gy_effect`` branch at
+    ``state_ops_actions.rs``).
+    """
+    state, pf_id, gy_ids = _build_pf_petrified_field_state(
+        engine, [_forest_dict()],
+    )
+    forest_id = gy_ids[0]
+
+    decisions = state.legal_decisions(0)
+    aa_decisions = [
+        d for d in decisions
+        if d.get("kind") == "activate_ability"
+        and d.get("source_id") == pf_id
+    ]
+    assert len(aa_decisions) == 1, (
+        f"Expected 1 ActivateAbility emit on Petrified Field with one "
+        f"eligible graveyard Land; got {len(aa_decisions)}: "
+        f"{aa_decisions}"
+    )
+    aa = aa_decisions[0]
+    assert aa["target_creature_id"] == forest_id, (
+        f"target_creature_id slot must carry the eligible graveyard-"
+        f"Land id ({forest_id}); got {aa['target_creature_id']}"
+    )
+    assert aa["ability_index"] == 0
+    assert aa["sacrifice_target_id"] is None
+
+
+def test_rust_legal_emit_fan_out_multiple_eligible_graveyard_lands(engine):
+    """**Phase 2a C2 legal-emit pin — fan-out cardinality (N=3
+    Lands).** With Petrified Field on bf + THREE Forests in p0's
+    graveyard, the fan-out emits THREE ``ActivateAbility`` dicts
+    (one per eligible target). Mirrors the existing
+    ``sacrifice_a_land`` fan-out cardinality contract at
+    ``state_ops_legal.rs::legal_decisions``.
+    """
+    state, pf_id, gy_ids = _build_pf_petrified_field_state(
+        engine,
+        [_forest_dict(), _forest_dict(), _forest_dict()],
+    )
+
+    decisions = state.legal_decisions(0)
+    aa_decisions = [
+        d for d in decisions
+        if d.get("kind") == "activate_ability"
+        and d.get("source_id") == pf_id
+    ]
+    assert len(aa_decisions) == 3, (
+        f"Expected 3 ActivateAbility emits (one per eligible "
+        f"graveyard Land); got {len(aa_decisions)}: {aa_decisions}"
+    )
+    emit_target_ids = sorted(d["target_creature_id"] for d in aa_decisions)
+    assert emit_target_ids == sorted(gy_ids), (
+        f"Each emit must carry a distinct gy-Land id; got "
+        f"target_creature_ids = {emit_target_ids}, expected {sorted(gy_ids)}"
+    )
+
+
+def test_rust_legal_emit_fan_out_silent_no_emit_on_empty_graveyard(engine):
+    """**Phase 2a C2 legal-emit pin — silent no-emit on no legal
+    target.** With Petrified Field on bf + EMPTY graveyard, the
+    fan-out emits ZERO ``ActivateAbility`` dicts (mirrors CR 601.2c
+    — a player can't begin to activate an ability without legal
+    targets). The activation is honestly silently unavailable, NOT
+    emitted-then-fizzled on resolve.
+    """
+    state, pf_id, _gy_ids = _build_pf_petrified_field_state(engine, [])
+
+    decisions = state.legal_decisions(0)
+    aa_decisions = [
+        d for d in decisions
+        if d.get("kind") == "activate_ability"
+        and d.get("source_id") == pf_id
+    ]
+    assert aa_decisions == [], (
+        f"Expected 0 ActivateAbility emits on Petrified Field with "
+        f"empty graveyard; got {aa_decisions}"
+    )
+
+
+def test_rust_legal_emit_fan_out_skips_non_land_graveyard_cards(engine):
+    """**Phase 2a C2 legal-emit pin — non-Land graveyard cards are
+    skipped.** With Petrified Field on bf + a Creature in p0's
+    graveyard (not a Land), the fan-out filters out the Creature and
+    emits ZERO ``ActivateAbility`` dicts. The graveyard-Land filter
+    is symmetric to the bf-Creature filter on the
+    ``requires_target_creature_you_control`` arm — non-matching
+    card-types decline silently.
+    """
+    creature_dict = {
+        "name": "Test Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+    }
+    state, pf_id, _gy_ids = _build_pf_petrified_field_state(
+        engine, [creature_dict],
+    )
+
+    decisions = state.legal_decisions(0)
+    aa_decisions = [
+        d for d in decisions
+        if d.get("kind") == "activate_ability"
+        and d.get("source_id") == pf_id
+    ]
+    assert aa_decisions == [], (
+        f"Expected 0 ActivateAbility emits on Petrified Field with a "
+        f"non-Land in graveyard (the gy-Land filter excludes it); "
+        f"got {aa_decisions}"
+    )
+
+
+def test_rust_legal_emit_fan_out_end_to_end_apply_and_resolve(engine):
+    """**Phase 2a C2 end-to-end pin — emit + apply + resolve.** The
+    fan-out emits an ``ActivateAbility`` dict; ``apply_action``
+    accepts it (apply-time graveyard-Land target validation passes
+    under the ``is_return_land_from_gy_effect`` branch); the source
+    sacs to graveyard via Phase 5b cost-pay; the stack carries the
+    ``ReturnTargetLandFromGraveyardToHand`` resolve payload;
+    ``resolve_top_of_stack`` honors the cast-time-bound target
+    (``current_resolve_payload_target_id``) and moves the Forest
+    from graveyard to hand. Byte-equal end-to-end with the
+    cast-time-bound target path (NOT the substrate-fallback path —
+    this validates the new C2 fan-out wiring drives the bound-target
+    branch of the resolve arm).
+    """
+    state, pf_id, gy_ids = _build_pf_petrified_field_state(
+        engine, [_forest_dict()],
+    )
+    forest_id = gy_ids[0]
+
+    decisions = state.legal_decisions(0)
+    aa_decisions = [
+        d for d in decisions
+        if d.get("kind") == "activate_ability"
+        and d.get("source_id") == pf_id
+    ]
+    assert len(aa_decisions) == 1
+    chosen = aa_decisions[0]
+    assert chosen["target_creature_id"] == forest_id
+
+    state.apply_action(chosen)
+    # Source sac'd to gy (Phase 5b sacrifice_self), Forest still in gy
+    # (resolve hasn't fired yet), stack has the trigger.
+    assert state.stack_size() == 1
+    assert state.battlefield_sizes[0] == 0
+    bf_snap = state.battlefield_snapshot()
+    assert not any(o["id"] == pf_id for o in bf_snap)
+    gy_post_sac = state.graveyard_snapshot(0)
+    assert any(o["id"] == pf_id for o in gy_post_sac)
+    assert any(o["id"] == forest_id for o in gy_post_sac)
+
+    # Resolve the stack — the resolve arm reads
+    # ``current_resolve_payload_target_id`` (set from the StackItem's
+    # target_id payload — bound via the cast-time-bound target path,
+    # NOT the substrate-fallback walk). Forest moves gy → hand.
+    state.resolve_top_of_stack()
+    hand_post = state.hand_snapshot(0)
+    gy_post = state.graveyard_snapshot(0)
+    assert any(o["id"] == forest_id for o in hand_post), (
+        f"Forest (id={forest_id}) must move to hand on resolve; got "
+        f"hand={hand_post}"
+    )
+    # Source stays in graveyard (Petrified Field doesn't return
+    # ITSELF — it returns the bound target).
+    assert any(o["id"] == pf_id for o in gy_post)
+    assert not any(o["id"] == pf_id for o in hand_post)
+    assert state.is_stack_empty()
+
+
+def test_rust_apply_action_raises_on_illegal_graveyard_target(engine):
+    """**Phase 2a C2 apply-time validation pin — illegal target
+    raises.** A malformed direct-caller-built dict with a
+    ``target_creature_id`` that doesn't resolve to a Land card in the
+    activator's graveyard raises ``ValueError`` BEFORE any state
+    mutation. Same symmetric-error-shape contract as the existing
+    Equipment / sacrifice-target validation arms (raise pre-commit).
+
+    The legal-emit fan-out pre-filters to legal targets, so this
+    raise only fires on direct callers (test / synthetic path); the
+    pin guards against silent target-id corruption in those paths.
+    """
+    state, pf_id, _gy_ids = _build_pf_petrified_field_state(
+        engine, [_forest_dict()],
+    )
+    # Build a malformed dict — points at a non-existent id (99999).
+    with pytest.raises(ValueError, match="not a legal graveyard-Land target"):
+        state.apply_action({
+            "kind": "activate_ability",
+            "source_id": pf_id,
+            "ability_index": 0,
+            "target_creature_id": 99999,
+        })
+
+
+def test_rust_apply_action_accepts_none_target_for_substrate_fallback(engine):
+    """**Phase 2a C2 apply-time validation pin — None target accepted
+    (substrate-fallback path).** An ``ActivateAbility`` dict with
+    ``target_creature_id = None`` is accepted under the
+    ``is_return_land_from_gy_effect`` branch (the resolve arm's
+    substrate-fallback path handles target selection). The legal-
+    emit fan-out NEVER produces this shape post-C2 (it always emits
+    a specific target id), but direct-callers / synthetic tests rely
+    on the substrate-fallback path that pre-dates the fan-out.
+    Confirms back-compat with the C1 substrate resolve-arm tests.
+    """
+    state, pf_id, _gy_ids = _build_pf_petrified_field_state(
+        engine, [_forest_dict()],
+    )
+    # No target_creature_id (None) — substrate-fallback path.
+    state.apply_action({
+        "kind": "activate_ability",
+        "source_id": pf_id,
+        "ability_index": 0,
+    })
+    # Source sac'd; stack has the trigger; resolve picks the Forest
+    # via substrate-fallback (first Land in gy after the sac'd source).
+    assert state.stack_size() == 1
+    state.resolve_top_of_stack()
+    hand_post = state.hand_snapshot(0)
+    # Substrate-fallback walks gy front-to-back; the pre-staged Forest
+    # was injected BEFORE the sac'd source, so it's at the front and
+    # gets picked. Confirms the C1 substrate-fallback path still
+    # works alongside the new C2 cast-time-bound path.
+    assert any(o["printing_name"] == "Test Forest" for o in hand_post)

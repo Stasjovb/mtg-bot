@@ -8462,18 +8462,43 @@ def _printing_is_bridge_nonbasic_painland_conditional(printing) -> bool:
 # substrate-side (C1) for the eventual Phase-1.5 Deserted Temple sibling
 # (or Phase-1.5 ``{N}, {T}`` cost-shape widen). Phase-2/3/N extends this
 # set as each Effect class lands cross-engine.
+#
+# **Carrier-AA substrate Phase 2a Cycle 2 (2026-05-25).** The accessor
+# is widened to include ``ReturnTargetLandFromGraveyardToHand``
+# (Petrified Field's pilot Effect — landed cross-engine in Phase 2a
+# Cycle 1 at ``aca39437`` per
+# ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_DESIGN.md`` §5.2). The
+# Phase-1 prefix in the function name is preserved for back-compat;
+# the function is the single source of truth for the Carrier-AA
+# admit-effect set (not specifically Phase 1) — mirrors the cost-
+# reduction substrate's ``_cost_reduction_rule_is_phase1_or_3``
+# widened-helper naming.
 def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
-    """Lazy accessor for the Phase-1 admitted AA[0] Effect classes.
+    """Lazy accessor for the Carrier-AA admitted AA[0] Effect classes.
 
-    Returns a frozenset of the two Python ``Effect`` subclasses the
-    Cycle-1 Rust substrate carries (``RegenerateTargetCreature`` +
-    ``UntapTargetLand``). Lazily imported so the module import-graph
-    stays light and tests that monkeypatch the effect classes (unit
-    pins) see a fresh frozenset each call.
+    Returns a frozenset of the Python ``Effect`` subclasses the Rust
+    substrate carries cross-engine: ``RegenerateTargetCreature``
+    (Phase 1 pilot — Swarmyard) + ``UntapTargetLand`` (Phase 1 C1
+    substrate / Phase 1.5a admits Deserted Temple) +
+    ``ReturnTargetLandFromGraveyardToHand`` (Phase 2a C1 substrate /
+    Phase 2a C2 admits Petrified Field). Lazily imported so the
+    module import-graph stays light and tests that monkeypatch the
+    effect classes (unit pins) see a fresh frozenset each call.
+
+    **Phase-2/3/N extends this set as each Effect class lands cross-
+    engine.** Phase 2b will add
+    ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain Generator).
     """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetLandFromGraveyardToHand,
+    )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.tap import UntapTargetLand
-    return frozenset({RegenerateTargetCreature, UntapTargetLand})
+    return frozenset({
+        RegenerateTargetCreature,
+        UntapTargetLand,
+        ReturnTargetLandFromGraveyardToHand,
+    })
 
 
 def _aa_is_phase1_sub_shape_a(aa) -> bool:
@@ -8514,11 +8539,26 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     needed widening. ZERO Rust changes (Rust already routes generic
     mana for AAs via the ``_python_aa_to_safe_dict`` round-trip).
 
-    **§2 contract preservation:** every non-mana cost-field gate
-    (sacrifice_*, pay_life, requires_*, etc.) stays bit-identical.
-    The widen is strictly additive on the cost-mana axis; no other
-    field's contract loosens. Colored / hybrid / X-pip mana costs
-    stay Phase-2+ honest-stops.
+    **Carrier-AA substrate Phase 2a (2026-05-25).** Cost-gate widen
+    from bare ``{T}`` / ``{N}, {T}`` to additionally admit
+    ``sacrifice_self=True`` per ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_
+    DESIGN.md`` §5.1. Admits Petrified Field on the gate-widen plus
+    the new ``ReturnTargetLandFromGraveyardToHand`` Effect-class
+    admit (Phase 2a Cycle 1 substrate landing at ``aca39437``
+    shipped the cross-engine Rust variant + bridge arms). The
+    ``sacrifice_self`` cost-pay path is already wired end-to-end on
+    the Rust side via the Lander ``{N}, Sac:`` token-AA precedent
+    (``state_ops_actions.rs:1300-1391``); ZERO new Rust cost-shape
+    machinery needed.
+
+    **§2 contract preservation:** every other cost-bool gate
+    (``exile_self``, ``tap_permanent_you_control``,
+    ``sacrifice_a_desert``, ``sacrifice_another_*``, ``pay_life``,
+    ``requires_*``, etc.) stays bit-identical. The widen is strictly
+    additive on the ``sacrifice_self`` axis; no other field's
+    contract loosens. Colored / hybrid / X-pip mana costs stay
+    Phase-N honest-stops; ``sacrifice_a_desert`` stays Phase 3+;
+    ``sacrifice_another_*`` stays Phase N.
 
     Mirrors the SoT-flip pattern of the token-AA Lander helper at
     ``trajectory.py:3208`` and the Phase-2 Eldrazi Scion helper at
@@ -8528,13 +8568,14 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
 
     if not isinstance(aa, ActivatedAbility):
         return False
-    # Cost gate — Phase 1.5a: bare {T} OR {N}, {T} (generic-only mana).
+    # Cost gate — Phase 2a: bare {T} OR {N}, {T} OR ({T}, Sac:) OR
+    # ({N}, {T}, Sac:) — generic-only mana, optional sacrifice_self.
     cost = aa.cost
     if not cost.tap_self:
         return False
     if cost.mana is not None:
         # Phase 1.5a admits generic-only mana costs ({N}, {T} shape).
-        # Colored / hybrid / X-pip mana costs are Phase 2+ honest-stops.
+        # Colored / hybrid / X-pip mana costs are Phase N honest-stops.
         if cost.mana.colored:
             return False
         if cost.mana.hybrid:
@@ -8546,8 +8587,12 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
             # be ``None``, not an empty ``ManaCost`` — but defend in
             # depth so a malformed cost never sneaks through.
             return False
-    if cost.sacrifice_self:
-        return False
+    # Phase 2a admits ``sacrifice_self=True`` under the cost-gate widen.
+    # Lander's ``{N}, Sac:`` token-AA precedent already wired the Rust
+    # ``ActivationCost.sacrifice_self`` parse + Phase 5b cost-pay
+    # commit (``state_ops_actions.rs:1300-1391``); no Rust change
+    # needed. Other sacrifice variants (``sacrifice_a_desert``,
+    # ``sacrifice_another_*``) still decline below.
     if cost.exile_self:
         return False
     if cost.tap_permanent_you_control:
@@ -8600,26 +8645,34 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
 
 
 def _printing_is_bridge_simple_carrier_aa_land(printing) -> bool:
-    """True iff a CardPrinting is a PURE single-``{T}`` or ``{N}, {T}``
-    cost, single-bridged-Effect, no-rider non-token Land Carrier-AA
-    carrier whose AA the Phase-1.5a Carrier-AA substrate round-trips
-    byte-equal.
+    """True iff a CardPrinting is a PURE single-``{T}`` / ``{N}, {T}``
+    / ``({T}, Sac:)`` / ``({N}, {T}, Sac:)`` cost, single-bridged-
+    Effect, no-rider non-token Land Carrier-AA carrier whose AA the
+    Phase-2a Carrier-AA substrate round-trips byte-equal.
 
-    Motivating Phase-1.5a admit set: Swarmyard + Deserted Temple
-    (2 EoE cards). The §2 Class-1 guardrail: admits ONLY the bare
-    ``{T}: <Phase-1-Effect>`` or ``{N}, {T}: <Phase-1-Effect>`` Land
-    profile and MUST reject every multi-AA, every ``{T}, Sac:``
-    carrier, every ``<empty-cost>`` carrier, every mana-ability, every
-    sorcery-speed, every triggered-ability-co-gated carrier, every
-    Creature carrier, every Equipment carrier, every
-    ``BecomeLandCreatureUEOT``-with-rider carrier — sub-shapes
-    deferred to Phase 2 / 3 / N (design doc §3).
+    Motivating Phase-2a admit set: Swarmyard + Deserted Temple +
+    Petrified Field (3 EoE cards). The §2 Class-1 guardrail: admits
+    ONLY the bare Carrier-AA Land profile under the Phase-2a cost
+    gate AND MUST reject every multi-AA, every ``<empty-cost>``
+    carrier, every mana-ability, every sorcery-speed, every
+    triggered-ability-co-gated carrier, every Creature carrier,
+    every Equipment carrier, every ``BecomeLandCreatureUEOT``-with-
+    rider carrier — sub-shapes deferred to Phase 2b / 3 / N (design
+    doc §3).
 
-    Phase 1.5a widen (this slice) adds Deserted Temple to the admit
-    set via the ``{N}, {T}`` cost-shape — see
-    :func:`_aa_is_phase1_sub_shape_a` for the cost-axis details.
-    Effect-class teeth still gate sibling candidates (Terrain
-    Generator / Thespian's Stage / Mystifying Maze) out at Phase 1.5a.
+    Phase 1.5a widen adds Deserted Temple via the ``{N}, {T}``
+    cost-shape; Phase 2a widen (this cycle) adds Petrified Field via
+    the ``({T}, Sac:)`` cost-shape PLUS the new
+    ``ReturnTargetLandFromGraveyardToHand`` Effect-class admit — see
+    :func:`_aa_is_phase1_sub_shape_a` for the cost-axis details and
+    :func:`_carrier_aa_phase_1_effect_classes` for the Effect-class
+    admit set. Effect-class + cost teeth still gate sibling candidates
+    (Terrain Generator on the
+    ``PutBasicLandFromHandOntoBattlefieldTapped`` Effect-class teeth /
+    Thespian's Stage on the ``BecomesCopyOfTargetLand`` Effect-class
+    teeth / Mystifying Maze on the
+    ``ExileTargetAttackingCreatureUntilEndStep`` Effect-class teeth)
+    out at Phase 2a.
     """
     if "Land" not in printing.card_types:
         return False

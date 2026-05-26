@@ -976,6 +976,23 @@ impl GameState {
                 // silently ignored (matches Python's permissive
                 // accept-and-ignore for spurious kwargs on
                 // `ActivateAbility(target_creature_id=...)`).
+                // **Carrier-AA substrate Phase 2a Cycle 2 (2026-05-25).**
+                // Recognize ``Effect::ReturnTargetLandFromGraveyardToHand``
+                // as a SECOND target-shape on the
+                // ``target_creature_id`` slot — when an AA's effect is
+                // this variant (Petrified Field's pilot AA), the
+                // ``target_creature_id`` slot acts as the chosen
+                // graveyard-Land card id, NOT a bf-Creature id. The
+                // legal-emit fan-out arm at
+                // ``state_ops_legal.rs::legal_decisions`` (this
+                // cycle's other deliverable) walks the activator's
+                // graveyard for Land cards and emits one
+                // ``ActivateAbility`` per eligible target with
+                // ``target_creature_id = Some(grave_land_id)``.
+                let is_return_land_from_gy_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::ReturnTargetLandFromGraveyardToHand,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1019,6 +1036,59 @@ impl GameState {
                             )));
                         }
                         Some(target_id)
+                    } else if is_return_land_from_gy_effect {
+                        // Phase-2a graveyard-Land target validation.
+                        // ``target_creature_id`` is OPTIONAL on this
+                        // effect (substrate-fallback path supports
+                        // ``None`` via the resolve arm's deterministic-
+                        // first-legal scan; direct-callers / synthetic
+                        // tests rely on it). When ``Some(id)``, the
+                        // id MUST resolve to a Land card in the
+                        // ACTIVATOR's graveyard — CR 701.3 + Python's
+                        // ``ReturnFromGraveyard.legal_targets`` at
+                        // ``effects/generic/graveyard.py:183-191``
+                        // walks ``state.player_by_id(controller_id)
+                        // .graveyard`` only. The source itself is NOT
+                        // pre-excluded here because at apply-time the
+                        // sacrifice_self cost hasn't yet committed
+                        // (the cost-pay path runs AFTER this
+                        // validation block in the activation pipeline,
+                        // so the source is still on the bf — not in
+                        // the graveyard — and naturally absent from
+                        // the gy target pool).
+                        match target_creature_id {
+                            Some(target_id) => {
+                                let target_legal: bool = {
+                                    let gy = &state.players[controller_idx].graveyard;
+                                    let registry = &state.registry;
+                                    gy.iter().any(|obj| {
+                                        if obj.id != target_id {
+                                            return false;
+                                        }
+                                        let Some(printing) = registry
+                                            .printings
+                                            .get(obj.printing_id as usize)
+                                        else {
+                                            return false;
+                                        };
+                                        printing
+                                            .card_types
+                                            .iter()
+                                            .any(|t| t == "Land")
+                                    })
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         graveyard-Land target (must be a \
+                                         Land card in activator's graveyard)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
                     } else {
                         // Non-target activation: accept None or
                         // ignore a stray target_creature_id key. The

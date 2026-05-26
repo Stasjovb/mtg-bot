@@ -2435,6 +2435,50 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Generator via a Rust ``PutBasicLandFromHandOntoBattlefieldTapped``
     # Effect port.
     REPO_ROOT / "tests" / "test_deserted_temple_parity.py",
+    # **Carrier-AA substrate Phase 2a Cycle 2 (2026-05-25):** Per-card
+    # real-EoE byte-equal probe binding Petrified Field to the
+    # Phase-2a widened Carrier-AA admit gate. Phase 2a (see
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_2_DESIGN.md`` §2/§5) widens
+    # ``_aa_is_phase1_sub_shape_a``'s cost gate from bare-``{T}`` /
+    # ``{N}, {T}`` to additionally admit ``sacrifice_self=True`` AND
+    # widens ``_carrier_aa_phase_1_effect_classes`` to include
+    # ``ReturnTargetLandFromGraveyardToHand`` (the Phase 2a C1
+    # substrate landed cross-engine at ``aca39437`` — new Rust
+    # Effect variant + parse / resolve / to_pydict arms + cross-engine
+    # bridge arms). Petrified Field admits at Phase 2a C2 on the
+    # gate-widen + Effect-class widen alone — the cross-engine
+    # substrate was already complete (C1 substrate-only landing).
+    # ZERO new Rust cost-shape machinery (Lander's ``{N}, Sac:``
+    # token-AA precedent already wired ``ActivationCost.sacrifice_
+    # self`` parse + Phase 5b cost-pay commit at
+    # ``state_ops_actions.rs:1300-1391``).
+    #
+    #   * ``test_petrified_field_parity.py`` — Petrified Field ({0}
+    #     Land); single non-mana AA (``{T}, Sacrifice this land:
+    #     Return target land card from your graveyard to your
+    #     hand.``) → ``ReturnTargetLandFromGraveyardToHand()`` (unit-
+    #     variant Effect, zero-arg frozen dataclass). The FIRST
+    #     PROBE_MODULES-credited probe of
+    #     ``ReturnTargetLandFromGraveyardToHand`` on a real-EoE Land +
+    #     AA carrier; templates on the sibling Carrier-AA AA probes
+    #     (parse + bridge round-trip + Rust synthetic acceptance +
+    #     end-to-end loader admit + Python-side resolve smoke
+    #     covering both the baseline empty-graveyard silent-fizzle
+    #     line and the load-bearing return-a-Forest line).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 28 → 27 cards. Sibling-candidate cards (Terrain
+    # Generator, Thespian's Stage, Mystifying Maze, Scavenger Grounds)
+    # stay honestly DECLINED at the Phase-2a Effect-class admit set
+    # + cost-shape gates — the no-silent-auto-grow walk pin
+    # ``test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_
+    # plus_deserted_temple_plus_petrified_field`` in
+    # ``test_carrier_aa_phase_1_substrate_cycle_2.py`` codifies the
+    # exact +3 admit set (Swarmyard + Deserted Temple + Petrified
+    # Field). Phase 2b ships
+    # ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain
+    # Generator).
+    REPO_ROOT / "tests" / "test_petrified_field_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
