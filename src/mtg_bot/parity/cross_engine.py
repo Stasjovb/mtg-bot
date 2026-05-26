@@ -1705,6 +1705,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "(mirrors Rust parse_effect contract)"
             )
         return EachOpponentDiscardsOrLosesLife(life_if_cant=life_if_cant)
+    if kind == "create_token_per_multicolored_permanent":
+        # **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Bridge arm for
+        # the new Rust ``Effect::CreateTokenPerMulticoloredPermanent
+        # { token_printing_id: u32, tapped: bool }`` variant
+        # (cards.rs). Mirrors Python's
+        # ``CreateTokenPerMulticoloredPermanent(token_printing,
+        # tapped=True)`` at ``effects/generic/tokens.py:122`` —
+        # Infinite Guideline Station's ETB token-spawn effect ("Create
+        # a tapped 2/2 colorless Robot artifact creature token for
+        # each multicolored permanent you control.").
+        #
+        # **Printing-id -> Python-CardPrinting lookup.** Same
+        # ``_TOKEN_PRINTING_BY_PID`` registration map as the sister
+        # ``create_token`` / ``create_token_tapped`` arms above;
+        # probes that drive this arm cross-engine must call
+        # ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state. The loader-side
+        # ``_seat_token_printings`` pass (extended this slice to
+        # walk the new ``create_token_per_multicolored_permanent``
+        # kind) handles this automatically for production decks
+        # carrying Infinite Guideline Station; bench probes call the
+        # register helper explicitly.
+        #
+        # **Field shape (default-handling).** ``token_printing_id``
+        # REQUIRED (sibling of every ``create_token*`` arm); missing
+        # raises KeyError. ``tapped`` defaults to ``True`` (mirrors
+        # Python class default + EoE consumer Infinite Guideline
+        # Station's `tapped=True` printed surface). The Python
+        # ``CreateTokenPerMulticoloredPermanent`` dataclass accepts
+        # both as kwargs.
+        from mtg_bot.effects.generic.tokens import (
+            CreateTokenPerMulticoloredPermanent,
+        )
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token_per_multicolored_permanent "
+                f"bridge: no Python CardPrinting registered for "
+                f"token_printing_id={token_pid!r}. Probes that drive "
+                f"the create_token_per_multicolored_permanent arm "
+                f"cross-engine must call register_token_printing(pid, "
+                f"py_printing) BEFORE building either state."
+            ) from exc
+        tapped = bool(eff_dict.get("tapped", True))
+        return CreateTokenPerMulticoloredPermanent(
+            token_printing=token_printing,
+            tapped=tapped,
+        )
+    if kind == "draw_card_per_multicolored_permanent":
+        # **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Bridge arm for
+        # the new Rust ``Effect::DrawCardPerMulticoloredPermanent``
+        # unit variant (cards.rs). Mirrors Python's
+        # ``DrawCardPerMulticoloredPermanent`` (`effects/generic/
+        # draw_mill.py:120`), a zero-field frozen dataclass —
+        # Infinite Guideline Station's ATTACKS-trigger draw effect
+        # ("Whenever Infinite Guideline Station attacks, draw a card
+        # for each multicolored permanent you control.").
+        #
+        # **No fields.** Unit variant — extra keys on the dict are
+        # silently ignored (sibling of every unit-Effect bridge arm).
+        from mtg_bot.effects.generic.draw_mill import (
+            DrawCardPerMulticoloredPermanent,
+        )
+        return DrawCardPerMulticoloredPermanent()
     if kind == "optional_sac_land_or_lander_for_basic_land_ramp":
         # **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Bridge arm for
         # the new Rust ``Effect::OptionalSacLandOrLanderForBasicLandRamp

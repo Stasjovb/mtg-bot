@@ -2752,6 +2752,51 @@ PROBE_MODULES: tuple[Path, ...] = (
     # doc §7.3 (CreateTokenPerMulticoloredPermanent +
     # DrawCardPerMulticoloredPermanent Effect classes).
     REPO_ROOT / "tests" / "test_entropic_battlecruiser_parity.py",
+    # **Spacecraft Phase 3C Cycle 4 (2026-05-26; PHASE 3 CLOSED):**
+    # Per-card real-EoE cross-engine byte-equal probe binding Infinite
+    # Guideline Station to the combined Rust + Python admit gate post-
+    # Phase-3C-Cycle-4 FLIP per
+    # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md`` §6.4
+    # #16. The FINAL Phase-3 trigger-leg flip and closure marker for
+    # Phase 3 of the Spacecraft Station substrate campaign.
+    #
+    #   * ``test_infinite_guideline_station_parity.py`` -- Infinite
+    #     Guideline Station (``{W}{U}{B}{R}{G}`` Legendary Artifact --
+    #     Spacecraft, 7/15, station_threshold=12, stationed_keywords=
+    #     {flying}, TWO triggers: (mode 0) ENTERS+IsSelf+
+    #     CreateTokenPerMulticoloredPermanent(token=Robot 2/2,
+    #     tapped=True) at tier=0; (mode 1) ATTACKS+IsSelf+
+    #     DrawCardPerMulticoloredPermanent at tier=0. Both triggers
+    #     are zero-tier -- IGS's station threshold (12) gates when
+    #     the Spacecraft is a creature, so no per-trigger
+    #     tier_threshold is needed). Drives BOTH engines through
+    #     TWO scenarios per design doc §6.4 #16: (A) ETB with 3
+    #     multicolored permanents on bf (IGS itself + 2 synthetic
+    #     multicolored artifacts) -- 3 Robot 2/2 tokens spawn
+    #     tapped; (B) Stationed (charge=12) + ATTACKS with same 3
+    #     multicolored permanents -- p0 draws 3 cards. The
+    #     multicolored-permanent count primitive (count battlefield
+    #     objects whose printing's mana cost has 2+ distinct colors)
+    #     is REUSED across both Effect arms per design doc §4.7's
+    #     "REUSE the predicate primitive from §4.6" instruction.
+    #     Bridge-wise this slice adds TWO new variants
+    #     (`Effect::CreateTokenPerMulticoloredPermanent {
+    #     token_printing_id, tapped }` and
+    #     `Effect::DrawCardPerMulticoloredPermanent` unit) +
+    #     extends the loader's `_seat_token_printings` pass to
+    #     recognize the new `create_token_per_multicolored_permanent`
+    #     kind.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Infinite
+    # Guideline Station joins Sawship + Lumen-Class Frigate + Larval
+    # Scoutlander + Sledge-Class Seedship + Synthesizer Labship +
+    # Entropic Battlecruiser as the SEVENTH PROBED Spacecraft).
+    # **PHASE 3 CLOSED** -- the only Spacecraft remaining DECLINED is
+    # The Eternity Elevator (Phase 4 territory; depends on the
+    # parallel Carrier-AA campaign Phase 1+ landing the non-token-AA
+    # bridge round-trip + a new `AddChargeCounterManaOfChosenColor`
+    # Effect class).
+    REPO_ROOT / "tests" / "test_infinite_guideline_station_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see

@@ -6960,6 +6960,189 @@ fn apply_effect(
                 )?;
             }
         }
+        // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Infinite
+        // Guideline Station's ETB ramp Effect — resolve arm for the
+        // new `Effect::CreateTokenPerMulticoloredPermanent {
+        // token_printing_id, tapped }` variant per design doc §4.6.
+        //
+        // Mirrors Python's `CreateTokenPerMulticoloredPermanent.resolve`
+        // at `effects/generic/tokens.py:122`:
+        //   1. Count multicolored permanents the source-controller
+        //      controls (the source-controller's battlefield walk,
+        //      counting any object whose printing's mana_cost colored-
+        //      symbol set has >= 2 distinct nonzero color slots).
+        //   2. If `n <= 0`: legal no-op return (matches Python's
+        //      `if n <= 0: return` early-out with the "controls 0
+        //      multicolored permanents — no tokens created" log line;
+        //      we silently no-op without the log entry, sibling of
+        //      every other Rust resolve arm).
+        //   3. Otherwise, spawn `n` tokens of `token_printing_id`
+        //      under the source-controller's bf, threading the
+        //      `tapped` rider per the variant's field.
+        //
+        // **Per-token spawn loop** — sibling-copy of
+        // `Effect::CreateTokenTapped` (registry-bounds check on the
+        // printing id, `current_resolve_source_controller`-aware
+        // controller pick, Moonlit substitution, fresh ids via
+        // `reserve_object_id`, CE4 monotonic `etb_timestamp`,
+        // `summoning_sick = token_is_creature`, queued
+        // `pending_etb_dispatches`, per-batch
+        // `created_tokens_this_turn` flip). The single byte
+        // difference: `n` is the dynamic multicolored count instead
+        // of the static `count` field.
+        Effect::CreateTokenPerMulticoloredPermanent {
+            token_printing_id,
+            tapped,
+        } => {
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "CreateTokenPerMulticoloredPermanent: token_printing_id {token_pid} not in registry"
+                )));
+            }
+            // Source-controller resolution (sibling of EachOpponentDiscards
+            // / EachOpponentDiscardsOrLosesLife). The
+            // `current_resolve_source_controller` slot is seated by the
+            // stack resolver around the apply_effect call, so prefer it;
+            // fall back to active_player only if absent.
+            let active = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // Multicolored-permanent count primitive — count this
+            // controller's battlefield objects whose printing's mana
+            // cost has 2+ distinct colors. Mirrors Python's
+            // `_multicolored_permanents_count` at `effects/base.py:259`.
+            let n = {
+                let bf = &state.players[active as usize].battlefield;
+                let mut count: usize = 0;
+                for o in bf.iter() {
+                    let Some(p) = state.registry.lookup(o.printing_id) else {
+                        continue;
+                    };
+                    let mc = &p.mana_cost;
+                    let mut distinct = 0u32;
+                    if mc.white > 0 { distinct += 1; }
+                    if mc.blue > 0 { distinct += 1; }
+                    if mc.black > 0 { distinct += 1; }
+                    if mc.red > 0 { distinct += 1; }
+                    if mc.green > 0 { distinct += 1; }
+                    if distinct >= 2 {
+                        count += 1;
+                    }
+                }
+                count
+            };
+            if n == 0 {
+                return Ok(()); // legal no-op (mirrors Python's early-out)
+            }
+            // Moonlit substitution (CR 614 first-batch-per-turn). Same
+            // sibling-narrow pre-mint replacement-source lookup the
+            // CreateToken / CreateTokenTapped arms use.
+            let (token_pid, moonlit_override) =
+                moonlit_token_substitution(state, active, token_pid);
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+            let n_u32 = n as u32;
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                token_ids.push(crate::state::reserve_object_id(state));
+            }
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[active as usize].battlefield);
+            let token_tapped = *tapped;
+            for (i, &tok_id) in token_ids.iter().enumerate() {
+                bf.push(GameObject {
+                    id: tok_id,
+                    printing_id: token_pid,
+                    controller: active,
+                    zone: ZONE_BATTLEFIELD,
+                    tapped: token_tapped,
+                    summoning_sick: token_is_creature,
+                    damage: 0,
+                    counters: 0,
+                    charge_counters: 0,
+                    loyalty_counters: 0,
+                    attached_to: None,
+                    exiled_with_source: None,
+                    stun_counters: 0,
+                    regeneration_shield: false,
+                    publicly_known_to_caster_bits: 0,
+                    etb_timestamp: bf_etb_base.saturating_add(i as u32),
+                    ueot_modifiers: Vec::new(),
+                    warp_exile_pending: false,
+                    warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
+                    token_supertype_override: moonlit_override,
+                    controller_override: None,
+                });
+            }
+            state.pending_etb_dispatches.extend(token_ids);
+            if (active as usize) < state.created_tokens_this_turn.len() {
+                state.created_tokens_this_turn[active as usize] = true;
+            }
+        }
+        // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Infinite
+        // Guideline Station's ATTACKS draw Effect — resolve arm for
+        // the new `Effect::DrawCardPerMulticoloredPermanent` unit
+        // variant per design doc §4.7.
+        //
+        // Mirrors Python's `DrawCardPerMulticoloredPermanent.resolve`
+        // at `effects/generic/draw_mill.py:120`:
+        //   1. Count multicolored permanents the source-controller
+        //      controls (SAME walk + predicate as the sister
+        //      `CreateTokenPerMulticoloredPermanent` arm above — the
+        //      design doc §4.7 explicit "REUSE the predicate primitive
+        //      from §4.6" instruction).
+        //   2. Draw `n` cards into the source-controller's hand.
+        //      Sibling-loop of `Effect::DrawCards`: per-card library
+        //      pop, zone flip to HAND, hand push, bail out on empty
+        //      library with `attempted_draw_on_empty` cause-signal.
+        Effect::DrawCardPerMulticoloredPermanent => {
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let n = {
+                let bf = &state.players[controller].battlefield;
+                let mut count: usize = 0;
+                for o in bf.iter() {
+                    let Some(p) = state.registry.lookup(o.printing_id) else {
+                        continue;
+                    };
+                    let mc = &p.mana_cost;
+                    let mut distinct = 0u32;
+                    if mc.white > 0 { distinct += 1; }
+                    if mc.blue > 0 { distinct += 1; }
+                    if mc.black > 0 { distinct += 1; }
+                    if mc.red > 0 { distinct += 1; }
+                    if mc.green > 0 { distinct += 1; }
+                    if distinct >= 2 {
+                        count += 1;
+                    }
+                }
+                count
+            };
+            // Sibling of `Effect::DrawCards` — per-card library pop +
+            // hand push; empty-library trip flips the cause-signal +
+            // breaks.
+            for _ in 0..n {
+                let player = &mut state.players[controller];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    player.attempted_draw_on_empty = true;
+                    break;
+                }
+                let mut obj = lib.remove(0);
+                obj.zone = ZONE_HAND;
+                Arc::make_mut(&mut player.hand).push(obj);
+            }
+        }
         // **Spacecraft Phase 3A Cycle 1 (2026-05-25).** Larval
         // Scoutlander's ETB ramp Effect — resolve arm for the new
         // `Effect::OptionalSacLandOrLanderForBasicLandRamp { land_count }`

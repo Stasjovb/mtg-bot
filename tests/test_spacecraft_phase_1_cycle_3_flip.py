@@ -291,7 +291,7 @@ def test_no_silent_auto_grow_on_other_spacecraft_post_c3():
         ("Sledge-Class Seedship", "triggered_abilities"),
         ("Synthesizer Labship", "triggered_abilities"),
         ("Entropic Battlecruiser", "triggered_abilities"),
-        ("Infinite Guideline Station", "triggered_abilities"),
+        ("Infinite Guideline Station", "triggered_abilities (Phase 3C C4)"),
         ("The Eternity Elevator", "activated_abilities + None threshold"),
     ],
 )
@@ -437,21 +437,23 @@ def test_admit_set_size_bumps_post_cycle_3():
     assert sorted(admitted_spacecraft) == [
         "Entropic Battlecruiser",
         "Galvanizing Sawship",
+        "Infinite Guideline Station",
         "Larval Scoutlander",
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
     ], (
-        "Admit-set count bump: exactly SIX Spacecraft must admit "
-        "at the deck-level filter post-Phase-3C-Cycle-3 — Galvanizing "
-        "Sawship (Phase-1 sub-shape A) + Lumen-Class Frigate "
-        "(Phase-2 static-anthem) + Larval Scoutlander (Phase-3A "
-        "trigger-bearing ETB) + Sledge-Class Seedship (Phase-3B "
-        "trigger-bearing ATTACKS) + Synthesizer Labship (Phase-3C "
-        "Cycle-2 trigger-bearing BEGINNING_OF_COMBAT, tier-gated) + "
-        "Entropic Battlecruiser (Phase-3C Cycle-3 trigger-bearing "
-        "ATTACKS + DISCARDS_CARD, the SECOND tier-gate consumer at "
-        "tier=1). Got: "
+        "Admit-set count bump: exactly SEVEN Spacecraft must admit "
+        "at the deck-level filter post-Phase-3C-Cycle-4 (PHASE 3 "
+        "CLOSED) — Galvanizing Sawship (Phase-1 sub-shape A) + "
+        "Lumen-Class Frigate (Phase-2 static-anthem) + Larval "
+        "Scoutlander (Phase-3A trigger-bearing ETB) + Sledge-Class "
+        "Seedship (Phase-3B trigger-bearing ATTACKS) + Synthesizer "
+        "Labship (Phase-3C Cycle-2 BEGINNING_OF_COMBAT tier-gated) + "
+        "Entropic Battlecruiser (Phase-3C Cycle-3 ATTACKS + "
+        "DISCARDS_CARD tier-1 gate) + Infinite Guideline Station "
+        "(Phase-3C Cycle-4 ETB CreateTokenPerMulticoloredPermanent + "
+        "ATTACKS DrawCardPerMulticoloredPermanent). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 

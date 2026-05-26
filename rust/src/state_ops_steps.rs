@@ -814,6 +814,53 @@ impl GameState {
         dispatch_event(self, Event::BeginningOfCombat, player_subject)
     }
 
+    /// **Test-helper (Spacecraft Phase 3C Cycle 4 follow-up,
+    /// 2026-05-26).** Fire the ENTERS dispatch event directly on a
+    /// freshly-injected object, mirroring the dispatch site at
+    /// `drain_pending_etb_dispatches` (`dispatch_event(self,
+    /// Event::Enters, entered_id)` at line 1682). Sibling of
+    /// `dispatch_beginning_of_combat`'s test-helper convention.
+    ///
+    /// Why this exists: probe-side tests need to drive an ETB trigger
+    /// fan-out (e.g. Infinite Guideline Station's
+    /// CreateTokenPerMulticoloredPermanent trigger) on an object
+    /// seeded via `register_and_inject_object` (which doesn't queue
+    /// the ENTERS dispatch because no resolve-time ETB was fired).
+    /// The production ETB pipeline runs through
+    /// `drain_pending_etb_dispatches` which fires the SAME
+    /// `dispatch_event(state, Event::Enters, obj_id)` call this
+    /// helper invokes -- byte-equal at the trigger dispatch layer.
+    fn dispatch_enters(&mut self, source_obj_id: u32) -> PyResult<()> {
+        dispatch_event(self, Event::Enters, source_obj_id)
+    }
+
+    /// **Test-helper (Spacecraft Phase 3C Cycle 4 follow-up,
+    /// 2026-05-26).** Count battlefield objects with the given
+    /// printing name on the given player's battlefield. Mirrors the
+    /// `battlefield_sizes` / `hand_sizes` getter idiom but with an
+    /// explicit per-printing filter for parity-probe assertions
+    /// ("count Robot tokens on p0's bf").
+    fn count_objects_by_printing_name_on_bf(
+        &self,
+        printing_name: &str,
+        player_id: u8,
+    ) -> PyResult<usize> {
+        if (player_id as usize) >= self.players.len() {
+            return Err(PyValueError::new_err(format!(
+                "player_id {player_id} out of range"
+            )));
+        }
+        let mut n: usize = 0;
+        for o in self.players[player_id as usize].battlefield.iter() {
+            if let Some(p) = self.registry.lookup(o.printing_id) {
+                if p.name.as_ref() == printing_name {
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
+    }
+
     /// Python-Step-name string for the current phase. Round 22 Phase
     /// 2b bridge expansion — `scripts/parity_smoke.py:hash_state`
     /// reads `state.step.name` (or falls back to `state.step` if

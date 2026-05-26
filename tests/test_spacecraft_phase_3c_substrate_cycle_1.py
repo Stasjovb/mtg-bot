@@ -355,13 +355,13 @@ def test_three_phase_3c_carriers_stay_declined_at_python_ta_to_safe_dict_post_cy
     set (the Phase-3 admit predicate uses its own dispatch path
     separate from this cascade — design doc §5.3a).
 
-    Post-Cycle-2 (THIS slice — 2026-05-26): Synthesizer Labship admits
-    at the SEPARATE Phase-3 admit predicate
+    Post-Cycle-4 (THIS slice — 2026-05-26): all 3 Phase-3C carriers
+    now admit at the SEPARATE Phase-3 admit predicate
     (``_printing_is_bridge_phase_3_trigger_spacecraft``) — see the
     INVERTED sibling pin
     ``test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2``
     below + the loader-filter sibling. The ``_python_ta_to_safe_dict``
-    cascade still declines BOTH Phase-3C carriers here because the
+    cascade still declines ALL Phase-3C carriers here because the
     Phase-3 admit path is INTENTIONALLY a parallel disjunct (per design
     doc §5.5) rather than a widen of the Phase-1 safe-trigger set.
     """
@@ -384,22 +384,22 @@ def test_three_phase_3c_carriers_stay_declined_at_python_ta_to_safe_dict_post_cy
 
 
 def test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2():
-    """**INVERTED invariant pin — Cycle 3 closure marker (this slice;
-    2026-05-26).**
+    """**INVERTED invariant pin — Cycle 4 closure marker (this slice;
+    2026-05-26). PHASE 3 CLOSED.**
 
-    Post-Cycle-3 (the Entropic Battlecruiser FLIP) Synthesizer Labship
-    AND Entropic Battlecruiser BOTH admit at the Phase-3 admit
-    predicate (``_printing_is_bridge_phase_3_trigger_spacecraft``).
-    This is the FLIP — the C2 closure pin pinned 1 admit + 2 declined;
-    Cycle 3 ships ``Effect::EachOpponentDiscardsOrLosesLife`` +
-    ``TargetPlayerLosesLife`` + ``(DISCARDS_CARD,
-    Controlled(OPPONENT))`` event-shape + the admit-class allowlist
-    widen, flipping Entropic Battlecruiser DECLINED -> ADMITTED.
+    Post-Cycle-4 (the Infinite Guideline Station FLIP) ALL THREE
+    Phase-3C carriers (Synthesizer Labship + Entropic Battlecruiser +
+    Infinite Guideline Station) admit at the Phase-3 admit predicate
+    (``_printing_is_bridge_phase_3_trigger_spacecraft``). This is THE
+    FINAL FLIP — Cycle 4 ships
+    ``Effect::CreateTokenPerMulticoloredPermanent`` +
+    ``Effect::DrawCardPerMulticoloredPermanent`` + the admit-class
+    allowlist widen (5 → 7 classes; event-shape table unchanged at 4),
+    flipping Infinite Guideline Station DECLINED -> ADMITTED.
 
-    Infinite Guideline Station STAYS DECLINED until Cycle 4 (the
-    CreateTokenPerMulticoloredPermanent +
-    DrawCardPerMulticoloredPermanent Effect classes are NOT yet in
-    the allowlist).
+    The only Spacecraft remaining DECLINED is **The Eternity Elevator**
+    (Phase 4 — depends on the parallel Carrier-AA Phase 1+ campaign
+    landing the non-token-AA bridge round-trip).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -407,35 +407,33 @@ def test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2():
     )
 
     ps = OracleParserCardSource().get_printings()
-    # Synthesizer Labship + Entropic Battlecruiser both ADMITTED post-Cycle-3.
-    for name in ("Synthesizer Labship", "Entropic Battlecruiser"):
+    # All 3 Phase-3C carriers ADMITTED post-Cycle-4.
+    for name in (
+        "Synthesizer Labship",
+        "Entropic Battlecruiser",
+        "Infinite Guideline Station",
+    ):
         assert _printing_is_bridge_phase_3_trigger_spacecraft(ps[name]), (
-            f"{name} MUST admit at the Phase-3 admit gate post-Cycle-3 "
-            "(Synthesizer Labship: Cycle 2 closure marker; Entropic "
-            "Battlecruiser: Cycle 3 closure marker — THIS slice)."
+            f"{name} MUST admit at the Phase-3 admit gate post-Cycle-4 "
+            "(Synthesizer Labship: Cycle 2; Entropic Battlecruiser: "
+            "Cycle 3; Infinite Guideline Station: Cycle 4 — THIS slice; "
+            "PHASE 3 CLOSED)."
         )
-    # Infinite Guideline Station STAYS DECLINED post-Cycle-3.
-    assert not _printing_is_bridge_phase_3_trigger_spacecraft(
-        ps["Infinite Guideline Station"]
-    ), (
-        "Infinite Guideline Station: MUST stay DECLINED post-Cycle-3 "
-        "(CreateTokenPerMulticoloredPermanent + "
-        "DrawCardPerMulticoloredPermanent Effect classes not yet in "
-        "the Phase-3C-Cycle-3 admit allowlist; Cycle 4 ships them)."
-    )
 
 
 def test_two_phase_3c_carriers_still_decline_at_production_loader_filter_post_cycle_2():
-    """**Loader-filter pin (INVERTED — Cycle 3 closure marker; 2026-05-26).**
-    Post-Cycle-3, the production-deck loader's bridge-filter
-    (``_filter_deck_to_bridge_supported``) ADMITS Synthesizer Labship
-    AND Entropic Battlecruiser via the Phase-3 OR-disjunct AND rejects
-    Infinite Guideline Station (which lands in the ``not_bridged_sink``).
+    """**Loader-filter pin (INVERTED — Cycle 4 closure marker; 2026-05-26;
+    PHASE 3 CLOSED).** Post-Cycle-4, the production-deck loader's
+    bridge-filter (``_filter_deck_to_bridge_supported``) ADMITS ALL
+    THREE Phase-3C carriers (Synthesizer Labship + Entropic
+    Battlecruiser + Infinite Guideline Station) via the Phase-3
+    OR-disjunct.
 
     The C1 substrate pinned all 3 carriers declined; Cycle 2 flipped
-    Synthesizer Labship to admit; Cycle 3 (this slice) flips Entropic
-    Battlecruiser to admit. Infinite Guideline Station stays declined
-    until C4.
+    Synthesizer Labship; Cycle 3 flipped Entropic Battlecruiser;
+    Cycle 4 (this slice) flips Infinite Guideline Station — the FINAL
+    Phase-3 trigger-leg flip. The only Spacecraft remaining DECLINED
+    is The Eternity Elevator (Phase 4 territory).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -456,17 +454,19 @@ def test_two_phase_3c_carriers_still_decline_at_production_loader_filter_post_cy
         unresolved_sink=unresolved,
         not_bridged_sink=not_bridged,
     )
-    # Synthesizer Labship + Entropic Battlecruiser admit; Infinite
-    # Guideline Station is filtered out.
-    assert filtered_names == ["Synthesizer Labship", "Entropic Battlecruiser"], (
-        f"Synthesizer Labship (Cycle 2) AND Entropic Battlecruiser "
-        f"(Cycle 3 FLIP) MUST admit; Infinite Guideline Station MUST "
-        f"decline. Got filtered={filtered_names!r}"
+    # All 3 Phase-3C carriers admit post-Cycle-4 (PHASE 3 CLOSED).
+    assert filtered_names == [
+        "Synthesizer Labship",
+        "Entropic Battlecruiser",
+        "Infinite Guideline Station",
+    ], (
+        f"PHASE 3 CLOSED — ALL THREE Phase-3C carriers (Synthesizer "
+        f"Labship + Entropic Battlecruiser + Infinite Guideline Station) "
+        f"MUST admit at the production loader filter post-Cycle-4. Got "
+        f"filtered={filtered_names!r}"
     )
-    # None are unresolved — they exist in the printings dict.
     assert unresolved == []
-    # Infinite Guideline Station lands in the not-bridged sink.
-    assert set(not_bridged) == {"Infinite Guideline Station"}
+    assert not_bridged == []
 
 
 # ---------------------------------------------------------------------------

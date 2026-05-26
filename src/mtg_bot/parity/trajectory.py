@@ -9734,33 +9734,41 @@ def _phase_3a_lazy_init_allowlists():
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
     )
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardPerMulticoloredPermanent,
+    )
     from mtg_bot.effects.generic.life import (
         EachOpponentDiscardsOrLosesLife,
         TargetPlayerLosesLife,
     )
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenPerMulticoloredPermanent,
+    )
     from mtg_bot.effects.predicates import Controlled, Event, IsSelf, OPPONENT, YOU
 
-    # Phase 3C Cycle 3 widen (2026-05-26; this slice): append the
-    # Entropic Battlecruiser two-trigger Effect classes
-    # ``EachOpponentDiscardsOrLosesLife`` (mode-0, ATTACKS, tier=0)
-    # + ``TargetPlayerLosesLife`` (mode-1, DISCARDS_CARD,
-    # tier_threshold=1 — the SECOND consumer of the C1 tier-gate
-    # substrate) to the Effect-class allowlist + ``(DISCARDS_CARD,
-    # Controlled(by=OPPONENT, subject=None))`` to the (event, predicate)-
-    # shape table. Per design doc §5.4 / §7.3 — the per-cycle admit set
-    # grows from the Phase-3C-Cycle-2 3-class / 3-shape allowlist to
-    # the Phase-3C-Cycle-3 5-class / 4-shape allowlist. Entropic
-    # Battlecruiser's mode-1 trigger is the SECOND tier-gate consumer
-    # of the C1 substrate (its DISCARDS_CARD trigger carries
-    # ``tier_threshold=1``; the Rust dispatch chokepoint gate at
-    # ``state_ops_resolve.rs::dispatch_event`` only fires the trigger
-    # when the source's ``charge_counters >= 1``).
+    # Phase 3C Cycle 4 widen (2026-05-26; this slice): append the
+    # Infinite Guideline Station two-trigger Effect classes
+    # ``CreateTokenPerMulticoloredPermanent`` (ETB, tier=0)
+    # + ``DrawCardPerMulticoloredPermanent`` (ATTACKS, tier=0) to
+    # the Effect-class allowlist. The event-shape table is UNCHANGED
+    # this cycle — IGS's two triggers carry shapes already in the
+    # Cycle-3 table ((ENTERS, IsSelf) and (ATTACKS, IsSelf) — both
+    # added in Phase 3A C2 + Phase 3B C2 respectively). Per design
+    # doc §5.4 / §7.3 — the per-cycle admit set grows from the
+    # Phase-3C-Cycle-3 5-class / 4-shape allowlist to the
+    # Phase-3C-Cycle-4 7-class / 4-shape allowlist. Infinite
+    # Guideline Station's two triggers are tier=0 (no tier-gate
+    # consumer — the IGS's station threshold 12 already gates when
+    # the ATTACKS trigger CAN fire by gating when the Spacecraft is
+    # a creature; no per-trigger tier needed).
     _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES = (
         OptionalSacLandOrLanderForBasicLandRamp,
         OptionalPutCreatureFromHandOntoBattlefield,
         TargetArtifactBecomesCreatureUEOT,
         EachOpponentDiscardsOrLosesLife,
         TargetPlayerLosesLife,
+        CreateTokenPerMulticoloredPermanent,
+        DrawCardPerMulticoloredPermanent,
     )
     _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES = (
         (Event.ENTERS, IsSelf(subject=None)),
@@ -9970,9 +9978,15 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
     )
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardPerMulticoloredPermanent,
+    )
     from mtg_bot.effects.generic.life import (
         EachOpponentDiscardsOrLosesLife,
         TargetPlayerLosesLife,
+    )
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenPerMulticoloredPermanent,
     )
     from mtg_bot.effects.predicates import Controlled, Event, IsSelf, OPPONENT, YOU
 
@@ -10102,6 +10116,59 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
             eff_dict = {
                 "kind": "target_player_loses_life",
                 "amount": int(trig.effect.amount),
+            }
+        elif isinstance(trig.effect, CreateTokenPerMulticoloredPermanent):
+            # **Phase 3C Cycle 4 widen (2026-05-26).** Infinite Guideline
+            # Station's ETB token-spawn effect ("create a tapped 2/2
+            # colorless Robot artifact creature token for each
+            # multicolored permanent you control"). Mirrors the new
+            # Cycle-4 Rust to_pydict arm at cards.rs + the cross-engine
+            # bridge dict-to-Python arm in cross_engine.py.
+            #
+            # **Symbolic ``_token_card_def`` reference.** Like the
+            # ``create_token`` / ``create_token_tapped`` carrier emit at
+            # ``_python_ta_to_safe_dict``, the dict carries a
+            # SYMBOLIC ``_token_card_def`` (the Robot 2/2 token's
+            # vanilla CardDef) rather than a numeric
+            # ``token_printing_id``. The numeric pid is assigned by the
+            # loader's ``_seat_token_printings`` pass once the union
+            # ``card_defs`` tuple is frozen and the token's Rust-
+            # registry position is known. ``_seat_token_printings`` is
+            # extended this cycle to recognize the new
+            # ``create_token_per_multicolored_permanent`` kind (sibling
+            # of the existing ``create_token`` / ``create_token_tapped``
+            # axes in ``_TOKEN_CREATE_KINDS``).
+            #
+            # The IGS's printed token is a vanilla 2/2 Artifact Creature
+            # — Robot, no abilities/keywords (verified at
+            # ``cards/tokens.py:50``); ``_token_vanilla_card_def`` is
+            # the matching helper. Any other token shape silently
+            # returns None from the builder (admit predicate gated
+            # this, so this is defense-in-depth).
+            tp = trig.effect.token_printing
+            token_cd = _token_vanilla_card_def(tp)
+            if token_cd is None:
+                return None
+            eff_dict = {
+                "kind": "create_token_per_multicolored_permanent",
+                "tapped": bool(trig.effect.tapped),
+                # Symbolic token reference — replaced with a numeric
+                # ``token_printing_id`` by ``_seat_token_printings``
+                # (which preserves the kind discriminator).
+                "_token_card_def": token_cd,
+            }
+        elif isinstance(trig.effect, DrawCardPerMulticoloredPermanent):
+            # **Phase 3C Cycle 4 widen (2026-05-26).** Infinite Guideline
+            # Station's ATTACKS-trigger draw effect ("Whenever Infinite
+            # Guideline Station attacks, draw a card for each
+            # multicolored permanent you control"). Mirrors the new
+            # Cycle-4 Rust to_pydict arm at cards.rs + the cross-engine
+            # bridge dict-to-Python arm in cross_engine.py. Unit-shape
+            # Effect; emit kind discriminator alone (no rider fields).
+            # Sibling of OptionalPutCreatureFromHandOntoBattlefield's
+            # emit shape.
+            eff_dict = {
+                "kind": "draw_card_per_multicolored_permanent",
             }
         else:
             return None  # defense-in-depth (admit predicate gated this)
@@ -12700,7 +12767,23 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     # register); the ONLY difference is the ``kind`` string, which is
     # the tapped-vs-untapped choice on the bridge and MUST survive the
     # seating rewrite.
-    _TOKEN_CREATE_KINDS = ("create_token", "create_token_tapped")
+    #
+    # **Spacecraft Phase 3C Cycle 4 (2026-05-26).** The new
+    # ``create_token_per_multicolored_permanent`` kind (Infinite
+    # Guideline Station's ETB token-spawn Effect) joins the seating
+    # axis. Seated identically to the static ``create_token*``
+    # carriers — same deterministic-pid token CardDef append + the
+    # SAME ``register_token_printing`` cross-engine bridge map. The
+    # carrier-rewrite branch below preserves the new kind discriminator
+    # AND the ``tapped`` bool rider unchanged (only ``_token_card_def``
+    # is swapped for ``token_printing_id``; ``count`` is NOT injected
+    # because the per-multicolored-permanent variant has no static
+    # count rider — the count is computed at resolve time).
+    _TOKEN_CREATE_KINDS = (
+        "create_token",
+        "create_token_tapped",
+        "create_token_per_multicolored_permanent",
+    )
 
     # Lander-spell-token-seating sub-substrate (round-73). The two
     # covered single-target Tier-A Lander-pid SPELL effects whose Rust
@@ -12887,17 +12970,22 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
             for idx, tcd in refs:
                 old = new_tas[idx]
                 old_eff = old["effect"]
+                # Spacecraft Phase 3C Cycle 4 (2026-05-26): the new
+                # ``create_token_per_multicolored_permanent`` kind has
+                # NO static ``count`` field (the count is computed at
+                # resolve time from the multicolored-permanent walk),
+                # so we copy every non-symbolic field through unchanged
+                # rather than hardcoding the {kind, count,
+                # token_printing_id} triple. Mirrors the spell-axis
+                # rewrite below (which uses the same "drop _token_card_
+                # def, add token_printing_id" semantics for spells
+                # whose dict shape varies by kind).
                 new_eff = {
-                    # Preserve the original kind — ``create_token``
-                    # (Phase 1, bare) vs ``create_token_tapped``
-                    # (Phase 4) IS the tapped-vs-untapped choice on
-                    # the bridge; the seating pass only swaps the
-                    # symbolic ``_token_card_def`` for the numeric
-                    # ``token_printing_id``, never the kind.
-                    "kind": old_eff["kind"],
-                    "count": old_eff["count"],
-                    "token_printing_id": token_pid_by_name[tcd.name],
+                    k: v
+                    for k, v in old_eff.items()
+                    if k != "_token_card_def"
                 }
+                new_eff["token_printing_id"] = token_pid_by_name[tcd.name]
                 new_ta = dict(old)
                 new_ta["effect"] = new_eff
                 new_tas[idx] = new_ta

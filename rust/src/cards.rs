@@ -1504,6 +1504,130 @@ pub enum Effect {
     /// (lost-track-of-source tolerance, mirrors
     /// `EachOpponentDiscards`).
     EachOpponentDiscardsOrLosesLife { life_if_cant: i32 },
+    /// **Spacecraft Station substrate -- Phase 3C Cycle 4 (Infinite
+    /// Guideline Station FLIP, 2026-05-26).** Per design doc
+    /// `SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md` §4.6 + §6.4 #16
+    /// + §7.3 Cycle 4.
+    ///
+    /// Create one token of the pre-registered `token_printing_id` per
+    /// multicolored permanent the source-controller controls. Each
+    /// minted token enters under the source-controller's control with
+    /// `tapped` set per the variant's `tapped` field (Infinite Guideline
+    /// Station emits with `tapped=true` per the printed oracle "create a
+    /// tapped 2/2 colorless Robot artifact creature token for each
+    /// multicolored permanent you control").
+    ///
+    /// Mirrors Python's `CreateTokenPerMulticoloredPermanent(token_
+    /// printing, tapped=True)` at `effects/generic/tokens.py:122` --
+    /// per-card multi-cycle sibling of the existing
+    /// `Effect::CreateToken` / `Effect::CreateTokenTapped` arms. The
+    /// printed surface ALWAYS has `tapped=True` on the EoE consumer, but
+    /// the variant carries `tapped` as a per-printing field for
+    /// schematic parity with the Python dataclass (which exposes
+    /// `tapped: bool = True` as a class-level default).
+    ///
+    /// **Multicolored-permanent count primitive.** Per design doc §4.6,
+    /// counts every object on the source-controller's battlefield whose
+    /// printing's `mana_cost`'s `colors()` length is >= 2 (multicolored
+    /// per Python's `_multicolored_permanents_count` at
+    /// `effects/base.py:259` -- iterate `state.battlefield`, skip
+    /// `controller_id != source_controller`, count when
+    /// `len(printing.mana_cost.colors) >= 2`). The Rust mirror walks
+    /// the source-controller's `players[c].battlefield` Vec, queries
+    /// the registry for each printing's colored cost, counts when the
+    /// colored-symbol set's cardinality is >= 2. The IGS itself does
+    /// NOT count (it IS itself a multicolored permanent its controller
+    /// controls, so its own count of 1 IS added) -- the EoE rules
+    /// preserve self-counting (a Boros Reckoner counts as 1, the IGS
+    /// counts as 1, etc.). Python's helper mirrors this exactly.
+    ///
+    /// **Count-at-resolve semantics.** Per CR 603.3 trigger resolution
+    /// + the Phase 3C Cycle 4 SEARCH_LIMITATIONS entry: the
+    /// multicolored count is sampled at TRIGGER RESOLUTION time, NOT
+    /// at trigger-fire time. The triggered ability queues a stack
+    /// object whose effect computes the count when the trigger
+    /// RESOLVES; if multicolored permanents enter/leave between trigger
+    /// fire and resolve, the resolve-time count is used. Matches
+    /// Python's `_multicolored_permanents_count` call inside
+    /// `CreateTokenPerMulticoloredPermanent.resolve` (computed at
+    /// `apply()` time).
+    ///
+    /// **Per-token spawn arm.** Sibling-loop of
+    /// `Effect::CreateTokenTapped` -- the SAME registry-bounds check,
+    /// SAME `current_resolve_source_controller`-aware controller pick,
+    /// SAME `reserve_object_id` fresh-id allocation, SAME
+    /// `next_etb_timestamp` CE4 stamp + ENTERS-dispatch queueing, SAME
+    /// `Arc::make_mut(&mut bf)` push pattern. The single byte
+    /// difference: count `n` is computed dynamically from the
+    /// multicolored-permanent walk instead of being a static field.
+    /// When `n == 0` (no multicolored permanents), legal no-op return
+    /// (mirrors Python's `if n <= 0: return` early-out + log line). The
+    /// `tapped` field is read PER-MINTED token (sibling of
+    /// `Effect::CreateTokenTapped` which hardcodes `tapped: true`); a
+    /// `tapped: false` variant emit creates untapped tokens (no EoE
+    /// consumer of `tapped=false` today, but the variant carries the
+    /// field for future printings).
+    ///
+    /// **Moonlit substitution + token-supertype override.** Inherits
+    /// the same `moonlit_token_substitution` pre-mint replacement
+    /// dispatch the sister `Effect::CreateToken` / `Effect::Create
+    /// TokenTapped` arms use (CR 614 first-batch-per-turn Aura-shape
+    /// replacement). The substitution swaps the requested printing to
+    /// the Aura's `attached_to` host's printing for the FIRST batch
+    /// this turn; subsequent N-1 tokens within the same batch DO NOT
+    /// retrigger replacement (the flag flip is per-batch not per-token,
+    /// mirroring Python's `players_who_created_tokens_this_turn`
+    /// semantics).
+    ///
+    /// **EoE consumer: Infinite Guideline Station** (Legendary Artifact
+    /// -- Spacecraft, `{W}{U}{B}{R}{G}`, 7/15, station_threshold=12,
+    /// stationed_keywords={flying}; ETB+IsSelf trigger at tier=0
+    /// emitting `CreateTokenPerMulticoloredPermanent(token_printing=
+    /// Robot, tapped=true)`). The SIXTH Spacecraft to admit through the
+    /// bridge -- the FINAL trigger-leg Spacecraft of the Phase 3
+    /// campaign.
+    CreateTokenPerMulticoloredPermanent {
+        token_printing_id: u32,
+        tapped: bool,
+    },
+    /// **Spacecraft Station substrate -- Phase 3C Cycle 4 (Infinite
+    /// Guideline Station FLIP, 2026-05-26).** Per design doc
+    /// `SPACECRAFT_STATION_SUBSTRATE_PHASE_3_DESIGN.md` §4.7 + §6.4 #16
+    /// + §7.3 Cycle 4.
+    ///
+    /// Draw one card for each multicolored permanent the source-
+    /// controller controls. Mirrors Python's
+    /// `DrawCardPerMulticoloredPermanent` (`effects/generic/draw_mill.
+    /// py:120`) -- a zero-field frozen dataclass; the Rust mirror is a
+    /// unit variant.
+    ///
+    /// **Multicolored-permanent count primitive.** SAME walk +
+    /// predicate as the sister `Effect::CreateTokenPerMulticolored
+    /// Permanent` arm (count source-controller-controlled battlefield
+    /// objects whose printing's colored cost has 2+ distinct colors).
+    /// REUSED predicate -- the design doc §4.7 explicit "REUSE the
+    /// predicate primitive from §4.6" instruction.
+    ///
+    /// **Per-card draw arm.** Sibling-loop of `Effect::DrawCards` --
+    /// the SAME source-controller resolution, SAME `Arc::make_mut`
+    /// library + hand pop / push, SAME empty-library bail-out via
+    /// `attempted_draw_on_empty` cause-signal, SAME `obj.zone =
+    /// ZONE_HAND` flip. The single byte difference: count `n` is
+    /// computed dynamically from the multicolored-permanent walk
+    /// instead of being a static field. When `n == 0` (no
+    /// multicolored permanents), legal no-op return.
+    ///
+    /// **EoE consumer: Infinite Guideline Station** (the same printing
+    /// as the sister `CreateTokenPerMulticoloredPermanent` arm).
+    /// Mode-1 ATTACKS+IsSelf trigger at tier=0 emitting
+    /// `DrawCardPerMulticoloredPermanent` (the second trigger on
+    /// IGS -- per the printed oracle "Whenever Infinite Guideline
+    /// Station attacks, draw a card for each multicolored permanent
+    /// you control."). The IGS becomes a creature at station_threshold
+    /// 12+ (so the ATTACKS trigger is gated by the station mechanic,
+    /// not by a `tier_threshold` -- both triggers carry
+    /// `tier_threshold=0`).
+    DrawCardPerMulticoloredPermanent,
     /// Destroy every creature on the battlefield (Wrath of God pattern,
     /// CR 701.7 + 701.4 AOE). Indestructible creatures (CR 702.12)
     /// are NOT destroyed — round-13 keyword check is honored.
@@ -12390,6 +12514,54 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentDiscardsOrLosesLife { life_if_cant })
         }
+        "create_token_per_multicolored_permanent" => {
+            // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Parse arm
+            // for `Effect::CreateTokenPerMulticoloredPermanent {
+            // token_printing_id: u32, tapped: bool }` — mirrors
+            // Python's `CreateTokenPerMulticoloredPermanent
+            // (token_printing, tapped=True)` at
+            // `effects/generic/tokens.py:122`. Per design doc §4.6.
+            //
+            // **`token_printing_id` is REQUIRED** (no default; sibling
+            // of every `create_token*` parse arm which all require
+            // explicit `token_printing_id`). Missing key raises.
+            // Non-u32 raises via the standard extract-error format.
+            //
+            // **`tapped` defaults to true** (mirrors Python class
+            // default `tapped: bool = True` AND the EoE consumer
+            // Infinite Guideline Station which emits `tapped=true`).
+            // Missing key defaults to true; present non-bool raises.
+            let token_printing_id: u32 = require(dict, "token_printing_id")?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "create_token_per_multicolored_permanent.token_printing_id must be a u32 (got: {e})"
+                    ))
+                })?;
+            let tapped: bool = match dict.get_item("tapped")? {
+                Some(b) => b.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "create_token_per_multicolored_permanent.tapped must be a bool (got: {e})"
+                    ))
+                })?,
+                None => true,
+            };
+            Ok(Effect::CreateTokenPerMulticoloredPermanent {
+                token_printing_id,
+                tapped,
+            })
+        }
+        "draw_card_per_multicolored_permanent" => {
+            // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Parse arm
+            // for `Effect::DrawCardPerMulticoloredPermanent` — unit
+            // variant; mirrors Python's
+            // `DrawCardPerMulticoloredPermanent` (`effects/generic/
+            // draw_mill.py:120`), a zero-field frozen dataclass. Per
+            // design doc §4.7. No required fields; extra keys are
+            // silently ignored (silent-drop convention for
+            // unit variants elsewhere in the parser).
+            Ok(Effect::DrawCardPerMulticoloredPermanent)
+        }
         "destroy_all_creatures" => {
             // Unit variant — no required fields. Python's
             // `DestroyAllCreatures` carries optional narrowing fields
@@ -15343,7 +15515,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent"
         ))),
     }
 }
@@ -17975,6 +18147,32 @@ pub(crate) fn effect_to_pydict<'py>(
             // `EachOpponentDiscards`'s `count`-emit arm.
             d.set_item("kind", "each_opponent_discards_or_loses_life")?;
             d.set_item("life_if_cant", *life_if_cant)?;
+        }
+        Effect::CreateTokenPerMulticoloredPermanent {
+            token_printing_id,
+            tapped,
+        } => {
+            // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Sibling
+            // to_pydict arm — mirrors the parse arm at the
+            // `create_token_per_multicolored_permanent` kind discriminator.
+            // Emits `kind` + the required `token_printing_id` u32 + the
+            // `tapped` bool rider. Always emits the `tapped` field
+            // (sibling of `each_opponent_discards_or_loses_life`'s
+            // `life_if_cant`-always-emit) so the dict round-trip is
+            // byte-deterministic regardless of whether the parser
+            // consumed the default-true or an explicit value.
+            d.set_item("kind", "create_token_per_multicolored_permanent")?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+            d.set_item("tapped", *tapped)?;
+        }
+        Effect::DrawCardPerMulticoloredPermanent => {
+            // **Spacecraft Phase 3C Cycle 4 (2026-05-26).** Sibling
+            // to_pydict arm — mirrors the parse arm at the
+            // `draw_card_per_multicolored_permanent` kind discriminator.
+            // Unit variant — emit ONLY the `kind` discriminator (sibling
+            // of `OptionalPutCreatureFromHandOntoBattlefield` /
+            // `DestroyAllCreatures` unit-Effect to_pydict shape).
+            d.set_item("kind", "draw_card_per_multicolored_permanent")?;
         }
         Effect::DestroyAllCreatures => {
             d.set_item("kind", "destroy_all_creatures")?;

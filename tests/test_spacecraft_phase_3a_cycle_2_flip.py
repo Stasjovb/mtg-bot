@@ -174,15 +174,17 @@ def test_larval_scoutlander_admits_at_deck_filter_post_cycle_2():
 
 
 def test_admit_set_size_bumps_to_3_spacecraft_post_cycle_2():
-    """Pin #3 — **Admit-set count bump.** Pre-Phase-3C-C3 admitted
+    """Pin #3 — **Admit-set count bump.** Pre-Phase-3C-C4 admitted
     Spacecraft were Galvanizing Sawship (Phase 1) + Lumen-Class Frigate
     (Phase 2) + Larval Scoutlander (Phase 3A) + Sledge-Class Seedship
-    (Phase 3B) + Synthesizer Labship (Phase 3C C2). Post-Phase-3C-Cycle-3
-    (2026-05-26; this campaign slice) exactly SIX Spacecraft admit at
-    the deck-level filter: + Entropic Battlecruiser (Phase 3C C3 — the
-    SECOND consumer of the tier-gate substrate, via its mode-1
-    DISCARDS_CARD tier=1 trigger). Bench-aggregate cross-check walks
-    every printing in the active source.
+    (Phase 3B) + Synthesizer Labship (Phase 3C C2) + Entropic
+    Battlecruiser (Phase 3C C3). Post-Phase-3C-Cycle-4 (2026-05-26;
+    this campaign slice; **PHASE 3 CLOSED**) exactly SEVEN Spacecraft
+    admit at the deck-level filter: + Infinite Guideline Station
+    (Phase 3C C4 — the FINAL Phase-3 trigger-leg flip via the new
+    ``CreateTokenPerMulticoloredPermanent`` +
+    ``DrawCardPerMulticoloredPermanent`` Effect classes). Bench-
+    aggregate cross-check walks every printing in the active source.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -200,32 +202,35 @@ def test_admit_set_size_bumps_to_3_spacecraft_post_cycle_2():
     assert sorted(admitted_spacecraft) == [
         "Entropic Battlecruiser",
         "Galvanizing Sawship",
+        "Infinite Guideline Station",
         "Larval Scoutlander",
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
     ], (
-        "Admit-set count bump: exactly SIX Spacecraft must admit at "
-        "the deck-level filter post-Phase-3C-Cycle-3 — Galvanizing "
-        "Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
-        "Scoutlander (Phase-3A ETB) + Sledge-Class Seedship (Phase-"
-        "3B ATTACKS) + Synthesizer Labship (Phase-3C C2 BEGINNING_OF_"
-        "COMBAT tier-gate) + Entropic Battlecruiser (Phase-3C C3 "
-        "ATTACKS + DISCARDS_CARD tier-1 gate). Got: "
+        "Admit-set count bump: exactly SEVEN Spacecraft must admit at "
+        "the deck-level filter post-Phase-3C-Cycle-4 (PHASE 3 CLOSED) — "
+        "Galvanizing Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) "
+        "+ Larval Scoutlander (Phase-3A ETB) + Sledge-Class Seedship "
+        "(Phase-3B ATTACKS) + Synthesizer Labship (Phase-3C C2 "
+        "BEGINNING_OF_COMBAT tier-gate) + Entropic Battlecruiser "
+        "(Phase-3C C3 ATTACKS + DISCARDS_CARD tier-1 gate) + Infinite "
+        "Guideline Station (Phase-3C C4 ETB CreateTokenPerMulticolored "
+        "Permanent + ATTACKS DrawCardPerMulticoloredPermanent). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 
 
 def test_phase_3a_admit_set_is_exactly_three_phase_3_carriers_post_cycle_2():
-    """Pin #3b — Subsystem-attribution: exactly FOUR EoE printings
+    """Pin #3b — Subsystem-attribution: exactly FIVE EoE printings
     pass :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
-    under the Phase-3C-Cycle-3 5-class / 4-shape allowlist (Larval
+    under the Phase-3C-Cycle-4 7-class / 4-shape allowlist (Larval
     Scoutlander + Sledge-Class Seedship + Synthesizer Labship +
-    Entropic Battlecruiser). The Phase-3C-Cycle-3 admit set is
-    exhaustive AND positively exclusive of every other Spacecraft.
-    The remaining Phase-3 Spacecraft (Infinite Guideline Station)
-    fails at least one (event, predicate, effect) clause and is
-    pinned at the per-cycle decline-set walk below.
+    Entropic Battlecruiser + Infinite Guideline Station). The
+    Phase-3C-Cycle-4 admit set is exhaustive AND positively
+    exclusive of every other Spacecraft. **PHASE 3 CLOSED** — the
+    only Phase-3-eligible Spacecraft (The Eternity Elevator) fails
+    on ``activated_abilities`` (Phase 4 territory).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -237,15 +242,16 @@ def test_phase_3a_admit_set_is_exactly_three_phase_3_carriers_post_cycle_2():
     )
     assert phase_3_admit == [
         "Entropic Battlecruiser",
+        "Infinite Guideline Station",
         "Larval Scoutlander",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
     ], (
-        "Phase-3C-Cycle-3 admit set must be exactly Larval Scoutlander + "
+        "Phase-3C-Cycle-4 admit set must be exactly Larval Scoutlander + "
         "Sledge-Class Seedship + Synthesizer Labship + Entropic "
-        "Battlecruiser; got "
+        "Battlecruiser + Infinite Guideline Station (PHASE 3 CLOSED); got "
         f"{phase_3_admit!r}. Any other admit is a silent auto-grow "
-        "honest-stop — verify the Phase-3C-Cycle-3 allowlist (5 Effect "
+        "honest-stop — verify the Phase-3C-Cycle-4 allowlist (7 Effect "
         "classes + 4 (event, predicate) shapes) hasn't been widened "
         "accidentally."
     )
@@ -262,12 +268,6 @@ def test_phase_3a_admit_set_is_exactly_three_phase_3_carriers_post_cycle_2():
     "card_name,decline_reason",
     [
         (
-            "Infinite Guideline Station",
-            "CreateTokenPerMulticoloredPermanent / "
-            "DrawCardPerMulticoloredPermanent effects (Phase 3C Cycle "
-            "4 territory)",
-        ),
-        (
             "The Eternity Elevator",
             "activated_abilities + station_threshold=None (Phase 4)",
         ),
@@ -276,15 +276,16 @@ def test_phase_3a_admit_set_is_exactly_three_phase_3_carriers_post_cycle_2():
 def test_phase_3a_predicate_declines_each_deferred_spacecraft(
     card_name, decline_reason,
 ):
-    """Pin #4 — Per design doc §6.6 #19 decline-set walk. Each of the
-    1 still-deferred Phase-3C Spacecraft carrier + The Eternity
-    Elevator stays DECLINED at the Phase-3C-Cycle-3 admit predicate
-    (Entropic Battlecruiser is promoted out of this decline set
-    post-Phase-3C-Cycle-3 — 2026-05-26; see the INVERTED admit-side
-    invariant pin
+    """Pin #4 — Per design doc §6.6 #19 decline-set walk. **PHASE 3
+    CLOSED** — only The Eternity Elevator remains DECLINED at the
+    Phase-3C-Cycle-4 admit predicate (Infinite Guideline Station is
+    promoted out of this decline set post-Phase-3C-Cycle-4 —
+    2026-05-26; see the INVERTED admit-side invariant pin
     ``test_synthesizer_labship_admits_at_phase_3_admit_gate_post_cycle_2``
-    in test_spacecraft_phase_3c_substrate_cycle_1.py). Silent auto-
-    grow honest-stop.
+    in test_spacecraft_phase_3c_substrate_cycle_1.py). The Eternity
+    Elevator depends on the parallel Carrier-AA Phase 1+ campaign
+    landing the non-token-AA bridge round-trip (Phase 4 territory).
+    Silent auto-grow honest-stop.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory

@@ -955,20 +955,26 @@ def test_phase_3a_allowlist_now_includes_optional_put_creature():
         "Phase 3A pilot class is preserved — C2 is a pure append, "
         "not a replace)."
     )
-    # Post-Phase-3C-Cycle-3 (2026-05-26; THIS slice) the allowlist has
-    # 5 entries — Cycle 3 appended both
-    # ``EachOpponentDiscardsOrLosesLife`` (Entropic Battlecruiser mode-0
-    # ATTACKS) AND ``TargetPlayerLosesLife`` (Entropic Battlecruiser
-    # mode-1 DISCARDS_CARD tier=1). The Phase 3B 2-class pin invariant
+    # Post-Phase-3C-Cycle-4 (2026-05-26; THIS slice — PHASE 3 CLOSED)
+    # the allowlist has 7 entries — Cycle 4 appended both
+    # ``CreateTokenPerMulticoloredPermanent`` (Infinite Guideline
+    # Station ETB) AND ``DrawCardPerMulticoloredPermanent`` (Infinite
+    # Guideline Station ATTACKS). The Phase 3B 2-class pin invariant
     # (Phase 3A pilot + Phase 3B class) is preserved as the subset
-    # assertion above; the exact set check moves to a 5-element set
-    # post-C3.
+    # assertion above; the exact set check moves to a 7-element set
+    # post-C4.
     from mtg_bot.effects.generic.become_type import (
         TargetArtifactBecomesCreatureUEOT,
+    )
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardPerMulticoloredPermanent,
     )
     from mtg_bot.effects.generic.life import (
         EachOpponentDiscardsOrLosesLife,
         TargetPlayerLosesLife,
+    )
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenPerMulticoloredPermanent,
     )
     assert set(classes) == {
         OptionalSacLandOrLanderForBasicLandRamp,
@@ -976,12 +982,16 @@ def test_phase_3a_allowlist_now_includes_optional_put_creature():
         TargetArtifactBecomesCreatureUEOT,
         EachOpponentDiscardsOrLosesLife,
         TargetPlayerLosesLife,
+        CreateTokenPerMulticoloredPermanent,
+        DrawCardPerMulticoloredPermanent,
     }, (
-        "Phase 3C-Cycle-3 admit-class allowlist must be exactly the "
-        "5-class set (Phase 3A pilot + Phase 3B class + Phase 3C "
+        "Phase 3C-Cycle-4 admit-class allowlist must be exactly the "
+        "7-class set (Phase 3A pilot + Phase 3B class + Phase 3C "
         "Cycle 2 TargetArtifactBecomesCreatureUEOT + Phase 3C Cycle 3 "
-        "EachOpponentDiscardsOrLosesLife + TargetPlayerLosesLife) — "
-        "Phase 3C Cycle 4 extends further. Silent auto-grow honest-stop."
+        "EachOpponentDiscardsOrLosesLife + TargetPlayerLosesLife + "
+        "Phase 3C Cycle 4 CreateTokenPerMulticoloredPermanent + "
+        "DrawCardPerMulticoloredPermanent) — PHASE 3 CLOSED. Silent "
+        "auto-grow honest-stop."
     )
 
 
@@ -1015,12 +1025,14 @@ def test_phase_3a_event_shape_now_includes_attacks():
         "3A pilot shape is preserved — C2 is a pure append, not a "
         "replace)."
     )
-    # Post-Phase-3C-Cycle-3 (2026-05-26; THIS slice) the event-shape
-    # table has 4 entries — Cycle 3 appended ``(Event.DISCARDS_CARD,
-    # Controlled(by=OPPONENT, subject=None))`` (Entropic Battlecruiser
-    # mode-1). The Phase 3B 2-shape pin invariant is preserved as the
-    # subset assertions above; the exact set check moves to a 4-element
-    # set post-C3.
+    # Post-Phase-3C-Cycle-4 (2026-05-26; THIS slice — PHASE 3 CLOSED)
+    # the event-shape table STAYS at 4 entries — Cycle 4 does NOT
+    # widen the event-shape table because Infinite Guideline Station's
+    # two triggers carry the (ENTERS, IsSelf) and (ATTACKS, IsSelf)
+    # shapes that are ALREADY in the table (added in Phase 3A C2 and
+    # Phase 3B C2 respectively). The Effect-class allowlist DOES
+    # widen Cycle 4 (5 → 7), per the sibling exact-set pin above.
+    # PHASE 3 CLOSED.
     from mtg_bot.effects.predicates import Controlled, OPPONENT, YOU
     beginning_of_combat_controlled_you = (
         Event.BEGINNING_OF_COMBAT, Controlled(by=YOU, subject=None),
