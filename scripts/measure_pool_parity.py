@@ -3044,6 +3044,71 @@ PROBE_MODULES: tuple[Path, ...] = (
     # GameObject.original_printing_id field for the CR-613 layer-1
     # copy substrate). Phase 3B is CLOSED with this probe.
     REPO_ROOT / "tests" / "test_scavenger_grounds_parity.py",
+    # Phase 3C Cycles 4+5 (2026-05-26 — Thespian's Stage per-card
+    # real-EoE byte-equal probe; CLOSES Phase 3C per
+    # ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md`` §7.3). The
+    # Phase-3C C1 substrate (commit ``f5a2a1ce``) landed the new
+    # ``GameObject.original_printing_id: Option<u32>`` slot + per-
+    # zone-change reset hookup at every bf-leave site + fingerprint
+    # serializer arm + clone path + GameObject snapshot bridge to
+    # Python. Phase-3C C2 (commit ``6de50d8d``) landed the Rust
+    # ``Effect::BecomesCopyOfTargetLand`` variant + parse / resolve /
+    # to_pydict arms + Land-target fan-out in
+    # ``state_ops_legal.rs::activate_ability_dict`` + re-copy
+    # snapshot logic + the 4 Rust unit pins. Phase-3C C3 (commits
+    # ``43ed68e6`` + ``cc47f026``) widened
+    # ``_carrier_aa_phase_1_effect_classes`` to include
+    # ``BecomesCopyOfTargetLand``; Thespian's Stage's live AA shape
+    # is ``{2}, {T}`` (Phase-1.5a cost-gate already wired), so the
+    # admit-gate FLIPped DECLINED → ADMITTED on the C3 widen alone
+    # (covered_by_construction tier). C4+C5 — THIS registration —
+    # close the tier flip to PROBED by attaching the per-card cross-
+    # engine probe.
+    #
+    #   * ``test_thespians_stage_parity.py`` — Thespian's Stage ({0}
+    #     Land); single non-mana AA (``{2}, {T}: This land becomes a
+    #     copy of target land, except it has this ability.``) →
+    #     ``BecomesCopyOfTargetLand()`` (unit-variant Effect, zero-
+    #     arg frozen dataclass; ``requires_target() == True`` +
+    #     ``legal_targets`` walks ``state.battlefield`` for any
+    #     Land, either controller). The FIRST PROBE_MODULES-credited
+    #     probe of the ``BecomesCopyOfTargetLand`` Effect class on a
+    #     real-EoE Land + AA carrier, AND the FIRST PROBED-tier
+    #     exercise of the CR-613 layer-1 object-copy substrate (the
+    #     new Rust ``GameObject.original_printing_id`` slot mirrored
+    #     by Python's existing ``GameObject.original_printing:
+    #     CardPrinting | None`` field at ``game.py:599``);
+    #     templates on the sibling Carrier-AA AA probes (parse +
+    #     bridge round-trip + Rust synthetic acceptance + end-to-end
+    #     loader admit + Python-side resolve smoke covering FOUR
+    #     load-bearing scenarios — baseline silent-fizzle, copy-
+    #     Mountain line, re-copy-Forest retention line, and the
+    #     Stage-leaves-clears-copy line). The CR-613 layer-1
+    #     snapshot-anchor invariant (``original_printing`` sticky
+    #     across re-copies; ``original_printing`` cleared on bf-
+    #     leave via ``revert_printing_if_no_layer1_copies`` at
+    #     ``game.py:1666``) is the structural mile over the simpler
+    #     ``Petrified Field`` / ``Terrain Generator`` /
+    #     ``Mystifying Maze`` / ``Scavenger Grounds`` single-
+    #     resolve probes — the C4+C5 probe walks the full copy →
+    #     re-copy → leave chain and pins every observable Rust's
+    #     mirror at every bf-leave site clears
+    #     ``original_printing_id = None`` per CR 400.7 (the C1
+    #     substrate audit).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Carrier-AA
+    # BLOCKED-SG row: 23 → 22 cards. Phase 3C is CLOSED with this
+    # probe; the 4 remaining Phase-4 multi-AA Carrier-AA carriers
+    # (Mirrorpool / Ghost Vacuum / Keys to the House / All-Fates
+    # Scroll) stay honestly DECLINED at the multi-AA per-AA teeth
+    # (Effect-class + sorcery_speed + is_mana_ability AA-riders,
+    # per Phase-4A C1 substrate at commit ``a6fe7c9c``). The full
+    # Phase-3 admit set is the exact 7-card set (Swarmyard +
+    # Deserted Temple + Petrified Field + Terrain Generator +
+    # Mystifying Maze + Scavenger Grounds + Thespian's Stage) per
+    # the ``test_carrier_aa_30_no_silent_auto_grow_admit_set_...
+    # _plus_thespians_stage`` walk at commit ``43ed68e6``.
+    REPO_ROOT / "tests" / "test_thespians_stage_parity.py",
     # **Aura-attachment substrate Phase 3+ Phase A Cycle 2 (2026-05-26
     # — Chorale of the Void per-card real-EoE probe; closes Phase A
     # per ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §7.3).**
