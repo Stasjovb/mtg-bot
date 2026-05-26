@@ -197,55 +197,57 @@ def test_admit_set_size_bumps_to_3_spacecraft_post_cycle_2():
         "Galvanizing Sawship",
         "Larval Scoutlander",
         "Lumen-Class Frigate",
+        "Sledge-Class Seedship",
     ], (
-        "Admit-set count bump: exactly THREE Spacecraft must admit at "
-        "the deck-level filter post-Cycle-2 — Galvanizing Sawship "
-        "(Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
-        "Scoutlander (Phase-3A). Got: "
+        "Admit-set count bump: exactly FOUR Spacecraft must admit at "
+        "the deck-level filter post-Phase-3B-Cycle-2 — Galvanizing "
+        "Sawship (Phase-1) + Lumen-Class Frigate (Phase-2) + Larval "
+        "Scoutlander (Phase-3A ETB) + Sledge-Class Seedship (Phase-"
+        "3B ATTACKS). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 
 
-def test_phase_3a_admit_set_is_exactly_larval_scoutlander():
-    """Pin #3b — Subsystem-attribution: exactly ONE EoE printing
-    passes :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
-    under the strict Phase-3A 1-class / 1-shape allowlist (Larval
-    Scoutlander). The Phase-3A admit set is exhaustive AND positively
-    exclusive of every other Spacecraft. The other 4 Phase-3
-    Spacecraft each fail at least one (event, predicate, effect)
-    clause and are pinned at the per-cycle decline-set walk below.
+def test_phase_3a_admit_set_is_exactly_larval_scoutlander_and_sledge_class_seedship():
+    """Pin #3b — Subsystem-attribution: exactly TWO EoE printings
+    pass :func:`_printing_is_bridge_phase_3_trigger_spacecraft`
+    under the Phase-3B 2-class / 2-shape allowlist (Larval Scoutlander
+    + Sledge-Class Seedship). The Phase-3B admit set is exhaustive
+    AND positively exclusive of every other Spacecraft. The other 3
+    Phase-3 Spacecraft each fail at least one (event, predicate,
+    effect) clause and are pinned at the per-cycle decline-set walk
+    below.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
     src = get_active_source().get_printings()
-    phase_3a_admit = sorted(
+    phase_3_admit = sorted(
         name for name, p in src.items()
         if trajectory._printing_is_bridge_phase_3_trigger_spacecraft(p)
     )
-    assert phase_3a_admit == ["Larval Scoutlander"], (
-        "Phase-3A admit set must be exactly Larval Scoutlander; "
-        f"got {phase_3a_admit!r}. Any other admit is a silent "
-        "auto-grow honest-stop — verify the strict Phase-3A allowlist "
-        "(1 Effect class + 1 (event, predicate) shape) hasn't been "
-        "widened accidentally."
+    assert phase_3_admit == [
+        "Larval Scoutlander",
+        "Sledge-Class Seedship",
+    ], (
+        "Phase-3B admit set must be exactly Larval Scoutlander + "
+        f"Sledge-Class Seedship; got {phase_3_admit!r}. Any other "
+        "admit is a silent auto-grow honest-stop — verify the "
+        "Phase-3B allowlist (2 Effect classes + 2 (event, predicate) "
+        "shapes) hasn't been widened accidentally."
     )
 
 
 # ---------------------------------------------------------------------------
-# Pin 4 — Decline-set bench check against the 4 remaining Phase-3
-# Spacecraft + The Eternity Elevator (design doc §6.6 #19-20).
+# Pin 4 — Decline-set bench check against the 3 remaining Phase-3C
+# Spacecraft + The Eternity Elevator (design doc §6.6 #19-20;
+# Sledge-Class Seedship promoted out of this set post-Phase-3B-C2).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "card_name,decline_reason",
     [
-        (
-            "Sledge-Class Seedship",
-            "ATTACKS event + OptionalPutCreatureFromHandOnto"
-            "Battlefield effect (Phase 3B)",
-        ),
         (
             "Synthesizer Labship",
             "BEGINNING_OF_COMBAT event + Controlled predicate + "
@@ -271,9 +273,12 @@ def test_phase_3a_predicate_declines_each_deferred_spacecraft(
     card_name, decline_reason,
 ):
     """Pin #4 — Per design doc §6.6 #19 decline-set walk. Each of the
-    4 still-deferred Phase-3 Spacecraft carriers + The Eternity
-    Elevator stays DECLINED at the Phase-3A admit predicate. Silent
-    auto-grow honest-stop.
+    3 still-deferred Phase-3C Spacecraft carriers + The Eternity
+    Elevator stays DECLINED at the Phase-3B admit predicate (Sledge-
+    Class Seedship is promoted out of this decline set post-Phase-3B-
+    C2; see ``test_sledge_class_seedship_now_admits_at_admit_gate_
+    post_cycle_2`` in test_spacecraft_phase_3b_substrate_cycle_1.py
+    for the new admit-side invariant). Silent auto-grow honest-stop.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -458,8 +463,9 @@ def test_phase_3a_predicate_rejects_extra_effect_class_synthetic():
     )
     assert not trajectory._printing_is_bridge_phase_3_trigger_spacecraft(p), (
         "Synthetic Spacecraft with DrawCards(3) trigger must be "
-        "REJECTED — DrawCards is NOT in the Phase-3A Effect-class "
-        "allowlist {OptionalSacLandOrLanderForBasicLandRamp}."
+        "REJECTED — DrawCards is NOT in the Phase-3B Effect-class "
+        "allowlist {OptionalSacLandOrLanderForBasicLandRamp, "
+        "OptionalPutCreatureFromHandOntoBattlefield}."
     )
 
 
@@ -603,10 +609,18 @@ def test_phase_3a_predicate_rejects_composed_shape_synthetic():
 
 def test_phase_3a_predicate_rejects_wrong_event_synthetic():
     """Pin #6e — No-silent-auto-grow (wrong event). A synthetic
-    Spacecraft carrying an ATTACKS+IsSelf+
+    Spacecraft carrying a BEGINNING_OF_COMBAT+IsSelf+
     OptionalSacLandOrLanderForBasicLandRamp shape is rejected (the
-    ``(ATTACKS, IsSelf())`` event-shape tuple is NOT in the Phase-3A
-    1-shape allowlist — it widens in Phase 3B).
+    ``(BEGINNING_OF_COMBAT, IsSelf())`` event-shape tuple is NOT in
+    the Phase-3B 2-shape allowlist — it would widen in Phase 3C with
+    Synthesizer Labship's BEGINNING_OF_COMBAT trigger).
+
+    NOTE (Phase 3B C2 update; this slice 2026-05-25): the pre-C2
+    version of this pin used ATTACKS as the wrong-event test, but
+    Phase 3B C2 admits ``(ATTACKS, IsSelf(subject=None))``, so this
+    pin pivots to the next-still-rejecting event shape
+    (BEGINNING_OF_COMBAT) per design doc §7.3 — the still-deferred
+    Phase 3C event-shape.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.effects.base import TriggeredAbility
@@ -618,7 +632,7 @@ def test_phase_3a_predicate_rejects_wrong_event_synthetic():
 
     eff = OptionalSacLandOrLanderForBasicLandRamp(land_count=2)
     p = CardPrinting(
-        name="Synthetic ATTACKS-trigger Spacecraft",
+        name="Synthetic BEGINNING_OF_COMBAT-trigger Spacecraft",
         mana_cost_str="{2}{G}",
         mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
         type_line="Artifact — Spacecraft",
@@ -632,12 +646,15 @@ def test_phase_3a_predicate_rejects_wrong_event_synthetic():
         stationed_keywords=frozenset({"flying"}),
         triggered_abilities=(
             TriggeredAbility(
-                event=Event.ATTACKS, predicate=IsSelf(), effect=eff,
+                event=Event.BEGINNING_OF_COMBAT,
+                predicate=IsSelf(),
+                effect=eff,
             ),
         ),
     )
     assert not trajectory._printing_is_bridge_phase_3_trigger_spacecraft(p), (
-        "Synthetic ATTACKS-trigger Spacecraft must be REJECTED "
-        "(ATTACKS not in Phase-3A 1-shape allowlist {(ENTERS, "
-        "IsSelf())}; Phase 3B widens the event-shapes table)."
+        "Synthetic BEGINNING_OF_COMBAT-trigger Spacecraft must be "
+        "REJECTED ((BEGINNING_OF_COMBAT, IsSelf()) not in Phase-3B "
+        "2-shape allowlist {(ENTERS, IsSelf()), (ATTACKS, "
+        "IsSelf())}; Phase 3C widens the event-shapes table)."
     )

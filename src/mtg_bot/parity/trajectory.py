@@ -9533,15 +9533,25 @@ def _phase_3a_lazy_init_allowlists():
     if _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES:
         return
     from mtg_bot.effects.combinators import (
+        OptionalPutCreatureFromHandOntoBattlefield,
         OptionalSacLandOrLanderForBasicLandRamp,
     )
     from mtg_bot.effects.predicates import Event, IsSelf
 
+    # Phase 3B Cycle 2 widen (2026-05-25; this slice): append
+    # ``OptionalPutCreatureFromHandOntoBattlefield`` (Sledge-Class
+    # Seedship) to the Effect-class allowlist and ``(ATTACKS,
+    # IsSelf(subject=None))`` to the (event, predicate)-shape table.
+    # Per design doc §5.4 / §7.2 — the per-cycle admit set grows from
+    # the Phase-3A 1-class / 1-shape pilot to the Phase-3B 2-class /
+    # 2-shape allowlist.
     _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES = (
         OptionalSacLandOrLanderForBasicLandRamp,
+        OptionalPutCreatureFromHandOntoBattlefield,
     )
     _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES = (
         (Event.ENTERS, IsSelf(subject=None)),
+        (Event.ATTACKS, IsSelf(subject=None)),
     )
 
 
@@ -9739,6 +9749,7 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
     """
     from mtg_bot.parity.cross_engine import CardDef as _CardDef
     from mtg_bot.effects.combinators import (
+        OptionalPutCreatureFromHandOntoBattlefield,
         OptionalSacLandOrLanderForBasicLandRamp,
     )
     from mtg_bot.effects.predicates import Event, IsSelf
@@ -9752,9 +9763,11 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
     except ValueError:
         return None
     # Build the triggered_abilities tuple — for each admitted trigger,
-    # emit the round-trip dict the bridge contract expects. Phase 3A's
-    # 1-shape allowlist makes this a single dispatch arm per Effect
-    # class; future sub-phases append additional arms (sibling to the
+    # emit the round-trip dict the bridge contract expects. Phase 3B's
+    # 2-shape allowlist widens the Phase-3A single-shape dispatch with
+    # the ATTACKS event arm + OptionalPutCreatureFromHandOntoBattlefield
+    # Effect-emit arm (Sledge-Class Seedship FLIP, this slice). Future
+    # sub-phases append additional arms (sibling to the
     # ``_python_ta_to_safe_dict`` cascade above but scoped to the
     # Phase-3-admit set).
     ta_dicts: list[dict] = []
@@ -9762,21 +9775,34 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
         # Event string mapping mirrors _python_ta_to_safe_dict above.
         if trig.event is Event.ENTERS:
             event_str = "enters"
+        elif trig.event is Event.ATTACKS:
+            # Phase 3B Cycle 2 widen — Sledge-Class Seedship's
+            # self-attack trigger event.
+            event_str = "attacks"
         else:
-            # Phase 3A only admits ENTERS; this is defense-in-depth.
+            # Phase 3B admits ENTERS + ATTACKS only; defense-in-depth.
             return None
-        # Predicate dict (Phase 3A only: IsSelf -> source_is_self).
+        # Predicate dict (Phase 3B: IsSelf -> source_is_self).
         if isinstance(trig.predicate, IsSelf) and trig.predicate.subject is None:
             pred_dict = {"kind": "source_is_self"}
         else:
             return None  # defense-in-depth
         # Effect dict — emit the canonical Rust-parser-claimed kind +
-        # land_count int. Mirrors the C1 substrate's reverse-serializer
-        # leaf at lines 4510-4523 + the Rust parse_effect arm.
+        # per-Effect payload. Mirrors the C1 substrate's reverse-
+        # serializer leaf + the Rust parse_effect arm.
         if isinstance(trig.effect, OptionalSacLandOrLanderForBasicLandRamp):
             eff_dict = {
                 "kind": "optional_sac_land_or_lander_for_basic_land_ramp",
                 "land_count": int(trig.effect.land_count),
+            }
+        elif isinstance(trig.effect, OptionalPutCreatureFromHandOntoBattlefield):
+            # Phase 3B Cycle 2 widen — Sledge-Class Seedship's effect.
+            # Unit-shape Effect; emit kind discriminator alone (no
+            # rider fields). Mirrors the C1 Rust to_pydict arm at
+            # cards.rs + the cross-engine bridge dict-to-Python arm
+            # in cross_engine.py.
+            eff_dict = {
+                "kind": "optional_put_creature_from_hand_onto_battlefield",
             }
         else:
             return None  # defense-in-depth (admit predicate gated this)
