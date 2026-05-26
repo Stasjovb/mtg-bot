@@ -391,14 +391,24 @@ def test_admit_set_size_bumps_post_cycle_3():
     INVERTED in-place here.
 
     Pre-C3: ZERO Spacecraft printings admitted through any disjunct
-    of the deck-level filter. Post-C3: exactly ONE Spacecraft admits
-    (Galvanizing Sawship — 5,938 17lands decks).
+    of the deck-level filter. Post-C3: at least Galvanizing Sawship
+    admits (Phase-1 sub-shape A — 5,938 17lands decks).
+
+    **Phase 2 Cycle 2 update (2026-05-25).** Post-Phase-2-C2 the
+    Phase-2 sibling disjunct
+    :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`
+    additionally admits Lumen-Class Frigate (1 card, ~37k 17lands
+    decks). The cardinality this pin asserts is therefore EXACTLY
+    {Sawship, Lumen-Class Frigate} post-Phase-2-C2; the post-Phase-
+    1-C3 baseline set ({Sawship}) is still the load-bearing
+    invariant being affirmed (Sawship still admits via the Phase-1
+    path).
 
     Bench-aggregate cross-check: walks every printing in the active
     source, counts those that admit through the deck-level filter
-    AND carry the Spacecraft subtype. Post-FLIP the count is EXACTLY 1
-    (Sawship). Any other Spacecraft admitting is a silent auto-grow
-    honest-stop.
+    AND carry the Spacecraft subtype. Post-Phase-2-FLIP the set is
+    {Sawship, Lumen-Class Frigate}. Any OTHER Spacecraft admitting
+    is a silent auto-grow honest-stop.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -413,9 +423,15 @@ def test_admit_set_size_bumps_post_cycle_3():
         )
         if filtered:
             admitted_spacecraft.append(name)
-    assert admitted_spacecraft == ["Galvanizing Sawship"], (
-        "Admit-set count bump: exactly ONE Spacecraft must admit at "
-        f"the deck-level filter post-C3. Got: {sorted(admitted_spacecraft)!r}."
+    assert sorted(admitted_spacecraft) == [
+        "Galvanizing Sawship",
+        "Lumen-Class Frigate",
+    ], (
+        "Admit-set count bump: exactly TWO Spacecraft must admit at "
+        "the deck-level filter post-Phase-2-Cycle-2 — Galvanizing "
+        "Sawship (Phase-1 sub-shape A) + Lumen-Class Frigate "
+        "(Phase-2 static-anthem). Got: "
+        f"{sorted(admitted_spacecraft)!r}."
     )
 
 

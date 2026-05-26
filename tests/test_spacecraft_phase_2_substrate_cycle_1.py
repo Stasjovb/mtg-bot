@@ -603,18 +603,31 @@ def test_pin13_mtl_phase_4_during_your_turn_anthem_unchanged_by_phase_2_substrat
 # ---------------------------------------------------------------------------
 
 
-def test_lumen_class_frigate_stays_declined_at_admit_gate_post_cycle_1():
-    """**LOAD-BEARING substrate-only invariant pin.**
+def test_lumen_class_frigate_now_admits_at_admit_gate_post_cycle_2():
+    """**INVERSION of the C1 substrate-only invariant pin
+    (formerly ``test_lumen_class_frigate_stays_declined_at_admit_
+    gate_post_cycle_1``).**
 
-    Cycle 1 lands the Rust substrate ONLY — the Python bridge widen,
-    the new admit predicate, and the OR-chain disjunct registration
-    all ship in Cycle 2. Lumen-Class Frigate's live ``CardPrinting``
-    must STAY DECLINED at every existing admit predicate disjunct
-    after Cycle 1 — every Cycle-1-shipped Rust change is gated behind
-    a parser-whitelist arm that is unreachable from the deck loader
-    until Cycle 2 widens the bridge emit + admit predicate.
+    Cycle 1 landed the Rust substrate ONLY (new
+    ``source_charge_counters_at_least`` condition_tag dispatcher arm
+    + parser whitelist widen). The C1 invariant pinned that
+    Lumen-Class Frigate STAYED DECLINED at every existing admit
+    predicate disjunct because the Python bridge widen + new admit
+    predicate + OR-chain disjunct registration were not yet in
+    place.
 
-    Cycle 2 is what flips this pin.
+    **Cycle 2 (this slice) lands the bridge rehydrator widen +
+    :func:`_static_ability_is_phase_2_spacecraft_anthem` +
+    :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`
+    admit predicate + OR-chain disjunct.** The invariant pin is
+    INVERTED here in place: Lumen-Class Frigate now ADMITS at the
+    Phase-2 admit gate, while STILL being rejected by the Phase-1
+    sub-shape A predicate (still gates on zero static_abilities) AND
+    the MTL Phase-4 warp+anthem predicate (still gates on
+    ``warp_cost is not None``). The new predicate is exhaustive for
+    Phase 2 — only Lumen-Class Frigate passes (verified at the
+    bench-aggregate pin in
+    ``test_spacecraft_phase_2_cycle_2_flip``).
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -627,6 +640,8 @@ def test_lumen_class_frigate_stays_declined_at_admit_gate_post_cycle_1():
     # Phase-1 sub-shape A predicate STILL rejects Lumen-Class Frigate —
     # the Phase-1 admit gates zero static abilities, but Lumen-Class
     # Frigate carries one anthem static (the Phase-2 carrier shape).
+    # The Phase-2 admit predicate is a SIBLING-DISJUNCT, NOT a widen
+    # of the Phase-1 predicate.
     assert (
         trajectory._printing_is_bridge_pure_station_spacecraft(lumen) is False
     ), (
@@ -646,22 +661,27 @@ def test_lumen_class_frigate_stays_declined_at_admit_gate_post_cycle_1():
         "MTL Phase-4 anthem-PT-conditional warp predicate must reject "
         "Lumen-Class Frigate (no warp_cost). The Phase-2 admit "
         "predicate that DOES admit Lumen-Class Frigate is "
-        "`_printing_is_bridge_phase_2_static_anthem_spacecraft`, which "
-        "Cycle 2 lands."
+        "`_printing_is_bridge_phase_2_static_anthem_spacecraft`."
     )
 
-    # The new Phase-2 admit predicate is NOT yet present on
-    # trajectory — Cycle 2 lands it. Cycle 1 substrate-only invariant:
-    # the symbol must NOT exist yet (the predicate is the Cycle-2
-    # FLIP marker; landing it in Cycle 1 would silently flip the
-    # admit set before Cycle 2's bridge widen is in place).
-    assert not hasattr(
+    # **THE FLIP.** The new Phase-2 admit predicate IS now defined on
+    # ``trajectory`` AND it positively admits Lumen-Class Frigate.
+    assert hasattr(
         trajectory, "_printing_is_bridge_phase_2_static_anthem_spacecraft"
     ), (
-        "Cycle 1 is substrate-only — the new admit predicate "
+        "Cycle 2 must land the Phase-2 admit predicate "
         "`_printing_is_bridge_phase_2_static_anthem_spacecraft` "
-        "must land in Cycle 2 alongside the bridge widen + "
-        "admit-set pin bump. Cycle 1 landing the predicate "
-        "out-of-order would silently flip the admit set before "
-        "the bridge emit / rehydrator widen is in place."
+        "on `mtg_bot.parity.trajectory`."
+    )
+    assert (
+        trajectory._printing_is_bridge_phase_2_static_anthem_spacecraft(
+            lumen,
+        ) is True
+    ), (
+        "Cycle 2 FLIP: Lumen-Class Frigate must ADMIT through the new "
+        "Phase-2 static-anthem Spacecraft admit predicate "
+        "`_printing_is_bridge_phase_2_static_anthem_spacecraft` "
+        "(the sole EoE printing matching the §5.4 §2-teeth — "
+        "verify-first walk pinned at the bench-aggregate pin in "
+        "test_spacecraft_phase_2_cycle_2_flip)."
     )

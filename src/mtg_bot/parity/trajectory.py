@@ -8974,6 +8974,264 @@ def _station_spacecraft_card_def(printing) -> "Optional[CardDef]":
     )
 
 
+def _static_ability_is_phase_2_spacecraft_anthem(ability) -> bool:
+    """True iff ``ability`` is a Phase-2 bridge-admittable Spacecraft
+    anthem static — a layer-7 ``PowerToughnessBonus`` gated by
+    ``tier_threshold >= 1`` (charge-counter gate on the source) under
+    a ``creatures_you_control`` / ``other_creatures_you_control``
+    scope, with no other rider.
+
+    **Spacecraft Station substrate — Phase 2 Cycle 2 (Lumen-Class
+    Frigate, 2026-05-25; spec at
+    ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md`` §5.4).**
+    Sibling of the Phase-4 MTL helper
+    :func:`_static_ability_is_phase4_anthem_pt_conditional`. Mirrors
+    the shape ``parser/statics.py:_parse_anthem_static_line`` emits
+    for Lumen-Class Frigate's "While this Spacecraft has two or more
+    charge counters, other creatures you control get +1/+1." line.
+    The verify-first walk confirms the parser SoT is
+    ``StaticAbility(scope=OTHER_CREATURES_YOU_CONTROL,
+    tier_threshold=2, condition=None,
+    continuous_effect=ContinuousModifier(layer=7,
+    payload=PowerToughnessBonus(1, 1)))``.
+
+    The §2 teeth:
+
+      * ``scope`` is ``creatures_you_control`` or
+        ``other_creatures_you_control`` — the only two anthem scopes
+        the Rust parser arm whitelists (matches the Phase-1 +
+        Phase-4 sibling vocab).
+      * ``tier_threshold >= 1`` (Phase 2's load-bearing new gate; the
+        Phase-1 helper rejects any ``tier_threshold``, the Phase-4
+        helper rejects any ``tier_threshold``, this helper REQUIRES
+        a positive one).
+      * ``condition`` is ``None``. The parser SoT does NOT compose a
+        ``DuringYourTurn``-style rider WITH ``tier_threshold`` for
+        Lumen-Class Frigate; Phase 2 explicitly admits only the
+        ``tier_threshold``-only shape — composed shapes are a future
+        widen (Phase 3+ co-gated triggers, §3.4 cross-phase
+        amortization).
+      * ``continuous_effect`` is a layer-7
+        ``ContinuousModifier(PowerToughnessBonus(p, t))``.
+      * ``subject_filter`` on the modifier is ``None`` (Phase 2
+        doesn't carry typed-anthem subjects).
+      * ``replacement_effect`` is ``None``.
+      * ``granted_keywords`` is empty (Phase 2 carriers don't ride a
+        keyword grant alongside the P/T gate — future widen).
+      * ``room_half`` is ``None``, ``grants_no_max_hand_size`` is
+        False, ``grants_creature_spells_uncounterable`` is False.
+      * The legacy ``power_bonus`` / ``toughness_bonus`` slot is
+        empty (payload rides the ContinuousModifier, NOT the legacy
+        field; same convention as the Phase-4 MTL helper).
+    """
+    from mtg_bot.cards.base import StaticScope
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier,
+        PowerToughnessBonus,
+    )
+
+    if ability.scope not in (
+        StaticScope.CREATURES_YOU_CONTROL,
+        StaticScope.OTHER_CREATURES_YOU_CONTROL,
+    ):
+        return False
+    if not ability.tier_threshold or ability.tier_threshold < 1:
+        return False
+    if ability.condition is not None:
+        return False  # composed shapes deferred
+    if ability.replacement_effect is not None:
+        return False
+    if ability.power_bonus or ability.toughness_bonus:
+        # Legacy P/T slot must be empty — the bonus rides on the
+        # ContinuousModifier payload below.
+        return False
+    if ability.granted_keywords:
+        return False
+    if ability.room_half is not None:
+        return False
+    if ability.grants_no_max_hand_size:
+        return False
+    if ability.grants_creature_spells_uncounterable:
+        return False
+    ce = ability.continuous_effect
+    if ce is None:
+        return False
+    if not isinstance(ce, ContinuousModifier):
+        return False
+    if ce.layer != 7:
+        return False
+    if not isinstance(ce.payload, PowerToughnessBonus):
+        return False
+    if getattr(ce, "subject_filter", None) is not None:
+        return False
+    return True
+
+
+def _printing_is_bridge_phase_2_static_anthem_spacecraft(printing) -> bool:
+    """True iff a CardPrinting is a Phase-2 bridge-supported
+    static-anthem Spacecraft — the Phase-1 sub-shape A clauses EXCEPT
+    ``static_abilities`` is replaced with a positive one-static
+    allowlist via
+    :func:`_static_ability_is_phase_2_spacecraft_anthem`.
+
+    **Spacecraft Station substrate — Phase 2 Cycle 2 (Lumen-Class
+    Frigate, 2026-05-25; spec at
+    ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md`` §5.4 +
+    §5.5).** Sibling of :func:`_printing_is_bridge_pure_station_
+    spacecraft` (Phase-1 zero-static carrier — Galvanizing Sawship)
+    and :func:`_printing_is_bridge_static_anthem_pt_conditional_warp_
+    creature` (Phase-4 MTL composed-warp-anthem creature). Pilot:
+    Lumen-Class Frigate (``{1}{W}``, station_threshold=12,
+    stationed_keywords={flying, lifelink}, 3/5, one
+    tier_threshold=2 anthem static +1/+1 to other creatures you
+    control).
+
+    The verify-first walk against the live EoE pool confirms exactly
+    ONE Spacecraft passes every clause (Lumen-Class Frigate); the
+    other 6 deferred Spacecraft each fail at least one clause
+    (Larval Scoutlander / Sledge-Class Seedship / Synthesizer Labship
+    / Entropic Battlecruiser / Infinite Guideline Station all carry
+    ``triggered_abilities`` — Phase 3; The Eternity Elevator carries
+    ``activated_abilities`` and ``station_threshold is None`` —
+    Phase 4). Galvanizing Sawship has zero static abilities, so it
+    falls to the Phase-1 predicate's path; the
+    ``len(static_abilities) != 1`` short-circuit here rejects it.
+
+    Routed as a NEW OR-disjunct in
+    :func:`_filter_deck_to_bridge_supported` sibling to the Phase-1
+    disjunct.
+    """
+    if "Spacecraft" not in printing.subtypes:
+        return False
+    if printing.station_threshold is None:
+        return False  # Phase 4 only (The Eternity Elevator)
+    if printing.station_threshold <= 0:
+        return False
+    if printing.triggered_abilities:
+        return False  # Phase 3 (5 carriers)
+    if printing.activated_abilities:
+        return False  # Phase 4 (The Eternity Elevator)
+    # Static abilities — POSITIVE allowlist of the Phase-2
+    # Spacecraft-anthem shape. Empty static_abilities falls through
+    # to the Phase-1 ``_pure_station_spacecraft`` disjunct (already
+    # in production); this predicate specifically admits the
+    # ONE-anthem shape.
+    if not printing.static_abilities:
+        return False  # Phase-1 path covers zero-static
+    if len(printing.static_abilities) != 1:
+        return False  # exactly one anthem (no composed multi-static)
+    if not _static_ability_is_phase_2_spacecraft_anthem(
+        printing.static_abilities[0]
+    ):
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if printing.keywords:
+        return False  # Phase-2 carrier has empty baseline keywords
+    if not printing.stationed_keywords:
+        return False
+    for kw in printing.stationed_keywords:
+        if kw not in _SAFE_KEYWORDS:
+            return False
+    if getattr(
+        printing,
+        "grants_toughness_as_station_power_for_creatures_you_control",
+        False,
+    ):
+        return False  # Tapestry Warden flag — Phase-3+ widen
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _phase_2_static_anthem_spacecraft_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Phase-2-admitted static-anthem
+    Spacecraft printing.
+
+    **Spacecraft Station substrate — Phase 2 Cycle 2 (Lumen-Class
+    Frigate, 2026-05-25).** Sibling of
+    :func:`_station_spacecraft_card_def` (Phase-1 zero-static
+    carrier). The synthesized CardDef carries every Phase-1 field
+    PLUS a one-entry ``static_anthems`` tuple encoding the anthem's
+    scope + P/T bonus + the new ``source_charge_counters_at_least``
+    condition_tag with the parser SoT's ``tier_threshold`` value
+    threaded back as ``condition_args[0]``. The Rust side reads this
+    via the Cycle-1-landed parse + dispatcher arms; the Python
+    rehydrator
+    (``cross_engine._card_def_to_python_printing`` anthem loop)
+    inverts it back to ``StaticAbility(tier_threshold=N,
+    condition=None, ...)`` per §5.3a.
+    """
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+    from mtg_bot.cards.base import StaticScope as _StaticScope
+    from mtg_bot.effects.modifiers import (
+        ContinuousModifier as _CM,
+        PowerToughnessBonus as _PTB,
+    )
+
+    if not _printing_is_bridge_phase_2_static_anthem_spacecraft(printing):
+        return None
+    try:
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return None
+    (anthem,) = printing.static_abilities
+    # Map StaticScope -> the lowercase string scope vocabulary the
+    # bridge dict / CardDef field carry (matches the parser emit
+    # surface in ``parser/statics.py`` and the C1 substrate's parse
+    # whitelist at ``rust/src/cards.rs:15191``).
+    if anthem.scope == _StaticScope.OTHER_CREATURES_YOU_CONTROL:
+        scope_str = "other_creatures_you_control"
+    elif anthem.scope == _StaticScope.CREATURES_YOU_CONTROL:
+        scope_str = "creatures_you_control"
+    else:
+        return None  # admit predicate already rejects but defensive
+    ce = anthem.continuous_effect
+    assert isinstance(ce, _CM) and isinstance(ce.payload, _PTB), (
+        "admit predicate must have already gated the payload shape"
+    )
+    p_bonus = int(ce.payload.power_bonus)
+    t_bonus = int(ce.payload.toughness_bonus)
+    tier = int(anthem.tier_threshold)
+    static_anthems = (
+        (
+            scope_str,
+            (),  # no granted_keywords — Phase 2 carrier is P/T-only
+            p_bonus,
+            t_bonus,
+            "source_charge_counters_at_least",
+            (tier,),
+        ),
+    )
+    return _CardDef(
+        name=printing.name,
+        card_type="Artifact",
+        mana_cost_generic=generic,
+        mana_cost_colored=colored,
+        subtypes=tuple(printing.subtypes),
+        supertypes=tuple(printing.supertypes or ()),
+        power=printing.power,
+        toughness=printing.toughness,
+        station_threshold=int(printing.station_threshold),
+        stationed_keywords=tuple(sorted(printing.stationed_keywords)),
+        static_anthems=static_anthems,
+    )
+
+
 def _static_ability_is_simple_anthem_keyword_grant(ability) -> bool:
     """True iff ``ability`` is a Phase-1 bridge-admittable anthem-shape
     static — an unconditional layer-6 keyword-grant whose subject is
@@ -10265,6 +10523,31 @@ def _printing_to_card_def(printing) -> CardDef:
         # branch passes the predicate by construction (the OR-chain
         # routes here only when the predicate returned True).
         card_def = _station_spacecraft_card_def(printing)
+        if card_def is not None:
+            return card_def
+    if _printing_is_bridge_phase_2_static_anthem_spacecraft(printing):
+        # **Spacecraft Station substrate Phase 2 Cycle 2 (Lumen-Class
+        # Frigate, 2026-05-25; spec at
+        # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md``
+        # §5.5).** A single-anthem-static Spacecraft flattens to an
+        # Artifact CardDef carrying ``station_threshold`` +
+        # ``stationed_keywords`` + a one-entry ``static_anthems``
+        # tuple encoding the anthem's scope + P/T bonus + the new
+        # ``source_charge_counters_at_least`` condition_tag with the
+        # parser SoT's ``tier_threshold`` value threaded as
+        # ``condition_args[0]``. Cycle 1 substrate landed the Rust
+        # side (new condition_tag dispatcher arm in
+        # ``rust/src/state_ops_combat.rs:737-810`` + parser whitelist
+        # widen at ``rust/src/cards.rs:15191``); this cycle adds the
+        # bridge rehydrator widen (``cross_engine.py``
+        # ``_static_anthem_condition_from_tag`` returns ``None`` for
+        # the new tag, with ``tier_threshold`` threaded back to the
+        # legacy slot at the anthem-static rehydration site per
+        # design doc §5.3a) + this admit predicate +
+        # :func:`_phase_2_static_anthem_spacecraft_card_def` builder
+        # + the OR-disjunct registration below. Pilot: Lumen-Class
+        # Frigate.
+        card_def = _phase_2_static_anthem_spacecraft_card_def(printing)
         if card_def is not None:
             return card_def
     if _printing_is_bridge_pure_warp_creature(printing):
@@ -12106,6 +12389,35 @@ def _filter_deck_to_bridge_supported(
             # OR-in. Per-card real-EoE probe (Scenarios A/B/C) ships
             # in Cycle 4 per design doc §6.3.
             or _printing_is_bridge_pure_station_spacecraft(printing)
+            # **Spacecraft Station substrate Phase 2 Cycle 2
+            # (Lumen-Class Frigate, 2026-05-25; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md``
+            # §5.5).** The bridge-supported static-anthem Spacecraft
+            # disjunct. Admits EXACTLY Lumen-Class Frigate in the EoE
+            # pool — the SOLE single-anthem-static-only Spacecraft per
+            # the verify-first walk (the other 5 trigger-bearing
+            # Spacecraft + The Eternity Elevator all fail at least
+            # one §5.4 clause). Routed AFTER the Phase-1 pure-station
+            # disjunct so a zero-static printing (Galvanizing Sawship)
+            # is short-circuited by the Phase-1 path; this disjunct
+            # only fires on a printing with EXACTLY ONE static_ability
+            # matching the Phase-2 anthem shape (tier_threshold >= 1,
+            # condition=None, layer-7 P/T continuous modifier). The §2
+            # teeth on :func:`_static_ability_is_phase_2_spacecraft_
+            # anthem` + :func:`_printing_is_bridge_phase_2_static_
+            # anthem_spacecraft` reject every multi-static / composed-
+            # shape / triggered-co-gated carrier — Phase-3+ widens
+            # those per design doc §3.1. Cycle 1 substrate landed
+            # ``afccee65`` (new ``source_charge_counters_at_least``
+            # condition_tag arm in
+            # ``state_ops_combat.rs::static_anthem_condition_matches``
+            # + parser whitelist widen at ``cards.rs:15191``); Cycle 2
+            # (this slice) adds the bridge rehydrator widen +
+            # :func:`_phase_2_static_anthem_spacecraft_card_def`
+            # builder + this OR-in. Per-card real-EoE probe Scenarios
+            # A & B ship alongside Cycle 2 (Scenarios C & D + composed-
+            # shape pins ship in Cycle 3 per design doc §7).
+            or _printing_is_bridge_phase_2_static_anthem_spacecraft(printing)
         ):
             # Resolved but passes none of the bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

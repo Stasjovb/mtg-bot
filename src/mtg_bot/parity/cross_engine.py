@@ -14416,6 +14416,26 @@ def _static_anthem_condition_from_tag(
       control get +1/+0." prints in this exact surface. The Condition
       reads ``state.active_player().id == viewer_id``; for an anthem
       the viewer is the source's controller.
+    * ``"source_charge_counters_at_least"`` (one int arg) → ``None``.
+      **Spacecraft Station substrate — Phase 2 Cycle 2 (Lumen-Class
+      Frigate, 2026-05-25; spec at
+      ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md`` §5.3a).**
+      Returns ``None`` here because the parser SoT for Lumen-Class
+      Frigate emits ``tier_threshold=N, condition=None`` — the
+      tier_threshold int is threaded back to the legacy
+      ``StaticAbility.tier_threshold`` slot at the anthem-static
+      rehydration site (the caller — ``_card_def_to_python_printing``
+      anthem loop), NOT on the rehydrated ``Condition``. The Rust
+      side STILL routes through the condition_tag dispatcher (the
+      Rust ``StaticAnthem`` slot has ``condition_tag: String +
+      condition_args: Vec<i32>``, not a ``tier_threshold: i32``);
+      the bridge encodes tier_threshold AS a condition_tag arm but
+      Python rehydrates back to the legacy slot. Asymmetric but
+      bridge-clean — same pattern the warp_cost substrate uses.
+      One arg required (the threshold int); the helper raises on
+      arg-list length mismatch as defense-in-depth against a
+      bridge-vs-parser drift (the Rust whitelist at
+      ``cards.rs:15191`` is the same source of truth).
 
     An unknown tag raises ``ValueError`` — the Rust parser's
     whitelist is the source of truth for which tags reach this
@@ -14442,6 +14462,18 @@ def _static_anthem_condition_from_tag(
                 f"during_your_turn takes no args; got {cond_args!r}"
             )
         return DuringYourTurn()
+    if cond_tag == "source_charge_counters_at_least":
+        # **Spacecraft Station substrate — Phase 2 Cycle 2.** The
+        # tier_threshold int is threaded separately at the anthem-
+        # static rehydration site; the helper itself returns None so
+        # the rehydrated StaticAbility carries the parser SoT's
+        # ``condition=None`` shape. See class docstring above.
+        if len(cond_args) != 1:
+            raise ValueError(
+                f"source_charge_counters_at_least takes one int arg; "
+                f"got {cond_args!r}"
+            )
+        return None
     raise ValueError(
         f"unknown anthem-scope conditional static tag: {cond_tag!r}"
     )
@@ -14700,6 +14732,26 @@ def _card_def_to_python_printing(card: "CardDef"):
             cond = _static_anthem_condition_from_tag(
                 condition_tag, condition_args,
             )
+            # **Spacecraft Station substrate — Phase 2 Cycle 2
+            # (2026-05-25; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_2_DESIGN.md``
+            # §5.3a).** The new ``source_charge_counters_at_least``
+            # condition_tag arm encodes a Spacecraft anthem's
+            # tier_threshold value as a condition_args[0] int on the
+            # bridge wire, but the Python parser SoT emits
+            # ``StaticAbility.tier_threshold=N, condition=None`` for
+            # Lumen-Class Frigate. The rehydrator HERE mirrors the
+            # parser SoT exactly: thread the int back onto the
+            # rehydrated ``StaticAbility``'s legacy ``tier_threshold``
+            # slot (``cards/base.py:559``-ish; the kwarg is honored by
+            # the dataclass-style constructor) and leave the rehydrated
+            # ``condition`` as ``None`` (returned by the helper above).
+            # Every OTHER tag (``""``, ``"during_your_turn"``) leaves
+            # ``extra_kwargs`` empty so its StaticAbility shape is
+            # bit-identical to pre-Phase-2 — back-compat preserved.
+            extra_kwargs: dict = {}
+            if condition_tag == "source_charge_counters_at_least":
+                extra_kwargs["tier_threshold"] = int(condition_args[0])
             if power_bonus or toughness_bonus:
                 sa_list.append(
                     StaticAbility(
@@ -14712,6 +14764,7 @@ def _card_def_to_python_printing(card: "CardDef"):
                                 toughness_bonus=int(toughness_bonus),
                             ),
                         ),
+                        **extra_kwargs,
                     )
                 )
             for kw in granted_keywords:
@@ -14723,6 +14776,7 @@ def _card_def_to_python_printing(card: "CardDef"):
                             layer=6,
                             payload=GrantKeyword(kw.replace("_", " ")),
                         ),
+                        **extra_kwargs,
                     )
                 )
         static_abilities = tuple(sa_list)

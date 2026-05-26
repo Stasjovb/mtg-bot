@@ -2524,6 +2524,53 @@ PROBE_MODULES: tuple[Path, ...] = (
     # scoped in the design doc §7 — ~16-22 cycles across the whole
     # campaign to close all 8 cards / 41,281 decks.
     REPO_ROOT / "tests" / "test_galvanizing_sawship_parity.py",
+    # **Spacecraft Station substrate Phase 2 Cycle 2 (2026-05-25):**
+    # Per-card real-EoE byte-equal probe binding Lumen-Class Frigate
+    # to the Phase-2 widened Station/anthem admit gate. Phase 2 Cycle
+    # 1 landed the Rust substrate (new ``source_charge_counters_at_
+    # least`` condition_tag dispatcher arm at
+    # ``rust/src/state_ops_combat.rs:737-810`` + parser whitelist
+    # widen at ``rust/src/cards.rs:15191``); Cycle 2 (this slice)
+    # adds the Python bridge rehydrator widen +
+    # ``_static_ability_is_phase_2_spacecraft_anthem`` predicate +
+    # ``_printing_is_bridge_phase_2_static_anthem_spacecraft`` admit
+    # predicate + ``_phase_2_static_anthem_spacecraft_card_def``
+    # builder + OR-chain disjunct registration in
+    # ``_filter_deck_to_bridge_supported``.
+    #
+    #   * ``test_lumen_class_frigate_parity.py`` — Lumen-Class
+    #     Frigate (``{1}{W}`` Artifact — Spacecraft, 3/5,
+    #     station_threshold=12, stationed_keywords={flying,
+    #     lifelink}, ONE static anthem with tier_threshold=2 +
+    #     +1/+1 to other_creatures_you_control); the FIRST
+    #     PROBE_MODULES-credited probe binding the new
+    #     ``source_charge_counters_at_least`` condition_tag arm to
+    #     a real-EoE Spacecraft + static-anthem carrier. Drives BOTH
+    #     engines through TWO scenarios across the charge-counter
+    #     axis per design doc §6.3: (A) un-stationed + anthem-gate-
+    #     closed (charge=0; crew P/T == printed; Spacecraft not a
+    #     creature), and (B) THE LOAD-BEARING anthem-gate-open +
+    #     station-gate-closed (charge=2; 2 ActivateStations resolved;
+    #     other-creature crew get +1/+1 from the anthem; Spacecraft
+    #     STILL not a creature at 2 < 12). Uses the scripted-picker
+    #     shape design doc §6.3 mandates (explicit
+    #     ``(spacecraft_id, crew_id)`` per activation via direct
+    #     ``apply_action``; the bench's ``attack_all`` strategy would
+    #     not produce "queue-N-ActivateStations-then-test-anthem"
+    #     organically). Each scenario asserts full
+    #     ``compare_fields == []`` byte-equality across the whole
+    #     field view on both engines.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Lumen-Class
+    # Frigate joins the Phase-1 Sawship as the second PROBED
+    # Spacecraft). The other 6 EoE Spacecraft printings stay
+    # honestly DECLINED on the strict shape gates — the §6.4
+    # decline-set bench check in
+    # ``test_spacecraft_phase_2_cycle_2_flip.py`` pins this
+    # exhaustively. Scenarios C+D (turn-rollover survival + bounce-
+    # resets + station+anthem-both-open) + composed-shape pins ship
+    # in Cycle 3 per design doc §7.
+    REPO_ROOT / "tests" / "test_lumen_class_frigate_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see
@@ -3011,7 +3058,7 @@ def residue_blocked_cards(
 
 def loader_admits(printing) -> bool:
     """True iff the production-deck loader admits this printing — the
-    EXACT gate the bench corpus runs through. Mirrors all 17 disjuncts
+    EXACT gate the bench corpus runs through. Mirrors all 18 disjuncts
     of ``trajectory._filter_deck_to_bridge_supported``'s admit gate:
 
     1. ``_printing_is_bridge_basic_land``
@@ -3267,6 +3314,18 @@ def loader_admits(printing) -> bool:
             # §6.3); this fold lifts the metric from ADMITTED to
             # COVERED-by-construction post-FLIP.
             or traj._printing_is_bridge_pure_station_spacecraft(printing)
+            # **Spacecraft Station substrate Phase 2 Cycle 2
+            # (2026-05-25).** Mirrors the real loader's new admit arm
+            # in ``_filter_deck_to_bridge_supported``. Admits exactly
+            # Lumen-Class Frigate in the EoE pool — the sole single-
+            # anthem-static-only Spacecraft per the verify-first walk
+            # against the 22-Spacecraft live set. Per-card real-EoE
+            # probe Scenarios A & B ship in Cycle 2 (this slice);
+            # Scenarios C & D + composed-shape pins ship in Cycle 3
+            # per design doc §7.
+            or traj._printing_is_bridge_phase_2_static_anthem_spacecraft(
+                printing,
+            )
         )
     except Exception:
         return False
