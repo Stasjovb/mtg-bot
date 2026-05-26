@@ -2610,6 +2610,56 @@ PROBE_MODULES: tuple[Path, ...] = (
     # (Synthesizer Labship + Entropic Battlecruiser + Infinite
     # Guideline Station) are the next FLIP cycles per design doc §7.
     REPO_ROOT / "tests" / "test_larval_scoutlander_parity.py",
+    # **Spacecraft Station substrate Phase 3B Cycle 2 (2026-05-25):**
+    # Per-card real-EoE byte-equal probe binding Sledge-Class Seedship
+    # to the Phase-3B widened Station/trigger admit gate. Phase 3B
+    # Cycle 1 landed the Rust substrate (commit ``2a35f95c`` — new
+    # ``Effect::OptionalPutCreatureFromHandOntoBattlefield`` unit
+    # variant + parse / to_pydict / resolve arms + cross-engine bridge
+    # dict-to-Python arm + reverse-serializer leaf in
+    # ``trajectory.py``); Cycle 2 (this slice) widens the Phase-3
+    # admit-class allowlist
+    # (``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` += ``Optional
+    # PutCreatureFromHandOntoBattlefield``) and event-shape table
+    # (``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES`` += ``(Event.
+    # ATTACKS, IsSelf(subject=None))``) + the matching per-card
+    # builder arms.
+    #
+    #   * ``test_sledge_class_seedship_parity.py`` — Sledge-Class
+    #     Seedship (``{2}{G}`` Artifact — Spacecraft, 4/5,
+    #     station_threshold=7, stationed_keywords={flying}, ONE
+    #     ATTACKS trigger
+    #     ATTACKS+IsSelf+OptionalPutCreatureFromHandOntoBattlefield
+    #     at tier_threshold=0); the FIRST PROBE_MODULES-credited
+    #     probe binding the new
+    #     ``OptionalPutCreatureFromHandOntoBattlefield`` Effect class
+    #     + the new ATTACKS+IsSelf event-shape on the Phase-3
+    #     trigger-bearing Spacecraft admit gate. Drives BOTH engines
+    #     through TWO scenarios across the eligible-card axis per
+    #     design doc §6.3: (A) Seedship attacks with empty hand —
+    #     silent fizzle path (the ATTACKS trigger queues + resolves,
+    #     no eligible Creature in hand, silent no-op), and (B) THE
+    #     LOAD-BEARING Seedship attacks with a Grizzly Bears in hand
+    #     (put-from-hand happy path; Bear leaves hand and enters bf
+    #     UNTAPPED + summoning_sick via the centralized ENTERS
+    #     dispatch). Uses the ``_PickFirstLibraryOptionAgent`` shim
+    #     to make Python's ``choose_card_from_library`` return
+    #     ``option_ids[0]`` (mirrors Rust's deterministic first-
+    #     eligible hand-index pick).
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction (Sledge-Class
+    # Seedship joins Sawship + Lumen-Class Frigate + Larval
+    # Scoutlander as the FOURTH PROBED Spacecraft). The other 3 EoE
+    # Phase-3C Spacecraft (Synthesizer Labship, Entropic
+    # Battlecruiser, Infinite Guideline Station) stay honestly
+    # DECLINED on the Phase-3B 2-class / 2-shape allowlist — the §6.4
+    # decline-set bench check in
+    # ``test_spacecraft_phase_3a_cycle_2_flip.py`` (updated this
+    # slice to drop Sledge-Class Seedship from the decline list)
+    # pins this exhaustively. Phase 3C (Synthesizer Labship +
+    # Entropic Battlecruiser + Infinite Guideline Station) is the
+    # next set of FLIP cycles per design doc §7.
+    REPO_ROOT / "tests" / "test_sledge_class_seedship_parity.py",
     # **Carrier-AA substrate Phase 2b (2026-05-25):** Per-card real-
     # EoE byte-equal probe binding Terrain Generator to the Phase-2b
     # widened Carrier-AA admit gate. Phase 2b (see

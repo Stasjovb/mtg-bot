@@ -801,52 +801,39 @@ def test_attacks_trigger_self_dispatch_for_non_aura_carrier(engine):
 # ---------------------------------------------------------------------------
 
 
-def test_sledge_class_seedship_stays_declined_at_admit_gate_post_cycle_1():
-    """**C1 substrate-only invariant pin — Sledge-Class Seedship
-    STAYS DECLINED at the Phase-3 admit gate post-Cycle-1
-    (2026-05-25).**
+def test_sledge_class_seedship_now_admits_at_admit_gate_post_cycle_2():
+    """**C2 FLIP invariant pin — Sledge-Class Seedship NOW ADMITS at
+    the Phase-3 admit gate post-Cycle-2 (2026-05-25; this slice
+    inverts the original C1 substrate-only invariant in-place per
+    Phase-3A Cycle-2 precedent).**
 
-    The substrate landing adds the Rust Effect variant + bridge
-    plumbing + reverse-serializer leaf, but DOES NOT widen the Phase-3
-    admit-class allowlist (``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_
-    CLASSES``) or the (event, predicate)-shape table
-    (``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES``). Sledge-Class
-    Seedship's ATTACKS trigger fails BOTH gates:
+    Cycle 2 widens BOTH the Effect-class allowlist
+    (``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` += ``Optional
+    PutCreatureFromHandOntoBattlefield``) AND the (event,
+    predicate)-shape table (``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_
+    SHAPES`` += ``(Event.ATTACKS, IsSelf(subject=None))``). With both
+    widens in place, Sledge-Class Seedship passes the admit predicate
+    end-to-end:
 
-      1. The ``(ATTACKS, IsSelf(subject=None))`` (event, predicate)
-         tuple is NOT in
-         ``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES`` (which Phase
-         3A's C2 closure scoped to ``{(ENTERS, IsSelf(subject=None))}``
-         only). Cycle 2 of Phase 3B widens this to add
-         ``(ATTACKS, IsSelf(subject=None))``.
-      2. ``OptionalPutCreatureFromHandOntoBattlefield`` is NOT in
-         ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` (which
-         Phase 3A's C2 closure scoped to
-         ``(OptionalSacLandOrLanderForBasicLandRamp,)``). Cycle 2
-         widens this to add ``OptionalPutCreatureFromHandOntoBattle
-         field``.
+      1. ``(ATTACKS, IsSelf(subject=None))`` is in
+         ``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES``.
+      2. ``OptionalPutCreatureFromHandOntoBattlefield`` is in
+         ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES``.
+      3. ``tier_threshold == 0 >= 0`` and ``once_per_turn is False``.
 
     Concrete observables:
 
       1. Phase 1 ``_printing_is_bridge_pure_station_spacecraft``
-         declines Sledge-Class Seedship (the zero-ability gate
+         STILL declines Sledge-Class Seedship (the zero-ability gate
          refuses the trigger-bearing carrier — unchanged from
          pre-Phase-3).
       2. Phase 2 ``_printing_is_bridge_phase_2_static_anthem_
-         spacecraft`` declines Sledge-Class Seedship (the single-
-         static gate refuses the no-static + triggered-ability
+         spacecraft`` STILL declines Sledge-Class Seedship (the
+         single-static gate refuses the no-static + triggered-ability
          carrier — unchanged from pre-Phase-3).
       3. The Phase-3 admit predicate
-         ``_printing_is_bridge_phase_3_trigger_spacecraft`` EXISTS
-         (shipped in Phase 3A Cycle 2) but DECLINES Sledge-Class
-         Seedship (the Effect-class allowlist + event-shape table
-         both currently scope to Phase 3A only).
-      4. The Phase-1 path's ``_python_ta_to_safe_dict`` declines
-         the synthetic (ATTACKS, IsSelf,
-         OptionalPutCreatureFromHandOntoBattlefield) trigger — the
-         safe-kinds gate refuses the new kind (pinned by
-         test_python_ta_to_safe_dict_optional_put_creature_arm_is_
-         dormant_at_safe_kinds_gate above).
+         ``_printing_is_bridge_phase_3_trigger_spacecraft`` NOW
+         ADMITS Sledge-Class Seedship.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -858,44 +845,45 @@ def test_sledge_class_seedship_stays_declined_at_admit_gate_post_cycle_1():
     ps = OracleParserCardSource().get_printings()
     seedship = ps["Sledge-Class Seedship"]
 
-    # Phase-1 path declines (the zero-ability gate refuses the
+    # Phase-1 path STILL declines (the zero-ability gate refuses the
     # trigger-bearing carrier).
     assert _printing_is_bridge_pure_station_spacecraft(seedship) is False, (
         "Phase-1 _printing_is_bridge_pure_station_spacecraft must "
-        "decline Sledge-Class Seedship (the zero-ability gate refuses "
-        "the trigger-bearing carrier)."
+        "STILL decline Sledge-Class Seedship post-C2 (the zero-ability "
+        "gate refuses the trigger-bearing carrier)."
     )
-    # Phase-2 path declines (the single-static gate refuses the
+    # Phase-2 path STILL declines (the single-static gate refuses the
     # no-static + triggered-ability carrier).
     assert _printing_is_bridge_phase_2_static_anthem_spacecraft(
         seedship,
     ) is False, (
         "Phase-2 _printing_is_bridge_phase_2_static_anthem_spacecraft "
-        "must decline Sledge-Class Seedship (it carries NO static "
-        "ability + DOES carry a triggered ability — neither half of "
-        "the Phase 2 single-static contract)."
+        "must STILL decline Sledge-Class Seedship post-C2 (it carries "
+        "NO static ability + DOES carry a triggered ability — neither "
+        "half of the Phase 2 single-static contract)."
     )
 
-    # **THE SUBSTRATE-ONLY INVARIANT** — Phase-3 admit predicate
-    # DECLINES Sledge-Class Seedship.
+    # **THE C2 FLIP** — Phase-3 admit predicate NOW ADMITS Sledge-
+    # Class Seedship.
     assert _printing_is_bridge_phase_3_trigger_spacecraft(
         seedship,
-    ) is False, (
-        "**Substrate-only Phase 3B C1 invariant** — Phase-3 admit "
-        "predicate `_printing_is_bridge_phase_3_trigger_spacecraft` "
-        "MUST DECLINE Sledge-Class Seedship post-Cycle-1 (the Phase-3 "
-        "admit-class allowlist + event-shape table currently scope to "
-        "Phase 3A only; both widen in Cycle 2 per design doc §7.2). "
-        "If this test fails, Cycle 1 silently auto-promoted Sledge-"
-        "Class Seedship without shipping the C2 per-card real-EoE "
-        "probe required by the Phase 3 acceptance gate."
+    ) is True, (
+        "**Phase 3B C2 FLIP** — Phase-3 admit predicate "
+        "`_printing_is_bridge_phase_3_trigger_spacecraft` MUST now "
+        "ADMIT Sledge-Class Seedship post-Cycle-2 (the Effect-class "
+        "allowlist + event-shape table both widened to include "
+        "OptionalPutCreatureFromHandOntoBattlefield + (ATTACKS, "
+        "IsSelf(subject=None)) respectively per design doc §7.2). If "
+        "this test fails, the C2 widen regressed."
     )
 
 
-def test_loader_filter_declines_sledge_class_seedship_post_cycle_1():
-    """**Loader-level invariant pin (end-to-end).** The
-    ``_filter_deck_to_bridge_supported`` loader gate DECLINES Sledge-
-    Class Seedship post-Cycle-1 (no Phase-3B admit-class widen yet).
+def test_loader_filter_admits_sledge_class_seedship_post_cycle_2():
+    """**Loader-level FLIP pin (end-to-end).** The
+    ``_filter_deck_to_bridge_supported`` loader gate NOW ADMITS Sledge-
+    Class Seedship post-Cycle-2 (the Phase-3B admit-class widen +
+    event-shape widen + per-card builder ATTACKS + Optional
+    PutCreatureFromHandOntoBattlefield emit arms ship in this slice).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -905,31 +893,47 @@ def test_loader_filter_declines_sledge_class_seedship_post_cycle_1():
     ps = OracleParserCardSource().get_printings()
     assert "Sledge-Class Seedship" in ps
 
-    filtered_names, _card_defs = _filter_deck_to_bridge_supported(
+    filtered_names, card_defs = _filter_deck_to_bridge_supported(
         ["Sledge-Class Seedship"],
         ps,
     )
-    assert filtered_names == [], (
-        "Sledge-Class Seedship must be DECLINED by "
-        "_filter_deck_to_bridge_supported post-Cycle-1; the Phase-3B "
+    assert filtered_names == ["Sledge-Class Seedship"], (
+        "Sledge-Class Seedship must be ADMITTED by "
+        "_filter_deck_to_bridge_supported post-Cycle-2; the Phase-3B "
         "admit widen (Effect-class allowlist + event-shape table) "
-        "ships in Cycle 2 per design doc §7.2. Got filtered names: "
-        f"{filtered_names}"
+        "shipped in this slice per design doc §7.2. Got filtered "
+        f"names: {filtered_names}"
+    )
+    assert len(card_defs) == 1
+    cd = card_defs[0]
+    assert cd.name == "Sledge-Class Seedship"
+    # Per-card builder must emit the canonical ATTACKS-shape
+    # + optional_put_creature_from_hand_onto_battlefield triggered
+    # ability dict.
+    assert cd.triggered_abilities == (
+        {
+            "event": "attacks",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {
+                "kind": "optional_put_creature_from_hand_onto_battlefield",
+            },
+        },
     )
 
 
-def test_phase_3a_admit_class_allowlist_does_not_include_optional_put_creature():
-    """**Substrate-only no-silent-auto-grow pin (Effect-class
-    allowlist).** Walk the live
-    ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` tuple — NO entry
-    is ``OptionalPutCreatureFromHandOntoBattlefield``. The C2 widen
-    has NOT silently shipped under cover of C1's substrate landing.
+def test_phase_3a_allowlist_now_includes_optional_put_creature():
+    """**C2 FLIP pin (Effect-class allowlist widen).** Walk the live
+    ``_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES`` tuple — exactly
+    one entry IS ``OptionalPutCreatureFromHandOntoBattlefield``. The
+    C2 widen has shipped explicitly per design doc §7.2 (sibling of
+    the original Phase 3A pilot class ``Optional
+    SacLandOrLanderForBasicLandRamp``).
     """
     from mtg_bot.effects.combinators import (
         OptionalPutCreatureFromHandOntoBattlefield,
+        OptionalSacLandOrLanderForBasicLandRamp,
     )
     from mtg_bot.parity.trajectory import (
-        _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES,
         _phase_3a_lazy_init_allowlists,
     )
 
@@ -938,20 +942,36 @@ def test_phase_3a_admit_class_allowlist_does_not_include_optional_put_creature()
     from mtg_bot.parity.trajectory import (
         _PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES as classes,
     )
-    assert OptionalPutCreatureFromHandOntoBattlefield not in classes, (
-        "OptionalPutCreatureFromHandOntoBattlefield silently joined "
-        "_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES — the C2 widen "
-        "must be a SEPARATE explicit commit + the matching Sledge-"
-        "Class Seedship per-card real-EoE probe + FLIP pin (per "
-        "design doc §7.2 Cycle 2 deliverable)."
+    assert OptionalPutCreatureFromHandOntoBattlefield in classes, (
+        "OptionalPutCreatureFromHandOntoBattlefield must be in "
+        "_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES post-C2 (the "
+        "Phase 3B Effect-class widen ships in this slice per design "
+        "doc §7.2)."
+    )
+    # Phase 3A pilot class is preserved (non-regression).
+    assert OptionalSacLandOrLanderForBasicLandRamp in classes, (
+        "OptionalSacLandOrLanderForBasicLandRamp must still be in "
+        "_PHASE_3A_SPACECRAFT_TRIGGER_EFFECT_CLASSES post-C2 (the "
+        "Phase 3A pilot class is preserved — C2 is a pure append, "
+        "not a replace)."
+    )
+    # Exactly the 2-entry Phase-3B admit set today (sibling-narrow;
+    # Phase 3C cycles extend further).
+    assert set(classes) == {
+        OptionalSacLandOrLanderForBasicLandRamp,
+        OptionalPutCreatureFromHandOntoBattlefield,
+    }, (
+        "Phase 3B admit-class allowlist must be exactly the 2-class "
+        "set (Phase 3A pilot + the new Phase 3B class) — Phase 3C "
+        "cycles extend further. Silent auto-grow honest-stop."
     )
 
 
-def test_phase_3a_event_shape_allowlist_does_not_include_attacks():
-    """**Substrate-only no-silent-auto-grow pin (event-shape table).**
-    Walk the live ``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES``
-    tuple — NO entry is ``(Event.ATTACKS, IsSelf(subject=None))``.
-    The C2 widen has NOT silently shipped.
+def test_phase_3a_event_shape_now_includes_attacks():
+    """**C2 FLIP pin (event-shape table widen).** Walk the live
+    ``_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES`` tuple — exactly one
+    entry IS ``(Event.ATTACKS, IsSelf(subject=None))``. The C2 widen
+    shipped explicitly per design doc §7.2.
     """
     from mtg_bot.effects.predicates import Event, IsSelf
     from mtg_bot.parity.trajectory import (
@@ -963,11 +983,25 @@ def test_phase_3a_event_shape_allowlist_does_not_include_attacks():
         _PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES as shapes,
     )
     attacks_isself = (Event.ATTACKS, IsSelf(subject=None))
-    assert attacks_isself not in shapes, (
-        "(Event.ATTACKS, IsSelf(subject=None)) silently joined "
-        "_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES — the C2 widen "
-        "must be a SEPARATE explicit commit per design doc §7.2 "
-        "Cycle 2 deliverable."
+    enters_isself = (Event.ENTERS, IsSelf(subject=None))
+    assert attacks_isself in shapes, (
+        "(Event.ATTACKS, IsSelf(subject=None)) must be in "
+        "_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES post-C2 (the Phase "
+        "3B event-shape widen ships in this slice per design doc "
+        "§7.2)."
+    )
+    # Phase 3A pilot shape preserved (non-regression).
+    assert enters_isself in shapes, (
+        "(Event.ENTERS, IsSelf(subject=None)) must still be in "
+        "_PHASE_3A_SPACECRAFT_TRIGGER_EVENT_SHAPES post-C2 (the Phase "
+        "3A pilot shape is preserved — C2 is a pure append, not a "
+        "replace)."
+    )
+    # Exactly the 2-shape Phase-3B admit set today.
+    assert set(shapes) == {enters_isself, attacks_isself}, (
+        "Phase 3B event-shape allowlist must be exactly the 2-shape "
+        "set (Phase 3A pilot + the new Phase 3B shape) — Phase 3C "
+        "cycles extend further. Silent auto-grow honest-stop."
     )
 
 
