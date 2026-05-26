@@ -3906,6 +3906,8 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+
+                    publicly_known_to_caster_bits: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                     // warp_cost substrate (Phase 1, round-63): tokens
@@ -4141,6 +4143,8 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+
+                        publicly_known_to_caster_bits: 0,
                         etb_timestamp: bf_etb_base.saturating_add(global_token_idx),
                         ueot_modifiers: Vec::new(),
                         // warp_cost substrate (Phase 1, round-63):
@@ -4318,6 +4322,8 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+
+                    publicly_known_to_caster_bits: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                     // warp_cost substrate (Phase 1, round-63): tapped
@@ -8238,6 +8244,8 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+
+                        publicly_known_to_caster_bits: 0,
                         etb_timestamp: tok_etb,
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
@@ -8473,6 +8481,8 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+
+                    publicly_known_to_caster_bits: 0,
                     etb_timestamp: tok_etb,
                     ueot_modifiers: Vec::new(),
                     warp_exile_pending: false,
@@ -8648,6 +8658,8 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+
+                        publicly_known_to_caster_bits: 0,
                         etb_timestamp: tok_etb,
                         ueot_modifiers: Vec::new(),
                         warp_exile_pending: false,
@@ -14432,6 +14444,8 @@ fn apply_effect(
                 stun_counters: 0,
                 // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                 regeneration_shield: false,
+
+                publicly_known_to_caster_bits: 0,
                 etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
                 // warp_cost substrate (Phase 1, round-63): cloned
@@ -16722,6 +16736,143 @@ fn apply_effect(
             //    on this same source doesn't accidentally consume the
             //    leftover id. Mirrors the cast-time-bound discipline.
             state.current_resolve_payload_target_id = None;
+        }
+        // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+        // substrate landing — TargetOpponentLookHandMayDiscard.**
+        // Mirrors Python's `TargetOpponentLookHandMayDiscard.resolve`
+        // (`effects/generic/discard.py:330-385`) STEP-FOR-STEP so the
+        // post-resolve state is byte-equal under matching inputs.
+        //
+        // **Target derivation (2-player simplification).** Python's
+        // `legal_targets` returns every opponent (not self); for the
+        // 2-player engine this collapses to `1 - controller`. The
+        // Rust arm uses the same `1 - controller` shortcut (sibling
+        // of `Effect::TargetOpponentLosesLife` at
+        // `state_ops_resolve.rs:6558`). No payload target slot needed
+        // today — multiplayer / archenemy support would route through
+        // the cast-time-bound `current_resolve_payload_target_id` like
+        // the Phase-A reanimate arm; out of scope for Cycle 1.
+        //
+        // **Step 1: Source-controller resolution** (5-zone walk +
+        // stack scan, sibling of EachOpponentDiscards / Pain for All).
+        // Required because the source is an Aura whose `controller`
+        // stays the bf controller across the trigger; mirrors round-24+
+        // pattern. If no controller found -> silent fizzle.
+        //
+        // **Step 2: Look step (one-way reveal).** Stamp
+        // `obj.publicly_known_to_caster_bits |= 1u32 << controller`
+        // on every card in the target opponent's hand. Mirrors
+        // Python's `for c in target.hand: reveal_to(c,
+        // controller_id)` at `discard.py:349-350` — one-way: only the
+        // caster sees, not the entire table.
+        //
+        // **Step 3: Nonland-options gate.** Enumerate the target's
+        // hand filtered to non-land cards. Empty -> silent fizzle
+        // (Python parity: `if not options: state.log.append(...);
+        // return` at `discard.py:352-357`).
+        //
+        // **Step 4: May-discard gate push.** Push
+        // `PendingDecision::MayDiscardChoice` carrying the source,
+        // controller, target_player_id, and nonland_card_ids. The
+        // controller drains via `submit_may_discard_decision(yes_no)`
+        // — on YES the arm pushes the follow-up
+        // `OpponentHandCardChoice`; on NO the arm fizzles silently.
+        // Mirrors Python's `caster.agent.choose_yes_no(...)` at
+        // `discard.py:364-372`.
+        //
+        // **Discard-pick step.** Handled by the
+        // `OpponentHandCardChoice` resolve in
+        // `auto_resolve_pending` / `submit_opponent_hand_card_decision`
+        // — moves the chosen card from the target's hand to their
+        // graveyard with CR 400.7 zone-change reset. The state-side
+        // mutations live in the decision pump (not this Effect arm)
+        // because Python's two-decision flow is preserved 1:1: the
+        // resolve arm exits after pushing the may-gate; the rest
+        // happens via decision drain.
+        //
+        // **Substrate-only landing (Cycle 1).** The Rust resolve arm
+        // ships full byte-equal semantics — this is NOT a honest-stop
+        // fizzle. The arm IS reachable today via `apply_effect_pub`
+        // (synthetic test path). Cracked Skull STAYS DECLINED at the
+        // production-deck loader filter post-Cycle-1 because the
+        // `_aura_triggers_are_phase3_safe` Python gate doesn't admit
+        // the ENTERS+IsSelf+TargetOpponentLookHandMayDiscard shape
+        // yet — Cycle 2 widens the gate + wires the ETB-trigger fire
+        // to push the may-gate decision in the same slice.
+        Effect::TargetOpponentLookHandMayDiscard => {
+            // Step 1: Source-controller resolution.
+            let mut source_controller: Option<u8> = None;
+            'outer: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // 2-player: target opponent = 1 - controller.
+            let target_player_id: u8 = 1 - controller;
+            let target_idx = target_player_id as usize;
+            if target_idx >= state.players.len() {
+                return Ok(());
+            }
+            // Step 2: Look step (one-way reveal).
+            let reveal_bit: u32 = 1u32 << controller;
+            let hand_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[target_idx].hand,
+            );
+            for obj in hand_mut.iter_mut() {
+                obj.publicly_known_to_caster_bits |= reveal_bit;
+            }
+            // Step 3: Nonland-options gate. Collect non-land card ids
+            // in the target opponent's hand (snapshot at resolve time —
+            // mirrors Python's `options = [c for c in target.hand if
+            // not c.printing.is_land]` at `discard.py:352`).
+            let mut nonland_card_ids: Vec<u32> = Vec::new();
+            for obj in state.players[target_idx].hand.iter() {
+                let is_land = state
+                    .registry
+                    .lookup(obj.printing_id)
+                    .map(|p| p.card_types.iter().any(|t| t == "Land"))
+                    .unwrap_or(false);
+                if !is_land {
+                    nonland_card_ids.push(obj.id);
+                }
+            }
+            if nonland_card_ids.is_empty() {
+                // Python parity: `if not options: state.log.append(...);
+                // return` at `discard.py:352-357`. Silent fizzle.
+                return Ok(());
+            }
+            // Step 4: May-discard gate push.
+            state.pending_decisions.push(
+                crate::state::PendingDecision::MayDiscardChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    nonland_card_ids,
+                },
+            );
         }
         // **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
         // "sacrifice this unless you tap an untapped permanent you
@@ -20764,6 +20915,8 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+
+                    publicly_known_to_caster_bits: 0,
                     etb_timestamp: etb_ts,
                     ueot_modifiers: Vec::new(),
                     warp_exile_pending: false,
@@ -24849,6 +25002,8 @@ impl GameState {
             stun_counters: 0,
             // Carrier-AA Phase 1 Cycle 1: shield defaults false.
             regeneration_shield: false,
+
+            publicly_known_to_caster_bits: 0,
             etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
             // warp_cost substrate (Phase 1, round-63): caller-
@@ -25019,6 +25174,8 @@ impl GameState {
             stun_counters: 0,
             // Carrier-AA Phase 1 Cycle 1: shield defaults false.
             regeneration_shield: false,
+
+            publicly_known_to_caster_bits: 0,
             etb_timestamp: 0,
             ueot_modifiers: Vec::new(),
             warp_exile_pending: false,

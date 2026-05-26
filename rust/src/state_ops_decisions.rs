@@ -164,6 +164,10 @@ pub(crate) fn auto_resolve_pending(
         | "tap_permanent_decline"
         | "tap_permanent_first"
         | "enchant_target_first"
+        | "may_discard_yes"
+        | "may_discard_no"
+        | "opponent_hand_card_first"
+        | "graveyard_card_first"
         | "default" => {}
         other => {
             return Err(PyValueError::new_err(format!(
@@ -173,7 +177,9 @@ pub(crate) fn auto_resolve_pending(
                  if_you_do_yes, if_you_do_no, manifest_top, reveal_yes, \
                  reveal_no, optional_pay_yes, optional_pay_no, \
                  scry_keep_top, scry_send_bottom, tap_permanent_decline, \
-                 tap_permanent_first, enchant_target_first, default"
+                 tap_permanent_first, enchant_target_first, \
+                 may_discard_yes, may_discard_no, \
+                 opponent_hand_card_first, graveyard_card_first, default"
             )))
         }
     }
@@ -581,9 +587,111 @@ pub(crate) fn auto_resolve_pending(
                         Some(candidates[0]);
                 }
             }
+            PendingDecision::MayDiscardChoice {
+                source_obj_id,
+                controller,
+                target_player_id,
+                nonland_card_ids,
+            } => {
+                // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked
+                // Skull substrate landing — auto-resolve.**
+                //
+                // "default" / "may_discard_yes" / unrelated -> say YES
+                // (matches Python's default Agent's choose_yes_no
+                // returning True, mirrors the MayDoChoice default-yes
+                // convention).
+                //
+                // On YES we must enqueue the SECOND PendingDecision —
+                // OpponentHandCardChoice — carrying the same source +
+                // controller + target_player_id + the nonland_card_ids
+                // snapshot. The production push path will hit this same
+                // arm when the trigger-fire push reaches the decision
+                // queue.
+                //
+                // On NO (strategy = "may_discard_no") we drop the
+                // decision without enqueueing the follow-up — Python
+                // parity with the "caster declines the may-discard"
+                // log + return path at `discard.py:368-372`.
+                let say_yes = !matches!(strategy, "may_discard_no");
+                if say_yes {
+                    state.pending_decisions.insert(
+                        0,
+                        PendingDecision::OpponentHandCardChoice {
+                            source_obj_id,
+                            controller,
+                            target_player_id,
+                            candidates: nonland_card_ids,
+                        },
+                    );
+                }
+            }
+            PendingDecision::OpponentHandCardChoice {
+                source_obj_id: _,
+                controller: _,
+                target_player_id,
+                candidates,
+            } => {
+                // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked
+                // Skull substrate landing — auto-resolve.**
+                //
+                // "default" / "opponent_hand_card_first" / unrelated ->
+                // pick candidates[0] (the deterministic-first legal
+                // target — mirrors the GraveyardCardChoice /
+                // EnchantTargetChoice convention).
+                //
+                // The chosen card is then moved from the target's hand
+                // to their graveyard with CR 400.7 zone-change reset.
+                // The push arm only enqueues this decision when the
+                // candidate set is non-empty (the may-gate's nonland-
+                // options gate already gated push on non-empty); empty-
+                // candidates is therefore an absorbing no-op (defensive).
+                if !candidates.is_empty() {
+                    let chosen_id = candidates[0];
+                    let tgt_idx = target_player_id as usize;
+                    if tgt_idx < state.players.len() {
+                        apply_opponent_hand_discard(
+                            state, tgt_idx, chosen_id,
+                        );
+                    }
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+/// substrate landing — opponent-hand discard helper.** Move
+/// `chosen_id` from `state.players[target_idx].hand` to
+/// `state.players[target_idx].graveyard` with CR 400.7 zone-change
+/// reset stamping. Mirrors Python's
+/// `target.hand.remove(chosen); chosen.zone = Zone.GRAVEYARD;
+/// target.graveyard.append(chosen)` at `discard.py:379-381`. Silent
+/// no-op if `chosen_id` is no longer in the hand (defensive — covers
+/// the race-with-mid-flight-hand-change case Python doesn't model).
+fn apply_opponent_hand_discard(
+    state: &mut crate::state::GameState,
+    target_idx: usize,
+    chosen_id: u32,
+) {
+    let hand_mut: &mut Vec<crate::state::GameObject> = std::sync::Arc::make_mut(
+        &mut state.players[target_idx].hand,
+    );
+    let Some(pos) = hand_mut.iter().position(|o| o.id == chosen_id) else {
+        return;
+    };
+    let mut obj = hand_mut.remove(pos);
+    // CR 400.7 zone-change reset.
+    obj.zone = crate::state_ops_zones::ZONE_GRAVEYARD;
+    obj.tapped = false;
+    obj.summoning_sick = false;
+    obj.damage = 0;
+    obj.counters = 0;
+    obj.attached_to = None;
+    obj.exiled_with_source = None;
+    obj.publicly_known_to_caster_bits = 0;
+    std::sync::Arc::make_mut(&mut state.players[target_idx].graveyard)
+        .push(obj);
 }
 
 /// **Aura-attachment substrate — Phase 1 STEP 3 (round-78).** Locate
@@ -1340,6 +1448,50 @@ impl GameState {
                     d.set_item("kind", "GraveyardCardChoice")?;
                     d.set_item("source_obj_id", *source_obj_id)?;
                     d.set_item("controller", *controller)?;
+                    d.set_item("candidates", candidates.clone())?;
+                }
+                PendingDecision::MayDiscardChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    nonland_card_ids,
+                } => {
+                    // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) —
+                    // Cracked Skull substrate landing — pending-
+                    // decisions surface dict.** `nonland_card_ids` is
+                    // the snapshot of the target opponent's hand
+                    // filtered to non-land cards (the options for the
+                    // directed discard the controller is being asked
+                    // about). The controller drains via
+                    // `submit_may_discard_decision(yes_no)` — `True`
+                    // enqueues the follow-up `OpponentHandCardChoice`
+                    // carrying the same payload; `False` is a silent
+                    // fizzle.
+                    d.set_item("kind", "MayDiscardChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("target_player_id", *target_player_id)?;
+                    d.set_item("nonland_card_ids", nonland_card_ids.clone())?;
+                }
+                PendingDecision::OpponentHandCardChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    candidates,
+                } => {
+                    // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) —
+                    // Cracked Skull substrate landing — pending-
+                    // decisions surface dict.** `candidates` is the
+                    // flat list of nonland card ids in the target
+                    // opponent's hand. The controller drains via
+                    // `submit_opponent_hand_card_decision(Some(id))` —
+                    // the id is removed from the target's hand and
+                    // moved to their graveyard with CR 400.7 zone-
+                    // change reset.
+                    d.set_item("kind", "OpponentHandCardChoice")?;
+                    d.set_item("source_obj_id", *source_obj_id)?;
+                    d.set_item("controller", *controller)?;
+                    d.set_item("target_player_id", *target_player_id)?;
                     d.set_item("candidates", candidates.clone())?;
                 }
             }
@@ -2291,6 +2443,160 @@ impl GameState {
         // from `graveyard.py:527-528`. Tests gate on this contract
         // directly.
         self.current_resolve_payload_target_id = chosen_id;
+        Ok(())
+    }
+
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing — may-discard yes/no submit.** Consume the
+    /// head `MayDiscardChoice` on the pending-decisions queue.
+    ///
+    /// On `yes = true`, pushes a follow-up
+    /// `PendingDecision::OpponentHandCardChoice` at the FRONT of the
+    /// queue carrying the same source / controller / target_player_id
+    /// + the `nonland_card_ids` snapshot taken at may-gate push time.
+    /// On `yes = false`, simply consumes the head — silent fizzle,
+    /// matching Python's `state.log.append(...); return` at
+    /// `discard.py:368-372`.
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not a `MayDiscardChoice`
+    ///
+    /// **Substrate-only landing (Cycle 1).** Same scope notes as
+    /// `submit_graveyard_card_decision` — no production push site
+    /// today; synthetic tests drive the push + drain + payload shape.
+    fn submit_may_discard_decision(&mut self, yes: bool) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_may_discard_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch.
+        match &self.pending_decisions[0] {
+            PendingDecision::MayDiscardChoice { .. } => {}
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_may_discard_decision: head of pending-\
+                     decisions queue is not a MayDiscardChoice (got \
+                     {:?}); call the variant-specific submit_* \
+                     dispatcher (e.g. submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let PendingDecision::MayDiscardChoice {
+            source_obj_id,
+            controller,
+            target_player_id,
+            nonland_card_ids,
+        } = decision
+        else {
+            // Unreachable: the head was just matched as MayDiscardChoice.
+            return Ok(());
+        };
+        if yes {
+            // Push the OpponentHandCardChoice at the FRONT of the
+            // queue so the next drain step reaches it before any
+            // sibling decisions Python's resolve loop would interleave.
+            // Mirrors Python's two-call flow at `discard.py:364-378`:
+            // the may-gate immediately consults the discard-pick on
+            // "yes".
+            self.pending_decisions.insert(
+                0,
+                PendingDecision::OpponentHandCardChoice {
+                    source_obj_id,
+                    controller,
+                    target_player_id,
+                    candidates: nonland_card_ids,
+                },
+            );
+        }
+        // On `no`, the decision is dropped — Python parity with
+        // `state.log.append(...); return` at `discard.py:368-372`.
+        Ok(())
+    }
+
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing — opponent-hand-card-discard submit.**
+    /// Consume the head `OpponentHandCardChoice` on the pending-
+    /// decisions queue.
+    ///
+    /// On `Some(chosen_id)`, validates `chosen_id` is in the
+    /// `candidates` list, then removes the card from the target
+    /// opponent's hand and moves it to the target's graveyard with
+    /// CR 400.7 zone-change reset stamping. Mirrors Python's
+    /// `target.hand.remove(chosen); chosen.zone = Zone.GRAVEYARD;
+    /// target.graveyard.append(chosen)` at `discard.py:379-381`.
+    /// On `None`, simply consumes the head — silent fizzle (defensive
+    /// — the production push path won't hit this because the may-gate
+    /// gates entry on non-empty `nonland_card_ids`).
+    ///
+    /// Raises `ValueError` if:
+    /// - the queue is empty
+    /// - the head is not an `OpponentHandCardChoice`
+    /// - `chosen_id = Some(id)` and `id` is not in the candidate set
+    ///
+    /// **Substrate-only landing (Cycle 1).** Same scope notes as
+    /// `submit_may_discard_decision`.
+    #[pyo3(signature = (chosen_id=None))]
+    fn submit_opponent_hand_card_decision(
+        &mut self,
+        chosen_id: Option<u32>,
+    ) -> PyResult<()> {
+        if self.pending_decisions.is_empty() {
+            return Err(PyValueError::new_err(
+                "submit_opponent_hand_card_decision: no pending decision",
+            ));
+        }
+        // Inspect head — fail before any mutation on a discriminant
+        // mismatch or unknown chosen_id.
+        match &self.pending_decisions[0] {
+            PendingDecision::OpponentHandCardChoice { candidates, .. } => {
+                if let Some(id) = chosen_id {
+                    if !candidates.contains(&id) {
+                        return Err(PyValueError::new_err(format!(
+                            "submit_opponent_hand_card_decision: \
+                             chosen_id {id} is not one of the candidate \
+                             nonland-card ids {:?}",
+                            candidates
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "submit_opponent_hand_card_decision: head of \
+                     pending-decisions queue is not an \
+                     OpponentHandCardChoice (got {:?}); call the \
+                     variant-specific submit_* dispatcher (e.g. \
+                     submit_surveil_decision)",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+        // Validation passed — consume the head and route.
+        let decision = self.pending_decisions.remove(0);
+        let PendingDecision::OpponentHandCardChoice {
+            source_obj_id: _,
+            controller: _,
+            target_player_id,
+            candidates: _,
+        } = decision
+        else {
+            // Unreachable: the head was just matched.
+            return Ok(());
+        };
+        if let Some(id) = chosen_id {
+            let tgt_idx = target_player_id as usize;
+            if tgt_idx < self.players.len() {
+                apply_opponent_hand_discard(self, tgt_idx, id);
+            }
+        }
+        // None -> silent fizzle (defensive; production won't push this
+        // path with no candidates).
         Ok(())
     }
 

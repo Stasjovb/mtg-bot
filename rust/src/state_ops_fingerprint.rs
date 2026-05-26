@@ -619,6 +619,50 @@ impl GameState {
                             candidates.iter().map(|id| json!(*id)).collect(),
                         ),
                     ]),
+                    // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) —
+                    // Cracked Skull substrate landing — may-discard
+                    // yes/no fingerprint.** Same `target_player_id` +
+                    // `nonland_card_ids` payload as the surface dict.
+                    // Snapshot fully determines the pending-state shape
+                    // (a different option set surfaces a different
+                    // pending decision).
+                    PendingDecision::MayDiscardChoice {
+                        source_obj_id,
+                        controller,
+                        target_player_id,
+                        nonland_card_ids,
+                    } => Value::Array(vec![
+                        Value::String("MayDiscardChoice".to_string()),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        json!(*target_player_id),
+                        Value::Array(
+                            nonland_card_ids
+                                .iter()
+                                .map(|id| json!(*id))
+                                .collect(),
+                        ),
+                    ]),
+                    // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) —
+                    // Cracked Skull substrate landing — opponent-hand
+                    // card-pick fingerprint.** Same `target_player_id`
+                    // + `candidates` payload as the surface dict.
+                    PendingDecision::OpponentHandCardChoice {
+                        source_obj_id,
+                        controller,
+                        target_player_id,
+                        candidates,
+                    } => Value::Array(vec![
+                        Value::String(
+                            "OpponentHandCardChoice".to_string(),
+                        ),
+                        json!(*source_obj_id),
+                        json!(*controller),
+                        json!(*target_player_id),
+                        Value::Array(
+                            candidates.iter().map(|id| json!(*id)).collect(),
+                        ),
+                    ]),
                 })
                 .collect();
             parts_vec.push(Value::Array(pds));

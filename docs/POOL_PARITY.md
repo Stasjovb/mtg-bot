@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **432 / 475 EoE cards (90.9%) are byte-equal at the Effect+bridge level**; of those, **393 (82.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 39 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **432 / 475 EoE cards (90.9%) are byte-equal at the Effect+bridge level**; of those, **392 (82.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 40 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **43 (9.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 393 | 82.7% |
-| Effect+bridge covered (not individually probed) | 39 | 8.2% |
+| PROBED byte-equal | 392 | 82.5% |
+| Effect+bridge covered (not individually probed) | 40 | 8.4% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -374,7 +374,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Swamp
 - Swarm Culler
 - Swarmyard
-- Synthesizer Labship
 - Syr Vondam, Sunstar Exemplar
 - Syr Vondam, the Lucent
 - Systems Override
@@ -456,8 +455,8 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | warp_cost (declined cost-mechanic) | 3 | 0 | 3 | 0 | 0 | medium |
 | Kicker / Impending cost | 1 | 0 | 1 | 0 | 0 | medium |
 | Static / layered abilities | 7 | 2 | 5 | 0 | 0 | sprawling |
-| Aura-attachment substrate | 2 | 0 | 2 | 0 | 0 | sprawling |
-| Station / Spacecraft | 3 | 0 | 3 | 0 | 0 | sprawling |
+| Aura-attachment substrate | 1 | 0 | 1 | 0 | 0 | sprawling |
+| Station / Spacecraft | 4 | 0 | 4 | 0 | 0 | sprawling |
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 0 | 0 | sprawling |
 | Carrier activated abilities | 24 | 0 | 24 | 0 | 0 | sprawling |
@@ -480,7 +479,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Charred Foyer // Warped Space
 - Consult the Star Charts
 - Contested War Zone
-- Cracked Skull
 - Echoing Deeps
 - Entropic Battlecruiser
 - Exalted Sunborn
@@ -508,6 +506,7 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Sliver Overlord
 - Sporogenic Infection
 - Starfield Vocalist
+- Synthesizer Labship
 - Tezzeret, Cruel Captain
 - The Eternity Elevator
 - Thespian's Stage

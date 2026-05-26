@@ -188,6 +188,58 @@ pub struct GameObject {
     /// at `turn.py:1052` for the once-per-turn aspect (Phase 1
     /// Cycle 1 defers wiring this; the substrate is set-only).
     pub regeneration_shield: bool,
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing — one-way reveal bitfield.** Per-object
+    /// per-player visibility bitfield for cards whose CONTENTS have
+    /// been revealed to specific players (the look-at-hand primitive).
+    /// `bit = 1u32 << player_id` is set when that player has "looked
+    /// at" this card. Mirrors Python's
+    /// `GameObject.publicly_known_to: frozenset[int]`
+    /// (`src/mtg_bot/game.py:627`) and the `reveal_to(obj,
+    /// player_id)` helper at `src/mtg_bot/game.py:761-774`.
+    ///
+    /// **One-way reveal semantics.** Setting bit `b` makes the card
+    /// `publicly_known_to` player `b`. It does NOT change the
+    /// object's `zone` or its visibility to other players. For the
+    /// 2-player engine the only relevant bits are `0` and `1`; the
+    /// 32-bit field is over-provisioned to keep the substrate
+    /// trivially multiplayer-extensible without re-touching the
+    /// fingerprint elision rules.
+    ///
+    /// **Used by:** `Effect::TargetOpponentLookHandMayDiscard`
+    /// (Cracked Skull's ETB look-at-target-opponent's-hand step) and
+    /// any future "look at" Effect (`reveals their hand`,
+    /// `look at the top N cards`, …). The 2-player Cracked Skull
+    /// reveal stamps `bit = 1u32 << controller` on every card in
+    /// the target opponent's hand at resolve time.
+    ///
+    /// **Defaults to `0`** for every freshly-allocated GameObject
+    /// (no card is publicly known at allocation time). Cleared
+    /// (reset to `0`) on every zone change (CR 400.7 per-object
+    /// state reset) — revealing-then-moving-zones drops the reveal
+    /// stamp the same way Python's per-object set drops on zone
+    /// move (mirrors the `reveal_to_none(obj)` semantics; though
+    /// Python doesn't auto-clear on zone change today, the Rust
+    /// resolve arms only check the field for one-way-reveal probes
+    /// and the CR 400.7 reset is the safe / deterministic default).
+    ///
+    /// **Why a bitfield** (vs `Vec<u8>` / `HashSet<u8>`): keeps the
+    /// per-object size cost zero on heap (Copy-still-Copy except
+    /// for the existing `ueot_modifiers` Vec); 2-player engine
+    /// only uses 2 of 32 bits; future >32-player engines would
+    /// widen to `u64` or migrate to a heap set. Mirrors the bit-
+    /// field idiom used for cast-from-exile + warp permission
+    /// flags above.
+    ///
+    /// **Fingerprint elision (back-compat).** NOT in the per-object
+    /// fingerprint 8-tuple or the snapshot dict today — every pre-
+    /// substrate pinned baseline stays byte-equal. Same elision
+    /// pattern as `stun_counters`, `regeneration_shield`,
+    /// `warp_exile_pending`. The observable surface for the
+    /// substrate-only Cycle 1 is the bitfield setter / getter, not
+    /// hand-zone byte-equal output — the resolve arm's discard pick
+    /// is observable post-Cycle-2 admit.
+    pub publicly_known_to_caster_bits: u32,
     /// **CE4 closure — ETB-timestamp ordering.** Monotonic counter
     /// stamped at every battlefield-entry call site (cast →
     /// move_from_hand_to_battlefield, play_land, every ETB pathway in
@@ -2283,6 +2335,120 @@ pub enum PendingDecision {
         controller: u8,
         candidates: Vec<u32>,
     },
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing.** Resolve-time "may force discard?" yes/no
+    /// decision for `Effect::TargetOpponentLookHandMayDiscard`. Pushed
+    /// when Cracked Skull's ETB resolves, after the look-step has
+    /// stamped the target opponent's hand cards as `publicly_known_
+    /// to_caster_bits`-visible to the resolving controller, AND the
+    /// non-land options gate has confirmed at least one nonland card
+    /// is in the hand.
+    ///
+    /// **Why a dedicated variant** (vs reusing `MayDoChoice`):
+    /// `MayDoChoice` carries a `Box<Effect>` to apply on "yes" — but
+    /// the Cracked Skull "yes" path needs to enqueue a SECOND
+    /// PendingDecision (`OpponentHandCardChoice`) rather than apply
+    /// an Effect inline, since the directed-discard pick is itself a
+    /// caller-choice. Modelling that as `MayDoChoice +
+    /// inner_effect=TargetOpponentLookHandMayDiscard` would re-enter
+    /// the resolve arm and re-look-at-hand the target's hand a
+    /// second time — wrong semantics. A dedicated variant carrying
+    /// `target_player_id` + `nonland_card_ids` keeps the two-stage
+    /// decision pump explicit. Matches Python's
+    /// `caster.agent.choose_yes_no(...)` then
+    /// `caster.agent.choose_card_from_opponent_hand(...)` two-call
+    /// flow at `effects/generic/discard.py:364-378`.
+    ///
+    /// **Payload.** Carries the source id (the resolving Aura), the
+    /// controller (the resolving-effect's controller — who answers
+    /// the may-gate), the target player id (the opponent whose hand
+    /// is being looked at), and the nonland-card-id list (the candidate
+    /// pool for the directed discard, pre-filtered to nonlands per
+    /// Python's `options = [c for c in target.hand if not
+    /// c.printing.is_land]` at `discard.py:352`).
+    ///
+    /// **Submit.** `submit_may_discard_decision(true)` consumes the
+    /// head and pushes a `PendingDecision::OpponentHandCardChoice`
+    /// carrying the same source / controller / target_player_id +
+    /// the `nonland_card_ids` (re-evaluated at submit time would be
+    /// stale-tolerant, but per Python's "look at hand BEFORE may-
+    /// gate" ordering the resolution-time snapshot is the right
+    /// option set — re-validating at the second decision would race
+    /// with mid-flight hand changes that Python doesn't observe).
+    /// `submit_may_discard_decision(false)` consumes the head and
+    /// silently fizzles (Python parity: `state.log.append(...);
+    /// return` at `discard.py:368-372`).
+    ///
+    /// **Auto-resolve default.** `"default"` / `"may_discard_yes"`
+    /// says "yes" — matches Python's default Agent's `choose_yes_no`
+    /// returning True (mirrors the `MayDoChoice` default-yes
+    /// convention). Tests gate on this contract directly.
+    ///
+    /// **Substrate-only landing (Cycle 1).** The decision-pump pin is
+    /// in place but no production code path pushes it yet — the
+    /// admit-gate widen ships in Cycle 2 + the per-card probe in a
+    /// later cycle. Synthetic tests exercise the push + drain shape
+    /// directly via the `submit_may_discard_decision` entry point.
+    MayDiscardChoice {
+        source_obj_id: u32,
+        controller: u8,
+        target_player_id: u8,
+        nonland_card_ids: Vec<u32>,
+    },
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing.** Resolve-time "pick which nonland card the
+    /// target opponent discards" decision for
+    /// `Effect::TargetOpponentLookHandMayDiscard`. Pushed by
+    /// `submit_may_discard_decision(true)` after the controller
+    /// confirmed they want to force the discard. The chosen card id
+    /// MUST be one of the non-land card ids enumerated at the may-
+    /// gate push time (snapshot — see `MayDiscardChoice` doc).
+    ///
+    /// **Why a dedicated variant** (vs reusing `GraveyardCardChoice`):
+    /// the candidate pool comes from a DIFFERENT player's hand (not
+    /// the resolving controller's graveyard), and the discard
+    /// destination is the TARGET's graveyard (not the resolving
+    /// controller's battlefield). The semantic shape is closer to a
+    /// "pick from opponent's hand" than a "pick from your graveyard,"
+    /// but neither existing variant carries `target_player_id`. A
+    /// dedicated variant keeps the dispatcher surface honest.
+    ///
+    /// **Payload.** Carries the source id (the resolving Aura), the
+    /// controller (the resolving-effect's controller — who picks),
+    /// the target player id (the opponent whose hand the pick comes
+    /// from), and the `candidates: Vec<u32>` (nonland card ids — the
+    /// snapshot taken at may-gate push time, kept stable across the
+    /// inter-decision gap per Python's resolve-time semantics).
+    ///
+    /// **Submit.** `submit_opponent_hand_card_decision(Some(card_id))`
+    /// consumes the head, validates `card_id` is in `candidates`,
+    /// removes it from the target's hand, stamps CR 400.7 zone-change
+    /// reset, and pushes onto the target's graveyard. Mirrors
+    /// Python's `target.hand.remove(chosen); chosen.zone = Zone.
+    /// GRAVEYARD; target.graveyard.append(chosen)` at
+    /// `discard.py:379-381`. An unknown card_id raises `ValueError`
+    /// transactionally (no mutation on failure).
+    /// `submit_opponent_hand_card_decision(None)` is the explicit
+    /// "decline to pick" path — silent fizzle (defensive; the
+    /// production push path won't hit this because the may-gate
+    /// gates entry on `nonland_card_ids` non-empty).
+    ///
+    /// **Auto-resolve default.** `"default"` /
+    /// `"opponent_hand_card_first"` picks `candidates[0]` (the
+    /// deterministic-first legal target in player-id-then-position
+    /// order — mirrors the `GraveyardCardChoice` /
+    /// `EnchantTargetChoice` convention every other trigger-time
+    /// target picker uses).
+    ///
+    /// **Substrate-only landing (Cycle 1).** Same substrate-only
+    /// caveats as `MayDiscardChoice` — push site lands in Cycle 2,
+    /// per-card probe in a later cycle.
+    OpponentHandCardChoice {
+        source_obj_id: u32,
+        controller: u8,
+        target_player_id: u8,
+        candidates: Vec<u32>,
+    },
 }
 
 /// `GameState` carries an `Arc<RegistryData>` so every clone shares
@@ -3618,6 +3784,8 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         stun_counters: 0,
         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
         regeneration_shield: false,
+
+        publicly_known_to_caster_bits: 0,
         // CE4 closure: synthetic-state fixtures pre-populate the
         // battlefield without going through stamp_etb_timestamp, so
         // every object defaults to 0. The stable-sort in the snapshot

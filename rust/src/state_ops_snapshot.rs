@@ -136,6 +136,20 @@ fn object_to_pydict<'py>(
         Some(pid) => d.set_item("controller_override", pid)?,
         None => d.set_item("controller_override", py.None())?,
     }
+    // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    // substrate landing — one-way reveal bitfield surface.** Surface
+    // the per-object publicly_known_to_caster_bits so cross-engine
+    // harnesses + substrate tests can observe the Rust side stamp it
+    // (Cycle 1 substrate-only; Cycle 2 wires the trigger-fire push
+    // that causes Cracked Skull's ETB to set this bit on the target
+    // opponent's hand cards). Pre-substrate snapshots observe `0` on
+    // every object (back-compat default — unchanged from the pre-
+    // substrate dict), so the new key is additive but the value is
+    // invariant on snapshots that don't exercise the new look-step.
+    d.set_item(
+        "publicly_known_to_caster_bits",
+        obj.publicly_known_to_caster_bits,
+    )?;
     Ok(d)
 }
 

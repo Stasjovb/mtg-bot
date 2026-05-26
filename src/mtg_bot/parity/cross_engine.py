@@ -10118,6 +10118,63 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReanimateTargetCreatureCardFromDefendersGraveyard,
         )
         return ReanimateTargetCreatureCardFromDefendersGraveyard()
+    if kind == "target_opponent_look_hand_may_discard":
+        # **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) -- Cracked Skull
+        # substrate landing -- bridge arm.** Rust's
+        # ``Effect::TargetOpponentLookHandMayDiscard`` (cards.rs unit
+        # variant added in Cycle 1 immediately after the Phase-A
+        # ``reanimate_target_creature_card_from_defenders_graveyard``
+        # arm; parse + to_pydict arms in cards.rs; resolve arm in
+        # ``state_ops_resolve.rs`` immediately after the
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard`` arm)
+        # mirrors Python's ``TargetOpponentLookHandMayDiscard``
+        # (``effects/generic/discard.py:297-391``).
+        #
+        # **Unit-variant bridge.** No fields to round-trip; the bare
+        # ``TargetOpponentLookHandMayDiscard()`` reconstructs the
+        # Python class (no ``@dataclass`` decorator, no fields).
+        # Mirrors the sibling Phase-A
+        # ``ReanimateTargetCreatureCardFromDefendersGraveyard``
+        # unit-variant bridge shape.
+        #
+        # **Full closure -- NOT honest-stop.** The Rust resolve arm
+        # ships full byte-equal semantics with Python: 5-zone source-
+        # controller resolution; 2-player target opponent = 1 -
+        # controller; look-step stamps ``publicly_known_to_caster_bits
+        # |= 1u32 << controller`` on every card in the target's hand
+        # (one-way reveal -- mirrors Python's ``reveal_to`` sweep at
+        # discard.py:349-350); nonland-options gate filter (silent
+        # fizzle on empty -- Python parity with the
+        # "no options" log + return at discard.py:352-357); push
+        # ``PendingDecision::MayDiscardChoice`` carrying source +
+        # controller + target_player_id + nonland_card_ids snapshot.
+        # The two follow-up steps (may-gate yes/no + discard card
+        # pick) are handled by the decision pump in
+        # ``state_ops_decisions.rs::auto_resolve_pending`` +
+        # ``submit_may_discard_decision`` +
+        # ``submit_opponent_hand_card_decision`` -- preserving
+        # Python's two-decision-call flow at discard.py:364-378
+        # byte-equal.
+        #
+        # **Aura admit boundary.** Cracked Skull (one of two EoE
+        # carriers of this Effect family alongside the design-doc
+        # Phase-C carrier Sporogenic Infection; 0 17lands decks --
+        # the Phase-B positive-control) STAYS DECLINED at the
+        # production-deck loader filter post-Cycle-1 because
+        # ``_aura_triggers_are_phase3_safe`` does NOT widen to admit
+        # the ENTERS + IsSelf + TargetOpponentLookHandMayDiscard
+        # shape yet (Cycle 2 ships the widen + the trigger-fire push
+        # of the may-gate decision in the same slice). The tail
+        # ``DEALT_DAMAGE + IsHost + DestroyEnchantedPermanent`` half
+        # (Tail-X1, shared with Sporogenic Infection) is also not
+        # yet widened -- the all-or-nothing gate refuses to admit a
+        # card whose other trigger isn't in the safe set. Per design
+        # doc ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.3
+        # + §8 row 3.
+        from mtg_bot.effects.generic.discard import (
+            TargetOpponentLookHandMayDiscard,
+        )
+        return TargetOpponentLookHandMayDiscard()
     if kind == "sacrifice_self_unless_void_active":
         # **Aura Phase 4 (Chorale of the Void substrate landing) --
         # SacrificeSelfUnlessVoidActive bridge arm.** Rust's

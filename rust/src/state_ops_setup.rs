@@ -217,6 +217,8 @@ fn push_object(
         // resolve arm of `Effect::RegenerateTargetCreature` is the
         // only writer.
         regeneration_shield: false,
+
+        publicly_known_to_caster_bits: 0,
         // CE4 closure: make_state never places objects directly on
         // battlefield (bf is built up by ETB primitives), so the
         // default 0 is fine for hand / library / starting zones.

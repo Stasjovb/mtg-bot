@@ -5186,6 +5186,83 @@ pub enum Effect {
     /// `ReanimateTargetCreatureCardFromDefendersGraveyard()` (field-
     /// free construction).
     ReanimateTargetCreatureCardFromDefendersGraveyard,
+    /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+    /// substrate landing.** "Look at target opponent's hand. You may
+    /// choose a nonland card from it. That player discards that card."
+    ///
+    /// Mirrors Python's `TargetOpponentLookHandMayDiscard`
+    /// (`src/mtg_bot/effects/generic/discard.py:297-391`). Cracked
+    /// Skull's ETB long-pole Effect — the Phase 3+ Phase B substrate
+    /// landing per
+    /// `docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md` §4.1 + §8 row 3.
+    ///
+    /// **Unit variant on both sides.** Python's
+    /// `TargetOpponentLookHandMayDiscard` carries no fields (target +
+    /// may-gate + discard-pick are all decided at resolve time). The
+    /// Rust enum mirrors that.
+    ///
+    /// **Resolve semantics (mirrors `discard.py:330-385`).**
+    /// 1. Pick the target opponent — in 2-player this reduces to the
+    ///    one opponent of the resolving controller (sibling-shape
+    ///    precedent: `Effect::TargetOpponentLosesLife` at
+    ///    `state_ops_resolve.rs:6558`). No payload target slot needed
+    ///    today; the future multiplayer extension would route through
+    ///    the cast-time-bound target.
+    /// 2. **Look step (one-way reveal).** Stamp every card in the
+    ///    target opponent's hand as `publicly_known_to` the resolving
+    ///    controller. Mirrors Python's `reveal_to(c, controller_id)`
+    ///    sweep at `discard.py:349-350`. The new
+    ///    `GameObject.publicly_known_to_caster_bits: u32` bitfield
+    ///    holds the per-controller visibility (1 bit per player id,
+    ///    `bit = 1u32 << controller_id`). One-way: only the caster
+    ///    sees, not the entire table; matches Python's per-target-
+    ///    player-set semantics for the 2-player engine.
+    /// 3. **Nonland-options gate.** Enumerate non-land cards in the
+    ///    target's hand. Empty → silent fizzle (Python parity:
+    ///    `if not options: state.log.append(...); return` at
+    ///    `discard.py:352-357`).
+    /// 4. **May-discard gate.** Push
+    ///    `PendingDecision::MayDiscardChoice` carrying source +
+    ///    controller + target_player_id. Controller drains via
+    ///    `submit_may_discard_decision(yes: bool)`. On `no` →
+    ///    silent fizzle (Python parity: `if not caster.agent.
+    ///    choose_yes_no(...): state.log.append(...); return` at
+    ///    `discard.py:364-372`). On `yes` → push
+    ///    `PendingDecision::OpponentHandCardChoice` carrying source +
+    ///    controller + target_player_id + the nonland-card-id list.
+    /// 5. **Card-pick gate.** Controller drains via
+    ///    `submit_opponent_hand_card_decision(Some(card_id))`. The
+    ///    chosen card is moved from the target opponent's hand to
+    ///    their graveyard with CR 400.7 zone-change reset (mirrors
+    ///    Python's `target.hand.remove(chosen); chosen.zone =
+    ///    Zone.GRAVEYARD; target.graveyard.append(chosen)` at
+    ///    `discard.py:379-381`).
+    ///
+    /// **Substrate-only landing (Cycle 1).** This C1 lands the Rust
+    /// Effect variant + parse + to_pydict + resolve arm + the two new
+    /// `PendingDecision::MayDiscardChoice` +
+    /// `PendingDecision::OpponentHandCardChoice` decision-pump pins +
+    /// the new `GameObject.publicly_known_to_caster_bits` one-way-
+    /// reveal substrate. The Python admit widen
+    /// (`_aura_triggers_are_phase3_safe` widen +
+    /// `_python_ta_to_safe_dict_aura_phase3` emitter widen) ships in
+    /// Cycle 2 per design doc §8 row 4. **Cracked Skull STAYS DECLINED
+    /// at the production-deck loader filter post-Cycle-1.**
+    ///
+    /// **Target-opponent simplification (2-player).** Python's
+    /// `legal_targets` returns every opponent (not "target player"
+    /// per the printed text — the Python class documents this as the
+    /// standard EoE / DSK target-player simplification). In 2-player
+    /// the resolving controller has exactly one opponent. The Rust
+    /// resolve arm picks `1 - controller` (sibling of
+    /// `TargetOpponentLosesLife` at `state_ops_resolve.rs:6558+`),
+    /// matching Python's 2-player behavior byte-equal. Multiplayer /
+    /// archenemy work would need an explicit choice callback.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — no
+    /// fields. The bridge translates this Rust variant to
+    /// `TargetOpponentLookHandMayDiscard()` (field-free construction).
+    TargetOpponentLookHandMayDiscard,
     /// **20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
     /// "sacrifice this unless you tap an untapped permanent you
     /// control".** Mirrors Python's `SacrificeSelfUnlessTapPermanent`
@@ -13539,6 +13616,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // round-trip dict-shape consistency.
             Ok(Effect::ReanimateTargetCreatureCardFromDefendersGraveyard)
         }
+        "target_opponent_look_hand_may_discard" => {
+            // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked
+            // Skull substrate landing — parse arm.** Unit variant; no
+            // payload fields beyond `kind`. Target opponent + may-gate
+            // + discard-pick are all decided at resolve time (target
+            // = 1 - controller in 2-player; the two PendingDecision
+            // pushes carry the per-decision payloads). Mirrors the
+            // sibling Aura Phase 3+ Phase A `reanimate_target_creature
+            // _card_from_defenders_graveyard` unit-variant parse arm
+            // verbatim. Extra dict fields silently ignored for round-
+            // trip dict-shape consistency.
+            Ok(Effect::TargetOpponentLookHandMayDiscard)
+        }
         "sacrifice_self_unless_tap_permanent" => {
             // 20th Rust slice (VVV Pin 2 closure) — Command Bridge ETB
             // "sacrifice this unless you tap an untapped permanent you
@@ -15164,7 +15254,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard"
         ))),
     }
 }
@@ -18523,6 +18613,22 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "reanimate_target_creature_card_from_defenders_graveyard",
+            )?;
+        }
+        Effect::TargetOpponentLookHandMayDiscard => {
+            // **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked
+            // Skull substrate landing — to_pydict.** Unit variant; no
+            // payload fields beyond `kind` (target opponent + may-gate
+            // + discard-pick are all decided at resolve time via the
+            // PendingDecision push sites). Mirrors Python's field-free
+            // @dataclass(frozen=True)-shaped class at
+            // `effects/generic/discard.py:297-391`. Round-trip dict-
+            // shape consistency — same emit shape as the sibling Phase
+            // A `reanimate_target_creature_card_from_defenders_graveyard`
+            // arm.
+            d.set_item(
+                "kind",
+                "target_opponent_look_hand_may_discard",
             )?;
         }
         Effect::SacrificeSelfUnlessTapPermanent => {

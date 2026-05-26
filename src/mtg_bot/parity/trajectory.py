@@ -7762,6 +7762,9 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
     from mtg_bot.effects.generic.graveyard import (
         ReanimateTargetCreatureCardFromDefendersGraveyard,
     )
+    from mtg_bot.effects.generic.discard import (
+        TargetOpponentLookHandMayDiscard,
+    )
 
     if isinstance(ta.effect, PainForAllETBEffect):
         # Shape 2: Pain for All ETB.
@@ -7833,6 +7836,35 @@ def _python_ta_to_safe_dict_aura_phase3(ta) -> dict:
             "predicate": pred_dict,
             "effect": {
                 "kind": "reanimate_target_creature_card_from_defenders_graveyard",
+            },
+            "once_per_turn": False,
+        }
+    if isinstance(ta.effect, TargetOpponentLookHandMayDiscard):
+        # **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
+        # substrate landing — reverse-serializer leaf.** Shape:
+        # ``ENTERS + IsSelf(subject=None) +
+        # TargetOpponentLookHandMayDiscard``. The predicate is the
+        # standard self-trigger ``IsSelf`` (subject=None) used by every
+        # Aura-ETB substrate today; round-trips via the existing
+        # ``is_self`` bridge arm in cross_engine.py. Per design doc
+        # ``docs/AURA_ATTACH_SUBSTRATE_PHASE_3_DESIGN.md`` §5.2 Phase B
+        # shape.
+        #
+        # **Dormant-by-construction in Cycle 1.** This branch only fires
+        # when ``_aura_triggers_are_phase3_safe`` admits the carrier's
+        # full trigger surface; Cycle 1 does NOT widen that gate.
+        # Cracked Skull has TWO triggers (ENTERS look-may-discard long
+        # pole + DEALT_DAMAGE destroy-host tail) and Cycle 1 widens
+        # NEITHER, so ``_python_ta_to_safe_dict_aura_phase3`` is never
+        # called on a Cracked Skull TA in Cycle 1. The leaf is here
+        # ahead of Cycle 2 to keep the recognizer + admit-gate widens
+        # additive in Cycle 2 (Cycle 2 only edits the gate; the emitter
+        # already knows how to translate the shape).
+        return {
+            "event": "enters",
+            "predicate": {"kind": "is_self"},
+            "effect": {
+                "kind": "target_opponent_look_hand_may_discard",
             },
             "once_per_turn": False,
         }
