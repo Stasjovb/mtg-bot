@@ -2479,6 +2479,51 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``PutBasicLandFromHandOntoBattlefieldTapped`` (Terrain
     # Generator).
     REPO_ROOT / "tests" / "test_petrified_field_parity.py",
+    # **Spacecraft Station substrate Phase 1 Cycle 4 (2026-05-25):**
+    # Per-card real-EoE byte-equal probe binding Galvanizing Sawship
+    # — the SOLE Phase-1-admitted Spacecraft printing — through the
+    # Phase-1-pilot Station substrate (the zero-ability Spacecraft
+    # carrier with ``station_threshold=3`` +
+    # ``stationed_keywords={flying, haste}``; 5,938 17lands decks
+    # unblocked through the new dedicated admit predicate
+    # :func:`_printing_is_bridge_pure_station_spacecraft`). Closes
+    # the Spacecraft Phase 1 campaign (C1 substrate Part A ``ea9aa996``
+    # + C2 substrate Part B ``62e10ff9`` + C3 Python bridge + FLIP
+    # ``e9a31c83``) per design doc §6.3.
+    #
+    #   * ``test_galvanizing_sawship_parity.py`` — Galvanizing Sawship
+    #     (``{5}{R}`` Artifact — Spacecraft, 6/5, station_threshold=3,
+    #     stationed_keywords={flying, haste}); the FIRST PROBE_MODULES-
+    #     credited probe binding the Spacecraft Station substrate +
+    #     ``Action::ActivateStation`` resolver + ``is_creature_now``
+    #     stationed-flip + ``battlefield_has_keyword`` stationed-fold.
+    #     Drives BOTH engines through three scenarios across the
+    #     charge-counter axis: (A) un-stationed baseline (charge=0;
+    #     Sawship is NOT a creature; no legal attack), (B) partial-
+    #     station (charge=1; 1 ActivateStation resolved; Sawship STILL
+    #     NOT a creature; 1 < threshold=3), and (C) the LOAD-BEARING
+    #     fully-stationed-and-attacking scenario (charge=3; 3
+    #     ActivateStations resolved; Sawship IS a creature with
+    #     flying+haste; IS a legal attacker per CR 311 + design
+    #     doc §4.5/§4.6). Uses the scripted-picker shape design
+    #     doc §6.3 mandates (explicit ``(spacecraft_id, crew_id)`` per
+    #     activation via direct ``apply_action``; the bench's
+    #     ``attack_all`` strategy would not produce "queue-three-
+    #     ActivateStations-then-attack" organically). Each scenario
+    #     asserts full ``compare_fields == []`` byte-equality across
+    #     the whole field view on both engines.
+    #
+    # Net delta: +1 PROBED / -1 covered_by_construction. Spacecraft
+    # Phase 1 COMPLETE: BLOCKED-SG Station/Spacecraft row drops
+    # Sawship; the other 21 EoE Spacecraft printings stay honestly
+    # DECLINED on the strict no-abilities admit predicate (the §6.4
+    # decline-set bench check in
+    # ``test_spacecraft_phase_1_cycle_3_flip.py`` pins this
+    # exhaustively). Subsequent phases (Lumen-Class Frigate Phase 2,
+    # 5 trigger carriers Phase 3, The Eternity Elevator Phase 4) are
+    # scoped in the design doc §7 — ~16-22 cycles across the whole
+    # campaign to close all 8 cards / 41,281 decks.
+    REPO_ROOT / "tests" / "test_galvanizing_sawship_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
