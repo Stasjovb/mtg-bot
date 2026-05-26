@@ -454,10 +454,10 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Station / Spacecraft | 6 | 0 | 6 | 0 | 0 | sprawling |
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 0 | 0 | sprawling |
-| Carrier activated abilities | 26 | 0 | 26 | 0 | 0 | sprawling |
+| Carrier activated abilities | 25 | 0 | 25 | 0 | 0 | sprawling |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 20 | 0 | 20 | 0 | 0 | diffuse |
-| Effect-uncovered (no covered Rust counterpart) | 41 | 0 | 41 | 0 | 0 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 40 | 0 | 40 | 0 | 0 | diffuse |
 
 **Reconciliation:** 49 subsystem-gated = 5 single-gated + 44 multi-gated; the per-subsystem `1gate` column sums to 5 (== single-gated total). The breakout partitions exactly the same 49 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
@@ -493,7 +493,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Meat Locker // Drowned Diner
 - Meteor Crater
 - Mirrorpool
-- Mystifying Maze
 - Nesting Grounds
 - Nexus of Fate
 - Pinnacle Starcage

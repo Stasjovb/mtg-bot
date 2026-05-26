@@ -12490,6 +12490,65 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnTargetLandFromGraveyardToHand,
         )
         return ReturnTargetLandFromGraveyardToHand()
+    if kind == "exile_target_attacking_creature_until_end_step":
+        # **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::ExileTargetAttackingCreature
+        # UntilEndStep`` variant (cards.rs). Mirrors Python's
+        # parameterless ``ExileTargetAttackingCreatureUntilEndStep``
+        # frozen dataclass at ``effects/generic/exile.py:180`` —
+        # Mystifying Maze's pilot effect. Unit variant — no fields
+        # beyond ``kind``. Same shape as the Phase-2a/2b siblings
+        # ``return_target_land_from_graveyard_to_hand`` and
+        # ``put_basic_land_from_hand_onto_battlefield_tapped``.
+        #
+        # **Cycle 1 SUBSTRATE-ONLY.** Phase 3A Cycle 1 keeps Mystifying
+        # Maze DECLINED at the production-deck loader; the Effect-class
+        # admit-set widen (``_carrier_aa_phase_1_effect_classes`` to
+        # include this Effect) ships C2. This bridge arm is byte-equal
+        # for both the substrate-only and the post-C2 flipped outcomes.
+        #
+        # **isinstance specificity.** The match-side check in
+        # ``_python_aa_to_safe_dict`` must use the SPECIFIC class
+        # ``ExileTargetAttackingCreatureUntilEndStep`` — NOT the parent
+        # ``Effect`` — to avoid silently widening admission to other
+        # ``Effect`` subclasses. This class has no subclasses in the
+        # live tree (verified via grep on
+        # ``class.*ExileTargetAttackingCreatureUntilEndStep``), so the
+        # match is exact.
+        from mtg_bot.effects.generic.exile import (
+            ExileTargetAttackingCreatureUntilEndStep,
+        )
+        return ExileTargetAttackingCreatureUntilEndStep()
+    if kind == "return_exiled_permanent_to_owner_tapped":
+        # **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).** Bridge
+        # arm for the new Rust ``Effect::ReturnExiledPermanentToOwner
+        # Tapped { exile_card_id }`` variant (cards.rs) — the paired
+        # delayed-trigger effect Mystifying Maze schedules at resolve
+        # time to return the exiled creature tapped at the next end
+        # step. Mirrors Python's
+        # ``ReturnExiledPermanentToOwnerTapped(exile_card_id: int)``
+        # frozen dataclass at ``effects/generic/exile.py:86``.
+        #
+        # **Single-field payload.** Two-field schema (``kind`` +
+        # ``exile_card_id``) — the captured-at-schedule-time exiled
+        # object id. Rust's ``parse_effect`` REQUIRES the field; this
+        # bridge arm matches the contract and constructs
+        # ``ReturnExiledPermanentToOwnerTapped(exile_card_id=int(...))``.
+        # Same shape as the ``remove_charge_counters_from_source_
+        # delayed`` single-int-field sibling.
+        #
+        # **Delayed-trigger snapshot path.** This arm is exercised when
+        # the Rust delayed_triggers Vec is snapshotted to Python (via
+        # ``state.delayed_triggers_snapshot()`` + the
+        # full-effect-to_pydict surface). The Python serializer's
+        # ``_leaf`` arm at ``parity/trajectory.py`` emits the matching
+        # forward dict-shape.
+        from mtg_bot.effects.generic.exile import (
+            ReturnExiledPermanentToOwnerTapped,
+        )
+        return ReturnExiledPermanentToOwnerTapped(
+            exile_card_id=int(eff_dict["exile_card_id"]),
+        )
     if kind == "put_basic_land_from_hand_onto_battlefield_tapped":
         # **Carrier-AA substrate Phase 2b Cycle 1 (2026-05-25).** Bridge
         # arm for the new Rust ``Effect::PutBasicLandFromHandOntoBattle
@@ -14296,6 +14355,9 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
     )
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetAttackingCreatureUntilEndStep,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -14312,6 +14374,26 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     elif isinstance(effect, PutBasicLandFromHandOntoBattlefieldTapped):
         effect_dict = {
             "kind": "put_basic_land_from_hand_onto_battlefield_tapped",
+        }
+    elif isinstance(effect, ExileTargetAttackingCreatureUntilEndStep):
+        # **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).** Forward-
+        # emit arm for Mystifying Maze's pilot effect. Unit variant —
+        # only the ``kind`` discriminator on the wire; the target rides
+        # on the action-dict's ``target_creature_id`` slot at activation
+        # time, and the paired EoT-return effect's ``exile_card_id``
+        # rides on its own ``Effect::ReturnExiledPermanentToOwnerTapped``
+        # variant (NOT in the AA's dict).
+        #
+        # **Substrate-only: Mystifying Maze STAYS DECLINED at admit
+        # gate.** The forward emit succeeds (Rust round-trip works),
+        # but the admit predicate
+        # ``_aa_is_phase1_sub_shape_a`` still declines the live
+        # Mystifying Maze printing because the C1 substrate doesn't
+        # widen ``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect class (C2 ships that widen). The forward arm exists
+        # at C1 so unit-test pins can drive the round-trip.
+        effect_dict = {
+            "kind": "exile_target_attacking_creature_until_end_step",
         }
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b admit set — decline.

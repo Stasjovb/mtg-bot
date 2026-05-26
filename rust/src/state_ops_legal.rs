@@ -3627,6 +3627,99 @@ impl GameState {
                             None,
                         )?);
                     }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::ExileTargetAttackingCreatureUntilEndStep,
+                ) {
+                    // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-
+                    // 25).** Attacking-creature target fan-out arm per
+                    // ``docs/CARRIER_AA_SUBSTRATE_PHASE_3_DESIGN.md``
+                    // §4.1 (Mystifying Maze). Walks `state.attackers`
+                    // for eligible target ids — each attacker that is
+                    // (a) STILL on a battlefield, (b) controlled by an
+                    // OPPONENT of the activator, and (c) printed as a
+                    // Creature (the `attackers` Vec is creature-only
+                    // by construction, but the registry-lookup is a
+                    // safety check for forward-correctness). Mirrors
+                    // the sacrifice-target fan-out arms above; differs
+                    // only in the SOURCE of the target enumeration
+                    // (`state.attackers` Vec walk instead of bf-walk +
+                    // sacrifice-filter).
+                    //
+                    // **Opponent-controlled gate.** Maze's printed text
+                    // is "target attacking creature an opponent
+                    // controls" — the activator can't target their own
+                    // attackers. Per CR 109.5 / 700.1, "opponent" =
+                    // any player other than the activator (`idx`).
+                    //
+                    // **Combat-phase guard.** `state.attackers` is only
+                    // populated during combat (declare-attackers →
+                    // end-of-combat); outside combat the Vec is empty
+                    // and this fan-out emits zero actions. Per CR
+                    // 117.5, an AA with NO legal target cannot be
+                    // activated — the no-emission branch is the
+                    // natural-deadcode path that enforces this.
+                    //
+                    // **No legal targets → no emission.** A bare Maze
+                    // on bf with no opponent attackers (either outside
+                    // combat or during a combat where the opponent
+                    // attacked with nothing) emits zero
+                    // `ActivateAbility` dicts (CR 601.2c).
+                    //
+                    // **Target dict slot.** Reuses `target_creature_id`
+                    // as the generic single-target object-id slot —
+                    // same shape as the Phase-2a sibling arm. The
+                    // apply-time validator at
+                    // `state_ops_actions.rs` re-validates the chosen
+                    // target against `state.attackers` + opponent-
+                    // controlled criteria before allowing the
+                    // activation; the resolve arm at
+                    // `state_ops_resolve.rs` reads
+                    // `state.current_resolve_payload_target_id`.
+                    for &attacker_id in self.attackers.iter() {
+                        // Locate the attacker across both bfs.
+                        let mut found_attacker: Option<&crate::state::GameObject> = None;
+                        for player in self.players.iter() {
+                            if let Some(a) = player
+                                .battlefield
+                                .iter()
+                                .find(|o| o.id == attacker_id)
+                            {
+                                found_attacker = Some(a);
+                                break;
+                            }
+                        }
+                        let Some(attacker) = found_attacker else {
+                            continue;
+                        };
+                        // Opponent-controlled gate (skip own attackers).
+                        if (attacker.controller as usize) == idx {
+                            continue;
+                        }
+                        // Defense-in-depth: printed-Creature filter
+                        // (the attackers Vec is creature-only by
+                        // construction; this filter is forward-
+                        // correct for any future widening).
+                        let Some(a_printing) =
+                            self.registry.lookup(attacker.printing_id)
+                        else {
+                            continue;
+                        };
+                        if !a_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            Some(attacker_id),
+                            None,
+                        )?);
+                    }
                 } else {
                     actions.push(activate_ability_dict(
                         py,

@@ -23027,6 +23027,216 @@ fn apply_effect(
             // dispatch path).
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `ExileTargetAttackingCreatureUntilEndStep` resolve.** Mystifying
+        // Maze's `{4}, {T}: Exile target attacking creature an opponent
+        // controls. At the beginning of the next end step, return it to
+        // the battlefield tapped under its owner's control.`
+        //
+        // **Target read.** From `state.current_resolve_payload_target_id`
+        // (seeded at activation time by `new_trigger_with_target` in
+        // `state_ops_actions.rs`). No deterministic-first-legal fallback
+        // — Maze's target is at-activation-time-chosen + re-validated at
+        // resolve, NOT at-resolve-time-picked. The legal-emit fan-out
+        // arm in `state_ops_legal.rs::legal_decisions` enumerates every
+        // legal attacking-creature target and emits one
+        // `ActivateAbility` per target with the chosen-target id seated
+        // in `target_creature_id`, which the apply-time validator at
+        // `state_ops_actions.rs` re-validates against `state.attackers`
+        // before allowing the activation.
+        //
+        // **Target re-validation per CR 608.2b.** Walk both players'
+        // battlefields for the target id. If the target is no longer on
+        // a battlefield (countered / died / bounced / re-exiled before
+        // resolve), silent fizzle — no exile move, NO delayed-trigger
+        // push. The delayed trigger fires per CR 603.7 ONLY when the
+        // exile commits — same shape as Python's `if target is None:
+        // return` early-return at `exile.py:222-223`.
+        //
+        // Also re-check that the target is STILL in `state.attackers`
+        // (CR 608.2b extends to ALL target-legality criteria printed on
+        // the ability — "attacking creature" is a printed target-
+        // selection clause). A target that was attacking at activation
+        // but stopped attacking by resolve (rare — `state.attackers` is
+        // only cleared at end-of-combat, but a removed creature is also
+        // removed from `state.attackers`) fizzles silently.
+        //
+        // **Exile primitive.** Standard bf→exile move: remove from
+        // owner's battlefield, reset CR-400.7 zone-change fields
+        // (tapped/damage/counters/attached_to/exiled_with_source) — DO
+        // NOT stamp `exiled_with_source` (Maze's exile is unconditional-
+        // until-EoT, NOT until-source-leaves; the return fires on the
+        // delayed trigger regardless of whether Maze still exists).
+        // Push to owner's exile zone. Same shape as the
+        // `Effect::ExileTargetCreature` sibling arm at line 20902.
+        //
+        // **Delayed-trigger push.** `state.delayed_triggers.push(...)`
+        // with `fire_at_turn = state.turn_number` and
+        // `controller_id = state.active_player`. Mystifying Maze is
+        // activated AT INSTANT SPEED on the opponent's combat → the
+        // opponent is `active_player`, the next end step is THEIR end
+        // step, and the trigger fires at THEIR end step. Same
+        // schedule shape as the Python producer at `exile.py:238-247`.
+        // `source_id` is the Maze permanent's id (`source_obj_id` —
+        // the `apply_effect` arg). The effect payload carries the
+        // captured target id — survives even if Maze later leaves the
+        // battlefield.
+        //
+        // **LEAVES dispatch / token-cease.** Same plumbing as the
+        // sibling `ExileTargetCreature` / `WarpExileSelf` arms — queue
+        // `pending_leaves_dispatches` + `queue_token_cease` after the
+        // exile push; mark LTB if non-land via
+        // `mark_left_battlefield_if_nonland`. Drained at the end of
+        // `resolve_top_of_stack`.
+        Effect::ExileTargetAttackingCreatureUntilEndStep => {
+            let target_id = match state.current_resolve_payload_target_id {
+                Some(tid) => tid,
+                None => return Ok(()), // No target seated — silent fizzle.
+            };
+            // Locate target across both players' battlefields. Same
+            // shape as the `ExileTargetCreature` two-arm scan.
+            let mut found: Option<(usize, usize)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(idx) =
+                    player.battlefield.iter().position(|o| o.id == target_id)
+                {
+                    found = Some((pidx, idx));
+                    break;
+                }
+            }
+            let Some((pidx, bf_idx)) = found else {
+                // Target no longer on any bf — CR 608.2b silent fizzle.
+                return Ok(());
+            };
+            // Re-check `state.attackers` — the target must still be
+            // attacking at resolve. CR 608.2b extends to the printed
+            // target-selection criteria; "attacking creature" is one
+            // such criterion.
+            if !state.attackers.contains(&target_id) {
+                return Ok(());
+            }
+            // Exile primitive — mirrors `ExileTargetCreature` /
+            // `WarpExileSelf`.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            let mut obj = bf_mut.remove(bf_idx);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            // Maze's exile is UNCONDITIONAL-UNTIL-EOT, NOT until-source-
+            // leaves. Do NOT stamp `exiled_with_source`; the return
+            // fires via the delayed-trigger machinery regardless of
+            // whether Maze still exists at fire time.
+            obj.exiled_with_source = None;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+            // LEAVES fan-out + LTB nonland mark + token-cease.
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            // Schedule the delayed-trigger EoT return. Mirrors Python
+            // at `exile.py:238-247` — `fire_at_turn = turn_number`,
+            // `controller_id = active_player`, `source_id = source_obj_id`
+            // (the Maze itself), effect-payload `exile_card_id =
+            // leaving_obj_id`.
+            state.delayed_triggers.push(crate::cards::DelayedTrigger {
+                fire_at_turn: state.turn_number,
+                controller_id: state.active_player,
+                source_id: source_obj_id,
+                effect: Effect::ReturnExiledPermanentToOwnerTapped {
+                    exile_card_id: leaving_obj_id,
+                },
+            });
+        }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `ReturnExiledPermanentToOwnerTapped` resolve.** Paired EoT
+        // return effect for Mystifying Maze. Fires via the delayed-
+        // trigger machinery at `state_ops_steps.rs::run_delayed_end_
+        // step_triggers` at the active player's end step.
+        //
+        // **Mirrors Python's `ReturnExiledPermanentToOwnerTapped.resolve`**
+        // at `effects/generic/exile.py:98-123`:
+        // 1. Walk both players' `exile` for the object with
+        //    `id == exile_card_id`. If absent (already moved by another
+        //    effect — re-exiled / shuffled into library / countered-
+        //    onto-graveyard), silent no-op per CR 603.6c.
+        // 2. Remove from exile. Push onto `players[pidx].battlefield`
+        //    where `pidx` is the owner-by-convention (the player whose
+        //    exile zone holds the object — EoE has no ownership-
+        //    changing effects, so Rust uses zone-resident-player as
+        //    owner). CR 110.2 — controller resets to owner on bf
+        //    re-entry.
+        // 3. Stamp `obj.zone = ZONE_BATTLEFIELD`, `obj.tapped = true`,
+        //    `obj.controller = pidx_as_u8` (= the owner), reset per-
+        //    zone-change fields (CR 400.7) — `damage`, `counters`,
+        //    `attached_to`, `exiled_with_source` all cleared on the
+        //    round-trip.
+        //    `summoning_sick = true` per CR 302.1 for any creature
+        //    re-entering the battlefield (Maze targets ATTACKING
+        //    creatures, all of which are creatures — gate is forward-
+        //    correct anyway).
+        // 4. Reserve a fresh ETB timestamp (CR 400.7) BEFORE the
+        //    player-mut borrow. Queue `Event::Enters` dispatch via
+        //    `pending_etb_dispatches` — ETB / landfall triggers fire
+        //    on the return per CR 603.6a. Same shape as the Phase 2b
+        //    `PutBasicLandFromHandOntoBattlefieldTapped` sibling.
+        Effect::ReturnExiledPermanentToOwnerTapped { exile_card_id } => {
+            // Locate the exiled object across both players.
+            let mut found: Option<(usize, usize)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(idx) =
+                    player.exile.iter().position(|o| o.id == *exile_card_id)
+                {
+                    found = Some((pidx, idx));
+                    break;
+                }
+            }
+            let Some((pidx, ex_idx)) = found else {
+                // Object no longer in exile — silent no-op per CR 603.6c.
+                return Ok(());
+            };
+            // Reserve ETB timestamp BEFORE the player-mut borrow.
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // Pop from exile; stamp re-entry fields.
+            // **Owner-id convention.** Rust GameObject doesn't carry a
+            // distinct `owner` field — the convention (mirroring
+            // `state_ops_sba.rs::move_aura_to_owners_graveyard` and the
+            // dies-to-owner-graveyard SBA path) is that the player whose
+            // zone the object currently sits in is its owner (EoE has
+            // no ownership-changing effects). `pidx` here = the
+            // player whose exile we found the object on = the owner.
+            // Mirrors Python's `owner = p` at `exile.py:108-111`.
+            let owner_u8 = pidx as u8;
+            let entered_id: u32 = {
+                let player = &mut state.players[pidx];
+                let exile_mut = Arc::make_mut(&mut player.exile);
+                let mut obj = exile_mut.remove(ex_idx);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                // CR 110.2 — controller resets to owner on bf re-entry.
+                obj.controller = owner_u8;
+                // CR 400.7 zone-change reset.
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                // CR 302.1 — creature re-entering the battlefield is
+                // summoning-sick this turn. Maze targets ATTACKING
+                // creatures (so the target is always a creature); the
+                // gate stays forward-correct for any future widening.
+                obj.summoning_sick = true;
+                obj.etb_timestamp = etb_ts;
+                let id = obj.id;
+                Arc::make_mut(&mut player.battlefield).push(obj);
+                id
+            };
+            // Queue Event::Enters dispatch — drained AFTER this arm
+            // returns. Same shape as the `PutBasicLandFromHandOnto
+            // BattlefieldTapped` sibling.
+            state.pending_etb_dispatches.push(entered_id);
+        }
     }
     Ok(())
 }

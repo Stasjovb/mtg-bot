@@ -8467,6 +8467,93 @@ pub enum Effect {
     /// **Unit variant** — no fields. Mirrors Python's parameterless
     /// `PutBasicLandFromHandOntoBattlefieldTapped()` frozen dataclass.
     PutBasicLandFromHandOntoBattlefieldTapped,
+    /// **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).** Mystifying
+    /// Maze's pilot effect — `{4}, {T}: Exile target attacking creature
+    /// an opponent controls. At the beginning of the next end step,
+    /// return it to the battlefield tapped under its owner's control.`
+    ///
+    /// **Mirrors Python's `ExileTargetAttackingCreatureUntilEndStep`**
+    /// (`src/mtg_bot/effects/generic/exile.py:180`). On resolve:
+    /// 1. Read the target from
+    ///    `state.current_resolve_payload_target_id` (the cast-time-
+    ///    bound target threaded onto the StackItem at activation time
+    ///    by the `state_ops_actions.rs` `new_trigger_with_target` path).
+    /// 2. Re-validate target legality per CR 608.2b — the chosen
+    ///    creature must STILL be on a player's battlefield AND STILL
+    ///    in `state.attackers`. If not, silent fizzle (no
+    ///    `DelayedTrigger` push). Mirrors Python's
+    ///    `if target is None: return` early-return at
+    ///    `exile.py:222-223`.
+    /// 3. Exile the target via the standard bf→exile primitive (mirrors
+    ///    `Effect::ExileTargetCreature` resolve arm + the
+    ///    `WarpExileSelf` resolve arm — both use the `bf.remove` +
+    ///    `obj.zone = ZONE_EXILE` + `players[*].exile.push` shape).
+    /// 4. Push a `DelayedTrigger` entry onto `state.delayed_triggers`
+    ///    with `fire_at_turn = state.turn_number`,
+    ///    `controller_id = state.active_player`, `source_id = source_obj_id`
+    ///    (the Maze itself), and `effect = ReturnExiledPermanentToOwnerTapped
+    ///    { exile_card_id: target_id }`. The active player's next END
+    ///    step fires the trigger via
+    ///    `state_ops_steps.rs::run_delayed_end_step_triggers` — the same
+    ///    plumbing `WarpExileSelf` rides.
+    ///
+    /// **Combat-phase guard.** The target must be in `state.attackers`,
+    /// which is only populated during combat (declare-attackers →
+    /// end-of-combat). The legal-emit fan-out arm in
+    /// `state_ops_legal.rs::legal_decisions` filters on
+    /// `state.attackers.contains(obj.id)` so the activation emits zero
+    /// targets outside combat (per CR 117.5 — an AA with no legal
+    /// target cannot be activated).
+    ///
+    /// **Unit variant** — no fields. Mirrors Python's parameterless
+    /// `ExileTargetAttackingCreatureUntilEndStep()` frozen dataclass.
+    /// Target rides on the StackItem's
+    /// `current_resolve_payload_target_id`; delayed-trigger return
+    /// rides on the `ReturnExiledPermanentToOwnerTapped` paired
+    /// variant's `exile_card_id` payload.
+    ExileTargetAttackingCreatureUntilEndStep,
+    /// **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).** Paired
+    /// delayed-trigger effect for Mystifying Maze's "at the beginning
+    /// of the next end step, return it tapped" rider. Scheduled by the
+    /// `ExileTargetAttackingCreatureUntilEndStep` resolve arm into
+    /// `state.delayed_triggers`; fired via
+    /// `run_delayed_end_step_triggers` at the active player's next end
+    /// step.
+    ///
+    /// **Mirrors Python's `ReturnExiledPermanentToOwnerTapped`**
+    /// (`src/mtg_bot/effects/generic/exile.py:86`). On resolve:
+    /// 1. Walk both players' `exile` for the object with
+    ///    `id == exile_card_id`. If not found, silent no-op (CR 603.6c
+    ///    — the object may have been moved by another effect, e.g.
+    ///    re-exiled / shuffled into library / re-exiled with rider).
+    /// 2. Remove from exile; push onto `players[pidx].battlefield`
+    ///    where `pidx` is the owner-by-convention (Rust GameObject
+    ///    has no `owner` field; the player whose zone the object
+    ///    sits in is its owner — EoE has no ownership-changing
+    ///    effects). CR 110.2 — controller resets to owner on bf
+    ///    re-entry.
+    /// 3. Stamp `obj.tapped = true`, `obj.zone = ZONE_BATTLEFIELD`,
+    ///    `obj.controller = pidx_as_u8` (= the owner), reset per-
+    ///    zone-change fields
+    ///    (CR 400.7), and queue `Event::Enters` via
+    ///    `pending_etb_dispatches` — ETB triggers (incl. landfall)
+    ///    fire on the return per CR 603.6a.
+    ///
+    /// **`exile_card_id` payload.** The slot is populated at schedule
+    /// time by the producer arm (`ExileTargetAttackingCreatureUntilEndStep`
+    /// resolve). Persists on the `DelayedTrigger.effect` field so the
+    /// fire-time resolve has the right object id without needing
+    /// extra state plumbing — `state.delayed_triggers` Vec is the
+    /// already-wired carrier. Same "no new state field" discipline as
+    /// the `WarpExileSelf` precedent.
+    ReturnExiledPermanentToOwnerTapped {
+        /// The exiled object's id captured at the producer-arm's
+        /// resolve time. Survives even if the Maze later leaves the
+        /// battlefield (the trigger has its own delayed-trigger source
+        /// reference via `DelayedTrigger.source_id`; this payload is
+        /// only the target-card id, decoupled from the Maze source).
+        exile_card_id: u32,
+    },
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -12690,6 +12777,53 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         // / `untap_target_land` siblings).
         "put_basic_land_from_hand_onto_battlefield_tapped" => {
             Ok(Effect::PutBasicLandFromHandOntoBattlefieldTapped)
+        }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `exile_target_attacking_creature_until_end_step` parse arm.**
+        // Unit variant; no fields. Mirrors Python's parameterless
+        // `ExileTargetAttackingCreatureUntilEndStep()` frozen dataclass
+        // at `effects/generic/exile.py:180`. Extra dict keys silently
+        // dropped (unit-variant contract; same shape as the
+        // `return_target_land_from_graveyard_to_hand` /
+        // `untap_target_land` siblings). Target rides on the
+        // StackItem's `current_resolve_payload_target_id`; the paired
+        // delayed-trigger return rides on the
+        // `return_exiled_permanent_to_owner_tapped` variant's
+        // `exile_card_id` payload.
+        "exile_target_attacking_creature_until_end_step" => {
+            Ok(Effect::ExileTargetAttackingCreatureUntilEndStep)
+        }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `return_exiled_permanent_to_owner_tapped` parse arm.** Paired
+        // delayed-trigger effect for Mystifying Maze's EoT-return rider.
+        // Mirrors Python's `ReturnExiledPermanentToOwnerTapped(exile_
+        // card_id: int)` frozen dataclass at `effects/generic/exile.py:86`.
+        // Single REQUIRED `exile_card_id` field — the chosen-at-
+        // schedule-time exiled object's id. Non-negative (object ids
+        // are u32 on Rust); rejected loudly on missing key.
+        //
+        // This Effect is normally constructed at the producer arm's
+        // resolve time (`ExileTargetAttackingCreatureUntilEndStep`
+        // pushes a `DelayedTrigger` with this Effect on the
+        // `delayed_triggers` Vec), but the parse arm exists so
+        // mid-game state sync from Python → Rust can deserialize an
+        // in-flight delayed-trigger snapshot dict back into the Rust
+        // type. Sibling of `RemoveChargeCountersFromSourceDelayed`'s
+        // single-int-field parse arm.
+        "return_exiled_permanent_to_owner_tapped" => {
+            let exile_card_id: u32 = match dict.get_item("exile_card_id")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "return_exiled_permanent_to_owner_tapped.exile_card_id must be a non-negative integer (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "return_exiled_permanent_to_owner_tapped: missing required 'exile_card_id' field",
+                    ));
+                }
+            };
+            Ok(Effect::ReturnExiledPermanentToOwnerTapped { exile_card_id })
         }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
@@ -18426,6 +18560,38 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "put_basic_land_from_hand_onto_battlefield_tapped",
             )?;
+        }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `ExileTargetAttackingCreatureUntilEndStep.to_pydict`.** Field-
+        // free unit-variant; only `kind` emitted. Mirrors Python's
+        // parameterless `ExileTargetAttackingCreatureUntilEndStep()`
+        // frozen dataclass (`effects/generic/exile.py:180`). Target is
+        // NOT in the dict — it rides on the StackItem's
+        // `current_resolve_payload_target_id` slot threaded at
+        // activation time. The paired EoT-return effect's payload
+        // is captured at the producer-arm's resolve time and lives on
+        // `Effect::ReturnExiledPermanentToOwnerTapped.exile_card_id`
+        // (NOT on this dict).
+        Effect::ExileTargetAttackingCreatureUntilEndStep => {
+            d.set_item(
+                "kind",
+                "exile_target_attacking_creature_until_end_step",
+            )?;
+        }
+        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25) —
+        // `ReturnExiledPermanentToOwnerTapped.to_pydict`.** Paired
+        // delayed-trigger effect; carries the captured exile target
+        // id. Two-field schema (`kind` + `exile_card_id`) — mirrors
+        // the `remove_charge_counters_from_source_delayed` single-int-
+        // field idiom (the WarpExileSelf-sibling delayed-trigger
+        // effect class that ALSO carries a single payload field).
+        // The schedule-time `exile_card_id` survives even if the
+        // Maze source later leaves the battlefield (the
+        // `DelayedTrigger.source_id` is the Maze; this payload is the
+        // exiled object's id, decoupled).
+        Effect::ReturnExiledPermanentToOwnerTapped { exile_card_id } => {
+            d.set_item("kind", "return_exiled_permanent_to_owner_tapped")?;
+            d.set_item("exile_card_id", *exile_card_id)?;
         }
     }
     Ok(d)

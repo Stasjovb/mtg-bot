@@ -6068,6 +6068,29 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": "remove_charge_counters_from_source_delayed",
                 "amount": int(eff.amount),
             }
+        # **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).**
+        # Single-field ``ReturnExiledPermanentToOwnerTapped(exile_card_
+        # id)`` leaf — Mystifying Maze's paired delayed-trigger return
+        # effect. Round-trips through the field-bearing dict — Rust's
+        # ``parse_effect`` ``"return_exiled_permanent_to_owner_tapped"``
+        # arm REQUIRES ``exile_card_id`` and the dict→Python bridge arm
+        # reconstructs ``ReturnExiledPermanentToOwnerTapped(exile_card_
+        # id=...)`` byte-equal. Scheduled by Mystifying Maze's resolve
+        # arm at producer time; this leaf exists so the
+        # ``delayed_triggers`` bridge round-trip is complete (the
+        # no-fallback-hybrid completeness teeth — without it a mid-
+        # game state-sync from Python → Rust would silently discard
+        # the in-flight return-on-EoT rider). Same single-int-field
+        # shape as the ``RemoveChargeCountersFromSourceDelayed``
+        # sibling at the previous leaf entry.
+        from mtg_bot.effects.generic.exile import (
+            ReturnExiledPermanentToOwnerTapped as _ReturnExiledPermanentToOwnerTapped,
+        )
+        if isinstance(eff, _ReturnExiledPermanentToOwnerTapped):
+            return {
+                "kind": "return_exiled_permanent_to_owner_tapped",
+                "exile_card_id": int(eff.exile_card_id),
+            }
         # **Phase-3 wrath-admit-widening (2026-05-21).** Pyroclasm-shape
         # mass-damage leaf — ``DealNDamageToEachCreature(amount)``. The
         # bridge arm at ``cross_engine.py::damage_each_creature`` REQUIRES

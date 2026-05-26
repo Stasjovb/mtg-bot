@@ -3287,6 +3287,17 @@ impl GameState {
                 crate::cards::Effect::SacrificeSourceDelayed => {
                     "sacrifice_source_delayed"
                 }
+                // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).**
+                // Mystifying Maze's paired EoT-return effect — fires
+                // via the delayed-trigger machinery the same way
+                // `WarpExileSelf` / `SacrificeSourceDelayed` do. Kind-
+                // string only here (no `exile_card_id` exposure) —
+                // tests that need full payload fidelity drive
+                // `effect_to_pydict` directly. Same minimal-inspector
+                // shape as the existing sibling arms.
+                crate::cards::Effect::ReturnExiledPermanentToOwnerTapped {
+                    ..
+                } => "return_exiled_permanent_to_owner_tapped",
                 _ => "<other>",
             };
             d.set_item("effect_kind", kind)?;

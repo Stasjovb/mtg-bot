@@ -993,6 +993,24 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::ReturnTargetLandFromGraveyardToHand,
                 );
+                // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-25).**
+                // Recognize ``Effect::ExileTargetAttackingCreatureUntilEnd
+                // Step`` as a THIRD target-shape on the
+                // ``target_creature_id`` slot — when an AA's effect is
+                // this variant (Mystifying Maze's pilot AA), the
+                // ``target_creature_id`` slot acts as the chosen
+                // attacking-creature id. Validation walks
+                // ``state.attackers`` for the target id + verifies the
+                // target is on a battlefield + opponent-controlled +
+                // printed-Creature. The legal-emit fan-out arm at
+                // ``state_ops_legal.rs::legal_decisions`` (this
+                // cycle's other deliverable) walks ``state.attackers``
+                // and emits one ``ActivateAbility`` per eligible
+                // attacker with ``target_creature_id = Some(attacker_id)``.
+                let is_exile_attacking_creature_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::ExileTargetAttackingCreatureUntilEndStep,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1036,6 +1054,85 @@ impl GameState {
                             )));
                         }
                         Some(target_id)
+                    } else if is_exile_attacking_creature_effect {
+                        // **Carrier-AA substrate Phase 3A Cycle 1 (2026-05-
+                        // 25).** Attacking-creature target validation
+                        // for Mystifying Maze. The legal-emit fan-out
+                        // arm in `state_ops_legal.rs::legal_decisions`
+                        // walks `state.attackers` and emits one
+                        // `ActivateAbility` per eligible target with
+                        // `target_creature_id = Some(attacker_id)`. The
+                        // validator here re-checks the chosen target
+                        // against `state.attackers` + opponent-controlled
+                        // + on-battlefield invariants.
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) is silent-
+                        // fizzle, matching Python's `if not targets:
+                        // return` early-return at `exile.py:216-217`.
+                        // Direct-callers / synthetic tests rely on
+                        // either passing the chosen attacker id or
+                        // omitting it to drive the fizzle path.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                // Must be in state.attackers.
+                                if !state.attackers.contains(&target_id) {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not currently \
+                                         attacking (not in state.attackers; \
+                                         CR 117.5 — Mystifying Maze's AA \
+                                         requires an attacking-creature \
+                                         target)"
+                                    )));
+                                }
+                                // Must be on SOME battlefield + opponent-
+                                // controlled + printed-Creature.
+                                let target_legal: bool = {
+                                    let registry = &state.registry;
+                                    let mut ok = false;
+                                    for (pidx, player) in
+                                        state.players.iter().enumerate()
+                                    {
+                                        if let Some(t_obj) = player
+                                            .battlefield
+                                            .iter()
+                                            .find(|o| o.id == target_id)
+                                        {
+                                            // Opponent-controlled?
+                                            if pidx == controller_idx {
+                                                break;
+                                            }
+                                            let Some(printing) = registry
+                                                .printings
+                                                .get(t_obj.printing_id as usize)
+                                            else {
+                                                break;
+                                            };
+                                            ok = printing
+                                                .card_types
+                                                .iter()
+                                                .any(|t| t == "Creature");
+                                            break;
+                                        }
+                                    }
+                                    ok
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         attacking-creature target (must be \
+                                         a Creature on a battlefield, \
+                                         opponent-controlled relative to \
+                                         the activator)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
                     } else if is_return_land_from_gy_effect {
                         // Phase-2a graveyard-Land target validation.
                         // ``target_creature_id`` is OPTIONAL on this
