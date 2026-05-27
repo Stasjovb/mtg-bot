@@ -590,9 +590,19 @@ def test_phase_1_3_admits_unchanged_post_4c_c2(all_printings):
 
 def test_phase_4c_c2_widen_does_not_lift_other_riders():
     """**Bounded widen sanity.** The Phase-4C-C2 widen lifts ONLY the
-    ``sorcery_speed=True`` decline arm; ``activate_only_once``,
-    ``tier_threshold``, ``room_half``, and ``cost_reductions`` all
-    stay decline-only.
+    ``sorcery_speed=True`` decline arm at the time of that slice's
+    landing; ``activate_only_once``, ``room_half``, and
+    ``cost_reductions`` all stay decline-only.
+
+    **Spacecraft Phase 4 Cycle 2 update (2026-05-26).** The
+    ``tier_threshold > 0`` decline arm was lifted in lockstep by the
+    Spacecraft Phase 4 C2 slice (The Eternity Elevator FLIP). The
+    bridge floor now ADMITS ``tier_threshold > 0`` and emits the
+    ``tier_threshold`` int on the AA dict (empty-omit when 0). This
+    bounded-widen sanity test no longer asserts ``tier_threshold > 0``
+    declines — it now confirms the OTHER three rider arms still
+    decline (``activate_only_once`` / ``room_half`` / negative
+    ``tier_threshold`` as defense-in-depth).
     """
     from mtg_bot.cards.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.tap import UntapTargetLand
@@ -601,16 +611,31 @@ def test_phase_4c_c2_widen_does_not_lift_other_riders():
     base_cost = ActivationCost(tap_self=True)
     base_effect = UntapTargetLand()
 
-    # tier_threshold > 0 still declines.
-    aa_tier = ActivatedAbility(
-        cost=base_cost, effect=base_effect, tier_threshold=2,
-    )
-    assert _python_aa_to_safe_dict(aa_tier) is None
     # activate_only_once still declines.
     aa_once = ActivatedAbility(
         cost=base_cost, effect=base_effect, activate_only_once=True,
     )
     assert _python_aa_to_safe_dict(aa_once) is None
+    # Spacecraft Phase 4 C2 update: tier_threshold > 0 NOW ADMITS at
+    # the bridge floor (the C2 widen lifts the decline arm to admit
+    # The Eternity Elevator's AA[1] tier_threshold=20). Pin the new
+    # behavior here so a regression in the lift is loud.
+    aa_tier = ActivatedAbility(
+        cost=base_cost, effect=base_effect, tier_threshold=2,
+    )
+    d_tier = _python_aa_to_safe_dict(aa_tier)
+    assert d_tier is not None, (
+        "Spacecraft Phase 4 C2 update: tier_threshold>0 must ADMIT at "
+        "the bridge floor (the decline was lifted in lockstep with "
+        "the Eternity Elevator FLIP). Got None."
+    )
+    assert d_tier["tier_threshold"] == 2
+    # Negative tier_threshold still declines (defense-in-depth — Rust
+    # parse arm rejects negatives).
+    aa_neg = ActivatedAbility(
+        cost=base_cost, effect=base_effect, tier_threshold=-1,
+    )
+    assert _python_aa_to_safe_dict(aa_neg) is None
 
 
 # ---------------------------------------------------------------------------

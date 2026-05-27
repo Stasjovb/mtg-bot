@@ -1,5 +1,9 @@
 """**Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26).**
 
+C1 substrate-only landing PLUS the Cycle 2 INVERTED admit-gate
+invariants (Python admit widen + Eternity Elevator FLIP per design
+doc §5 — Cycle 2 lands at this slice's sibling commit).
+
 Tests for the Phase 4 Cycle 1 Rust substrate slice landing per
 ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md`` §3 (Rust spec)
 + §4 (Python bridge spec) + §5 (cycle plan).
@@ -557,31 +561,44 @@ def test_resolve_add_charge_counter_mana_mints_to_source_controller(
 # ---------------------------------------------------------------------------
 
 
-def test_the_eternity_elevator_stays_declined_post_cycle_1_admit_gate():
-    """**Substrate-only invariant.** The Eternity Elevator's live
-    printing must STAY DECLINED at every relevant admit gate post-C1:
+def test_the_eternity_elevator_admit_gate_post_cycle_2_flip():
+    """**Cycle 2 admit-gate FLIP invariants.** The Eternity Elevator's
+    live printing FLIPS DECLINED → ADMITTED at the Phase-4 admit gate
+    in Cycle 2 (the Python admit widen ships at this slice; pre-C2
+    state had every Phase 1/2/3/4A-Artifact path declining the
+    carrier — see the design doc §1.3 walk).
 
-      (a) ``_aa_is_phase1_sub_shape_a`` on AA[1] returns False
-          (``tier_threshold > 0`` decline).
-      (b) ``_carrier_aa_phase_1_effect_classes`` does NOT include
-          ``AddChargeCounterManaOfChosenColor`` — the C2 widen ships
-          that admit.
+    Post-C2 invariants:
+
+      (a) ``_aa_is_phase1_sub_shape_a`` on AA[1] returns True (the
+          ``tier_threshold > 0`` decline is lifted per design doc §4 —
+          mirror of the Rust ``ActivatedAbility.tier_threshold`` round-
+          trip slot at ``cards.rs:17865``).
+      (b) ``_carrier_aa_phase_1_effect_classes`` INCLUDES
+          ``AddChargeCounterManaOfChosenColor`` (the C2 Effect-class
+          widen — pairs with the C1 Rust variant + cross-engine
+          bridge arms at commit ``354588a5``).
       (c) ``_printing_is_bridge_pure_station_spacecraft`` (Phase 1)
-          returns False (``station_threshold is None`` decline).
+          STILL returns False (``station_threshold is None`` decline
+          unchanged — Phase 1 stays animating-only).
       (d) ``_printing_is_bridge_phase_3_trigger_spacecraft`` (Phase 3)
-          returns False (``station_threshold is None`` decline AND
-          empty ``triggered_abilities``).
+          STILL returns False (``station_threshold is None`` +
+          empty ``triggered_abilities`` decline unchanged).
       (e) ``_printing_is_bridge_simple_carrier_aa_artifact``
-          (Carrier-AA Phase 4A.2 Artifact sibling) returns False (the
-          ``Spacecraft`` subtype excludes the Artifact admit; per
-          ``trajectory.py:9440-9441`` non-empty subtypes decline).
+          (Carrier-AA Phase 4A.2 Artifact sibling) STILL returns False
+          (the ``Spacecraft`` subtype excludes the Artifact admit
+          via the empty-subtypes guard at ``trajectory.py:9550``;
+          Spacecraft Phase 4 goes through a NEW sibling, not a widen
+          of the Carrier-AA Artifact admit).
+      (f) The NEW
+          ``_printing_is_bridge_phase_4_spacecraft_eternity_elevator``
+          predicate (Cycle 2 keystone) returns True — the FLIP load-
+          bearing invariant.
 
-    This pin is the load-bearing invariant of the Cycle 1 substrate-
-    only landing — the Rust + bridge slice is dormant on production
-    traffic until Cycle 2 ships the Python admit widens. A regression
-    here would mean Cycle 1 silently auto-admitted the carrier
-    without the matching Python admit-set bump + per-card real-EoE
-    probe (Cycle 3) — a no-silent-auto-grow violation.
+    This pin INVERTS the Cycle-1 substrate-only "STAY DECLINED"
+    invariant — at Cycle 2 the live admit gate FLIPS the carrier
+    DECLINED → ADMITTED. The per-card real-EoE byte-equal probe
+    (DECLINED → PROBED) ships at Cycle 3.
     """
     import json
 
@@ -593,6 +610,7 @@ def test_the_eternity_elevator_stays_declined_post_cycle_1_admit_gate():
         _carrier_aa_phase_1_effect_classes,
         _printing_is_bridge_pure_station_spacecraft,
         _printing_is_bridge_phase_3_trigger_spacecraft,
+        _printing_is_bridge_phase_4_spacecraft_eternity_elevator,
         _printing_is_bridge_simple_carrier_aa_artifact,
     )
     from mtg_bot.effects.generic.mana import (
@@ -609,51 +627,75 @@ def test_the_eternity_elevator_stays_declined_post_cycle_1_admit_gate():
     printing = build_spacecraft_printing(raw)
     assert printing is not None
 
-    # (a) AA[1] declines on tier_threshold>0.
+    # (a) AA[1] now ADMITS at the Phase 1 sub-shape A predicate. The
+    # tier_threshold>0 decline was lifted at C2; AA[1]'s
+    # tier_threshold=20 + AddChargeCounterManaOfChosenColor +
+    # is_mana_ability=True all clear the per-AA admit gate.
     aa1 = printing.activated_abilities[1]
     assert aa1.tier_threshold == 20
-    assert _aa_is_phase1_sub_shape_a(aa1) is False, (
-        "AA[1] must decline at the Phase 1 sub-shape A predicate on "
-        "tier_threshold>0; Spacecraft Phase 4 C2 widens that gate"
+    assert _aa_is_phase1_sub_shape_a(aa1) is True, (
+        "Spacecraft Phase 4 C2 admit-gate FLIP invariant: AA[1] must "
+        "ADMIT at the Phase 1 sub-shape A predicate post-tier_threshold "
+        "widen + AddChargeCounterManaOfChosenColor Effect-class widen"
     )
+    # AA[0] also admits (was already admit-eligible — AddManaToPool +
+    # is_mana_ability=True ride the Phase-4E-C2 widens).
+    aa0 = printing.activated_abilities[0]
+    assert _aa_is_phase1_sub_shape_a(aa0) is True
 
-    # (b) Effect-class admit set does NOT yet include the new class.
+    # (b) Effect-class admit set NOW INCLUDES the new class (post-C2).
     effect_classes = _carrier_aa_phase_1_effect_classes()
-    assert AddChargeCounterManaOfChosenColor not in effect_classes, (
-        "Phase 4 C1 substrate must NOT yet auto-widen "
-        "_carrier_aa_phase_1_effect_classes; that widen ships C2"
+    assert AddChargeCounterManaOfChosenColor in effect_classes, (
+        "Spacecraft Phase 4 C2 must widen "
+        "_carrier_aa_phase_1_effect_classes to include "
+        "AddChargeCounterManaOfChosenColor (the Rust variant landed at "
+        "C1 commit 354588a5; C2 admits the class)"
     )
 
-    # (c) Phase 1 admit predicate declines on station_threshold=None.
+    # (c) Phase 1 admit predicate STILL declines on
+    # station_threshold=None (Phase 1 is animating-only; the Phase 4
+    # admit predicate handles the non-animating case).
     assert _printing_is_bridge_pure_station_spacecraft(printing) is False
 
-    # (d) Phase 3 admit predicate declines on station_threshold=None
-    # AND empty triggered_abilities.
+    # (d) Phase 3 admit predicate STILL declines on
+    # station_threshold=None + empty triggered_abilities.
     assert _printing_is_bridge_phase_3_trigger_spacecraft(printing) is False
 
-    # (e) Carrier-AA Artifact admit predicate declines on Spacecraft
-    # subtype (extra_card_types is empty for Artifact-only, but
-    # subtypes={"Spacecraft"} non-empty rejects at trajectory.py:9440-
-    # 9441).
+    # (e) Carrier-AA Artifact admit predicate STILL declines on the
+    # ``Spacecraft`` subtype (the empty-subtypes guard at
+    # trajectory.py:9550 — Phase 4A.2 is Artifact-with-empty-subtypes
+    # only; Spacecraft go through the new Phase-4 sibling).
     assert (
         _printing_is_bridge_simple_carrier_aa_artifact(printing) is False
     ), (
-        "Carrier-AA Artifact admit predicate must decline on non-empty "
-        "subtypes={'Spacecraft'}; Spacecraft Phase 4 admit goes through "
-        "a NEW sibling, not a widen of the Carrier-AA Artifact admit"
+        "Spacecraft Phase 4 C2 admit goes through the NEW Phase-4 "
+        "sibling, not a widen of the Carrier-AA Phase-4A.2 Artifact "
+        "admit; the Artifact admit's empty-subtypes guard rejects the "
+        "Spacecraft subtype unchanged"
+    )
+
+    # (f) THE NEW Phase 4 admit predicate ADMITS — load-bearing FLIP
+    # invariant for Cycle 2.
+    assert (
+        _printing_is_bridge_phase_4_spacecraft_eternity_elevator(printing)
+        is True
+    ), (
+        "Spacecraft Phase 4 C2 FLIP invariant: The Eternity Elevator "
+        "must ADMIT at the new Phase 4 admit predicate "
+        "_printing_is_bridge_phase_4_spacecraft_eternity_elevator. This "
+        "is the load-bearing DECLINED -> ADMITTED FLIP of Cycle 2."
     )
 
 
-def test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1():
-    """**No-silent-auto-grow pin.** The
-    ``_carrier_aa_phase_1_effect_classes`` admit set must NOT include
-    ``AddChargeCounterManaOfChosenColor`` post-C1. This pin breaks
-    LOUD if a future hand mutates the Effect-class admit set without
-    landing the matching admit-predicate + per-card probe + design
-    doc updates.
+def test_carrier_aa_phase_1_effect_classes_includes_new_class_post_cycle_2():
+    """**Cycle 2 admit-set bump pin.** The
+    ``_carrier_aa_phase_1_effect_classes`` admit set MUST now include
+    ``AddChargeCounterManaOfChosenColor`` post-C2 (the Effect-class
+    widen ships at Cycle 2 per design doc §5 cycle plan).
 
-    Sibling of the Carrier-AA Phase 4B/4C/4D/4E substrate-only
-    invariant pins.
+    Sibling of the Carrier-AA Phase 4B/4C/4D/4E Effect-class widen
+    pins — every C2 admit-set bump lands a positive membership pin
+    here.
     """
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
@@ -663,28 +705,46 @@ def test_carrier_aa_phase_1_effect_classes_unchanged_post_cycle_1():
     )
 
     effect_classes = _carrier_aa_phase_1_effect_classes()
-    assert AddChargeCounterManaOfChosenColor not in effect_classes
+    assert AddChargeCounterManaOfChosenColor in effect_classes, (
+        "Spacecraft Phase 4 C2 admit-set widen invariant: "
+        "AddChargeCounterManaOfChosenColor MUST be in the Carrier-AA "
+        "Phase-1 Effect-class admit set post-C2 (the C1 Rust variant "
+        "at commit 354588a5 + the C2 Python admit widen combine to "
+        "FLIP the Eternity Elevator)"
+    )
 
 
-def test_python_aa_to_safe_dict_declines_eternity_elevator_aa1_on_tier_threshold():
-    """**Bridge-floor invariant.** Even with the new
-    ``AddChargeCounterManaOfChosenColor`` forward emit arm, the bridge
-    floor ``_python_aa_to_safe_dict`` STILL DECLINES The Eternity
-    Elevator's live AA[1] post-C1 because of the unrelated
-    ``tier_threshold > 0`` rider gate
-    (``cross_engine.py:15021``). The forward arm exists; the
-    surrounding floor still says no until C2 lifts the rider gate.
+def test_python_aa_to_safe_dict_admits_eternity_elevator_aa1_post_cycle_2():
+    """**Cycle 2 bridge-floor FLIP pin.** The bridge floor
+    ``_python_aa_to_safe_dict`` now ADMITS The Eternity Elevator's
+    live AA[1] post-C2 — the ``tier_threshold > 0`` rider gate at
+    ``cross_engine.py:15021`` was lifted at Cycle 2 in lockstep with
+    the per-AA admit predicate widen.
 
-    This pin is the bridge-side mirror of the per-AA admit-predicate
-    decline pin above. Together they guarantee the C1 substrate is
-    truly dormant on production traffic.
+    The emitted AA dict carries:
+
+      * ``cost = {"tap_self": True}`` — bare ``{T}``.
+      * ``effect = {"kind": "add_charge_counter_mana_of_chosen_color"}``
+        — the C1 substrate's unit-variant wire shape.
+      * ``is_mana_ability = True`` — empty-omit discipline (mana-
+        ability bypass-stack semantics, Phase-4E-C2 widen).
+      * ``tier_threshold = 20`` — the new Cycle-2 widen's emit arm.
+
+    This pin INVERTS the C1 substrate-only "declines on
+    tier_threshold>0" invariant — at Cycle 2 the bridge floor
+    ADMITS the live AA[1]. Sibling of the
+    ``test_the_eternity_elevator_admit_gate_post_cycle_2_flip`` pin
+    above.
     """
     import json
 
     from mtg_bot.cards.parser_source import (
         _build_spacecraft_printing as build_spacecraft_printing,
     )
-    from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
+    from mtg_bot.parity.cross_engine import (
+        _aa_dict_to_python_activated_ability,
+        _python_aa_to_safe_dict,
+    )
 
     with open("data/edge_of_eternities.json", encoding="utf-8") as f:
         raw_cards = json.load(f)
@@ -699,7 +759,29 @@ def test_python_aa_to_safe_dict_declines_eternity_elevator_aa1_on_tier_threshold
     aa1 = printing.activated_abilities[1]
     assert aa1.tier_threshold == 20
     d = _python_aa_to_safe_dict(aa1)
-    assert d is None, (
-        "Bridge floor _python_aa_to_safe_dict must decline AA[1] on "
-        "tier_threshold>0 (Phase 4 C2 widen lifts this); got dict={d}"
+    assert d is not None, (
+        "Spacecraft Phase 4 C2 bridge-floor FLIP invariant: AA[1] "
+        "must ADMIT at _python_aa_to_safe_dict post-tier_threshold "
+        "widen. The C1 substrate-only invariant is INVERTED at C2."
+    )
+    assert d["cost"] == {"tap_self": True}
+    assert d["effect"] == {
+        "kind": "add_charge_counter_mana_of_chosen_color",
+    }
+    assert d["is_mana_ability"] is True
+    assert d["tier_threshold"] == 20, (
+        "The bridge floor must emit ``tier_threshold`` on the AA "
+        "dict so the Rust round-trip carries the charge-counter "
+        "tier gate. Empty-omit discipline keeps the key absent for "
+        "tier_threshold=0 (the back-compat default)."
+    )
+    # Round-trip pin — Python → dict → Python yields a byte-equal AA.
+    aa_back = _aa_dict_to_python_activated_ability(d)
+    assert aa_back == aa1, (
+        "Spacecraft Phase 4 C2 byte-equal round-trip pin: AA[1] "
+        "must Python -> dict -> Python at the dataclass __eq__ "
+        "surface. The reverse arm at "
+        "_aa_dict_to_python_activated_ability reads tier_threshold "
+        "back from the dict and threads it through the "
+        "ActivatedAbility constructor."
     )

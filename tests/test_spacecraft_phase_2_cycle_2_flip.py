@@ -346,6 +346,20 @@ def test_admit_set_size_bumps_post_cycle_2():
     Frigate, Larval Scoutlander} post-Phase-3A-C2; Lumen-Class
     Frigate still admits via the Phase-2 path (the load-bearing
     post-Phase-2-C2 invariant being affirmed).
+
+    **Spacecraft Phase 4 Cycle 2 update (2026-05-26 — CAMPAIGN
+    CLOSURE).** Post-Phase-4-C2 the Phase-4 sibling disjunct
+    :func:`_printing_is_bridge_phase_4_spacecraft_eternity_elevator`
+    admits The Eternity Elevator — the SOLE non-animating
+    Spacecraft per the verify-first walk against the 22-Spacecraft
+    EoE set; the cardinality this pin asserts is therefore EXACTLY
+    {Sawship, Lumen-Class Frigate, Larval Scoutlander, Sledge-Class
+    Seedship, Synthesizer Labship, Entropic Battlecruiser, Infinite
+    Guideline Station, The Eternity Elevator} = EIGHT
+    post-Phase-4-C2. With 8 of 8 EoE Spacecraft admitted, the
+    Spacecraft Station substrate campaign is structurally closed
+    at the admit gate; the PROBED tier bump for The Eternity
+    Elevator ships at Cycle 3.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -368,17 +382,19 @@ def test_admit_set_size_bumps_post_cycle_2():
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
+        "The Eternity Elevator",
     ], (
-        "Admit-set count bump: exactly SEVEN Spacecraft must admit "
-        "at the deck-level filter post-Phase-3C-Cycle-4 (PHASE 3 "
-        "CLOSED) — Galvanizing Sawship (Phase-1) + Lumen-Class "
-        "Frigate (Phase-2) + Larval Scoutlander (Phase-3A ETB) + "
-        "Sledge-Class Seedship (Phase-3B ATTACKS) + Synthesizer "
-        "Labship (Phase-3C C2 BEGINNING_OF_COMBAT tier-gated) + "
-        "Entropic Battlecruiser (Phase-3C C3 ATTACKS + DISCARDS_CARD "
-        "tier-1 gate) + Infinite Guideline Station (Phase-3C C4 ETB "
-        "CreateTokenPerMulticoloredPermanent + ATTACKS DrawCardPer "
-        "MulticoloredPermanent). Got: "
+        "Admit-set count bump: exactly EIGHT Spacecraft must admit "
+        "at the deck-level filter post-Phase-4-Cycle-2 (FULL CAMPAIGN "
+        "ADMIT CLOSURE) — Galvanizing Sawship (Phase-1) + Lumen-"
+        "Class Frigate (Phase-2) + Larval Scoutlander (Phase-3A "
+        "ETB) + Sledge-Class Seedship (Phase-3B ATTACKS) + "
+        "Synthesizer Labship (Phase-3C C2 BEGINNING_OF_COMBAT "
+        "tier-gated) + Entropic Battlecruiser (Phase-3C C3 ATTACKS "
+        "+ DISCARDS_CARD tier-1 gate) + Infinite Guideline Station "
+        "(Phase-3C C4 ETB CreateTokenPerMulticoloredPermanent + "
+        "ATTACKS DrawCardPerMulticoloredPermanent) + The Eternity "
+        "Elevator (Phase-4 C2 non-animating multi-AA). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 

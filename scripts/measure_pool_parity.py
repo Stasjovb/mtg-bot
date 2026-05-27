@@ -4162,6 +4162,26 @@ def loader_admits(printing) -> bool:
             or traj._printing_is_bridge_phase_3_trigger_spacecraft(
                 printing,
             )
+            # **Spacecraft Station substrate Phase 4 Cycle 2 (The
+            # Eternity Elevator FLIP, 2026-05-26; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md``
+            # §5).** Mirrors the real loader's new admit arm in
+            # ``_filter_deck_to_bridge_supported``. Admits EXACTLY
+            # The Eternity Elevator in the EoE pool — the SOLE
+            # ``station_threshold=None`` Spacecraft per the verify-
+            # first walk against the 22-Spacecraft live set. The
+            # admitted carrier flips from BLOCKED → COVERED-by-
+            # construction here (the Rust C1 substrate at
+            # ``354588a5`` shipped the
+            # ``AddChargeCounterManaOfChosenColor`` Effect variant,
+            # so both AAs' Effect classes have live Rust variants;
+            # the Effect-coverage instrument classifies the printing
+            # as covered_by_construction). The PROBED tier bump
+            # waits for Cycle 3 — the per-card real-EoE byte-equal
+            # probe in ``tests/test_the_eternity_elevator_parity.py``.
+            or traj._printing_is_bridge_phase_4_spacecraft_eternity_elevator(
+                printing,
+            )
         )
     except Exception:
         return False

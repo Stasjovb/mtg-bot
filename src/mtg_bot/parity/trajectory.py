@@ -9126,7 +9126,10 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
-    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.mana import (
+        AddChargeCounterManaOfChosenColor,
+        AddManaToPool,
+    )
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
     )
@@ -9195,6 +9198,34 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # unchanged at C2 close (decline-set walk + Phase-4A
         # invariants stay intact).
         CreateTokenCopyOfTargetCreatureYouControl,
+        # **Spacecraft Phase 4 Cycle 2 widen (2026-05-26 — Eternity
+        # Elevator admit per
+        # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md`` §5
+        # cycle plan + §4).** Adds The Eternity Elevator's AA[1] pilot
+        # Effect class. The Rust substrate (new
+        # ``Effect::AddChargeCounterManaOfChosenColor`` unit variant +
+        # parser + resolver + ``to_pydict`` + cross-engine forward and
+        # reverse arms) all landed at C1 (commit ``354588a5``). C2
+        # widens the per-AA Effect-class gate. Sibling AA[0]
+        # ``AddManaToPool(produces=(("C", 3),))`` has been in the
+        # admit set since Phase 4E Cycle 2 (round-21 mana-ability
+        # bridge slice + Phase 4E forward arm at
+        # ``cross_engine.py:15600+``), so both Eternity Elevator AAs
+        # now clear the per-AA Effect-class gate after this widen.
+        #
+        # **Combined widens for Eternity Elevator FLIP.** The per-AA
+        # admit predicate :func:`_aa_is_phase1_sub_shape_a`
+        # additionally gets a ``tier_threshold`` AA-rider widen so
+        # AA[1]'s ``tier_threshold=20`` rider passes; the bridge floor
+        # :func:`cross_engine._python_aa_to_safe_dict` gets a matching
+        # widen to emit ``tier_threshold`` (and the consumer
+        # :func:`cross_engine._aa_dict_to_python_activated_ability`
+        # reads it back). With all three Python widens + the C1 Rust
+        # substrate + the new
+        # :func:`_printing_is_bridge_phase_4_spacecraft_eternity_elevator`
+        # admit predicate + builder, The Eternity Elevator FLIPS
+        # DECLINED → ADMITTED in the OR-chain.
+        AddChargeCounterManaOfChosenColor,
     })
 
 
@@ -9400,7 +9431,24 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
         return False
     if aa.room_half is not None:
         return False
-    if aa.tier_threshold:
+    # **Spacecraft Phase 4 Cycle 2 (2026-05-26 — Eternity Elevator FLIP
+    # per docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md §5).** The
+    # ``tier_threshold > 0`` rider was Phase-1 honest-stop. Lifted to
+    # admit The Eternity Elevator's AA[1] (``20+ | {T}: Add X mana of
+    # any one color, where X is the number of charge counters on The
+    # Eternity Elevator.`` -- ``tier_threshold=20``). The Rust
+    # ``ActivatedAbility.tier_threshold: i32`` slot has been parsed +
+    # round-tripped since the CE20 follow-up Slice 3
+    # (``cards.rs:11276 + 17865``); the legal-emit gate already
+    # filters tier-gated AAs by ``charge_counters >= tier_threshold``
+    # at ``state_ops_legal.rs:3328``. The bridge floor
+    # :func:`cross_engine._python_aa_to_safe_dict` widens in lockstep
+    # to emit the ``tier_threshold`` key (and
+    # :func:`cross_engine._aa_dict_to_python_activated_ability` reads
+    # it back) so the AA dict round-trips byte-equal. Negative values
+    # are non-sensical (Rust parse arm rejects on negative);
+    # ``aa.tier_threshold < 0`` defense-in-depth declines.
+    if aa.tier_threshold < 0:
         return False
     if aa.activate_only_once:
         return False
@@ -10696,6 +10744,255 @@ def _phase_3_trigger_spacecraft_card_def(printing) -> "Optional[CardDef]":
         station_threshold=int(printing.station_threshold),
         stationed_keywords=tuple(sorted(printing.stationed_keywords)),
         triggered_abilities=tuple(ta_dicts),
+    )
+
+
+def _printing_is_bridge_phase_4_spacecraft_eternity_elevator(printing) -> bool:
+    """True iff a CardPrinting is a Phase-4 bridge-supported
+    non-animating multi-AA Spacecraft — The Eternity Elevator's
+    distinguishing shape.
+
+    **Spacecraft Station substrate — Phase 4 Cycle 2 (2026-05-26;
+    spec at docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md §0 /
+    §4 / §5).** Sibling of :func:`_printing_is_bridge_pure_station_
+    spacecraft` (Phase-1 zero-ability carrier),
+    :func:`_printing_is_bridge_phase_2_static_anthem_spacecraft`
+    (Phase-2 single-anthem carrier), and
+    :func:`_printing_is_bridge_phase_3_trigger_spacecraft` (Phase-3
+    trigger-bearing carrier). Closes the LAST Spacecraft in the EoE
+    pool — The Eternity Elevator (``station_threshold=None``,
+    multi-AA with a ``tier_threshold=20`` gate). Pilot card admit
+    set is **EXACTLY {The Eternity Elevator}** — the SOLE non-
+    animating Spacecraft in the live pool (verify-first walk against
+    the 22-Spacecraft EoE set; design doc §1.2 / §1.3).
+
+    **§2 teeth (must reject):**
+
+      * Non-Spacecraft (no ``"Spacecraft"`` subtype).
+      * ``station_threshold is not None`` — Phase-1/2/3 paths cover
+        animating Spacecraft; this predicate is the non-animating-
+        only sibling.
+      * Empty ``activated_abilities`` — Phase-1 zero-ability carrier
+        (Galvanizing Sawship) flows through
+        :func:`_printing_is_bridge_pure_station_spacecraft`.
+      * Any ``static_abilities`` — Phase-2 path covers static-anthem
+        Spacecraft (Lumen-Class Frigate).
+      * Any ``triggered_abilities`` — Phase-3 path covers trigger-
+        bearing Spacecraft (Larval Scoutlander / Sledge-Class
+        Seedship / Synthesizer Labship / Entropic Battlecruiser /
+        Infinite Guideline Station).
+      * Any AA failing :func:`_aa_is_phase1_sub_shape_a` — the
+        Phase-4A multi-AA all-or-nothing per-AA walk contract. The
+        per-AA admit predicate carries the new
+        :class:`AddChargeCounterManaOfChosenColor` Effect-class
+        admit + the lifted ``tier_threshold`` AA-rider widen + the
+        existing :class:`AddManaToPool` Phase-4E-C2 Effect-class
+        admit + the existing ``is_mana_ability=True`` AA-rider widen
+        (Phase-4E-C2).
+      * ``spell_effect is not None`` (Spacecraft are permanents —
+        defense-in-depth against a mistranslation regression).
+      * ``room_halves`` non-empty / ``loyalty`` set / any
+        ``cost_reductions`` or ``external_cost_reductions`` /
+        ``warp_cost`` / ``kicker_cost`` / ``impending_cost`` /
+        ``dynamic_pt_formula`` / ``ward_cost`` — sibling substrates
+        whose interaction with Spacecraft station is Phase-N.
+      * Non-empty baseline ``keywords`` — Phase-4 carrier has empty
+        baseline keywords; The Eternity Elevator's printing.keywords
+        is empty per the verify-first walk against the live parser
+        SoT (the parser elides baseline-keyword tracking of the
+        Station ability — the Station mechanic rides on
+        ``station_threshold`` + the activate-station action path).
+      * Non-empty ``stationed_keywords`` — non-animating Spacecraft
+        carry no stationed keywords (no animation, no keyword grants
+        on a non-creature stationed state). The Eternity Elevator's
+        ``stationed_keywords`` is the empty frozenset per the
+        verify-first walk.
+      * ``grants_toughness_as_station_power_for_creatures_you_control``
+        Tapestry Warden flag — Phase-N widen (mirror of Phase-1/2/3
+        teeth).
+      * Unparseable ``mana_cost_str`` — defense-in-depth (The
+        Eternity Elevator is ``{5}`` which parses; any future
+        non-animating Spacecraft with a hybrid / phyrexian / X cost
+        is honest-stopped).
+      * Non-zero printed ``power`` or ``toughness`` is allowed only
+        when ``station_threshold is None`` AND the value is the
+        Phase-4-non-animating default of 0 (parser SoT emits 0/0 for
+        non-animating Spacecraft per ``cards/base.py:1265-1270``).
+        Any non-zero P/T declines as defense-in-depth — a future
+        animating shape with ``station_threshold is None`` is not in
+        the Phase-4 admit set.
+
+    The positive Phase-4-C2 admit set is **exactly The Eternity
+    Elevator** (the verify-first walk against the live EoE pool —
+    the only Spacecraft with ``station_threshold=None``).
+
+    **Why Phase 4 needs its own predicate (rather than widening one
+    of the Phase 1/2/3 predicates).** All three Phase 1/2/3
+    predicates explicitly decline ``station_threshold is None`` (the
+    printing never animates) AND each predicate has its own per-AA /
+    per-static / per-trigger ability-shape teeth that are mutually
+    exclusive with The Eternity Elevator's multi-AA shape. The
+    Carrier-AA Phase-4A.2 Artifact sibling also declines because
+    Spacecraft carry the ``"Spacecraft"`` subtype which trips the
+    Phase-4A.2 strict empty-subtypes guard
+    (``trajectory.py:9550``) — Phase-4-design-doc §1.3 makes this
+    explicit. A new sibling predicate is the right abstraction.
+    """
+    if "Spacecraft" not in printing.subtypes:
+        return False
+    # Non-animating-only sibling: the live admit set is exactly The
+    # Eternity Elevator (the SOLE non-animating Spacecraft per the
+    # verify-first walk).
+    if printing.station_threshold is not None:
+        return False
+    # Multi-AA shape — must carry at least one AA (the Phase-1
+    # zero-ability Spacecraft path covers zero-AA cards).
+    if not printing.activated_abilities:
+        return False
+    # Phase-2 / Phase-3 paths cover static / triggered carriers.
+    if printing.static_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    # Per-AA all-or-nothing walk (Phase-4A keystone). Every AA must
+    # independently pass the per-AA Carrier-AA admit predicate; the
+    # admit predicate carries the new
+    # ``AddChargeCounterManaOfChosenColor`` Effect-class admit and
+    # the lifted ``tier_threshold`` AA-rider gate (this slice).
+    for aa in printing.activated_abilities:
+        if not _aa_is_phase1_sub_shape_a(aa):
+            return False
+    # Sibling-rider exclusion set — every other subsystem stays
+    # honest-stopped on this predicate (Phase-N widens).
+    if printing.spell_effect is not None:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    if printing.keywords:
+        return False
+    # Non-animating Spacecraft carry no stationed keywords (no
+    # animation, no keyword grants on a non-creature stationed
+    # state). The Eternity Elevator's stationed_keywords is empty
+    # per the verify-first walk. A non-empty stationed_keywords
+    # combined with station_threshold=None is a parser regression
+    # we honest-stop on rather than silently admit.
+    if printing.stationed_keywords:
+        return False
+    if getattr(
+        printing,
+        "grants_toughness_as_station_power_for_creatures_you_control",
+        False,
+    ):
+        return False
+    # Non-zero P/T on a non-animating shape would be a parser
+    # regression. The parser's non-animating default is power=0,
+    # toughness=0 per ``cards/base.py:1265-1270``; defend in depth.
+    if printing.power not in (None, 0):
+        return False
+    if printing.toughness not in (None, 0):
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _eternity_elevator_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Phase-4-admitted non-animating multi-AA
+    Spacecraft printing.
+
+    **Spacecraft Station substrate — Phase 4 Cycle 2 (2026-05-26).**
+    Sibling of :func:`_station_spacecraft_card_def` (Phase-1
+    zero-ability carrier),
+    :func:`_phase_2_static_anthem_spacecraft_card_def` (Phase-2
+    single-anthem carrier), and
+    :func:`_phase_3_trigger_spacecraft_card_def` (Phase-3 trigger-
+    bearing carrier). Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_phase_4_spacecraft_eternity_elevator`.
+
+    The synthesized CardDef carries:
+
+    * ``card_type="Artifact"`` — Spacecraft are printed Artifacts.
+      The non-animating ``station_threshold=None`` variant NEVER
+      becomes a creature even at 20+ charge counters, per CR 311.
+      Sub-typed as ``("Spacecraft",)`` so the Rust registry-dict
+      consumer at ``rust/src/cards.rs:parse_printing`` sees the
+      printed subtype.
+    * ``supertypes`` — threaded from the printing (Legendary for
+      The Eternity Elevator).
+    * ``power`` / ``toughness`` — left as their printed values
+      (0/0 for The Eternity Elevator's non-animating default per
+      the parser SoT). The Rust ``is_creature_now`` predicate
+      gates battlefield-creature reads behind ``station_threshold
+      is not None && charge_counters >= station_threshold``, so a
+      None station_threshold means the printed 0/0 stays inert.
+    * ``mana_cost_generic`` / ``mana_cost_colored`` — parsed from
+      ``printing.mana_cost_str`` via the same
+      :func:`_parse_mana_cost_string` codec the admit predicate's
+      mana-cost teeth use.
+    * NO ``station_threshold`` — the field is omitted (``None``
+      default) on the registry dict for non-animating Spacecraft.
+      The Cycle-3 forward-emit arm in
+      ``cross_engine.py::_spec_card_to_printing_dict`` is
+      symmetric: omitted when default.
+    * NO ``stationed_keywords`` (non-animating).
+    * ``activated_abilities=tuple(aa_dicts)`` — each AA is emitted
+      through the cross-engine bridge floor's
+      :func:`cross_engine._python_aa_to_safe_dict` round-trip
+      helper. The helper carries the new ``tier_threshold`` widen
+      (this cycle) so AA[1]'s ``tier_threshold=20`` rides through
+      the round-trip byte-equal; AA[0] (``tier_threshold=0``)
+      emits without the key, mirroring the existing empty-omit
+      discipline.
+    * NO baseline ``keywords`` (the admit predicate rejects any
+      baseline keyword), NO ``triggered_abilities``, NO
+      ``static_abilities``, NO ``spell_effect``, NO
+      ``cost_reductions`` (the admit predicate rejects all these).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef as _CardDef,
+        _python_aa_to_safe_dict,
+    )
+
+    if not _printing_is_bridge_phase_4_spacecraft_eternity_elevator(printing):
+        return None
+    try:
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "",
+        )
+    except ValueError:
+        return None
+    aa_dicts: list = []
+    for aa in printing.activated_abilities:
+        aa_dict = _python_aa_to_safe_dict(aa)
+        if aa_dict is None:
+            # Defense-in-depth: the admit predicate's per-AA walk
+            # should already have rejected any AA whose round-trip
+            # fails. Reaching here is a builder-vs-predicate
+            # disagreement; honest-decline.
+            return None
+        aa_dicts.append(aa_dict)
+    return _CardDef(
+        name=printing.name,
+        card_type="Artifact",
+        mana_cost_generic=generic,
+        mana_cost_colored=colored,
+        subtypes=tuple(printing.subtypes),
+        supertypes=tuple(printing.supertypes or ()),
+        power=printing.power,
+        toughness=printing.toughness,
+        activated_abilities=tuple(aa_dicts),
     )
 
 
@@ -12055,6 +12352,27 @@ def _printing_to_card_def(printing) -> CardDef:
         # predicate by construction (the OR-chain routes here only
         # when the predicate returned True).
         card_def = _phase_3_trigger_spacecraft_card_def(printing)
+        if card_def is not None:
+            return card_def
+    if _printing_is_bridge_phase_4_spacecraft_eternity_elevator(printing):
+        # **Spacecraft Station substrate Phase 4 Cycle 2 (The
+        # Eternity Elevator, 2026-05-26; spec at
+        # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md``
+        # §5).** A non-animating multi-AA Spacecraft (Phase 4 admits
+        # exactly The Eternity Elevator — the SOLE
+        # ``station_threshold=None`` carrier in the EoE pool)
+        # flattens to a Legendary Artifact CardDef carrying every AA
+        # in the bridge dict shape via the cross-engine
+        # ``_python_aa_to_safe_dict`` round-trip floor. Cycle 1
+        # substrate (``354588a5``) shipped the Rust
+        # ``Effect::AddChargeCounterManaOfChosenColor`` unit variant
+        # + parser + resolver + ``to_pydict`` + cross-engine forward
+        # and reverse arms; this cycle (C2) adds the per-AA Effect-
+        # class widen + the ``tier_threshold`` AA-rider widen + the
+        # bridge-floor ``tier_threshold`` round-trip + the admit
+        # predicate + builder + this OR-disjunct registration. Per-
+        # card real-EoE probe ships at Cycle 3 per design doc §5.
+        card_def = _eternity_elevator_card_def(printing)
         if card_def is not None:
             return card_def
     if _printing_is_bridge_pure_warp_creature(printing):
@@ -13980,6 +14298,38 @@ def _filter_deck_to_bridge_supported(
             # this OR-in. Per-card real-EoE probe Scenarios A & B ship
             # alongside Cycle 2 per design doc §6.2 #9.
             or _printing_is_bridge_phase_3_trigger_spacecraft(printing)
+            # **Spacecraft Station substrate Phase 4 Cycle 2 (The
+            # Eternity Elevator, 2026-05-26; spec at
+            # ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md``
+            # §5).** The bridge-supported non-animating multi-AA
+            # Spacecraft disjunct. Phase 4 admits EXACTLY The Eternity
+            # Elevator in the EoE pool — the SOLE
+            # ``station_threshold=None`` carrier per the verify-first
+            # walk against the 22-Spacecraft live set. Routed AFTER
+            # the Phase-1 / Phase-2 / Phase-3 disjuncts so an
+            # animating Spacecraft (Galvanizing Sawship / Lumen-Class
+            # Frigate / Larval Scoutlander / Sledge-Class Seedship /
+            # Synthesizer Labship / Entropic Battlecruiser / Infinite
+            # Guideline Station) is short-circuited by the earlier
+            # arms. The §2 teeth on
+            # :func:`_printing_is_bridge_phase_4_spacecraft_eternity_
+            # elevator` + the lifted ``tier_threshold`` AA-rider gate
+            # + the new ``AddChargeCounterManaOfChosenColor`` Effect-
+            # class admit + the existing ``AddManaToPool`` +
+            # ``is_mana_ability`` Phase-4E-C2 widens combine to admit
+            # the Eternity Elevator's 2-AA shape (AA[0] ``{T}: Add
+            # {C}{C}{C}.`` + AA[1] ``20+ | {T}: Add X mana of any one
+            # color, where X is the number of charge counters on The
+            # Eternity Elevator.``). C1 (``354588a5``) shipped the
+            # Rust ``Effect::AddChargeCounterManaOfChosenColor``
+            # variant + parser + resolver + ``to_pydict`` + cross-
+            # engine forward and reverse arms; this cycle (C2) adds
+            # the Python admit widen + admit predicate + builder +
+            # this OR-in. Per-card real-EoE probe (Scenarios A/B/C)
+            # ships at Cycle 3 per design doc §5.
+            or _printing_is_bridge_phase_4_spacecraft_eternity_elevator(
+                printing,
+            )
         ):
             # Resolved but passes none of the bridge-admit disjuncts.
             if on_non_admitted == LoaderAdmitPolicy.RAISE:

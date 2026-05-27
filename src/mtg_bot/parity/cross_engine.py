@@ -14879,7 +14879,8 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
       ``{"cost": {...},                         # required, cost dict
          "effect": {"kind": ...},               # required, effect dict
          "is_mana_ability": False,              # optional, default False
-         "sorcery_speed": False}``              # optional, default False
+         "sorcery_speed": False,                # optional, default False
+         "tier_threshold": 0}``                 # optional, default 0
 
     The ``effect`` dict recurses through the existing
     :func:`_ta_dict_to_python_effect` bridge — so the Lander's
@@ -14933,11 +14934,33 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
             "activated_ability.sorcery_speed must be a bool (mirrors "
             "Rust parse_activated_ability)"
         )
+    # **Spacecraft Phase 4 Cycle 2 (2026-05-26).** Optional
+    # ``tier_threshold`` int — default 0 (no gate); mirrors the Rust
+    # ``parse_activated_ability`` ``tier_threshold`` arm at
+    # ``cards.rs:17865``. Negative values are rejected (Rust raises);
+    # ``bool`` is an ``int`` subclass in Python but a bool here is
+    # explicitly disallowed to mirror the ``cards.rs:17875+``
+    # integer-type strict check (avoid True/False being silently
+    # coerced to ``tier_threshold=1`` / ``0``).
+    tier_threshold_raw = aa_dict.get("tier_threshold", 0)
+    if isinstance(tier_threshold_raw, bool) or not isinstance(
+        tier_threshold_raw, int,
+    ):
+        raise ValueError(
+            "activated_ability.tier_threshold must be a non-negative int "
+            "(mirrors Rust parse_activated_ability)"
+        )
+    if tier_threshold_raw < 0:
+        raise ValueError(
+            "activated_ability.tier_threshold must be a non-negative int "
+            "(mirrors Rust parse_activated_ability)"
+        )
     return ActivatedAbility(
         cost=cost,
         effect=effect,
         is_mana_ability=is_mana_ability,
         sorcery_speed=sorcery_speed,
+        tier_threshold=int(tier_threshold_raw),
     )
 
 
@@ -15018,7 +15041,24 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # ``docs/SEARCH_LIMITATIONS.md`` Phase 4C entry.
     if aa.activate_only_once:
         return None
-    if aa.tier_threshold:
+    # **Spacecraft Phase 4 Cycle 2 (2026-05-26 — Eternity Elevator FLIP
+    # per docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md §5).** The
+    # ``tier_threshold > 0`` decline is lifted to admit The Eternity
+    # Elevator's AA[1] (``20+ | {T}: Add X mana of any one color,
+    # where X is the number of charge counters on The Eternity
+    # Elevator.`` -- ``tier_threshold=20``). Mirrors the per-AA admit
+    # widen in :func:`trajectory._aa_is_phase1_sub_shape_a`. The Rust
+    # ``ActivatedAbility.tier_threshold: i32`` slot has been parsed +
+    # round-tripped since the CE20 follow-up Slice 3
+    # (``cards.rs:11276 + 17865``); the legal-emit gate already
+    # filters tier-gated AAs by ``charge_counters >= tier_threshold``
+    # at ``state_ops_legal.rs:3328``. The forward arm emits the
+    # ``tier_threshold`` key on the result dict below (only when
+    # non-zero, mirroring the empty-omit discipline used by
+    # ``is_mana_ability`` and ``sorcery_speed``). Negative values are
+    # non-sensical (Rust parse arm rejects negatives at
+    # ``cards.rs:17870``); defense-in-depth decline.
+    if aa.tier_threshold < 0:
         return None
     if aa.room_half is not None:
         return None
@@ -15702,6 +15742,22 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # discipline mirrors ``is_mana_ability`` above.
     if aa.sorcery_speed:
         result_dict["sorcery_speed"] = True
+    # **Spacecraft Phase 4 Cycle 2 widen (2026-05-26).** Emit the
+    # ``tier_threshold`` int on the AA dict so the Rust round-trip
+    # carries the charge-counter tier gate. The Rust
+    # ``ActivatedAbility.tier_threshold: i32`` slot has been parsed +
+    # round-tripped since the CE20 follow-up Slice 3
+    # (``cards.rs:11276 + 17865``); the legal-emit gate already
+    # filters tier-gated AAs by ``charge_counters >= tier_threshold``
+    # at ``state_ops_legal.rs:3328``. Empty-omit discipline mirrors
+    # ``is_mana_ability`` and ``sorcery_speed`` above: omit when
+    # ``tier_threshold == 0`` (the default, no gate) for back-compat
+    # with every pre-Phase-4-C2 serializer, and emit the int when
+    # non-zero. The consumer
+    # :func:`_aa_dict_to_python_activated_ability` reads it back via
+    # ``aa_dict.get("tier_threshold", 0)``.
+    if aa.tier_threshold:
+        result_dict["tier_threshold"] = int(aa.tier_threshold)
     return result_dict
 
 
