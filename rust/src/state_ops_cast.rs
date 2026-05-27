@@ -618,6 +618,18 @@ pub(crate) fn auto_tap_pay_for_cost(
                 b'R' => mp.red = mp.red.saturating_sub(1),
                 b'G' => mp.green = mp.green.saturating_sub(1),
                 b'C' => mp.colorless = mp.colorless.saturating_sub(1),
+                // Phase 4E follow-on (2026-05-27): mirror the wildcard
+                // ("any") arm here as well. The plan-phase FIFO walk at
+                // line 526 will FIFO-accept a `b'a'` coin to satisfy
+                // either a colored or a generic requirement; without
+                // this arm the commit-phase removes the coin from
+                // `coins` but leaves the denormalized `any` count
+                // untouched, drifting the per-color count cache against
+                // the coins vec. Caught by Worker C's diagnosis after
+                // Worker A's `phase-4e-payment-time-any-p1` commit
+                // (daecd399) widened the plan-phase but missed the
+                // commit-phase mirror.
+                b'a' => mp.any = mp.any.saturating_sub(1),
                 _ => {} // Defensive: vocabulary already validated.
             }
         }

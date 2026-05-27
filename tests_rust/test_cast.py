@@ -1408,3 +1408,183 @@ def test_castspell_diplomatic_relations_pause_sibling_parity(
     assert synthetic_state.effective_power(5) == 3
     assert synthetic_state.find_object_zone(72) == ZONE_GRAVEYARD
     assert synthetic_state.is_stack_empty() is True
+
+
+# ---------------------------------------------------------------------------
+# `auto_tap_pay_for_cost` commit-phase wildcard ("any") arm regression
+# ---------------------------------------------------------------------------
+#
+# **Phase 4E follow-on (2026-05-27).** Worker C's diagnosis: the
+# plan-phase FIFO walk at `state_ops_cast.rs:526` was widened to
+# FIFO-accept ``b'a'`` coins for either a colored or a generic
+# requirement (commit ``daecd399``), but the commit-phase per-color
+# decrement match at `state_ops_cast.rs:614-622` was NOT widened — it
+# handled ``b'W'/b'U'/b'B'/b'R'/b'G'/b'C'`` and fell through on
+# ``b'a'``. The pool drifted: ``mp.coins.remove(i)`` correctly dropped
+# the wildcard coin, but ``mp.any`` stayed at its pre-spend count.
+#
+# These pins exercise the bug repro Worker C supplied + a few
+# closely-related scenarios. The bug surfaces only on the
+# ``auto_tap_pay_for_cost`` payment path (the one used by
+# ``cast_spell_noncreature`` / ``cast_creature`` — the count-only
+# ``pay_mana_cost`` path is a different code site and was never
+# affected). Without the fix the post-spend ``pool['any']`` lies; with
+# the fix it correctly reads 0.
+
+
+def test_auto_tap_any_coin_commit_phase_decrements_any_slot():
+    """Worker C's exact repro. Cast an instant whose cost is ``{W}`` —
+    auto_tap_pay_for_cost FIFO-walks the pool, picks the wildcard
+    coin to satisfy the W pip, then commit-phase removes it from the
+    coins vec. The per-color ``any`` cache MUST decrement in lockstep;
+    pre-fix it stayed at 1 (drift). Post-fix it reads 0."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    inst = {
+        "name": "TestW",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+    r.register_printing(inst)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(inst, 0, 0)
+    # 5 library cards so the draw effect at resolve has fodder.
+    for _ in range(5):
+        gs.register_and_inject_object(
+            {
+                "name": "D",
+                "card_types": ["Land"],
+                "supertypes": ["Basic"],
+            },
+            0,
+            1,
+        )
+    gs.add_mana(0, "any", 1)
+
+    ok = gs.cast_spell_noncreature(iid, 0)
+    assert ok, "cast_spell_noncreature must succeed: wildcard satisfies {W}"
+
+    pool = gs.get_mana_pool(0)
+    assert pool["any"] == 0, (
+        "commit-phase MUST decrement mp.any when a b'a' coin is spent — "
+        "drifted to 1 pre-fix, fixed by the new b'a' arm at "
+        "state_ops_cast.rs:614-622"
+    )
+    assert pool["W"] == 0
+    # The full 7-tuple should reflect a fully-empty pool.
+    for k in ("W", "U", "B", "R", "G", "C", "any"):
+        assert pool[k] == 0, f"pool['{k}'] must be 0, got {pool[k]}"
+
+
+def test_auto_tap_any_coin_commit_phase_generic_cost():
+    """Same drift bug, exercised against a pure-generic cost. The
+    plan-phase generic walk also FIFO-accepts wildcard coins; the
+    commit-phase mirror also needed the ``b'a'`` arm. Post-fix
+    ``any`` decrements correctly."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    inst = {
+        "name": "Test2Generic",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 2},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+    r.register_printing(inst)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(inst, 0, 0)
+    for _ in range(5):
+        gs.register_and_inject_object(
+            {
+                "name": "D",
+                "card_types": ["Land"],
+                "supertypes": ["Basic"],
+            },
+            0,
+            1,
+        )
+    gs.add_mana(0, "any", 2)
+
+    ok = gs.cast_spell_noncreature(iid, 0)
+    assert ok
+
+    pool = gs.get_mana_pool(0)
+    assert pool["any"] == 0, "both wildcards consumed for generic; any must hit 0"
+
+
+def test_auto_tap_any_coin_commit_phase_mixed_with_colored_pool():
+    """Heterogeneous pool: ``[W: 1, any: 1]`` paying ``{W}{W}`` via
+    cast_spell_noncreature. The plan-phase picks the W coin for the
+    first W pip and the wildcard for the second. The commit-phase
+    must decrement BOTH per-color caches (``white`` and ``any``)."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    inst = {
+        "name": "TestWW",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 2},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+    r.register_printing(inst)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(inst, 0, 0)
+    for _ in range(5):
+        gs.register_and_inject_object(
+            {
+                "name": "D",
+                "card_types": ["Land"],
+                "supertypes": ["Basic"],
+            },
+            0,
+            1,
+        )
+    gs.add_mana(0, "W", 1)
+    gs.add_mana(0, "any", 1)
+
+    ok = gs.cast_spell_noncreature(iid, 0)
+    assert ok
+
+    pool = gs.get_mana_pool(0)
+    assert pool["W"] == 0, "real W coin spent for one W pip"
+    assert pool["any"] == 0, "wildcard spent for the other W pip"
+
+
+def test_auto_tap_any_coin_partial_spend_leaves_remaining_any():
+    """``[any: 2]`` paying ``{W}`` — only one wildcard is consumed,
+    one stays. Both the coins vec AND the ``any`` cache must agree
+    that exactly one wildcard remains."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    inst = {
+        "name": "TestW",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+    r.register_printing(inst)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(inst, 0, 0)
+    for _ in range(5):
+        gs.register_and_inject_object(
+            {
+                "name": "D",
+                "card_types": ["Land"],
+                "supertypes": ["Basic"],
+            },
+            0,
+            1,
+        )
+    gs.add_mana(0, "any", 2)
+
+    ok = gs.cast_spell_noncreature(iid, 0)
+    assert ok
+
+    pool = gs.get_mana_pool(0)
+    assert pool["any"] == 1, (
+        "exactly one wildcard consumed; the other stays — partial-spend "
+        "byte-mirror of the Python FIFO drain"
+    )
