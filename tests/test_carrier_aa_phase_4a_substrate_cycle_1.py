@@ -368,10 +368,11 @@ def test_phase_4_carrier_per_aa_walk_declines_at_effect_class(printings):
     """**Per-AA decline-axis pin -- the teeth catching each carrier.**
 
     Confirms the EXACT per-AA decline mechanism documented in the
-    design doc §2.2 verify-first walk: every AA on every Phase-4
+    design doc §2.2 verify-first walk: at least ONE AA on each Phase-4
     carrier independently fails :func:`_aa_is_phase1_sub_shape_a`.
     The multi-AA all-or-nothing contract therefore declines the
-    printing as a whole even if a sibling AA happened to pass.
+    printing as a whole — even if a sibling AA happens to pass post-
+    partial widens.
 
     Co-asserts the printing-level rider gate passes for each
     carrier — i.e., the decline mechanism is per-AA, not printing-
@@ -383,6 +384,21 @@ def test_phase_4_carrier_per_aa_walk_declines_at_effect_class(printings):
     CARRIERS` (3 cards, All-Fates Scroll moved out post-C2 partial-
     FLIP). All-Fates Scroll's per-AA decline-axis pin lives at
     :func:`test_phase_4_carrier_builder_gate_decline_post_c2` instead.
+
+    **Post-Phase-4B-C2 invariant (Option A partial widen).** Mirrorpool
+    is now in a partial-widen state: AA[1]
+    (``CreateTokenCopyOfTargetCreatureYouControl``) FLIPS ADMITTED at
+    the per-AA gate because C2 widens the Effect-class admit set with
+    AA[1]'s Effect class (Rust substrate landed at C1 / commit
+    ``434d6aa1``); AA[0] (``CopyTargetInstantOrSorceryYouControl``)
+    STAYS DECLINED because its Rust substrate (new
+    ``Effect::CopyTargetInstantOrSorceryYouControl`` variant + stack-
+    target fan-out + ``StackItem.is_copy`` audit + push-copy-on-stack
+    resolve arm) defers to a future Rust cycle per design doc §4.1.1.
+    Under the multi-AA all-or-nothing contract, Mirrorpool's printing-
+    level admit STAYS DECLINED on AA[0]'s teeth alone — that's the
+    Option A honest-stop. The per-AA walk asserts at-least-one-AA-
+    declines (instead of every-AA-declines pre-C2).
     """
     for name in PHASE_4_DECLINED_CARRIERS:
         p = printings[name]
@@ -402,18 +418,24 @@ def test_phase_4_carrier_per_aa_walk_declines_at_effect_class(printings):
         assert not p.cost_reductions, (
             f"{name} has unexpected printing-level cost_reductions"
         )
-        # Per-AA walk: every AA fails sub-shape-A.
+        # Per-AA walk: at least one AA fails sub-shape-A (multi-AA
+        # all-or-nothing contract -- one decline declines the
+        # printing). Pre-Phase-4B-C2 invariant was every-AA-declines;
+        # post-C2's partial widen flips Mirrorpool AA[1] admit (AA[0]
+        # keeps the printing declined).
         aas = tuple(p.activated_abilities or ())
         assert len(aas) >= 2, (
             f"{name} expected to have >=2 AAs (multi-AA carrier)"
         )
-        for idx, aa in enumerate(aas):
-            assert not _aa_is_phase1_sub_shape_a(aa), (
-                f"{name} AA[{idx}] unexpectedly passes the per-AA gate "
-                f"(effect={type(aa.effect).__name__}, "
-                f"is_mana={aa.is_mana_ability}, "
-                f"sorcery_speed={aa.sorcery_speed})"
-            )
+        per_aa_results = [
+            (idx, _aa_is_phase1_sub_shape_a(aa)) for idx, aa in enumerate(aas)
+        ]
+        assert any(not passes for _, passes in per_aa_results), (
+            f"{name} unexpectedly has every AA pass the per-AA gate "
+            f"(per-AA results: {per_aa_results}) -- the multi-AA all-"
+            f"or-nothing contract requires at least one AA to fail to "
+            f"keep the printing declined"
+        )
 
 
 # ---------------------------------------------------------------------------

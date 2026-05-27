@@ -9045,6 +9045,70 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     slice). Keys to the House FLIPS DECLINED → ADMITTED on the
     combined widen.
 
+    **Phase 4B Cycle 2 (2026-05-26 — Option A partial widen per
+    ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.4 + §7.2).**
+    Effect-class admit-set widen 13 → 14, adding
+    ``CreateTokenCopyOfTargetCreatureYouControl`` (Mirrorpool's AA[1]
+    pilot — the C1 Rust substrate at ``434d6aa1``/``818b4c64``
+    shipped the target fan-out in ``state_ops_legal.rs:: activate_
+    ability_dict`` (activator-bf Creature target enumeration, mirrors
+    Python's ``legal_targets`` walk per ``effects/generic/tokens.py:
+    340-348``) + target validation in
+    ``state_ops_actions.rs::ActivateAbility`` (re-checks chosen target
+    against bf + printed-Creature; ``target_creature_id`` is OPTIONAL
+    on this effect — substrate-fallback path preserves pre-substrate
+    callers) + target-aware resolve in ``state_ops_resolve.rs``
+    (consults ``current_resolve_payload_target_id`` FIRST, falls back
+    to the deterministic-first-creature scan when no payload target
+    seated; preserves round-28 byte-equal surface) + cross-engine
+    forward arm at ``cross_engine.py::_python_aa_to_safe_dict``
+    emitting ``{"kind":
+    "create_token_copy_of_target_creature_you_control"}`` (honest-
+    declines on ``additional_subtype != None`` — Rust variant is
+    unit, rider not representable on the wire). The reverse arm at
+    ``cross_engine.py:7190`` has been on main since round-23.
+
+    **C2 is Option A (partial widen + honest-stop).** Mirrorpool's
+    sibling AA[0] ``CopyTargetInstantOrSorceryYouControl`` (CR-707.2
+    spell-copy — design doc §4.1.1) has NO Rust substrate at
+    ``818b4c64`` — the new ``Effect::CopyTargetInstantOrSorceryYou
+    Control`` variant + stack-target fan-out in ``state_ops_legal.rs`` +
+    new resolve arm (push copy of spell onto stack with activator as
+    controller, CR 707.2; activator-targeted spells fan out across
+    the activator's controlled stack-items) + ``StackItem.is_copy``
+    audit all defer to a future Rust cycle. Under the Phase 4A multi-
+    AA all-or-nothing contract, Mirrorpool's printing-level admit
+    STAYS DECLINED post-C2 because AA[0] bites on the per-AA Effect-
+    class teeth (its class is NOT widened here — only AA[1]'s class).
+    The per-AA admit :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED
+    → ADMITTED on AA[1] only; AA[0] keeps the printing-level admit
+    declined.
+
+    **Refined remaining Phase 4B sequencing (post-C2 — narrower than
+    the original §7.2 plan):**
+
+      * C3 (Rust agent): ``Effect::CopyTargetInstantOrSorceryYou
+        Control`` Rust variant — new parse / resolve / to_pydict arms
+        + new stack-target fan-out in ``state_ops_legal.rs::
+        activate_ability_dict`` + ``StackItem.is_copy`` audit (new
+        ``is_copy: bool`` slot on ``StackItem`` may be needed —
+        design doc §4.1.1 ``StackItem.is_copy slot`` paragraph) + 5
+        Rust unit pins per design doc §6.2 #9-13 (parse round-trip
+        + to_pydict round-trip + resolve happy path + resolve silent-
+        fizzle + StackItem.is_copy round-trip).
+      * C4 (Python/bridge agent): Effect-class widen
+        ``CopyTargetInstantOrSorceryYouControl`` (the AA[0] half) +
+        forward arm in ``_python_aa_to_safe_dict`` emitting ``{"kind":
+        "copy_target_instant_or_sorcery_you_control"}`` + reverse arm
+        in ``_ta_dict_to_python_effect`` for the same key + admit-
+        gate Mirrorpool FLIP DECLINED → ADMITTED + walk inversion in
+        ``tests/test_carrier_aa_phase_4a_substrate_cycle_1.py``
+        (Mirrorpool moves OUT of
+        ``PHASE_4_DECLINED_CARRIERS``) + pool-parity regen.
+      * C5 (Python agent): Phase 4B real-EoE probe — AA[0] spell-copy
+        line + AA[1] token-copy line on a live Mirrorpool printing
+        per design doc §6.7.
+
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
     """
@@ -9068,6 +9132,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     )
     from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import UntapTargetLand
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
     from mtg_bot.effects.generic.zone_moves import (
         PutBasicLandFromHandOntoBattlefieldTapped,
     )
@@ -9085,6 +9152,49 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
         LockOrUnlockDoorOfTargetRoomYouControl,
         SearchLibraryForCard,
+        # **Phase 4B Cycle 2 widen (2026-05-26 — Option A partial widen
+        # per ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.4 +
+        # §7.2.) Adds Mirrorpool's AA[1] pilot Effect class.** The Rust
+        # substrate (target fan-out + validation + target-aware resolve
+        # + cross-engine forward + reverse arms) all landed at C1 (commit
+        # ``434d6aa1``). C2 widens the per-AA Effect-class gate; combined
+        # with the existing Phase-1.5a/2a cost gate + Phase-4A multi-AA
+        # admit predicate, the per-AA admit predicate
+        # :func:`_aa_is_phase1_sub_shape_a` now ADMITS Mirrorpool's
+        # AA[1] (was previously declined on the Effect-class teeth).
+        #
+        # **Honest-stop: Mirrorpool STAYS DECLINED at the printing-level
+        # admit gate post-C2.** The sibling AA[0]
+        # ``CopyTargetInstantOrSorceryYouControl`` (CR-707.2 spell-copy)
+        # is NOT widened here because (a) its Rust ``Effect`` variant
+        # does not exist (the Phase 4B-1 spell-copy substrate slice
+        # ships in a future cycle — design doc §4.1.1 outlines the
+        # required new stack-target fan-out + ``StackItem.is_copy``
+        # audit + new resolve arm pushing a copy of the spell onto the
+        # stack with the activator as controller); (b) the
+        # ``_python_aa_to_safe_dict`` forward arm has no recognizer for
+        # the class (would honest-decline by returning ``None``); (c)
+        # the per-AA admit predicate would still bite AA[0] on the
+        # Effect-class teeth even if it didn't bite on the substrate
+        # gap. Under the Phase 4A multi-AA all-or-nothing contract, a
+        # printing admits only if EVERY AA admits — so AA[0]'s teeth
+        # keep the WHOLE printing DECLINED at the admit gate.
+        #
+        # The full Mirrorpool DECLINED -> ADMITTED FLIP requires the
+        # AA[0] Rust slice (one or more cycles of Rust work — CR-707.2
+        # spell-copy is "the most novel substrate of Phase 4" per
+        # design doc §2.3 row) + a follow-up Python widen + bridge arms
+        # to land before the printing-level admit can flip. The refined
+        # sequencing for the remaining Phase 4B cycles ships at the
+        # bottom of this docstring + the worklog summary.
+        #
+        # **The C2 admit-set widen is admit-set-neutral at the
+        # PRINTING level** — Mirrorpool's printing-level admit DOES NOT
+        # flip on this widen alone (gated by AA[0]'s untouched teeth).
+        # The per-AA predicate flips for AA[1] only; pool-parity is
+        # unchanged at C2 close (decline-set walk + Phase-4A
+        # invariants stay intact).
+        CreateTokenCopyOfTargetCreatureYouControl,
     })
 
 
