@@ -4174,6 +4174,43 @@ pub enum Effect {
     /// raise. amount<0 raises at parse + apply. amount=0 is a legal
     /// no-op (no color minted).
     AddNManaOfChosenColor { amount: i32, options: Vec<String> },
+    /// **Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26 —
+    /// spec at `docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md`
+    /// §3.1).** Add X mana of a single color chosen by the controller
+    /// at resolution time, where X is the source object's
+    /// `charge_counters: i32`. Mirrors Python's
+    /// `AddChargeCounterManaOfChosenColor()` (unit dataclass — no
+    /// fields) at `mana.py:133` — The Eternity Elevator's
+    /// `tier_threshold=20` AA[1] pilot effect (`20+ | {T}: Add X mana
+    /// of any one color, where X is the number of charge counters on
+    /// The Eternity Elevator.`).
+    ///
+    /// **Resolve semantics.** Reads the source object's
+    /// `charge_counters: i32` from any zone (mirror of the source-
+    /// controller scan in `AddNManaOfChosenColor`). On
+    /// `charge_counters <= 0`, silent no-op (matches Python's
+    /// `if amount <= 0: return` at `mana.py:161-162`). Otherwise
+    /// mints `charge_counters` coins of `options[0]="W"` via the
+    /// same `push_coins` path. **First-slice deterministic color
+    /// choice** (mirrors `AddNManaOfChosenColor`'s no-agent fallback
+    /// at `state_ops_resolve.rs:14057`; see
+    /// `docs/SEARCH_LIMITATIONS.md` Phase-4 C1 entry for the
+    /// agent-callback follow-up).
+    ///
+    /// **Unit variant.** No fields — the source-derived `amount` is
+    /// read at resolve time, and the implicit WUBRG default options
+    /// are immortalized as `options[0]="W"`.
+    ///
+    /// **Substrate-only at Cycle 1.** The Eternity Elevator STAYS
+    /// DECLINED at the Python admit gate post-C1 — the AA-rider gate
+    /// (`tier_threshold > 0`) in
+    /// `_aa_is_phase1_sub_shape_a` + the Spacecraft Phase 1-3 admit
+    /// predicates' `station_threshold=None` reject + the
+    /// `_carrier_aa_phase_1_effect_classes` set missing this Effect
+    /// class all keep the printing declined. The bridge round-trip is
+    /// exercised by synthetic unit pins; the live admit FLIP ships
+    /// Cycle 2.
+    AddChargeCounterManaOfChosenColor,
     /// **Round 28 coverage extension.** Search the source-controller's
     /// library for a card matching `filter_name`, reveal it, put it
     /// into that player's hand. Mirrors Python's
@@ -15647,6 +15684,24 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::AddNManaOfChosenColor { amount, options })
         }
+        "add_charge_counter_mana_of_chosen_color" => {
+            // **Spacecraft Station substrate Phase 4 Cycle 1
+            // (2026-05-26 — spec at
+            // docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md
+            // §3.2).** Unit variant — only the `kind` discriminator
+            // on the wire. The source-derived `amount` is read from
+            // `obj.charge_counters` at resolve time; the color is
+            // the implicit `options[0]="W"` (first-slice
+            // deterministic fallback, mirrors
+            // `AddNManaOfChosenColor`).
+            //
+            // Mirrors Python's `AddChargeCounterManaOfChosenColor()`
+            // unit dataclass at `mana.py:133` — The Eternity
+            // Elevator's tier-gated `20+ | {T}: Add X mana of any
+            // one color, where X is the number of charge counters
+            // on The Eternity Elevator.` AA[1].
+            Ok(Effect::AddChargeCounterManaOfChosenColor)
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -19352,6 +19407,18 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "add_n_mana_of_chosen_color")?;
             d.set_item("amount", *amount)?;
             d.set_item("options", options.clone())?;
+        }
+        Effect::AddChargeCounterManaOfChosenColor => {
+            // **Spacecraft Station substrate Phase 4 Cycle 1
+            // (2026-05-26 — spec at
+            // docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md
+            // §3.3).** Unit variant — emit only the `kind`
+            // discriminator. The source-derived `amount` + implicit
+            // `options[0]="W"` color are NOT round-tripped on the
+            // wire; the Python `AddChargeCounterManaOfChosenColor()`
+            // unit dataclass mirror at `mana.py:133` carries no
+            // fields either.
+            d.set_item("kind", "add_charge_counter_mana_of_chosen_color")?;
         }
         Effect::SearchLibraryForCard {
             filter_name,

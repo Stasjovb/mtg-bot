@@ -6025,6 +6025,37 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         else:
             options = ("W", "U", "B", "R", "G")
         return AddNManaOfChosenColor(amount=amount, options=options)
+    if kind == "add_charge_counter_mana_of_chosen_color":
+        # **Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26 —
+        # spec at docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md
+        # §4.1).** Reverse arm rehydrating Rust's
+        # ``Effect::AddChargeCounterManaOfChosenColor`` (unit variant —
+        # only the ``kind`` discriminator on the wire) to Python's
+        # ``AddChargeCounterManaOfChosenColor()`` (unit dataclass at
+        # ``effects/generic/mana.py:133``). The source-derived
+        # ``amount`` is computed at resolve time from the source
+        # object's ``charge_counters`` field; the color is the
+        # implicit ``options[0]="W"`` (first-slice deterministic
+        # fallback, mirrors ``AddNManaOfChosenColor``).
+        #
+        # The Eternity Elevator's tier-gated ``20+ | {T}: Add X mana
+        # of any one color, where X is the number of charge counters
+        # on The Eternity Elevator.`` AA[1] pilot — see the Phase 4
+        # design doc §0 + §1.1 for the full live oracle context.
+        #
+        # **Substrate-only at Cycle 1.** The Eternity Elevator STAYS
+        # DECLINED at the admit gate post-C1 — the per-AA admit gate
+        # ``_aa_is_phase1_sub_shape_a`` declines ``tier_threshold > 0``
+        # AND the Effect-class admit set
+        # ``_carrier_aa_phase_1_effect_classes`` doesn't include this
+        # class AND no Spacecraft admit predicate accepts
+        # ``station_threshold=None`` carriers. All three widens ship
+        # Cycle 2; this reverse arm is exercised by synthetic unit
+        # pins at C1.
+        from mtg_bot.effects.generic.mana import (
+            AddChargeCounterManaOfChosenColor,
+        )
+        return AddChargeCounterManaOfChosenColor()
     if kind == "tap_target_artifact_or_creature":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "tap target artifact
         # or creature" (TapTargetArtifactOrCreature family,
@@ -15194,6 +15225,27 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     # "any" coin substrate) ships the full substrate. See
     # ``docs/SEARCH_LIMITATIONS.md`` for the divergence entry.
     from mtg_bot.effects.generic.mana import AddManaToPool
+    # **Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26 — spec
+    # at ``docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md`` §4.2).**
+    # Forward-emit arm for The Eternity Elevator's AA[1] pilot Effect
+    # (``20+ | {T}: Add X mana of any one color, where X is the number
+    # of charge counters on The Eternity Elevator.``). Unit variant —
+    # only the ``kind`` discriminator on the wire. The Python class is
+    # a unit dataclass (no fields); the source-derived ``amount`` is
+    # read at resolve time on both engines, and the color is the
+    # implicit ``options[0]="W"`` first-slice deterministic fallback.
+    #
+    # **Substrate-only at Cycle 1.** The Eternity Elevator STAYS
+    # DECLINED at the admit gate post-C1 because (a) the per-AA admit
+    # gate ``_aa_is_phase1_sub_shape_a`` declines ``tier_threshold > 0``
+    # AND (b) the Effect-class admit set
+    # ``_carrier_aa_phase_1_effect_classes`` doesn't include this class
+    # AND (c) no Spacecraft admit predicate accepts
+    # ``station_threshold=None`` carriers. All three widens ship Cycle
+    # 2; this forward arm is exercised by synthetic unit pins at C1.
+    from mtg_bot.effects.generic.mana import (
+        AddChargeCounterManaOfChosenColor,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -15609,8 +15661,26 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             "color": color,
             "amount": amount,
         }
+    elif isinstance(effect, AddChargeCounterManaOfChosenColor):
+        # **Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26).**
+        # Forward-emit arm for The Eternity Elevator's AA[1] pilot
+        # Effect. Unit variant — emit only the ``kind`` discriminator.
+        # The Python class carries no fields; the Rust mirror's parse +
+        # resolve + to_pydict arms all treat the variant symmetrically
+        # as a unit (no amount/options/color on the wire).
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``AddChargeCounterManaOfChosenColor`` — NOT any parent
+        # ``Effect`` class — to avoid silently widening admission to
+        # other ``Effect`` subclasses (consistent with the
+        # Phase-3A/3B/3C/4B/4C/4D/4E specificity contract). The class
+        # has no subclasses in the live tree.
+        effect_dict = {
+            "kind": "add_charge_counter_mana_of_chosen_color",
+        }
     else:
-        # Effect class not in the Phase-1/1.5a/2a/2b/3/4E admit set — decline.
+        # Effect class not in the Phase-1/1.5a/2a/2b/3/4E/Spacecraft-4 admit
+        # set — decline.
         return None
     result_dict: dict = {
         "cost": cost_dict,

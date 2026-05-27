@@ -14110,6 +14110,84 @@ fn apply_effect(
             pool.push_coins(color_byte, amount_u8);
             pool.assert_count_sync();
         }
+        // **Spacecraft Station substrate Phase 4 Cycle 1 (2026-05-26
+        // — spec at docs/SPACECRAFT_STATION_SUBSTRATE_PHASE_4_DESIGN.md
+        // §3.4).** Add `obj.charge_counters` coins of `options[0]="W"`
+        // to the source-controller's mana pool. Mirrors Python's
+        // `AddChargeCounterManaOfChosenColor.resolve` at
+        // `mana.py:153-165` — reads `state.resolving_source.
+        // charge_counters` for X, delegates to `AddNManaOfChosenColor`
+        // for the actual mint. First-slice deterministic color choice
+        // (mirror of `AddNManaOfChosenColor`'s no-agent fallback).
+        //
+        // **`charge_counters <= 0` silent no-op.** Both Python (`if
+        // amount <= 0: return` at `mana.py:161-162`) and Rust honor
+        // the silent no-op when X resolves to 0 or negative. A
+        // negative `charge_counters` cannot occur in normal play
+        // (the field is mutated only by `apply_activate_station`'s
+        // counter-add path; SBA cleanup doesn't deduct charge
+        // counters), but the guard is defense-in-depth.
+        //
+        // **Source-not-found silent no-op.** Mirrors Python's
+        // `if source is None: return` at `mana.py:158-159`. The
+        // source scan walks every zone (mirrors
+        // `AddNManaOfChosenColor`'s pattern); if the source object
+        // has left every zone before resolve, the effect is a silent
+        // no-op (mana-ability resolutions bypass the stack so this
+        // shouldn't normally happen, but defense-in-depth is cheap).
+        Effect::AddChargeCounterManaOfChosenColor => {
+            // Source-object scan: read `charge_counters` from
+            // whichever zone the source sits in.
+            let mut src_controller: Option<u8> = None;
+            let mut amount: i32 = 0;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        amount = obj.charge_counters;
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+                // Source-not-found AND not on stack: silent no-op.
+                if src_controller.is_none() {
+                    return Ok(());
+                }
+            }
+            // `charge_counters <= 0` silent no-op (mirrors
+            // `AddNManaOfChosenColor`'s `amount == 0` early return,
+            // plus the negative-defense-in-depth guard).
+            if amount <= 0 {
+                return Ok(());
+            }
+            let controller_idx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            let amount_u8 = amount.min(u8::MAX as i32) as u8;
+            let pool = &mut state.players[controller_idx].mana_pool;
+            // First-slice deterministic color: options[0] = "W"
+            // (mirrors AddNManaOfChosenColor's WUBRG-default + first-
+            // color fallback at `state_ops_resolve.rs:14057`). The
+            // agent-callback follow-up (Phase 4 SL entry #1) plumbs
+            // an explicit color choice through pending_decisions.
+            pool.push_coins(b'W', amount_u8);
+            pool.assert_count_sync();
+        }
         // Round-28 generalized library tutor. Scans the source-
         // controller's library top-to-bottom for the FIRST card
         // matching filter_name; moves match to controller's hand
