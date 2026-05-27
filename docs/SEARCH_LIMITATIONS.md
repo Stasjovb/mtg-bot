@@ -16950,6 +16950,34 @@ The Rust ManaPool widen is a self-contained ~1 cycle of Rust work (no Python sch
 
 ---
 
+## Phase 4E satisfies-any-color follow-on LANDED (2026-05-27, `feature/phase-4e-payment-time-any`) — Rust payment-time "any" coin satisfies any colored requirement (CR 106.5)
+
+**Location:**
+- `rust/src/state_ops_legal.rs::pool_can_cover` — widened to count `pool.any` toward each unmet colored requirement; leftover wildcards fold into the generic-payable total.
+- `rust/src/state_ops_legal.rs::auto_tap_headroom_pool` — adds an `"any"` arm to the `mana_produced` symbol match so a battlefield permanent with `mana_produced=["any"]` credits the wildcard coin into headroom.
+- `rust/src/state_ops_decisions.rs::can_pay_mana_cost_internal` / `pay_mana_cost_internal` — same widening as `pool_can_cover` for the decision-callback count-only pay primitive.
+- `rust/src/state_ops_cast.rs::pay_mana_cost` (legacy count-only) — same-color FIFO first; wildcard `b'a'` covers any colored shortfall; generic drain order extended `C → W → U → B → R → G → a` (wildcard preferred LAST among generic-payable sources). `pool_total` widened to include `pool.any`.
+- `rust/src/state_ops_cast.rs::auto_tap_pay_for_cost` — colored coin-plan walk accepts `b'a'` coins as matching any color, byte-mirroring Python's `actions._coin_matches_color` (`actions.py:203-207`) returning True for `coin.color == "any"`.
+- `rust/src/state_ops_mana.rs::GameState::pay_mana_cost` (PyMethod) — same widening as the legacy `pay_mana_cost`; preserves the legacy C → W → U → B → R → G generic drain with `b'a'` appended at the tail.
+
+**Closes:** Phase 4E C2.5 deferred follow-on (CR 106.5 — "If a player adds mana of any type that a permanent could produce, the player chooses which type the mana is."). Closes the Phase 4E C2 SL entry's "Fix scope" item 4 ("Update colored-payment drain semantics so an 'any' coin satisfies any color request"). After this slice, the Rust ManaPool wildcard coin behaves byte-equal to Python's `ManaCoin(color="any")` at the count-level affordability gate AND at the position-level FIFO drain.
+
+**Why it's OK (parity-equivalence proof at count level):**
+- `pool_can_cover` and the count-only `pay_mana_cost` paths use "same-color first, then any for shortfall, then any joins generic" — provably byte-equal to Python's `can_pay_cost` enumerate-walk for any final-empty-pool outcome. Worked examples in `tests/test_phase_4e_payment_time_any.py`: `[any: 1]` pays `{W}` (drains any); `[W: 1, any: 1]` pays `{W}` (drains W, retains any); `[W: 1, any: 1]` pays `{W}{W}` (drains both); `[any: 2]` pays `{2}` (both wildcards drain at the generic tail); `[C: 1, any: 1]` paying `{1}` drains C first (preserves wildcard).
+- `auto_tap_pay_for_cost` byte-mirrors Python's `auto_tap_for_cost` (`actions.py:919-986`) — Python's `_coin_matches_color` returns True for `coin.color == "any"` AND `coin.color == color`. The Rust walk picks the FIRST matching coin in pool insertion order; an "any" coin earlier in the pool IS drained before a same-color coin appearing later (intentional FIFO parity, NOT a divergence).
+
+**Failure mode:**
+- The count-level "same-color first" preference is order-neutral for any pool where the final outcome is "pool is fully drained" (the common case after a single CastSpell). It DIVERGES from Python's enumerate-walk ONLY at the position-level INSIDE the same drain — and that surface is what `auto_tap_pay_for_cost` covers (which DOES walk positions). No live admitted card produces "any" coins today that would exercise the path; All-Fates Scroll's AA[0] is the first.
+- Hybrid mana symbols (`{W/U}` etc.) are still treated as generic-1 per the engine-wide ManaCost.hybrid simplification — orthogonal to the "any" coin pathway.
+
+**Fix scope:** CLOSED at this slice. The per-card real-EoE byte-equal probes for All-Fates Scroll (Phase 4E Cycle 3) and Gemstone Caverns (Phase 4E variant probe) are the natural follow-ons that compose against this substrate.
+
+**Impact estimate:** Substrate-only at the engine surface; no new admit set growth (the C2.5 admit set delta — All-Fates Scroll, Gemstone Caverns — already landed at `a82cf1e8`). Enables the next-cycle PROBED flips for both cards. 0 strength cost — the widening is strictly additive (closed-vocab pools behave identically; existing tests unchanged).
+
+**Pinned by:** `tests/test_phase_4e_payment_time_any.py` (16 pins — count-level satisfies-any-color via `pay_mana_cost` PyMethod across same-color preference, multi-colored requirement, partial-shortfall, leftover-pays-generic, insufficient-total, pure-generic, colorless-before-any priority, mixed-priority, snapshot-rollback-on-fail, cross-engine signature parity smoke). Existing Phase 4E C2.5 substrate pins at `tests/test_carrier_aa_phase_4e_substrate_cycle_2_5.py` continue to PASS — additive widen, not a replacement.
+
+---
+
 ## Carrier-AA substrate Phase 3C CLOSED (Phase 3C C1+C2+C3+C4+C5, 2026-05-26) — CR-613 layer-1 object-copy substrate (`GameObject.original_printing_id: Option<u32>` slot + per-zone-change reset hookup) + `Effect::BecomesCopyOfTargetLand` Rust variant + Python admit widen + per-card real-EoE probe; Thespian's Stage `covered_by_construction` → PROBED
 
 **Location:** `rust/src/state.rs` (the new `GameObject.original_printing_id: Option<u32>` slot — Phase 3C C1 substrate at commit `f5a2a1ce`) + `rust/src/cards.rs` (Effect enum variant + parse / to_pydict arms — Phase 3C C2 at commit `6de50d8d`) + `rust/src/state_ops_resolve.rs` (resolve arm with re-copy snapshot logic) + `rust/src/state_ops_legal.rs::activate_ability_dict` (Land-target fan-out) + every Rust bf-leave call site (zone-change reset hookup clearing `original_printing_id = None` per CR 400.7) + `src/mtg_bot/parity/cross_engine.py` (forward `_python_aa_to_safe_dict` arm at line 14917 + reverse `_ta_dict_to_python_effect` arm at line 12975) + `src/mtg_bot/parity/trajectory.py` (`_carrier_aa_phase_1_effect_classes` widen to include `BecomesCopyOfTargetLand` — 7th Effect class — at commits `43ed68e6` + `cc47f026`).

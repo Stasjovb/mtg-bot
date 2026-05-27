@@ -196,6 +196,11 @@ fn pool_total(pool: &ManaPool) -> u32 {
         + pool.red as u32
         + pool.green as u32
         + pool.colorless as u32
+        // **Phase 4E satisfies-any-color follow-on (2026-05-27).**
+        // Include the wildcard `any` coins in the affordability fast-
+        // fail total — they can pay any colored or generic
+        // requirement, so they ARE part of the pool's spending power.
+        + pool.any as u32
 }
 
 /// Try to spend `cost` out of `pool`. On success the pool is
@@ -244,25 +249,52 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     // explicitly so the rollback path can restore both the per-color
     // counts AND the insertion-ordered `coins` vec.
     let snapshot = pool.clone();
-    if pool.white < cost.white
-        || pool.blue < cost.blue
-        || pool.black < cost.black
-        || pool.red < cost.red
-        || pool.green < cost.green
-    {
-        return false;
+    // **Phase 4E satisfies-any-color follow-on (2026-05-27).** Each
+    // colored requirement first drains same-color coins FIFO; if the
+    // same-color slot is short, the wildcard `pool.any` covers the
+    // shortfall (CR 106.5). If both are still insufficient, restore
+    // the snapshot and bail. After all colored are paid, generic
+    // drains from C → W → U → B → R → G → a (any drains LAST among
+    // generic-payable colors so a future cost can still benefit from
+    // its flexibility).
+    let colored_reqs: [(u8, u8); 5] = [
+        (b'W', cost.white),
+        (b'U', cost.blue),
+        (b'B', cost.black),
+        (b'R', cost.red),
+        (b'G', cost.green),
+    ];
+    for (color_byte, need) in colored_reqs {
+        let need = need as u32;
+        if need == 0 {
+            continue;
+        }
+        let same_color_avail = match color_byte {
+            b'W' => pool.white as u32,
+            b'U' => pool.blue as u32,
+            b'B' => pool.black as u32,
+            b'R' => pool.red as u32,
+            b'G' => pool.green as u32,
+            _ => 0,
+        };
+        let take_same = same_color_avail.min(need);
+        pool.drain_first_n_color(color_byte, take_same);
+        let mut shortfall = need - take_same;
+        if shortfall > 0 {
+            let any_take = (pool.any as u32).min(shortfall);
+            pool.drain_first_n_color(b'a', any_take);
+            shortfall -= any_take;
+        }
+        if shortfall > 0 {
+            // Same-color + any still couldn't cover this requirement.
+            // Restore the snapshot — both the count cache and the
+            // ordered `coins` vec — and bail.
+            *pool = snapshot;
+            return false;
+        }
     }
-    // G7 S6-Class-E ordered-pool: drain colored from `coins` in FIFO
-    // (per-color) to keep the insertion-ordered vec in sync with the
-    // per-color count cache. Same effective per-color delta as the
-    // legacy `pool.X -= cost.X` shape, but `coins` no longer drifts.
-    pool.drain_first_n_color(b'W', cost.white as u32);
-    pool.drain_first_n_color(b'U', cost.blue as u32);
-    pool.drain_first_n_color(b'B', cost.black as u32);
-    pool.drain_first_n_color(b'R', cost.red as u32);
-    pool.drain_first_n_color(b'G', cost.green as u32);
     let mut generic_remaining = cost.generic as u32;
-    for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
+    for color in [b'C', b'W', b'U', b'B', b'R', b'G', b'a'] {
         if generic_remaining == 0 {
             break;
         }
@@ -273,6 +305,7 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
             b'R' => pool.red as u32,
             b'G' => pool.green as u32,
             b'C' => pool.colorless as u32,
+            b'a' => pool.any as u32,
             _ => 0,
         };
         let take = avail.min(generic_remaining);
@@ -463,8 +496,18 @@ pub(crate) fn auto_tap_pay_for_cost(
         // indices, picking matching-color coins. Byte-mirror of
         // Python `for idx, coin in enumerate(p.mana_pool):` +
         // `if _coin_matches_color(coin, color)` (`actions.py:940-949`).
-        // Rust's `ManaCoin` is single-color (W/U/B/R/G/C — no "any"
-        // wildcard in the live registry), so the match is byte-equal.
+        //
+        // **Phase 4E satisfies-any-color follow-on (2026-05-27).**
+        // Python's `_coin_matches_color` (`actions.py:203-207`)
+        // returns True for both `coin.color == "any"` AND
+        // `coin.color == color`. Rust's wildcard discriminator is
+        // `b'a'` (the C2.5 substrate); accept that alongside the
+        // same-color byte so the FIFO enumerate-walk byte-matches
+        // Python. An "any" coin earlier in pool insertion order is
+        // picked BEFORE a same-color coin appearing later — this is
+        // intentional parity with Python, not a divergence (proved
+        // against `actions.auto_tap_for_cost:937-949` pool-FIFO
+        // enumerate semantics).
         let want = match sym {
             "W" => b'W',
             "U" => b'U',
@@ -480,7 +523,7 @@ pub(crate) fn auto_tap_pay_for_cost(
             if used_coin_indices.contains(&i) {
                 continue;
             }
-            if coin.color == want {
+            if coin.color == want || coin.color == b'a' {
                 used_coin_indices.push(i);
                 need -= 1;
             }

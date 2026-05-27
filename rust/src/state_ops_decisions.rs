@@ -53,21 +53,38 @@ fn can_pay_mana_cost_internal(
         return false;
     }
     let pool = &state.players[idx].mana_pool;
-    if (pool.white as u32) < cost.white as u32
-        || (pool.blue as u32) < cost.blue as u32
-        || (pool.black as u32) < cost.black as u32
-        || (pool.red as u32) < cost.red as u32
-        || (pool.green as u32) < cost.green as u32
-    {
-        return false;
+    // **Phase 4E satisfies-any-color follow-on (2026-05-27).**
+    // Same algorithm as `state_ops_legal::pool_can_cover`: each
+    // colored slot is drained by same-color first; the wildcard
+    // `pool.any` budget covers any shortfall. After colored, leftover
+    // `any` joins the generic-payable pool. Byte-equal to Python's
+    // `actions.can_pay_cost` (`src/mtg_bot/actions.py:336-403`) at
+    // the count-level (`_coin_matches_color` returns True for `any`).
+    let mut any_remaining = pool.any as u32;
+    let coloreds: [(u8, u8); 5] = [
+        (pool.white, cost.white),
+        (pool.blue, cost.blue),
+        (pool.black, cost.black),
+        (pool.red, cost.red),
+        (pool.green, cost.green),
+    ];
+    let mut rem_per_color: [u32; 5] = [0; 5];
+    for (i, (avail, need)) in coloreds.iter().enumerate() {
+        let avail = *avail as u32;
+        let need = *need as u32;
+        if avail >= need {
+            rem_per_color[i] = avail - need;
+        } else {
+            let shortfall = need - avail;
+            if any_remaining < shortfall {
+                return false;
+            }
+            any_remaining -= shortfall;
+            rem_per_color[i] = 0;
+        }
     }
-    let rem_white = pool.white as u32 - cost.white as u32;
-    let rem_blue = pool.blue as u32 - cost.blue as u32;
-    let rem_black = pool.black as u32 - cost.black as u32;
-    let rem_red = pool.red as u32 - cost.red as u32;
-    let rem_green = pool.green as u32 - cost.green as u32;
-    let rem_colorless = pool.colorless as u32;
-    let rem_total = rem_white + rem_blue + rem_black + rem_red + rem_green + rem_colorless;
+    let rem_colored: u32 = rem_per_color.iter().sum();
+    let rem_total = rem_colored + (pool.colorless as u32) + any_remaining;
     rem_total >= cost.generic as u32
 }
 
@@ -95,13 +112,59 @@ fn pay_mana_cost_internal(
     // `auto_tap_for_cost` SoT path. Class E is fixed at the call
     // site that DOES route through Python's `auto_tap_for_cost` SoT
     // — `auto_tap_pay_for_cost` in `state_ops_cast.rs`.
-    pool.drain_first_n_color(b'W', cost.white as u32);
-    pool.drain_first_n_color(b'U', cost.blue as u32);
-    pool.drain_first_n_color(b'B', cost.black as u32);
-    pool.drain_first_n_color(b'R', cost.red as u32);
-    pool.drain_first_n_color(b'G', cost.green as u32);
+    //
+    // **Phase 4E satisfies-any-color follow-on (2026-05-27).** Each
+    // colored requirement first drains same-color coins FIFO; if the
+    // same-color slot is short, the wildcard `pool.any` covers the
+    // shortfall (CR 106.5). `can_pay_mana_cost_internal` already
+    // validated the affordability with the same widen, so the drain
+    // here is always complete.
+    let colored_reqs: [(u8, u8); 5] = [
+        (b'W', cost.white),
+        (b'U', cost.blue),
+        (b'B', cost.black),
+        (b'R', cost.red),
+        (b'G', cost.green),
+    ];
+    for (color_byte, need) in colored_reqs {
+        let need = need as u32;
+        if need == 0 {
+            continue;
+        }
+        // Step a: drain matching-color coins first.
+        let same_color_avail = match color_byte {
+            b'W' => pool.white as u32,
+            b'U' => pool.blue as u32,
+            b'B' => pool.black as u32,
+            b'R' => pool.red as u32,
+            b'G' => pool.green as u32,
+            _ => 0,
+        };
+        let take_same = same_color_avail.min(need);
+        pool.drain_first_n_color(color_byte, take_same);
+        let mut shortfall = need - take_same;
+        // Step b: any leftover requirement is paid by wildcard coins.
+        if shortfall > 0 {
+            let any_take = (pool.any as u32).min(shortfall);
+            pool.drain_first_n_color(b'a', any_take);
+            shortfall -= any_take;
+        }
+        debug_assert_eq!(
+            shortfall, 0,
+            "pay_mana_cost_internal: colored shortfall after any-coin \
+             drain — can_pay validator should have rejected first"
+        );
+    }
     let mut remaining_generic = cost.generic as u32;
-    for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
+    // Generic drain: legacy C→W→U→B→R→G priority preserved for parity-
+    // neutral migration of the closed-vocab path. The new tail `a`
+    // entry drains any leftover wildcard coins last (matching Python
+    // `auto_tap_for_cost`'s "any unused coin pays generic" behavior;
+    // the `any` coin is the most-flexible coin, so it's drained LAST
+    // among generic-payable colors so a future cost can still benefit
+    // from its flexibility — for THIS one cost the order is moot
+    // because the pool is fully drained either way).
+    for color in [b'C', b'W', b'U', b'B', b'R', b'G', b'a'] {
         if remaining_generic == 0 {
             break;
         }
@@ -112,6 +175,7 @@ fn pay_mana_cost_internal(
             b'R' => pool.red as u32,
             b'G' => pool.green as u32,
             b'C' => pool.colorless as u32,
+            b'a' => pool.any as u32,
             _ => 0,
         };
         let take = avail.min(remaining_generic);

@@ -296,57 +296,84 @@ impl GameState {
             }
         }
         let pool = &self.players[idx].mana_pool;
-        // Step 1: each colored requirement must be matchable by
-        // same-color mana already in the pool.
-        if (pool.white as u32) < req_white
-            || (pool.blue as u32) < req_blue
-            || (pool.black as u32) < req_black
-            || (pool.red as u32) < req_red
-            || (pool.green as u32) < req_green
-        {
-            return Ok(false);
+        // **Phase 4E satisfies-any-color follow-on (2026-05-27).**
+        // Each colored requirement is satisfied by same-color mana
+        // first; if the same-color slot is short, the wildcard
+        // `pool.any` budget covers the shortfall (CR 106.5). Leftover
+        // `any` coins join the generic-payable pool. Byte-equal to
+        // Python's `actions.can_pay_cost` at the count level.
+        let mut any_remaining = pool.any as u32;
+        let coloreds_check: [(u32, u32); 5] = [
+            (pool.white as u32, req_white),
+            (pool.blue as u32, req_blue),
+            (pool.black as u32, req_black),
+            (pool.red as u32, req_red),
+            (pool.green as u32, req_green),
+        ];
+        let mut rem_per_color: [u32; 5] = [0; 5];
+        for (i, (avail, need)) in coloreds_check.iter().enumerate() {
+            if avail >= need {
+                rem_per_color[i] = avail - need;
+            } else {
+                let shortfall = need - avail;
+                if any_remaining < shortfall {
+                    return Ok(false);
+                }
+                any_remaining -= shortfall;
+                rem_per_color[i] = 0;
+            }
         }
-        // Step 2: post-colored remaining pool must cover generic.
-        let rem_white = pool.white as u32 - req_white;
-        let rem_blue = pool.blue as u32 - req_blue;
-        let rem_black = pool.black as u32 - req_black;
-        let rem_red = pool.red as u32 - req_red;
-        let rem_green = pool.green as u32 - req_green;
-        let rem_colorless = pool.colorless as u32;
-        let rem_total = rem_white + rem_blue + rem_black + rem_red + rem_green + rem_colorless;
+        let rem_colored: u32 = rem_per_color.iter().sum();
+        let rem_total = rem_colored + (pool.colorless as u32) + any_remaining;
         if rem_total < req_generic {
             return Ok(false);
         }
-        // Step 3: commit. Deduct colored, then drain generic from a
-        // deterministic order: C → W → U → B → R → G.
+        // Step 3: commit. For each colored requirement, drain same-
+        // color FIFO first, then drain wildcard `b'a'` coins for any
+        // shortfall. Generic then drains from the legacy
+        // C → W → U → B → R → G priority, with `b'a'` appended to the
+        // tail so wildcard coins are preferred LAST among generic-
+        // payable sources (defers wildcard flexibility for future
+        // costs from this same pool).
         //
         // **G7 S6-Class-E ordered-pool parity-neutral migration**:
         // this `pay_mana_cost` PyMethod is NOT the Python SoT for
         // CastSpell / ActivateAbility — those route through
         // `auto_tap_pay_for_cost` in `state_ops_cast.rs` (the lands-
         // auto-tapping byte-mirror of `auto_tap_for_cost`). This
-        // method is the count-only legacy pay primitive; preserving
-        // its existing C→W→U→B→R→G drain order keeps Slice-1 byte-
-        // neutral (no test churn). What we ADD here is keeping the
-        // ordered `coins` vec in sync: for each per-color slot the
-        // method decrements, drain that many coins of that color from
-        // the head of `coins`. The two sides remain consistent so
-        // future readers (or future drain consumers) see the same
-        // pool.
+        // method is the count-only legacy pay primitive; the legacy
+        // generic drain order (C→W→U→B→R→G) is preserved for parity-
+        // neutral migration of the closed-vocab path, with the new
+        // `b'a'` tail entry strictly additive.
         let pool = &mut self.players[idx].mana_pool;
-        pool.drain_first_n_color(b'W', req_white);
-        pool.drain_first_n_color(b'U', req_blue);
-        pool.drain_first_n_color(b'B', req_black);
-        pool.drain_first_n_color(b'R', req_red);
-        pool.drain_first_n_color(b'G', req_green);
+        let colored_reqs: [(u8, u32); 5] = [
+            (b'W', req_white),
+            (b'U', req_blue),
+            (b'B', req_black),
+            (b'R', req_red),
+            (b'G', req_green),
+        ];
+        for (color_byte, need) in colored_reqs {
+            if need == 0 {
+                continue;
+            }
+            let same_color_avail = match color_byte {
+                b'W' => pool.white as u32,
+                b'U' => pool.blue as u32,
+                b'B' => pool.black as u32,
+                b'R' => pool.red as u32,
+                b'G' => pool.green as u32,
+                _ => 0,
+            };
+            let take_same = same_color_avail.min(need);
+            pool.drain_first_n_color(color_byte, take_same);
+            let shortfall = need - take_same;
+            if shortfall > 0 {
+                pool.drain_first_n_color(b'a', shortfall);
+            }
+        }
         let mut remaining_generic = req_generic;
-        // Walk the legacy C → W → U → B → R → G priority for the
-        // generic drain; for each color, drain from `coins` (FIFO of
-        // matching color) to keep `coins`/count cache synced. The
-        // legacy order is preserved verbatim (parity-neutral); the
-        // CLASS-E FIX in `auto_tap_pay_for_cost` is a SEPARATE drain
-        // path that uses `drain_first_n_fifo` (any-color FIFO).
-        for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
+        for color in [b'C', b'W', b'U', b'B', b'R', b'G', b'a'] {
             if remaining_generic == 0 {
                 break;
             }
@@ -357,14 +384,14 @@ impl GameState {
                 b'R' => pool.red as u32,
                 b'G' => pool.green as u32,
                 b'C' => pool.colorless as u32,
+                b'a' => pool.any as u32,
                 _ => 0,
             };
             let take = avail.min(remaining_generic);
             pool.drain_first_n_color(color, take);
             remaining_generic -= take;
         }
-        // Sanity: step-2's `rem_total >= req_generic` check guarantees
-        // we always drain to zero. Belt-and-suspenders only.
+        // Sanity: the affordability check above guarantees full drain.
         debug_assert_eq!(remaining_generic, 0);
         pool.assert_count_sync();
         Ok(true)

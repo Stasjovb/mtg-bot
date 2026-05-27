@@ -668,24 +668,57 @@ fn activate_station_dict(
 /// the commit step. Returns `true` iff `pool` can cover `cost`
 /// outright. Composes with `auto_tap_headroom_pool` for the broader
 /// emission-side affordability check.
+///
+/// **Phase 4E satisfies-any-color follow-on (2026-05-27).** The
+/// wildcard `pool.any` coin satisfies any single colored requirement
+/// (CR 106.5 — "any-color mana can pay for any colored cost"). The
+/// match algorithm is: for each colored requirement, draw from the
+/// same-color slot FIRST; if the same-color slot is short, draw the
+/// shortfall from a shared `any_remaining` budget. After every
+/// colored requirement is satisfied, any unused `any` coins join the
+/// generic-payable pool (alongside C/W/U/B/R/G remnants). This is the
+/// COUNT-LEVEL byte-mirror of Python's `actions.can_pay_cost`
+/// (`src/mtg_bot/actions.py:336-403`): Python's `_coin_matches_color`
+/// returns True for `coin.color == "any"`, so an "any" coin in the
+/// pool satisfies any colored requirement in Python's enumerate-walk
+/// gate. The count-level shape "same-color first, then any" is
+/// byte-equal to Python's FIFO when the pool is treated as a bag of
+/// counts (proved: pool `[any, W]` cost `{W}{1}` — Python uses `any`
+/// for W then `W` for generic; Rust drains `W` for W then `any` for
+/// generic. Same final empty pool, same payable-yes outcome).
 pub(crate) fn pool_can_cover(
     pool: &crate::state::ManaPool,
     cost: &crate::cards::ManaCost,
 ) -> bool {
-    if pool.white < cost.white
-        || pool.blue < cost.blue
-        || pool.black < cost.black
-        || pool.red < cost.red
-        || pool.green < cost.green
-    {
-        return false;
+    // **Phase 4E satisfies-any-color follow-on.** Track the wildcard
+    // budget separately so each colored shortfall can draw from it
+    // in turn. Same-color drains never touch the `any` budget; only
+    // shortfalls do.
+    let mut any_remaining = pool.any as u32;
+    let coloreds: [(u8, u8); 5] = [
+        (pool.white, cost.white),
+        (pool.blue, cost.blue),
+        (pool.black, cost.black),
+        (pool.red, cost.red),
+        (pool.green, cost.green),
+    ];
+    let mut rem_per_color: [u32; 5] = [0; 5];
+    for (i, (avail, need)) in coloreds.iter().enumerate() {
+        let avail = *avail as u32;
+        let need = *need as u32;
+        if avail >= need {
+            rem_per_color[i] = avail - need;
+        } else {
+            let shortfall = need - avail;
+            if any_remaining < shortfall {
+                return false;
+            }
+            any_remaining -= shortfall;
+            rem_per_color[i] = 0;
+        }
     }
-    let rem_total = (pool.white - cost.white) as u32
-        + (pool.blue - cost.blue) as u32
-        + (pool.black - cost.black) as u32
-        + (pool.red - cost.red) as u32
-        + (pool.green - cost.green) as u32
-        + (pool.colorless) as u32;
+    let rem_colored: u32 = rem_per_color.iter().sum();
+    let rem_total = rem_colored + (pool.colorless as u32) + any_remaining;
     rem_total >= cost.generic as u32
 }
 
@@ -766,6 +799,18 @@ pub(crate) fn auto_tap_headroom_pool(
                 "R" => pool.red = pool.red.saturating_add(1),
                 "G" => pool.green = pool.green.saturating_add(1),
                 "C" => pool.colorless = pool.colorless.saturating_add(1),
+                // **Phase 4E satisfies-any-color follow-on
+                // (2026-05-27).** A permanent with
+                // `mana_produced=["any"]` (e.g. Chromatic Lantern's
+                // future widen, All-Fates Scroll AA[0]'s headroom
+                // accounting if/when it ever becomes a mana ability
+                // gated through the lands-only headroom — today it's
+                // not, since AFS is an artifact AA[0], not a land or
+                // `printing.mana_produced` source) credits the
+                // wildcard coin to `pool.any` headroom. The
+                // `pool_can_cover` composition above counts this
+                // toward both colored shortfall AND leftover-generic.
+                "any" => pool.any = pool.any.saturating_add(1),
                 _ => {} // validate_mana_symbol gates registration; defensive no-op.
             }
         }
