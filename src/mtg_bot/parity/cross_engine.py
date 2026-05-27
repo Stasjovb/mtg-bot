@@ -15771,20 +15771,24 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # honestly until a Rust schema bump for multi-color batched
         # mana.
         #
-        # **"any" color honest-decline (Phase 4E C2 partial-FLIP).**
-        # All-Fates Scroll's AA[0] carries ``produces=(("any", 1),)``.
-        # Rust's ``validate_mana_symbol`` is a closed vocab over
-        # ``{W,U,B,R,G,C}`` (``cards.rs:15888``) and the ``ManaPool``
-        # substrate lacks an "any" coin slot. The forward arm honest-
-        # declines "any" so the cross-engine builder DECLINES All-Fates
-        # Scroll until Phase 4E C2.5 (Rust ManaPool "any" coin
-        # substrate). The per-AA admit predicate
-        # ``_aa_is_phase1_sub_shape_a`` passes for the AA[0] post-C2
-        # widens (Effect-class + ``is_mana_ability``), but the builder
-        # gate :func:`trajectory._carrier_aa_artifact_card_def` reaches
-        # this forward arm next and returns None on the "any" coin.
-        # The net contract: All-Fates Scroll STAYS DECLINED at the
-        # cross-engine deck-filter gate.
+        # **"any" color admit (Phase 4E C2.5 — full FLIP).** All-Fates
+        # Scroll's AA[0] carries ``produces=(("any", 1),)``. The Rust
+        # ``ManaPool`` substrate grew an ``any: u8`` slot + ``b'a'``
+        # discriminator in ``push_coins`` / ``drain_first_n_where`` /
+        # ``rebuild_coins_from_counts`` / ``assert_count_sync``; the
+        # ``validate_mana_symbol`` closed vocab widened to admit
+        # ``"any"`` (``cards.rs:16291``); the ``Effect::AddManaToPool``
+        # resolve arm at ``state_ops_resolve.rs:4495`` translates
+        # ``"any"`` → ``b'a'`` for ``push_coins``. The cross-engine
+        # builder ADMITS All-Fates Scroll post-C2.5 — the per-AA
+        # predicate passes (Phase 4E C2 widens) and this forward arm
+        # round-trips the dict through Rust's parse + resolve. The
+        # payment-time satisfies-any-color semantics (CR 106.5
+        # wildcard) is a deferred follow-on cycle — the substrate
+        # exists, but no payment path consults it yet (no live
+        # admitted card produces ``any`` coins on resolution outside
+        # All-Fates Scroll's AA[0], which itself doesn't get spent in
+        # a parity-gated game until the satisfies path lands).
         #
         # **``spend_restriction`` honest-decline.** Python's
         # ``AddManaToPool.spend_restriction: str | None`` tags each
@@ -15802,10 +15806,9 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         color, amount = effect.produces[0]
         if not isinstance(color, str):
             return None
-        if color not in ("W", "U", "B", "R", "G", "C"):
-            # "any" or unknown — Rust validate_mana_symbol rejects;
-            # honest-decline at the bridge floor. See Phase 4E C2.5
-            # follow-up cycle (Rust ManaPool "any" coin substrate).
+        if color not in ("W", "U", "B", "R", "G", "C", "any"):
+            # Unknown color — Rust validate_mana_symbol rejects;
+            # honest-decline at the bridge floor.
             return None
         if not isinstance(amount, int):
             return None
@@ -17217,19 +17220,31 @@ def build_python_field_view(state) -> dict:
 
 # Canonical Rust color ordering. Mirror this in the Python normalizer so
 # the sorted-key tuple comparison is apples-to-apples.
-_RUST_COLORS: tuple[str, ...] = ("B", "C", "G", "R", "U", "W")
+#
+# **Phase 4E C2.5 (2026-05-26) — "any" wildcard slot.** The Rust
+# ``ManaPool`` grew a 7th ``any: u8`` slot mirroring Python's
+# ``ManaCoin(color="any")`` wildcard (All-Fates Scroll AA[0]); the
+# ``get_mana_pool`` PyMethod now emits 7 keys (W/U/B/R/G/C/any) and
+# this tuple grew the seventh entry. The histogram emits "any"
+# alongside the closed colored vocab so the sorted-key tuple
+# comparison remains shape-equal between engines.
+_RUST_COLORS: tuple[str, ...] = ("B", "C", "G", "R", "U", "W", "any")
 
 
 def _python_mana_pool_signature(mana_pool) -> tuple:
-    """Translate a Python ``list[ManaCoin]`` to the Rust 6-color tuple.
+    """Translate a Python ``list[ManaCoin]`` to the Rust 7-color tuple.
 
-    Rust always emits all six color counts even when empty; matching
-    that shape on the Python side is the only way the field-view
-    comparison says "both empty" rather than "Python is list, Rust is
-    dict — type mismatch".
+    Rust always emits all seven color counts even when empty
+    (W/U/B/R/G/C + "any" wildcard); matching that shape on the Python
+    side is the only way the field-view comparison says "both empty"
+    rather than "Python is list, Rust is dict — type mismatch".
 
-    The Python ``ManaCoin`` carries a single-character color tag; we
-    histogram them into the 6-color bucket and emit sorted items.
+    The Python ``ManaCoin`` carries a single-character color tag
+    (W/U/B/R/G/C) OR the string ``"any"`` (the wildcard discriminator
+    from All-Fates Scroll's AA[0]); we histogram them into the 7-key
+    bucket and emit sorted items. The "any" tag is preserved verbatim
+    (not folded into a single-character key) so the cross-engine
+    sorted-tuple comparison sees the same 7-tuple.
     """
     counts: dict[str, int] = {c: 0 for c in _RUST_COLORS}
     if mana_pool:
@@ -17240,8 +17255,16 @@ def _python_mana_pool_signature(mana_pool) -> tuple:
                 # is folded into colorless ``C``. Should never happen
                 # in practice — every mana coin has a known color.
                 color = "C"
-            # Normalize aliases — some sources use lowercase or names.
-            color = color.upper()[:1]
+            # **Phase 4E C2.5 — "any" wildcard pass-through.** The
+            # "any" tag is multi-character; only the closed colored
+            # vocab gets the upper()[:1] single-char normalization.
+            # Any unrecognized multi-char tag is dropped (folded into
+            # nothing — defense in depth against a future synthetic
+            # color tag not yet wired into the bucket).
+            if color == "any":
+                pass
+            else:
+                color = color.upper()[:1]
             if color in counts:
                 counts[color] += 1
     return tuple(sorted(counts.items()))

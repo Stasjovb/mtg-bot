@@ -338,12 +338,19 @@ impl GameState {
         Ok(out)
     }
 
-    /// Snapshot of `player_id`'s mana pool as a 6-key dict
-    /// `{"W", "U", "B", "R", "G", "C"}` mapping each color to its
-    /// current count. Always returns all six keys, mirroring the
+    /// Snapshot of `player_id`'s mana pool as a 7-key dict
+    /// `{"W", "U", "B", "R", "G", "C", "any"}` mapping each color to
+    /// its current count. Always returns all seven keys, mirroring the
     /// existing `get_mana_pool` shape so Python callers can rely on
     /// `.get(color, 0)` not being needed. Raises `IndexError` on an
     /// out-of-range `player_id`.
+    ///
+    /// **Phase 4E C2.5 (2026-05-26) — "any" wildcard slot.** The
+    /// snapshot grew a 7th `"any"` key alongside the closed colored
+    /// vocab, mirroring `ManaPool.any`'s denormalized count slot. The
+    /// `_python_mana_pool_signature` Python sibling emits the matching
+    /// 7-tuple so the cross-engine parity comparison stays apples-
+    /// to-apples.
     fn mana_pool_snapshot<'py>(
         &self,
         py: Python<'py>,
@@ -358,6 +365,7 @@ impl GameState {
         d.set_item("R", pool.red)?;
         d.set_item("G", pool.green)?;
         d.set_item("C", pool.colorless)?;
+        d.set_item("any", pool.any)?;
         Ok(d)
     }
 }

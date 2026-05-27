@@ -4511,9 +4511,16 @@ fn apply_effect(
                 "R" => b'R',
                 "G" => b'G',
                 "C" => b'C',
+                // **Phase 4E C2.5 — "any" wildcard.** Mirrors Python's
+                // `ManaCoin(color="any")` shape. Substrate-only this
+                // cycle; payment-time satisfies-any-color is the
+                // follow-on (the closed-vocab pay paths still ignore
+                // `any` coins; no live admitted card produces them
+                // until the satisfies-any-color closure lands).
+                "any" => b'a',
                 other => {
                     return Err(PyValueError::new_err(format!(
-                        "AddManaToPool: unknown color {other:?}; valid: W, U, B, R, G, C"
+                        "AddManaToPool: unknown color {other:?}; valid: W, U, B, R, G, C, any"
                     )))
                 }
             };

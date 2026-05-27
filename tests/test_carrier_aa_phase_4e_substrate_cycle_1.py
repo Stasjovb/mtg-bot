@@ -779,25 +779,26 @@ def test_resolve_draw_cards_by_condition_multiplier_zero_count_no_op(
 
 
 def test_all_fates_scroll_stays_declined_at_loader_gate_post_c2_partial():
-    """**Phase 4E C2 partial-FLIP invariant — All-Fates Scroll STAYS
-    DECLINED at the cross-engine loader gate.** The Phase 4E C2 cycle
-    widens the per-AA admit predicate (Effect-class set + ``is_mana_
-    ability`` rider) so BOTH AAs now pass
-    :func:`_aa_is_phase1_sub_shape_a`; the printing-level admit
-    dispatcher therefore returns True. But the cross-engine builder
-    gate at :func:`trajectory._carrier_aa_artifact_card_def` calls
-    :func:`cross_engine._python_aa_to_safe_dict` to serialize each AA
-    into the bridge dict shape, and that floor honest-declines AA[0]
-    on the new "any" color teeth (Rust's ``validate_mana_symbol``
-    closed vocab + ``ManaPool`` substrate gap — see Phase 4E C2.5
-    follow-up cycle in ``docs/SEARCH_LIMITATIONS.md``).
+    """**Phase 4E C2 partial-FLIP invariant -- INVERTED at C2.5
+    (2026-05-26).** The C2 partial-FLIP gap (the "any" color teeth at
+    the bridge floor) has CLOSED. The Phase 4E C2.5 cycle landed the
+    Rust ``ManaPool`` "any" coin substrate: new ``any: u8`` slot +
+    ``push_coins`` ``b'a'`` arm + ``validate_mana_symbol`` widen +
+    ``Effect::AddManaToPool`` resolve arm "any" → ``b'a'`` translation
+    + ``slot_mut`` widen + Python forward arm + 7-key signature
+    histogram. All-Fates Scroll now FLIPS at the cross-engine builder
+    gate: DECLINED → ADMITTED.
 
-    Verify both surfaces explicitly:
-      * Per-AA admit predicate: BOTH AAs now PASS (C2 widens shipped).
-      * Printing-level Artifact predicate: now PASSES (per-AA all-
-        pass under the Phase 4A multi-AA contract).
-      * Cross-engine Artifact builder: STILL returns None (the "any"
-        teeth at the bridge floor — closes the partial-FLIP gap).
+    The test name + lane stay so the dispatcher / git-log walk
+    continues to dispatch through this pin, but the assertions flip
+    to pin the post-C2.5 ADMITTED state. See
+    ``tests/test_carrier_aa_phase_4e_substrate_cycle_2_5.py`` for the
+    explicit substrate pins.
+
+    Verify both surfaces:
+      * Per-AA admit predicate: BOTH AAs PASS (unchanged from C2).
+      * Printing-level Artifact predicate: PASSES (unchanged from C2).
+      * Cross-engine Artifact builder: now ADMITS (C2.5 closure).
     """
     import json
 
@@ -817,39 +818,23 @@ def test_all_fates_scroll_stays_declined_at_loader_gate_post_c2_partial():
     printing = _build_artifact_printing(raw)
     aa0, aa1 = printing.activated_abilities
 
-    # Per-AA admit predicate: BOTH AAs PASS post-C2 widens (AA[0]
-    # passes via the ``is_mana_ability`` rider widen + ``AddManaToPool``
-    # Effect-class widen; AA[1] passes via the
-    # ``DrawCardsByConditionMultiplier`` Effect-class widen).
-    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
-        "AA[0] must PASS the per-AA admit gate post-C2 widens"
-    )
-    assert _aa_is_phase1_sub_shape_a(aa1) is True, (
-        "AA[1] must PASS the per-AA admit gate post-C2 widens"
-    )
+    # Per-AA admit predicate: BOTH AAs PASS (unchanged from C2).
+    assert _aa_is_phase1_sub_shape_a(aa0) is True
+    assert _aa_is_phase1_sub_shape_a(aa1) is True
     # Printing-level admit dispatcher: passes (per-AA all-pass).
-    assert (
-        _printing_is_bridge_simple_carrier_aa_any(printing) is True
-    ), (
-        "All-Fates Scroll must PASS the printing-level admit "
-        "dispatcher post-C2 widens"
+    assert _printing_is_bridge_simple_carrier_aa_any(printing) is True
+    assert _printing_is_bridge_simple_carrier_aa_artifact(printing) is True
+    # **Cross-engine builder gate: now ADMITS (C2.5 closure).** The
+    # bridge floor's AddManaToPool forward arm admits the "any" color;
+    # Rust's validate_mana_symbol + ManaPool substrate accept it
+    # end-to-end.
+    cd = _carrier_aa_artifact_card_def(printing)
+    assert cd is not None, (
+        "Phase 4E C2.5 closure: All-Fates Scroll must ADMIT at the "
+        "cross-engine builder gate (Rust ManaPool 'any' coin substrate "
+        "landed)"
     )
-    assert (
-        _printing_is_bridge_simple_carrier_aa_artifact(printing) is True
-    ), (
-        "All-Fates Scroll must PASS the Artifact sibling admit "
-        "predicate post-C2 widens"
-    )
-    # **Cross-engine builder gate: STAYS DECLINED.** The builder calls
-    # the bridge floor for each AA; AA[0]'s ``AddManaToPool(produces=
-    # (("any", 1),))`` honest-declines on the new "any" teeth.
-    assert _carrier_aa_artifact_card_def(printing) is None, (
-        "Phase 4E C2 partial-FLIP teeth: All-Fates Scroll must STAY "
-        "DECLINED at the cross-engine builder gate via the 'any' "
-        "color honest-decline in _python_aa_to_safe_dict's "
-        "AddManaToPool forward arm (the Rust ManaPool 'any' coin "
-        "substrate is the C2.5 follow-up)"
-    )
+    assert cd.name == "All-Fates Scroll"
 
 
 def test_carrier_aa_phase_1_effect_classes_widened_post_c2():

@@ -253,10 +253,18 @@ def test_phase_4e_c2_all_fates_scroll_predicate_passes_post_widens():
 
 
 def test_phase_4e_c2_all_fates_scroll_builder_gate_declines_on_any_teeth():
-    """**§6.5 #34 (builder side — partial-FLIP teeth).** The cross-
-    engine builder STILL returns None on All-Fates Scroll because the
-    bridge floor's ``AddManaToPool`` forward arm honest-declines the
-    ``produces=(("any", 1),)`` shape.
+    """**§6.5 #34 -- INVERTED at Phase 4E C2.5 (2026-05-26).** The Phase
+    4E C2 partial-FLIP teeth at the bridge floor's ``AddManaToPool``
+    forward arm has CLOSED at C2.5 — the Rust ``ManaPool`` "any" coin
+    substrate landed (new ``ManaPool.any: u8`` slot + ``push_coins``
+    ``b'a'`` arm + ``validate_mana_symbol`` widen + ``Effect::AddMana
+    ToPool`` resolve arm). All-Fates Scroll FLIPPED at the cross-engine
+    builder gate: DECLINED → ADMITTED.
+
+    This test was the explicit "partial-FLIP teeth" pin pre-C2.5; the
+    inversion is the C2.5 closure. The test name + lane stay so the
+    git-log / dispatcher walk continues to dispatch through this pin,
+    but the assertions now pin the ADMITTED state.
     """
     from mtg_bot.cards.parser_source import _build_artifact_printing
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
@@ -270,15 +278,16 @@ def test_phase_4e_c2_all_fates_scroll_builder_gate_declines_on_any_teeth():
     printing = _build_artifact_printing(raw)
     aa0 = printing.activated_abilities[0]
 
-    # AA[0] bridge floor honest-declines on the "any" teeth.
-    assert _python_aa_to_safe_dict(aa0) is None, (
-        "Phase 4E C2 partial-FLIP teeth: AA[0] AddManaToPool "
-        "produces=(('any', 1),) must DECLINE at the bridge floor "
-        "(Rust validate_mana_symbol closed vocab — Phase 4E C2.5 "
-        "ships the ManaPool 'any' coin substrate)"
+    # AA[0] bridge floor: now ADMITS the "any" color post-C2.5.
+    aa0_dict = _python_aa_to_safe_dict(aa0)
+    assert aa0_dict is not None, (
+        "Phase 4E C2.5 closure: AA[0] AddManaToPool "
+        "produces=(('any', 1),) must ADMIT at the bridge floor "
+        "(Rust ManaPool 'any' coin substrate landed)"
     )
-    # Builder gate returns None → loader-side decline.
-    assert _carrier_aa_artifact_card_def(printing) is None
+    assert aa0_dict["effect"]["color"] == "any"
+    # Builder gate now ADMITS All-Fates Scroll.
+    assert _carrier_aa_artifact_card_def(printing) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +384,13 @@ def test_phase_4e_c2_add_mana_to_pool_admits_single_pair_closed_vocab():
 
 
 def test_phase_4e_c2_add_mana_to_pool_declines_any_color():
-    """**§6.5 #39 (decline side — "any" teeth).** ``AddManaToPool``
-    with an "any" color discriminator honest-declines at the bridge
-    floor — the Rust ``validate_mana_symbol`` closed vocab + the
-    ``ManaPool`` substrate gap is the underlying constraint; Phase
-    4E C2.5 closes the gap.
+    """**§6.5 #39 -- INVERTED at Phase 4E C2.5 (2026-05-26).** The
+    "any" teeth at the bridge floor's ``AddManaToPool`` forward arm
+    has CLOSED at C2.5 — the substrate landed (see commit
+    ``test_carrier_aa_phase_4e_substrate_cycle_2_5.py`` + the
+    ``ManaPool.any`` slot in ``state.rs``). The "any"-color AA now
+    ADMITS at the bridge floor; the test name + lane stay for git-log
+    continuity but the assertion flips.
     """
     from mtg_bot.cards.base import ActivatedAbility, ActivationCost
     from mtg_bot.effects.generic.mana import AddManaToPool
@@ -390,10 +401,12 @@ def test_phase_4e_c2_add_mana_to_pool_declines_any_color():
         effect=AddManaToPool(produces=(("any", 1),)),
         is_mana_ability=True,
     )
-    assert _python_aa_to_safe_dict(aa) is None, (
-        "Phase 4E C2 partial-FLIP teeth: 'any' color AddManaToPool "
-        "must DECLINE at the bridge floor"
+    aa_dict = _python_aa_to_safe_dict(aa)
+    assert aa_dict is not None, (
+        "Phase 4E C2.5 closure: 'any' color AddManaToPool must "
+        "ADMIT at the bridge floor (substrate landed)"
     )
+    assert aa_dict["effect"]["color"] == "any"
 
 
 def test_phase_4e_c2_add_mana_to_pool_declines_multi_pair():
@@ -543,16 +556,19 @@ def test_phase_4e_c2_all_fates_scroll_synthetic_w_variant_full_round_trip():
 
 
 def test_phase_4e_c2_all_fates_scroll_live_partial_flip_trace():
-    """**Per-card probe — live All-Fates Scroll partial-FLIP trace.**
-    Walks the live admit chain end-to-end and asserts:
+    """**Per-card probe -- INVERTED at Phase 4E C2.5 (2026-05-26).**
+    Pre-C2.5 the partial-FLIP teeth at AA[0]'s bridge floor closed the
+    cross-engine builder; post-C2.5 the substrate landed and All-Fates
+    Scroll FLIPS DECLINED → ADMITTED end-to-end.
+
+    Walks the live admit chain and asserts:
       1. Each AA passes the per-AA admit predicate.
       2. The printing-level Artifact admit predicate passes.
-      3. AA[0] fails the bridge floor (the "any" teeth).
-      4. The cross-engine builder returns None.
+      3. AA[0] now ADMITS at the bridge floor ("any" coin substrate).
+      4. The cross-engine builder returns a non-None CardDef.
 
-    This is the explicit teeth-trace for the partial-FLIP. The full
-    FLIP defers to Phase 4E C2.5 (Rust ``ManaPool`` "any" coin
-    substrate).
+    This is the explicit teeth-trace for the closure. The test name +
+    lane stay (git-log continuity) but the assertions flip.
     """
     from mtg_bot.cards.parser_source import _build_artifact_printing
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
@@ -577,8 +593,12 @@ def test_phase_4e_c2_all_fates_scroll_live_partial_flip_trace():
     # 2. Printing-level admit predicate: passes.
     assert _printing_is_bridge_simple_carrier_aa_artifact(printing) is True
     assert _printing_is_bridge_simple_carrier_aa_any(printing) is True
-    # 3. AA[0] bridge floor: declines on the "any" teeth.
-    assert _python_aa_to_safe_dict(aa0) is None
+    # 3. AA[0] bridge floor: now ADMITS post-C2.5 (the "any" coin
+    # substrate landed).
+    aa0_dict = _python_aa_to_safe_dict(aa0)
+    assert aa0_dict is not None
+    assert aa0_dict["effect"]["kind"] == "add_mana_to_pool"
+    assert aa0_dict["effect"]["color"] == "any"
     # AA[1] bridge floor: PASSES (the DrawCardsByConditionMultiplier
     # arm is fully wired at C1).
     aa1_dict = _python_aa_to_safe_dict(aa1)
@@ -587,10 +607,10 @@ def test_phase_4e_c2_all_fates_scroll_live_partial_flip_trace():
         aa1_dict["effect"]["kind"]
         == "draw_cards_by_condition_multiplier"
     )
-    # 4. Cross-engine builder: returns None (the all-or-nothing
-    # bridge-floor contract — AA[0] fails, builder declines the
-    # whole printing).
-    assert _carrier_aa_artifact_card_def(printing) is None
+    # 4. Cross-engine builder: now returns a non-None CardDef.
+    cd = _carrier_aa_artifact_card_def(printing)
+    assert cd is not None
+    assert cd.name == "All-Fates Scroll"
 
 
 # ---------------------------------------------------------------------------

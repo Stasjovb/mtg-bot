@@ -213,41 +213,35 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
         name for name, p in printings.items()
         if _carrier_aa_artifact_card_def(p) is not None
     )
-    assert set(loader_land_admits) == set(PHASE_1_3_ADMITTED_LAND_CARRIERS), (
-        f"Phase-4E-C2 LOADER-SIDE Land admit set diverged from "
-        f"baseline; got {loader_land_admits}, expected "
-        f"{sorted(PHASE_1_3_ADMITTED_LAND_CARRIERS)}"
+    # Phase 4E C2.5 (2026-05-26): The "any" coin substrate landed in
+    # Rust ManaPool; Gemstone Caverns (the only EoE Land whose AA[0]
+    # uses produces=(("any", 1),)) FLIPs at the cross-engine LAND
+    # builder gate. The Land admit set grows from 7 → 8.
+    expected_land_admits = sorted(
+        set(PHASE_1_3_ADMITTED_LAND_CARRIERS) | {"Gemstone Caverns"}
     )
-    # Phase 4E C2 partial-FLIP: All-Fates Scroll passes the Artifact
-    # admit predicate but the cross-engine builder STILL returns None
-    # on the "any" teeth → All-Fates Scroll absent from the loader-
-    # side Artifact admit set.
+    assert set(loader_land_admits) == set(expected_land_admits), (
+        f"Phase-4E-C2.5 LOADER-SIDE Land admit set diverged from "
+        f"baseline; got {loader_land_admits}, expected "
+        f"{expected_land_admits} (Gemstone Caverns FLIPs via the Rust "
+        f"ManaPool 'any' coin substrate at C2.5)"
+    )
+    # Phase 4E C2.5 FULL FLIP: All-Fates Scroll's AA[0] AddManaToPool
+    # 'any' forward arm admits at C2.5; the cross-engine builder
+    # ADMITS the printing end-to-end.
     #
-    # Phase 4C C2 FULL FLIP: Ghost Vacuum's two AAs both round-trip
-    # end-to-end via the bridge floor (Effect-class +
-    # sorcery_speed widens land at C2).
-    #
-    # Phase 4D C2 FULL FLIP (2026-05-26): Keys to the House passes the
-    # Artifact admit predicate AND the cross-engine builder (both AAs
-    # round-trip cleanly through the bridge floor — no "any" color
-    # teeth, no spend-restriction teeth; the
-    # ``LockOrUnlockDoorOfTargetRoomYouControl`` + ``SearchLibraryFor
-    # Card`` forward arms emit clean dicts).
-    #
-    # Combined: loader-side Artifact admit set = {Ghost Vacuum, Keys
-    # to the House} post-C2.
+    # Combined: loader-side Artifact admit set =
+    #   {Ghost Vacuum, Keys to the House, All-Fates Scroll} post-C2.5.
     expected_artifact_admits = sorted(
-        set(PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS) | {"Ghost Vacuum"}
+        set(PHASE_1_3_ADMITTED_ARTIFACT_CARRIERS)
+        | {"Ghost Vacuum", "All-Fates Scroll"}
     )
     assert set(loader_artifact_admits) == set(
         expected_artifact_admits
     ), (
-        f"Phase-4C-C2 + Phase-4D-C2 LOADER-SIDE Artifact admit set: "
-        f"expected {expected_artifact_admits} (Ghost Vacuum + Keys to "
-        f"the House FLIPs via the Phase-4C-C2 + Phase-4D-C2 combined "
-        f"Effect-class + sorcery_speed AA-rider widens); All-Fates "
-        f"Scroll absent on the 'any' color teeth at the bridge floor "
-        f"(Phase 4E C2.5 closes that gap); got {loader_artifact_admits}"
+        f"Phase-4E-C2.5 LOADER-SIDE Artifact admit set: expected "
+        f"{expected_artifact_admits} (Ghost Vacuum + Keys to the House "
+        f"+ All-Fates Scroll FLIPs); got {loader_artifact_admits}"
     )
 
 
@@ -301,15 +295,11 @@ PHASE_4_DECLINED_CARRIERS: tuple[str, ...] = (
 )
 
 
-# **Phase 4E C2 partial-FLIP (2026-05-26).** All-Fates Scroll moves
-# out of PHASE_4_DECLINED_CARRIERS at the per-AA admit predicate
-# level but STAYS DECLINED at the cross-engine builder gate via the
-# "any" color teeth in :func:`cross_engine._python_aa_to_safe_dict`'s
-# new ``AddManaToPool`` forward arm. The follow-up cycle (Phase 4E
-# C2.5 — Rust ManaPool "any" coin substrate) closes the gap.
-PHASE_4_BUILDER_GATE_DECLINED_CARRIERS = (
-    "All-Fates Scroll",      # Phase 4E C2 partial-FLIP teeth ("any")
-)
+# **Phase 4E C2.5 (2026-05-26) — partial-FLIP closure.** The Rust
+# ManaPool "any" coin substrate landed; All-Fates Scroll FLIPs
+# DECLINED → ADMITTED at the cross-engine builder gate. The tuple is
+# now empty (kept here for parametrize-walk continuity).
+PHASE_4_BUILDER_GATE_DECLINED_CARRIERS: tuple[str, ...] = ()
 
 
 if PHASE_4_DECLINED_CARRIERS:

@@ -16285,14 +16285,23 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
 }
 
 /// Validate that a string is one of the closed mana-color vocab
-/// (W/U/B/R/G/C). Returns the input on success; raises ValueError
-/// otherwise. Shared by `parse_mana_produced` and is callable from
-/// the `mana_produced` field validator.
+/// (W/U/B/R/G/C) or the "any" wildcard. Returns the input on success;
+/// raises ValueError otherwise. Shared by `parse_mana_produced` and is
+/// callable from the `mana_produced` field validator.
+///
+/// **Phase 4E Cycle 2.5 (2026-05-26) — "any" widen.** The "any"
+/// wildcard mirrors Python's `ManaCoin(color="any")` shape used by
+/// All-Fates Scroll's AA[0] `AddManaToPool(produces=(("any", 1),))`.
+/// Substrate-only landing — the `ManaPool` struct grew an `any: u8`
+/// slot and `push_coins` handles `b'a'`. Payment-time
+/// satisfies-any-color semantics (CR 106.5 wildcard) is a deferred
+/// follow-on cycle; this validator widen is the parser gate that
+/// unblocks the bridge round-trip.
 fn validate_mana_symbol(sym: &str) -> PyResult<()> {
     match sym {
-        "W" | "U" | "B" | "R" | "G" | "C" => Ok(()),
+        "W" | "U" | "B" | "R" | "G" | "C" | "any" => Ok(()),
         other => Err(PyValueError::new_err(format!(
-            "unknown mana symbol {other:?} in mana_produced; valid: W, U, B, R, G, C"
+            "unknown mana symbol {other:?} in mana_produced; valid: W, U, B, R, G, C, any"
         ))),
     }
 }

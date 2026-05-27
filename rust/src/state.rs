@@ -976,6 +976,28 @@ pub struct ManaPool {
     pub red: u8,
     pub green: u8,
     pub colorless: u8,
+    /// **Phase 4E Cycle 2.5 (2026-05-26) — "any" coin substrate.**
+    /// Wildcard mana ("Add one mana of any color" — All-Fates Scroll
+    /// AA[0], Chromatic Lantern, etc.). The denormalized count cache
+    /// mirrors the Python `ManaCoin(color="any")` shape. ASCII byte
+    /// discriminator is `b'a'` (lowercase, distinct from the closed
+    /// colored vocab `b'W'/b'U'/b'B'/b'R'/b'G'/b'C'` so a single-byte
+    /// `coin.color` switch is unambiguous).
+    ///
+    /// **Substrate-only landing (C2.5).** This slice ships the data
+    /// structure + push/drain semantics so the cross-engine bridge
+    /// can round-trip All-Fates Scroll's AA[0]
+    /// `AddManaToPool(produces=(("any", 1),))` through Rust's
+    /// `register_printing` → `parse_effect` → `apply_effect` →
+    /// `get_mana_pool` chain. Payment-time satisfies-any-color
+    /// semantics (the "any" coin can pay any colored requirement —
+    /// CR 106.5 wildcard) is a deferred follow-on cycle (the existing
+    /// `pay_mana_cost` / `pool_can_cover` / `auto_tap_pay_for_cost`
+    /// paths still see `any: 0` for every currently-admitted card; no
+    /// live admitted card today produces `b'a'` coins at resolve time
+    /// because the admit gate keeps All-Fates Scroll declined until
+    /// the satisfies-any-color follow-on lands at the payment surface).
+    pub any: u8,
     /// Insertion-ordered SoT — mirrors Python's `list[ManaCoin]`.
     /// `add_mana` appends; drain consumers that care about FIFO
     /// (Python `auto_tap_for_cost`'s generic drain) iterate this.
@@ -1004,6 +1026,12 @@ impl ManaPool {
             b'R' => &mut self.red,
             b'G' => &mut self.green,
             b'C' => &mut self.colorless,
+            // **Phase 4E C2.5 — "any" coin discriminator.** Mirrors
+            // Python's `ManaCoin(color="any")` wildcard. The lowercase
+            // ASCII byte `b'a'` is the single-byte discriminator (the
+            // closed colored vocab is all uppercase, so case alone
+            // distinguishes).
+            b'a' => &mut self.any,
             _ => return, // Defensive no-op on unknown byte.
         };
         *slot = slot.saturating_add(count);
@@ -1043,6 +1071,10 @@ impl ManaPool {
                     b'R' => &mut self.red,
                     b'G' => &mut self.green,
                     b'C' => &mut self.colorless,
+                    // **Phase 4E C2.5 — "any" coin drain.** Maintains
+                    // the `any` denormalized slot in lockstep with the
+                    // `coins` vec.
+                    b'a' => &mut self.any,
                     _ => {
                         removed += 1;
                         continue;
@@ -1104,6 +1136,12 @@ impl ManaPool {
         for _ in 0..self.colorless {
             self.coins.push(ManaCoin { color: b'C' });
         }
+        // **Phase 4E C2.5 — "any" coin rebuild.** Emit `b'a'` coins
+        // last in the canonical W/U/B/R/G/C/a rebuild order. The
+        // wildcard tier sits after the closed colored vocab.
+        for _ in 0..self.any {
+            self.coins.push(ManaCoin { color: b'a' });
+        }
     }
 
     /// Debug-only invariant check: `coins`'s per-color histogram
@@ -1120,6 +1158,7 @@ impl ManaPool {
             let mut r = 0u32;
             let mut g = 0u32;
             let mut c = 0u32;
+            let mut a = 0u32;
             for coin in &self.coins {
                 match coin.color {
                     b'W' => w += 1,
@@ -1128,6 +1167,7 @@ impl ManaPool {
                     b'R' => r += 1,
                     b'G' => g += 1,
                     b'C' => c += 1,
+                    b'a' => a += 1,
                     _ => {}
                 }
             }
@@ -1137,6 +1177,7 @@ impl ManaPool {
             debug_assert_eq!(r, self.red as u32, "ManaPool R drift");
             debug_assert_eq!(g, self.green as u32, "ManaPool G drift");
             debug_assert_eq!(c, self.colorless as u32, "ManaPool C drift");
+            debug_assert_eq!(a, self.any as u32, "ManaPool any drift");
         }
     }
 }

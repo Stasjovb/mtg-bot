@@ -115,7 +115,18 @@ _PHASE_4D_C2_FULL_FLIP_ARTIFACT_CARRIERS = (
 # + Artifact sub-predicate + dispatcher; STAY DECLINED at the cross-
 # engine builder gate (the "any" color teeth in the bridge floor's
 # AddManaToPool forward arm).
-_PHASE_4E_C2_BUILDER_DECLINE_CARRIERS = (
+#
+# **Phase 4E C2.5 (2026-05-26) — the partial-FLIP teeth closed.** The
+# Rust ManaPool "any" coin substrate landed; All-Fates Scroll FLIPs
+# DECLINED → ADMITTED at the cross-engine builder gate. The tuple is
+# now empty (kept here for git-log continuity).
+_PHASE_4E_C2_BUILDER_DECLINE_CARRIERS: tuple[str, ...] = ()
+
+# Phase 4E C2.5 FULL-FLIP carriers — pass every gate (dispatcher +
+# Artifact sub-predicate + cross-engine builder) post-Phase-4E-C2.5's
+# Rust ManaPool "any" coin substrate landing. All-Fates Scroll is the
+# sole Phase 4E carrier; its FULL FLIP lands at C2.5.
+_PHASE_4E_C2_5_FULL_FLIP_CARRIERS = (
     "All-Fates Scroll",
 )
 
@@ -222,23 +233,25 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"builder post-Phase 4D C2 (both AAs round-trip clean "
             f"through the bridge floor — full LOADER-SIDE FLIP)"
         )
-    # Phase 4E C2 partial-FLIP exception path — All-Fates Scroll
-    # passes the dispatcher (the per-AA admit gate widens) but
-    # declines at the cross-engine builder gate (the bridge floor's
-    # "any" color teeth in AddManaToPool forward arm).
+    # Phase 4E C2 partial-FLIP exception path — emptied at C2.5
+    # (All-Fates Scroll moved to _PHASE_4E_C2_5_FULL_FLIP_CARRIERS).
     elif card_name in _PHASE_4E_C2_BUILDER_DECLINE_CARRIERS:
+        # Dead branch post-C2.5 (the tuple is empty); kept for
+        # symmetry with the dispatcher walk taxonomy.
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True
+        assert traj._carrier_aa_artifact_card_def(p) is None
+    elif card_name in _PHASE_4E_C2_5_FULL_FLIP_CARRIERS:
+        # Phase 4E C2.5 FULL FLIP — All-Fates Scroll admits at every
+        # gate (Rust ManaPool 'any' coin substrate landed).
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
             f"{card_name} must PASS the Carrier-AA dispatcher post-"
-            f"Phase 4E C2's partial-FLIP widens (per-AA gate lifted "
-            f"is_mana_ability + AddManaToPool Effect-class teeth)"
+            f"Phase 4E C2.5's FULL FLIP"
         )
-        # But the cross-engine builder gate honest-declines on the
-        # "any" teeth.
-        assert traj._carrier_aa_artifact_card_def(p) is None, (
-            f"{card_name} must DECLINE at the cross-engine builder "
-            f"gate (the 'any' color teeth in the bridge floor's "
-            f"AddManaToPool forward arm). Phase 4E C2.5 closes the "
-            f"Rust ManaPool 'any' coin substrate gap."
+        assert traj._carrier_aa_artifact_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Artifact "
+            f"builder gate post-Phase 4E C2.5 (the 'any' color "
+            f"teeth in the bridge floor's AddManaToPool forward arm "
+            f"closed at C2.5 — Rust ManaPool gained an 'any' coin slot)"
         )
     elif card_name in _PHASE_4C_C2_FULL_FLIP_CARRIERS:
         # Phase 4C C2 FULL FLIP — Ghost Vacuum admits at every gate
@@ -269,23 +282,21 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
 def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     """**§6.4 #26 (subsystem-attribution exhaustive pin — LAND axis,
     LOADER-SIDE).** Walks the FULL live EoE pool and asserts EXACTLY
-    the 7-card Phase-3-close admit set passes the cross-engine
-    builder ``_carrier_aa_land_card_def`` (loader-side admit gate).
+    the post-Phase-4E-C2.5 admit set passes the cross-engine builder
+    ``_carrier_aa_land_card_def`` (loader-side admit gate).
 
-    Re-anchored to the loader-side admit gate at Phase 4E C2's
-    partial-FLIP landing (2026-05-26). The predicate-level admit
-    set may silently auto-grow under the C2 widens (the
-    ``AddManaToPool`` Effect-class admit matches live EoE mana-
-    ability lands like Crystal Quarry / Eldrazi Temple / Gemstone
-    Caverns / Sunken Citadel that pass the per-AA predicate but
-    decline at the bridge floor on multi-pair / spend_restriction /
-    "any" teeth); the loader-side admit set is what
-    ``_filter_deck_to_bridge_supported`` actually consults, NOT the
-    predicate alone.
+    **Phase 4E C2.5 (2026-05-26) — admit-set delta +1 on the LAND
+    axis.** The Rust ManaPool 'any' coin substrate landed; Gemstone
+    Caverns (the only EoE Land whose AA[0] uses
+    ``produces=(("any", 1),)``) FLIPs at the cross-engine builder
+    gate via the AddManaToPool 'any' forward arm. The other live EoE
+    mana-ability lands (Crystal Quarry / Eldrazi Temple / Sunken
+    Citadel) still decline at the builder on multi-pair /
+    spend_restriction / subtype-Cave teeth; the loader-side LAND
+    admit set is now 8 cards (7 Phase-3-close + Gemstone Caverns).
 
-    The Phase-3-close LOADER-SIDE positive set is exhaustive over the
-    live EoE pool — any Phase-4+ widen would surface here as a
-    silent auto-grow."""
+    Any further Phase-4+ widen that lights up additional builder-
+    admits surfaces here as a silent auto-grow."""
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity import trajectory as traj
 
@@ -295,10 +306,11 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
         for name, p in ps.items()
         if traj._carrier_aa_land_card_def(p) is not None
     )
-    assert admits == list(_PHASE_3_ADMIT_SET), (
-        f"Phase 3C C5 subsystem-attribution LOADER-SIDE LAND pin "
+    expected_post_c2_5 = sorted(set(_PHASE_3_ADMIT_SET) | {"Gemstone Caverns"})
+    assert admits == expected_post_c2_5, (
+        f"Phase 4E C2.5 subsystem-attribution LOADER-SIDE LAND pin "
         f"violated. _carrier_aa_land_card_def must admit EXACTLY "
-        f"the 7-card Phase-3-close set {list(_PHASE_3_ADMIT_SET)}, "
+        f"the post-C2.5 8-card set {expected_post_c2_5}, "
         f"got {admits}. A silent auto-grow indicates a Phase-4+ "
         f"widen landed without inverting this assertion — "
         f"investigate before merging."
@@ -330,13 +342,14 @@ def test_phase_3c_close_carrier_aa_artifact_admit_set_is_empty_over_eoe_pool():
         for name, p in ps.items()
         if traj._carrier_aa_artifact_card_def(p) is not None
     )
-    # Post-Phase-4C-C2 + Phase-4D-C2: Ghost Vacuum + Keys to the
-    # House each FULL FLIP at the loader-side Artifact builder gate
-    # (Effect-class + sorcery_speed widens land end-to-end). Phase 4E
-    # C2.5 ships the final +1 for All-Fates Scroll (Rust ManaPool
-    # "any" coin substrate).
+    # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5: Ghost Vacuum +
+    # Keys to the House + All-Fates Scroll each FULL FLIP at the
+    # loader-side Artifact builder gate. C2.5 lands the final +1 for
+    # All-Fates Scroll via the Rust ManaPool "any" coin substrate.
     expected_artifact_admits = sorted(
-        set(_PHASE_4D_C2_FULL_FLIP_ARTIFACT_CARRIERS) | {"Ghost Vacuum"}
+        set(_PHASE_4D_C2_FULL_FLIP_ARTIFACT_CARRIERS)
+        | {"Ghost Vacuum"}
+        | set(_PHASE_4E_C2_5_FULL_FLIP_CARRIERS)
     )
     assert admits == expected_artifact_admits, (
         f"Phase 3C C5 subsystem-attribution LOADER-SIDE ARTIFACT axis "
@@ -512,15 +525,16 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
             or traj._carrier_aa_artifact_card_def(p) is not None
         )
     )
-    # Post-Phase-4C-C2 + Phase-4D-C2: the LOADER-SIDE admit set grows
-    # from 7 to 9 (7-card Phase-3-close Land admits + Ghost Vacuum +
-    # Keys to the House as Artifact admits). All-Fates Scroll passes
-    # the Artifact predicate but honest-declines at the builder gate
-    # on "any" teeth (Phase 4E C2.5 closes that gap).
-    assert loader_admit_count == 9, (
-        f"Phase 3C close LOADER-SIDE admit-set size invariant "
-        f"violated: expected exactly 9 cards (7 Land + 2 Artifact: "
-        f"Ghost Vacuum + Keys to the House) post-Phase-4C-C2 + "
-        f"Phase-4D-C2, got {loader_admit_count}. Further Phase-4 "
-        f"sub-phase FLIPs MUST update this size in lockstep."
+    # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5: the LOADER-SIDE
+    # admit set grows from 7 to 11 (8 Land admits = 7-card Phase-3-
+    # close + Gemstone Caverns under the "any" coin substrate; 3
+    # Artifact admits = Ghost Vacuum + Keys to the House + All-Fates
+    # Scroll).
+    assert loader_admit_count == 11, (
+        f"Phase 4E C2.5 close LOADER-SIDE admit-set size invariant "
+        f"violated: expected exactly 11 cards (8 Land = 7 Phase-3 + "
+        f"Gemstone Caverns; 3 Artifact = Ghost Vacuum + Keys to the "
+        f"House + All-Fates Scroll) post-Phase-4E-C2.5, got "
+        f"{loader_admit_count}. Further Phase-4+ FLIPs MUST update "
+        f"this size in lockstep."
     )

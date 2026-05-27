@@ -80,8 +80,12 @@ fn slot_mut<'a>(
         "R" => Ok(&mut pool.red),
         "G" => Ok(&mut pool.green),
         "C" => Ok(&mut pool.colorless),
+        // **Phase 4E C2.5 — "any" wildcard slot.** Mirrors Python's
+        // `ManaCoin(color="any")`; substrate-only landing (payment-
+        // time satisfies-any-color is a deferred follow-on cycle).
+        "any" => Ok(&mut pool.any),
         other => Err(PyValueError::new_err(format!(
-            "unknown mana color {other:?}; valid: W, U, B, R, G, C"
+            "unknown mana color {other:?}; valid: W, U, B, R, G, C, any"
         ))),
     }
 }
@@ -107,6 +111,10 @@ impl GameState {
         d.set_item("R", pool.red)?;
         d.set_item("G", pool.green)?;
         d.set_item("C", pool.colorless)?;
+        // **Phase 4E C2.5 — "any" wildcard slot.** Emit the seventh
+        // key unconditionally so Python callers can rely on the shape
+        // (consistent with the W/U/B/R/G/C emit-all-keys discipline).
+        d.set_item("any", pool.any)?;
         Ok(d)
     }
 
@@ -129,6 +137,8 @@ impl GameState {
             "R" => b'R',
             "G" => b'G',
             "C" => b'C',
+            // **Phase 4E C2.5 — "any" wildcard byte.**
+            "any" => b'a',
             // Unreachable: `slot_mut` above already validated the
             // closed vocabulary. Belt-and-suspenders pattern.
             _ => unreachable!("slot_mut validated color vocabulary"),
@@ -177,6 +187,8 @@ impl GameState {
             "R" => b'R',
             "G" => b'G',
             "C" => b'C',
+            // **Phase 4E C2.5 — "any" wildcard byte.**
+            "any" => b'a',
             _ => unreachable!("slot_mut validated color vocabulary"),
         };
         let drained = pool.drain_first_n_color(color_byte, amount as u32);
@@ -440,6 +452,12 @@ impl GameState {
             "R" => b'R',
             "G" => b'G',
             "C" => b'C',
+            // **Phase 4E C2.5 — "any" wildcard byte.** A mana-producing
+            // permanent with `mana_produced=["any"]` taps to credit one
+            // wildcard coin (substrate-only — no live admitted card
+            // taps for "any" mana until the satisfies-any-color
+            // closure lands at the payment surface).
+            "any" => b'a',
             _ => unreachable!("slot_mut validated color vocabulary"),
         };
         player.mana_pool.push_coins(color_byte, 1);

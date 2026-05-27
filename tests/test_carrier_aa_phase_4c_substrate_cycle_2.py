@@ -536,23 +536,24 @@ def test_keys_to_the_house_still_declines_post_4c_c2(all_printings):
 
 
 def test_all_fates_scroll_still_declines_at_builder_post_4c_c2(all_printings):
-    """**No-silent-auto-grow pin (All-Fates Scroll -- Phase 4E
-    partial-FLIP).** All-Fates Scroll's per-AA predicate already
-    passes post-Phase-4E-C2; it STAYS DECLINED at the cross-engine
-    builder gate via the "any" coin teeth in the AddManaToPool
-    forward arm. The Phase-4C-C2 sorcery_speed widen does NOT flip
-    its builder-gate decline (the "any" teeth bite at a different
-    layer).
+    """**INVERTED at Phase 4E C2.5 (2026-05-26).** Pre-C2.5 the "any"
+    teeth at the bridge floor closed the cross-engine builder; post-
+    C2.5 the Rust ManaPool "any" coin substrate landed and the FLIP
+    closes. The Phase-4C-C2 sorcery_speed widen is unrelated to the
+    "any" teeth (a different layer), but this pin lived in the C2
+    file as a no-silent-auto-grow guard; flip-on-C2.5 keeps the lane.
     """
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
     from mtg_bot.parity.trajectory import _carrier_aa_artifact_card_def
 
     p = all_printings["All-Fates Scroll"]
     aa0 = p.activated_abilities[0]
-    # Bridge floor still honest-declines on "any" teeth.
-    assert _python_aa_to_safe_dict(aa0) is None
-    # Builder still returns None.
-    assert _carrier_aa_artifact_card_def(p) is None
+    # Bridge floor now ADMITS the "any" color post-C2.5.
+    aa0_dict = _python_aa_to_safe_dict(aa0)
+    assert aa0_dict is not None
+    assert aa0_dict["effect"]["color"] == "any"
+    # Builder now ADMITS All-Fates Scroll.
+    assert _carrier_aa_artifact_card_def(p) is not None
 
 
 def test_phase_1_3_admits_unchanged_post_4c_c2(all_printings):
