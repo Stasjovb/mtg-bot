@@ -3539,6 +3539,63 @@ PROBE_MODULES: tuple[Path, ...] = (
     # **MIRRORPOOL BLOCKED-SG tier: 1 (Mirrorpool) -> 0 ==
     # MIRRORPOOL CAMPAIGN FULL CLOSURE.**
     REPO_ROOT / "tests" / "test_mirrorpool_parity.py",
+    # **covered-by-construction-probe-writing-batch-3 (2026-05-27):**
+    # Five additional per-card real-EoE cross-engine byte-equal probes
+    # for cards previously honest-stopped on "PumpTargetCreatureUntilEOT
+    # bit-identical to PROBED Dark Endurance" grounds (BBBB drop list).
+    # Same lane discipline as batches 1+2: per-slug attribution credits
+    # a PROBED slot per-printing, no engine changes, no Rust changes,
+    # no substrate widens. Each module carries a canonical
+    # ``test_cross_engine_real_eoe_<slug>_..._parity`` function that
+    # binds the live EoE printing via the module-scope
+    # ``_PRINTINGS = get_active_source().get_printings()`` idiom (the
+    # ``_probe_module_probed_cards_via_module_scope_binding`` widen
+    # accepts it) + drives a synthetic Instant carrier constructed from
+    # the bridge spell-effect dict on BOTH engines via the Dark
+    # Endurance / OOO bridge-narrowing discipline (granted_keywords +
+    # you_control_only + draw_if_target_has_plus_one_counter riders
+    # all dropped at the bridge boundary — both engines apply the SAME
+    # power_bonus/toughness_bonus mutation with no keyword divergence):
+    #
+    #   * ``test_give_in_to_violence_parity.py`` — Give In to Violence
+    #     ({1}{B} Instant); PumpTargetCreatureUntilEOT(power_bonus=2,
+    #     toughness_bonus=2, granted_keywords={lifelink}).  Mirrors the
+    #     PROBED Dark Endurance probe (QQQ); the +2/+2 magnitude is the
+    #     distinguishing field value.
+    #   * ``test_rig_for_war_parity.py`` — Rig for War ({1}{R} Instant);
+    #     PumpTargetCreatureUntilEOT(power_bonus=3, toughness_bonus=0,
+    #     granted_keywords={first strike, reach}).  The +3/+0 magnitude
+    #     distinguishes the per-slug credit.
+    #   * ``test_violent_urge_parity.py`` — Violent Urge ({R} Instant);
+    #     PumpTargetCreatureUntilEOT(power_bonus=1, toughness_bonus=0,
+    #     granted_keywords={first strike}).  The +1/+0 magnitude
+    #     distinguishes the per-slug credit; BBBB explicitly drop-listed
+    #     this card on "honest exhaustion" grounds, but the post-flip-
+    #     reclassification-scout precedent (batch-1/2) overrides per
+    #     the slug-credit rule.
+    #   * ``test_horrid_vigor_parity.py`` — Horrid Vigor ({1}{G} Instant);
+    #     PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
+    #     granted_keywords={indestructible, deathtouch}).  The (0, 0)
+    #     pump short-circuits as a pure no-op on Rust per
+    #     cross_engine.py:2009-2010; the probe asserts byte-equality on
+    #     the spell carrier's stack -> graveyard movement (the keyword
+    #     grants are bridge-invisible).
+    #   * ``test_dual_sun_technique_parity.py`` — Dual-Sun Technique
+    #     ({1}{W} Instant); PumpTargetCreatureUntilEOT(power_bonus=0,
+    #     toughness_bonus=0, granted_keywords={double strike},
+    #     you_control_only=True,
+    #     draw_if_target_has_plus_one_counter=1).  Like Horrid Vigor,
+    #     (0, 0) short-circuits on Rust; the you_control_only flag and
+    #     the conditional-draw rider are both bridge-narrowed away.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens. Net delta: +5
+    # PROBED / -5 covered_by_construction.
+    REPO_ROOT / "tests" / "test_give_in_to_violence_parity.py",
+    REPO_ROOT / "tests" / "test_rig_for_war_parity.py",
+    REPO_ROOT / "tests" / "test_violent_urge_parity.py",
+    REPO_ROOT / "tests" / "test_horrid_vigor_parity.py",
+    REPO_ROOT / "tests" / "test_dual_sun_technique_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
