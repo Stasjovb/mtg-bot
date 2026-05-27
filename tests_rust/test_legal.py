@@ -7,12 +7,18 @@ order exactly (Action types in the same sequence with the same
 per-type tie-breaking) for trajectory parity in
 ``scripts/parity_smoke.py``.
 
-**Slice scope (rust(legal-decisions-skeleton + cast-spell)).**
+**Slice scope (rust(legal-decisions-skeleton + cast-spell + G1)).**
 ``PassPriority`` + ``PlayLand`` + base ``CastSpell`` (no alt-cost
 flags — all six defaulted: ``use_warp=False, kicked=False,
-cast_for_free=False, use_impending=False, cast_room_half=None``).
-``ActivateAbility``, ``DeclareAttackers``, ``DeclareBlockers``,
-alt-cost CastSpell variants grow in follow-up slices.
+cast_for_free=False, use_impending=False, cast_room_half=None``)
++ ``ActivateAbility`` + the **G1 factored per-creature combat
+decisions** (``attacker_decision`` / ``blocker_decision``) — the
+post-G1 model where the legacy whole-action
+``DeclareAttackers`` / ``DeclareBlockers`` enumerations are GONE
+from ``legal_decisions``. The B3 Python provider
+(``RustGameStateAdapter`` sibling slice) owns finalize-to-whole-
+action accumulation; the whole-action ``apply_action`` arms remain
+for the Python-sourced single-script-replay harness.
 
 **Emission-order audit vs Python.**  Mirrors
 ``src/mtg_bot/legal.py:legal_actions``:
@@ -794,32 +800,28 @@ def test_legal_decisions_cast_spell_works_for_player_1(synthetic_state):
     assert cast_spell["card_id"] in p1_hand_ids
 
 
-# --- DeclareAttackers emission --------------------------------------
+# --- AttackerDecision emission (post-G1 factored shape) -------------
 #
-# rust(legal-decisions-declare-attackers) — extends `legal_decisions`
-# to emit `DeclareAttackers` action dicts during the
-# DECLARE_ATTACKERS phase. **Deliberate divergence from Python**:
-# Python's `legal_actions` (in `src/mtg_bot/legal.py`) does NOT emit
-# DeclareAttackers — the engine.py docstring (lines 10-19) explicitly
-# says the combat-declaration actions "aren't enumerable as legal
-# moves because their decision space is combinatorial," and Python
-# uses a factored search-side approach in
-# `src/mtg_bot/search/combat_decisions.py` (`AttackerDecision` —
-# one per eligible attacker, 2 branches each — feeds MCTS at search
-# time and the adapter accumulates them into a single engine-level
-# `DeclareAttackers(frozenset[int])`).
-#
-# For the Rust port's first-slice we emit a powerset enumeration so
-# `legal_decisions` covers the DECLARE_ATTACKERS phase uniformly.
-# With N eligible attackers and N <= 4, all 2^N subsets emit. With
-# N > 4, only the two canonical extremes (empty + full) emit so the
-# dict count stays bounded. Future slices replace this with the
-# factored-search shape (one AttackerDecision-style action per
-# eligible attacker).
+# rust(legal-decisions-factored-combat) — `legal_decisions` emits
+# factored per-attacker `attacker_decision` dicts during the
+# DECLARE_ATTACKERS phase, byte-compatible with Python's
+# `AttackerDecision` factored search seam
+# (`src/mtg_bot/search/combat_decisions.py:44-55` +
+# `engine_adapter.py:808-814`). Each call surfaces exactly two
+# decisions for the HEAD pending attacker (smallest-id eligible —
+# mirrors the adapter's `_pending_attackers = sorted(o.id for o in
+# eligible)`): `attack=True` then `attack=False`. The B3 Python
+# provider (RustGameStateAdapter sibling slice) accumulates these
+# per-attacker decisions and finalizes them into a single
+# whole-action `declare_attackers` apply at the accumulation
+# boundary (state_ops_actions.rs:2260-2289). The legacy 2^N
+# powerset + DECLARE_ATTACKERS_POWERSET_CAP are GONE
+# (state_ops_legal.rs:499-518).
 #
 # Eligibility mirrors `src/mtg_bot/combat.py:eligible_attackers`
 # (lines 15-23): on active player's battlefield, is a Creature, not
-# tapped, not summoning-sick OR has haste. Defender (CR 702.3) and
+# tapped, not summoning-sick OR has haste, NOT defender (CE17
+# enumeration-time filter at state_ops_legal.rs:224-238). Other
 # continuous "can't attack" restrictions are deferred to the
 # `declare_attacker` primitive's per-id apply-time gate.
 
@@ -941,10 +943,12 @@ def test_legal_decisions_declare_attackers_phase_zero_creatures_emits_empty_subs
     engine,
 ):
     """DECLARE_ATTACKERS phase with NO eligible attackers (empty
-    battlefield): emit ONE DeclareAttackers (empty set) + PassPriority
-    = 2 actions total. The powerset of the empty set is {{}}, a
-    one-element set containing only the empty subset — bit-for-bit
-    what `for bitmask in 0..1` yields."""
+    battlefield): post-G1 the factored per-creature emission emits
+    ZERO `attacker_decision` dicts when no creature is eligible
+    (state_ops_legal.rs:258-261 — "Zero eligible attackers ⇒ NO
+    combat dict emitted"). Only PassPriority remains. The legacy
+    whole-action `declare_attackers` shape is gone — the B3 Python
+    provider owns finalize-to-whole-action accumulation."""
     state, _, _, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=[],  # empty battlefield
@@ -954,9 +958,10 @@ def test_legal_decisions_declare_attackers_phase_zero_creatures_emits_empty_subs
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    assert kinds == ["pass_priority", "declare_attackers"]
-    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
-    assert da["attacker_ids"] == []
+    assert kinds == ["pass_priority"]
+    # Per-creature model: no attacker_decision dicts when zero eligible.
+    assert "attacker_decision" not in kinds
+    assert "declare_attackers" not in kinds
 
 
 # --- 24. DECLARE_ATTACKERS + 1 untapped creature --------------------
@@ -966,10 +971,13 @@ def test_legal_decisions_declare_attackers_phase_one_eligible_emits_two_subsets(
     engine,
 ):
     """DECLARE_ATTACKERS phase with 1 untapped non-sick creature:
-    emit 2 DeclareAttackers dicts (empty + full = 2^1) +
-    PassPriority = 3 total. Locks in: (a) emission count = 2^N
-    when N <= 4, (b) PassPriority is still at index 0, (c) the full
-    subset carries exactly the eligible creature's id."""
+    post-G1 the factored per-creature emission emits exactly 2
+    `attacker_decision` dicts for the HEAD pending attacker (the
+    only eligible creature) — `attack=True` then `attack=False`
+    (state_ops_legal.rs:252-260). PassPriority + 2 decisions = 3
+    actions total. The fan-out is fixed at 2 regardless of how many
+    eligible creatures are on the board — the head-only-emission
+    factored shape replaces the legacy 2^N powerset."""
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -979,12 +987,13 @@ def test_legal_decisions_declare_attackers_phase_one_eligible_emits_two_subsets(
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    assert kinds.count("declare_attackers") == 2
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
-    # 2^1 powerset: empty + {bear}.
-    assert subsets == {(), (bf_ids[0],)}
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"]
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    # Both dicts target the (only) eligible creature.
+    assert all(d["attacker_id"] == bf_ids[0] for d in ads)
+    # The `attack=True`-first then `attack=False` order (mirrors the
+    # B3 Python adapter at engine_adapter.py:811-814).
+    assert [d["attack"] for d in ads] == [True, False]
 
 
 # --- 25. DECLARE_ATTACKERS + 2 untapped creatures -------------------
@@ -994,9 +1003,15 @@ def test_legal_decisions_declare_attackers_phase_two_eligible_emits_four_subsets
     engine,
 ):
     """DECLARE_ATTACKERS phase with 2 untapped non-sick creatures:
-    emit 4 DeclareAttackers dicts (powerset of 2^2 = 4) +
-    PassPriority. Subsets: {}, {A}, {B}, {A,B}. Locks in the cap-
-    just-below-threshold behavior."""
+    post-G1 the factored emission still emits exactly 2
+    `attacker_decision` dicts — both targeting the HEAD pending
+    attacker (smallest-id eligible). Fan-out is fixed at 2
+    regardless of board width; the legacy 2^N powerset is GONE
+    (state_ops_legal.rs:262-267: "No cap, no dropped middle. The
+    factored shape has a fixed fan-out of 2 per `legal_decisions`
+    call regardless of board width"). Subsequent creatures are
+    reached through MCTS depth as accumulation accrues — not by
+    breadth in a single emission."""
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
@@ -1006,12 +1021,12 @@ def test_legal_decisions_declare_attackers_phase_two_eligible_emits_four_subsets
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    assert kinds.count("declare_attackers") == 4
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
-    a, b = bf_ids[0], bf_ids[1]
-    assert subsets == {(), (a,), (b,), (a, b)}
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"]
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    # Head pending attacker == smallest-id eligible == bf_ids[0].
+    head = min(bf_ids)
+    assert all(d["attacker_id"] == head for d in ads)
+    assert [d["attack"] for d in ads] == [True, False]
 
 
 # --- 26. DECLARE_ATTACKERS + tapped creature excluded ---------------
@@ -1022,8 +1037,9 @@ def test_legal_decisions_declare_attackers_tapped_creature_is_excluded(
 ):
     """A tapped creature can't attack (CR 508.1a). With only one
     creature on the battlefield and it tapped, the eligible set is
-    empty → emit only the empty subset, mirroring the zero-eligible
-    case in test 23."""
+    empty → ZERO `attacker_decision` dicts emit (per-creature model:
+    no head pending attacker → no factored decisions). Only
+    PassPriority remains. Mirrors the zero-eligible case in test 23."""
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1035,10 +1051,9 @@ def test_legal_decisions_declare_attackers_tapped_creature_is_excluded(
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    # Tapped creature -> no eligible -> just the empty subset.
-    assert kinds == ["pass_priority", "declare_attackers"]
-    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
-    assert da["attacker_ids"] == []
+    # Tapped creature -> no eligible -> no attacker_decision dicts.
+    assert kinds == ["pass_priority"]
+    assert "attacker_decision" not in kinds
 
 
 # --- 27. Summoning-sick creature WITHOUT haste excluded -------------
@@ -1101,12 +1116,12 @@ def test_legal_decisions_declare_attackers_summoning_sick_without_haste_excluded
 
     actions = state.legal_decisions(0)
 
-    # Sick bear without haste is excluded → only the empty subset
-    # emits (n=0 eligible).
+    # Sick bear without haste is excluded → no eligible creature →
+    # zero `attacker_decision` dicts (per-creature model: no head
+    # pending attacker → no factored decisions).
     kinds = _kinds(actions)
-    assert kinds == ["pass_priority", "declare_attackers"]
-    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
-    assert da["attacker_ids"] == []
+    assert kinds == ["pass_priority"]
+    assert "attacker_decision" not in kinds
 
 
 # --- 28. Summoning-sick creature WITH haste included ----------------
@@ -1161,11 +1176,13 @@ def test_legal_decisions_declare_attackers_haste_creature_included(
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    # Haste creature is eligible despite sick → full 2^1 powerset.
-    assert kinds.count("declare_attackers") == 2
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
-    assert subsets == {(), (hasty_id,)}
+    # Haste creature is eligible despite sick → 2 attacker_decision
+    # dicts emit (attack=True then attack=False) for the haste bear
+    # as the (sole) head pending attacker.
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"]
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    assert all(d["attacker_id"] == hasty_id for d in ads)
+    assert [d["attack"] for d in ads] == [True, False]
 
 
 # --- 28b. CE17 closure — defender keyword excluded from eligibility -
@@ -1181,12 +1198,11 @@ def test_legal_decisions_declare_attackers_defender_creature_excluded(
     effective_keywords(...)`` and the apply-time gate at
     ``state_ops_combat.rs:639-641``.
     Board: a normal ``Vanilla Bear`` (eligible) + a ``Defender Wall``
-    (CR 702.3 — can't attack) untapped on p0's battlefield. Expected
-    emission: powerset of {bear} = ``{(), (bear_id,)}`` — i.e. only
-    2 ``declare_attackers`` dicts emit, and NEITHER contains the
-    defender's id. Pre-CE17 closure the enumerator would have emitted
-    the full 2^2 powerset including ``(defender_id,)`` and
-    ``(bear_id, defender_id)``; CE17 (I40) closes that.
+    (CR 702.3 — can't attack) untapped on p0's battlefield. Post-G1
+    the per-creature factored emission emits 2 `attacker_decision`
+    dicts for the HEAD pending attacker (smallest-id eligible); the
+    defender's id must NOT appear in any decision (it's filtered out
+    of the eligible set, never reachable as the head).
     """
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
@@ -1199,24 +1215,26 @@ def test_legal_decisions_declare_attackers_defender_creature_excluded(
 
     kinds = _kinds(actions)
     assert kinds[0] == "pass_priority"
-    # Defender excluded → 2^1 (only the bear) = 2 subsets.
-    assert kinds.count("declare_attackers") == 2, (
-        f"expected 2 declare_attackers (powerset of the one non-defender "
-        f"attacker), got {kinds.count('declare_attackers')} from actions={actions}"
+    # Defender excluded → only the bear is eligible → head is the
+    # bear → exactly 2 attacker_decision dicts emit, both targeting
+    # the bear, both with bear_id (defender_id never appears).
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"], (
+        f"expected [pass_priority, attacker_decision, attacker_decision] "
+        f"(head pending attacker = bear; defender filtered out), "
+        f"got {kinds} from actions={actions}"
     )
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    subsets = {tuple(sorted(d["attacker_ids"])) for d in das}
-    # Only legal subsets emit: empty and {bear}.
-    assert subsets == {(), (bear_id,)}, (
-        f"defender id {defender_id} unexpectedly in subsets {subsets}; "
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    # Both dicts target the bear (head), not the defender.
+    assert all(d["attacker_id"] == bear_id for d in ads), (
+        f"defender id {defender_id} unexpectedly emitted in attacker_decision; "
         f"CE17 / I40 contract: defender excluded from eligibility per "
         f"CR 702.3 (mirror of state_ops_combat.rs:639-641 apply-time gate)"
     )
-    # Belt-and-braces: defender_id absent from EVERY emitted subset.
-    for subset in subsets:
-        assert defender_id not in subset, (
+    # Belt-and-braces: defender_id absent from EVERY emitted decision.
+    for d in ads:
+        assert d["attacker_id"] != defender_id, (
             f"CE17 regression: defender id {defender_id} leaked into "
-            f"declare_attackers subset {subset}"
+            f"attacker_decision {d}"
         )
 
 
@@ -1288,11 +1306,15 @@ def test_legal_decisions_declare_attackers_off_turn_emits_no_declare_attackers(
 def test_legal_decisions_declare_attackers_cap_above_threshold_emits_two_subsets(
     engine,
 ):
-    """With N > DECLARE_ATTACKERS_POWERSET_CAP (= 4) eligible
-    attackers, only the empty + full subsets emit. Confirms the cap
-    keeps `legal_decisions` bounded at 2 dicts even on a wide
-    board, instead of exploding to 2^N. Builds a 5-creature board
-    (N = 5 > cap = 4)."""
+    """Post-G1 the legacy `DECLARE_ATTACKERS_POWERSET_CAP` (= 4) is
+    gone (state_ops_legal.rs:499-518). The per-creature factored
+    emission has a fixed fan-out of 2 regardless of how many
+    eligible attackers there are on the board: 2
+    `attacker_decision` dicts for the HEAD pending attacker
+    (smallest-id eligible). This test rebroadcasts the same
+    fan-out-independence-of-board-width invariant the original
+    cap-test pinned, but against the new model — a 5-creature
+    board emits 2 decisions for the head, not 2^5 = 32 of anything."""
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"] * 5,
@@ -1302,13 +1324,12 @@ def test_legal_decisions_declare_attackers_cap_above_threshold_emits_two_subsets
     actions = state.legal_decisions(0)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    # Capped: just 2 DeclareAttackers dicts (empty + everyone).
-    assert kinds.count("declare_attackers") == 2
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    subsets = [tuple(sorted(d["attacker_ids"])) for d in das]
-    assert () in subsets
-    assert tuple(sorted(bf_ids)) in subsets
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"]
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    # Head pending attacker == smallest-id eligible.
+    head = min(bf_ids)
+    assert all(d["attacker_id"] == head for d in ads)
+    assert [d["attack"] for d in ads] == [True, False]
 
 
 # --- 32. Round-trip every emitted DeclareAttackers via apply_action -
@@ -1317,10 +1338,13 @@ def test_legal_decisions_declare_attackers_cap_above_threshold_emits_two_subsets
 def test_legal_decisions_declare_attackers_dicts_round_trip_via_apply_action(
     engine,
 ):
-    """Every DeclareAttackers dict from `legal_decisions` must be a
-    valid input to `apply_action` (regression for the round-23
-    declare-attackers bridge). For the FULL-subset dict in particular,
-    applying it should mark the attackers in `state.attackers`."""
+    """Every `attacker_decision` dict from `legal_decisions` must be
+    a valid input to `apply_action`. Post-G1 the round-trip target
+    is the per-creature factored shape (state_ops_actions.rs:2260-
+    2289): `attack=True` dispatches the same `declare_attacker`
+    primitive the legacy whole-action arm used; `attack=False` is a
+    no-op. Applying the `attack=True` decision for the head
+    creature must add it to `state.get_attackers()`."""
     state, _, bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
@@ -1328,16 +1352,33 @@ def test_legal_decisions_declare_attackers_dicts_round_trip_via_apply_action(
     _put_bf_into_declare_attackers(state, 0)
 
     actions = state.legal_decisions(0)
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    # Find the full-set DeclareAttackers (2 ids).
-    full_da = max(das, key=lambda d: len(d["attacker_ids"]))
-    assert sorted(full_da["attacker_ids"]) == sorted(bf_ids)
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    assert len(ads) == 2
+    # Find the attack=True dict for the head.
+    head = min(bf_ids)
+    attack_true = next(d for d in ads if d["attack"] is True)
+    assert attack_true["attacker_id"] == head
+    attack_false = next(d for d in ads if d["attack"] is False)
+    assert attack_false["attacker_id"] == head
 
-    # Apply it; the primitive must accept the dict shape without
-    # raising. We don't assert on the precise battlefield mutation
-    # (combat-state diagnostics live in test_combat.py); the
-    # round-trip itself is the regression target.
-    state.apply_action(full_da)
+    # Apply the attack=True dict — primitive accepts it without
+    # raising AND records the attacker (per the SoT-shared
+    # declare_attacker primitive call).
+    state.apply_action(attack_true)
+    assert head in state.get_attackers()
+
+    # Apply the attack=False dict on a fresh state — no-op (no error).
+    state2, _, bf_ids2, _ = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
+    )
+    _put_bf_into_declare_attackers(state2, 0)
+    actions2 = state2.legal_decisions(0)
+    ads2 = [a for a in actions2 if a["kind"] == "attacker_decision"]
+    attack_false2 = next(d for d in ads2 if d["attack"] is False)
+    state2.apply_action(attack_false2)
+    # attack=False is a no-op — the head is NOT in state.attackers.
+    assert min(bf_ids2) not in state2.get_attackers()
 
 
 # --- 33. DeclareAttackers carries the right wire shape --------------
@@ -1346,11 +1387,12 @@ def test_legal_decisions_declare_attackers_dicts_round_trip_via_apply_action(
 def test_legal_decisions_declare_attackers_dict_shape_is_minimal(
     engine,
 ):
-    """Every DeclareAttackers dict carries exactly two keys: `kind`
-    + `attacker_ids`. Mirrors `actions.rs:action_to_pydict`'s
-    DeclareAttackers arm. Catches a future-slice regression that
-    adds an extra wire key (e.g. `controller_id`) to the emitter
-    but forgets to update the round-trip parser."""
+    """Every `attacker_decision` dict carries exactly three keys:
+    `kind` + `attacker_id` + `attack`. Mirrors
+    `actions.rs:action_to_pydict`'s `AttackerDecision` arm
+    (actions.rs:781-792). Catches a future-slice regression that
+    adds an extra wire key to the emitter but forgets to update
+    the round-trip parser."""
     state, _, _, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1358,20 +1400,21 @@ def test_legal_decisions_declare_attackers_dict_shape_is_minimal(
     _put_bf_into_declare_attackers(state, 0)
 
     actions = state.legal_decisions(0)
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    assert len(das) >= 1
-    for d in das:
-        assert set(d.keys()) == {"kind", "attacker_ids"}
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    assert len(ads) >= 1
+    for d in ads:
+        assert set(d.keys()) == {"kind", "attacker_id", "attack"}
 
 
 # --- 34. P1 parity during their DECLARE_ATTACKERS ------------------
 
 
 def test_legal_decisions_declare_attackers_works_for_player_1(engine):
-    """P1's DECLARE_ATTACKERS phase: DeclareAttackers emits for P1's
-    eligible battlefield creatures (not P0's). Locks in the
-    enumerator's player-indexing — `self.players[idx].battlefield`
-    walks the correct player's creatures."""
+    """P1's DECLARE_ATTACKERS phase: `attacker_decision` dicts emit
+    for P1's eligible battlefield creatures (not P0's). Locks in
+    the enumerator's player-indexing — `self.players[idx].battlefield`
+    walks the correct player's creatures. Post-G1 the head pending
+    attacker is the smallest-id eligible on P1's side."""
     state, _, _, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1385,13 +1428,11 @@ def test_legal_decisions_declare_attackers_works_for_player_1(engine):
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    # 2^1 = 2 DeclareAttackers (empty + P1's bear).
-    assert kinds.count("declare_attackers") == 2
-    das = [a for a in actions if a["kind"] == "declare_attackers"]
-    full = [d for d in das if len(d["attacker_ids"]) == 1][0]
-    # The single eligible attacker is P1's bear, not P0's.
-    assert full["attacker_ids"] == [p1_bf_ids[0]]
+    assert kinds == ["pass_priority", "attacker_decision", "attacker_decision"]
+    ads = [a for a in actions if a["kind"] == "attacker_decision"]
+    # Both decisions target P1's bear (head pending attacker), not P0's.
+    assert all(d["attacker_id"] == p1_bf_ids[0] for d in ads)
+    assert [d["attack"] for d in ads] == [True, False]
 
 
 # --- 35. DECLARE_ATTACKERS + non-empty stack: no DeclareAttackers --
@@ -1659,6 +1700,11 @@ def test_legal_decisions_activate_ability_dict_shape_is_minimal(
     **CE20 follow-up Slice 6 (targeted-sacrifice variants)**: the dict
     shape grew an optional `sacrifice_target_id` key (`None` for every
     non-sacrifice-target activation).
+
+    **Carrier-AA Phase 4D Cycle 2 (2026-05-26)**: the dict shape grew
+    an optional `chosen_mode_idx` key (`None` for every non-modal
+    activation — door-half index for `LockOrUnlockDoorOfTargetRoom`
+    activations; see `actions.rs:507-520`).
     """
     _empty_hand(synthetic_state, 0)
     synthetic_state.set_phase(PHASE_MAIN1)
@@ -1673,12 +1719,14 @@ def test_legal_decisions_activate_ability_dict_shape_is_minimal(
             "ability_index",
             "target_creature_id",
             "sacrifice_target_id",
+            "chosen_mode_idx",
         }
         # Non-target activations (the synthetic state's mana-ability
         # bridge entries on Forests / Llanowar Elves) carry None on
-        # both target fields.
+        # both target fields plus chosen_mode_idx.
         assert a["target_creature_id"] is None
         assert a["sacrifice_target_id"] is None
+        assert a["chosen_mode_idx"] is None
 
 
 def test_legal_decisions_activate_ability_apply_action_taps_and_credits_pool(
@@ -1827,28 +1875,23 @@ def test_legal_decisions_activate_ability_emits_for_summoning_sick_land(
     assert len(aas) == 5
 
 
-# --- DeclareBlockers emission --------------------------------------
+# --- BlockerDecision emission (post-G1 factored shape) -------------
 #
-# rust(legal-decisions-declare-blockers) — extends `legal_decisions`
-# to emit `DeclareBlockers` action dicts during the
-# DECLARE_BLOCKERS phase. **Deliberate divergence from Python**:
-# Python's `legal_actions` (in `src/mtg_bot/legal.py`) does NOT emit
-# DeclareBlockers — same factored-search story as DeclareAttackers
-# (`src/mtg_bot/engine.py:10-19` is explicit). Python uses
-# `BlockerDecision` (one per eligible blocker, one branch per
-# attacker plus a "don't block" branch) in
-# `src/mtg_bot/search/combat_decisions.py` and accumulates them into
-# a single engine-level `DeclareBlockers(assignments=...)` at apply
-# time.
-#
-# For the Rust port we emit a direct enumeration of assignments. With
-# `n_blockers <= 3` AND `m_attackers <= 3` we emit all `(M+1)^N`
-# possibilities — each blocker picks one of M attackers OR "don't
-# block." With either dimension over its cap we emit only the
-# canonical "no blocks" assignment (an empty Vec). Combinatorial
-# growth is harder than DeclareAttackers's `2^N`: a 4×4 board is
-# `5^4 = 625`. Future slices replace this with the factored-search
-# shape.
+# rust(legal-decisions-factored-combat) — `legal_decisions` emits
+# factored per-blocker `blocker_decision` dicts during the
+# DECLARE_BLOCKERS phase, byte-compatible with Python's
+# `BlockerDecision` factored search seam
+# (`src/mtg_bot/search/combat_decisions.py:57-73` +
+# `engine_adapter.py:815-828`). Each call surfaces decisions ONLY
+# for the HEAD pending blocker (smallest-id eligible — mirrors the
+# adapter's `_pending_blockers = sorted(o.id for o in eligible)`).
+# The fan-out is `m+1` (one per currently-attacking creature, plus a
+# `attacker_id=None` "don't block" branch). The B3 Python provider
+# (RustGameStateAdapter sibling slice) accumulates these per-blocker
+# decisions and finalizes them into a single whole-action
+# `declare_blockers` apply at the accumulation boundary. The legacy
+# `(M+1)^N` product + caps are GONE
+# (state_ops_legal.rs:426-436).
 #
 # Eligibility mirrors `src/mtg_bot/combat.py:eligible_blockers`
 # (lines 26-32): on the defender's battlefield, is a Creature, not
@@ -1888,10 +1931,12 @@ def test_legal_decisions_declare_blockers_phase_zero_blockers_emits_no_blocks(
     engine,
 ):
     """DECLARE_BLOCKERS phase with NO eligible blockers but 1
-    attacker: emit ONE DeclareBlockers (empty assignments) +
-    PassPriority = 2 actions total. `(M+1)^N = (1+1)^0 = 1`
-    iteration of the product loop produces a single empty
-    assignment list."""
+    attacker: post-G1 the factored emission emits ZERO
+    `blocker_decision` dicts (state_ops_legal.rs:422-424: "Zero
+    eligible blockers ⇒ NO combat dict emitted"). Only PassPriority
+    remains. The legacy whole-action `declare_blockers` shape is
+    gone — the B3 Python provider owns finalize-to-whole-action
+    accumulation."""
     state, _, p0_bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1903,9 +1948,9 @@ def test_legal_decisions_declare_blockers_phase_zero_blockers_emits_no_blocks(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds == ["pass_priority", "declare_blockers"]
-    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
-    assert db["assignments"] == []
+    # No eligible blockers → no blocker_decision dicts.
+    assert kinds == ["pass_priority"]
+    assert "blocker_decision" not in kinds
 
 
 # --- 37. DECLARE_BLOCKERS + 1 blocker, 1 attacker -------------------
@@ -1914,10 +1959,11 @@ def test_legal_decisions_declare_blockers_phase_zero_blockers_emits_no_blocks(
 def test_legal_decisions_declare_blockers_one_one_emits_two_assignments(
     engine,
 ):
-    """1 blocker, 1 attacker: `(M+1)^N = (1+1)^1 = 2` assignments —
-    {} (don't block) and {(b, a)} (block). Plus PassPriority = 3
-    total. Locks in the product-shape with the smallest non-trivial
-    N×M."""
+    """1 blocker, 1 attacker: post-G1 the factored emission emits
+    `m+1 = 2` `blocker_decision` dicts for the HEAD pending blocker
+    (smallest-id eligible) — one per attacker (here just one), plus
+    a final `attacker_id=None` "don't block" branch
+    (state_ops_legal.rs:415-424). Plus PassPriority = 3 total."""
     state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1929,17 +1975,14 @@ def test_legal_decisions_declare_blockers_one_one_emits_two_assignments(
 
     kinds = _kinds(actions)
     assert kinds[0] == "pass_priority"
-    # 2 DeclareBlockers + 1 PassPriority = 3 total.
-    assert kinds.count("declare_blockers") == 2
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    # Set of (assignments-as-frozenset) — {} (no block) + {(b, a)}.
-    assignments_sets = {
-        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
-    }
-    assert assignments_sets == {
-        frozenset(),
-        frozenset({(p1_bf_ids[0], p0_bf_ids[0])}),
-    }
+    assert kinds.count("blocker_decision") == 2
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    head = min(p1_bf_ids)
+    # All decisions target the head pending blocker.
+    assert all(d["blocker_id"] == head for d in bds)
+    # One decision per attacker + a `None` ("don't block") branch.
+    attacker_ids_seen = [d["attacker_id"] for d in bds]
+    assert attacker_ids_seen == [p0_bf_ids[0], None]
 
 
 # --- 38. DECLARE_BLOCKERS + 2 blockers, 1 attacker ------------------
@@ -1948,9 +1991,16 @@ def test_legal_decisions_declare_blockers_one_one_emits_two_assignments(
 def test_legal_decisions_declare_blockers_two_blockers_one_attacker_emits_four(
     engine,
 ):
-    """2 blockers, 1 attacker: `(M+1)^N = (1+1)^2 = 4` assignments:
-    {}, {(b0,a)}, {(b1,a)}, {(b0,a),(b1,a)}. Locks in product growth
-    in the N dimension."""
+    """2 blockers, 1 attacker: post-G1 the factored emission still
+    only surfaces decisions for the HEAD pending blocker (smallest-
+    id eligible), so the fan-out is `m+1 = 2` — not the product-shape
+    `(M+1)^N = 4` the legacy whole-action enumeration emitted. The
+    second blocker becomes the new head only after the first
+    blocker's decision is applied (state_ops_legal.rs:413-435: "No
+    cap, no dropped middle. The factored shape has a fixed fan-out
+    of `m+1` per `legal_decisions` call regardless of blocker-board
+    width" — board breadth is reached through MCTS depth via
+    accumulation, not through breadth in a single emission)."""
     state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -1961,20 +2011,13 @@ def test_legal_decisions_declare_blockers_two_blockers_one_attacker_emits_four(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    assert kinds.count("declare_blockers") == 4
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    assignments_sets = {
-        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
-    }
-    a = p0_bf_ids[0]
-    b0, b1 = p1_bf_ids[0], p1_bf_ids[1]
-    assert assignments_sets == {
-        frozenset(),
-        frozenset({(b0, a)}),
-        frozenset({(b1, a)}),
-        frozenset({(b0, a), (b1, a)}),
-    }
+    assert kinds == ["pass_priority", "blocker_decision", "blocker_decision"]
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    # Head pending blocker == smallest-id eligible on P1's side.
+    head = min(p1_bf_ids)
+    assert all(d["blocker_id"] == head for d in bds)
+    # One decision per live attacker (here 1) + the `None` branch.
+    assert [d["attacker_id"] for d in bds] == [p0_bf_ids[0], None]
 
 
 # --- 39. DECLARE_BLOCKERS + 1 blocker, 2 attackers ------------------
@@ -1983,9 +2026,13 @@ def test_legal_decisions_declare_blockers_two_blockers_one_attacker_emits_four(
 def test_legal_decisions_declare_blockers_one_blocker_two_attackers_emits_three(
     engine,
 ):
-    """1 blocker, 2 attackers: `(M+1)^N = (2+1)^1 = 3` assignments:
-    {} (don't block), {(b,a0)}, {(b,a1)}. Locks in product growth
-    in the M dimension — each blocker picks among M+1 choices."""
+    """1 blocker, 2 attackers: post-G1 the factored emission emits
+    `m+1 = 3` `blocker_decision` dicts for the (only) blocker
+    (which is the head): one per attacking creature plus a final
+    `attacker_id=None` "don't block" branch. This is the headline
+    M-dimension fan-out — `m+1` (3) — and pins that the factored
+    shape walks each attacker as a per-decision branch (mirrors
+    `engine_adapter.py:816-828`)."""
     state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear", "Vanilla Bear"],
@@ -1996,19 +2043,22 @@ def test_legal_decisions_declare_blockers_one_blocker_two_attackers_emits_three(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds[0] == "pass_priority"
-    assert kinds.count("declare_blockers") == 3
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    assignments_sets = {
-        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
-    }
-    a0, a1 = p0_bf_ids[0], p0_bf_ids[1]
-    b = p1_bf_ids[0]
-    assert assignments_sets == {
-        frozenset(),
-        frozenset({(b, a0)}),
-        frozenset({(b, a1)}),
-    }
+    assert kinds == [
+        "pass_priority",
+        "blocker_decision",
+        "blocker_decision",
+        "blocker_decision",
+    ]
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    head = min(p1_bf_ids)
+    assert all(d["blocker_id"] == head for d in bds)
+    # One decision per declared attacker (in attackers-declaration
+    # order, which is p0_bf_ids order) + a final `None` branch.
+    assert [d["attacker_id"] for d in bds] == [
+        p0_bf_ids[0],
+        p0_bf_ids[1],
+        None,
+    ]
 
 
 # --- 40. Tapped blocker is excluded ---------------------------------
@@ -2018,9 +2068,10 @@ def test_legal_decisions_declare_blockers_tapped_blocker_excluded(
     engine,
 ):
     """A tapped creature can't block (CR 509.1a). With P1's only
-    creature tapped, eligible_blockers is empty → only the empty
-    assignments emit. Mirrors the DeclareAttackers tapped-creature
-    exclusion test."""
+    creature tapped, eligible_blockers is empty → ZERO
+    `blocker_decision` dicts emit (per-creature model: no head
+    pending blocker → no factored decisions). Mirrors the
+    DeclareAttackers tapped-creature exclusion test."""
     state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -2032,10 +2083,9 @@ def test_legal_decisions_declare_blockers_tapped_blocker_excluded(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    # Tapped blocker -> no eligible -> just the empty assignment.
-    assert kinds == ["pass_priority", "declare_blockers"]
-    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
-    assert db["assignments"] == []
+    # Tapped blocker -> no eligible -> no blocker_decision dicts.
+    assert kinds == ["pass_priority"]
+    assert "blocker_decision" not in kinds
 
 
 # --- 41. Non-creature is excluded -----------------------------------
@@ -2047,7 +2097,8 @@ def test_legal_decisions_declare_blockers_non_creature_excluded(
     """Only creatures can block (CR 509.1). A Forest (Land) on the
     defender's battlefield does NOT count toward the eligible-
     blockers set. With only a Forest + no creature, eligible is
-    empty → just the empty assignment."""
+    empty → ZERO `blocker_decision` dicts emit (per-creature
+    model)."""
     state, _, p0_bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -2058,9 +2109,8 @@ def test_legal_decisions_declare_blockers_non_creature_excluded(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds == ["pass_priority", "declare_blockers"]
-    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
-    assert db["assignments"] == []
+    assert kinds == ["pass_priority"]
+    assert "blocker_decision" not in kinds
 
 
 # --- 42. Summoning-sick creature IS included ------------------------
@@ -2138,14 +2188,13 @@ def test_legal_decisions_declare_blockers_summoning_sick_creature_included(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    # Sick bear IS eligible → full (1+1)^1 = 2 assignments emit.
-    assert kinds.count("declare_blockers") == 2
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    assignments_sets = {
-        frozenset(tuple(p) for p in d["assignments"]) for d in dbs
-    }
-    assert frozenset() in assignments_sets
-    assert frozenset({(p1_bear_id, p0_hasty_id)}) in assignments_sets
+    # Sick bear IS eligible → 2 blocker_decision dicts (m+1 = 1+1).
+    assert kinds == ["pass_priority", "blocker_decision", "blocker_decision"]
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    # The sick bear is the head pending blocker.
+    assert all(d["blocker_id"] == p1_bear_id for d in bds)
+    # One decision per attacker (the hasty bear) + the `None` branch.
+    assert [d["attacker_id"] for d in bds] == [p0_hasty_id, None]
 
 
 # --- 43. Cap kicks in: N > 3 OR M > 3 emits only no-blocks ---------
@@ -2154,36 +2203,42 @@ def test_legal_decisions_declare_blockers_summoning_sick_creature_included(
 def test_legal_decisions_declare_blockers_n_over_cap_emits_only_no_blocks(
     engine,
 ):
-    """`n_blockers > DECLARE_BLOCKERS_PRODUCT_CAP` (= 3): emit only
-    the "no blocks" empty assignment. Builds a 4-blocker / 1-
-    attacker board — full product would be `(1+1)^4 = 16` dicts,
-    capped to 1."""
-    state, _, p0_bf_ids, _ = _custom_registry_state(
+    """Post-G1 the legacy `DECLARE_BLOCKERS_PRODUCT_CAP` (= 3) is
+    gone (state_ops_legal.rs:426-436). A 4-blocker / 1-attacker
+    board still emits exactly `m+1 = 2` `blocker_decision` dicts
+    for the HEAD pending blocker — fan-out is independent of
+    blocker-board width N. The legacy "n_blockers > cap → emit
+    only the empty assignment" behavior is gone; the other 3
+    blockers are reached through MCTS depth as the head advances
+    via accumulation."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
-        p1_battlefield_printings=["Vanilla Bear"] * 4,  # N=4 > cap=3
+        p1_battlefield_printings=["Vanilla Bear"] * 4,
     )
     _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
 
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    # Capped: just 1 DeclareBlockers (the empty "no blocks" choice).
-    assert kinds == ["pass_priority", "declare_blockers"]
-    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
-    assert db["assignments"] == []
+    assert kinds == ["pass_priority", "blocker_decision", "blocker_decision"]
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    head = min(p1_bf_ids)
+    assert all(d["blocker_id"] == head for d in bds)
+    assert [d["attacker_id"] for d in bds] == [p0_bf_ids[0], None]
 
 
 def test_legal_decisions_declare_blockers_m_over_cap_emits_only_no_blocks(
     engine,
 ):
-    """`m_attackers > DECLARE_BLOCKERS_MAX_ATTACKERS` (= 3): emit
-    only the empty assignment. Builds a 1-blocker / 4-attacker
-    board — full product would be `(4+1)^1 = 5` dicts, capped to 1.
-    The M-dimension cap fires independently of the N-dimension cap."""
-    state, _, p0_bf_ids, _ = _custom_registry_state(
+    """Post-G1 the legacy `DECLARE_BLOCKERS_MAX_ATTACKERS` (= 3) is
+    gone (state_ops_legal.rs:426-436). A 1-blocker / 4-attacker
+    board emits `m+1 = 5` `blocker_decision` dicts for the (only)
+    blocker — one per declared attacker plus the `None` branch.
+    Fan-out scales linearly with attacker count, not as a product."""
+    state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
-        p0_battlefield_printings=["Vanilla Bear"] * 4,  # M=4 > cap=3
+        p0_battlefield_printings=["Vanilla Bear"] * 4,
         p1_battlefield_printings=["Vanilla Bear"],
     )
     _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
@@ -2191,9 +2246,14 @@ def test_legal_decisions_declare_blockers_m_over_cap_emits_only_no_blocks(
     actions = state.legal_decisions(1)
 
     kinds = _kinds(actions)
-    assert kinds == ["pass_priority", "declare_blockers"]
-    db = [a for a in actions if a["kind"] == "declare_blockers"][0]
-    assert db["assignments"] == []
+    # m+1 = 4+1 = 5 blocker_decision dicts.
+    assert kinds == ["pass_priority"] + ["blocker_decision"] * 5
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    head = p1_bf_ids[0]
+    assert all(d["blocker_id"] == head for d in bds)
+    # One decision per declared attacker (in attackers-declaration
+    # order, i.e. p0_bf_ids order) + a final `None` branch.
+    assert [d["attacker_id"] for d in bds] == list(p0_bf_ids) + [None]
 
 
 # --- 44. Wrong phase: no DeclareBlockers ---------------------------
@@ -2286,12 +2346,14 @@ def test_legal_decisions_declare_blockers_non_empty_stack_emits_no_declare_block
 def test_legal_decisions_declare_blockers_dicts_round_trip_via_apply_action(
     engine,
 ):
-    """Every DeclareBlockers dict from `legal_decisions` must be a
-    valid input to `apply_action` (regression for the round-23
-    declare-blockers bridge). The "block everything" dict in
-    particular should apply without raising — the primitive accepts
-    `[[blocker_id, attacker_id], ...]` and dispatches one
-    `declare_blocker` per pair."""
+    """Every `blocker_decision` dict from `legal_decisions` must be
+    a valid input to `apply_action`. Post-G1 the round-trip target
+    is the per-creature factored shape
+    (state_ops_actions.rs:2290-2319): `attacker_id=Some(atk)`
+    dispatches the same `declare_blocker` primitive the legacy
+    whole-action arm used; `attacker_id=None` is a no-op. Applying
+    the `attacker_id=Some` decision for the head blocker must
+    register the block in `state.get_blockers_for(atk)`."""
     state, _, p0_bf_ids, p1_bf_ids = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -2300,14 +2362,30 @@ def test_legal_decisions_declare_blockers_dicts_round_trip_via_apply_action(
     _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
 
     actions = state.legal_decisions(1)
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    # Find the non-empty-assignments dict.
-    full_db = max(dbs, key=lambda d: len(d["assignments"]))
-    assert len(full_db["assignments"]) == 1
-    # Apply it; the primitive must accept the dict shape without
-    # raising. Combat-state diagnostics live in test_combat.py — the
-    # round-trip itself is the regression target here.
-    state.apply_action(full_db)
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    # Find the block-Some dict and the None dict.
+    block_some = next(d for d in bds if d["attacker_id"] is not None)
+    block_none = next(d for d in bds if d["attacker_id"] is None)
+    # Both target the head pending blocker.
+    head = min(p1_bf_ids)
+    assert block_some["blocker_id"] == head
+    assert block_none["blocker_id"] == head
+
+    # Apply the block-Some dict — primitive accepts it without
+    # raising.
+    state.apply_action(block_some)
+
+    # Apply the None dict on a fresh state — no-op (no error).
+    state2, _, p0_bf_ids2, p1_bf_ids2 = _custom_registry_state(
+        engine,
+        p0_battlefield_printings=["Vanilla Bear"],
+        p1_battlefield_printings=["Vanilla Bear"],
+    )
+    _put_into_declare_blockers(state2, attacker_ids=p0_bf_ids2, defender_id=1)
+    actions2 = state2.legal_decisions(1)
+    bds2 = [a for a in actions2 if a["kind"] == "blocker_decision"]
+    block_none2 = next(d for d in bds2 if d["attacker_id"] is None)
+    state2.apply_action(block_none2)
 
 
 # --- 48. DeclareBlockers dict carries the right wire shape ---------
@@ -2316,11 +2394,12 @@ def test_legal_decisions_declare_blockers_dicts_round_trip_via_apply_action(
 def test_legal_decisions_declare_blockers_dict_shape_is_minimal(
     engine,
 ):
-    """Every DeclareBlockers dict carries exactly two keys: `kind`
-    + `assignments`. Mirrors `actions.rs:action_to_pydict`'s
-    DeclareBlockers arm so a future-slice regression that adds an
-    extra wire key (e.g. `blocker_order`) to the emitter but
-    forgets to update the round-trip parser trips loudly."""
+    """Every `blocker_decision` dict carries exactly three keys:
+    `kind` + `blocker_id` + `attacker_id`. Mirrors
+    `actions.rs:action_to_pydict`'s `BlockerDecision` arm
+    (actions.rs:794-808). Catches a future-slice regression that
+    adds an extra wire key to the emitter but forgets to update
+    the round-trip parser."""
     state, _, p0_bf_ids, _ = _custom_registry_state(
         engine,
         p0_battlefield_printings=["Vanilla Bear"],
@@ -2329,10 +2408,10 @@ def test_legal_decisions_declare_blockers_dict_shape_is_minimal(
     _put_into_declare_blockers(state, attacker_ids=p0_bf_ids, defender_id=1)
 
     actions = state.legal_decisions(1)
-    dbs = [a for a in actions if a["kind"] == "declare_blockers"]
-    assert len(dbs) >= 1
-    for d in dbs:
-        assert set(d.keys()) == {"kind", "assignments"}
+    bds = [a for a in actions if a["kind"] == "blocker_decision"]
+    assert len(bds) >= 1
+    for d in bds:
+        assert set(d.keys()) == {"kind", "blocker_id", "attacker_id"}
 
 
 # --- Edge-case coverage spanning multiple emission types ------------
@@ -2583,12 +2662,12 @@ def test_legal_decisions_declare_attackers_with_empty_bf_emits_pass_then_empty_s
 ):
     """Synthetic-like edge case: DECLARE_ATTACKERS phase with NO
     creatures on the active player's battlefield → exactly
-    `[PassPriority, DeclareAttackers([])]`. Extends test 23
-    (`...declare_attackers_phase_zero_creatures_emits_empty_subset`)
-    by also asserting the precise emission count = 2 and that no
-    other Action kind sneaks in (the powerset-of-empty edge case is
-    structurally identical to the cap-fires case, so this test
-    also doubles as a regression on the cap-vs-empty divergence)."""
+    `[PassPriority]`. Post-G1 zero eligible attackers ⇒ no
+    `attacker_decision` dict emitted at all
+    (state_ops_legal.rs:258-261); the priority window opens instead.
+    Extends test 23 by also asserting the precise emission count
+    and that no combat dict sneaks in (no hidden floor / no
+    legacy whole-action `declare_attackers` regression)."""
     import mtg_bot_engine as _engine
     registry = _engine.Registry()
     forest_pid = registry.register_printing({
@@ -2608,10 +2687,11 @@ def test_legal_decisions_declare_attackers_with_empty_bf_emits_pass_then_empty_s
 
     actions = state.legal_decisions(0)
 
-    assert _kinds(actions) == ["pass_priority", "declare_attackers"]
-    da = [a for a in actions if a["kind"] == "declare_attackers"][0]
-    assert da["attacker_ids"] == []
-    assert len(actions) == 2
+    assert _kinds(actions) == ["pass_priority"]
+    # No combat dicts in either legacy whole-action or new per-creature form.
+    assert "declare_attackers" not in _kinds(actions)
+    assert "attacker_decision" not in _kinds(actions)
+    assert len(actions) == 1
 
 
 # --- 59. PassPriority is ALWAYS emitted, exactly once, at index 0 --
