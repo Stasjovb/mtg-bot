@@ -3487,6 +3487,58 @@ PROBE_MODULES: tuple[Path, ...] = (
     # **SPACECRAFT BLOCKED-SG tier: 1 (Eternity Elevator) -> 0 ==
     # SPACECRAFT 8/8 CAMPAIGN FULL CLOSURE.**
     REPO_ROOT / "tests" / "test_the_eternity_elevator_parity.py",
+    # **Carrier-AA Phase 4B Cycle 5 (2026-05-26) -- Mirrorpool
+    # PROBED-tier flip; MIRRORPOOL CAMPAIGN FULL CLOSURE.** The
+    # Phase 4B C1 substrate landing (commit ``818b4c64``) shipped the
+    # Rust ``Effect::CreateTokenCopyOfTargetCreatureYouControl``
+    # target fan-out + validation + target-aware resolve + cross-
+    # engine forward arm for AA[1] (CR-707.5 token-creature-copy).
+    # The Phase 4B C2 admit-set partial widen (commit ``58988ade``)
+    # widened ``_carrier_aa_phase_1_effect_classes`` 13 -> 14 (adds
+    # ``CreateTokenCopyOfTargetCreatureYouControl``) -- Mirrorpool
+    # stayed DECLINED on AA[0]. The Phase 4B C3 Rust substrate landing
+    # (commit ``e5cd1c18``) shipped the
+    # ``Effect::CopyTargetInstantOrSorceryYouControl`` Effect variant
+    # + parse + ``to_pydict`` + stack-target fan-out + validation +
+    # push-on-resolve substrate + ``StackItem.is_copy`` audit for
+    # AA[0] (CR-707.2 spell-copy). The Phase 4B C4 admit-set FLIP
+    # (commit ``b17b0c66``) widened ``_carrier_aa_phase_1_effect_
+    # classes`` 14 -> 15 (adds
+    # ``CopyTargetInstantOrSorceryYouControl``) + the bridge forward
+    # + reverse arms + closed the FULL Mirrorpool FLIP DECLINED ->
+    # ADMITTED at the multi-AA all-or-nothing gate (the FIRST Phase-4
+    # multi-AA carrier to fully FLIP). This probe (per Phase 4B
+    # design doc §6.7) is the FIRST PROBE_MODULES-credited probe
+    # binding the Mirrorpool slug to BOTH carrier-AA Effect classes
+    # on the REAL parsed EoE printing + Rust register acceptance +
+    # loader end-to-end admit + TWO cross-engine byte-equal
+    # observable scenarios:
+    #
+    #   (AA[0]) spell-copy line -- Mirrorpool AA[0] activated against
+    #       a vanilla draw-1 Instant cast from p0's hand. Rust pushes
+    #       a copy onto the stack with ``is_copy=true`` per CR
+    #       707.2/707.10; Python short-circuits the spell_effect.
+    #       Post-drain byte-equal observables: Mirrorpool sac'd off
+    #       bf, ``{1}`` cast + ``{3}`` AA[0] mana drained, p0 drew 2
+    #       cards (effect resolved twice -- once from copy + once
+    #       from original), library shrank by 2, stack empty.
+    #   (AA[1]) token-copy line -- Mirrorpool AA[1] activated
+    #       against a vanilla Test Bear (2/2 Creature) on p0's bf.
+    #       Both engines mint a new token-copy of the Bear under
+    #       p0's control. Post-resolve byte-equal observables:
+    #       Mirrorpool sac'd off bf, ``{5}`` mana drained, original
+    #       Bear still on bf, new token-copy on bf with same printing
+    #       name as the Bear + summoning_sick=True, stack empty.
+    #
+    # AA[0]'s Python short-circuit SHAPE divergence (vs Rust's
+    # push-on-resolve) is documented in docs/SEARCH_LIMITATIONS.md
+    # under the Phase 4B C5 SL entry -- functionally equivalent for
+    # the fixture's draw-1 Instant; future modal-spell substrate
+    # widens may require a Python AA[0] port to the stack-push shape.
+    # Net delta: +1 PROBED / -1 covered_by_construction.
+    # **MIRRORPOOL BLOCKED-SG tier: 1 (Mirrorpool) -> 0 ==
+    # MIRRORPOOL CAMPAIGN FULL CLOSURE.**
+    REPO_ROOT / "tests" / "test_mirrorpool_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
