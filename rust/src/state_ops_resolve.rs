@@ -14855,18 +14855,69 @@ fn apply_effect(
                 Some(c) => c as usize,
                 None => state.active_player as usize,
             };
-            // Pick first creature on controller's bf.
-            let target_printing_id: Option<u32> = {
-                let bf = &state.players[cidx].battlefield;
-                let registry = &state.registry;
-                bf.iter().find_map(|obj| {
-                    let printing = registry.printings.get(obj.printing_id as usize)?;
-                    if printing.card_types.iter().any(|t| t == "Creature") {
-                        Some(obj.printing_id)
-                    } else {
-                        None
-                    }
-                })
+            // **Carrier-AA substrate Phase 4B Cycle 1 (2026-05-26).**
+            // Target-aware resolution path. When the activation seated
+            // a target id into ``current_resolve_payload_target_id``
+            // (via the Phase 4B C1 validation arm at
+            // ``state_ops_actions.rs::ActivateAbility``), re-validate
+            // and use it; CR 608.2b silent fizzle if the chosen target
+            // left the activator's bf or its printing is no longer a
+            // Creature. When no payload target is seated (substrate-
+            // fallback path used by direct-callers / synthetic pre-
+            // substrate tests), fall back to the deterministic-first-
+            // creature scan that landed in round 28 (back-compat: any
+            // pre-Phase-4B caller that built an ActivateAbility dict
+            // without a target_creature_id still drives the resolve
+            // arm through the same first-creature pick).
+            let target_printing_id: Option<u32> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(target_id) => {
+                    // Re-validate (CR 608.2b): target must STILL be on
+                    // the activator's bf AND its printing must STILL
+                    // be a Creature.
+                    let bf = &state.players[cidx].battlefield;
+                    let registry = &state.registry;
+                    bf.iter().find_map(|obj| {
+                        if obj.id != target_id {
+                            return None;
+                        }
+                        let printing = registry
+                            .printings
+                            .get(obj.printing_id as usize)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some(obj.printing_id)
+                        } else {
+                            None
+                        }
+                    })
+                }
+                None => {
+                    // Substrate-fallback path: deterministic first-
+                    // creature scan on controller's bf (pre-substrate
+                    // behavior; preserved for back-compat with the
+                    // round-28 caller surface).
+                    let bf = &state.players[cidx].battlefield;
+                    let registry = &state.registry;
+                    bf.iter().find_map(|obj| {
+                        let printing = registry
+                            .printings
+                            .get(obj.printing_id as usize)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some(obj.printing_id)
+                        } else {
+                            None
+                        }
+                    })
+                }
             };
             let Some(printing_id) = target_printing_id else {
                 return Ok(()); // no eligible target

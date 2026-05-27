@@ -15137,6 +15137,27 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.search import (
         SearchLibraryForCard,
     )
+    # **Phase 4B C1 widen (2026-05-26).** Add
+    # ``CreateTokenCopyOfTargetCreatureYouControl`` (Mirrorpool's AA[1]
+    # pilot Effect — Carrier-AA Phase 4B cycle per design doc §5.4).
+    # Unit-variant on the wire: ``{"kind":
+    # "create_token_copy_of_target_creature_you_control"}``. The Python
+    # class carries an optional ``additional_subtype: str | None =
+    # None`` field for the Mirror Room-shape rider; Rust's
+    # ``Effect::CreateTokenCopyOfTargetCreatureYouControl`` is a unit
+    # variant (Rust has no subtype-tracking on registry today — the
+    # ``additional_subtype`` rider is explicitly deferred per
+    # ``cards.rs:4446-4447``). The forward arm therefore HONESTLY
+    # DECLINES (returns None for the AA dict) when
+    # ``additional_subtype is not None`` to keep the round-trip byte-
+    # equal — the Rust variant cannot represent the rider so emitting
+    # the dict would lose the additional_subtype information silently.
+    # Mirrorpool's live AA[1] uses ``additional_subtype=None`` per the
+    # parser SoT verified at the design doc §2.1 row, so the live
+    # decline path is unreachable from production.
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
     # **Phase 4E C2 widen (2026-05-26).** Add ``AddManaToPool``
     # (All-Fates Scroll's AA[0] pilot Effect — Carrier-AA Phase 4E
     # cycle per design doc §5.7). Two-key dict per the round-21 mana-
@@ -15331,6 +15352,60 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # subclasses (consistent with the Phase-3A / 3B specificity
         # contract).
         effect_dict = {"kind": "becomes_copy_of_target_land"}
+    elif isinstance(effect, CreateTokenCopyOfTargetCreatureYouControl):
+        # **Carrier-AA substrate Phase 4B Cycle 1 (2026-05-26).**
+        # Forward-emit arm for Mirrorpool's AA[1] pilot effect (``{4}
+        # {C}, {T}, Sacrifice this land: Create a token that's a copy
+        # of target creature you control.``). Unit variant — only the
+        # ``kind`` discriminator on the wire. Target rides on the
+        # action-dict's ``target_creature_id`` slot at activation time
+        # (the generic single-target object-id slot, reused for the
+        # Phase-2a / Phase-3A / Phase-3C / Phase-4B / Phase-4C / Phase-
+        # 4D target-bearing siblings).
+        #
+        # **Substrate-only (Rust slice): Mirrorpool STAYS DECLINED at
+        # admit gate post-Phase-4B-C1.** The forward emit succeeds
+        # (Rust round-trip works) when ``additional_subtype is None``,
+        # but the admit predicate ``_aa_is_phase1_sub_shape_a`` still
+        # declines the live Mirrorpool printing because (a) C1 doesn't
+        # widen ``_carrier_aa_phase_1_effect_classes`` to include this
+        # Effect class AND (b) Mirrorpool's sibling AA[0]
+        # (``CopyTargetInstantOrSorceryYouControl``) is also not in
+        # the admit set (the multi-AA all-or-nothing gate per Phase
+        # 4A — both AAs must admit for the printing to admit). Both
+        # widens + the sibling AA[0] Effect-class port ship later
+        # cycles (C2-C5). The forward arm exists at C1 so unit-test
+        # pins can drive the Rust round-trip on this AA[1] slice.
+        #
+        # **additional_subtype rider honest-decline.** Rust's
+        # ``Effect::CreateTokenCopyOfTargetCreatureYouControl`` is a
+        # unit variant — the optional ``additional_subtype`` Python
+        # field is NOT representable on the wire (Rust has no subtype
+        # tracking on registry today; the rider's the Mirror-Room
+        # shape per design doc §3.10). When ``additional_subtype is
+        # not None`` the forward arm honest-declines by returning
+        # ``None`` for the AA dict so the round-trip stays byte-equal.
+        # Mirrorpool's live AA[1] is ``additional_subtype=None`` per
+        # the parser SoT (verified §2.1 row) — the live decline path
+        # is unreachable from production. Mirror Room (a sister
+        # printing not in EoE) would be the live consumer of the
+        # decline path.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``CreateTokenCopyOfTargetCreatureYouControl`` — NOT any
+        # parent ``Effect`` class — to avoid silently widening
+        # admission to other ``Effect`` subclasses (consistent with
+        # the Phase-3A / 3B / 3C / 4C / 4D specificity contract). The
+        # class has no subclasses in the live tree.
+        if effect.additional_subtype is not None:
+            # Honest-decline — Rust can't carry the rider; round-trip
+            # would lose information silently. The bridge-floor
+            # ``None`` return propagates out per the per-AA admit
+            # all-or-nothing contract.
+            return None
+        effect_dict = {
+            "kind": "create_token_copy_of_target_creature_you_control",
+        }
     elif isinstance(effect, ExileTargetCardFromGraveyard):
         # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).**
         # Forward-emit arm for Ghost Vacuum's AA[0] pilot effect
