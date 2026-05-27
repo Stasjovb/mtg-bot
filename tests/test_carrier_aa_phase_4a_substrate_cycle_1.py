@@ -114,6 +114,18 @@ PHASE_1_3_ADMITTED_LAND_CARRIERS = (
     # frontier closes at 7 admits; Phase 4+ multi-AA carriers stay
     # declined per the per-AA gate teeth).
     "Thespian's Stage",
+    # **Phase 4B C4 (2026-05-26).** Adds Mirrorpool via the full Option
+    # A FLIP. C3 shipped the AA[0] Rust spell-copy substrate at
+    # ``e5cd1c18``; C4 widens
+    # ``_carrier_aa_phase_1_effect_classes`` with
+    # ``CopyTargetInstantOrSorceryYouControl`` + lands the
+    # ``_python_aa_to_safe_dict`` forward arm + reverse arm. Combined
+    # with the C2 widen for AA[1] (``CreateTokenCopyOfTargetCreature
+    # YouControl``), BOTH per-AA Effect classes admit, and Mirrorpool's
+    # printing-level admit FLIPs DECLINED → ADMITTED at the multi-AA
+    # all-or-nothing gate. First Phase-4 multi-AA carrier to FULLY
+    # FLIP end-to-end.
+    "Mirrorpool",
 )
 
 # Phase 4D C2 (2026-05-26) FLIPs Keys to the House DECLINED → ADMITTED
@@ -244,8 +256,18 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
 # ---------------------------------------------------------------------------
 
 
-PHASE_4_DECLINED_CARRIERS = (
-    "Mirrorpool",            # 4B target (Land)
+PHASE_4_DECLINED_CARRIERS: tuple[str, ...] = (
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool (was here pre-Phase-4B-C4
+    # as the LAST remaining Phase-4 multi-AA decline) FLIPS DECLINED →
+    # ADMITTED end-to-end at C4. C3 shipped the AA[0] Rust spell-copy
+    # substrate at ``e5cd1c18``; C4 ships the Python admit widen for
+    # ``CopyTargetInstantOrSorceryYouControl`` +
+    # ``_python_aa_to_safe_dict`` forward arm + ``_ta_dict_to_python_
+    # effect`` reverse arm. With the C2 widen for AA[1] already in
+    # place, BOTH per-AA Effect classes are now in the admit set —
+    # Mirrorpool's printing-level admit FLIPs under the multi-AA
+    # all-or-nothing contract. Mirrorpool is now in
+    # ``PHASE_1_3_ADMITTED_LAND_CARRIERS`` above.
     # Ghost Vacuum (4C target) was here pre-Phase-4C-C2; the Phase 4C
     # C2 combined widen (Effect-class adds ExileTargetCardFromGraveyard
     # + PutEachCreatureCardExiledWith...; AA-rider lifts sorcery_speed)
@@ -290,46 +312,57 @@ PHASE_4_BUILDER_GATE_DECLINED_CARRIERS = (
 )
 
 
-@pytest.mark.parametrize("name", PHASE_4_DECLINED_CARRIERS)
-def test_phase_4_carrier_stays_declined_post_substrate(name, printings):
-    """**Phase-4A substrate-only invariant -- 3 carriers STAY DECLINED.**
+if PHASE_4_DECLINED_CARRIERS:
+    @pytest.mark.parametrize("name", PHASE_4_DECLINED_CARRIERS)
+    def test_phase_4_carrier_stays_declined_post_substrate(name, printings):
+        """**Phase-4A substrate-only invariant -- carriers in the
+        decline-set must STAY DECLINED.**
 
-    Each Phase-4 carrier in this set must decline through ALL three
-    Carrier-AA admit entry points (Land predicate, Artifact predicate,
-    dispatcher) post-Phase-4A-Cycle-1. The decline mechanism per card:
+        Each Phase-4 carrier in this set must decline through ALL three
+        Carrier-AA admit entry points (Land predicate, Artifact predicate,
+        dispatcher).
 
-      * Mirrorpool: Land-typed; passes the multi-AA shape gate AND
-        every printing-level rider check; declines at the per-AA
-        Effect-class teeth (AA[0] ``CopyTargetInstantOrSorceryYouControl``
-        + AA[1] ``CreateTokenCopyOfTargetCreatureYouControl`` are NOT
-        in the Phase-3 Effect-class admit set). Phase 4B widens the
-        Effect-class set and FLIPs Mirrorpool ADMITTED.
-      * Ghost Vacuum: Artifact-typed; declines at the per-AA AA-rider
-        teeth (AA[1] ``sorcery_speed=True`` rejected by
-        :func:`_aa_is_phase1_sub_shape_a`) AND at the per-AA Effect-
-        class teeth (both Effects not in admit set). Phase 4C widens
-        ``sorcery_speed`` admit + adds the two Effect classes and
-        FLIPs Ghost Vacuum ADMITTED.
-      * Keys to the House: Artifact-typed; declines at the per-AA AA-
-        rider teeth (AA[1] ``sorcery_speed=True``) AND Effect-class
-        teeth. Phase 4D lands the FLIP.
+        Post-Phase-4B-C4: the decline set is empty (Mirrorpool FLIPPED
+        ADMITTED — see the inverted invariant
+        ``test_mirrorpool_flips_admitted_at_full_admit_gate_post_c4``
+        in ``test_carrier_aa_phase_4b_substrate_cycle_4.py``). This
+        parametrized test only runs when the decline set is non-empty;
+        when empty, the standalone empty-set sentinel below replaces it.
+        """
+        p = printings[name]
+        assert not _printing_is_bridge_simple_carrier_aa_land(p), (
+            f"{name} should STAY DECLINED on the Land predicate"
+        )
+        assert not _printing_is_bridge_simple_carrier_aa_artifact(p), (
+            f"{name} should STAY DECLINED on the Artifact predicate"
+        )
+        assert not _printing_is_bridge_simple_carrier_aa_any(p), (
+            f"{name} should STAY DECLINED on the dispatcher"
+        )
 
-    All-Fates Scroll has moved to :data:`PHASE_4_BUILDER_GATE_DECLINED_
-    CARRIERS` post-Phase 4E C2's per-AA admit widens (its decline
-    happens at the cross-engine builder gate, NOT the admit predicate).
+
+def test_phase_4_declined_carriers_set_is_empty_post_4b_c4():
+    """**Phase 4B C4 (2026-05-26) sentinel — Mirrorpool was the LAST
+    Phase-4 multi-AA carrier in :data:`PHASE_4_DECLINED_CARRIERS`.**
+
+    Post-C4 all four Phase-4 multi-AA carriers have FLIPPED end-to-end:
+      * Ghost Vacuum (4C) — Phase 4C C2 (2026-05-26)
+      * Keys to the House (4D) — Phase 4D C2 (2026-05-26)
+      * All-Fates Scroll (4E) — Phase 4E C2 partial-FLIP at the
+        predicate gate (still declines at the builder gate via "any"
+        teeth — see
+        :data:`PHASE_4_BUILDER_GATE_DECLINED_CARRIERS`).
+      * Mirrorpool (4B) — Phase 4B C4 (2026-05-26).
+
+    Sentinel — flips loudly if a future widen accidentally restores
+    a Phase-4 multi-AA carrier to the decline-set without an
+    accompanying inversion of this assertion + the FLIP test in
+    ``test_carrier_aa_phase_4b_substrate_cycle_4.py``.
     """
-    p = printings[name]
-    assert not _printing_is_bridge_simple_carrier_aa_land(p), (
-        f"{name} should STAY DECLINED on the Land predicate "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
-    )
-    assert not _printing_is_bridge_simple_carrier_aa_artifact(p), (
-        f"{name} should STAY DECLINED on the Artifact predicate "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
-    )
-    assert not _printing_is_bridge_simple_carrier_aa_any(p), (
-        f"{name} should STAY DECLINED on the dispatcher "
-        f"post-Phase-4A-Cycle-1 (Phase 4B/C/D land the FLIP)"
+    assert PHASE_4_DECLINED_CARRIERS == (), (
+        f"Phase 4B C4 sentinel: PHASE_4_DECLINED_CARRIERS must be "
+        f"empty post-Phase-4B-C4 (Mirrorpool FLIPped); got "
+        f"{PHASE_4_DECLINED_CARRIERS!r}"
     )
 
 
@@ -385,20 +418,13 @@ def test_phase_4_carrier_per_aa_walk_declines_at_effect_class(printings):
     FLIP). All-Fates Scroll's per-AA decline-axis pin lives at
     :func:`test_phase_4_carrier_builder_gate_decline_post_c2` instead.
 
-    **Post-Phase-4B-C2 invariant (Option A partial widen).** Mirrorpool
-    is now in a partial-widen state: AA[1]
-    (``CreateTokenCopyOfTargetCreatureYouControl``) FLIPS ADMITTED at
-    the per-AA gate because C2 widens the Effect-class admit set with
-    AA[1]'s Effect class (Rust substrate landed at C1 / commit
-    ``434d6aa1``); AA[0] (``CopyTargetInstantOrSorceryYouControl``)
-    STAYS DECLINED because its Rust substrate (new
-    ``Effect::CopyTargetInstantOrSorceryYouControl`` variant + stack-
-    target fan-out + ``StackItem.is_copy`` audit + push-copy-on-stack
-    resolve arm) defers to a future Rust cycle per design doc §4.1.1.
-    Under the multi-AA all-or-nothing contract, Mirrorpool's printing-
-    level admit STAYS DECLINED on AA[0]'s teeth alone — that's the
-    Option A honest-stop. The per-AA walk asserts at-least-one-AA-
-    declines (instead of every-AA-declines pre-C2).
+    **Post-Phase-4B-C4 invariant — set is now empty.** Mirrorpool was
+    the last Phase-4 multi-AA carrier in the decline set; the C4
+    Python admit widen + bridge arms FLIP it ADMITTED end-to-end. The
+    decline-set walk becomes a degenerate empty iteration; the
+    standalone sentinel
+    :func:`test_phase_4_declined_carriers_set_is_empty_post_4b_c4`
+    asserts the emptiness invariant explicitly.
     """
     for name in PHASE_4_DECLINED_CARRIERS:
         p = printings[name]
@@ -709,19 +735,23 @@ def test_land_builder_iterates_all_aas_on_synthetic_multi_aa(printings):
 
 
 def test_land_builder_unchanged_for_phase_1_3_admits(printings):
-    """**Phase-4A no-regression pin -- single-AA Land builder unchanged.**
+    """**Phase-4A no-regression pin -- Land builder flattens each admit.**
 
-    Every Phase-1-3 single-AA Land admit still flattens to a CardDef
-    with ``activated_abilities`` of length 1 (the multi-AA iteration
-    widen is back-compat -- a 1-AA input yields a 1-element tuple).
+    Every Phase-1-3 / 4B C4 Land admit flattens to a CardDef with
+    ``activated_abilities`` of length matching the printing's AA count
+    (single-AA carriers yield 1; the C4 multi-AA carrier Mirrorpool
+    yields 2 via the Phase-4A multi-AA iteration widen — back-compat).
     """
     for name in PHASE_1_3_ADMITTED_LAND_CARRIERS:
         p = printings[name]
         cd = _carrier_aa_land_card_def(p)
         assert cd is not None, f"{name} builder regressed to None"
         assert cd.card_type == "Land", f"{name} card_type drifted"
-        assert len(cd.activated_abilities) == 1, (
-            f"{name} should still flatten to 1 AA"
+        expected_n_aas = len(p.activated_abilities)
+        assert len(cd.activated_abilities) == expected_n_aas, (
+            f"{name} should flatten to {expected_n_aas} AAs (matching "
+            f"the live printing's AA count); got "
+            f"{len(cd.activated_abilities)}"
         )
 
 
@@ -771,28 +801,29 @@ def test_artifact_builder_returns_none_when_predicate_rejects(printings):
 
 
 def test_phase_1_effect_classes_unchanged_post_substrate_cycle_1():
-    """**Phase-4A no-Effect-class-widen pin.** Cycle 1 does NOT widen
-    the Effect-class allowlist -- that's Phase 4B/4C/4D/4E's
-    deliverable. None of the Phase-4 Effect classes should be in the
-    admit set post-Cycle-1.
+    """**Phase-4A no-Effect-class-widen pin — Phase 4B C4 inverts.**
+
+    Pre-Phase-4B-C4 this asserted ``CopyTargetInstantOrSorceryYouControl``
+    NOT in the admit set as the next-pending Phase-4B sentinel. Phase 4B
+    C4 (2026-05-26) lands the widen — the assertion inverts to ``IN
+    the admit set`` post-C4 to track the actual frontier. The next
+    pending sub-phase widen target is the cross-engine ``"any"`` color
+    coin substrate (Phase 4E C2.5) at the bridge floor, NOT a new
+    Effect-class admit-set entry — so the next sentinel landing point
+    is no longer this file.
     """
     from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
 
     classes = _carrier_aa_phase_1_effect_classes()
 
-    # Confirm the Phase-4B Effect class (Mirrorpool's pilot Effect)
-    # is NOT in the admit set -- Phase 4B is the next pending sub-
-    # phase that will widen it. The Phase-4C carrier's Effect
-    # classes (ExileTargetCardFromGraveyard +
-    # PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl)
-    # WERE here as the C-pre-Phase-4C-C2 sentinel; post-Phase-4C-C2
-    # they are admitted, so the sentinel checks the next-pending
-    # widen (Mirrorpool / Phase 4B) instead.
     from mtg_bot.effects.generic.stack_control import (
         CopyTargetInstantOrSorceryYouControl,
     )
 
-    assert CopyTargetInstantOrSorceryYouControl not in classes, (
-        "CopyTargetInstantOrSorceryYouControl should NOT be in the "
-        "admit set post-Phase-4A-Cycle-1 (Phase 4B ships the widen)"
+    # **Phase 4B C4 inversion (2026-05-26).** Was NOT-IN pre-C4;
+    # IS-IN post-C4.
+    assert CopyTargetInstantOrSorceryYouControl in classes, (
+        "Phase 4B C4 invariant: CopyTargetInstantOrSorceryYouControl "
+        "must BE in the admit set post-Phase-4B-C4 (the widen lands "
+        "as part of the Mirrorpool full FLIP)."
     )

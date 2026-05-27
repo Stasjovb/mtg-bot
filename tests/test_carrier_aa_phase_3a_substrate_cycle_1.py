@@ -1050,8 +1050,12 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
         for name in carrier_aa_30
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
     )
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
+    # the full Option A widen. The auto-grow walk now includes
+    # Mirrorpool in the expected admit set.
     assert admits == [
         "Deserted Temple",
+        "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
         "Scavenger Grounds",
@@ -1059,9 +1063,9 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mystifying Maze', "
-        f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
+        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying "
+        f"Maze', 'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
         f"'Terrain Generator', \"Thespian's Stage\"], got "
         f"{admits}. A widen in a sibling substrate or predicate "
         f"would surface here as a silent auto-grow — investigate "

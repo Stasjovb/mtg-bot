@@ -9134,6 +9134,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         LockOrUnlockDoorOfTargetRoomYouControl,
     )
     from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.effects.generic.stack_control import (
+        CopyTargetInstantOrSorceryYouControl,
+    )
     from mtg_bot.effects.generic.tap import UntapTargetLand
     from mtg_bot.effects.generic.tokens import (
         CreateTokenCopyOfTargetCreatureYouControl,
@@ -9226,6 +9229,29 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # admit predicate + builder, The Eternity Elevator FLIPS
         # DECLINED → ADMITTED in the OR-chain.
         AddChargeCounterManaOfChosenColor,
+        # **Phase 4B Cycle 4 widen (2026-05-26 — full Option A FLIP per
+        # ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.4 + §7.2 row
+        # C4).** Adds Mirrorpool's AA[0] pilot Effect class
+        # ``CopyTargetInstantOrSorceryYouControl`` (CR-707.2 spell-copy).
+        # The Rust substrate (new ``Effect::CopyTargetInstantOrSorcery
+        # YouControl`` variant + ``parse_effect`` + ``to_pydict`` +
+        # stack-target fan-out in ``state_ops_legal.rs::activate_
+        # ability_dict`` + ``StackItem.is_copy`` audit + push-copy-on-
+        # stack resolve arm) shipped at C3 (commit ``e5cd1c18``);
+        # combined with the C2 widen for AA[1] (above), BOTH of
+        # Mirrorpool's per-AA Effect classes are now in the admit
+        # set. The cross-engine bridge forward arm in
+        # :func:`cross_engine._python_aa_to_safe_dict` + reverse arm
+        # in ``_ta_dict_to_python_effect`` ship in this same C4 cycle.
+        #
+        # **Mirrorpool FLIPS DECLINED → ADMITTED at the printing-level
+        # admit gate post-C4.** Under the Phase 4A multi-AA all-or-
+        # nothing contract, a printing admits only if EVERY AA admits;
+        # post-C4 both AA[0] AND AA[1] admit at the per-AA gate, so
+        # Mirrorpool's printing-level admit FLIPS — first Phase-4
+        # multi-AA carrier to fully FLIP (the C2-only widen left AA[0]
+        # biting; C4 closes the AA[0] half end-to-end).
+        CopyTargetInstantOrSorceryYouControl,
     })
 
 

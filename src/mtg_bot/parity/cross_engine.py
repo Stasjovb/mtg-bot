@@ -7291,6 +7291,51 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             CreateTokenCopyOfTargetCreatureYouControl,
         )
         return CreateTokenCopyOfTargetCreatureYouControl()
+    if kind == "copy_target_instant_or_sorcery_you_control":
+        # **Carrier-AA substrate Phase 4B Cycle 4 (2026-05-26).** Reverse-
+        # construct arm for Mirrorpool's AA[0] pilot effect (CR-707.2
+        # spell-copy — "Copy target instant or sorcery spell you
+        # control. You may choose new targets for the copy."). Sibling
+        # of the round-23 ``CreateTokenCopyOfTargetCreatureYouControl``
+        # reverse arm above.
+        #
+        # **C3 Rust substrate at ``e5cd1c18``** landed the
+        # ``Effect::CopyTargetInstantOrSorceryYouControl`` variant +
+        # parse_effect + to_pydict + stack-target fan-out + push-copy
+        # resolve + ``StackItem.is_copy`` audit. C4 ships the Python
+        # admit widen at ``trajectory._carrier_aa_phase_1_effect_classes``
+        # + the forward arm in ``_python_aa_to_safe_dict`` (above) +
+        # this reverse arm + Mirrorpool FLIP.
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors the C3
+        # Rust ``parse_effect`` arm — silent-drop convention for
+        # unrecognized keys (extra dict fields are ignored). The Python
+        # class is a no-field dataclass; constructed with no args.
+        #
+        # **Resolve semantics (parity-relevant).** Python's resolve
+        # (effects/generic/stack_control.py:30+) short-circuits by
+        # re-resolving the target spell's ``spell_effect`` with
+        # freshly-chosen targets (see the class docstring for the
+        # explicit simplification note). Rust's C3 resolve pushes a
+        # real stack copy with ``is_copy=true`` inserted UNDER the
+        # resolving AA so it pops to the top after the AA pops — the
+        # right CR 608.2 / 707.2 ordering (copy resolves BEFORE the
+        # original). The two engines therefore diverge at the
+        # observable mid-resolution level on the copy's own
+        # resolution path (Python re-resolves the leaf effect
+        # directly; Rust adds a stack frame and lets the resolve loop
+        # handle it). For the C4 admit-gate FLIP the divergence is at
+        # the resolve-arm boundary, not the parser/round-trip surface
+        # this arm closes. C5's per-card real-EoE probe pins the
+        # synthetic-controlled-state behavior that both engines DO
+        # agree on (e.g. the pre-resolve state shape + the post-
+        # validation fizzle path); a deeper full-game cross-engine
+        # probe is the campaign open frontier per the POOL_PARITY.md
+        # caveat.
+        from mtg_bot.effects.generic.stack_control import (
+            CopyTargetInstantOrSorceryYouControl,
+        )
+        return CopyTargetInstantOrSorceryYouControl()
     if kind == "move_self_counters_to_target_creature_you_control":
         # **Round-25 BLOCKED-BRIDGE-ARM slice -- "move all +1/+1
         # counters from this permanent to target creature you control"
@@ -15229,6 +15274,23 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.tokens import (
         CreateTokenCopyOfTargetCreatureYouControl,
     )
+    # **Phase 4B C4 widen (2026-05-26).** Add
+    # ``CopyTargetInstantOrSorceryYouControl`` (Mirrorpool's AA[0] pilot
+    # Effect — CR-707.2 spell-copy). Unit-variant on the wire: ``{"kind":
+    # "copy_target_instant_or_sorcery_you_control"}``. The Python class
+    # is a no-field unit dataclass; the Rust mirror's parse_effect +
+    # resolve + to_pydict arms all treat the variant symmetrically as a
+    # unit (no rider keys). The C3 Rust substrate at ``e5cd1c18`` shipped
+    # the Effect variant + parse_effect arm + to_pydict arm + stack-
+    # target fan-out in ``state_ops_legal.rs::activate_ability_dict`` +
+    # validation arm in ``state_ops_actions.rs::ActivateAbility`` +
+    # push-copy resolve arm in ``state_ops_resolve.rs`` +
+    # ``StackItem.is_copy`` audit field. This forward arm closes the
+    # Python -> Rust dict half; the reverse Python construction arm
+    # ships in the same C4 cycle in ``_ta_dict_to_python_effect``.
+    from mtg_bot.effects.generic.stack_control import (
+        CopyTargetInstantOrSorceryYouControl,
+    )
     # **Phase 4E C2 widen (2026-05-26).** Add ``AddManaToPool``
     # (All-Fates Scroll's AA[0] pilot Effect — Carrier-AA Phase 4E
     # cycle per design doc §5.7). Two-key dict per the round-21 mana-
@@ -15497,6 +15559,61 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             return None
         effect_dict = {
             "kind": "create_token_copy_of_target_creature_you_control",
+        }
+    elif isinstance(effect, CopyTargetInstantOrSorceryYouControl):
+        # **Carrier-AA substrate Phase 4B Cycle 4 (2026-05-26).** Forward-
+        # emit arm for Mirrorpool's AA[0] pilot effect (``{2}{C}, {T},
+        # Sacrifice this land: Copy target instant or sorcery spell you
+        # control. You may choose new targets for the copy.``).
+        # CR-707.2 spell-copy. Unit variant — only the ``kind``
+        # discriminator on the wire. Target rides on the action-dict's
+        # ``target_creature_id`` slot at activation time (the generic
+        # single-target object-id slot is reused for stack-target
+        # spell-copy: ``target_creature_id = stack_item.source_obj_id``
+        # — see the C3 Rust validation arm at ``state_ops_actions.rs``
+        # + resolve arm at ``state_ops_resolve.rs``).
+        #
+        # **C3 Rust substrate landed at ``e5cd1c18``.** The full
+        # spell-copy Rust slice (Effect variant + parse_effect +
+        # to_pydict + stack-target fan-out in ``state_ops_legal.rs::
+        # activate_ability_dict`` for activator-controlled
+        # ``StackItemKind::Spell`` items whose printing is instant or
+        # sorcery + ``state_ops_actions.rs`` validation re-check +
+        # ``state_ops_resolve.rs`` push-copy resolve via
+        # ``current_resolve_payload_target_id`` + ``StackItem.is_copy``
+        # bookkeeping field) all shipped at C3. This forward arm
+        # closes the Python -> Rust dict half end-to-end.
+        #
+        # **Mirrorpool FLIPS DECLINED → ADMITTED at the printing-level
+        # admit gate at C4.** The C4 widen at
+        # :func:`trajectory._carrier_aa_phase_1_effect_classes` adds
+        # this Effect class; combined with the C2 widen for AA[1]
+        # (``CreateTokenCopyOfTargetCreatureYouControl``), both
+        # Mirrorpool AAs admit at the per-AA gate
+        # :func:`trajectory._aa_is_phase1_sub_shape_a`. Under the
+        # Phase 4A multi-AA all-or-nothing contract Mirrorpool's
+        # printing-level admit FLIPS — first Phase-4 multi-AA carrier
+        # to fully FLIP.
+        #
+        # **Unit variant — no riders.** Python's
+        # ``CopyTargetInstantOrSorceryYouControl``
+        # (effects/generic/stack_control.py:30) is a no-field
+        # dataclass; the new-targets-for-copy semantics ride on the
+        # cast-time target pipeline (NOT a per-Effect rider). The
+        # forward emit therefore has nothing to gate on — no
+        # rider-decline branch is needed (sibling of the C1
+        # ``CreateTokenCopyOfTargetCreatureYouControl`` arm, which DID
+        # have an ``additional_subtype`` rider decline; this AA[0]
+        # variant has no such rider).
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``CopyTargetInstantOrSorceryYouControl`` — NOT any parent
+        # ``Effect`` class — to avoid silently widening admission to
+        # other ``Effect`` subclasses (consistent with the Phase-3A /
+        # 3B / 3C / 4B / 4C / 4D / 4E specificity contract). The
+        # class has no subclasses in the live tree.
+        effect_dict = {
+            "kind": "copy_target_instant_or_sorcery_you_control",
         }
     elif isinstance(effect, ExileTargetCardFromGraveyard):
         # **Carrier-AA substrate Phase 4C Cycle 1 (2026-05-26).**

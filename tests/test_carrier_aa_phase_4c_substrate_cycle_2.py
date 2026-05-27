@@ -490,12 +490,11 @@ def all_printings():
 
 
 def test_mirrorpool_still_declines_post_4c_c2(all_printings):
-    """**No-silent-auto-grow pin (Mirrorpool -- 4B target).**
-    Mirrorpool stays DECLINED post-Phase-4C-C2 because BOTH its AAs
-    carry Effect classes not in the 11-entry admit set
-    (CopyTargetInstantOrSorceryYouControl + Create...; Phase 4B
-    ships the widen). The sorcery_speed widen does NOT silently flip
-    Mirrorpool because the Effect-class teeth still bite.
+    """**Phase 4B C4 inversion (was no-silent-auto-grow pre-C4).**
+    Pre-C4: Mirrorpool stayed DECLINED post-Phase-4C-C2 (its AA
+    Effect classes not in the admit set then). The Phase 4B widen
+    sequence (C2 lands AA[1], C4 lands AA[0]) FLIPped Mirrorpool
+    ADMITTED. This pin now confirms the C4 FLIP holds.
     """
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_any,
@@ -503,11 +502,13 @@ def test_mirrorpool_still_declines_post_4c_c2(all_printings):
     )
 
     p = all_printings["Mirrorpool"]
-    assert _printing_is_bridge_simple_carrier_aa_land(p) is False, (
-        "Mirrorpool must STAY DECLINED post-Phase-4C-C2 -- Phase 4B "
-        "ships the Effect-class widen"
+    # **Phase 4B C4 inversion (2026-05-26).**
+    assert _printing_is_bridge_simple_carrier_aa_land(p) is True, (
+        "Phase 4B C4 invariant: Mirrorpool FLIPs ADMITTED post-C4 "
+        "(both per-AA Effect classes admit; the multi-AA all-or-"
+        "nothing gate passes)."
     )
-    assert _printing_is_bridge_simple_carrier_aa_any(p) is False
+    assert _printing_is_bridge_simple_carrier_aa_any(p) is True
 
 
 def test_keys_to_the_house_still_declines_post_4c_c2(all_printings):

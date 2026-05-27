@@ -607,19 +607,13 @@ def test_rust_validation_rejects_opponent_controlled_spell_target(
 
 
 def test_mirrorpool_stays_declined_at_admit_gate_post_c3():
-    """**C3 substrate-only invariant pin.** Mirrorpool's printing-level
-    admit STAYS DECLINED at the admit gate post-Cycle-3 because the
-    Python admit set does NOT yet include
-    ``CopyTargetInstantOrSorceryYouControl``. The Rust substrate
-    (Effect variant + parse + to_pydict + resolve + stack-target fan-
-    out + validation + StackItem.is_copy) all lands; the per-AA admit
-    predicate at ``_aa_is_phase1_sub_shape_a`` reads the
-    Effect-class admit set, which is still missing AA[0]'s class.
+    """**Phase 4B C4 inversion — Mirrorpool's AA[0] FLIPs ADMITTED.**
 
-    Under the Phase 4A multi-AA all-or-nothing contract a printing
-    admits only if EVERY AA admits — Mirrorpool's AA[0] still bites
-    on the per-AA Effect-class teeth (its class is intentionally NOT
-    widened here; C4 ships the widen).
+    Pre-C4 (post-C3): the Rust substrate had landed but the Python
+    admit set did NOT yet include
+    ``CopyTargetInstantOrSorceryYouControl`` — synthetic Mirrorpool-
+    AA[0] declined at the per-AA admit gate. The C4 widen lands the
+    Effect class in :func:`_carrier_aa_phase_1_effect_classes`.
     """
     from mtg_bot.parity.trajectory import (
         _aa_is_phase1_sub_shape_a,
@@ -631,17 +625,15 @@ def test_mirrorpool_stays_declined_at_admit_gate_post_c3():
         CopyTargetInstantOrSorceryYouControl,
     )
 
-    # The Effect class is NOT in the admit set post-C3.
+    # **Phase 4B C4 inversion (2026-05-26).** The Effect class IS in
+    # the admit set post-C4.
     admit_set = _carrier_aa_phase_1_effect_classes()
-    assert CopyTargetInstantOrSorceryYouControl not in admit_set, (
-        "Phase 4B C3 substrate-only invariant: "
-        "CopyTargetInstantOrSorceryYouControl must NOT be in the "
-        "admit set at C3 — C4 ships the widen. Got admit_set with "
-        f"{CopyTargetInstantOrSorceryYouControl.__name__} present."
+    assert CopyTargetInstantOrSorceryYouControl in admit_set, (
+        "Phase 4B C4 invariant: CopyTargetInstantOrSorceryYouControl "
+        "must BE in the admit set post-C4."
     )
 
-    # A synthetic Mirrorpool-AA[0]-shape ActivatedAbility declines at
-    # the per-AA admit gate.
+    # A synthetic Mirrorpool-AA[0]-shape ActivatedAbility now ADMITS.
     aa0 = ActivatedAbility(
         cost=ActivationCost(
             tap_self=True,
@@ -650,28 +642,20 @@ def test_mirrorpool_stays_declined_at_admit_gate_post_c3():
         ),
         effect=CopyTargetInstantOrSorceryYouControl(),
     )
-    assert _aa_is_phase1_sub_shape_a(aa0) is False, (
-        "Phase 4B C3 substrate-only invariant: Mirrorpool's AA[0] "
-        "shape must STILL decline at the per-AA admit predicate gate "
-        "post-C3 — its Effect class isn't in the admit set yet "
-        "(C4 ships the widen)."
+    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
+        "Phase 4B C4 inversion: Mirrorpool's AA[0] shape FLIPs "
+        "ADMITTED at the per-AA admit predicate gate post-C4."
     )
 
 
 def test_mirrorpool_live_printing_stays_declined_at_full_admit_gate_post_c3():
-    """**C3 substrate-only invariant pin — live Mirrorpool printing.**
-    Same shape as ``test_mirrorpool_stays_declined_at_admit_gate_
-    post_c3`` but exercised on the LIVE Mirrorpool printing parsed
-    from the live EoE pool (verified at C1's verify-first walk:
-    AA[0] = ``CopyTargetInstantOrSorceryYouControl()``, AA[1] =
-    ``CreateTokenCopyOfTargetCreatureYouControl(additional_subtype=
-    None)``).
+    """**Phase 4B C4 inversion — live Mirrorpool FLIPs ADMITTED.**
 
-    Post-C2, Mirrorpool's per-AA admit is mixed: AA[0] declines (no
-    Effect-class widen yet), AA[1] admits. Post-C3 the per-AA mix is
-    UNCHANGED — C3 adds no Python admit widen. The printing-level
-    admit at the multi-AA all-or-nothing gate stays DECLINED on
-    AA[0]'s teeth.
+    Pre-C4 (post-C3): Mirrorpool's per-AA admit was mixed (AA[0]
+    declined, AA[1] admitted); printing-level admit STAYED DECLINED.
+    Post-C4: AA[0] admits via the Python admit widen + bridge arms;
+    both per-AA gates pass; the multi-AA all-or-nothing gate flips
+    Mirrorpool ADMITTED at the printing-level dispatcher.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -693,21 +677,20 @@ def test_mirrorpool_live_printing_stays_declined_at_full_admit_gate_post_c3():
     )
     aa0, aa1 = mp.activated_abilities[0], mp.activated_abilities[1]
 
-    # AA[0] still declines (Effect class not in admit set post-C3).
-    assert _aa_is_phase1_sub_shape_a(aa0) is False, (
-        "Phase 4B C3 invariant: live Mirrorpool's AA[0] must STILL "
-        "decline at the per-AA admit gate post-C3."
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0] now admits.
+    assert _aa_is_phase1_sub_shape_a(aa0) is True, (
+        "Phase 4B C4 invariant: live Mirrorpool's AA[0] FLIPs ADMITTED "
+        "at the per-AA admit gate post-C4."
     )
     # AA[1] admits (per the C2 widen at 58988ade).
     assert _aa_is_phase1_sub_shape_a(aa1) is True, (
-        "Phase 4B C3 invariant: live Mirrorpool's AA[1] should STILL "
-        "admit at the per-AA admit gate post-C3 (C2 widen at "
-        "58988ade lands the token-creature-copy Effect class)."
+        "Phase 4B C2 invariant: live Mirrorpool's AA[1] admits at the "
+        "per-AA admit gate (C2 widen at ``58988ade``)."
     )
-    # Printing-level admit STAYS DECLINED on AA[0]'s teeth (multi-AA
-    # all-or-nothing contract).
-    assert _printing_is_bridge_simple_carrier_aa_any(mp) is False, (
-        "Phase 4B C3 substrate-only invariant: Mirrorpool's printing-"
-        "level admit must STAY DECLINED post-C3 on AA[0]'s teeth. C4 "
-        "ships the Python admit widen + bridge arms + Mirrorpool FLIP."
+    # **Phase 4B C4 inversion (2026-05-26).** Printing-level admit
+    # FLIPs ADMITTED.
+    assert _printing_is_bridge_simple_carrier_aa_any(mp) is True, (
+        "Phase 4B C4 invariant: Mirrorpool's printing-level admit "
+        "FLIPs ADMITTED post-C4 — both per-AA Effect classes admit; "
+        "the multi-AA all-or-nothing gate passes."
     )

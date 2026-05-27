@@ -188,21 +188,15 @@ def test_create_token_copy_aa_with_subtype_rider_still_declines_at_bridge():
 
 
 def test_mirrorpool_live_per_aa_mixed_admit_decline_post_c2():
-    """**Phase 4B C2 honest-stop pin — Mirrorpool's per-AA walk mixes
-    1 admit + 1 decline post-C2 (Option A partial widen).**
+    """**Phase 4B C4 inversion — Mirrorpool's per-AA walk now admits
+    BOTH (was 1 admit + 1 decline pre-C4).**
 
-    AA[0] ``CopyTargetInstantOrSorceryYouControl`` STAYS DECLINED at
-    the per-AA admit predicate (its Effect class is intentionally NOT
-    in ``_carrier_aa_phase_1_effect_classes`` at C2 — the AA[0] Rust
-    substrate defers to a future cycle).
-
-    AA[1] ``CreateTokenCopyOfTargetCreatureYouControl`` FLIPS ADMITTED
-    at the per-AA admit predicate (C2 widens the admit set to include
-    the class).
-
-    Sibling of the C1 file's ``test_mirrorpool_stays_declined_at_
-    admit_gate_post_c2`` pin (which asserts the same per-AA mix +
-    the printing-level admit stays declined).
+    Pre-C4 (post-C2): AA[0] declined on the missing Effect-class widen.
+    Post-C4: AA[0]'s Effect class
+    ``CopyTargetInstantOrSorceryYouControl`` is in the admit set
+    (Phase 4B C4 widen); AA[1] continues to admit (Phase 4B C2 widen).
+    Both per-AA gates pass — Mirrorpool FLIPs at the multi-AA
+    all-or-nothing gate.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _aa_is_phase1_sub_shape_a
@@ -211,33 +205,30 @@ def test_mirrorpool_live_per_aa_mixed_admit_decline_post_c2():
     assert len(printing.activated_abilities) == 2
     aa0 = printing.activated_abilities[0]
     aa1 = printing.activated_abilities[1]
-    assert not _aa_is_phase1_sub_shape_a(aa0), (
-        "Phase 4B C2 invariant: Mirrorpool AA[0] (CopyTargetInstantOr"
-        "SorceryYouControl) STAYS DECLINED at the per-AA admit "
-        "predicate post-Cycle-2 — its Effect class is intentionally "
-        "NOT widened (Rust substrate defers to a future cycle per "
-        "design doc §4.1.1)"
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0] now ADMITS.
+    assert _aa_is_phase1_sub_shape_a(aa0), (
+        "Phase 4B C4 inversion: Mirrorpool AA[0] (CopyTargetInstantOr"
+        "SorceryYouControl) FLIPS ADMITTED at the per-AA admit "
+        "predicate post-C4 — the C4 widen lands its Effect class in "
+        "``_carrier_aa_phase_1_effect_classes``."
     )
     assert _aa_is_phase1_sub_shape_a(aa1), (
-        "Phase 4B C2 inversion: Mirrorpool AA[1] (CreateTokenCopyOf"
-        "TargetCreatureYouControl) FLIPS ADMITTED at the per-AA admit "
-        "predicate post-Cycle-2 — its Effect class is widened by C2"
+        "Phase 4B C2 invariant: Mirrorpool AA[1] (CreateTokenCopyOf"
+        "TargetCreatureYouControl) ADMITS at the per-AA admit "
+        "predicate (C2 widen at ``58988ade``)."
     )
 
 
 def test_mirrorpool_printing_level_admit_stays_declined_post_c2():
-    """**Phase 4B C2 honest-stop pin — Mirrorpool's PRINTING-level
-    admit STAYS DECLINED post-C2 (multi-AA all-or-nothing).**
+    """**Phase 4B C4 inversion — Mirrorpool's PRINTING-level admit
+    FLIPs ADMITTED post-C4 (was DECLINED pre-C4).**
 
     Under the Phase 4A multi-AA all-or-nothing contract at
     :func:`_printing_is_bridge_simple_carrier_aa_land`, a printing
-    admits only if EVERY AA admits. Mirrorpool's AA[0] stays declined
-    (per-AA Effect-class teeth), so the printing-level admit STAYS
-    DECLINED on AA[0]'s teeth alone — that's Option A's honest-stop.
-
-    The full FLIP DECLINED → ADMITTED requires the AA[0] Rust cycle
-    + a follow-up Python widen + bridge arms (refined Phase 4B
-    sequencing in trajectory.py docstring + worklog).
+    admits only if EVERY AA admits. Post-C4 both AAs admit (per the
+    C2 widen for AA[1] and the C4 widen for AA[0]) — Mirrorpool's
+    printing-level admit FLIPs at the Land predicate AND the unified
+    dispatcher.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -247,21 +238,24 @@ def test_mirrorpool_printing_level_admit_stays_declined_post_c2():
     )
 
     printing = OracleParserCardSource().get_printings()["Mirrorpool"]
-    assert not _printing_is_bridge_simple_carrier_aa_land(printing), (
-        "Phase 4B C2 invariant: Mirrorpool STAYS DECLINED on the Land "
-        "predicate post-Cycle-2 — AA[0]'s untouched Effect-class teeth "
-        "bite under the multi-AA all-or-nothing contract"
+    # **Phase 4B C4 inversion (2026-05-26).** FLIPs ADMITTED on the
+    # Land predicate.
+    assert _printing_is_bridge_simple_carrier_aa_land(printing), (
+        "Phase 4B C4 invariant: Mirrorpool FLIPs ADMITTED on the Land "
+        "predicate post-C4 — both per-AA Effect classes admit; the "
+        "multi-AA all-or-nothing gate passes."
     )
-    # Mirrorpool is Land-typed, not Artifact — confirm the Artifact
-    # predicate also declines (cleanly, on the card_type guard).
+    # Mirrorpool is Land-typed, not Artifact — Artifact predicate
+    # still declines on the card_type guard.
     assert not _printing_is_bridge_simple_carrier_aa_artifact(printing), (
         "Phase 4B C2 invariant: Mirrorpool declines on the Artifact "
-        "sibling predicate (it's Land-typed, not Artifact)"
+        "sibling predicate (it's Land-typed, not Artifact)."
     )
-    assert not _printing_is_bridge_simple_carrier_aa_any(printing), (
-        "Phase 4B C2 invariant: Mirrorpool STAYS DECLINED on the "
-        "unified admit dispatcher post-Cycle-2 — neither sibling "
-        "admits"
+    # **Phase 4B C4 inversion (2026-05-26).** FLIPs ADMITTED on the
+    # unified dispatcher (the Land path admits).
+    assert _printing_is_bridge_simple_carrier_aa_any(printing), (
+        "Phase 4B C4 invariant: Mirrorpool FLIPs ADMITTED on the "
+        "unified admit dispatcher post-C4 — the Land sibling admits."
     )
 
 
@@ -271,14 +265,19 @@ def test_mirrorpool_printing_level_admit_stays_declined_post_c2():
 
 
 def test_phase_4b_c2_admit_set_widened_by_exactly_one():
-    """**Phase 4B C2 sentinel — the Effect-class admit set grows by
-    exactly 1 (AA[1]'s class in, AA[0]'s class out).** Option A's
-    partial-widen contract.
+    """**Phase 4B C2 sentinel — INVERTED at C4 for the full FLIP.**
 
-    Sibling of the renamed C1-file pin
-    ``test_create_token_copy_effect_class_admit_set_post_c2``; this
-    pin adds the explicit "exactly one new class" assertion + the
-    full pre/post delta walk.
+    Originally pinned the C2-Option-A partial widen contract (admit set
+    grows by exactly 1, AA[1]'s class in, AA[0]'s class out). The C4
+    full FLIP (commit lands the AA[0] Python admit widen + bridge
+    arms + Mirrorpool FLIP) adds AA[0]'s
+    ``CopyTargetInstantOrSorceryYouControl`` to the admit set — so the
+    expected set bumps to 15 classes and the AA[0] honest-stop check
+    inverts to an in-admit-set assertion.
+
+    Naming kept stable (no rename to ``_post_c4``) — the snapshot
+    semantics drift forward with each cycle's widen; cross-referencing
+    test failure logs to commit history makes the audit trail.
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
@@ -294,7 +293,10 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
-    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.mana import (
+        AddChargeCounterManaOfChosenColor,
+        AddManaToPool,
+    )
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
     )
@@ -312,9 +314,11 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
     from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
 
     admit_set = _carrier_aa_phase_1_effect_classes()
-    # Expected post-C2 admit set: Phase 1-3 (7) + Phase 4C C2 (2) +
-    # Phase 4D C2 (2) + Phase 4E C2 (2) + Phase 4B C2 (1) = 14.
-    expected_post_c2 = frozenset({
+    # Expected post-C4 admit set (post-rebase-onto-Spacecraft-P4-C2):
+    # Phase 1-3 (7) + Phase 4C C2 (2) + Phase 4D C2 (2) + Phase 4E C2
+    # (2) + Phase 4B C2 (1) + Spacecraft P4 C2 (1) + Phase 4B C4
+    # (1) = 16.
+    expected_post_c4 = frozenset({
         RegenerateTargetCreature,
         UntapTargetLand,
         ReturnTargetLandFromGraveyardToHand,
@@ -331,21 +335,29 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         # Phase 4D C2:
         LockOrUnlockDoorOfTargetRoomYouControl,
         SearchLibraryForCard,
-        # Phase 4B C2 (the new one):
+        # Phase 4B C2:
         CreateTokenCopyOfTargetCreatureYouControl,
+        # Spacecraft Phase 4 C2 (rebase pickup):
+        AddChargeCounterManaOfChosenColor,
+        # Phase 4B C4 (the new one):
+        CopyTargetInstantOrSorceryYouControl,
     })
-    assert admit_set == expected_post_c2, (
-        "Phase 4B C2 admit set sentinel: post-C2 admit set must be "
-        f"the 14-class set; got {len(admit_set)} classes, delta = "
-        f"added {admit_set - expected_post_c2} / "
-        f"missing {expected_post_c2 - admit_set}"
+    assert admit_set == expected_post_c4, (
+        "Phase 4B C4 admit set sentinel: post-C4 admit set must be "
+        f"the 16-class set (rebased onto Spacecraft P4 C2 at "
+        f"``4a2485f1``); got {len(admit_set)} classes, delta = "
+        f"added {admit_set - expected_post_c4} / "
+        f"missing {expected_post_c4 - admit_set}"
     )
-    # Option A honest-stop: AA[0]'s class is intentionally NOT in.
-    assert CopyTargetInstantOrSorceryYouControl not in admit_set, (
-        "Phase 4B C2 Option A honest-stop: CopyTargetInstantOrSorcery"
-        "YouControl must NOT be in _carrier_aa_phase_1_effect_classes "
-        "at C2 (Rust substrate defers to a future cycle per design "
-        "doc §4.1.1)"
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s class IS in the
+    # admit set post-C4 (the full FLIP). Was NOT-IN pre-C4 per the
+    # Option A honest-stop.
+    assert CopyTargetInstantOrSorceryYouControl in admit_set, (
+        "Phase 4B C4 invariant: CopyTargetInstantOrSorceryYouControl "
+        "must BE in _carrier_aa_phase_1_effect_classes post-C4 (the "
+        "AA[0] Python admit widen + bridge arms ship together with "
+        "the Mirrorpool FLIP at C4; the C3 Rust substrate at "
+        "``e5cd1c18`` was the immediate predecessor)."
     )
 
 
@@ -381,10 +393,13 @@ PHASE_4D_ADMITTED_ARTIFACT_CARRIERS = (
 
 
 def test_phase_1_3_4d_land_admit_set_unchanged_post_phase_4b_c2():
-    """**Phase 4B C2 invariant — the 7-card Phase-1-3 Land admit set
-    stays UNCHANGED post-Cycle-2.** Confirms Option A's partial
-    widen does NOT auto-grow the printing-level admit set on the
-    Land predicate side. Mirrorpool stays DECLINED on AA[0]'s teeth.
+    """**Phase 4B C2 invariant — Phase-1-3 Land admit set stays
+    intact + grows by Mirrorpool at C4.**
+
+    Pre-C4 this walked the 7-card baseline (Mirrorpool DECLINED on
+    AA[0]'s teeth). Post-C4 the AA[0] half admits and Mirrorpool
+    FLIPS — so the walk now confirms the 7-card baseline stays
+    admitted AND Mirrorpool is freshly admitted via the C4 widen.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -399,6 +414,19 @@ def test_phase_1_3_4d_land_admit_set_unchanged_post_phase_4b_c2():
             f"Land predicate post-Cycle-2 (Option A widen is on the "
             f"per-AA Effect-class gate, not the printing-level admit)"
         )
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPS DECLINED →
+    # ADMITTED via the full Option A FLIP at C4.
+    assert "Mirrorpool" in printings, (
+        "verify-first: Mirrorpool missing from pool"
+    )
+    assert _printing_is_bridge_simple_carrier_aa_land(
+        printings["Mirrorpool"],
+    ), (
+        "Phase 4B C4 invariant: Mirrorpool must FLIP ADMITTED on the "
+        "Land predicate post-C4 (the AA[0] Python admit widen + bridge "
+        "arms close the multi-AA all-or-nothing gate; C3 shipped the "
+        "AA[0] Rust spell-copy substrate at ``e5cd1c18``)."
+    )
 
 
 def test_phase_4d_artifact_admit_set_unchanged_post_phase_4b_c2():
@@ -424,12 +452,11 @@ def test_phase_4d_artifact_admit_set_unchanged_post_phase_4b_c2():
 
 
 def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
-    """**Phase 4B C2 invariant — no silent auto-grow.** Walk the FULL
-    EoE pool and assert the unified admit dispatcher
-    :func:`_printing_is_bridge_simple_carrier_aa_any` returns the
-    EXACT same admit set as the named expected set (7 Lands + 1
-    Artifact = 8 cards). No new card silently admits via the C2
-    widen.
+    """**Phase 4B C4 invariant — full-pool admit dispatcher walk.**
+
+    Pre-C4 this asserted no silent auto-grow + Mirrorpool DECLINED.
+    Post-C4 the dispatcher admits the C2 baseline PLUS Mirrorpool —
+    the full pool admit set grows by exactly 1 (Mirrorpool's FLIP).
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -444,19 +471,24 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
     )
     expected = frozenset(
         PHASE_1_3_4D_ADMITTED_LAND_CARRIERS
-        + PHASE_4D_ADMITTED_ARTIFACT_CARRIERS,
+        + PHASE_4D_ADMITTED_ARTIFACT_CARRIERS
+        # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPS into the
+        # full-pool admit set via the AA[0] Python admit widen +
+        # bridge arms (C3 Rust substrate at ``e5cd1c18``).
+        + ("Mirrorpool",),
     )
     assert admitted == expected, (
-        f"Phase 4B C2 invariant: full-pool admit set must be exactly "
-        f"the 8-card Phase-1-3 + Phase-4D set; got admit delta = "
-        f"added {admitted - expected} / missing {expected - admitted}"
+        f"Phase 4B C4 invariant: full-pool admit set must be exactly "
+        f"the C2 baseline + Mirrorpool (post-C4 FLIP); got admit "
+        f"delta = added {admitted - expected} / "
+        f"missing {expected - admitted}"
     )
-    # Mirrorpool MUST appear in the decline set (not in admitted).
-    assert "Mirrorpool" not in admitted, (
-        "Phase 4B C2 honest-stop: Mirrorpool must STAY DECLINED at the "
-        "printing-level admit gate post-Cycle-2 (AA[0]'s untouched "
-        "Effect-class teeth bite under the multi-AA all-or-nothing "
-        "contract)"
+    # **Phase 4B C4 inversion (2026-05-26).** Mirrorpool MUST appear
+    # in the admit set post-C4 (was DECLINED pre-C4).
+    assert "Mirrorpool" in admitted, (
+        "Phase 4B C4 FLIP: Mirrorpool must be in the printing-level "
+        "admit dispatcher post-C4 (both per-AA Effect classes now "
+        "admit; multi-AA all-or-nothing gate flips)."
     )
 
 
@@ -498,15 +530,15 @@ def test_aa1_bridge_forward_emit_still_works_post_c2():
 
 
 def test_aa0_bridge_forward_still_honest_declines_post_c2():
-    """**Phase 4B C2 honest-stop sanity — AA[0]'s bridge forward arm
-    still honest-declines (returns None) post-C2.** The C2 widen
-    does NOT touch the cross-engine bridge floor's recognizer set;
-    :func:`_python_aa_to_safe_dict` still has no recognizer for
-    ``CopyTargetInstantOrSorceryYouControl`` so the forward arm
-    falls through to the ``effect_dict is None`` decline.
+    """**Phase 4B C4 inversion — AA[0]'s bridge forward arm FLIPs
+    ADMITTED post-C4.**
 
-    Sibling-of-design-doc-§5.4 spec: the C4 future cycle ships the
-    recognizer + reverse arm + admit widen together.
+    Pre-C4 (post-C2): the C2 widen lived in :mod:`trajectory` only;
+    :func:`_python_aa_to_safe_dict` had no recognizer for AA[0]'s
+    Effect class so the forward arm honest-declined.
+
+    Post-C4: the C4 widen lands the recognizer + reverse arm + admit
+    widen together — the forward arm emits a non-None dict.
     """
     from mtg_bot.cards.base import ManaCost
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
@@ -524,13 +556,15 @@ def test_aa0_bridge_forward_still_honest_declines_post_c2():
         effect=CopyTargetInstantOrSorceryYouControl(),
     )
     d = _python_aa_to_safe_dict(aa)
-    assert d is None, (
-        "Phase 4B C2 honest-stop sanity: AA[0]'s bridge forward arm "
-        "must still honest-decline (return None) post-C2 — no "
-        "recognizer for CopyTargetInstantOrSorceryYouControl exists "
-        "yet (C4 future cycle ships it together with the AA[0] Rust "
-        "substrate)"
+    # **Phase 4B C4 inversion (2026-05-26).**
+    assert d is not None, (
+        "Phase 4B C4 invariant: AA[0]'s bridge forward arm FLIPs "
+        "ADMITTED post-C4 (the recognizer + reverse arm + admit "
+        "widen all land at C4)."
     )
+    assert d["effect"] == {
+        "kind": "copy_target_instant_or_sorcery_you_control",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -539,15 +573,12 @@ def test_aa0_bridge_forward_still_honest_declines_post_c2():
 
 
 def test_mirrorpool_live_per_aa_dict_partial_round_trip_post_c2():
-    """**Phase 4B C2 live round-trip — Mirrorpool's two AAs each
-    serialize through ``_python_aa_to_safe_dict`` independently
-    post-C2.** AA[0] honest-declines (no recognizer); AA[1] succeeds
-    (recognizer + admit set widened).
+    """**Phase 4B C4 inversion — both Mirrorpool AAs round-trip post-
+    C4.**
 
-    Same shape as the C1 file's
-    ``test_mirrorpool_two_aa_list_round_trip_partial_at_c1`` pin —
-    the C1 + C2 state of the bridge floor is identical (the C2
-    widen lives in :mod:`mtg_bot.parity.trajectory` only).
+    Pre-C4 (post-C2): AA[0] honest-declined at the bridge floor (no
+    recognizer); AA[1] succeeded. The C4 widen adds the AA[0]
+    recognizer + reverse arm; both AAs now emit non-None dicts.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
@@ -558,16 +589,17 @@ def test_mirrorpool_live_per_aa_dict_partial_round_trip_post_c2():
     aa0_dict = _python_aa_to_safe_dict(printing.activated_abilities[0])
     aa1_dict = _python_aa_to_safe_dict(printing.activated_abilities[1])
 
-    assert aa0_dict is None, (
-        "Phase 4B C2 invariant: Mirrorpool AA[0] (CopyTargetInstantOr"
-        "SorceryYouControl) bridge forward arm must still honest-"
-        "decline post-Cycle-2 (no recognizer; Rust variant doesn't "
-        "exist)"
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0] emits non-None.
+    assert aa0_dict is not None, (
+        "Phase 4B C4 invariant: Mirrorpool AA[0]'s bridge forward arm "
+        "FLIPs ADMITTED post-C4."
     )
+    assert aa0_dict["effect"] == {
+        "kind": "copy_target_instant_or_sorcery_you_control",
+    }
     assert aa1_dict is not None, (
-        "Phase 4B C2 invariant: Mirrorpool AA[1] (CreateTokenCopyOf"
-        "TargetCreatureYouControl, additional_subtype=None) bridge "
-        "forward arm continues to succeed post-Cycle-2"
+        "Phase 4B C2 invariant: Mirrorpool AA[1]'s bridge forward arm "
+        "emits a non-None dict (C1 forward arm)."
     )
     assert aa1_dict["effect"] == {
         "kind": "create_token_copy_of_target_creature_you_control",

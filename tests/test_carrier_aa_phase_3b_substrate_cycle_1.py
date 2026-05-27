@@ -816,8 +816,11 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         for name in carrier_aa_30
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
     )
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
+    # the full Option A widen.
     assert admits == [
         "Deserted Temple",
+        "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
         "Scavenger Grounds",
@@ -825,8 +828,8 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mystifying Maze', "
+        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying Maze', "
         f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
         f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
         f"A widen in a sibling substrate or predicate would surface "

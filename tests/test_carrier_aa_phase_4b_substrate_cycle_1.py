@@ -419,15 +419,20 @@ def test_mirrorpool_two_aa_list_round_trip_partial_at_c1(synthetic_state):
     aa0_dict = _python_aa_to_safe_dict(printing.activated_abilities[0])
     aa1_dict = _python_aa_to_safe_dict(printing.activated_abilities[1])
 
-    # C1 invariant: AA[0]'s CopyTargetInstantOrSorceryYouControl has
-    # no Rust substrate yet — forward arm declines (returns None).
-    assert aa0_dict is None, (
-        "C1 invariant: Mirrorpool AA[0] (CopyTargetInstantOrSorcery"
-        "YouControl) has NO Rust Effect variant yet (C2 ships it). "
-        "Forward arm declines."
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s
+    # CopyTargetInstantOrSorceryYouControl forward arm landed at C4
+    # — both AAs now round-trip cleanly through the bridge floor.
+    assert aa0_dict is not None, (
+        "Phase 4B C4 invariant: Mirrorpool AA[0] (CopyTargetInstantOr"
+        "SorceryYouControl) ADMITS at the bridge-floor forward emit "
+        "post-C4 — the C4 widen lands the forward arm in "
+        "``_python_aa_to_safe_dict``."
     )
-    # C1 invariant: AA[1]'s CreateTokenCopyOfTargetCreatureYouControl
-    # passes the new C1 forward arm.
+    assert aa0_dict["effect"] == {
+        "kind": "copy_target_instant_or_sorcery_you_control",
+    }
+    # AA[1]'s CreateTokenCopyOfTargetCreatureYouControl forward arm
+    # shipped C1.
     assert aa1_dict is not None, (
         "C1 invariant: Mirrorpool AA[1] (CreateTokenCopyOfTarget"
         "CreatureYouControl, additional_subtype=None) ADMITS at the "
@@ -444,39 +449,16 @@ def test_mirrorpool_two_aa_list_round_trip_partial_at_c1(synthetic_state):
 
 
 def test_mirrorpool_stays_declined_at_admit_gate_post_c2():
-    """**Phase 4B C2 partial-widen invariant — Mirrorpool STILL STAYS
-    DECLINED at the printing-level admit gate post-Cycle-2 (Option A
-    honest-stop).**
+    """**Phase 4B C4 inversion — Mirrorpool FLIPS ADMITTED at the
+    printing-level admit gate post-Cycle-4 (full FLIP).**
 
-    **C2 widen.** The C2 widen at
-    :func:`_carrier_aa_phase_1_effect_classes` adds
-    ``CreateTokenCopyOfTargetCreatureYouControl`` (Mirrorpool's AA[1]
-    pilot Effect class). The per-AA admit predicate
-    :func:`_aa_is_phase1_sub_shape_a` now ADMITS AA[1] (the Effect-
-    class teeth previously biting at C1 are removed).
-
-    **Honest-stop — AA[0] keeps the printing DECLINED.** Mirrorpool's
-    sibling AA[0] ``CopyTargetInstantOrSorceryYouControl`` (CR-707.2
-    spell-copy) has NO Rust substrate at C2 (the new
-    ``Effect::CopyTargetInstantOrSorceryYouControl`` variant + stack-
-    target fan-out + ``StackItem.is_copy`` audit + new push-copy-on-
-    stack resolve arm all defer to a future Rust cycle per design doc
-    §4.1.1). The Effect-class admit set therefore does NOT include
-    ``CopyTargetInstantOrSorceryYouControl`` at C2 (omitting from the
-    widen is intentional — the cross-engine bridge floor would honest-
-    decline this Effect class anyway because no forward arm exists,
-    and the Rust resolve arm would crash on the unknown variant).
-
-    Under the Phase 4A multi-AA all-or-nothing contract
-    (per-AA all-admit-or-decline at
-    :func:`_printing_is_bridge_simple_carrier_aa_land`),
-    Mirrorpool's printing-level admit declines because AA[0] bites on
-    the per-AA Effect-class teeth.
-
-    The full Mirrorpool FLIP DECLINED → ADMITTED requires the AA[0]
-    Rust slice (one or more future Rust cycles) + a follow-up Python
-    Effect-class widen + bridge arms. Refined Phase 4B sequencing in
-    the trajectory.py docstring + worklog.
+    Pre-C4 this asserted the Option A partial-widen honest-stop —
+    AA[0] declines on the missing Effect-class widen, AA[1] admits,
+    printing-level admit STAYS DECLINED on AA[0]'s teeth. The C4 widen
+    closes AA[0] end-to-end (Effect-class widen + forward + reverse
+    bridge arms; C3 Rust substrate at ``e5cd1c18`` is the immediate
+    predecessor). Both per-AA gates pass; the multi-AA all-or-nothing
+    gate flips Mirrorpool ADMITTED.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -488,47 +470,36 @@ def test_mirrorpool_stays_declined_at_admit_gate_post_c2():
     printing = OracleParserCardSource().get_printings()["Mirrorpool"]
     aa0 = printing.activated_abilities[0]
     aa1 = printing.activated_abilities[1]
-    # Per-AA admit teeth: AA[0] STAYS declined (Effect class not in
-    # admit set — Rust substrate gap); AA[1] FLIPS ADMITTED (C2 widen).
-    assert not _aa_is_phase1_sub_shape_a(aa0), (
-        "Phase 4B C2 invariant: AA[0] (CopyTargetInstantOrSorcery"
-        "YouControl) must STAY declined at the per-AA admit predicate "
-        "(its Effect class is intentionally NOT in _carrier_aa_phase_1_"
-        "effect_classes at C2 — the AA[0] Rust substrate ships in a "
-        "future cycle per design doc §4.1.1)."
+    # **Phase 4B C4 inversion (2026-05-26).** Both AAs now admit.
+    assert _aa_is_phase1_sub_shape_a(aa0), (
+        "Phase 4B C4 invariant: AA[0] (CopyTargetInstantOrSorcery"
+        "YouControl) FLIPS ADMITTED at the per-AA admit predicate "
+        "post-C4 — its Effect class is widened by C4."
     )
     assert _aa_is_phase1_sub_shape_a(aa1), (
         "Phase 4B C2 invariant: AA[1] (CreateTokenCopyOfTargetCreature"
-        "YouControl) must FLIP ADMITTED at the per-AA admit predicate "
-        "(C2 widens _carrier_aa_phase_1_effect_classes to include the "
-        "Effect class; the C1 Rust substrate at 434d6aa1/818b4c64 "
-        "shipped target fan-out + validation + target-aware resolve + "
-        "cross-engine forward + reverse arms)."
+        "YouControl) ADMITS at the per-AA admit predicate (C2 widen)."
     )
-    # Printing-level admit (Phase 4A multi-AA all-or-nothing): STILL
-    # declines via the Land predicate AND the unified dispatcher
-    # because AA[0]'s teeth keep biting.
-    assert not _printing_is_bridge_simple_carrier_aa_land(printing), (
-        "Phase 4B C2 invariant: Mirrorpool must STAY declined on the "
-        "Land admit predicate (AA[0]'s Effect-class teeth bite under "
-        "the multi-AA all-or-nothing contract)."
+    # **Phase 4B C4 inversion (2026-05-26).** Printing-level admit
+    # FLIPs ADMITTED via the Land predicate AND the unified dispatcher.
+    assert _printing_is_bridge_simple_carrier_aa_land(printing), (
+        "Phase 4B C4 invariant: Mirrorpool FLIPs ADMITTED on the Land "
+        "admit predicate post-C4 — both per-AA Effect classes admit; "
+        "the multi-AA all-or-nothing gate passes."
     )
-    assert not _printing_is_bridge_simple_carrier_aa_any(printing), (
-        "Phase 4B C2 invariant: Mirrorpool must STAY declined on the "
-        "unified admit dispatcher (AA[0]'s Effect-class teeth bite "
-        "under the multi-AA all-or-nothing contract)."
+    assert _printing_is_bridge_simple_carrier_aa_any(printing), (
+        "Phase 4B C4 invariant: Mirrorpool FLIPs ADMITTED on the "
+        "unified admit dispatcher post-C4 — the Land sibling admits."
     )
 
 
 def test_create_token_copy_effect_class_admit_set_post_c2():
-    """**Sentinel pin — the C2 admit-set IS WIDENED to include
-    ``CreateTokenCopyOfTargetCreatureYouControl``** but NOT the
-    sibling ``CopyTargetInstantOrSorceryYouControl`` (the AA[0]
-    half), per Option A's partial-widen contract.
+    """**Phase 4B C4 inversion — both AA[0] and AA[1] Effect classes
+    are in the admit set post-C4 (full FLIP).**
 
-    Pins the C2 admit-set surface exactly so the Phase 4B C3+/C4 FLIP
-    cycle has a precise inversion point (C4 ships the AA[0] half).
-    Sibling of the Phase 3A/3B/3C/4C/4D/4E admit-set sentinel pins.
+    Pre-C4 this asserted the C2 Option-A partial-widen contract
+    (AA[1]'s class IN, AA[0]'s class OUT). The C4 widen lands AA[0]'s
+    Effect class as well.
     """
     from mtg_bot.effects.generic.stack_control import (
         CopyTargetInstantOrSorceryYouControl,
@@ -543,21 +514,15 @@ def test_create_token_copy_effect_class_admit_set_post_c2():
     assert CreateTokenCopyOfTargetCreatureYouControl in admit_set, (
         "Phase 4B C2 invariant: CreateTokenCopyOfTargetCreatureYou"
         "Control must be in _carrier_aa_phase_1_effect_classes "
-        "post-Cycle-2 (the C1 Rust substrate at 434d6aa1 shipped the "
-        "fan-out + validation + resolve + bridge arms; C2 widens the "
-        "admit set)."
+        "post-Cycle-2."
     )
-    # C2 does NOT add CopyTargetInstantOrSorceryYouControl (Option A
-    # honest-stop — AA[0] Rust substrate not yet shipped).
-    assert CopyTargetInstantOrSorceryYouControl not in admit_set, (
-        "Phase 4B C2 invariant (Option A honest-stop): "
-        "CopyTargetInstantOrSorceryYouControl must NOT be in "
-        "_carrier_aa_phase_1_effect_classes at C2 — its Rust ``Effect`` "
-        "variant + stack-target fan-out + push-copy-on-stack resolve "
-        "arm + StackItem.is_copy audit all defer to a future Rust "
-        "cycle per design doc §4.1.1. The Python admit widen + bridge "
-        "arms ship together with the Rust slice in a future Python "
-        "cycle (refined sequencing in trajectory.py docstring)."
+    # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s class IS in the
+    # admit set post-C4.
+    assert CopyTargetInstantOrSorceryYouControl in admit_set, (
+        "Phase 4B C4 invariant: CopyTargetInstantOrSorceryYouControl "
+        "must BE in _carrier_aa_phase_1_effect_classes post-C4 — the "
+        "AA[0] Python admit widen + bridge arms close the full FLIP "
+        "(C3 Rust substrate at ``e5cd1c18``)."
     )
 
 

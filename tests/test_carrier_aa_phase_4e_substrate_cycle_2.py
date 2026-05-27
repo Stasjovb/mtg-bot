@@ -637,20 +637,21 @@ def test_phase_4e_c2_no_regression_on_phase_1_3_carriers():
 
 @pytest.mark.parametrize(
     "name",
-    # Post-Phase-4C-C2 + Phase-4D-C2: Ghost Vacuum + Keys to the House
-    # have FLIPped DECLINED -> ADMITTED. Only Mirrorpool still declines
-    # (4B ships its 2 Effect-class widens — spell-copy + token-copy).
-    ["Mirrorpool"],
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
+    # the full Option A widen — no Phase-4 multi-AA carriers remain
+    # in the decline set at the per-AA admit predicate. The parametrize
+    # list is now empty; the standalone sentinel
+    # ``test_phase_4_declined_carriers_set_is_empty_post_4b_c4`` in
+    # ``test_carrier_aa_phase_4a_substrate_cycle_1.py`` asserts the
+    # emptiness invariant.
+    [],
 )
 def test_phase_4e_c2_other_phase_4_carriers_stay_declined(name):
-    """**Phase 4E C2 no-silent-auto-grow pin (post-Phase-4C-C2 +
-    Phase-4D-C2).** The remaining Phase-4 multi-AA carrier that
-    hasn't yet shipped its FLIP (Mirrorpool) STAYS DECLINED. Ghost
-    Vacuum + Keys to the House were here pre-C2 but have FLIPped
-    ADMITTED via the Phase 4C C2 + Phase 4D C2 widens (Effect-class
-    + sorcery_speed AA-rider). Phase 4B ships the Mirrorpool widens
-    (CopyTargetInstantOrSorceryYouControl +
-    CreateTokenCopyOfTargetCreatureYouControl).
+    """**Phase 4B C4 inversion — empty parametrize.** The 4E C2 pin
+    used to walk Mirrorpool as the last remaining Phase-4 multi-AA
+    decline; the C4 widen FLIPped Mirrorpool ADMITTED. The parametrize
+    list is now empty (no Phase-4 multi-AA carriers decline at the
+    per-AA admit predicate).
     """
     from mtg_bot.cards.parser_source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -661,11 +662,24 @@ def test_phase_4e_c2_other_phase_4_carriers_stay_declined(name):
 
     ps = OracleParserCardSource().get_printings()
     p = ps[name]
-    # Both predicate and builder must decline.
-    assert _printing_is_bridge_simple_carrier_aa_any(p) is False, (
-        f"{name} must STAY DECLINED at the dispatcher post-Phase-4E-"
-        f"C2 + Phase-4C-C2 + Phase-4D-C2 (Phase 4B ships the Mirrorpool "
-        f"widens)"
-    )
+    assert _printing_is_bridge_simple_carrier_aa_any(p) is False
     assert _carrier_aa_land_card_def(p) is None
     assert _carrier_aa_artifact_card_def(p) is None
+
+
+def test_phase_4e_c2_no_remaining_phase_4_multi_aa_declines_post_4b_c4():
+    """**Phase 4B C4 sentinel.** Sibling of the inverted parametrize
+    test above — explicitly asserts Mirrorpool (and any future
+    Phase-4 multi-AA carrier) admits at the unified dispatcher
+    post-C4. No silent regression-to-decline.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_carrier_aa_any,
+    )
+
+    ps = OracleParserCardSource().get_printings()
+    assert _printing_is_bridge_simple_carrier_aa_any(ps["Mirrorpool"]) is True, (
+        "Phase 4B C4 invariant: Mirrorpool must ADMIT at the unified "
+        "dispatcher post-C4."
+    )

@@ -590,8 +590,14 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         for name in carrier_aa_30
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
     )
+    # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
+    # the full Option A widen (Effect-class widen for
+    # ``CopyTargetInstantOrSorceryYouControl`` + bridge arms);
+    # combined with the C2 widen for AA[1] both per-AA gates pass and
+    # the multi-AA all-or-nothing gate flips the printing.
     assert admits == [
         "Deserted Temple",
+        "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
         "Scavenger Grounds",
@@ -599,9 +605,9 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 3C C3 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mystifying Maze', "
-        f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
+        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying "
+        f"Maze', 'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
         f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
         f"A widen in a sibling substrate or predicate would surface "
         f"here as a silent auto-grow — investigate before merging."
