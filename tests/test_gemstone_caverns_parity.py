@@ -315,3 +315,192 @@ def test_cross_engine_real_eoe_gemstone_caverns_mana_ability_legendary_any_parit
     assert coin.color == "any"
     assert coin.spend_restriction is None
     assert len(py_state.players[1].mana_pool) == 0
+
+
+# ---------------------------------------------------------------------------
+# (5) Phase 4E variant probe — cross-engine MINT + PAY byte-equality on
+# the actual parsed Gemstone Caverns printing.
+#
+# This closes the "different probe shape" follow-on identified in the
+# 2026-05-25 Rust-parity-campaign handoff: Gemstone Caverns is a LAND
+# that produces ``any`` on tap (no AA mint, just produces ``any`` on
+# tap) and therefore exercises the Phase 4E payment-time satisfies-any-
+# color path on a real-EoE Land carrier — distinct from the AA[0] spell-
+# side wildcard mint shape (All-Fates Scroll / batch-3 sibling).
+#
+# The mint-only probe above closed the substrate-only contract at the
+# AddManaToPool resolve surface.  The Phase 4E payment-time substrate
+# (commit ``daecd399``, 2026-05-27) shipped the deferred CR 106.5
+# satisfies-any-color semantics: a wildcard ``any`` coin satisfies any
+# colored requirement at ``pay_mana_cost`` / ``pool_can_cover`` /
+# ``auto_tap_pay_for_cost``.  This test composes Gemstone Caverns's
+# AA-emitted ``any`` coin against that newly-landed payment surface
+# cross-engine — the FIRST PROBE_MODULES-credited probe binding a
+# real-EoE Land's wildcard MINT to the Phase 4E PAYMENT-time semantics
+# round-tripped byte-equal between Rust ``ManaPool`` and Python
+# ``ManaCoin`` pool.
+# ---------------------------------------------------------------------------
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_gemstone_caverns_mint_then_pay_colored_byte_equal():
+    """**Phase 4E variant probe — Gemstone Caverns wildcard MINT + colored
+    PAY round-trip byte-equal cross-engine.**
+
+    Drives the **ACTUAL parsed Gemstone Caverns printing** through a
+    full mint→pay sequence on BOTH engines and asserts byte-equality
+    on the post-pay ManaPool snapshot at each step:
+
+      1. Empty starting pool — 7-key snapshot all-zero on both sides.
+      2. Resolve Gemstone Caverns's mana ability (mint one ``any``
+         coin) — both pools show ``any=1``, all other slots 0.
+      3. Pay ``{W}`` from the wildcard — both pools fully drain
+         (``any=0``, ``W=0``).
+
+    **Newness vs. the mint-only probe above:** that probe pinned the
+    Effect+bridge layer at the resolve surface but did NOT exercise
+    the Phase 4E payment surface — at the time it landed, paying a
+    colored cost with an ``any`` coin was a deferred follow-on. Now
+    that the payment substrate has landed (commit ``daecd399``), this
+    test pins the end-to-end MINT + PAY round trip byte-equal,
+    closing the variant probe the 2026-05-25 handoff flagged.
+
+    **Bridge arms exercised:**
+      * ``add_mana_to_pool`` (mint, round-27 bridge arm).
+      * ``_python_mana_pool_signature`` (7-tuple snapshot on Python
+        ``list[ManaCoin]``).
+      * Rust ``GameState.get_mana_pool`` (7-key snapshot).
+      * Rust ``GameState.pay_mana_cost`` (Phase 4E payment-time
+        satisfies-any-color drain — ``daecd399``).
+      * Python ``_coin_matches_color`` (matches the ``"any"`` coin
+        against any color string — the Python SoT the Rust widening
+        mirrors).
+
+    **Observables asserted at each step:**
+      * Step-1 snapshot byte-equality (empty pool, 7 zeros on both).
+      * Step-2 snapshot byte-equality (post-mint: ``any=1`` only).
+      * Step-3 snapshot byte-equality (post-pay: fully empty).
+    """
+    import mtg_bot_engine as e
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.game import ManaCoin, Zone
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        _python_mana_pool_signature,
+        build_python_state,
+    )
+    from mtg_bot.actions import _coin_matches_color
+
+    # ------------------------------------------------------------------
+    # 0. Resolve the real-EoE Gemstone Caverns printing + its any-mint
+    #    AddManaToPool AA.
+    # ------------------------------------------------------------------
+    real = get_active_source().get_printings().get("Gemstone Caverns")
+    if real is None:
+        pytest.skip("Gemstone Caverns absent from active CardSource")
+    aa = next(
+        aa for aa in real.activated_abilities
+        if isinstance(aa.effect, AddManaToPool)
+        and aa.effect.produces == (("any", 1),)
+    )
+    assert aa.effect.spend_restriction is None
+
+    # ------------------------------------------------------------------
+    # 1. Empty-pool snapshot byte-equality (sanity / pre-mint).
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    py_source = py_state.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_source.tapped = False
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+
+    r = e.Registry()
+    gs = e.make_state(r, [], [])
+
+    def _rust_snapshot(gs_, pid):
+        return tuple(sorted(gs_.get_mana_pool(pid).items()))
+
+    py_sig_empty = _python_mana_pool_signature(py_state.players[0].mana_pool)
+    rust_sig_empty = _rust_snapshot(gs, 0)
+    assert py_sig_empty == rust_sig_empty, (
+        f"Step-1 empty-pool snapshot must be byte-equal cross-engine; "
+        f"python={py_sig_empty}, rust={rust_sig_empty}"
+    )
+
+    # ------------------------------------------------------------------
+    # 2. Mint: resolve Gemstone Caverns's AA on Python; add_mana("any",1)
+    #    on Rust. Snapshot equality after the mint.
+    # ------------------------------------------------------------------
+    aa.effect.resolve(py_state, py_source.controller_id)
+    gs.add_mana(0, "any", 1)
+
+    py_sig_post_mint = _python_mana_pool_signature(
+        py_state.players[0].mana_pool
+    )
+    rust_sig_post_mint = _rust_snapshot(gs, 0)
+    assert py_sig_post_mint == rust_sig_post_mint, (
+        f"Step-2 post-mint snapshot must be byte-equal cross-engine; "
+        f"python={py_sig_post_mint}, rust={rust_sig_post_mint}"
+    )
+    # And exactly the expected 7-tuple shape.
+    expected_post_mint = (
+        ("B", 0), ("C", 0), ("G", 0), ("R", 0),
+        ("U", 0), ("W", 0), ("any", 1),
+    )
+    assert py_sig_post_mint == expected_post_mint, (
+        f"Step-2 snapshot must reflect a single wildcard coin; got "
+        f"{py_sig_post_mint}"
+    )
+
+    # ------------------------------------------------------------------
+    # 3. Pay {W}: the wildcard coin pays the colored pip on both engines
+    #    via the Phase 4E payment-time satisfies-any-color semantics.
+    # ------------------------------------------------------------------
+    # Python SoT pin: the ``any`` coin matches the W color string at
+    # the matches-color predicate.
+    py_coin = py_state.players[0].mana_pool[0]
+    assert _coin_matches_color(py_coin, "W"), (
+        "Python ``_coin_matches_color`` must return True for an "
+        "``any`` coin against any color string — this is the Python "
+        "SoT the Rust widening mirrors"
+    )
+    # Drain the wildcard coin on the Python side (mirrors the spend
+    # by ``actions._consume_for_color`` / ``auto_tap_for_cost``).
+    py_state.players[0].mana_pool.pop(0)
+
+    # Rust side: pay_mana_cost drains the wildcard coin from the
+    # `any` slot via the Phase 4E payment-time satisfies-any-color path.
+    ok = gs.pay_mana_cost(0, {"W": 1})
+    assert ok, (
+        "Rust ``pay_mana_cost`` must accept a wildcard ``any`` coin "
+        "as payment for a {W} requirement (Phase 4E payment-time "
+        "satisfies-any-color semantics — commit daecd399)"
+    )
+
+    py_sig_post_pay = _python_mana_pool_signature(
+        py_state.players[0].mana_pool
+    )
+    rust_sig_post_pay = _rust_snapshot(gs, 0)
+    assert py_sig_post_pay == rust_sig_post_pay, (
+        f"Step-3 post-pay snapshot must be byte-equal cross-engine; "
+        f"python={py_sig_post_pay}, rust={rust_sig_post_pay}"
+    )
+    # And both pools fully empty post-pay.
+    expected_post_pay = (
+        ("B", 0), ("C", 0), ("G", 0), ("R", 0),
+        ("U", 0), ("W", 0), ("any", 0),
+    )
+    assert py_sig_post_pay == expected_post_pay, (
+        f"Step-3 snapshot must reflect a fully-drained pool; got "
+        f"{py_sig_post_pay}"
+    )
+    # p1's pool untouched throughout.
+    assert _rust_snapshot(gs, 1) == expected_post_pay
+    assert (
+        _python_mana_pool_signature(py_state.players[1].mana_pool)
+        == expected_post_pay
+    )
