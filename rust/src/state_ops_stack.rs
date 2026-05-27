@@ -234,6 +234,37 @@ impl GameState {
         }
     }
 
+    /// **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).** Getter
+    /// for the top stack item's `is_copy` bookkeeping flag. Returns
+    /// `false` for every pre-Cycle-3 push and `true` only on the new
+    /// push performed by the
+    /// `Effect::CopyTargetInstantOrSorceryYouControl` resolve arm.
+    /// Returns `false` on an empty stack.
+    fn stack_top_is_copy(&self) -> bool {
+        self.stack
+            .last()
+            .map(|item| item.is_copy)
+            .unwrap_or(false)
+    }
+
+    /// **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).**
+    /// Synthetic-test setter for the top stack item's `is_copy` slot.
+    fn set_stack_top_is_copy(&mut self, is_copy: bool) {
+        if let Some(item) = self.stack.last_mut() {
+            item.is_copy = is_copy;
+        }
+    }
+
+    /// **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).** Per-
+    /// item `is_copy` getter — accepts a stack index, returns the
+    /// flag at that index. Out-of-range returns `false`.
+    fn stack_item_is_copy(&self, index: usize) -> bool {
+        self.stack
+            .get(index)
+            .map(|item| item.is_copy)
+            .unwrap_or(false)
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the

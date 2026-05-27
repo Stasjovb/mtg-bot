@@ -4483,6 +4483,43 @@ pub enum Effect {
     /// **Python field drop.** Python's `additional_subtype` field is
     /// deferred (Rust has no subtypes on registry yet).
     CreateTokenCopyOfTargetCreatureYouControl,
+    /// **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).** Copy
+    /// target instant or sorcery spell you control. Mirrors Python's
+    /// `CopyTargetInstantOrSorceryYouControl` (Mirrorpool's AA[0] —
+    /// CR-707.2 spell-copy substrate; the most novel substrate of
+    /// Phase 4).
+    ///
+    /// **CR 707.2 semantics (Phase 4B C3 first-slice).** Target a
+    /// `StackItem` such that: (a) `stack_item.controller ==
+    /// activator_controller`, (b) `stack_item.kind == Spell`, (c) the
+    /// item's printing is_instant OR is_sorcery. On resolve, if the
+    /// target left the stack since activation (CR 608.2b), fizzle
+    /// silently. Else clone the target StackItem with `is_copy=true`,
+    /// SAME printing_id (no registry push — the copy points at the
+    /// original printing), SAME targets / modes / X / kicker, SAME
+    /// controller (activator's — Mirrorpool's "you control" rider).
+    /// The copy is INSERTED UNDER the resolving AA on the stack (at
+    /// position len-1) so when the AA pops after `apply_effect`
+    /// returns, the copy is left at the new top of stack — per CR
+    /// 608.2 / 707.2 the copy resolves BEFORE the original because
+    /// it sits on top of the original after the AA pops.
+    ///
+    /// **Phase 4B C3 first-slice simplifications:**
+    /// - SAME targets (the original's `target_obj_id` / `_2` / `_3`
+    ///   ride into the copy verbatim); agent-chooses-new-targets per
+    ///   CR 707.10b is Phase N.
+    /// - SAME modes / X / kicker selections.
+    /// - SAME controller (activator's per Mirrorpool's "you control"
+    ///   rider). Cross-controller spell-copy (Twincast / Reverberate
+    ///   shape) is Phase N per design doc §3.9.
+    ///
+    /// **Substrate-only invariant.** Mirrorpool STAYS DECLINED at the
+    /// production-deck admit gate post-Cycle-3. The Python admit
+    /// widen + bridge arms + Mirrorpool FLIP ship C4 per design doc
+    /// §7.2.
+    ///
+    /// **Unit variant.** No fields beyond the kind discriminator.
+    CopyTargetInstantOrSorceryYouControl,
     /// **Round 28 coverage extension.** "You may sacrifice an
     /// artifact. If you do, [inner_effect]." Mirrors Python's
     /// `OptionalSacArtifactForEffect` (`combinators.py:299` —
@@ -13751,6 +13788,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "create_token_copy_of_target_creature_you_control" => {
             Ok(Effect::CreateTokenCopyOfTargetCreatureYouControl)
         }
+        "copy_target_instant_or_sorcery_you_control" => {
+            // **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).**
+            // Unit-variant parse for CR-707.2 spell-copy substrate
+            // (Mirrorpool's AA[0]). Sibling of the token-creature-copy
+            // unit variant above; both are Mirrorpool's two AAs.
+            Ok(Effect::CopyTargetInstantOrSorceryYouControl)
+        }
         "optional_sac_artifact_for_effect" => {
             let nested = dict.get_item("inner_effect")?.ok_or_else(|| {
                 PyValueError::new_err(
@@ -19471,6 +19515,12 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::CreateTokenCopyOfTargetCreatureYouControl => {
             d.set_item("kind", "create_token_copy_of_target_creature_you_control")?;
+        }
+        Effect::CopyTargetInstantOrSorceryYouControl => {
+            // **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).**
+            // Unit-variant to_pydict arm for the CR-707.2 spell-copy
+            // substrate (Mirrorpool's AA[0]).
+            d.set_item("kind", "copy_target_instant_or_sorcery_you_control")?;
         }
         Effect::OptionalSacArtifactForEffect { inner_effect } => {
             d.set_item("kind", "optional_sac_artifact_for_effect")?;

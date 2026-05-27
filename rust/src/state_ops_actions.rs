@@ -1104,6 +1104,24 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::CreateTokenCopyOfTargetCreatureYouControl,
                 );
+                // **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).**
+                // Recognize ``Effect::CopyTargetInstantOrSorceryYouControl``
+                // as another target-shape on the ``target_creature_id``
+                // slot — when an AA's effect is this variant
+                // (Mirrorpool's AA[0]), the ``target_creature_id`` slot
+                // acts as the chosen target spell's ``source_obj_id``.
+                // Validation walks ``state.stack`` for the target id,
+                // re-checks (a) stack presence, (b) StackItemKind::Spell,
+                // (c) controller == activator, (d) printing is instant
+                // OR sorcery.
+                //
+                // **target_creature_id is OPTIONAL** on this effect —
+                // the substrate-fallback path in the resolve arm (no
+                // target seated) is silent-fizzle.
+                let is_copy_target_instant_or_sorcery_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::CopyTargetInstantOrSorceryYouControl,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1347,6 +1365,72 @@ impl GameState {
                                          Creature on the activator's bf; \
                                          CR 707.5 — Mirrorpool's AA[1] \
                                          targets `target creature you control`)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
+                    } else if is_copy_target_instant_or_sorcery_effect {
+                        // **Carrier-AA substrate Phase 4B Cycle 3
+                        // (2026-05-26).** Stack-target validation for
+                        // Mirrorpool's AA[0] (CR-707.2 spell-copy).
+                        // Re-checks the chosen target id against
+                        // ``state.stack`` for (a) stack presence, (b)
+                        // StackItemKind::Spell, (c) controller ==
+                        // activator, (d) printing is instant OR
+                        // sorcery.
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) is silent-
+                        // fizzle.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                let target_legal: bool = {
+                                    let registry = &state.registry;
+                                    let activator = controller_idx as u8;
+                                    state.stack.iter().any(|si| {
+                                        if si.source_obj_id != target_id {
+                                            return false;
+                                        }
+                                        if si.controller != activator {
+                                            return false;
+                                        }
+                                        if !matches!(
+                                            si.kind,
+                                            crate::state::StackItemKind::Spell,
+                                        ) {
+                                            return false;
+                                        }
+                                        let Some(stack_obj) = state
+                                            .stack_objects
+                                            .iter()
+                                            .find(|so| so.id == si.source_obj_id)
+                                        else {
+                                            return false;
+                                        };
+                                        let Some(printing) = registry
+                                            .printings
+                                            .get(stack_obj.printing_id as usize)
+                                        else {
+                                            return false;
+                                        };
+                                        printing.card_types.iter().any(|t| {
+                                            t == "Instant" || t == "Sorcery"
+                                        })
+                                    })
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         spell-copy target (must be an \
+                                         instant or sorcery spell on the \
+                                         stack controlled by the activator; \
+                                         CR 707.2 — Mirrorpool's AA[0] \
+                                         targets `target instant or sorcery \
+                                         spell you control`)"
                                     )));
                                 }
                                 Some(target_id)

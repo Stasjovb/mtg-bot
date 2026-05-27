@@ -4026,6 +4026,79 @@ impl GameState {
                             None,
                         )?);
                     }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::CopyTargetInstantOrSorceryYouControl,
+                ) {
+                    // **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-
+                    // 26).** Stack-target fan-out arm per design doc
+                    // §4.1.1 (Mirrorpool's AA[0] — CR-707.2 spell-copy).
+                    // Walks ``state.stack`` for activator-controlled
+                    // Spell-kind items whose printing is instant or
+                    // sorcery; emits one ``ActivateAbility`` per
+                    // eligible target with
+                    // ``target_creature_id = Some(stack_item.
+                    // source_obj_id)``.
+                    //
+                    // **Upstream sorcery-timing caveat.** The AA
+                    // emission block is gated on ``is_sorcery_timing``
+                    // (stack empty required); this arm fires from
+                    // ``legal_decisions`` only when stack is empty,
+                    // making the legal-decisions emission path
+                    // unreachable in production for spell-copy
+                    // (Mirrorpool's AA[0] requires a spell on the
+                    // stack to target). The validation arm in
+                    // ``state_ops_actions.rs::ActivateAbility`` + the
+                    // resolve arm in ``state_ops_resolve.rs`` are NOT
+                    // gated on this — direct callers (apply_action)
+                    // drive the full substrate end-to-end. A future
+                    // cycle can promote AA emission to instant-speed
+                    // for Mirrorpool-shape AAs.
+                    //
+                    // **Substrate-only invariant.** Mirrorpool STAYS
+                    // DECLINED at the production-deck admit gate
+                    // post-Cycle-3 because
+                    // ``_carrier_aa_phase_1_effect_classes`` doesn't
+                    // yet include this Effect class (C4 ships the
+                    // widen).
+                    let activator = idx as u8;
+                    for stack_item in self.stack.iter() {
+                        if stack_item.controller != activator {
+                            continue;
+                        }
+                        if !matches!(
+                            stack_item.kind,
+                            crate::state::StackItemKind::Spell,
+                        ) {
+                            continue;
+                        }
+                        let Some(stack_obj) = self
+                            .stack_objects
+                            .iter()
+                            .find(|so| so.id == stack_item.source_obj_id)
+                        else {
+                            continue;
+                        };
+                        let Some(t_printing) =
+                            self.registry.lookup(stack_obj.printing_id)
+                        else {
+                            continue;
+                        };
+                        let is_instant_or_sorcery = t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Instant" || t == "Sorcery");
+                        if !is_instant_or_sorcery {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            Some(stack_item.source_obj_id),
+                            None,
+                        )?);
+                    }
                 } else {
                     actions.push(activate_ability_dict(
                         py,

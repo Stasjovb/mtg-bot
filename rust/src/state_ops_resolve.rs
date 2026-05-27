@@ -15096,6 +15096,128 @@ fn apply_effect(
                 state.created_tokens_this_turn[cidx] = true;
             }
         }
+        // **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).**
+        // CR-707.2 spell-copy resolve arm. Mirrorpool's AA[0]
+        // (`{2}{C}, {T}, Sacrifice this land: Copy target instant
+        // or sorcery spell you control. You may choose new targets
+        // for the copy.`). Reads
+        // `current_resolve_payload_target_id` for the chosen target
+        // stack item's source_obj_id; re-validates per CR 608.2b
+        // (target legality re-check at resolve time — fizzle
+        // silently if the target left the stack or no longer
+        // matches the criteria); else clones the target StackItem
+        // with `is_copy=true`, SAME targets / modes / X / kicker /
+        // printing_id, controller = activator.
+        //
+        // **Critical sequencing.** `apply_effect` runs BEFORE the
+        // resolving AA is popped from the stack (see
+        // `resolve_top_of_stack` — the pop happens AFTER
+        // `apply_effect` returns). If we pushed the copy onto the
+        // TOP of the stack here, the subsequent `pop()` would pop
+        // the COPY (treating it as the resolving AA) and the AA
+        // itself would never pop — breaking the resolve invariant.
+        // The fix: insert the copy at `state.stack.len() - 1` —
+        // UNDER the resolving AA. When the resolver returns from
+        // `apply_effect` and pops, the AA pops correctly, and the
+        // copy is left at the new top of stack — which is the
+        // right CR 608.2 / 707.2 ordering (the copy resolves BEFORE
+        // the original because it sits on top of the original after
+        // both the AA pops AND the copy was inserted UNDER it).
+        //
+        // **DO NOT** dispatch `Event::SpellCast` — copies are NEVER
+        // cast (CR 707.10). The existing stack-resolution machinery
+        // picks the copy up on the next resolve_top_of_stack call.
+        Effect::CopyTargetInstantOrSorceryYouControl => {
+            // Locate source controller (the activator) — required
+            // for the controller-match validation.
+            let mut src_controller: Option<u8> = None;
+            'outer_cp: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'outer_cp;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let activator = match src_controller {
+                Some(c) => c,
+                None => state.active_player,
+            };
+            // Read the payload target id seated by the
+            // ActivateAbility validation arm.
+            let Some(target_id) = state.current_resolve_payload_target_id
+            else {
+                // No payload target — silent fizzle (CR 608.2b /
+                // 707.2: copy substrate has no deterministic-first
+                // fallback on the stack because spell-copy is opt-in
+                // per-target).
+                return Ok(());
+            };
+            // Re-validate (CR 608.2b): target must STILL be on the
+            // stack, kind == Spell, controller == activator, and
+            // printing is_instant OR is_sorcery.
+            let target_item_idx: Option<usize> = state
+                .stack
+                .iter()
+                .position(|si| {
+                    if si.source_obj_id != target_id {
+                        return false;
+                    }
+                    if si.controller != activator {
+                        return false;
+                    }
+                    if !matches!(si.kind, StackItemKind::Spell) {
+                        return false;
+                    }
+                    let Some(stack_obj) = state
+                        .stack_objects
+                        .iter()
+                        .find(|so| so.id == si.source_obj_id)
+                    else {
+                        return false;
+                    };
+                    let Some(printing) = state
+                        .registry
+                        .printings
+                        .get(stack_obj.printing_id as usize)
+                    else {
+                        return false;
+                    };
+                    printing.card_types.iter().any(|t| {
+                        t == "Instant" || t == "Sorcery"
+                    })
+                });
+            let Some(idx) = target_item_idx else {
+                // Target left the stack or no longer matches — fizzle.
+                return Ok(());
+            };
+            // Clone the target StackItem with `is_copy=true`. SAME
+            // targets / modes / X / kicker / printing_id / controller.
+            let mut copy_item = state.stack[idx].clone();
+            copy_item.is_copy = true;
+            // Insert UNDER the resolving AA (at position len-1) so
+            // the AA pops correctly post-apply_effect and the copy
+            // is left at the new top of stack.
+            let insert_at = state.stack.len().saturating_sub(1);
+            state.stack.insert(insert_at, copy_item);
+        }
         // Round-28 "may sac for inner effect". First-slice
         // deterministic-yes: if controller controls an artifact,
         // sacrifice the first one + recursively apply inner. No
@@ -26649,6 +26771,9 @@ impl GameState {
             // no printing → X-cost detection never fires → default
             // `None` (back-compat).
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Synthetic
+            // bespoke spell push (test helper) — not a CR-707.2 copy.
+            is_copy: false,
         });
         Ok(next_id)
     }

@@ -1581,6 +1581,39 @@ pub struct StackItem {
     /// `chosen_mode_idx` / `additional_cost_choice_id` /
     /// `chosen_mode_idxs`.
     pub x_value: Option<i32>,
+    /// **Carrier-AA substrate Phase 4B Cycle 3 (2026-05-26).** Marks
+    /// this StackItem as a copy of another spell (per CR 707.2 —
+    /// "copies" of instants and sorceries pushed to the stack by an
+    /// effect like Mirrorpool's AA[0]
+    /// `CopyTargetInstantOrSorceryYouControl`). Per CR 707.10, a
+    /// copy is a NEW object on the stack — it is not "cast" (no
+    /// `Event::SpellCast` fires), but it resolves like any other
+    /// spell. The flag is mostly bookkeeping for future interactions
+    /// that ask "is this stack item a copy?" (e.g. some "counter
+    /// target spell that wasn't cast" interactions, or copy-counting
+    /// triggers like "whenever you copy a spell").
+    ///
+    /// **First-slice scope (substrate-only).** Phase 4B C3 mints the
+    /// field on every StackItem with a `false` default and sets it
+    /// to `true` only on the new push performed by the
+    /// `Effect::CopyTargetInstantOrSorceryYouControl` resolve arm.
+    /// No consumer in Rust reads it yet — it is the forward substrate
+    /// for any future "is this a copy" gate. Python's StackItem
+    /// dataclass does NOT have an equivalent field today (Python
+    /// uses layered `"is_copy"` registry entries on GameObjects per
+    /// CR 706.2 — a different "is_copy" concept that applies to
+    /// permanents-that-are-copies, not stack items). So the Rust
+    /// `is_copy` flag is Rust-only bookkeeping at this slice; if
+    /// Python ever grows a sibling field, the round-trip codec can
+    /// add a mirror arm at that time.
+    ///
+    /// **NOT in the per-StackItem fingerprint tuple** so pre-
+    /// substrate stacks stay byte-equal — same discipline as
+    /// `chosen_mode_idx` / `additional_cost_choice_id` /
+    /// `chosen_mode_idxs` / `x_value`. Every pre-Cycle-3 StackItem
+    /// constructor + back-compat synthetic test push leaves this
+    /// field at `false`.
+    pub is_copy: bool,
 }
 
 impl StackItem {
@@ -1623,6 +1656,9 @@ impl StackItem {
             // detector (Cycle 2/3 work); default `None` is back-
             // compat-correct for every pre-cycle non-X-cost spell.
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Every bare
+            // spell push originates from a CR-601 cast, NOT a copy.
+            is_copy: false,
         }
     }
 
@@ -1694,6 +1730,9 @@ impl StackItem {
             // 2-slot caller is on a non-X-cost spell, so the back-
             // compat default holds).
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Targeted
+            // spell push originates from a real cast, NOT a copy.
+            is_copy: false,
         }
     }
 
@@ -1783,6 +1822,9 @@ impl StackItem {
             // `chosen_mode_idx` `None`).
             chosen_mode_idxs: None,
             x_value,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Cast
+            // pipeline target-carrying push site — not a copy.
+            is_copy: false,
         }
     }
 
@@ -1844,6 +1886,9 @@ impl StackItem {
             // modal reads `effects[0] is ChooseOneMode`); leave
             // `None`.
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** `or_both`
+            // modal pushes originate from a CR-601 cast, NOT a copy.
+            is_copy: false,
         }
     }
 
@@ -1902,6 +1947,10 @@ impl StackItem {
             // pathway per CR 601.2f-h; triggers don't carry an X
             // value. `None` for every trigger.
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Spell-
+            // kind-only — triggers aren't "copies" in the CR-707.2
+            // spell-copy sense.
+            is_copy: false,
         }
     }
 
@@ -1948,6 +1997,9 @@ impl StackItem {
             chosen_mode_idxs: None,
             // X-value subsystem Cycle 1: Spell-kind-only.
             x_value: None,
+            // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Trigger
+            // with target — not a CR-707.2 spell copy.
+            is_copy: false,
         }
     }
 }
