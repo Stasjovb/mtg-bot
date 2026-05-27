@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **442 / 475 EoE cards (93.1%) are byte-equal at the Effect+bridge level**; of those, **400 (84.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 42 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **442 / 475 EoE cards (93.1%) are byte-equal at the Effect+bridge level**; of those, **401 (84.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 41 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **33 (6.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 400 | 84.2% |
-| Effect+bridge covered (not individually probed) | 42 | 8.8% |
+| PROBED byte-equal | 401 | 84.4% |
+| Effect+bridge covered (not individually probed) | 41 | 8.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -397,6 +397,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Thawbringer
 - The Dominion Bracelet
 - The Endstone
+- The Eternity Elevator
 - The Seriema
 - Thespian's Stage
 - Thornspire Verge

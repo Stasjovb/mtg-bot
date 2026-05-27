@@ -3433,6 +3433,60 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Vacuum exits BLOCKED). Sibling of the Phase 3 PROBE_MODULES
     # registrations (e.g. Thespian's Stage's Phase 3C closure).
     REPO_ROOT / "tests" / "test_ghost_vacuum_parity.py",
+    # **Spacecraft Station substrate Phase 4 Cycle 3 (2026-05-26) --
+    # The Eternity Elevator PROBED-tier flip; SPACECRAFT 8/8 CAMPAIGN
+    # FULL CLOSURE.** The Phase 4 Cycle 1 substrate landing
+    # (``354588a5``) shipped the Rust ``Effect::
+    # AddChargeCounterManaOfChosenColor`` unit variant + parse +
+    # resolve + ``to_pydict`` + cross-engine bridge arms. The Phase 4
+    # Cycle 2 admit-gate FLIP (``4a2485f1``) widened
+    # ``_carrier_aa_phase_1_effect_classes`` (14 -> 15 to admit the
+    # new Effect class) + ``_aa_is_phase1_sub_shape_a`` (lifted the
+    # ``tier_threshold > 0`` honest-stop to admit AA[1]'s
+    # ``tier_threshold=20``) + ``_python_aa_to_safe_dict`` (emit
+    # ``tier_threshold`` on the AA dict, empty-omit when 0) + new
+    # ``_printing_is_bridge_phase_4_spacecraft_eternity_elevator``
+    # admit predicate + ``_eternity_elevator_card_def`` builder +
+    # OR-chain registration. The Eternity Elevator DECLINED ->
+    # ADMITTED at the production-deck admit gate end-to-end (admit
+    # set 7 -> 8; the EIGHTH and FINAL Spacecraft admit -- SPACECRAFT
+    # 8/8). This probe (per Phase 4 design doc sect. 5 C3 cycle plan)
+    # is the FIRST PROBE_MODULES-credited probe binding the Eternity
+    # Elevator slug to the AddChargeCounterManaOfChosenColor Effect +
+    # bridge round-trip on the REAL parsed EoE printing, plus three
+    # cross-engine byte-equal observable scenarios:
+    #
+    #   (A) AA[1] tier-gated OFF at ``charge_counters=0`` -- tier-
+    #       gate legality refusal byte-equal observable: both engines
+    #       leave the pool empty + EE untapped + stack empty. The
+    #       refusal SHAPE differs (Python silent via ``effective_
+    #       activated_abilities`` filter; Rust loud raise from the
+    #       ``apply_action`` post-dispatch tier gate) but the
+    #       observable mutation IS byte-equal (zero on both sides).
+    #   (B) AA[1] tier-gated ON at ``charge_counters=20`` -- 20-W-
+    #       coin mint byte-equal: both engines deterministically pick
+    #       "W" (Python ``AddNManaOfChosenColor`` first-options
+    #       fallback; Rust ``state_ops_resolve.rs:14188`` first-slice
+    #       ``b'W'`` push) and mint 20 W coins; mana_pool_snapshot
+    #       byte-equal.
+    #   (C) Both-AA mana-ability bypass-stack semantics -- AA[0]
+    #       (basic 3 C mint) + AA[1] (tier-gated 20 W mint) drive
+    #       sequentially on both engines; cumulative pool 3 C + 20 W
+    #       byte-equal across engines; stack stays empty both times
+    #       (CR 605.3a bypass-stack); non-animating EE stays a
+    #       non-creature throughout (the ``station_threshold=None``
+    #       CR 311 invariant the Phase 4 design doc sect. 4 pins).
+    #
+    # AA[1] color choice carries the Phase-4 SL-entry deferred path
+    # (agent-callback ``choose_mana_color`` plumbing for both
+    # engines) -- the probe pins ONLY the no-agent W-fallback path,
+    # which IS byte-equal across engines today; the agent-callback
+    # follow-up is a Phase-N widen that doesn't affect the PROBED
+    # tier flip evidence this slice ships.
+    # Net delta: +1 PROBED / -1 covered_by_construction.
+    # **SPACECRAFT BLOCKED-SG tier: 1 (Eternity Elevator) -> 0 ==
+    # SPACECRAFT 8/8 CAMPAIGN FULL CLOSURE.**
+    REPO_ROOT / "tests" / "test_the_eternity_elevator_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

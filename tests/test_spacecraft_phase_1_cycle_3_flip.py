@@ -417,9 +417,23 @@ def test_admit_set_size_bumps_post_cycle_3():
 
     Bench-aggregate cross-check: walks every printing in the active
     source, counts those that admit through the deck-level filter
-    AND carry the Spacecraft subtype. Post-Phase-3A-FLIP the set is
-    {Sawship, Lumen-Class Frigate, Larval Scoutlander}. Any OTHER
-    Spacecraft admitting is a silent auto-grow honest-stop.
+    AND carry the Spacecraft subtype. Post-Phase-4-Cycle-2 the set is
+    the FULL EoE Spacecraft EIGHT-card admit set -- the Phase 3
+    seven-card baseline + The Eternity Elevator (the SOLE
+    non-animating Spacecraft, admitted post-Phase-4-Cycle-2 via the
+    new ``_printing_is_bridge_phase_4_spacecraft_eternity_elevator``
+    OR-chain disjunct). Any OTHER Spacecraft admitting is a silent
+    auto-grow honest-stop.
+
+    **Phase 4 Cycle 2 update (2026-05-26).** Post-Phase-4-C2 the
+    Phase-4 sibling disjunct
+    :func:`_printing_is_bridge_phase_4_spacecraft_eternity_elevator`
+    additionally admits The Eternity Elevator (1 card, the SOLE
+    ``station_threshold=None`` non-animating multi-AA Spacecraft in
+    the live 22-Spacecraft EoE set). **SPACECRAFT 8/8 admit-gate
+    closed.** The C3 per-card real-EoE byte-equal probe
+    ``test_the_eternity_elevator_parity.py`` lands the PROBED tier
+    flip, completing SPACECRAFT CAMPAIGN FULL CLOSURE.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -442,18 +456,22 @@ def test_admit_set_size_bumps_post_cycle_3():
         "Lumen-Class Frigate",
         "Sledge-Class Seedship",
         "Synthesizer Labship",
+        "The Eternity Elevator",
     ], (
-        "Admit-set count bump: exactly SEVEN Spacecraft must admit "
-        "at the deck-level filter post-Phase-3C-Cycle-4 (PHASE 3 "
-        "CLOSED) — Galvanizing Sawship (Phase-1 sub-shape A) + "
-        "Lumen-Class Frigate (Phase-2 static-anthem) + Larval "
-        "Scoutlander (Phase-3A trigger-bearing ETB) + Sledge-Class "
-        "Seedship (Phase-3B trigger-bearing ATTACKS) + Synthesizer "
-        "Labship (Phase-3C Cycle-2 BEGINNING_OF_COMBAT tier-gated) + "
-        "Entropic Battlecruiser (Phase-3C Cycle-3 ATTACKS + "
-        "DISCARDS_CARD tier-1 gate) + Infinite Guideline Station "
-        "(Phase-3C Cycle-4 ETB CreateTokenPerMulticoloredPermanent + "
-        "ATTACKS DrawCardPerMulticoloredPermanent). Got: "
+        "Admit-set count bump: exactly EIGHT Spacecraft must admit "
+        "at the deck-level filter post-Phase-4-Cycle-2 (SPACECRAFT "
+        "8/8 ADMIT-GATE CLOSED) -- Galvanizing Sawship (Phase-1 sub-"
+        "shape A) + Lumen-Class Frigate (Phase-2 static-anthem) + "
+        "Larval Scoutlander (Phase-3A trigger-bearing ETB) + Sledge-"
+        "Class Seedship (Phase-3B trigger-bearing ATTACKS) + "
+        "Synthesizer Labship (Phase-3C Cycle-2 BEGINNING_OF_COMBAT "
+        "tier-gated) + Entropic Battlecruiser (Phase-3C Cycle-3 "
+        "ATTACKS + DISCARDS_CARD tier-1 gate) + Infinite Guideline "
+        "Station (Phase-3C Cycle-4 ETB CreateTokenPerMulticolored"
+        "Permanent + ATTACKS DrawCardPerMulticoloredPermanent) + "
+        "The Eternity Elevator (Phase-4 non-animating multi-AA with "
+        "AddChargeCounterManaOfChosenColor + tier_threshold=20 "
+        "AA[1]). Got: "
         f"{sorted(admitted_spacecraft)!r}."
     )
 
