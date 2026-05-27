@@ -1069,6 +1069,41 @@ impl GameState {
                     resolved.effect,
                     crate::cards::Effect::LockOrUnlockDoorOfTargetRoomYouControl,
                 );
+                // **Carrier-AA substrate Phase 4B Cycle 1 (2026-05-26).**
+                // Recognize ``Effect::CreateTokenCopyOfTargetCreatureYou
+                // Control`` as a SEVENTH target-shape on the
+                // ``target_creature_id`` slot — when an AA's effect is
+                // this variant (Mirrorpool's AA[1]), the
+                // ``target_creature_id`` slot acts as the chosen
+                // activator-controlled creature id. Validation walks
+                // the activator's battlefield for the target id +
+                // verifies the target is printed as a Creature. The
+                // legal-emit fan-out arm at
+                // ``state_ops_legal.rs::activate_ability_dict`` walks
+                // the activator's bf and emits one ``ActivateAbility``
+                // per eligible Creature target with
+                // ``target_creature_id = Some(creature_id)``. Mirrors
+                // Python's
+                // ``CreateTokenCopyOfTargetCreatureYouControl.legal_
+                // targets`` walk over the activator's bf for
+                // ``is_creature_now(o) AND o.controller_id ==
+                // controller_id`` at
+                // ``effects/generic/tokens.py:340-348``.
+                //
+                // **target_creature_id is OPTIONAL** on this effect —
+                // the substrate-fallback path in the resolve arm (no
+                // target seated) reuses the existing deterministic-
+                // first-creature scan, matching Python's
+                // ``CreateTokenCopyOfTargetCreatureYouControl.resolve``
+                // at ``tokens.py:350-389``'s ``if not targets: return``
+                // early-return reads from the engine-bound target list.
+                // Direct-callers / synthetic tests rely on either
+                // passing the chosen creature id or omitting it to
+                // drive the deterministic-fallback path.
+                let is_create_token_copy_creature_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::CreateTokenCopyOfTargetCreatureYouControl,
+                );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
                         let Some(target_id) = target_creature_id else {
@@ -1246,6 +1281,72 @@ impl GameState {
                                          permanent on the activator's bf; \
                                          CR 715 — Keys to the House's AA[1] \
                                          requires `target Room you control`)"
+                                    )));
+                                }
+                                Some(target_id)
+                            }
+                            None => None,
+                        }
+                    } else if is_create_token_copy_creature_effect {
+                        // **Carrier-AA substrate Phase 4B Cycle 1
+                        // (2026-05-26).** Activator-bf-Creature target
+                        // validation for Mirrorpool's AA[1]. The legal-
+                        // emit fan-out arm in
+                        // ``state_ops_legal.rs::activate_ability_dict``
+                        // walks the activator's bf for printed-Creature
+                        // objects and emits one ``ActivateAbility`` per
+                        // eligible target with ``target_creature_id =
+                        // Some(creature_id)``. The validator here re-
+                        // checks the chosen target against bf-presence
+                        // on the ACTIVATOR's bf + printed-Creature
+                        // (matching Python's ``controller_id ==
+                        // controller_id`` gate at
+                        // ``effects/generic/tokens.py:340-348``).
+                        //
+                        // **target_creature_id is OPTIONAL** on this
+                        // effect — the substrate-fallback path in the
+                        // resolve arm (no target seated) reuses the
+                        // existing deterministic-first-creature scan
+                        // on the activator's bf, matching the pre-
+                        // substrate behavior. Direct-callers / synthetic
+                        // tests can either pass the chosen creature id
+                        // or omit it to drive the deterministic-
+                        // fallback path.
+                        match target_creature_id {
+                            Some(target_id) => {
+                                // Must be on the activator's bf AND
+                                // printed Creature. ACTIVATOR-only
+                                // (not opponent's bf) — per the printed
+                                // "you control" rider.
+                                let target_legal: bool = {
+                                    let bf = &state
+                                        .players[controller_idx]
+                                        .battlefield;
+                                    let registry = &state.registry;
+                                    bf.iter().any(|obj| {
+                                        if obj.id != target_id {
+                                            return false;
+                                        }
+                                        let Some(printing) = registry
+                                            .printings
+                                            .get(obj.printing_id as usize)
+                                        else {
+                                            return false;
+                                        };
+                                        printing
+                                            .card_types
+                                            .iter()
+                                            .any(|t| t == "Creature")
+                                    })
+                                };
+                                if !target_legal {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         target {target_id} not a legal \
+                                         token-copy-Creature target (must be a \
+                                         Creature on the activator's bf; \
+                                         CR 707.5 — Mirrorpool's AA[1] \
+                                         targets `target creature you control`)"
                                     )));
                                 }
                                 Some(target_id)

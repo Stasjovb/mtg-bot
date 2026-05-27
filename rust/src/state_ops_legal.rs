@@ -3952,6 +3952,80 @@ impl GameState {
                             )?);
                         }
                     }
+                } else if matches!(
+                    ability.effect,
+                    crate::cards::Effect::CreateTokenCopyOfTargetCreatureYouControl,
+                ) {
+                    // **Carrier-AA substrate Phase 4B Cycle 1 (2026-05-
+                    // 26).** Activator-bf-Creature target fan-out arm
+                    // per ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md``
+                    // §4.1.2 (Mirrorpool's AA[1] — CR-707.5 token-
+                    // creature-copy). Enumerates every battlefield
+                    // ``GameObject`` on the activator's bf whose printing
+                    // is a Creature — Mirrorpool's printed text reads
+                    // "target creature you control" so this fan-out
+                    // restricts to the activator-controlled side only.
+                    // Mirrors Python's
+                    // ``CreateTokenCopyOfTargetCreatureYouControl.
+                    // legal_targets`` walk at
+                    // ``effects/generic/tokens.py:340-348`` which
+                    // filters ``o.controller_id == controller_id`` AND
+                    // ``is_creature_now(o)``.
+                    //
+                    // **Activator's bf only.** Per Python's
+                    // ``controller_id == controller_id`` gate, the
+                    // target is restricted to the activator's bf —
+                    // opponents' creatures are NOT eligible. Differs
+                    // from the Phase 3C ``BecomesCopyOfTargetLand`` arm
+                    // (which walks BOTH bfs per CR 109.3 / 613).
+                    //
+                    // **Source is naturally ineligible.** The source
+                    // (Mirrorpool, a Land) fails the printed-Creature
+                    // filter so it's naturally absent from the target
+                    // pool — no explicit ``id == obj.id`` exclusion is
+                    // needed.
+                    //
+                    // **No legal targets → no emission.** A bare
+                    // Mirrorpool on a bf with no other creatures emits
+                    // zero ``ActivateAbility`` dicts (CR 601.2c).
+                    //
+                    // **Target dict slot.** Reuses
+                    // ``target_creature_id`` as the generic single-
+                    // target object-id slot — same shape as the Phase-
+                    // 2a / Phase-3A / Phase-3C / Phase-4C / Phase-4D
+                    // sibling arms.
+                    //
+                    // **Substrate-only invariant.** Mirrorpool STAYS
+                    // DECLINED at the production-deck admit gate
+                    // post-Cycle-1 because the
+                    // ``_carrier_aa_phase_1_effect_classes`` Python
+                    // admit set doesn't yet include this Effect class
+                    // (C2/C3 ships the widen). This fan-out arm is
+                    // dead-relative-to-production this cycle — no live
+                    // deck admits Mirrorpool, so no resolved AA reaches
+                    // this branch on a real bench state. The emit lights
+                    // up the moment the admit widen lands.
+                    for target in self.players[idx].battlefield.iter() {
+                        let Some(t_printing) =
+                            self.registry.lookup(target.printing_id)
+                        else {
+                            continue;
+                        };
+                        if !t_printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            continue;
+                        }
+                        actions.push(activate_ability_dict(
+                            py,
+                            obj.id,
+                            ability_index as u32,
+                            Some(target.id),
+                            None,
+                        )?);
+                    }
                 } else {
                     actions.push(activate_ability_dict(
                         py,
