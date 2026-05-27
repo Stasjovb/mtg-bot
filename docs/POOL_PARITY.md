@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **442 / 475 EoE cards (93.1%) are byte-equal at the Effect+bridge level**; of those, **407 (85.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 35 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **442 / 475 EoE cards (93.1%) are byte-equal at the Effect+bridge level**; of those, **408 (85.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 34 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **33 (6.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 407 | 85.7% |
-| Effect+bridge covered (not individually probed) | 35 | 7.4% |
+| PROBED byte-equal | 408 | 85.9% |
+| Effect+bridge covered (not individually probed) | 34 | 7.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -46,6 +46,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - Abandoned Campground
 - Adagia, Windswept Bastion
+- All-Fates Scroll
 - All-Fates Stalker
 - Alpharael, Dreaming Acolyte
 - Alpharael, Stonechosen

@@ -3596,6 +3596,28 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_violent_urge_parity.py",
     REPO_ROOT / "tests" / "test_horrid_vigor_parity.py",
     REPO_ROOT / "tests" / "test_dual_sun_technique_parity.py",
+    # **auto-tap-any-arm-afs-probe (2026-05-27 — All-Fates Scroll
+    # per-card real-EoE cross-engine MINT + PAY byte-equal probe via
+    # ``cast_spell_noncreature`` / ``auto_tap_pay_for_cost``;
+    # complements the immediately-prior Gemstone Caverns variant
+    # probe at commit ``f064a190``).**  Same Effect shape as the
+    # Mana Confluence / Cascading Cataracts / Gemstone Caverns
+    # batch-4 + variant-probe siblings (AddManaToPool(produces=(('
+    # any', 1),))); the per-slug attribution distinction here is
+    # the **Artifact** carrier (wildcard mint on a spell-side
+    # permanent vs. the land-side siblings) AND the **PAY-path
+    # call site** (cast_spell_noncreature → auto_tap_pay_for_cost
+    # vs. the count-only pay_mana_cost path the Gemstone Caverns
+    # variant exercises). This probe is the load-bearing closure
+    # of Worker C's diagnosis: the Phase 4E payment-time
+    # commit ``daecd399`` widened the plan-phase FIFO walk to
+    # FIFO-accept ``b'a'`` coins but missed the commit-phase
+    # per-color-cache mirror, drifting ``mp.any`` whenever a
+    # wildcard coin was consumed via auto_tap_pay_for_cost.
+    # Pre-fix this probe asserts FAIL at Step 3; post-fix it
+    # PASSES byte-equal cross-engine. Net delta: +1 PROBED /
+    # -1 covered_by_construction (All-Fates Scroll slug flips).
+    REPO_ROOT / "tests" / "test_all_fates_scroll_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
