@@ -3618,6 +3618,66 @@ PROBE_MODULES: tuple[Path, ...] = (
     # PASSES byte-equal cross-engine. Net delta: +1 PROBED /
     # -1 covered_by_construction (All-Fates Scroll slug flips).
     REPO_ROOT / "tests" / "test_all_fates_scroll_parity.py",
+    # **covered-by-construction-probe-writing-batch-4 (2026-05-27):**
+    # Five per-card real-EoE cross-engine byte-equal probes flipping
+    # covered_by_construction → PROBED. This batch deliberately picks
+    # a DIFFERENT shape than the prior batch 3 PumpTargetCreatureUntilEOT
+    # spell-effect lane (Horrid Vigor / Dual-Sun Technique / Give In
+    # to Violence / Rig for War / Violent Urge): the carriers here are
+    # **triggered abilities on permanents** (4 Room ENTERS / Creature
+    # ENTERS / Creature ATTACKS triggers) instead of spell-effect
+    # Instants, and the Effect classes are **non-PumpTargetCreatureUntilEOT**
+    # (PutPlusOneCounterOnEachOfUpToNTargetCreatures, CreateTokenCopyOf
+    # TargetCreatureYouControl, DestroyAllCreatures, PumpSelfUntilEOT
+    # x2) -- diversity of probe coverage per the orchestrator note.
+    #
+    # Each module follows the JJJJ-idiom (parse + bridge round-trip +
+    # Python-side resolve smoke, NO cross-engine compare_fields) on a
+    # documented silent-no-op short-circuit:
+    #
+    #   * **Grand Entryway // Elegant Rotunda** (Enchantment Room
+    #     ENTERS -- Elegant Rotunda back-half) -- ``PutPlusOneCounterOn
+    #     EachOfUpToNTargetCreatures(max_n=2)``; parsed == bridged
+    #     byte-equal (no rider narrowing). Empty-targets silent no-op
+    #     short-circuit at counters.py.
+    #   * **Mirror Room // Fractured Realm** (Enchantment Room ENTERS
+    #     -- Mirror Room front-half) -- ``CreateTokenCopyOfTargetCreature
+    #     YouControl(additional_subtype='Reflection')`` narrowed to
+    #     bare per OOO discipline. Empty-targets ``if not targets:
+    #     return`` silent no-op at tokens.py.
+    #   * **Restricted Office // Lecture Hall** (Enchantment Room
+    #     ENTERS -- Restricted Office front-half) -- ``DestroyAllCreatures
+    #     (min_power=3)`` narrowed to bare per OOO discipline. FIRST
+    #     credited probe of DestroyAllCreatures on a TRIGGERED carrier
+    #     (the JJJJ wrath-admit-widening probe pins the spell-effect
+    #     carrier shape, a DIFFERENT (event, effect-class) tuple).
+    #     Empty-battlefield-no-creatures silent no-op at destroy.py.
+    #   * **Cult Healer** (Creature ENTERS-enchantment / ROOM_FULLY_
+    #     UNLOCKED) -- ``PumpSelfUntilEOT(0/0, lifelink)`` narrowed to
+    #     bare per OOO discipline. FIRST credited probe of PumpSelf
+    #     UntilEOT on a TRIGGERED ability carrier. No-resolving-source
+    #     ``if source is None: return`` silent no-op at pump.py.
+    #   * **Hand That Feeds** (Creature ATTACKS-with-delirium) --
+    #     ``PumpSelfUntilEOT(2/0, menace)`` narrowed to bare per OOO
+    #     discipline; FIRST credited probe of the ``power_bonus=2``
+    #     parameterization on PumpSelfUntilEOT. No-resolving-source
+    #     ``if source is None: return`` silent no-op at pump.py.
+    #
+    # Per-slug attribution credit per the 2026-05-24 ``post-flip-
+    # reclassification-scout`` sweep precedent (the classifier credits
+    # per-slug via the module-scope ``_PRINTINGS = get_active_source().
+    # get_printings()`` idiom that ``_probe_module_probed_cards_via_
+    # module_scope_binding`` accepts). Pure measurement-attribution +
+    # per-slug credit: no engine changes, no Rust changes, no
+    # substrate widens.  Net delta: +5 PROBED / -5
+    # covered_by_construction (PROBED 408 → 413; covered_by_
+    # construction 34 → 29; BLOCKED-SG unchanged at 33; pool total
+    # 475 unchanged).
+    REPO_ROOT / "tests" / "test_grand_entryway_elegant_rotunda_parity.py",
+    REPO_ROOT / "tests" / "test_mirror_room_fractured_realm_parity.py",
+    REPO_ROOT / "tests" / "test_restricted_office_lecture_hall_parity.py",
+    REPO_ROOT / "tests" / "test_cult_healer_parity.py",
+    REPO_ROOT / "tests" / "test_hand_that_feeds_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
