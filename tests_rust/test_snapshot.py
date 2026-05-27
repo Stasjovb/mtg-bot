@@ -69,6 +69,13 @@ EXPECTED_KEYS = {
     # arm pilot toggle; Cycle 2 ships the Python admit + bridge arms +
     # Room-target fan-out.
     "door_states",
+    # Per-object substrate slots added by subsequent campaign cycles
+    # (snapshot key parity tracks Rust-side cards.rs field set).
+    "cast_from_exile_with_lightstall_surcharge",
+    "publicly_known_to_caster_bits",
+    "token_supertype_override",
+    "exiled_with_source",
+    "controller_override",
 }
 
 _FOREST = {
@@ -277,7 +284,7 @@ def test_battlefield_snapshot_empty_returns_empty_list(engine):
 def test_mana_pool_snapshot_default_all_zero(synthetic_state):
     snap = synthetic_state.mana_pool_snapshot(0)
     assert isinstance(snap, dict)
-    assert set(snap.keys()) == {"W", "U", "B", "R", "G", "C"}
+    assert set(snap.keys()) == {"W", "U", "B", "R", "G", "C", "any"}
     assert all(v == 0 for v in snap.values())
 
 
@@ -285,10 +292,10 @@ def test_mana_pool_snapshot_reflects_added_mana(synthetic_state):
     synthetic_state.add_mana(0, "G", 3)
     synthetic_state.add_mana(0, "U", 1)
     snap = synthetic_state.mana_pool_snapshot(0)
-    assert snap == {"W": 0, "U": 1, "B": 0, "R": 0, "G": 3, "C": 0}
+    assert snap == {"W": 0, "U": 1, "B": 0, "R": 0, "G": 3, "C": 0, "any": 0}
     # p1's pool remains empty.
     assert synthetic_state.mana_pool_snapshot(1) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0,
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0,
     }
 
 
@@ -486,7 +493,7 @@ def test_mana_pool_snapshot_after_add_mana_full_palette(synthetic_state):
     for color, n in (("W", 1), ("U", 2), ("B", 3), ("R", 4), ("G", 5), ("C", 6)):
         synthetic_state.add_mana(0, color, n)
     snap = synthetic_state.mana_pool_snapshot(0)
-    assert snap == {"W": 1, "U": 2, "B": 3, "R": 4, "G": 5, "C": 6}
+    assert snap == {"W": 1, "U": 2, "B": 3, "R": 4, "G": 5, "C": 6, "any": 0}
 
 
 def test_mana_pool_snapshot_zero_after_empty_all(synthetic_state):
@@ -496,7 +503,7 @@ def test_mana_pool_snapshot_zero_after_empty_all(synthetic_state):
     synthetic_state.add_mana(0, "G", 4)
     synthetic_state.add_mana(1, "R", 2)
     synthetic_state.empty_all_mana_pools()
-    zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.mana_pool_snapshot(0) == zero
     assert synthetic_state.mana_pool_snapshot(1) == zero
 

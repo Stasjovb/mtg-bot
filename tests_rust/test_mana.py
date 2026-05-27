@@ -63,15 +63,16 @@ def _bears_id(state, player_id):
 def test_initial_mana_pool_is_empty(synthetic_state):
     """Both players' pools start at all-zero (the foundation commit
     defaults ``Player.mana_pool: ManaPool`` in ``make_player``)."""
-    expected = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(0) == expected
     assert synthetic_state.get_mana_pool(1) == expected
 
 
 def test_get_mana_pool_returns_dict_view(synthetic_state):
-    """The 6-key dict has all six expected keys, all int-typed."""
+    """The 7-key dict has all expected keys (six real colors + the
+    ``any`` wildcard slot added by Phase 4E C2.5), all int-typed."""
     pool = synthetic_state.get_mana_pool(0)
-    assert set(pool.keys()) == {"W", "U", "B", "R", "G", "C"}
+    assert set(pool.keys()) == {"W", "U", "B", "R", "G", "C", "any"}
     for v in pool.values():
         assert isinstance(v, int)
 
@@ -99,7 +100,7 @@ def test_add_mana_all_six_colors(synthetic_state):
     for color in ("W", "U", "B", "R", "G", "C"):
         synthetic_state.add_mana(0, color, 1)
     pool = synthetic_state.get_mana_pool(0)
-    assert pool == {"W": 1, "U": 1, "B": 1, "R": 1, "G": 1, "C": 1}
+    assert pool == {"W": 1, "U": 1, "B": 1, "R": 1, "G": 1, "C": 1, "any": 0}
 
 
 def test_add_mana_unknown_color_raises_value_error(synthetic_state):
@@ -164,7 +165,7 @@ def test_empty_mana_pool_resets_player_to_zero(synthetic_state):
     synthetic_state.add_mana(0, "R", 2)
     synthetic_state.add_mana(1, "U", 3)
     synthetic_state.empty_mana_pool(0)
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(0) == expected_zero
     # Opponent's pool untouched.
     assert synthetic_state.get_mana_pool(1)["U"] == 3
@@ -188,7 +189,7 @@ def test_empty_all_mana_pools_drains_both(synthetic_state):
     synthetic_state.add_mana(0, "G", 3)
     synthetic_state.add_mana(1, "W", 2)
     synthetic_state.empty_all_mana_pools()
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(0) == expected_zero
     assert synthetic_state.get_mana_pool(1) == expected_zero
 
@@ -197,7 +198,7 @@ def test_empty_all_mana_pools_no_op_on_empty(synthetic_state):
     """Calling on already-empty pools is a quiet no-op (no error,
     pools stay empty). This is the common case at end-of-step when
     no player produced mana that step."""
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(0) == expected_zero
     assert synthetic_state.get_mana_pool(1) == expected_zero
     synthetic_state.empty_all_mana_pools()
@@ -213,7 +214,7 @@ def test_empty_all_mana_pools_clone_isolation(synthetic_state):
     synthetic_state.add_mana(1, "U", 2)
     cloned = synthetic_state.clone_once()
     cloned.empty_all_mana_pools()
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert cloned.get_mana_pool(0) == expected_zero
     assert cloned.get_mana_pool(1) == expected_zero
     # Original untouched.
@@ -325,7 +326,7 @@ def test_pay_mana_cost_simple_colored(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.pay_mana_cost(0, {"G": 1}) is True
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0
     }
 
 
@@ -338,7 +339,7 @@ def test_pay_mana_cost_insufficient_color_returns_false(synthetic_state):
     synthetic_state.add_mana(0, "W", 1)
     assert synthetic_state.pay_mana_cost(0, {"G": 1}) is False
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 1, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+        "W": 1, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0
     }
 
 
@@ -350,7 +351,7 @@ def test_pay_mana_cost_generic_drawn_from_any_color(synthetic_state):
     synthetic_state.add_mana(0, "G", 2)
     assert synthetic_state.pay_mana_cost(0, {"generic": 1, "G": 1}) is True
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0
     }
 
 
@@ -359,7 +360,7 @@ def test_pay_mana_cost_insufficient_total_for_generic_returns_false(synthetic_st
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.pay_mana_cost(0, {"generic": 2}) is False
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0, "any": 0
     }
 
 
@@ -371,7 +372,7 @@ def test_pay_mana_cost_zero_cost_returns_true(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.pay_mana_cost(0, {}) is True
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0, "any": 0
     }
 
 
@@ -403,7 +404,7 @@ def test_pay_mana_cost_drains_colorless_first_for_generic(synthetic_state):
     synthetic_state.add_mana(0, "G", 2)
     assert synthetic_state.pay_mana_cost(0, {"generic": 1}) is True
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0, "any": 0
     }
 
 
@@ -422,7 +423,7 @@ def test_pay_mana_cost_complex_multi_color(synthetic_state):
     cost = {"generic": 3, "W": 1, "R": 1}
     assert synthetic_state.pay_mana_cost(0, cost) is True
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 1, "C": 0, "any": 0
     }
 
 
@@ -573,16 +574,16 @@ def test_add_mana_isolation_across_players(synthetic_state):
     synthetic_state.add_mana(0, "G", 4)
     synthetic_state.add_mana(0, "U", 2)
     # Player 1's pool is still all zero across every color.
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(1) == expected_zero
 
     # Now mutate p1; p0's pool keeps its existing contents.
     synthetic_state.add_mana(1, "R", 1)
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 2, "B": 0, "R": 0, "G": 4, "C": 0
+        "W": 0, "U": 2, "B": 0, "R": 0, "G": 4, "C": 0, "any": 0
     }
     assert synthetic_state.get_mana_pool(1) == {
-        "W": 0, "U": 0, "B": 0, "R": 1, "G": 0, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 1, "G": 0, "C": 0, "any": 0
     }
 
 
@@ -664,13 +665,13 @@ def test_mana_pool_snapshot_matches_get_mana_pool_after_mutations(
     snap = synthetic_state.mana_pool_snapshot(0)
     pool = synthetic_state.get_mana_pool(0)
     assert snap == pool
-    assert snap == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 3}
+    assert snap == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 3, "any": 0}
 
     # Drain and re-check.
     synthetic_state.empty_mana_pool(0)
     assert synthetic_state.mana_pool_snapshot(0) == synthetic_state.get_mana_pool(0)
     assert synthetic_state.mana_pool_snapshot(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0
     }
 
 
@@ -694,7 +695,7 @@ def test_multi_color_pool_entries_coexist(synthetic_state):
     # Stack on a third color; first two are untouched.
     synthetic_state.add_mana(0, "C", 1)
     pool = synthetic_state.get_mana_pool(0)
-    assert pool == {"W": 2, "U": 0, "B": 0, "R": 0, "G": 3, "C": 1}
+    assert pool == {"W": 2, "U": 0, "B": 0, "R": 0, "G": 3, "C": 1, "any": 0}
 
     # Pay a cost that consumes from two colors + generic; the
     # untouched slot stays put.
@@ -702,7 +703,7 @@ def test_multi_color_pool_entries_coexist(synthetic_state):
     pool = synthetic_state.get_mana_pool(0)
     # generic drains from C first (deterministic order), so C goes
     # 1->0; W goes 2->1; G goes 3->2.
-    assert pool == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0}
+    assert pool == {"W": 1, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0, "any": 0}
 
 
 def test_add_mana_to_pool_effect_rejects_negative_amount_at_register_time(
@@ -728,7 +729,7 @@ def test_add_mana_to_pool_effect_rejects_negative_amount_at_register_time(
             ZONE_BATTLEFIELD,
         )
     # State after the rejected register is unmutated: pool stays empty.
-    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0}
+    expected_zero = {"W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0}
     assert synthetic_state.get_mana_pool(0) == expected_zero
     assert synthetic_state.get_mana_pool(1) == expected_zero
 
