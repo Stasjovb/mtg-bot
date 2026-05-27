@@ -4211,6 +4211,61 @@ pub enum Effect {
     /// exercised by synthetic unit pins; the live admit FLIP ships
     /// Cycle 2.
     AddChargeCounterManaOfChosenColor,
+    /// **Meteor Crater substrate Phase 4 Cycle 1 (2026-05-27 — spec
+    /// at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#1
+    /// Meteor Crater).** Add one mana of a color chosen by the
+    /// controller at resolution time, where the chosen color must be
+    /// drawn from the union of colors on permanents the source's
+    /// controller controls (per CR 105.2 — colors of a permanent
+    /// come from colored mana symbols in the printed cost).
+    ///
+    /// Mirrors Python's `AddOneManaOfChosenPermanentColor()` (unit
+    /// dataclass — no fields) at `effects/generic/mana.py:227` —
+    /// Meteor Crater's single `{T}` mana-AA pilot effect
+    /// (`{T}: Choose a color of a permanent you control. Add one
+    /// mana of that color.`).
+    ///
+    /// **Resolve semantics.** Walks the source-controller's
+    /// battlefield, unions colored-pip slots across each permanent's
+    /// `mana_cost` (W/U/B/R/G — colorless `{C}` and generic pips do
+    /// NOT contribute, mirroring Python's
+    /// `set(o.printing.mana_cost.colors)` walk). If the union is
+    /// non-empty, picks the canonical-first WUBRG-ordered color from
+    /// the union (no-agent deterministic fallback — mirror of the
+    /// Phase-4E `AddNManaOfChosenColor` no-agent-seated convention
+    /// at `state_ops_resolve.rs:14057`). If the union is empty
+    /// (controller has only colorless permanents, e.g. only basic
+    /// lands), mints one `{C}` colorless coin (defensive fallback —
+    /// mirrors Python's `if not options: color = "C"` at
+    /// `mana.py:255-256`). Single coin minted via `push_coins`.
+    ///
+    /// **Color set bounded to `{W, U, B, R, G}`.** No `any` wildcard
+    /// — the union is built from concrete colored pips. The defensive
+    /// `{C}` fallback when the union is empty mirrors Python verbatim.
+    ///
+    /// **Unit variant.** No fields — the choice surface (color
+    /// options set + canonical-first pick) is derived at resolve
+    /// time from the source-controller's battlefield. Sibling shape
+    /// of `Effect::AddChargeCounterManaOfChosenColor` (also a unit
+    /// variant; both Effects mint a mana coin at resolve time
+    /// without carrying any wire-side rider).
+    ///
+    /// **Substrate-only at Cycle 1.** Meteor Crater STAYS DECLINED
+    /// at the Python admit gate post-C1 — the
+    /// `_carrier_aa_phase_1_effect_classes` Effect-class admit set
+    /// does NOT yet include `AddOneManaOfChosenPermanentColor`
+    /// (the Phase-1 honest-stop teeth in `_aa_is_phase1_sub_shape_a`
+    /// at the `type(aa.effect) not in
+    /// _carrier_aa_phase_1_effect_classes()` rejection keeps Meteor
+    /// Crater's AA[0] declined at the per-AA gate). The Effect-class
+    /// admit-set widen (16 → 17) + admit-set pin bump + per-card
+    /// real-EoE probe ALL ship Cycle 2 as the FLIP — mirrors the
+    /// Spacecraft Phase-4 / Phase-4E C1 substrate-only precedent
+    /// (the Rust variant + cross-engine bridge arms land at C1; the
+    /// Python admit widen + live FLIP lands at C2 to keep the
+    /// substrate-only invariant honest). The bridge round-trip is
+    /// exercised by synthetic unit pins at C1.
+    AddOneManaOfChosenPermanentColor,
     /// **Round 28 coverage extension.** Search the source-controller's
     /// library for a card matching `filter_name`, reveal it, put it
     /// into that player's hand. Mirrors Python's
@@ -15746,6 +15801,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // on The Eternity Elevator.` AA[1].
             Ok(Effect::AddChargeCounterManaOfChosenColor)
         }
+        "add_one_mana_of_chosen_permanent_color" => {
+            // **Meteor Crater substrate Phase 4 Cycle 1 (2026-05-27
+            // — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#1 Meteor Crater).** Unit variant — only the `kind`
+            // discriminator on the wire. The color options surface
+            // (union of colored pips across the source-controller's
+            // battlefield permanents) is derived at resolve time;
+            // the canonical-first WUBRG-ordered pick is the no-agent
+            // deterministic fallback (mirrors
+            // `AddNManaOfChosenColor`'s `options[0]` convention).
+            //
+            // Mirrors Python's `AddOneManaOfChosenPermanentColor()`
+            // unit dataclass at `effects/generic/mana.py:227` —
+            // Meteor Crater's single `{T}` mana-AA pilot effect
+            // (`{T}: Choose a color of a permanent you control. Add
+            // one mana of that color.`).
+            Ok(Effect::AddOneManaOfChosenPermanentColor)
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -19472,6 +19546,20 @@ pub(crate) fn effect_to_pydict<'py>(
             // unit dataclass mirror at `mana.py:133` carries no
             // fields either.
             d.set_item("kind", "add_charge_counter_mana_of_chosen_color")?;
+        }
+        Effect::AddOneManaOfChosenPermanentColor => {
+            // **Meteor Crater substrate Phase 4 Cycle 1 (2026-05-27
+            // — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#1 Meteor Crater).** Unit variant — emit only the
+            // `kind` discriminator. The color-options surface (union
+            // of colored pips across the source-controller's
+            // battlefield permanents) + canonical-first WUBRG pick
+            // are computed at resolve time on both engines; the
+            // Python `AddOneManaOfChosenPermanentColor()` unit
+            // dataclass mirror at `effects/generic/mana.py:227`
+            // carries no fields either.
+            d.set_item("kind", "add_one_mana_of_chosen_permanent_color")?;
         }
         Effect::SearchLibraryForCard {
             filter_name,

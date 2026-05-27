@@ -14195,6 +14195,146 @@ fn apply_effect(
             pool.push_coins(b'W', amount_u8);
             pool.assert_count_sync();
         }
+        // **Meteor Crater substrate Phase 4 Cycle 1 (2026-05-27 —
+        // spec at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+        // §#1 Meteor Crater).** Add ONE mana coin to the source-
+        // controller's mana pool. The coin's color is the canonical-
+        // first WUBRG-ordered element of the union of colored pips
+        // across every permanent the source-controller controls
+        // (CR 105.2 — colors of a permanent come from colored mana
+        // symbols in the printed cost). If the union is empty (the
+        // controller has only colorless permanents — all basic lands,
+        // colorless artifacts), defensive fallback mints one `{C}`
+        // colorless coin — mirrors Python's
+        // `if not options: color = "C"` defensive branch at
+        // `effects/generic/mana.py:255-256`.
+        //
+        // Mirrors Python's `AddOneManaOfChosenPermanentColor.resolve`
+        // at `effects/generic/mana.py:243-270`. The Python no-agent
+        // fallback picks `sorted_options[0]` (lexicographic =
+        // alphabetic among `{"W","U","B","R","G"}`, which becomes
+        // `B < G < R < U < W` lexicographically rather than the WUBRG
+        // canonical order — see the Python pin
+        // `effects/generic/mana.py:258-264`). Rust mirrors **the
+        // canonical WUBRG-ordinal pick** (W before U before B before
+        // R before G) because the broader Phase-4E no-agent precedent
+        // at `state_ops_resolve.rs:14057` (`AddNManaOfChosenColor`'s
+        // `options[0]="W"` first-slice convention) uses WUBRG-canonical
+        // ordering; the substrate-only invariant means this divergence
+        // is **harmless at C1** — the live admit gate STAYS DECLINED
+        // and the cross-engine probe doesn't drive resolve on this
+        // path yet. Cycle 2's per-card real-EoE probe will surface
+        // either (a) byte-equal under harness conventions that map
+        // both engines to the same first pick, or (b) the divergence
+        // requires reconciliation — Cycle 2 is where the
+        // sorted-vs-canonical choice gets pinned to the agent's call.
+        //
+        // **Color set bounded to {W, U, B, R, G}.** No `any` wildcard
+        // — the union is built from concrete colored pips on
+        // permanents' printed mana costs.
+        //
+        // **Source-controller resolution.** 5-zone walk + stack scan
+        // (sibling of `AddNManaOfChosenColor`'s pattern at
+        // `state_ops_resolve.rs:14071-14094`). Source-not-found AND
+        // not on stack: silent no-op (defense-in-depth — mana-ability
+        // bypass-stack semantics make this unreachable in normal
+        // play, but defense-in-depth is cheap).
+        Effect::AddOneManaOfChosenPermanentColor => {
+            // Source-controller scan: zones + stack.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+                if src_controller.is_none() {
+                    return Ok(());
+                }
+            }
+            let controller_idx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Build color union from controller.battlefield. For each
+            // permanent the controller controls, look up its printing
+            // and accumulate per-color pip presence (W/U/B/R/G).
+            // Colorless `{C}` and generic pips do NOT contribute (CR
+            // 105.2 — colors come from colored mana symbols only).
+            let mut has_w = false;
+            let mut has_u = false;
+            let mut has_b = false;
+            let mut has_r = false;
+            let mut has_g = false;
+            let controller_id = controller_idx as u8;
+            for obj in state.players[controller_idx].battlefield.iter() {
+                // Defense-in-depth — battlefield iteration should only
+                // contain permanents controlled by this player, but
+                // pin the controller check explicitly.
+                if obj.controller != controller_id {
+                    continue;
+                }
+                if let Some(printing) = state.registry.lookup(obj.printing_id) {
+                    if printing.mana_cost.white > 0 {
+                        has_w = true;
+                    }
+                    if printing.mana_cost.blue > 0 {
+                        has_u = true;
+                    }
+                    if printing.mana_cost.black > 0 {
+                        has_b = true;
+                    }
+                    if printing.mana_cost.red > 0 {
+                        has_r = true;
+                    }
+                    if printing.mana_cost.green > 0 {
+                        has_g = true;
+                    }
+                }
+            }
+            // Canonical-first WUBRG pick — mirrors the Phase-4E
+            // `AddNManaOfChosenColor` no-agent-seated convention at
+            // `state_ops_resolve.rs:14057` (`options[0]="W"` first-
+            // slice fallback). The Phase-4E `any` code-path's
+            // canonical-first choice precedent at `daecd399` uses
+            // the same WUBRG-ordinal-first pick under the no-agent
+            // harness.
+            let color_byte = if has_w {
+                b'W'
+            } else if has_u {
+                b'U'
+            } else if has_b {
+                b'B'
+            } else if has_r {
+                b'R'
+            } else if has_g {
+                b'G'
+            } else {
+                // Defensive fallback — controller has no colored
+                // permanents (e.g. only basic lands). Mirrors Python's
+                // `if not options: color = "C"` at `mana.py:255-256`.
+                b'C'
+            };
+            let pool = &mut state.players[controller_idx].mana_pool;
+            pool.push_coins(color_byte, 1);
+            pool.assert_count_sync();
+        }
         // Round-28 generalized library tutor. Scans the source-
         // controller's library top-to-bottom for the FIRST card
         // matching filter_name; moves match to controller's hand
