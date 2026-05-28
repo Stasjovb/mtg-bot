@@ -3852,6 +3852,31 @@ PROBE_MODULES: tuple[Path, ...] = (
     # 420 -> 421; covered_by_construction 24 -> 23; BLOCKED-SG
     # unchanged at 31.
     REPO_ROOT / "tests" / "test_reflecting_pool_parity.py",
+    # Batch 6 (2026-05-27): 6 manlands extending the batch-5
+    # JJJJ-idiom BecomeLandCreatureUEOT lane to the remaining EoE
+    # manlands.  Rebased onto Worker B's Reflecting Pool Cycle 2 FLIP
+    # merge ``8250a33f`` -- the batch-6 deltas compose with Cycle 2's
+    # Reflecting Pool flip on top of the batch-5 baseline. Confirms
+    # (per Worker A) that the 2026-05-25 saturation doc was wrong on
+    # the WHOLE manland bucket, not just batch-5's 3 -- every manland
+    # in EoE was probe-able via the per-slug attribution path. Six
+    # distinct parameterization tuples:
+    #   * Celestial Colonnade   4/4 + {flying, vigilance}
+    #   * Creeping Tar Pit      3/2 + unblockable=True
+    #   * Hissing Quagmire      2/2 + {deathtouch}
+    #   * Inkmoth Nexus         1/1 + {flying, infect}
+    #   * Shambling Vent        2/3 + {lifelink}
+    #   * Stirring Wildwood     3/4 + {reach}
+    # Net delta (rebased onto Worker B's Reflecting Pool Cycle 2 FLIP
+    # merge ``8250a33f``, baseline PROBED 421 / covered_by_construction
+    # 23): +6 PROBED / -6 covered_by_construction; PROBED 421 -> 427;
+    # covered_by_construction 23 -> 17; BLOCKED-SG unchanged at 31.
+    REPO_ROOT / "tests" / "test_celestial_colonnade_parity.py",
+    REPO_ROOT / "tests" / "test_creeping_tar_pit_parity.py",
+    REPO_ROOT / "tests" / "test_hissing_quagmire_parity.py",
+    REPO_ROOT / "tests" / "test_inkmoth_nexus_parity.py",
+    REPO_ROOT / "tests" / "test_shambling_vent_parity.py",
+    REPO_ROOT / "tests" / "test_stirring_wildwood_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

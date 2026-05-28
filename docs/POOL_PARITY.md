@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **444 / 475 EoE cards (93.5%) are byte-equal at the Effect+bridge level**; of those, **421 (88.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 23 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **444 / 475 EoE cards (93.5%) are byte-equal at the Effect+bridge level**; of those, **427 (89.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 17 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **31 (6.5%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 421 | 88.6% |
-| Effect+bridge covered (not individually probed) | 23 | 4.8% |
+| PROBED byte-equal | 427 | 89.9% |
+| Effect+bridge covered (not individually probed) | 17 | 3.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -88,6 +88,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cascading Cataracts
 - Cathedral of War
 - Cautious Survivor
+- Celestial Colonnade
 - Cerebral Download
 - Chorale of the Void
 - Chrome Companion
@@ -103,6 +104,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cosmogoyf
 - Cosmogrand Zenith
 - Cracked Skull
+- Creeping Tar Pit
 - Cryogen Relic
 - Cryoshatter
 - Cult Healer
@@ -207,6 +209,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Harmonious Grovestrider
 - Hemosymbic Mite
 - High Market
+- Hissing Quagmire
 - Honor
 - Honored Knight-Captain
 - Horrid Vigor
@@ -224,6 +227,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Impossible Inferno
 - Infernal Phantom
 - Infinite Guideline Station
+- Inkmoth Nexus
 - Innocuous Rat
 - Insatiable Skittermaw
 - Interceptor Mechan
@@ -355,6 +359,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Seedship Impact
 - Seized from Slumber
 - Selfcraft Mechan
+- Shambling Vent
 - Shardmage's Rescue
 - Shattered Wings
 - Sheltered by Ghosts
@@ -383,6 +388,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Starwinder
 - Station Monitor
 - Stay Hidden, Stay Silent
+- Stirring Wildwood
 - Stomping Ground
 - Strangled Cemetery
 - Strip Mine
