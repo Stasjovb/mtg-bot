@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **445 / 475 EoE cards (93.7%) are byte-equal at the Effect+bridge level**; of those, **427 (89.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 18 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **445 / 475 EoE cards (93.7%) are byte-equal at the Effect+bridge level**; of those, **433 (91.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 12 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **30 (6.3%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 427 | 89.9% |
-| Effect+bridge covered (not individually probed) | 18 | 3.8% |
+| PROBED byte-equal | 433 | 91.2% |
+| Effect+bridge covered (not individually probed) | 12 | 2.5% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -115,6 +115,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Darkness
 - Dashing Bloodsucker
 - Dauntless Scrapbot
+- Dawnsire, Sunstar Dreadnought
 - Dawnstrike Vanguard
 - Debris Field Crusher
 - Decode Transmissions
@@ -334,6 +335,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Red Tiger Mechan
 - Reflecting Pool
 - Remnant Elemental
+- Requiem Monolith
 - Reroute Systems
 - Rescue Skiff
 - Restricted Office // Lecture Hall
@@ -378,6 +380,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Specimen Freighter
 - Spectral Snatcher
 - Spineseeker Centipede
+- Split Up
 - Splitskin Doll
 - Sporogenic Infection
 - Squire's Lightblade
@@ -412,6 +415,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Tannuk, Memorial Ensign
 - Tannuk, Steadfast Second
 - Tapestry Warden
+- Temporal Intervention
 - Terminal Velocity
 - Terrain Generator
 - Terramorphic Expanse
@@ -439,6 +443,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Umbral Collar Zealot
 - Under the Skin
 - Underwater Tunnel // Slimy Aquarium
+- Unnerving Grasp
 - Unravel
 - Unsettling Twins
 - Untimely Malfunction
@@ -447,6 +452,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Uthros Scanship
 - Uthros, Titanic Godcore
 - Valgavoth's Faithful
+- Vanish from Sight
 - Vaultguard Trooper
 - Vengeful Possession
 - Vicious Clown

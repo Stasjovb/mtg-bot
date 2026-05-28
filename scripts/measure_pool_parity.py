@@ -3877,6 +3877,60 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_inkmoth_nexus_parity.py",
     REPO_ROOT / "tests" / "test_shambling_vent_parity.py",
     REPO_ROOT / "tests" / "test_stirring_wildwood_parity.py",
+    # Batch 7 (2026-05-27): 6 EoE cards extending the batch-5 + batch-6
+    # JJJJ-idiom per-slug attribution lane BEYOND the manland +
+    # Pump+keyword buckets the saturation doc had bounded the idiom to.
+    # Each card carries Effect classes the 2026-05-25 saturation doc
+    # mislabelled BLOCKED (Categories D + E) -- verify-first confirmed
+    # the bridge arms DO exist and the bare-shape Python resolves are
+    # silent no-ops on empty state.  Six distinct Effect-class
+    # parameterizations + carrier shapes:
+    #   * Split Up                    -- ModalChooseOne Sorcery binding
+    #     DestroyAllCreatures with tapped_only / untapped_only narrowing
+    #     modes; bridge produces bare ``DestroyAllCreatures()`` unit-
+    #     variant (saturation-doc Category E was wrong).
+    #   * Temporal Intervention       -- Sorcery binding
+    #     TargetOpponentDiscardsCasterChoice; bridge collapses to parent
+    #     ``TargetOpponentDiscards(count=1)`` (saturation-doc Category
+    #     D "not byte-equal" was wrong -- per-slug attribution permits
+    #     parent-class bridge round-trip).
+    #   * Unnerving Grasp             -- Sorcery binding Sequence(
+    #     ReturnTargetCreatureToOwnersHand, ManifestDread); bridge
+    #     collapses bounce sub-effect to parent ``Bounce`` (saturation-
+    #     doc Category D "not byte-equal" was wrong -- per-slug
+    #     attribution credits the slug via the bounce sub-Effect).
+    #   * Vanish from Sight           -- Instant binding Sequence(
+    #     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    #     Surveil); bridge arm ``owner_puts_target_artifact_or_creature
+    #     _on_top_or_bottom_of_library`` DOES exist (cross_engine.py:
+    #     4742 -- saturation-doc Category D "bridge arm absent" was
+    #     wrong).
+    #   * Dawnsire, Sunstar Dreadnought -- Spacecraft (Artifact) YOU_
+    #     ATTACK trigger binding DealDamageToTargetCreature(100,
+    #     optional=True); bridge ``deal_damage`` arm collapses to
+    #     parent ``DealDamage(100, AnyCreature)`` (saturation-doc
+    #     Category D "no deal_damage_to_target_creature arm" was
+    #     wrong; the parent ``deal_damage`` arm is the canonical
+    #     parametric-target burn primitive).  Station-tier gate
+    #     bypassed because the probe drives the Effect's resolve
+    #     directly, not the trigger fan-out.
+    #   * Requiem Monolith            -- Artifact AA binding Sequence(
+    #     GrantTriggeredAbilityUEOT, MayHaveSourceDealDamageToTarget(1));
+    #     bridge arm ``may_have_source_deal_damage_to_target`` DOES
+    #     exist (cross_engine.py:10730 -- saturation-doc Category D
+    #     "no grant_triggered_ability_ueot arm" picked the wrong
+    #     sub-Effect's arm to interrogate; per-slug attribution
+    #     credits the slug via the ping sub-Effect).
+    # Net delta (rebased onto Worker A's probe-writing-batch-6 merge
+    # ``335b71c9``, baseline PROBED 427 / covered_by_construction 17):
+    # +6 PROBED / -6 covered_by_construction; PROBED 427 -> 433;
+    # covered_by_construction 17 -> 11; BLOCKED-SG unchanged at 31.
+    REPO_ROOT / "tests" / "test_split_up_parity.py",
+    REPO_ROOT / "tests" / "test_temporal_intervention_parity.py",
+    REPO_ROOT / "tests" / "test_unnerving_grasp_parity.py",
+    REPO_ROOT / "tests" / "test_vanish_from_sight_parity.py",
+    REPO_ROOT / "tests" / "test_dawnsire_sunstar_dreadnought_parity.py",
+    REPO_ROOT / "tests" / "test_requiem_monolith_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
