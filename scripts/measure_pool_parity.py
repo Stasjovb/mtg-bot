@@ -3852,6 +3852,61 @@ PROBE_MODULES: tuple[Path, ...] = (
     # 420 -> 421; covered_by_construction 24 -> 23; BLOCKED-SG
     # unchanged at 31.
     REPO_ROOT / "tests" / "test_reflecting_pool_parity.py",
+    # **Ancient Tomb Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    # ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#3 row
+    # C2).** Per-card real-EoE cross-engine MINT + MINT-at-2-life +
+    # MINT+PAY byte-equal probe -- Ancient Tomb covered_by_construction
+    # -> PROBED. ANCIENT TOMB CAMPAIGN FULL CLOSURE.
+    #
+    # The Phase 4 Cycle 1 substrate (commit ``c250a60d``) shipped the
+    # Rust ``Effect::DealDamageToControllerAndAddMana`` fields variant
+    # (``damage: u32`` + ``produces: Vec<(u8, u32)>``) + parser +
+    # resolver (life-decrement-THEN-push_coins -- damage applies as
+    # raw ``player.life -= damage as i32`` NOT via dispatch_event,
+    # mirroring Python's ``p.life -= self.damage``) + ``to_pydict``
+    # + cross-engine bridge arms (forward + reverse). Ancient Tomb
+    # STAYED DECLINED at the admit gate post-C1 -- the Effect-class
+    # admit set ``_carrier_aa_phase_1_effect_classes`` didn't include
+    # the new Effect class (covered_by_construction +1 / BLOCKED-SG -1
+    # at C1).
+    #
+    # Cycle 2 (THIS LANE) ships the FLIP:
+    #   - ``_carrier_aa_phase_1_effect_classes`` widen 18 -> 19.
+    #   - Ancient Tomb FLIPS DECLINED -> ADMITTED at the production
+    #     deck filter end-to-end via the Carrier-AA Land sibling.
+    #   - Per-card real-EoE byte-equal probe driving BOTH engines
+    #     through THREE scenarios:
+    #       * MINT -- Ancient Tomb alone on p0's bf, p0 at 20 life;
+    #         activate AA[0] on both engines via
+    #         ``apply_action({"kind": "activate_ability", "source_id":
+    #         AT, "ability_index": 0})``. The fixed produces tuple
+    #         ``(("C", 2),)`` mints 2 C coins deterministically -- no
+    #         chosen-color path, no produces-union scan, no agent
+    #         callback. Byte-equal observables: 2 C coins minted to p0,
+    #         p0's life -= 2 (20 -> 18), stack empty (mana-ability
+    #         bypass), AT tapped, p1's pool + life untouched.
+    #       * MINT-at-2-life -- same fixture but p0's life = 2 PRE-
+    #         activate. Damage = current life. Both engines must drop
+    #         life to EXACTLY 0 byte-equal AND mint 2 C coins AFTER
+    #         the lethal damage (the resolve arm's lifetime contract
+    #         is damage-first then mint; SBA runs at the next pass).
+    #         Byte-equal observables: life=0, pool=C=2.
+    #       * MINT+PAY -- same starting fixture (20 life); AFTER the
+    #         mint, cast a {2} generic Instant via Rust's
+    #         ``cast_spell_noncreature`` -> ``auto_tap_pay_for_cost``.
+    #         Both pools end fully drained (post-pay snapshot ==
+    #         empty pool on both engines).
+    #
+    # Unlike MC C2 / RP C2 there is NO color-picker divergence to gate
+    # around -- Ancient Tomb's produces tuple is FIXED at ``(("C", 2),)``
+    # on the Effect itself (a fields variant on the Rust side; dataclass
+    # field on the Python side), so both engines mint 2 C coins byte-
+    # equal under every fixture. The damage half is also deterministic
+    # (a fixed ``damage: u32 = 2`` field on the Effect; no agent-callback
+    # path). Net delta: +1 PROBED / -1 covered_by_construction
+    # (Ancient Tomb slug flips). PROBED 421 -> 422;
+    # covered_by_construction 23 -> 22; BLOCKED-SG unchanged.
+    REPO_ROOT / "tests" / "test_ancient_tomb_parity.py",
     # Batch 6 (2026-05-27): 6 manlands extending the batch-5
     # JJJJ-idiom BecomeLandCreatureUEOT lane to the remaining EoE
     # manlands.  Rebased onto Worker B's Reflecting Pool Cycle 2 FLIP

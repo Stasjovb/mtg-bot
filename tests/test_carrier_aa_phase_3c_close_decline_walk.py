@@ -117,6 +117,12 @@ _PHASE_4_DEFERRAL_CARRIERS = (
     # (Cycle 1 substrate at commit ``d7be074e`` shipped the Rust
     # variant + bridge arms; C2 widens the per-AA admit gate). See
     # ``tests/test_reflecting_pool_parity.py`` for the per-card probe.
+    # Ancient Tomb was here pre-Ancient-Tomb-C2; Ancient Tomb Phase
+    # 4 Cycle 2 (2026-05-27) FULL FLIP via the
+    # DealDamageToControllerAndAddMana Effect-class widen (Cycle 1
+    # substrate at commit ``c250a60d`` shipped the Rust variant +
+    # bridge arms; C2 widens the per-AA admit gate). See
+    # ``tests/test_ancient_tomb_parity.py`` for the per-card probe.
     "Haunted Screen",
     "The Eternity Elevator",
 )
@@ -185,6 +191,19 @@ _REFLECTING_POOL_C2_FULL_FLIP_LAND_CARRIERS = (
     "Reflecting Pool",
 )
 
+# Ancient Tomb Phase 4 C2 FULL-FLIP Land carriers — pass every gate
+# (dispatcher + LAND sub-predicate + cross-engine LAND builder) post-
+# Ancient-Tomb-C2's Effect-class widen for AA[0]
+# (DealDamageToControllerAndAddMana); Cycle 1 substrate at commit
+# ``c250a60d`` shipped the Rust variant + bridge arms. Ancient Tomb
+# is the SOLE EoE carrier of the Effect class (verified no-auto-grow
+# at the C2 widen — the damage-rider shape is structurally distinct
+# from MC/RP's chosen-color shape so no sibling was waiting on the
+# new Effect class).
+_ANCIENT_TOMB_C2_FULL_FLIP_LAND_CARRIERS = (
+    "Ancient Tomb",
+)
+
 
 # ---------------------------------------------------------------------------
 # §6.4 #25 — live-printing parametrized walk (admit + decline sides)
@@ -242,13 +261,15 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
         builder gate via the "any" color teeth in the bridge floor's
         ``AddManaToPool`` forward arm. Phase 4E C2.5 (Rust ManaPool
         "any" coin substrate) closes the gap.
-      * Phase N cost-shape declines (Reflecting Pool / Meteor Crater
-        / Grove of the Burnwillows / Lotus Field / Ancient Tomb /
-        Nesting Grounds / Blast Zone / Lavaclaw Reaches / Wandering
-        Fumarole / Contested War Zone / Pinnacle Starcage /
-        Auxiliary Boosters / Baseball Bat) — decline on colored /
-        x-pip / pay_life / sacrifice_another_* / activate_only_once
-        cost-bool gates at the dispatcher;
+      * Phase N cost-shape declines (Grove of the Burnwillows /
+        Lotus Field / Nesting Grounds / Blast Zone / Lavaclaw
+        Reaches / Wandering Fumarole / Contested War Zone /
+        Pinnacle Starcage / Auxiliary Boosters / Baseball Bat) —
+        decline on colored / x-pip / pay_life / sacrifice_another_*
+        / activate_only_once cost-bool gates at the dispatcher;
+        (Note: Reflecting Pool moved to its FULL FLIP carrier group
+        at RP P4 C2 / Meteor Crater moved at MC P4 C2 / Ancient
+        Tomb moved at AT P4 C2.)
       * Phase N rider-cluster declines (Sliver Overlord / Robe of
         Stars / Saw / Atomic Microsizer) — decline on
         non-Carrier-AA Effect class teeth at the dispatcher.
@@ -352,6 +373,20 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Land builder "
             f"gate post-Reflecting-Pool-C2"
         )
+    elif card_name in _ANCIENT_TOMB_C2_FULL_FLIP_LAND_CARRIERS:
+        # Ancient Tomb P4 C2 FULL FLIP — Ancient Tomb admits at every
+        # gate post-Ancient-Tomb-C2 (Effect-class widen for
+        # DealDamageToControllerAndAddMana; Cycle 1 substrate at
+        # commit ``c250a60d`` shipped the Rust fields variant + bridge
+        # arms).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post-"
+            f"Ancient Tomb Phase 4 C2's FULL FLIP"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post-Ancient-Tomb-C2"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -404,19 +439,23 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     # Reflecting Pool P4 C2 (2026-05-27) added Reflecting Pool —
     # single-AA Land carrier FULL FLIP via the
     # AddOneManaFromControlledLandsProductions Effect-class widen.
-    expected_post_reflecting_pool_c2 = sorted(
+    # Ancient Tomb P4 C2 (2026-05-27) added Ancient Tomb — single-AA
+    # Land carrier FULL FLIP via the DealDamageToControllerAndAddMana
+    # Effect-class widen.
+    expected_post_ancient_tomb_c2 = sorted(
         set(_PHASE_3_ADMIT_SET) | {
             "Gemstone Caverns",
             "Mirrorpool",
             "Meteor Crater",
             "Reflecting Pool",
+            "Ancient Tomb",
         }
     )
-    assert admits == expected_post_reflecting_pool_c2, (
-        f"Reflecting Pool P4 C2 subsystem-attribution LOADER-SIDE LAND "
+    assert admits == expected_post_ancient_tomb_c2, (
+        f"Ancient Tomb P4 C2 subsystem-attribution LOADER-SIDE LAND "
         f"pin violated. _carrier_aa_land_card_def must admit EXACTLY "
-        f"the post-Reflecting-Pool-C2 11-card set "
-        f"{expected_post_reflecting_pool_c2}, got {admits}. A silent "
+        f"the post-Ancient-Tomb-C2 12-card set "
+        f"{expected_post_ancient_tomb_c2}, got {admits}. A silent "
         f"auto-grow indicates a Phase-4+ widen landed without inverting "
         f"this assertion — investigate before merging."
     )
@@ -512,6 +551,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "Mirrorpool",           # Phase-4B-C4 FULL FLIP (Land admit + builder)
             "Meteor Crater",        # Meteor Crater P4 C2 FULL FLIP (Land admit + builder)
             "Reflecting Pool",      # Reflecting Pool P4 C2 FULL FLIP (Land admit + builder)
+            "Ancient Tomb",         # Ancient Tomb P4 C2 FULL FLIP (Land admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -521,7 +561,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
         }
     )
     assert admits == expected_post_c2, (
-        f"Reflecting Pool P4 C2 dispatcher exhaustive-walk pin violated. "
+        f"Ancient Tomb P4 C2 dispatcher exhaustive-walk pin violated. "
         f"Expected {expected_post_c2}, got {admits}. The dispatcher "
         f"delegates LAND ∪ ARTIFACT; silent admit-set growth on either "
         f"sub-predicate surfaces here. NOTE: the predicate-level admit "
@@ -634,17 +674,17 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
         )
     )
     # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5 + Phase-4B-C5
-    # (Mirrorpool FULL FLIP) + Meteor-Crater-C2 + Reflecting-Pool-C2:
-    # the LOADER-SIDE admit set grows to 14 (11 Land admits = 7-card
-    # Phase-3-close + Gemstone Caverns + Mirrorpool + Meteor Crater +
-    # Reflecting Pool; 3 Artifact admits = Ghost Vacuum + Keys to the
-    # House + All-Fates Scroll).
-    assert loader_admit_count == 14, (
-        f"Reflecting Pool P4 C2 close LOADER-SIDE admit-set size "
-        f"invariant violated: expected exactly 14 cards (11 Land = 7 "
+    # (Mirrorpool FULL FLIP) + Meteor-Crater-C2 + Reflecting-Pool-C2 +
+    # Ancient-Tomb-C2: the LOADER-SIDE admit set grows to 15 (12 Land
+    # admits = 7-card Phase-3-close + Gemstone Caverns + Mirrorpool +
+    # Meteor Crater + Reflecting Pool + Ancient Tomb; 3 Artifact
+    # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
+    assert loader_admit_count == 15, (
+        f"Ancient Tomb P4 C2 close LOADER-SIDE admit-set size "
+        f"invariant violated: expected exactly 15 cards (12 Land = 7 "
         f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater + "
-        f"Reflecting Pool; 3 Artifact = Ghost Vacuum + Keys to the "
-        f"House + All-Fates Scroll) post-Reflecting-Pool-C2, got "
-        f"{loader_admit_count}. Further Phase-4+ FLIPs MUST update "
-        f"this size in lockstep."
+        f"Reflecting Pool + Ancient Tomb; 3 Artifact = Ghost Vacuum + "
+        f"Keys to the House + All-Fates Scroll) post-Ancient-Tomb-C2, "
+        f"got {loader_admit_count}. Further Phase-4+ FLIPs MUST "
+        f"update this size in lockstep."
     )

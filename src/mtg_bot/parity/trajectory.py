@@ -9156,12 +9156,42 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     for the ``{W,U,B,R,G,C}`` produces vocabulary) + the probe-side
     mono-white-Plains-bf seating that avoids exercising it.
 
+    **Ancient Tomb Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#3 row C2).**
+    Effect-class admit-set widen 18 → 19, adding
+    ``DealDamageToControllerAndAddMana`` (Ancient Tomb's AA[0] pilot
+    — the C1 substrate at commit ``c250a60d`` shipped the Rust fields
+    variant + parse / resolve / to_pydict + cross-engine bridge arms;
+    THIS cycle widens the per-AA Effect-class gate). Combined with
+    the Phase-1.5a bare ``{T}`` cost gate and the Phase-4E
+    ``is_mana_ability=True`` AA-rider widen, the per-AA admit
+    predicate :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED →
+    ADMITTED on Ancient Tomb's AA[0]; the printing-level admit
+    cascades through the Carrier-AA Land sibling and Ancient Tomb
+    admits end-to-end at the deck loader (Land admits 14 → 15 at
+    the live-pool walk after the widen — Ancient Tomb is the SOLE
+    new admit, verified no-auto-grow; the damage-rider shape is
+    structurally distinct from MC/RP's chosen-color shape so no
+    sibling carrier was waiting on the new Effect class). ZERO Rust
+    changes (C1 shipped the substrate). Per-card real-EoE byte-
+    equal probe ships in lockstep at ``tests/test_ancient_tomb_
+    parity.py`` (the covered_by_construction → PROBED tier bump).
+    Unlike MC/RP C2 there is NO no-agent-fallback color-picker
+    divergence to gate around — Ancient Tomb mints the FIXED
+    ``produces=(("C", 2),)`` tuple regardless of the controller's
+    battlefield shape, so the byte-equal pin lands on a single
+    universal scenario (MINT at high life + cross-engine byte-equal
+    on the pool + life delta).
+
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
     """
     from mtg_bot.effects.generic.become_type import BecomesCopyOfTargetLand
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
+    )
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToControllerAndAddMana,
     )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.draw_mill import (
@@ -9385,6 +9415,42 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # is deferred to a follow-up cycle if a future probe scenario
         # surfaces the multi-color produces-union case.
         AddOneManaFromControlledLandsProductions,
+        # **Ancient Tomb Phase 4 Cycle 2 widen (2026-05-27 — THE FLIP
+        # per ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#3
+        # row C2).** Adds Ancient Tomb's AA[0] pilot Effect class
+        # ``DealDamageToControllerAndAddMana`` (CR-106.1 mana-ability
+        # producing ``{C}{C}`` paired with a 2-life self-damage rider).
+        # The Rust substrate (new ``Effect::DealDamageToControllerAnd
+        # AddMana`` fields variant + ``parse_effect`` arm + ``to_pydict``
+        # arm + life-decrement-then-push_coins resolve arm + cross-
+        # engine bridge forward / reverse arms) all shipped at C1
+        # (commit ``c250a60d``). C2 is the admit-set widen (18 → 19) —
+        # combined with the Phase-1.5a bare ``{T}`` cost gate and the
+        # Phase-4E ``is_mana_ability=True`` AA-rider widen, Ancient
+        # Tomb's per-AA admit predicate :func:`_aa_is_phase1_sub_
+        # shape_a` FLIPS DECLINED → ADMITTED on AA[0]; the printing-
+        # level admit cascades through :func:`_printing_is_bridge_
+        # simple_carrier_aa_land` / :func:`_printing_is_bridge_simple_
+        # carrier_aa_any` and Ancient Tomb admits end-to-end at the
+        # deck loader. ZERO Rust changes this cycle (C1 shipped the
+        # substrate).
+        #
+        # **No no-agent-fallback divergence at C2.** Unlike Meteor
+        # Crater C2 / Reflecting Pool C2 — both of which had a WUBRG-
+        # canonical-vs-sorted-alphabetic color-picker divergence
+        # gated to multi-color produces unions — Ancient Tomb's
+        # produces tuple is FIXED at ``(("C", 2),)`` regardless of
+        # the controller's battlefield shape (the Effect carries the
+        # mint specification on its own fields, not via a board-walk).
+        # Both engines mint 2 C coins byte-equal under every fixture;
+        # the C2 per-card real-EoE probe (``tests/test_ancient_tomb_
+        # parity.py``) lands its byte-equal pin on a single MINT
+        # scenario (high life + cross-engine pool + life delta).
+        # Ancient Tomb is the SOLE EoE carrier of the new Effect
+        # class — no sibling auto-grow available (the damage-rider
+        # shape is structurally distinct from MC/RP's chosen-color
+        # shape, verified no-auto-grow via full-pool re-derivation).
+        DealDamageToControllerAndAddMana,
     })
 
 

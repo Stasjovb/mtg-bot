@@ -79,6 +79,9 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToControllerAndAddMana,
+    )
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
@@ -103,11 +106,12 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
 
     admit_set = _carrier_aa_phase_1_effect_classes()
     # Expected post-C4 admit set (post-rebase-onto-Spacecraft-P4-C2
-    # + post-Meteor-Crater-P4-C2 + post-Reflecting-Pool-P4-C2):
+    # + post-Meteor-Crater-P4-C2 + post-Reflecting-Pool-P4-C2 +
+    # post-Ancient-Tomb-P4-C2):
     # Phase 1-3 (7) + Phase 4C C2 (2) + Phase 4D C2 (2) + Phase 4E C2
     # (2) + Phase 4B C2 (1) + Spacecraft Phase 4 C2 (1) + Phase 4B
     # C4 (1) + Meteor Crater Phase 4 C2 (1) + Reflecting Pool Phase 4
-    # C2 (1) = 18.
+    # C2 (1) + Ancient Tomb Phase 4 C2 (1) = 19.
     expected_post_c4 = frozenset({
         RegenerateTargetCreature,
         UntapTargetLand,
@@ -129,21 +133,23 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         CopyTargetInstantOrSorceryYouControl,
         # Meteor Crater Phase 4 C2:
         AddOneManaOfChosenPermanentColor,
-        # Reflecting Pool Phase 4 C2 (the new one):
+        # Reflecting Pool Phase 4 C2:
         AddOneManaFromControlledLandsProductions,
+        # Ancient Tomb Phase 4 C2 (the new one):
+        DealDamageToControllerAndAddMana,
     })
     assert admit_set == expected_post_c4, (
         "Phase 4B C4 admit set sentinel: post-C4 + post-Meteor-Crater-"
-        f"C2 + post-Reflecting-Pool-C2 admit set must be the 18-class "
-        f"set; got {len(admit_set)} classes, delta = added "
-        f"{admit_set - expected_post_c4} / "
+        f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 admit "
+        f"set must be the 19-class set; got {len(admit_set)} classes, "
+        f"delta = added {admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
-    assert len(admit_set) == 18, (
-        f"Phase 4B C4 admit-set size sentinel: expected 18 classes "
+    assert len(admit_set) == 19, (
+        f"Phase 4B C4 admit-set size sentinel: expected 19 classes "
         f"post-C4 (rebased onto Spacecraft P4 C2 at ``4a2485f1`` + "
-        f"post-Meteor-Crater-C2 + post-Reflecting-Pool-C2); got "
-        f"{len(admit_set)}"
+        f"post-Meteor-Crater-C2 + post-Reflecting-Pool-C2 + post-"
+        f"Ancient-Tomb-C2); got {len(admit_set)}"
     )
     assert CopyTargetInstantOrSorceryYouControl in admit_set, (
         "Phase 4B C4 FLIP: CopyTargetInstantOrSorceryYouControl must "
@@ -158,6 +164,11 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         "Reflecting Pool P4 C2 FLIP: "
         "AddOneManaFromControlledLandsProductions must BE in "
         "_carrier_aa_phase_1_effect_classes post-Reflecting-Pool-C2."
+    )
+    assert DealDamageToControllerAndAddMana in admit_set, (
+        "Ancient Tomb P4 C2 FLIP: DealDamageToControllerAndAddMana "
+        "must BE in _carrier_aa_phase_1_effect_classes post-Ancient-"
+        "Tomb-C2."
     )
 
 
@@ -419,10 +430,10 @@ def test_mirrorpool_live_both_aas_round_trip_at_bridge_floor_post_c4():
 
 
 # Carrier-AA Phase-1-3 + Phase-4D + Phase-4B C4 + Meteor Crater C2 +
-# Reflecting Pool C2 Land admits. Pre-C4: 7 Lands + 4 spillover Lands =
-# 11 Lands. C4 ADDS Mirrorpool. Meteor Crater C2 ADDS Meteor Crater.
-# Reflecting Pool C2 ADDS Reflecting Pool. Post-Reflecting-Pool-C2:
-# 14 Lands.
+# Reflecting Pool C2 + Ancient Tomb C2 Land admits. Pre-C4: 7 Lands +
+# 4 spillover Lands = 11 Lands. C4 ADDS Mirrorpool. Meteor Crater C2
+# ADDS Meteor Crater. Reflecting Pool C2 ADDS Reflecting Pool. Ancient
+# Tomb C2 ADDS Ancient Tomb. Post-Ancient-Tomb-C2: 15 Lands.
 PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Swarmyard",
     "Deserted Temple",
@@ -439,8 +450,10 @@ PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Mirrorpool",
     # Meteor Crater P4 C2.
     "Meteor Crater",
-    # Reflecting Pool P4 C2 (the new one).
+    # Reflecting Pool P4 C2.
     "Reflecting Pool",
+    # Ancient Tomb P4 C2 (the new one).
+    "Ancient Tomb",
 )
 
 PHASE_4D_ADMITTED_ARTIFACT_CARRIERS = (
@@ -475,11 +488,11 @@ def test_full_pool_admit_set_grows_by_exactly_one_post_c4():
         + PHASE_4D_ADMITTED_ARTIFACT_CARRIERS,
     )
     assert admitted == expected, (
-        f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 "
-        f"pool-parity invariant: full-pool admit set must be exactly "
-        f"the C2 baseline + Mirrorpool + Meteor Crater + Reflecting "
-        f"Pool; got admit delta = added {admitted - expected} / "
-        f"missing {expected - admitted}"
+        f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 + "
+        f"Ancient Tomb C2 pool-parity invariant: full-pool admit set "
+        f"must be exactly the C2 baseline + Mirrorpool + Meteor "
+        f"Crater + Reflecting Pool + Ancient Tomb; got admit delta = "
+        f"added {admitted - expected} / missing {expected - admitted}"
     )
     # Mirrorpool MUST be in the admit set post-C4.
     assert "Mirrorpool" in admitted, (
