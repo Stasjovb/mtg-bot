@@ -49,6 +49,21 @@ precedent — substrate lands at C1, the live FLIP lands at C2).
 ZERO per-card probe this cycle (Cycle 2 ships the real-EoE
 ``tests/test_meteor_crater_parity.py``).
 
+**Cycle 2 update (2026-05-27).** Cycle 2 has now LANDED: the
+substrate-only invariant pin
+``test_meteor_crater_stays_declined_at_admit_gate_post_cycle_1``
++ count sentinel ``test_meteor_crater_carrier_aa_effect_classes_
+count_stays_16`` are INVERTED in this same file to
+``test_meteor_crater_now_admits_at_admit_gate_post_cycle_2`` +
+``test_meteor_crater_carrier_aa_effect_classes_count_is_17_post_
+cycle_2`` per the Coordinated Clobbering 2b / Mirrorpool C4
+invariant-inversion precedent. The C1 substrate-level Rust unit
+pins (parse / to_pydict / resolve canonical-W / multi-color
+canonical-WUBRG / colorless empty-union fallback / source-
+controller fan-out / color-union scoping) all stay GREEN at C2 —
+they pin the Rust resolve arm's invariants on the C1 substrate
+shape and are untouched by the admit-set widen.
+
 **Verify-first findings (live tree, main ``6d834305``):**
 
   - Meteor Crater printing: ``card_types=("Land",)``,
@@ -589,33 +604,37 @@ def test_resolve_color_union_only_from_source_controllers_battlefield(
 # ---------------------------------------------------------------------------
 
 
-def test_meteor_crater_stays_declined_at_admit_gate_post_cycle_1():
-    """**LOAD-BEARING substrate-only invariant pin.** Meteor Crater's
-    live printing STAYS DECLINED at the Phase-4 Carrier-AA admit
-    gate post-Cycle-1.
+def test_meteor_crater_now_admits_at_admit_gate_post_cycle_2():
+    """**LOAD-BEARING flip invariant pin (INVERTED at Cycle 2).** Meteor
+    Crater's live printing FLIPS DECLINED → ADMITTED at the Phase-4
+    Carrier-AA admit gate post-Cycle-2.
 
-    Post-C1 invariants:
+    Post-C2 invariants:
 
-      (a) ``_carrier_aa_phase_1_effect_classes`` does NOT include
+      (a) ``_carrier_aa_phase_1_effect_classes`` INCLUDES
           ``AddOneManaOfChosenPermanentColor`` (the Effect-class
-          admit set retains 16 entries — the Cycle 2 widen ships
-          the 16 → 17 bump).
+          admit set is 17 entries post-C2 — the C2 widen lands the
+          16 → 17 bump).
       (b) ``_aa_is_phase1_sub_shape_a(meteor.activated_abilities[0])``
-          returns False (the ``type(aa.effect) not in
-          _carrier_aa_phase_1_effect_classes()`` teeth fires).
+          returns True (the ``type(aa.effect) not in
+          _carrier_aa_phase_1_effect_classes()`` teeth no longer
+          fire; the Phase-1.5a bare ``{T}`` cost gate + the Phase-4E
+          ``is_mana_ability=True`` AA-rider widen all clear too).
       (c) ``_printing_is_bridge_simple_carrier_aa_land(meteor)``
-          returns False (cascades from the per-AA gate decline at
-          the per-AA all-or-nothing walk).
+          returns True (the per-AA gate admits, and the single-AA
+          all-or-nothing printing-level cascade admits the
+          printing).
       (d) ``_printing_is_bridge_simple_carrier_aa_any(meteor)``
-          returns False (the top-level dispatcher delegates to the
-          Land sibling which declines).
+          returns True (the top-level dispatcher delegates to the
+          Land sibling which admits).
 
-    If this pin fails — i.e. Meteor Crater starts admitting on this
-    branch — the substrate-only invariant has been violated and the
-    cross-engine probe would run BEFORE the per-card real-EoE byte-
-    equal probe ships, producing false-success or false-failure
-    claims for the resolve arm. Catch the drift here. Cycle 2 is
-    what flips this pin.
+    This pin was renamed from
+    ``test_meteor_crater_stays_declined_at_admit_gate_post_cycle_1``
+    at Cycle 2 per the Coordinated Clobbering 2b / Mirrorpool C4
+    invariant-inversion precedent. If this pin fails — i.e. the
+    admit-gate stops admitting Meteor Crater — the C2 FLIP has
+    silently regressed and the per-card real-EoE probe would run
+    against a wrong fixture. Catch the drift here.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.generic.mana import (
@@ -632,57 +651,57 @@ def test_meteor_crater_stays_declined_at_admit_gate_post_cycle_1():
     if real is None:
         pytest.skip("Meteor Crater absent from active CardSource")
 
-    # (a) Effect-class admit set EXCLUDES the new class at C1.
+    # (a) Effect-class admit set INCLUDES the new class post-C2.
     effect_classes = _carrier_aa_phase_1_effect_classes()
-    assert AddOneManaOfChosenPermanentColor not in effect_classes, (
-        "Substrate-only invariant violation: "
-        "AddOneManaOfChosenPermanentColor MUST NOT be in the "
-        "Carrier-AA Phase-1 Effect-class admit set post-C1. "
-        "Cycle 2 ships the 16 → 17 widen + admit-set pin bump "
-        "together as the FLIP."
+    assert AddOneManaOfChosenPermanentColor in effect_classes, (
+        "Flip invariant violation: "
+        "AddOneManaOfChosenPermanentColor MUST be in the Carrier-"
+        "AA Phase-1 Effect-class admit set post-C2."
     )
 
-    # (b) Per-AA gate STILL declines on the Effect-class teeth.
+    # (b) Per-AA gate ADMITS post-C2.
     aa = real.activated_abilities[0]
-    assert _aa_is_phase1_sub_shape_a(aa) is False, (
-        "Substrate-only invariant violation: "
-        "_aa_is_phase1_sub_shape_a must STILL decline Meteor "
-        "Crater's AA[0] post-C1 on the Effect-class teeth."
+    assert _aa_is_phase1_sub_shape_a(aa) is True, (
+        "Flip invariant violation: "
+        "_aa_is_phase1_sub_shape_a must ADMIT Meteor Crater's "
+        "AA[0] post-C2 on the Effect-class widen + Phase-1.5a "
+        "bare {T} cost gate + Phase-4E is_mana_ability rider."
     )
 
-    # (c) Carrier-AA Land admit predicate STILL declines.
-    assert _printing_is_bridge_simple_carrier_aa_land(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_land must STILL "
-        "decline Meteor Crater post-C1 (cascades from per-AA "
-        "decline under all-or-nothing contract)."
+    # (c) Carrier-AA Land admit predicate ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_land(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_land must ADMIT "
+        "Meteor Crater post-C2 (cascades from per-AA admit at the "
+        "single-AA all-or-nothing walk)."
     )
 
-    # (d) Top-level dispatcher STILL declines.
-    assert _printing_is_bridge_simple_carrier_aa_any(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_any must STILL "
-        "decline Meteor Crater post-C1."
+    # (d) Top-level dispatcher ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_any(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_any must ADMIT "
+        "Meteor Crater post-C2 (delegates to the Land sibling)."
     )
 
 
-def test_meteor_crater_carrier_aa_effect_classes_count_stays_16():
-    """**Substrate-only count sentinel.** The
-    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST remain
-    16 post-C1. The Cycle 2 widen ships the 16 → 17 bump
-    (``AddOneManaOfChosenPermanentColor``).
+def test_meteor_crater_carrier_aa_effect_classes_count_is_17_post_cycle_2():
+    """**Flip count sentinel (INVERTED at Cycle 2).** The
+    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be 17
+    post-C2 — the C2 widen lands the 16 → 17 bump (adding
+    ``AddOneManaOfChosenPermanentColor``).
 
-    Sibling of the Cycle-1 admit-set-unchanged sentinel in the
-    Spacecraft / Phase 4E substrate-only test suite — pin the count
-    so a future drift surfaces here before a silent admit-gate flip.
+    Renamed from ``test_meteor_crater_carrier_aa_effect_classes_
+    count_stays_16``; pin the new count so a future widen / drift
+    surfaces here before a silent admit-gate flip beyond the C2
+    closure.
     """
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 16, (
-        "Substrate-only invariant: the Carrier-AA Phase-1 Effect-"
-        "class admit set MUST have exactly 16 entries post-Cycle-1. "
-        "Cycle 2 ships the 16 → 17 widen (adding "
-        "AddOneManaOfChosenPermanentColor)."
+    assert len(_carrier_aa_phase_1_effect_classes()) == 17, (
+        "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
+        "set MUST have exactly 17 entries post-Cycle-2 — Meteor "
+        "Crater C2 lands the 16 → 17 bump adding "
+        "AddOneManaOfChosenPermanentColor."
     )

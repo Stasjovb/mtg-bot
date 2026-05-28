@@ -82,6 +82,7 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddOneManaOfChosenPermanentColor,
     )
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
@@ -100,10 +101,11 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
     from mtg_bot.parity.trajectory import _carrier_aa_phase_1_effect_classes
 
     admit_set = _carrier_aa_phase_1_effect_classes()
-    # Expected post-C4 admit set (post-rebase-onto-Spacecraft-P4-C2):
+    # Expected post-C4 admit set (post-rebase-onto-Spacecraft-P4-C2
+    # + post-Meteor-Crater-P4-C2):
     # Phase 1-3 (7) + Phase 4C C2 (2) + Phase 4D C2 (2) + Phase 4E C2
     # (2) + Phase 4B C2 (1) + Spacecraft Phase 4 C2 (1) + Phase 4B
-    # C4 (1) = 16.
+    # C4 (1) + Meteor Crater Phase 4 C2 (1) = 17.
     expected_post_c4 = frozenset({
         RegenerateTargetCreature,
         UntapTargetLand,
@@ -121,24 +123,31 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         CreateTokenCopyOfTargetCreatureYouControl,
         # Spacecraft Phase 4 C2 (rebase pickup):
         AddChargeCounterManaOfChosenColor,
-        # Phase 4B C4 (the new one):
+        # Phase 4B C4:
         CopyTargetInstantOrSorceryYouControl,
+        # Meteor Crater Phase 4 C2 (the new one):
+        AddOneManaOfChosenPermanentColor,
     })
     assert admit_set == expected_post_c4, (
-        "Phase 4B C4 admit set sentinel: post-C4 admit set must be "
-        f"the 16-class set (rebased onto Spacecraft P4 C2); got "
+        "Phase 4B C4 admit set sentinel: post-C4 + post-Meteor-Crater-"
+        f"C2 admit set must be the 17-class set; got "
         f"{len(admit_set)} classes, delta = added "
         f"{admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
-    assert len(admit_set) == 16, (
-        f"Phase 4B C4 admit-set size sentinel: expected 16 classes "
-        f"post-C4 (rebased onto Spacecraft P4 C2 at ``4a2485f1``); "
-        f"got {len(admit_set)}"
+    assert len(admit_set) == 17, (
+        f"Phase 4B C4 admit-set size sentinel: expected 17 classes "
+        f"post-C4 (rebased onto Spacecraft P4 C2 at ``4a2485f1`` + "
+        f"post-Meteor-Crater-C2); got {len(admit_set)}"
     )
     assert CopyTargetInstantOrSorceryYouControl in admit_set, (
         "Phase 4B C4 FLIP: CopyTargetInstantOrSorceryYouControl must "
         "BE in _carrier_aa_phase_1_effect_classes post-C4."
+    )
+    assert AddOneManaOfChosenPermanentColor in admit_set, (
+        "Meteor Crater P4 C2 FLIP: AddOneManaOfChosenPermanentColor "
+        "must BE in _carrier_aa_phase_1_effect_classes post-Meteor-"
+        "Crater-C2."
     )
 
 
@@ -399,9 +408,10 @@ def test_mirrorpool_live_both_aas_round_trip_at_bridge_floor_post_c4():
 # ---------------------------------------------------------------------------
 
 
-# Carrier-AA Phase-1-3 + Phase-4D + Phase-4B C4 Land admits. Pre-C4:
-# 7 Lands + 4 spillover Lands = 11 Lands. C4 ADDS Mirrorpool. Post-C4:
-# 12 Lands.
+# Carrier-AA Phase-1-3 + Phase-4D + Phase-4B C4 + Meteor Crater C2
+# Land admits. Pre-C4: 7 Lands + 4 spillover Lands = 11 Lands. C4 ADDS
+# Mirrorpool. Meteor Crater C2 ADDS Meteor Crater. Post-Meteor-Crater-
+# C2: 13 Lands.
 PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Swarmyard",
     "Deserted Temple",
@@ -414,8 +424,10 @@ PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Eldrazi Temple",
     "Gemstone Caverns",
     "Sunken Citadel",
-    # Phase 4B C4 (the new one).
+    # Phase 4B C4.
     "Mirrorpool",
+    # Meteor Crater P4 C2 (the new one).
+    "Meteor Crater",
 )
 
 PHASE_4D_ADMITTED_ARTIFACT_CARRIERS = (
@@ -450,8 +462,9 @@ def test_full_pool_admit_set_grows_by_exactly_one_post_c4():
         + PHASE_4D_ADMITTED_ARTIFACT_CARRIERS,
     )
     assert admitted == expected, (
-        f"Phase 4B C4 pool-parity invariant: full-pool admit set must "
-        f"be exactly the C2 baseline + Mirrorpool; got admit delta = "
+        f"Phase 4B C4 + Meteor Crater C2 pool-parity invariant: "
+        f"full-pool admit set must be exactly the C2 baseline + "
+        f"Mirrorpool + Meteor Crater; got admit delta = "
         f"added {admitted - expected} / "
         f"missing {expected - admitted}"
     )

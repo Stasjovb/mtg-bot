@@ -595,8 +595,16 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
     # ``CopyTargetInstantOrSorceryYouControl`` + bridge arms);
     # combined with the C2 widen for AA[1] both per-AA gates pass and
     # the multi-AA all-or-nothing gate flips the printing.
+    # **Meteor Crater Phase 4 C2 (2026-05-27).** Effect-class widen
+    # 16 → 17 (adds ``AddOneManaOfChosenPermanentColor``) FLIPs Meteor
+    # Crater DECLINED → ADMITTED — combined with the Phase-1.5a bare
+    # ``{T}`` cost gate + the Phase-4E ``is_mana_ability=True`` AA-
+    # rider widen, the single-AA all-or-nothing per-AA walk admits.
+    # Admit set 8 → 9 (Meteor Crater is THE new entry; every other
+    # carrier honestly declines per the verify-first walk).
     assert admits == [
         "Deserted Temple",
+        "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
@@ -605,12 +613,13 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying "
-        f"Maze', 'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
-        f"A widen in a sibling substrate or predicate would surface "
-        f"here as a silent auto-grow — investigate before merging."
+        f"Carrier-AA Meteor Crater C2 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Meteor Crater', 'Mirrorpool', "
+        f"'Mystifying Maze', 'Petrified Field', 'Scavenger Grounds', "
+        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], got "
+        f"{admits}. A widen in a sibling substrate or predicate would "
+        f"surface here as a silent auto-grow — investigate before "
+        f"merging."
     )
 
 

@@ -9109,6 +9109,29 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         line + AA[1] token-copy line on a live Mirrorpool printing
         per design doc §6.7.
 
+    **Meteor Crater Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#1 row C2).**
+    Effect-class admit-set widen 16 → 17, adding
+    ``AddOneManaOfChosenPermanentColor`` (Meteor Crater's AA[0] pilot —
+    the C1 substrate at commit ``eb059eaa`` shipped the Rust unit
+    variant + parse / resolve / to_pydict + cross-engine bridge arms;
+    THIS cycle widens the per-AA Effect-class gate). Combined with the
+    Phase-1.5a bare ``{T}`` cost gate and the Phase-4E
+    ``is_mana_ability=True`` AA-rider widen, the per-AA admit predicate
+    :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED → ADMITTED on
+    Meteor Crater's AA[0]; the printing-level admit cascades through
+    the Carrier-AA Land sibling and Meteor Crater admits end-to-end at
+    the deck loader (admit set 7 → 8 Land carriers — Deserted Temple +
+    Meteor Crater + Mirrorpool + Mystifying Maze + Petrified Field +
+    Scavenger Grounds + Swarmyard + Terrain Generator + Thespian's
+    Stage = 9 total at the live-pool walk after the C2 widen). ZERO
+    Rust changes (C1 shipped the substrate). Per-card real-EoE byte-
+    equal probe ships in lockstep at ``tests/test_meteor_crater_
+    parity.py`` (the covered_by_construction → PROBED tier bump). See
+    ``docs/SEARCH_LIMITATIONS.md`` Meteor Crater C2 entry for the
+    WUBRG-canonical-vs-sorted-alphabetic no-agent fallback divergence
+    + the probe-side mono-white-bf seating that avoids exercising it.
+
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
     """
@@ -9129,6 +9152,7 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddOneManaOfChosenPermanentColor,
     )
     from mtg_bot.effects.generic.misc import (
         LockOrUnlockDoorOfTargetRoomYouControl,
@@ -9252,6 +9276,45 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # multi-AA carrier to fully FLIP (the C2-only widen left AA[0]
         # biting; C4 closes the AA[0] half end-to-end).
         CopyTargetInstantOrSorceryYouControl,
+        # **Meteor Crater Phase 4 Cycle 2 widen (2026-05-27 — THE FLIP
+        # per ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#1
+        # row C2).** Adds Meteor Crater's AA[0] pilot Effect class
+        # ``AddOneManaOfChosenPermanentColor`` (CR-106.1 mana-ability
+        # producing one mana of a color chosen from the colors of
+        # permanents the source's controller controls). The Rust
+        # substrate (new ``Effect::AddOneManaOfChosenPermanentColor``
+        # unit variant + ``parse_effect`` arm + ``to_pydict`` arm +
+        # source-controller battlefield walk + WUBRG-canonical-first
+        # color pick + empty-union colorless ``{C}`` defensive fallback
+        # + ``push_coins`` mint + cross-engine bridge forward / reverse
+        # arms) all shipped at C1 (commit ``eb059eaa``). C2 is the
+        # admit-set widen (16 → 17) — combined with the Phase-1.5a
+        # bare ``{T}`` cost gate and the Phase-4E ``is_mana_ability=
+        # True`` AA-rider widen, Meteor Crater's per-AA admit predicate
+        # :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED → ADMITTED
+        # on AA[0]; the printing-level admit cascades through
+        # :func:`_printing_is_bridge_simple_carrier_aa_land` /
+        # :func:`_printing_is_bridge_simple_carrier_aa_any` and Meteor
+        # Crater admits end-to-end at the deck loader. ZERO Rust
+        # changes this cycle (C1 shipped the substrate).
+        #
+        # **WUBRG-canonical-vs-sorted-alphabetic divergence under the
+        # no-agent fallback.** Rust picks the canonical-first WUBRG-
+        # ordered color from the union (e.g. ``{'U','G','R'}`` → ``U``)
+        # per ``state_ops_resolve.rs``; Python's
+        # ``AddOneManaOfChosenPermanentColor.resolve`` at
+        # ``effects/generic/mana.py:258-264`` picks ``sorted(options)[0]``
+        # (alphabetic-first → ``G`` from the same set). The C2 per-card
+        # real-EoE probe (``tests/test_meteor_crater_parity.py``)
+        # avoids exercising the divergence by seating ONLY mono-white
+        # permanents on the source-controller's battlefield — both
+        # engines pick ``W`` byte-equal regardless of the picker. The
+        # divergence is documented in
+        # ``docs/SEARCH_LIMITATIONS.md`` as the Meteor Crater Phase 4
+        # C2 SL entry; the agent-callback color-choice plumbing through
+        # ``choose_mana_color`` is deferred to a follow-up cycle if a
+        # future probe scenario surfaces the multi-color union case.
+        AddOneManaOfChosenPermanentColor,
     })
 
 

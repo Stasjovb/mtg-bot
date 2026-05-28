@@ -1053,8 +1053,12 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
     # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
     # the full Option A widen. The auto-grow walk now includes
     # Mirrorpool in the expected admit set.
+    # **Meteor Crater Phase 4 C2 (2026-05-27).** Effect-class widen
+    # 16 → 17 (adds ``AddOneManaOfChosenPermanentColor``) FLIPs Meteor
+    # Crater DECLINED → ADMITTED. 8 → 9 admits.
     assert admits == [
         "Deserted Temple",
+        "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
@@ -1063,10 +1067,10 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying "
-        f"Maze', 'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator', \"Thespian's Stage\"], got "
+        f"Carrier-AA Meteor Crater C2 admit-set pin violated: expected "
+        f"admit set = ['Deserted Temple', 'Meteor Crater', 'Mirrorpool', "
+        f"'Mystifying Maze', 'Petrified Field', 'Scavenger Grounds', "
+        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], got "
         f"{admits}. A widen in a sibling substrate or predicate "
         f"would surface here as a silent auto-grow — investigate "
         f"before merging."

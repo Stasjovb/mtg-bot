@@ -78,7 +78,11 @@ _PHASE_3_DECLINE_RESIDUE = tuple(
 )
 
 _PHASE_4_DEFERRAL_CARRIERS = (
-    "Mirrorpool",
+    # Mirrorpool was here pre-Phase-4B-C4; Phase 4B Cycle 4 (2026-05-26
+    # commit ``b17b0c66``) shipped the FULL FLIP via the Option A widen
+    # + AA[0] CopyTargetInstantOrSorceryYouControl Effect-class widen +
+    # bridge arms; admits at the dispatcher + LAND sibling builder.
+    # See ``tests/test_mirrorpool_parity.py`` for the per-card probe.
     # Ghost Vacuum was here pre-Phase-4C-C2; Phase 4C C2's FULL FLIP
     # (2026-05-26) widens the Effect-class admit set + lifts the
     # sorcery_speed AA-rider gate + adds the Rust ActivatedAbility
@@ -101,6 +105,12 @@ _PHASE_4_DEFERRAL_CARRIERS = (
     # C2.5 (Rust ManaPool "any" coin substrate). See
     # `tests/test_carrier_aa_phase_4e_substrate_cycle_2.py` for the
     # partial-FLIP teeth-trace pin set.
+    # Meteor Crater was here pre-Meteor-Crater-C2; Meteor Crater
+    # Phase 4 Cycle 2 (2026-05-27) FULL FLIP via the
+    # AddOneManaOfChosenPermanentColor Effect-class widen (Cycle 1
+    # substrate at commit ``eb059eaa`` shipped the Rust variant +
+    # bridge arms; C2 widens the per-AA admit gate). See
+    # ``tests/test_meteor_crater_parity.py`` for the per-card probe.
     "Haunted Screen",
     "The Eternity Elevator",
 )
@@ -137,6 +147,26 @@ _PHASE_4E_C2_5_FULL_FLIP_CARRIERS = (
 # Phase-4 carrier to land its FULL FLIP at Phase 4C C2.
 _PHASE_4C_C2_FULL_FLIP_CARRIERS = (
     "Ghost Vacuum",
+)
+
+# Phase 4B C4 FULL-FLIP Land carriers — pass every gate (dispatcher +
+# LAND sub-predicate + cross-engine LAND builder) post-Phase-4B-C4's
+# Effect-class widen for AA[0] (CopyTargetInstantOrSorceryYouControl)
+# + bridge arms. Mirrorpool is the sole Phase-4 multi-AA carrier to
+# FULL FLIP at Phase 4B C4 (the FIRST Phase-4 multi-AA carrier to
+# fully FLIP).
+_PHASE_4B_C4_FULL_FLIP_LAND_CARRIERS = (
+    "Mirrorpool",
+)
+
+# Meteor Crater Phase 4 C2 FULL-FLIP Land carriers — pass every gate
+# (dispatcher + LAND sub-predicate + cross-engine LAND builder) post-
+# Meteor-Crater-C2's Effect-class widen for AA[0]
+# (AddOneManaOfChosenPermanentColor); Cycle 1 substrate at commit
+# ``eb059eaa`` shipped the Rust variant + bridge arms. Meteor Crater
+# is the SOLE EoE carrier of the Effect class.
+_METEOR_CRATER_C2_FULL_FLIP_LAND_CARRIERS = (
+    "Meteor Crater",
 )
 
 
@@ -265,6 +295,33 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Artifact "
             f"builder gate post-Phase-4C-C2"
         )
+    elif card_name in _PHASE_4B_C4_FULL_FLIP_LAND_CARRIERS:
+        # Phase 4B C4 FULL FLIP — Mirrorpool admits at every gate
+        # post-Phase-4B-C4 (Effect-class widen for AA[0]
+        # CopyTargetInstantOrSorceryYouControl + bridge arms; combined
+        # with the C2 widen for AA[1] both per-AA gates pass and the
+        # multi-AA all-or-nothing gate flips the printing).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post-"
+            f"Phase 4B C4's FULL FLIP (multi-AA all-or-nothing gate)"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post-Phase-4B-C4"
+        )
+    elif card_name in _METEOR_CRATER_C2_FULL_FLIP_LAND_CARRIERS:
+        # Meteor Crater P4 C2 FULL FLIP — Meteor Crater admits at
+        # every gate post-Meteor-Crater-C2 (Effect-class widen for
+        # AddOneManaOfChosenPermanentColor; Cycle 1 substrate at
+        # commit ``eb059eaa`` shipped the Rust variant + bridge arms).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post-"
+            f"Meteor Crater Phase 4 C2's FULL FLIP"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post-Meteor-Crater-C2"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -306,14 +363,28 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
         for name, p in ps.items()
         if traj._carrier_aa_land_card_def(p) is not None
     )
-    expected_post_c2_5 = sorted(set(_PHASE_3_ADMIT_SET) | {"Gemstone Caverns"})
-    assert admits == expected_post_c2_5, (
-        f"Phase 4E C2.5 subsystem-attribution LOADER-SIDE LAND pin "
-        f"violated. _carrier_aa_land_card_def must admit EXACTLY "
-        f"the post-C2.5 8-card set {expected_post_c2_5}, "
-        f"got {admits}. A silent auto-grow indicates a Phase-4+ "
-        f"widen landed without inverting this assertion — "
-        f"investigate before merging."
+    # Phase 4E C2.5 (2026-05-26) added Gemstone Caverns to the LAND
+    # admit set under the "any" coin substrate.
+    # Phase 4B C4 (2026-05-26) added Mirrorpool — multi-AA Land carrier
+    # FULL FLIP at the printing-level admit gate via the Option A
+    # widen + bridge arms.
+    # Meteor Crater P4 C2 (2026-05-27) added Meteor Crater — single-AA
+    # Land carrier FULL FLIP via the AddOneManaOfChosenPermanentColor
+    # Effect-class widen.
+    expected_post_meteor_crater_c2 = sorted(
+        set(_PHASE_3_ADMIT_SET) | {
+            "Gemstone Caverns",
+            "Mirrorpool",
+            "Meteor Crater",
+        }
+    )
+    assert admits == expected_post_meteor_crater_c2, (
+        f"Meteor Crater P4 C2 subsystem-attribution LOADER-SIDE LAND "
+        f"pin violated. _carrier_aa_land_card_def must admit EXACTLY "
+        f"the post-Meteor-Crater-C2 10-card set "
+        f"{expected_post_meteor_crater_c2}, got {admits}. A silent "
+        f"auto-grow indicates a Phase-4+ widen landed without inverting "
+        f"this assertion — investigate before merging."
     )
 
 
@@ -404,6 +475,8 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "All-Fates Scroll",
             "Ghost Vacuum",         # Phase-4C-C2 FULL FLIP
             "Keys to the House",    # Phase-4D-C2 FULL FLIP (Artifact admit + builder)
+            "Mirrorpool",           # Phase-4B-C4 FULL FLIP (Land admit + builder)
+            "Meteor Crater",        # Meteor Crater P4 C2 FULL FLIP (Land admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -413,12 +486,12 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
         }
     )
     assert admits == expected_post_c2, (
-        f"Phase 3C C5 dispatcher exhaustive-walk pin violated post-"
-        f"Phase-4D-C2 FULL FLIP. Expected {expected_post_c2}, "
-        f"got {admits}. The dispatcher delegates LAND ∪ ARTIFACT; "
-        f"silent admit-set growth on either sub-predicate surfaces "
-        f"here. NOTE: the predicate-level admit set is NOT the same "
-        f"as the loader-side admit gate — see the LOADER-SIDE pins."
+        f"Meteor Crater P4 C2 dispatcher exhaustive-walk pin violated. "
+        f"Expected {expected_post_c2}, got {admits}. The dispatcher "
+        f"delegates LAND ∪ ARTIFACT; silent admit-set growth on either "
+        f"sub-predicate surfaces here. NOTE: the predicate-level admit "
+        f"set is NOT the same as the loader-side admit gate — see the "
+        f"LOADER-SIDE pins."
     )
 
 
@@ -525,16 +598,16 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
             or traj._carrier_aa_artifact_card_def(p) is not None
         )
     )
-    # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5: the LOADER-SIDE
-    # admit set grows from 7 to 11 (8 Land admits = 7-card Phase-3-
-    # close + Gemstone Caverns under the "any" coin substrate; 3
-    # Artifact admits = Ghost Vacuum + Keys to the House + All-Fates
-    # Scroll).
-    assert loader_admit_count == 11, (
-        f"Phase 4E C2.5 close LOADER-SIDE admit-set size invariant "
-        f"violated: expected exactly 11 cards (8 Land = 7 Phase-3 + "
-        f"Gemstone Caverns; 3 Artifact = Ghost Vacuum + Keys to the "
-        f"House + All-Fates Scroll) post-Phase-4E-C2.5, got "
-        f"{loader_admit_count}. Further Phase-4+ FLIPs MUST update "
-        f"this size in lockstep."
+    # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5 + Phase-4B-C5
+    # (Mirrorpool FULL FLIP) + Meteor-Crater-C2: the LOADER-SIDE
+    # admit set grows to 13 (10 Land admits = 7-card Phase-3-close +
+    # Gemstone Caverns + Mirrorpool + Meteor Crater; 3 Artifact
+    # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
+    assert loader_admit_count == 13, (
+        f"Meteor Crater P4 C2 close LOADER-SIDE admit-set size "
+        f"invariant violated: expected exactly 13 cards (10 Land = 7 "
+        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater; "
+        f"3 Artifact = Ghost Vacuum + Keys to the House + All-Fates "
+        f"Scroll) post-Meteor-Crater-C2, got {loader_admit_count}. "
+        f"Further Phase-4+ FLIPs MUST update this size in lockstep."
     )

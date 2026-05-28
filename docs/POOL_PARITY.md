@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **443 / 475 EoE cards (93.3%) are byte-equal at the Effect+bridge level**; of those, **413 (86.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 30 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **443 / 475 EoE cards (93.3%) are byte-equal at the Effect+bridge level**; of those, **414 (87.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 29 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **32 (6.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 413 | 86.9% |
-| Effect+bridge covered (not individually probed) | 30 | 6.3% |
+| PROBED byte-equal | 414 | 87.2% |
+| Effect+bridge covered (not individually probed) | 29 | 6.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -264,6 +264,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Memorial Team Leader
 - Memorial Vault
 - Mental Modulation
+- Meteor Crater
 - Midnight Mayhem
 - Mightform Harmonizer
 - Mirror Room // Fractured Realm

@@ -3678,6 +3678,52 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_restricted_office_lecture_hall_parity.py",
     REPO_ROOT / "tests" / "test_cult_healer_parity.py",
     REPO_ROOT / "tests" / "test_hand_that_feeds_parity.py",
+    # **Meteor Crater Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    # ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#1 row
+    # C2).** Per-card real-EoE cross-engine MINT + MINT+PAY byte-equal
+    # probe -- Meteor Crater covered_by_construction -> PROBED.
+    # METEOR CRATER CAMPAIGN FULL CLOSURE.
+    #
+    # The Phase 4 Cycle 1 substrate (commit ``eb059eaa``) shipped the
+    # Rust ``Effect::AddOneManaOfChosenPermanentColor`` unit variant +
+    # parser + resolver + ``to_pydict`` + cross-engine bridge arms
+    # (forward + reverse). Meteor Crater STAYED DECLINED at the admit
+    # gate post-C1 -- the Effect-class admit set
+    # ``_carrier_aa_phase_1_effect_classes`` didn't include the new
+    # Effect class (covered_by_construction +1 / BLOCKED-SG -1 at C1).
+    #
+    # Cycle 2 (THIS LANE) ships the FLIP:
+    #   - ``_carrier_aa_phase_1_effect_classes`` widen 16 -> 17.
+    #   - Meteor Crater FLIPS DECLINED -> ADMITTED at the production
+    #     deck filter end-to-end via the Carrier-AA Land sibling.
+    #   - Per-card real-EoE byte-equal probe driving BOTH engines
+    #     through TWO scenarios:
+    #       * MINT -- Meteor Crater + mono-white Bear on p0's bf;
+    #         activate AA[0] on both engines via ``apply_action({
+    #         "kind": "activate_ability", "source_id": MC,
+    #         "ability_index": 0})``. The color union is {"W"} (the
+    #         Bear's W mana symbol) -- both engines pick "W" on the
+    #         single-element union regardless of the picker, so the
+    #         WUBRG-canonical-vs-sorted-alphabetic divergence is
+    #         DELIBERATELY AVOIDED. Byte-equal observables: 1 W coin
+    #         minted to p0, stack empty (mana-ability bypass), Meteor
+    #         Crater tapped, Bear untapped, p1's pool untouched.
+    #       * MINT+PAY -- same fixture; AFTER the mint, cast a {W}
+    #         Instant via ``cast_spell_noncreature`` on Rust (routes
+    #         through ``auto_tap_pay_for_cost``) / pop the W coin on
+    #         Python (mirrors ``_consume_for_color``). Both pools end
+    #         fully drained (post-pay snapshot == empty pool on both
+    #         engines).
+    #
+    # The probe avoids exercising the WUBRG-canonical-vs-sorted-
+    # alphabetic divergence (documented in
+    # ``docs/SEARCH_LIMITATIONS.md`` Meteor Crater Phase 4 C2 entry)
+    # by seating only a single colored permanent on the source-
+    # controller's bf -- both pickers agree on a single-element union.
+    # Net delta: +1 PROBED / -1 covered_by_construction (Meteor
+    # Crater slug flips). PROBED 413 -> 414; covered_by_construction
+    # 30 -> 29; BLOCKED-SG unchanged at 32.
+    REPO_ROOT / "tests" / "test_meteor_crater_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
