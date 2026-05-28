@@ -4327,6 +4327,80 @@ pub enum Effect {
     /// keep the substrate-only invariant honest. The bridge round-
     /// trip is exercised by synthetic unit pins at C1.
     AddOneManaFromControlledLandsProductions,
+    /// **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27 — spec at
+    /// `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#3
+    /// Ancient Tomb / Carrier-AA Phase-1 Effect-port row).** Single
+    /// `{T}` mana-AA on a plain Land that fuses an add-N-colorless-mana
+    /// production with a damage-to-controller rider on the same
+    /// activation (`{T}: Add {C}{C}. This land deals 2 damage to
+    /// you.`).
+    ///
+    /// Mirrors Python's `DealDamageToControllerAndAddMana(damage: int,
+    /// produces: tuple[tuple[str, int], ...])` dataclass at
+    /// `effects/generic/damage.py:170` — Ancient Tomb's single
+    /// pain-land mana-AA pilot effect.
+    ///
+    /// **Resolve semantics.** Walks 5 zones + the stack to resolve the
+    /// source's controller (mirrors the
+    /// `AddOneManaFromControlledLandsProductions` /
+    /// `AddOneManaOfChosenPermanentColor` source-controller discovery
+    /// pattern). Applies damage as life-loss FIRST (`p.life -=
+    /// damage`), then mints the produces tuple into the controller's
+    /// mana pool — mirrors Python's `.resolve()` body verbatim:
+    /// damage applies before mana so a controller at 1 life loses
+    /// before the mana is added (CR 119.5: "if the amount of damage
+    /// that would be dealt is 0 or less, no damage is dealt" —
+    /// non-positive damage is a no-op here too). The damage is
+    /// applied as raw life-loss, NOT through the damage pipeline
+    /// (matches Python's `p.life -= self.damage`; sibling pattern of
+    /// `PainForAllDamageEchoEffect` at `state_ops_resolve.rs:17571`
+    /// — both intentionally skirt the dispatch_event path because
+    /// the source is a mana ability that bypasses the stack). The
+    /// produces tuple is bounded to the closed W/U/B/R/G/C
+    /// vocabulary (the same vocab as `mana_produced` /
+    /// `validate_mana_symbol` at `cards.rs:15888`); unknown symbols
+    /// are defense-in-depth silently skipped.
+    ///
+    /// **State-based actions on lethal life.** If the controller's
+    /// life drops to 0 or below from the damage, the CR 704 state-
+    /// based actions will set `player.has_lost = true` at the next
+    /// SBA check — the resolve arm here doesn't pre-empt that, it
+    /// just writes the life delta. The mana minted AFTER the lethal
+    /// damage stays in the (now-losing) controller's pool until the
+    /// SBA check clears it; this mirrors Python verbatim (the
+    /// `.resolve()` body unconditionally appends ManaCoins after the
+    /// life decrement). The SBA pass is the global game-loop's
+    /// responsibility, not this Effect's.
+    ///
+    /// **Fields variant.** `damage: u32` (CR damage amounts are
+    /// non-negative integers) and `produces: Vec<(u8, u32)>` (color
+    /// byte + count, matching the `push_coins` signature directly —
+    /// each `(color, count)` pair adds `count` coins of that color
+    /// to the pool). Today's only EoE printing is Ancient Tomb
+    /// itself (`damage=2, produces=[(b'C', 2)]`); a future printing
+    /// with `Add {C}{C}{C}. This land deals 3 damage to you.` would
+    /// claim through the same parser regex and parameterize cleanly
+    /// (`damage=3, produces=[(b'C', 3)]`).
+    ///
+    /// **Substrate-only at Cycle 1.** Ancient Tomb STAYS DECLINED at
+    /// the Python admit gate post-C1 — the
+    /// `_carrier_aa_phase_1_effect_classes` Effect-class admit set
+    /// does NOT yet include `DealDamageToControllerAndAddMana` (the
+    /// Phase-1 honest-stop teeth in `_aa_is_phase1_sub_shape_a` at
+    /// the `type(aa.effect) not in
+    /// _carrier_aa_phase_1_effect_classes()` rejection keeps
+    /// Ancient Tomb's AA[0] declined at the per-AA gate). The
+    /// Effect-class admit-set widen (18 → 19) + admit-set pin bump
+    /// + per-card real-EoE probe ALL ship Cycle 2 as the FLIP —
+    /// mirrors the Meteor Crater C1 (`eb059eaa`) / Reflecting Pool
+    /// C1 (`d7be074e`) substrate-only precedents: Rust variant +
+    /// cross-engine bridge arms land at C1; Python admit widen +
+    /// live FLIP lands at C2. The bridge round-trip is exercised by
+    /// synthetic unit pins at C1.
+    DealDamageToControllerAndAddMana {
+        damage: u32,
+        produces: Vec<(u8, u32)>,
+    },
     /// **Round 28 coverage extension.** Search the source-controller's
     /// library for a card matching `filter_name`, reveal it, put it
     /// into that player's hand. Mirrors Python's
@@ -15902,6 +15976,94 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // control could produce.`).
             Ok(Effect::AddOneManaFromControlledLandsProductions)
         }
+        "deal_damage_to_controller_and_add_mana" => {
+            // **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27
+            // — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#3 Ancient Tomb).** Fields variant — `damage: u32`
+            // + `produces: list[[color: str, count: int]]`. Mirrors
+            // Python's `DealDamageToControllerAndAddMana(damage,
+            // produces)` dataclass at
+            // `effects/generic/damage.py:170` — Ancient Tomb's
+            // single pain-land mana-AA pilot effect (`{T}: Add {C}{C}.
+            // This land deals 2 damage to you.`).
+            //
+            // Wire shape: `{"kind":
+            // "deal_damage_to_controller_and_add_mana", "damage": N,
+            // "produces": [["C", 2]]}`. The produces list mirrors
+            // Python's tuple-of-tuples surface; each inner pair is
+            // `[color_str, count]`. Color symbols validated against
+            // the closed W/U/B/R/G/C vocabulary at parse time so
+            // the variant's `produces: Vec<(u8, u32)>` slot can be
+            // safely consumed by `push_coins` at resolve time.
+            let damage_pyobj = dict.get_item("damage")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "deal_damage_to_controller_and_add_mana.damage missing",
+                )
+            })?;
+            let damage: u32 = damage_pyobj.extract().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "deal_damage_to_controller_and_add_mana.damage must be a non-negative integer (got: {e})"
+                ))
+            })?;
+            let produces_pyobj = dict.get_item("produces")?.ok_or_else(|| {
+                PyValueError::new_err(
+                    "deal_damage_to_controller_and_add_mana.produces missing",
+                )
+            })?;
+            // produces is an iterable of (color: str, count: int) pairs.
+            // Walk the iterable manually so we accept both list-of-list
+            // and list-of-tuple shapes on the wire (Python emits lists
+            // by default; the Rust to_pydict round-trip emits lists too).
+            // Validate + pack to (u8, u32) using the closed mana-symbol
+            // vocabulary.
+            let produces_iter = produces_pyobj.try_iter().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "deal_damage_to_controller_and_add_mana.produces must be a sequence of [color, count] pairs (got: {e})"
+                ))
+            })?;
+            let mut produces: Vec<(u8, u32)> = Vec::new();
+            for item_res in produces_iter {
+                let item = item_res?;
+                let pair_iter = item.try_iter().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "deal_damage_to_controller_and_add_mana.produces: each pair must be a [color, count] sequence (got: {e})"
+                    ))
+                })?;
+                let mut elems = pair_iter.collect::<Result<Vec<_>, _>>()?;
+                if elems.len() != 2 {
+                    return Err(PyValueError::new_err(format!(
+                        "deal_damage_to_controller_and_add_mana.produces: each pair must have exactly 2 elements (got {})",
+                        elems.len()
+                    )));
+                }
+                let count: u32 = elems.pop().unwrap().extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "deal_damage_to_controller_and_add_mana.produces: count must be a non-negative integer (got: {e})"
+                    ))
+                })?;
+                let color: String = elems.pop().unwrap().extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "deal_damage_to_controller_and_add_mana.produces: color must be a string (got: {e})"
+                    ))
+                })?;
+                let color_byte = match color.as_str() {
+                    "W" => b'W',
+                    "U" => b'U',
+                    "B" => b'B',
+                    "R" => b'R',
+                    "G" => b'G',
+                    "C" => b'C',
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "deal_damage_to_controller_and_add_mana.produces: unknown color symbol '{other}' (expected W/U/B/R/G/C)"
+                        )));
+                    }
+                };
+                produces.push((color_byte, count));
+            }
+            Ok(Effect::DealDamageToControllerAndAddMana { damage, produces })
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -19657,6 +19819,43 @@ pub(crate) fn effect_to_pydict<'py>(
             // dataclass mirror at `effects/generic/mana.py:173`
             // carries no fields either.
             d.set_item("kind", "add_one_mana_from_controlled_lands_productions")?;
+        }
+        Effect::DealDamageToControllerAndAddMana { damage, produces } => {
+            // **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27
+            // — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#3 Ancient Tomb).** Fields variant — emit the `kind`
+            // discriminator + `damage` int + `produces` list of
+            // `[color_str, count]` pairs. Mirrors Python's
+            // `DealDamageToControllerAndAddMana(damage, produces)`
+            // dataclass at `effects/generic/damage.py:170` — the
+            // produces tuple-of-tuples projects onto the wire as a
+            // list-of-lists with each inner pair `[color, count]`.
+            d.set_item("kind", "deal_damage_to_controller_and_add_mana")?;
+            d.set_item("damage", *damage)?;
+            // Re-string the color byte for the wire — Python's
+            // `produces` stores symbols as strings ("C", "W", ...).
+            let produces_pylist: Vec<(String, u32)> = produces
+                .iter()
+                .map(|(color_byte, count)| {
+                    let color_str = match *color_byte {
+                        b'W' => "W",
+                        b'U' => "U",
+                        b'B' => "B",
+                        b'R' => "R",
+                        b'G' => "G",
+                        b'C' => "C",
+                        // Defense-in-depth — parse_effect's color-
+                        // validation arm already rejects unknown
+                        // symbols, but if a synthetic test ever
+                        // builds the variant directly we must NOT
+                        // emit a malformed wire-side symbol.
+                        _ => "C",
+                    };
+                    (color_str.to_string(), *count)
+                })
+                .collect();
+            d.set_item("produces", produces_pylist)?;
         }
         Effect::SearchLibraryForCard {
             filter_name,

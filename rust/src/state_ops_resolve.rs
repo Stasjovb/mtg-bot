@@ -14503,6 +14503,115 @@ fn apply_effect(
             pool.push_coins(color_byte, 1);
             pool.assert_count_sync();
         }
+        // **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27 — spec
+        // at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3
+        // Ancient Tomb).** Apply damage to source-controller (as
+        // life-loss) FIRST, then mint the produces tuple into the
+        // controller's mana pool. Mirrors Python's
+        // `DealDamageToControllerAndAddMana.resolve` at
+        // `effects/generic/damage.py:179-193` STEP-FOR-STEP so the
+        // post-resolve state is byte-equal under matching inputs.
+        //
+        // **Order: damage BEFORE mana.** This matches Python's
+        // `.resolve()` body verbatim (`p.life -= self.damage`
+        // executes before the `for color, count in self.produces`
+        // loop). Order matters when the controller's life is
+        // exactly equal to the damage amount: under damage-first,
+        // the controller's life is at 0 (or negative) AFTER the
+        // life decrement and BEFORE the mana is minted, which is
+        // the state SBAs observe at the next check (CR 704.5a:
+        // "a player with 0 or less life loses"). The mana minted
+        // after the lethal damage stays in the (now-losing)
+        // controller's pool until SBAs clear it; this mirrors
+        // Python (the Python resolve unconditionally appends
+        // ManaCoins after the life decrement).
+        //
+        // **Damage as life-loss, NOT dispatch_event.** Python's
+        // `p.life -= self.damage` writes the life delta directly
+        // without going through `DEALT_DAMAGE` dispatch. Rust
+        // mirrors this with `player.life -= damage as i32`
+        // (sibling pattern of `PainForAllDamageEchoEffect` at
+        // `state_ops_resolve.rs:17571`, `Pain for All` at
+        // `state_ops_resolve.rs:17515`, `LifeLossForAttacking` at
+        // `state_ops_resolve.rs:17561+`). The implication: if a
+        // future printing fires a triggered ability OFF this
+        // damage (e.g. a hypothetical "whenever you take damage"
+        // shape), it would NOT trigger — but the live tree has no
+        // such trigger for the Ancient Tomb shape; Python takes
+        // the same shortcut, so cross-engine byte-equality holds.
+        //
+        // **Source-controller resolution.** 5-zone walk + stack
+        // scan (sibling of `AddOneManaFromControlledLandsProductions`
+        // and `AddOneManaOfChosenPermanentColor`). The damage
+        // recipient is the source's CONTROLLER (mirrors Python's
+        // `state.player_by_id(controller_id)` where `controller_id`
+        // is passed in as the AA's source controller).
+        //
+        // **Non-positive damage is a no-op.** Mirrors Python's
+        // implicit behavior: if `damage == 0`, the `p.life -= 0`
+        // write is a no-op; CR 119.5 says zero/negative damage
+        // "deals no damage". The mana minting still runs because
+        // the Python `.resolve()` body unconditionally runs both
+        // steps; Rust mirrors verbatim (no early return on
+        // damage=0).
+        //
+        // **Mana minting via push_coins per (color, count).** For
+        // each `(color_byte, count)` pair in `produces`, push
+        // `count` coins of that color into the pool. Mirrors
+        // Python's `for color, count in self.produces: for _ in
+        // range(count): p.mana_pool.append(ManaCoin(color=color))`
+        // verbatim. The parse arm has already validated the color
+        // bytes against {W,U,B,R,G,C} so every push_coins call is
+        // well-formed.
+        Effect::DealDamageToControllerAndAddMana { damage, produces } => {
+            // 1. Source-controller scan: zones + stack.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+                if src_controller.is_none() {
+                    return Ok(());
+                }
+            }
+            let controller_idx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // 2. Apply damage as life-loss FIRST. Mirrors Python's
+            //    `p.life -= self.damage` at
+            //    `effects/generic/damage.py:186`.
+            state.players[controller_idx].life -= *damage as i32;
+            // 3. Mint the produces tuple — for each (color, count)
+            //    pair, push `count` coins of that color into the
+            //    controller's mana pool. Mirrors Python's
+            //    `for color, count in self.produces: for _ in
+            //    range(count): p.mana_pool.append(ManaCoin(color=
+            //    color))` at `effects/generic/damage.py:191-193`.
+            let pool = &mut state.players[controller_idx].mana_pool;
+            for (color_byte, count) in produces.iter() {
+                pool.push_coins(*color_byte, *count as u8);
+            }
+            pool.assert_count_sync();
+        }
         // Round-28 generalized library tutor. Scans the source-
         // controller's library top-to-bottom for the FIRST card
         // matching filter_name; moves match to controller's hand
