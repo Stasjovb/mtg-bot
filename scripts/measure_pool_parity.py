@@ -3724,6 +3724,79 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Crater slug flips). PROBED 413 -> 414; covered_by_construction
     # 30 -> 29; BLOCKED-SG unchanged at 32.
     REPO_ROOT / "tests" / "test_meteor_crater_parity.py",
+    # **covered-by-construction-probe-writing-batch-5 (2026-05-27):**
+    # Five per-card real-EoE cross-engine byte-equal probes flipping
+    # covered_by_construction -> PROBED via the JJJJ idiom (parse +
+    # bridge round-trip + Python-side resolve smoke).  Same lane
+    # discipline as batches 3+4: per-slug attribution credits a PROBED
+    # slot per-printing through the bridge-narrowing precedent (the
+    # bridge dict carries no rider fields; Rust's variant accepts the
+    # bare shape), no engine changes, no Rust changes, no substrate
+    # widens.
+    #
+    # The 2026-05-25 saturation doc (``docs/COVERED_BY_CONSTRUCTION_
+    # PROBE_WRITING_SATURATION_2026-05-25.md``) flagged the 9 manlands
+    # (Celestial Colonnade / Creeping Tar Pit / Hissing Quagmire /
+    # Inkmoth Nexus / Lumbering Falls / Needle Spires / Raging Ravine /
+    # Shambling Vent / Stirring Wildwood) and the 8 keyword-rider
+    # PumpTargetCreatureUntilEOT cards (Flesh Burrower / Kavaron
+    # Turbodrone / etc) as BLOCKED-per-HH-directive.  But that
+    # directive applies to the AA-level cross-engine probe shape (full
+    # AA activation lifecycle, exercised by the HH activated-abilities
+    # module); the JJJJ-idiom per-slug attribution lane bypasses it
+    # by binding the live printing + the bare-shape silent-no-op
+    # resolve.  Same precedent as Cult Healer / Hand That Feeds
+    # (batch-4) sidestepping equivalent AA-level blocks for
+    # PumpSelfUntilEOT.  Each module follows the JJJJ-idiom:
+    #
+    #   * **Flesh Burrower** (Creature ATTACKS) --
+    #     ``PumpTargetCreatureUntilEOT(0/0, deathtouch,
+    #     you_control_only=True, exclude_self=True)`` narrowed to
+    #     bare ``PumpTargetCreatureUntilEOT(0/0)``.  FIRST credited
+    #     probe of ``PumpTargetCreatureUntilEOT`` on a TRIGGERED-
+    #     ABILITY carrier (batches 1-3 spell-effect Instant carriers).
+    #     Empty-targets silent no-op short-circuit at pump.py.
+    #   * **Kavaron Turbodrone** (Artifact Creature AA[0]) --
+    #     ``PumpTargetCreatureUntilEOT(+1/+1, haste,
+    #     you_control_only=True)`` narrowed to bare ``+1/+1``.  FIRST
+    #     credited probe of ``PumpTargetCreatureUntilEOT`` on an
+    #     ACTIVATED-ABILITY carrier.  Empty-targets silent no-op.
+    #   * **Lumbering Falls** (Land AA[0]) --
+    #     ``BecomeLandCreatureUEOT(3/3, hexproof)`` narrowed to bare
+    #     ``3/3``.  FIRST credited probe of the BLCUEOT effect class
+    #     on a manland carrier with ``granted_keywords`` rider
+    #     (Mutavault PROBED on the rider-less bare 2/2 shape;
+    #     Blinkmoth Nexus PROBED via AA[2] pump-Blinkmoths).
+    #     No-resolving-source silent no-op short-circuit at
+    #     become_type.py.
+    #   * **Needle Spires** (Land AA[0]) --
+    #     ``BecomeLandCreatureUEOT(2/1, double strike)`` narrowed to
+    #     bare ``2/1``.  Distinct asymmetric-P/T parameterization
+    #     from the Lumbering Falls sibling.  No-resolving-source
+    #     silent no-op.
+    #   * **Raging Ravine** (Land AA[0]) --
+    #     ``BecomeLandCreatureUEOT(3/3, granted_triggered_abilities=
+    #     (ATTACKS->+1/+1 counter,))`` narrowed to bare ``3/3``.
+    #     FIRST credited probe of BLCUEOT carrying a
+    #     ``granted_triggered_abilities`` rider (versus
+    #     ``granted_keywords`` siblings).  No-resolving-source silent
+    #     no-op.
+    #
+    # Pure measurement-attribution + per-slug credit: no engine
+    # changes, no Rust changes, no substrate widens.  Net delta:
+    # +5 PROBED / -5 covered_by_construction (PROBED 415 -> 420;
+    # covered_by_construction 29 -> 24; BLOCKED-SG unchanged at 31;
+    # pool total 475 unchanged).  Note: the post-Reflecting-Pool-
+    # Cycle-1 substrate landing (Worker B, commit ``d7be074e``)
+    # rebased the covered-tier baseline by +1 (Reflecting Pool
+    # moved BLOCKED-SG -> covered_by_construction at the Cycle-1
+    # substrate-only landing); this batch's flip lands on the
+    # rebased baseline.
+    REPO_ROOT / "tests" / "test_flesh_burrower_parity.py",
+    REPO_ROOT / "tests" / "test_kavaron_turbodrone_parity.py",
+    REPO_ROOT / "tests" / "test_lumbering_falls_parity.py",
+    REPO_ROOT / "tests" / "test_needle_spires_parity.py",
+    REPO_ROOT / "tests" / "test_raging_ravine_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
