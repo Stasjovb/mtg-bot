@@ -486,7 +486,7 @@ def _seat_lumen_and_crew(parity_smoke_mod, n_crew: int):
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_lumen_class_frigate_scenario_a_unstationed_anthem_closed(
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_a_unstationed_anthem_closed_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Scenario A
@@ -580,7 +580,7 @@ def test_cross_engine_real_eoe_lumen_class_frigate_scenario_a_unstationed_anthem
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_lumen_class_frigate_scenario_b_anthem_open_station_closed(
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_b_anthem_open_station_closed_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Scenario B
@@ -738,7 +738,7 @@ def test_cross_engine_real_eoe_lumen_class_frigate_scenario_b_anthem_open_statio
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_turn_rollover_survival(
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_turn_rollover_survival_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Scenario C
@@ -877,7 +877,7 @@ def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_turn_rollover_surv
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_bounce_resets_anthem(
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_bounce_resets_anthem_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Scenario C
@@ -1013,7 +1013,7 @@ def test_cross_engine_real_eoe_lumen_class_frigate_scenario_c_bounce_resets_anth
 
 
 @_rust_skip
-def test_cross_engine_real_eoe_lumen_class_frigate_scenario_d_anthem_and_station_both_open(
+def test_cross_engine_real_eoe_lumen_class_frigate_scenario_d_anthem_and_station_both_open_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Scenario D
