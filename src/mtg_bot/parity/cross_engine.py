@@ -6089,6 +6089,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             AddOneManaOfChosenPermanentColor,
         )
         return AddOneManaOfChosenPermanentColor()
+    if kind == "add_one_mana_from_controlled_lands_productions":
+        # **Reflecting Pool substrate Phase 4 Cycle 1 (2026-05-27 —
+        # spec at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+        # §#2 Reflecting Pool).** Reverse arm rehydrating Rust's
+        # ``Effect::AddOneManaFromControlledLandsProductions`` (unit
+        # variant — only the ``kind`` discriminator on the wire) to
+        # Python's ``AddOneManaFromControlledLandsProductions()``
+        # (unit dataclass at ``effects/generic/mana.py:173``). The
+        # color-options surface (union of ``mana_produced`` symbols
+        # across the source-controller's controlled Lands) is derived
+        # at resolve time on both engines; the no-agent fallback
+        # picks the canonical-first WUBRG-then-C-ordered color (Rust)
+        # / lexicographic-first color (Python —
+        # ``sorted(options)[0]`` at ``mana.py:213``). The divergence
+        # is harmless at C1 — the live admit gate STAYS DECLINED so
+        # the no-agent code path is never exercised in cross-engine
+        # probes this cycle; Cycle 2 reconciles either by pinning
+        # the no-agent fallback or by ensuring the probe always
+        # seats an agent.
+        #
+        # Reflecting Pool's single ``{T}: Add one mana of any type
+        # that a land you control could produce.`` AA pilot — see
+        # the scout doc §#2 for the full closure shape. Sibling of
+        # the Meteor Crater C1 reverse arm above; the only delta is
+        # the union predicate (controlled-Lands' ``produces`` vs all
+        # permanents' ``mana_cost.colors``).
+        #
+        # **Substrate-only at Cycle 1.** Reflecting Pool STAYS
+        # DECLINED at the admit gate post-C1 — the Effect-class
+        # admit set ``_carrier_aa_phase_1_effect_classes`` does NOT
+        # yet include this class. The widen + admit-set pin bump +
+        # per-card real-EoE probe all ship Cycle 2 as the FLIP.
+        # This reverse arm is exercised by synthetic unit pins at C1.
+        from mtg_bot.effects.generic.mana import (
+            AddOneManaFromControlledLandsProductions,
+        )
+        return AddOneManaFromControlledLandsProductions()
     if kind == "tap_target_artifact_or_creature":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "tap target artifact
         # or creature" (TapTargetArtifactOrCreature family,
@@ -15400,6 +15437,27 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.mana import (
         AddOneManaOfChosenPermanentColor,
     )
+    # **Reflecting Pool substrate Phase 4 Cycle 1 (2026-05-27 — spec at
+    # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#2 Reflecting
+    # Pool).** Forward-emit arm for Reflecting Pool's single ``{T}: Add
+    # one mana of any type that a land you control could produce.`` AA.
+    # Unit variant — only the ``kind`` discriminator on the wire. The
+    # Python class is a unit dataclass (no fields); the source-derived
+    # color-options surface (union of ``mana_produced`` symbols across
+    # the source-controller's controlled Lands) + canonical-first
+    # WUBRG-then-C pick are computed at resolve time on both engines.
+    # Sibling of the Meteor Crater C1 forward arm above; only the
+    # union predicate differs.
+    #
+    # **Substrate-only at Cycle 1.** Reflecting Pool STAYS DECLINED at
+    # the admit gate post-C1 because the Effect-class admit set
+    # ``_carrier_aa_phase_1_effect_classes`` doesn't yet include this
+    # class. The C2 widen + admit-set pin bump + per-card real-EoE
+    # probe land the FLIP; this forward arm is exercised by synthetic
+    # unit pins at C1.
+    from mtg_bot.effects.generic.mana import (
+        AddOneManaFromControlledLandsProductions,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -15919,9 +15977,40 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         effect_dict = {
             "kind": "add_one_mana_of_chosen_permanent_color",
         }
+    elif isinstance(effect, AddOneManaFromControlledLandsProductions):
+        # **Reflecting Pool substrate Phase 4 Cycle 1 (2026-05-27 —
+        # spec at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+        # §#2 Reflecting Pool).** Forward-emit arm for Reflecting
+        # Pool's single ``{T}: Add one mana of any type that a land
+        # you control could produce.`` AA. Unit variant — emit only
+        # the ``kind`` discriminator. The Python class carries no
+        # fields; the Rust mirror's parse + resolve + to_pydict arms
+        # all treat the variant symmetrically as a unit (no
+        # options/color on the wire). The color-options surface
+        # (union of ``mana_produced`` symbols across the source-
+        # controller's controlled Lands) + canonical-first WUBRG-
+        # then-C pick is computed at resolve time on the Rust side,
+        # mirroring the Meteor Crater C1 sibling pattern
+        # (``state_ops_resolve.rs:14241+``).
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``AddOneManaFromControlledLandsProductions`` — NOT any
+        # parent ``Effect`` class — consistent with the Phase-3A/3B/
+        # 3C/4B/4C/4D/4E/Meteor-Crater specificity contract. The
+        # class has no subclasses in the live tree.
+        #
+        # **Substrate-only at Cycle 1.** Reflecting Pool STAYS
+        # DECLINED at the live admit gate post-C1 because
+        # ``_carrier_aa_phase_1_effect_classes`` does NOT yet include
+        # this class. The Cycle 2 widen + admit-set pin bump + per-
+        # card real-EoE probe ship together as the FLIP; this
+        # forward arm is exercised by synthetic unit pins at C1.
+        effect_dict = {
+            "kind": "add_one_mana_from_controlled_lands_productions",
+        }
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b/3/4E/Spacecraft-4/
-        # Meteor-Crater admit set — decline.
+        # Meteor-Crater/Reflecting-Pool admit set — decline.
         return None
     result_dict: dict = {
         "cost": cost_dict,

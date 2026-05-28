@@ -4266,6 +4266,67 @@ pub enum Effect {
     /// substrate-only invariant honest). The bridge round-trip is
     /// exercised by synthetic unit pins at C1.
     AddOneManaOfChosenPermanentColor,
+    /// **Reflecting Pool substrate Phase 4 Cycle 1 (2026-05-27 — spec
+    /// at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#2
+    /// Reflecting Pool).** Add one mana of any type that a land the
+    /// source's controller controls could produce. The chosen color
+    /// is drawn from the union of `produces` symbols across every
+    /// Land the source-controller controls.
+    ///
+    /// Mirrors Python's `AddOneManaFromControlledLandsProductions()`
+    /// (unit dataclass — no fields) at
+    /// `effects/generic/mana.py:173` — Reflecting Pool's single
+    /// `{T}` mana-AA pilot effect (`{T}: Add one mana of any type
+    /// that a land you control could produce.`).
+    ///
+    /// **Resolve semantics.** Walks the source-controller's
+    /// battlefield, filters to permanents whose `card_types` contains
+    /// `"Land"`, unions each Land's `mana_produced` symbols
+    /// (`W`/`U`/`B`/`R`/`G`/`C` — the full produces vocabulary,
+    /// unlike `AddOneManaOfChosenPermanentColor` which is bounded to
+    /// colored pips only). If the union is non-empty, picks the
+    /// canonical-first WUBRG-then-C color from the union (no-agent
+    /// deterministic fallback — same precedent as
+    /// `AddOneManaOfChosenPermanentColor` / Phase-4E
+    /// `AddNManaOfChosenColor` at
+    /// `state_ops_resolve.rs:14057`). If the union is empty (no
+    /// Lands in play, or Lands with no `mana_produced`), mints one
+    /// `{C}` colorless coin (defensive fallback — mirrors Python's
+    /// `if not options: color = "C"` at `mana.py:204-205`). Single
+    /// coin minted via `push_coins`.
+    ///
+    /// **Color set bounded to `{W, U, B, R, G, C}`.** No `any`
+    /// wildcard — Rust's `mana_produced` field is the closed
+    /// W/U/B/R/G/C vocabulary per `parse_mana_produced` at
+    /// `cards.rs:15888`. The defensive `{C}` fallback when the
+    /// union is empty mirrors Python verbatim.
+    ///
+    /// **Unit variant.** No fields — the choice surface (color
+    /// options set + canonical-first pick) is derived at resolve
+    /// time from the source-controller's controlled Lands. Sibling
+    /// shape of `Effect::AddOneManaOfChosenPermanentColor` (also a
+    /// unit variant; both Effects mint a mana coin at resolve time
+    /// without carrying any wire-side rider — the only difference
+    /// is the union predicate: this variant unions controlled-
+    /// Lands' `produces` symbols whereas the chosen-permanent-color
+    /// variant unions all permanents' `mana_cost.colors`).
+    ///
+    /// **Substrate-only at Cycle 1.** Reflecting Pool STAYS
+    /// DECLINED at the Python admit gate post-C1 — the
+    /// `_carrier_aa_phase_1_effect_classes` Effect-class admit set
+    /// does NOT yet include `AddOneManaFromControlledLandsProductions`
+    /// (the Phase-1 honest-stop teeth in `_aa_is_phase1_sub_shape_a`
+    /// at the `type(aa.effect) not in
+    /// _carrier_aa_phase_1_effect_classes()` rejection keeps
+    /// Reflecting Pool's AA[0] declined at the per-AA gate). The
+    /// Effect-class admit-set widen (16 → 17) + admit-set pin bump
+    /// + per-card real-EoE probe ALL ship Cycle 2 as the FLIP —
+    /// mirrors the Meteor Crater C1 substrate-only precedent
+    /// (commit `eb059eaa`): Rust variant + cross-engine bridge arms
+    /// land at C1; Python admit widen + live FLIP lands at C2 to
+    /// keep the substrate-only invariant honest. The bridge round-
+    /// trip is exercised by synthetic unit pins at C1.
+    AddOneManaFromControlledLandsProductions,
     /// **Round 28 coverage extension.** Search the source-controller's
     /// library for a card matching `filter_name`, reveal it, put it
     /// into that player's hand. Mirrors Python's
@@ -15820,6 +15881,27 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // one mana of that color.`).
             Ok(Effect::AddOneManaOfChosenPermanentColor)
         }
+        "add_one_mana_from_controlled_lands_productions" => {
+            // **Reflecting Pool substrate Phase 4 Cycle 1
+            // (2026-05-27 — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#2 Reflecting Pool).** Unit variant — only the
+            // `kind` discriminator on the wire. The color options
+            // surface (union of `mana_produced` symbols across the
+            // source-controller's controlled Lands) is derived at
+            // resolve time; the canonical-first WUBRG-then-C-ordered
+            // pick is the no-agent deterministic fallback (mirrors
+            // the Meteor Crater C1 sibling at `eb059eaa` +
+            // `AddNManaOfChosenColor`'s `options[0]` convention).
+            //
+            // Mirrors Python's
+            // `AddOneManaFromControlledLandsProductions()` unit
+            // dataclass at `effects/generic/mana.py:173` —
+            // Reflecting Pool's single `{T}` mana-AA pilot effect
+            // (`{T}: Add one mana of any type that a land you
+            // control could produce.`).
+            Ok(Effect::AddOneManaFromControlledLandsProductions)
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -19560,6 +19642,21 @@ pub(crate) fn effect_to_pydict<'py>(
             // dataclass mirror at `effects/generic/mana.py:227`
             // carries no fields either.
             d.set_item("kind", "add_one_mana_of_chosen_permanent_color")?;
+        }
+        Effect::AddOneManaFromControlledLandsProductions => {
+            // **Reflecting Pool substrate Phase 4 Cycle 1
+            // (2026-05-27 — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §#2 Reflecting Pool).** Unit variant — emit only the
+            // `kind` discriminator. The color-options surface (union
+            // of `mana_produced` symbols across the source-
+            // controller's controlled Lands) + canonical-first
+            // WUBRG-then-C pick are computed at resolve time on both
+            // engines; the Python
+            // `AddOneManaFromControlledLandsProductions()` unit
+            // dataclass mirror at `effects/generic/mana.py:173`
+            // carries no fields either.
+            d.set_item("kind", "add_one_mana_from_controlled_lands_productions")?;
         }
         Effect::SearchLibraryForCard {
             filter_name,

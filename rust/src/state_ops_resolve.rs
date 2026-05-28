@@ -14335,6 +14335,174 @@ fn apply_effect(
             pool.push_coins(color_byte, 1);
             pool.assert_count_sync();
         }
+        // **Reflecting Pool substrate Phase 4 Cycle 1 (2026-05-27 —
+        // spec at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+        // §#2 Reflecting Pool).** Add ONE mana coin to the source-
+        // controller's mana pool. The coin's color is the canonical-
+        // first WUBRG-then-C-ordered element of the union of
+        // `mana_produced` symbols across every Land the source-
+        // controller controls. If the union is empty (no Lands in
+        // play, or Lands have no `mana_produced` entry), defensive
+        // fallback mints one `{C}` colorless coin — mirrors Python's
+        // `if not options: color = "C"` defensive branch at
+        // `effects/generic/mana.py:204-205`.
+        //
+        // Mirrors Python's
+        // `AddOneManaFromControlledLandsProductions.resolve` at
+        // `effects/generic/mana.py:190-219`. The Python no-agent
+        // fallback picks `sorted_options[0]` (lexicographic =
+        // alphabetic among `{"W","U","B","R","G","C"}`, which becomes
+        // `B < C < G < R < U < W` lexicographically rather than the
+        // WUBRG-canonical order). Rust mirrors **the canonical
+        // WUBRG-then-C ordinal pick** (W before U before B before R
+        // before G before C) because the sibling Meteor Crater C1
+        // (`eb059eaa`) + the Phase-4E `AddNManaOfChosenColor`
+        // no-agent-seated convention at `state_ops_resolve.rs:14057`
+        // both use WUBRG-canonical ordering. The substrate-only
+        // invariant means this divergence is **harmless at C1** —
+        // the live admit gate STAYS DECLINED and the cross-engine
+        // probe doesn't drive resolve on this path yet. Cycle 2's
+        // per-card real-EoE probe will surface either (a) byte-equal
+        // under harness conventions that map both engines to the
+        // same first pick, or (b) the divergence requires
+        // reconciliation — Cycle 2 is where the sorted-vs-canonical
+        // choice gets pinned to the agent's call.
+        //
+        // **Color set bounded to {W, U, B, R, G, C}.** Rust's
+        // `mana_produced` is the closed W/U/B/R/G/C vocabulary per
+        // `parse_mana_produced` at `cards.rs:15888`. No `any`
+        // wildcard creeps into the union — `produces` only carries
+        // concrete colorable symbols.
+        //
+        // **Source-controller resolution.** 5-zone walk + stack scan
+        // (sibling of `AddOneManaOfChosenPermanentColor`'s pattern
+        // at `state_ops_resolve.rs:14241+`). Source-not-found AND
+        // not on stack: silent no-op (defense-in-depth — mana-ability
+        // bypass-stack semantics make this unreachable in normal
+        // play, but defense-in-depth is cheap).
+        Effect::AddOneManaFromControlledLandsProductions => {
+            // Source-controller scan: zones + stack.
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+                if src_controller.is_none() {
+                    return Ok(());
+                }
+            }
+            let controller_idx = match src_controller {
+                Some(c) => c as usize,
+                None => state.active_player as usize,
+            };
+            // Build produce-symbol union from controller.battlefield
+            // filtered to Lands. For each Land the controller
+            // controls, look up its printing and accumulate per-
+            // symbol presence (W/U/B/R/G/C) from `mana_produced`.
+            // Non-Land permanents do NOT contribute. Mirrors
+            // Python's `if not o.printing.is_land: continue` walk at
+            // `effects/generic/mana.py:201-203`.
+            let mut has_w = false;
+            let mut has_u = false;
+            let mut has_b = false;
+            let mut has_r = false;
+            let mut has_g = false;
+            let mut has_c = false;
+            let controller_id = controller_idx as u8;
+            for obj in state.players[controller_idx].battlefield.iter() {
+                // Defense-in-depth — battlefield iteration should
+                // only contain permanents controlled by this player,
+                // but pin the controller check explicitly.
+                if obj.controller != controller_id {
+                    continue;
+                }
+                if let Some(printing) = state.registry.lookup(obj.printing_id) {
+                    // Land filter — `card_types contains "Land"`.
+                    // Mirrors Python's `printing.is_land` (a derived
+                    // boolean from `"Land" in card_types`).
+                    let is_land = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Land");
+                    if !is_land {
+                        continue;
+                    }
+                    // Accumulate `mana_produced` symbols. Lands with
+                    // `mana_produced=None` (e.g. card-types-only
+                    // synthetic stubs) contribute nothing.
+                    if let Some(produced) = printing.mana_produced.as_ref() {
+                        for sym in produced {
+                            match sym.as_str() {
+                                "W" => has_w = true,
+                                "U" => has_u = true,
+                                "B" => has_b = true,
+                                "R" => has_r = true,
+                                "G" => has_g = true,
+                                "C" => has_c = true,
+                                // Defense-in-depth — parse_mana_
+                                // produced already rejects unknown
+                                // symbols at parse time; silently
+                                // skip any that slipped through
+                                // (e.g. direct registry builds via
+                                // state.rs that bypass the parser).
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            // Canonical-first WUBRG-then-C pick — mirrors the
+            // sibling Meteor Crater C1 (`eb059eaa`) + the Phase-4E
+            // `AddNManaOfChosenColor` no-agent-seated convention at
+            // `state_ops_resolve.rs:14057`. Unlike
+            // `AddOneManaOfChosenPermanentColor` (whose union is
+            // bounded to colored pips only), Reflecting Pool's
+            // union includes `C` because `mana_produced` carries
+            // colorless symbols (e.g. Wastes, Blinkmoth Nexus).
+            // When the union contains both colored and `C` (e.g.
+            // Grove of the Burnwillows: produces={G, C, R}), the
+            // canonical pick prefers any colored slot first.
+            let color_byte = if has_w {
+                b'W'
+            } else if has_u {
+                b'U'
+            } else if has_b {
+                b'B'
+            } else if has_r {
+                b'R'
+            } else if has_g {
+                b'G'
+            } else if has_c {
+                b'C'
+            } else {
+                // Defensive fallback — controller has no Lands, or
+                // controlled Lands all have empty `mana_produced`.
+                // Mirrors Python's `if not options: color = "C"` at
+                // `mana.py:204-205`.
+                b'C'
+            };
+            let pool = &mut state.players[controller_idx].mana_pool;
+            pool.push_coins(color_byte, 1);
+            pool.assert_count_sync();
+        }
         // Round-28 generalized library tutor. Scans the source-
         // controller's library top-to-bottom for the FIRST card
         // matching filter_name; moves match to controller's hand
