@@ -111,6 +111,12 @@ _PHASE_4_DEFERRAL_CARRIERS = (
     # substrate at commit ``eb059eaa`` shipped the Rust variant +
     # bridge arms; C2 widens the per-AA admit gate). See
     # ``tests/test_meteor_crater_parity.py`` for the per-card probe.
+    # Reflecting Pool was here pre-Reflecting-Pool-C2; Reflecting
+    # Pool Phase 4 Cycle 2 (2026-05-27) FULL FLIP via the
+    # AddOneManaFromControlledLandsProductions Effect-class widen
+    # (Cycle 1 substrate at commit ``d7be074e`` shipped the Rust
+    # variant + bridge arms; C2 widens the per-AA admit gate). See
+    # ``tests/test_reflecting_pool_parity.py`` for the per-card probe.
     "Haunted Screen",
     "The Eternity Elevator",
 )
@@ -167,6 +173,16 @@ _PHASE_4B_C4_FULL_FLIP_LAND_CARRIERS = (
 # is the SOLE EoE carrier of the Effect class.
 _METEOR_CRATER_C2_FULL_FLIP_LAND_CARRIERS = (
     "Meteor Crater",
+)
+
+# Reflecting Pool Phase 4 C2 FULL-FLIP Land carriers — pass every gate
+# (dispatcher + LAND sub-predicate + cross-engine LAND builder) post-
+# Reflecting-Pool-C2's Effect-class widen for AA[0]
+# (AddOneManaFromControlledLandsProductions); Cycle 1 substrate at
+# commit ``d7be074e`` shipped the Rust variant + bridge arms.
+# Reflecting Pool is the SOLE EoE carrier of the Effect class.
+_REFLECTING_POOL_C2_FULL_FLIP_LAND_CARRIERS = (
+    "Reflecting Pool",
 )
 
 
@@ -322,6 +338,20 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Land builder "
             f"gate post-Meteor-Crater-C2"
         )
+    elif card_name in _REFLECTING_POOL_C2_FULL_FLIP_LAND_CARRIERS:
+        # Reflecting Pool P4 C2 FULL FLIP — Reflecting Pool admits at
+        # every gate post-Reflecting-Pool-C2 (Effect-class widen for
+        # AddOneManaFromControlledLandsProductions; Cycle 1 substrate
+        # at commit ``d7be074e`` shipped the Rust variant + bridge
+        # arms).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post-"
+            f"Reflecting Pool Phase 4 C2's FULL FLIP"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post-Reflecting-Pool-C2"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -371,18 +401,22 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     # Meteor Crater P4 C2 (2026-05-27) added Meteor Crater — single-AA
     # Land carrier FULL FLIP via the AddOneManaOfChosenPermanentColor
     # Effect-class widen.
-    expected_post_meteor_crater_c2 = sorted(
+    # Reflecting Pool P4 C2 (2026-05-27) added Reflecting Pool —
+    # single-AA Land carrier FULL FLIP via the
+    # AddOneManaFromControlledLandsProductions Effect-class widen.
+    expected_post_reflecting_pool_c2 = sorted(
         set(_PHASE_3_ADMIT_SET) | {
             "Gemstone Caverns",
             "Mirrorpool",
             "Meteor Crater",
+            "Reflecting Pool",
         }
     )
-    assert admits == expected_post_meteor_crater_c2, (
-        f"Meteor Crater P4 C2 subsystem-attribution LOADER-SIDE LAND "
+    assert admits == expected_post_reflecting_pool_c2, (
+        f"Reflecting Pool P4 C2 subsystem-attribution LOADER-SIDE LAND "
         f"pin violated. _carrier_aa_land_card_def must admit EXACTLY "
-        f"the post-Meteor-Crater-C2 10-card set "
-        f"{expected_post_meteor_crater_c2}, got {admits}. A silent "
+        f"the post-Reflecting-Pool-C2 11-card set "
+        f"{expected_post_reflecting_pool_c2}, got {admits}. A silent "
         f"auto-grow indicates a Phase-4+ widen landed without inverting "
         f"this assertion — investigate before merging."
     )
@@ -477,6 +511,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "Keys to the House",    # Phase-4D-C2 FULL FLIP (Artifact admit + builder)
             "Mirrorpool",           # Phase-4B-C4 FULL FLIP (Land admit + builder)
             "Meteor Crater",        # Meteor Crater P4 C2 FULL FLIP (Land admit + builder)
+            "Reflecting Pool",      # Reflecting Pool P4 C2 FULL FLIP (Land admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -486,7 +521,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
         }
     )
     assert admits == expected_post_c2, (
-        f"Meteor Crater P4 C2 dispatcher exhaustive-walk pin violated. "
+        f"Reflecting Pool P4 C2 dispatcher exhaustive-walk pin violated. "
         f"Expected {expected_post_c2}, got {admits}. The dispatcher "
         f"delegates LAND ∪ ARTIFACT; silent admit-set growth on either "
         f"sub-predicate surfaces here. NOTE: the predicate-level admit "
@@ -599,15 +634,17 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
         )
     )
     # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5 + Phase-4B-C5
-    # (Mirrorpool FULL FLIP) + Meteor-Crater-C2: the LOADER-SIDE
-    # admit set grows to 13 (10 Land admits = 7-card Phase-3-close +
-    # Gemstone Caverns + Mirrorpool + Meteor Crater; 3 Artifact
-    # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
-    assert loader_admit_count == 13, (
-        f"Meteor Crater P4 C2 close LOADER-SIDE admit-set size "
-        f"invariant violated: expected exactly 13 cards (10 Land = 7 "
-        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater; "
-        f"3 Artifact = Ghost Vacuum + Keys to the House + All-Fates "
-        f"Scroll) post-Meteor-Crater-C2, got {loader_admit_count}. "
-        f"Further Phase-4+ FLIPs MUST update this size in lockstep."
+    # (Mirrorpool FULL FLIP) + Meteor-Crater-C2 + Reflecting-Pool-C2:
+    # the LOADER-SIDE admit set grows to 14 (11 Land admits = 7-card
+    # Phase-3-close + Gemstone Caverns + Mirrorpool + Meteor Crater +
+    # Reflecting Pool; 3 Artifact admits = Ghost Vacuum + Keys to the
+    # House + All-Fates Scroll).
+    assert loader_admit_count == 14, (
+        f"Reflecting Pool P4 C2 close LOADER-SIDE admit-set size "
+        f"invariant violated: expected exactly 14 cards (11 Land = 7 "
+        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater + "
+        f"Reflecting Pool; 3 Artifact = Ghost Vacuum + Keys to the "
+        f"House + All-Fates Scroll) post-Reflecting-Pool-C2, got "
+        f"{loader_admit_count}. Further Phase-4+ FLIPs MUST update "
+        f"this size in lockstep."
     )

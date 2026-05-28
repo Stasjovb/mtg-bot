@@ -685,10 +685,13 @@ def test_meteor_crater_now_admits_at_admit_gate_post_cycle_2():
 
 
 def test_meteor_crater_carrier_aa_effect_classes_count_is_17_post_cycle_2():
-    """**Flip count sentinel (INVERTED at Cycle 2).** The
-    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be 17
-    post-C2 — the C2 widen lands the 16 → 17 bump (adding
-    ``AddOneManaOfChosenPermanentColor``).
+    """**Flip count sentinel (INVERTED at Cycle 2; rebased at
+    Reflecting Pool C2 to count 18).** The
+    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be 18
+    post-Reflecting-Pool-C2 — Meteor Crater C2 landed the 16 → 17
+    bump (adding ``AddOneManaOfChosenPermanentColor``); Reflecting
+    Pool C2 (2026-05-27) landed the 17 → 18 bump (adding
+    ``AddOneManaFromControlledLandsProductions``).
 
     Renamed from ``test_meteor_crater_carrier_aa_effect_classes_
     count_stays_16``; pin the new count so a future widen / drift
@@ -699,9 +702,11 @@ def test_meteor_crater_carrier_aa_effect_classes_count_is_17_post_cycle_2():
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 17, (
+    assert len(_carrier_aa_phase_1_effect_classes()) == 18, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 17 entries post-Cycle-2 — Meteor "
-        "Crater C2 lands the 16 → 17 bump adding "
-        "AddOneManaOfChosenPermanentColor."
+        "set MUST have exactly 18 entries post-Reflecting-Pool-Cycle-"
+        "2 — Meteor Crater C2 lands the 16 → 17 bump adding "
+        "AddOneManaOfChosenPermanentColor; Reflecting Pool C2 lands "
+        "the 17 → 18 bump adding "
+        "AddOneManaFromControlledLandsProductions."
     )

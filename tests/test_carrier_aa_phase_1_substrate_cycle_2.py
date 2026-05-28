@@ -602,24 +602,30 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
     # rider widen, the single-AA all-or-nothing per-AA walk admits.
     # Admit set 8 → 9 (Meteor Crater is THE new entry; every other
     # carrier honestly declines per the verify-first walk).
+    # **Reflecting Pool Phase 4 C2 (2026-05-27).** Effect-class widen
+    # 17 → 18 (adds ``AddOneManaFromControlledLandsProductions``)
+    # FLIPs Reflecting Pool DECLINED → ADMITTED — same single-AA
+    # all-or-nothing per-AA walk admits via the produces-union mana-
+    # ability. Admit set 9 → 10 (Reflecting Pool is THE new entry).
     assert admits == [
         "Deserted Temple",
         "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
+        "Reflecting Pool",
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Meteor Crater C2 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Meteor Crater', 'Mirrorpool', "
-        f"'Mystifying Maze', 'Petrified Field', 'Scavenger Grounds', "
-        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], got "
-        f"{admits}. A widen in a sibling substrate or predicate would "
-        f"surface here as a silent auto-grow — investigate before "
-        f"merging."
+        f"Carrier-AA Reflecting Pool C2 admit-set pin violated: "
+        f"expected admit set = ['Deserted Temple', 'Meteor Crater', "
+        f"'Mirrorpool', 'Mystifying Maze', 'Petrified Field', "
+        f"'Reflecting Pool', 'Scavenger Grounds', 'Swarmyard', "
+        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. A "
+        f"widen in a sibling substrate or predicate would surface "
+        f"here as a silent auto-grow — investigate before merging."
     )
 
 

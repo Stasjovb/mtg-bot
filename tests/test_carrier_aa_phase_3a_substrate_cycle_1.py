@@ -1056,22 +1056,26 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
     # **Meteor Crater Phase 4 C2 (2026-05-27).** Effect-class widen
     # 16 → 17 (adds ``AddOneManaOfChosenPermanentColor``) FLIPs Meteor
     # Crater DECLINED → ADMITTED. 8 → 9 admits.
+    # **Reflecting Pool Phase 4 C2 (2026-05-27).** Effect-class widen
+    # 17 → 18 (adds ``AddOneManaFromControlledLandsProductions``)
+    # FLIPs Reflecting Pool DECLINED → ADMITTED. 9 → 10 admits.
     assert admits == [
         "Deserted Temple",
         "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
+        "Reflecting Pool",
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Meteor Crater C2 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Meteor Crater', 'Mirrorpool', "
-        f"'Mystifying Maze', 'Petrified Field', 'Scavenger Grounds', "
-        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], got "
-        f"{admits}. A widen in a sibling substrate or predicate "
-        f"would surface here as a silent auto-grow — investigate "
-        f"before merging."
+        f"Carrier-AA Reflecting Pool C2 admit-set pin violated: "
+        f"expected admit set = ['Deserted Temple', 'Meteor Crater', "
+        f"'Mirrorpool', 'Mystifying Maze', 'Petrified Field', "
+        f"'Reflecting Pool', 'Scavenger Grounds', 'Swarmyard', "
+        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. A "
+        f"widen in a sibling substrate or predicate would surface "
+        f"here as a silent auto-grow — investigate before merging."
     )

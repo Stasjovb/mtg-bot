@@ -9132,6 +9132,30 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     WUBRG-canonical-vs-sorted-alphabetic no-agent fallback divergence
     + the probe-side mono-white-bf seating that avoids exercising it.
 
+    **Reflecting Pool Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#2 row C2).**
+    Effect-class admit-set widen 17 → 18, adding
+    ``AddOneManaFromControlledLandsProductions`` (Reflecting Pool's
+    AA[0] pilot — the C1 substrate at commit ``d7be074e`` shipped the
+    Rust unit variant + parse / resolve / to_pydict + cross-engine
+    bridge arms; THIS cycle widens the per-AA Effect-class gate).
+    Combined with the Phase-1.5a bare ``{T}`` cost gate and the
+    Phase-4E ``is_mana_ability=True`` AA-rider widen, the per-AA admit
+    predicate :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED →
+    ADMITTED on Reflecting Pool's AA[0]; the printing-level admit
+    cascades through the Carrier-AA Land sibling and Reflecting Pool
+    admits end-to-end at the deck loader (Land admits 13 → 14 at the
+    live-pool walk after the widen — Reflecting Pool is the SOLE new
+    admit, verified no-auto-grow). ZERO Rust changes (C1 shipped the
+    substrate). Per-card real-EoE byte-equal probe ships in lockstep
+    at ``tests/test_reflecting_pool_parity.py`` (the covered_by_
+    construction → PROBED tier bump). See ``docs/SEARCH_LIMITATIONS
+    .md`` Reflecting Pool C2 entry for the WUBRG-then-C-vs-sorted-
+    alphabetic no-agent fallback divergence (sibling of the Meteor
+    Crater C1 divergence, extended one slot to include the ``C`` tail
+    for the ``{W,U,B,R,G,C}`` produces vocabulary) + the probe-side
+    mono-white-Plains-bf seating that avoids exercising it.
+
     **Phase-3/N extends this set as each Effect class lands cross-
     engine.**
     """
@@ -9152,6 +9176,7 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddOneManaFromControlledLandsProductions,
         AddOneManaOfChosenPermanentColor,
     )
     from mtg_bot.effects.generic.misc import (
@@ -9315,6 +9340,51 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # ``choose_mana_color`` is deferred to a follow-up cycle if a
         # future probe scenario surfaces the multi-color union case.
         AddOneManaOfChosenPermanentColor,
+        # **Reflecting Pool Phase 4 Cycle 2 widen (2026-05-27 — THE FLIP
+        # per ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#2
+        # row C2).** Adds Reflecting Pool's AA[0] pilot Effect class
+        # ``AddOneManaFromControlledLandsProductions`` (CR-106.1 mana-
+        # ability producing one mana of any type that a Land the
+        # source's controller controls could produce). The Rust
+        # substrate (new ``Effect::AddOneManaFromControlledLands
+        # Productions`` unit variant + ``parse_effect`` arm +
+        # ``to_pydict`` arm + source-controller battlefield walk filtered
+        # to permanents whose ``card_types`` contains ``"Land"`` +
+        # ``mana_produced`` union across each Land + WUBRG-then-C
+        # canonical-first color pick + empty-union colorless ``{C}``
+        # defensive fallback + ``push_coins`` mint + cross-engine bridge
+        # forward / reverse arms) all shipped at C1 (commit
+        # ``d7be074e``). C2 is the admit-set widen (17 → 18) — combined
+        # with the Phase-1.5a bare ``{T}`` cost gate and the Phase-4E
+        # ``is_mana_ability=True`` AA-rider widen, Reflecting Pool's
+        # per-AA admit predicate :func:`_aa_is_phase1_sub_shape_a` FLIPS
+        # DECLINED → ADMITTED on AA[0]; the printing-level admit
+        # cascades through :func:`_printing_is_bridge_simple_carrier_aa
+        # _land` / :func:`_printing_is_bridge_simple_carrier_aa_any` and
+        # Reflecting Pool admits end-to-end at the deck loader. ZERO
+        # Rust changes this cycle (C1 shipped the substrate).
+        #
+        # **WUBRG-then-C-canonical-vs-sorted-alphabetic divergence under
+        # the no-agent fallback.** Rust picks the canonical-first WUBRG-
+        # then-C-ordered color from the produces union (e.g.
+        # ``{'U','G','R','C'}`` → ``U``) per ``state_ops_resolve.rs``;
+        # Python's ``AddOneManaFromControlledLandsProductions.resolve``
+        # at ``effects/generic/mana.py:188-208`` picks
+        # ``sorted(options)[0]`` (alphabetic-first → ``C`` from the same
+        # set — note ``C`` sorts before letters alphabetically). The C2
+        # per-card real-EoE probe (``tests/test_reflecting_pool_parity
+        # .py``) avoids exercising the divergence by seating ONLY a
+        # mono-white Plains on the source-controller's battlefield —
+        # the produces union is ``{"W"}``, and both engines pick ``W``
+        # byte-equal regardless of the picker. The divergence is
+        # documented in ``docs/SEARCH_LIMITATIONS.md`` as the Reflecting
+        # Pool Phase 4 C2 SL entry (sibling of the Meteor Crater C1
+        # divergence, extended one slot to include the ``C`` tail for
+        # the full ``{W,U,B,R,G,C}`` produces vocabulary); the agent-
+        # callback color-choice plumbing through ``choose_mana_color``
+        # is deferred to a follow-up cycle if a future probe scenario
+        # surfaces the multi-color produces-union case.
+        AddOneManaFromControlledLandsProductions,
     })
 
 
