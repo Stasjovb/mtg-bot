@@ -296,6 +296,7 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddOneManaFromControlledLandsProductions,
         AddOneManaOfChosenPermanentColor,
     )
     from mtg_bot.effects.generic.misc import (
@@ -316,10 +317,10 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
 
     admit_set = _carrier_aa_phase_1_effect_classes()
     # Expected post-C4 admit set (post-rebase-onto-Spacecraft-P4-C2 +
-    # post-Meteor-Crater-P4-C2):
+    # post-Meteor-Crater-P4-C2 + post-Reflecting-Pool-P4-C2):
     # Phase 1-3 (7) + Phase 4C C2 (2) + Phase 4D C2 (2) + Phase 4E C2
     # (2) + Phase 4B C2 (1) + Spacecraft P4 C2 (1) + Phase 4B C4
-    # (1) + Meteor Crater P4 C2 (1) = 17.
+    # (1) + Meteor Crater P4 C2 (1) + Reflecting Pool P4 C2 (1) = 18.
     expected_post_c4 = frozenset({
         RegenerateTargetCreature,
         UntapTargetLand,
@@ -343,14 +344,17 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         AddChargeCounterManaOfChosenColor,
         # Phase 4B C4:
         CopyTargetInstantOrSorceryYouControl,
-        # Meteor Crater Phase 4 C2 (the new one):
+        # Meteor Crater Phase 4 C2:
         AddOneManaOfChosenPermanentColor,
+        # Reflecting Pool Phase 4 C2 (the new one):
+        AddOneManaFromControlledLandsProductions,
     })
     assert admit_set == expected_post_c4, (
         "Phase 4B C4 admit set sentinel: post-C4 + post-Meteor-Crater-"
-        f"C2 admit set must be the 17-class set (rebased onto "
-        f"Spacecraft P4 C2 at ``4a2485f1``); got {len(admit_set)} "
-        f"classes, delta = added {admit_set - expected_post_c4} / "
+        f"C2 + post-Reflecting-Pool-C2 admit set must be the 18-class "
+        f"set (rebased onto Spacecraft P4 C2 at ``4a2485f1``); got "
+        f"{len(admit_set)} classes, delta = added "
+        f"{admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s class IS in the
@@ -484,12 +488,18 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
         # FLIPS into the full-pool admit set via the Effect-class
         # widen for AddOneManaOfChosenPermanentColor (C1 Rust
         # substrate at ``eb059eaa``).
-        + ("Meteor Crater",),
+        + ("Meteor Crater",)
+        # **Reflecting Pool Phase 4 C2 (2026-05-27).** Reflecting Pool
+        # FLIPS into the full-pool admit set via the Effect-class
+        # widen for AddOneManaFromControlledLandsProductions (C1 Rust
+        # substrate at ``d7be074e``).
+        + ("Reflecting Pool",),
     )
     assert admitted == expected, (
-        f"Phase 4B C4 + Meteor Crater C2 invariant: full-pool admit "
-        f"set must be exactly the C2 baseline + Mirrorpool + Meteor "
-        f"Crater; got admit delta = added {admitted - expected} / "
+        f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 "
+        f"invariant: full-pool admit set must be exactly the C2 "
+        f"baseline + Mirrorpool + Meteor Crater + Reflecting Pool; "
+        f"got admit delta = added {admitted - expected} / "
         f"missing {expected - admitted}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** Mirrorpool MUST appear

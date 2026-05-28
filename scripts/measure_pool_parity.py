@@ -3797,6 +3797,61 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_lumbering_falls_parity.py",
     REPO_ROOT / "tests" / "test_needle_spires_parity.py",
     REPO_ROOT / "tests" / "test_raging_ravine_parity.py",
+    # **Reflecting Pool Phase 4 Cycle 2 (2026-05-27 — THE FLIP per
+    # ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#2 row
+    # C2).** Per-card real-EoE cross-engine MINT + MINT+PAY byte-equal
+    # probe -- Reflecting Pool covered_by_construction -> PROBED.
+    # REFLECTING POOL CAMPAIGN FULL CLOSURE.
+    #
+    # The Phase 4 Cycle 1 substrate (commit ``d7be074e``) shipped the
+    # Rust ``Effect::AddOneManaFromControlledLandsProductions`` unit
+    # variant + parser + resolver (source-controller Land-filtered
+    # battlefield walk + produces-union over each Land's
+    # ``mana_produced`` + WUBRG-then-C canonical-first color pick +
+    # empty-union colorless ``{C}`` defensive fallback) + ``to_pydict``
+    # + cross-engine bridge arms (forward + reverse). Reflecting Pool
+    # STAYED DECLINED at the admit gate post-C1 -- the Effect-class
+    # admit set ``_carrier_aa_phase_1_effect_classes`` didn't include
+    # the new Effect class (covered_by_construction +1 / BLOCKED-SG -1
+    # at C1).
+    #
+    # Cycle 2 (THIS LANE) ships the FLIP:
+    #   - ``_carrier_aa_phase_1_effect_classes`` widen 17 -> 18.
+    #   - Reflecting Pool FLIPS DECLINED -> ADMITTED at the production
+    #     deck filter end-to-end via the Carrier-AA Land sibling.
+    #   - Per-card real-EoE byte-equal probe driving BOTH engines
+    #     through TWO scenarios:
+    #       * MINT -- Reflecting Pool + mono-white Plains-style Land
+    #         on p0's bf; activate AA[0] on both engines via
+    #         ``apply_action({"kind": "activate_ability", "source_id":
+    #         RP, "ability_index": 0})``. The produces union is {"W"}
+    #         (the Plains' ``mana_produced=["W"]``) -- both engines
+    #         pick "W" on the single-element union regardless of the
+    #         picker, so the WUBRG-then-C-vs-sorted-alphabetic
+    #         divergence is DELIBERATELY AVOIDED. Byte-equal
+    #         observables: 1 W coin minted to p0, stack empty
+    #         (mana-ability bypass), Reflecting Pool tapped, Plains
+    #         untapped (RP scans the controller's Lands and reads
+    #         their ``mana_produced`` registry rather than tapping
+    #         them), p1's pool untouched.
+    #       * MINT+PAY -- same fixture; AFTER the mint, cast a {W}
+    #         Instant via ``cast_spell_noncreature`` on Rust (routes
+    #         through ``auto_tap_pay_for_cost``) / pop the W coin on
+    #         Python (mirrors ``_consume_for_color``). Both pools end
+    #         fully drained (post-pay snapshot == empty pool on both
+    #         engines).
+    #
+    # The probe avoids exercising the WUBRG-then-C-canonical-vs-
+    # sorted-alphabetic divergence (documented in
+    # ``docs/SEARCH_LIMITATIONS.md`` Reflecting Pool Phase 4 C2 entry)
+    # by seating only a single Land on the source-controller's bf --
+    # both pickers agree on a single-element produces union. Net
+    # delta (rebased onto Worker A's probe-writing-batch-5 +5
+    # PROBED merge ``5ec91db5``): +1 PROBED / -1
+    # covered_by_construction (Reflecting Pool slug flips). PROBED
+    # 420 -> 421; covered_by_construction 24 -> 23; BLOCKED-SG
+    # unchanged at 31.
+    REPO_ROOT / "tests" / "test_reflecting_pool_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -54,6 +54,21 @@ pin bump + per-card real-EoE probe all ship Cycle 2 as the FLIP
 ZERO per-card probe this cycle (Cycle 2 ships the real-EoE
 ``tests/test_reflecting_pool_parity.py``).
 
+**Cycle 2 update (2026-05-27).** Cycle 2 has now LANDED: the
+substrate-only invariant pin
+``test_reflecting_pool_stays_declined_at_admit_gate_post_cycle_1``
++ count sentinel ``test_reflecting_pool_carrier_aa_effect_classes
+_count_stays_17`` are INVERTED in this same file to
+``test_reflecting_pool_now_admits_at_admit_gate_post_cycle_2`` +
+``test_reflecting_pool_carrier_aa_effect_classes_count_is_18_
+post_cycle_2`` per the Coordinated Clobbering 2b / Mirrorpool C4 /
+Meteor Crater C2 invariant-inversion precedent. The C1 substrate-
+level Rust unit pins (parse / to_pydict / resolve canonical-W /
+multi-color canonical-WUBRG-then-C / colorless empty-union
+fallback / source-controller fan-out / produces-union scoping) all
+stay GREEN at C2 — they pin the Rust resolve arm's invariants on
+the C1 substrate shape and are untouched by the admit-set widen.
+
 **Verify-first findings (live tree, main ``eb059eaa``):**
 
   - Reflecting Pool printing: ``card_types=("Land",)``,
@@ -700,33 +715,38 @@ def test_resolve_produces_union_only_from_source_controllers_lands(
 # ---------------------------------------------------------------------------
 
 
-def test_reflecting_pool_stays_declined_at_admit_gate_post_cycle_1():
-    """**LOAD-BEARING substrate-only invariant pin.** Reflecting
-    Pool's live printing STAYS DECLINED at the Phase-4 Carrier-AA
-    admit gate post-Cycle-1.
+def test_reflecting_pool_now_admits_at_admit_gate_post_cycle_2():
+    """**LOAD-BEARING flip invariant pin (INVERTED at Cycle 2).**
+    Reflecting Pool's live printing FLIPS DECLINED → ADMITTED at
+    the Phase-4 Carrier-AA admit gate post-Cycle-2.
 
-    Post-C1 invariants:
+    Post-C2 invariants:
 
-      (a) ``_carrier_aa_phase_1_effect_classes`` does NOT include
+      (a) ``_carrier_aa_phase_1_effect_classes`` INCLUDES
           ``AddOneManaFromControlledLandsProductions`` (the Effect-
-          class admit set retains 16 entries — the Cycle 2 widen
-          ships the 16 → 17 bump).
+          class admit set is 18 entries post-C2 — the C2 widen
+          lands the 17 → 18 bump).
       (b) ``_aa_is_phase1_sub_shape_a(reflecting.activated_abilities
-          [0])`` returns False (the ``type(aa.effect) not in
-          _carrier_aa_phase_1_effect_classes()`` teeth fires).
+          [0])`` returns True (the ``type(aa.effect) not in
+          _carrier_aa_phase_1_effect_classes()`` teeth no longer
+          fire; the Phase-1.5a bare ``{T}`` cost gate + the
+          Phase-4E ``is_mana_ability=True`` AA-rider widen all
+          clear too).
       (c) ``_printing_is_bridge_simple_carrier_aa_land(reflecting)``
-          returns False (cascades from the per-AA gate decline at
-          the per-AA all-or-nothing walk).
+          returns True (the per-AA gate admits, and the single-AA
+          all-or-nothing printing-level cascade admits the
+          printing).
       (d) ``_printing_is_bridge_simple_carrier_aa_any(reflecting)``
-          returns False (the top-level dispatcher delegates to the
-          Land sibling which declines).
+          returns True (the top-level dispatcher delegates to the
+          Land sibling which admits).
 
-    If this pin fails — i.e. Reflecting Pool starts admitting on
-    this branch — the substrate-only invariant has been violated
-    and the cross-engine probe would run BEFORE the per-card real-
-    EoE byte-equal probe ships, producing false-success or false-
-    failure claims for the resolve arm. Catch the drift here.
-    Cycle 2 is what flips this pin.
+    This pin was renamed from
+    ``test_reflecting_pool_stays_declined_at_admit_gate_post_cycle_1``
+    at Cycle 2 per the Coordinated Clobbering 2b / Mirrorpool C4 /
+    Meteor Crater C2 invariant-inversion precedent. If this pin
+    fails — i.e. the admit-gate stops admitting Reflecting Pool —
+    the C2 FLIP has silently regressed and the per-card real-EoE
+    probe would run against a wrong fixture. Catch the drift here.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.generic.mana import (
@@ -743,70 +763,57 @@ def test_reflecting_pool_stays_declined_at_admit_gate_post_cycle_1():
     if real is None:
         pytest.skip("Reflecting Pool absent from active CardSource")
 
-    # (a) Effect-class admit set EXCLUDES the new class at C1.
+    # (a) Effect-class admit set INCLUDES the new class post-C2.
     effect_classes = _carrier_aa_phase_1_effect_classes()
-    assert AddOneManaFromControlledLandsProductions not in effect_classes, (
-        "Substrate-only invariant violation: "
-        "AddOneManaFromControlledLandsProductions MUST NOT be in "
-        "the Carrier-AA Phase-1 Effect-class admit set post-C1. "
-        "Cycle 2 ships the 16 → 17 widen + admit-set pin bump "
-        "together as the FLIP."
+    assert AddOneManaFromControlledLandsProductions in effect_classes, (
+        "Flip invariant violation: "
+        "AddOneManaFromControlledLandsProductions MUST be in the "
+        "Carrier-AA Phase-1 Effect-class admit set post-C2."
     )
 
-    # (b) Per-AA gate STILL declines on the Effect-class teeth.
+    # (b) Per-AA gate ADMITS post-C2.
     aa = real.activated_abilities[0]
-    assert _aa_is_phase1_sub_shape_a(aa) is False, (
-        "Substrate-only invariant violation: "
-        "_aa_is_phase1_sub_shape_a must STILL decline Reflecting "
-        "Pool's AA[0] post-C1 on the Effect-class teeth."
+    assert _aa_is_phase1_sub_shape_a(aa) is True, (
+        "Flip invariant violation: "
+        "_aa_is_phase1_sub_shape_a must ADMIT Reflecting Pool's "
+        "AA[0] post-C2 on the Effect-class widen + Phase-1.5a bare "
+        "{T} cost gate + Phase-4E is_mana_ability rider."
     )
 
-    # (c) Carrier-AA Land admit predicate STILL declines.
-    assert _printing_is_bridge_simple_carrier_aa_land(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_land must STILL "
-        "decline Reflecting Pool post-C1 (cascades from per-AA "
-        "decline under all-or-nothing contract)."
+    # (c) Carrier-AA Land admit predicate ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_land(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_land must ADMIT "
+        "Reflecting Pool post-C2 (cascades from per-AA admit at "
+        "the single-AA all-or-nothing walk)."
     )
 
-    # (d) Top-level dispatcher STILL declines.
-    assert _printing_is_bridge_simple_carrier_aa_any(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_any must STILL "
-        "decline Reflecting Pool post-C1."
+    # (d) Top-level dispatcher ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_any(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_any must ADMIT "
+        "Reflecting Pool post-C2 (delegates to the Land sibling)."
     )
 
 
-def test_reflecting_pool_carrier_aa_effect_classes_count_stays_17():
-    """**Substrate-only count sentinel.** The
-    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST
-    remain 17 post-Reflecting-Pool-C1 (post the Meteor Crater C2
-    widen at commit ``f16dda79`` which bumped the set 16 → 17 by
-    adding ``AddOneManaOfChosenPermanentColor``). The Reflecting
-    Pool Cycle 2 widen ships the next 17 → 18 bump (adding
+def test_reflecting_pool_carrier_aa_effect_classes_count_is_18_post_cycle_2():
+    """**Flip count sentinel (INVERTED at Cycle 2).** The
+    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be
+    18 post-C2 — the C2 widen lands the 17 → 18 bump (adding
     ``AddOneManaFromControlledLandsProductions``).
 
-    Sibling of the Cycle-1 admit-set-unchanged sentinel in the
-    Meteor Crater / Spacecraft / Phase 4E substrate-only test
-    suites — pin the count so a future drift surfaces here before
-    a silent admit-gate flip.
-
-    Note: this sentinel is independent of the Meteor Crater C2
-    count sentinel at ``tests/test_meteor_crater_substrate_cycle_1
-    .py::test_meteor_crater_carrier_aa_effect_classes_count_is_17_
-    post_cycle_2``. Reflecting Pool's class is deliberately excluded
-    at this C1; Reflecting Pool's Cycle 2 widen ships the 17 → 18
-    bump as the FLIP.
+    Renamed from ``test_reflecting_pool_carrier_aa_effect_classes_
+    count_stays_17``; pin the new count so a future widen / drift
+    surfaces here before a silent admit-gate flip beyond the C2
+    closure.
     """
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 17, (
-        "Substrate-only invariant: the Carrier-AA Phase-1 Effect-"
-        "class admit set MUST have exactly 17 entries post-"
-        "Reflecting-Pool-Cycle-1 (post the Meteor Crater C2 widen "
-        "at f16dda79 which bumped 16 → 17). Reflecting Pool Cycle "
-        "2 ships the next 17 → 18 widen (adding "
-        "AddOneManaFromControlledLandsProductions)."
+    assert len(_carrier_aa_phase_1_effect_classes()) == 18, (
+        "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
+        "set MUST have exactly 18 entries post-Cycle-2 — Reflecting "
+        "Pool C2 lands the 17 → 18 bump adding "
+        "AddOneManaFromControlledLandsProductions."
     )
