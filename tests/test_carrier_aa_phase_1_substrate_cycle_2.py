@@ -607,7 +607,14 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
     # FLIPs Reflecting Pool DECLINED → ADMITTED — same single-AA
     # all-or-nothing per-AA walk admits via the produces-union mana-
     # ability. Admit set 9 → 10 (Reflecting Pool is THE new entry).
+    # **Ancient Tomb Phase 4 C2 (2026-05-27).** Effect-class widen
+    # 18 → 19 (adds ``DealDamageToControllerAndAddMana``) FLIPs
+    # Ancient Tomb DECLINED → ADMITTED — same single-AA all-or-
+    # nothing per-AA walk admits via the fixed-produces mana-ability
+    # with the damage rider. Admit set 10 → 11 (Ancient Tomb is THE
+    # new entry).
     assert admits == [
+        "Ancient Tomb",
         "Deserted Temple",
         "Meteor Crater",
         "Mirrorpool",
@@ -619,13 +626,14 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Reflecting Pool C2 admit-set pin violated: "
-        f"expected admit set = ['Deserted Temple', 'Meteor Crater', "
-        f"'Mirrorpool', 'Mystifying Maze', 'Petrified Field', "
-        f"'Reflecting Pool', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. A "
-        f"widen in a sibling substrate or predicate would surface "
-        f"here as a silent auto-grow — investigate before merging."
+        f"Carrier-AA Ancient Tomb C2 admit-set pin violated: "
+        f"expected admit set = ['Ancient Tomb', 'Deserted Temple', "
+        f"'Meteor Crater', 'Mirrorpool', 'Mystifying Maze', "
+        f"'Petrified Field', 'Reflecting Pool', 'Scavenger Grounds', "
+        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], "
+        f"got {admits}. A widen in a sibling substrate or predicate "
+        f"would surface here as a silent auto-grow — investigate "
+        f"before merging."
     )
 
 

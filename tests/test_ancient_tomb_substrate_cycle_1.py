@@ -58,6 +58,22 @@ Pool C1 substrate-only precedents — substrate lands at C1, the live
 FLIP lands at C2). ZERO per-card probe this cycle (Cycle 2 ships the
 real-EoE ``tests/test_ancient_tomb_parity.py``).
 
+**Cycle 2 update (2026-05-27).** Cycle 2 has now LANDED: the
+substrate-only invariant pin
+``test_ancient_tomb_stays_declined_at_admit_gate_post_cycle_1``
++ count sentinel ``test_ancient_tomb_carrier_aa_effect_classes_
+count_stays_18`` are INVERTED in this same file to
+``test_ancient_tomb_now_admits_at_admit_gate_post_cycle_2`` +
+``test_ancient_tomb_carrier_aa_effect_classes_count_is_19_post_
+cycle_2`` per the Coordinated Clobbering 2b / Mirrorpool C4 /
+Meteor Crater C2 / Reflecting Pool C2 invariant-inversion
+precedent. The C1 substrate-level Rust unit pins (parse /
+to_pydict / resolve at default/arbitrary/1-life-lethal lives /
+source-controller fan-out / cross-engine byte-equal life + pool
+delta) all stay GREEN at C2 — they pin the Rust resolve arm's
+invariants on the C1 substrate shape and are untouched by the
+admit-set widen.
+
 **Verify-first findings (live tree, main ``8250a33f``):**
 
   - Ancient Tomb printing: ``card_types=("Land",)``, ``supertypes=()``,
@@ -634,39 +650,46 @@ def test_resolve_cross_engine_byte_equal_mana_pool_and_life_delta(
 
 
 # ---------------------------------------------------------------------------
-# Substrate-only invariant — Ancient Tomb STAYS DECLINED at admit gate
-# (load-bearing closure marker)
+# Flip invariant — Ancient Tomb NOW ADMITS at admit gate
+# (INVERTED at C2 per the Mirrorpool C4 / Meteor Crater C2 /
+# Reflecting Pool C2 invariant-inversion precedent — load-bearing
+# closure marker for the FLIP)
 # ---------------------------------------------------------------------------
 
 
-def test_ancient_tomb_stays_declined_at_admit_gate_post_cycle_1():
-    """**LOAD-BEARING substrate-only invariant pin.** Ancient
-    Tomb's live printing STAYS DECLINED at the Phase-4 Carrier-AA
-    admit gate post-Cycle-1.
+def test_ancient_tomb_now_admits_at_admit_gate_post_cycle_2():
+    """**LOAD-BEARING flip invariant pin (INVERTED at Cycle 2).**
+    Ancient Tomb's live printing FLIPS DECLINED → ADMITTED at the
+    Phase-4 Carrier-AA admit gate post-Cycle-2.
 
-    Post-C1 invariants:
+    Post-C2 invariants:
 
-      (a) ``_carrier_aa_phase_1_effect_classes`` does NOT include
+      (a) ``_carrier_aa_phase_1_effect_classes`` INCLUDES
           ``DealDamageToControllerAndAddMana`` (the Effect-class
-          admit set stays at 18 entries post-C1 — Reflecting Pool's
-          C2 widen brought the count to 18 at main HEAD ``8250a33f``;
-          Ancient Tomb's C2 widen will lift it to 19).
+          admit set is 19 entries post-C2 — the C2 widen lands the
+          18 → 19 bump).
       (b) ``_aa_is_phase1_sub_shape_a(ancient_tomb.activated_abilities
-          [0])`` returns False (the ``type(aa.effect) not in
-          _carrier_aa_phase_1_effect_classes()`` teeth fire because
-          Ancient Tomb's class is NOT widened in).
+          [0])`` returns True (the ``type(aa.effect) not in
+          _carrier_aa_phase_1_effect_classes()`` teeth no longer
+          fire; the Phase-1.5a bare ``{T}`` cost gate + the
+          Phase-4E ``is_mana_ability=True`` AA-rider widen all
+          clear too).
       (c) ``_printing_is_bridge_simple_carrier_aa_land(ancient_tomb)``
-          returns False (the per-AA gate declines, and the single-
-          AA all-or-nothing printing-level cascade declines the
+          returns True (the per-AA gate admits, and the single-AA
+          all-or-nothing printing-level cascade admits the
           printing).
       (d) ``_printing_is_bridge_simple_carrier_aa_any(ancient_tomb)``
-          returns False (the top-level dispatcher delegates to the
-          Land sibling which declines).
+          returns True (the top-level dispatcher delegates to the
+          Land sibling which admits).
 
-    This is the load-bearing closure marker for the C1 substrate-
-    only invariant: if any of these flips True before C2 ships, the
-    substrate has silently widened the admit set and the C2 cycle
-    has been pre-empted. Catch the drift here.
+    This pin was renamed from
+    ``test_ancient_tomb_stays_declined_at_admit_gate_post_cycle_1``
+    at Cycle 2 per the Coordinated Clobbering 2b / Mirrorpool C4 /
+    Meteor Crater C2 / Reflecting Pool C2 invariant-inversion
+    precedent. If this pin fails — i.e. the admit-gate stops
+    admitting Ancient Tomb — the C2 FLIP has silently regressed
+    and the per-card real-EoE probe would run against a wrong
+    fixture. Catch the drift here.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.generic.damage import (
@@ -683,62 +706,57 @@ def test_ancient_tomb_stays_declined_at_admit_gate_post_cycle_1():
     if real is None:
         pytest.skip("Ancient Tomb absent from active CardSource")
 
-    # (a) Effect-class admit set does NOT include the new class
-    # post-C1.
+    # (a) Effect-class admit set INCLUDES the new class post-C2.
     effect_classes = _carrier_aa_phase_1_effect_classes()
-    assert DealDamageToControllerAndAddMana not in effect_classes, (
-        "Substrate-only invariant violation: "
-        "DealDamageToControllerAndAddMana MUST NOT be in the "
-        "Carrier-AA Phase-1 Effect-class admit set post-C1 — C2 "
-        "ships the widen as the FLIP."
+    assert DealDamageToControllerAndAddMana in effect_classes, (
+        "Flip invariant violation: "
+        "DealDamageToControllerAndAddMana MUST be in the "
+        "Carrier-AA Phase-1 Effect-class admit set post-C2."
     )
 
-    # (b) Per-AA gate DECLINES post-C1.
+    # (b) Per-AA gate ADMITS post-C2.
     aa = real.activated_abilities[0]
-    assert _aa_is_phase1_sub_shape_a(aa) is False, (
-        "Substrate-only invariant violation: "
-        "_aa_is_phase1_sub_shape_a must DECLINE Ancient Tomb's "
-        "AA[0] post-C1 on the Effect-class teeth (C2 ships the "
-        "widen)."
+    assert _aa_is_phase1_sub_shape_a(aa) is True, (
+        "Flip invariant violation: "
+        "_aa_is_phase1_sub_shape_a must ADMIT Ancient Tomb's "
+        "AA[0] post-C2 on the Effect-class widen + Phase-1.5a "
+        "bare {T} cost gate + Phase-4E is_mana_ability rider."
     )
 
-    # (c) Carrier-AA Land admit predicate DECLINES.
-    assert _printing_is_bridge_simple_carrier_aa_land(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_land must DECLINE "
-        "Ancient Tomb post-C1 (cascades from per-AA decline at the "
+    # (c) Carrier-AA Land admit predicate ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_land(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_land must ADMIT "
+        "Ancient Tomb post-C2 (cascades from per-AA admit at the "
         "single-AA all-or-nothing walk)."
     )
 
-    # (d) Top-level dispatcher DECLINES.
-    assert _printing_is_bridge_simple_carrier_aa_any(real) is False, (
-        "Substrate-only invariant violation: "
-        "_printing_is_bridge_simple_carrier_aa_any must DECLINE "
-        "Ancient Tomb post-C1 (delegates to the Land sibling)."
+    # (d) Top-level dispatcher ADMITS.
+    assert _printing_is_bridge_simple_carrier_aa_any(real) is True, (
+        "Flip invariant violation: "
+        "_printing_is_bridge_simple_carrier_aa_any must ADMIT "
+        "Ancient Tomb post-C2 (delegates to the Land sibling)."
     )
 
 
-def test_ancient_tomb_carrier_aa_effect_classes_count_stays_18():
-    """**Count sentinel.** The
+def test_ancient_tomb_carrier_aa_effect_classes_count_is_19_post_cycle_2():
+    """**Flip count sentinel (INVERTED at Cycle 2).** The
     ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be
-    18 post-C1 — Reflecting Pool's C2 widen at commit ``8250a33f``
-    on main brought the count to 18; Ancient Tomb C1 is substrate-
-    only (ZERO admit widen this cycle), so the count stays at 18.
-    Cycle 2 ships the 18 → 19 widen adding
-    ``DealDamageToControllerAndAddMana``.
+    19 post-C2 — the C2 widen lands the 18 → 19 bump (adding
+    ``DealDamageToControllerAndAddMana``).
 
-    Pin the count so a future widen / drift surfaces here before a
-    silent admit-gate flip beyond the C1 substrate-only closure.
+    Renamed from ``test_ancient_tomb_carrier_aa_effect_classes_
+    count_stays_18``; pin the new count so a future widen / drift
+    surfaces here before a silent admit-gate flip beyond the C2
+    closure.
     """
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 18, (
-        "Substrate-only invariant: the Carrier-AA Phase-1 Effect-"
-        "class admit set MUST have exactly 18 entries post-Cycle-1 "
-        "— Reflecting Pool's C2 widen brought the count to 18 at "
-        "main HEAD 8250a33f; Ancient Tomb C1 is substrate-only and "
-        "does NOT widen the count. C2 widens 18 → 19 by adding "
+    assert len(_carrier_aa_phase_1_effect_classes()) == 19, (
+        "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
+        "set MUST have exactly 19 entries post-Cycle-2 — Ancient "
+        "Tomb C2 lands the 18 → 19 bump adding "
         "DealDamageToControllerAndAddMana."
     )

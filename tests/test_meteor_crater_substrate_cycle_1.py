@@ -684,29 +684,33 @@ def test_meteor_crater_now_admits_at_admit_gate_post_cycle_2():
     )
 
 
-def test_meteor_crater_carrier_aa_effect_classes_count_is_17_post_cycle_2():
+def test_meteor_crater_carrier_aa_effect_classes_count_is_19_post_at_c2():
     """**Flip count sentinel (INVERTED at Cycle 2; rebased at
-    Reflecting Pool C2 to count 18).** The
-    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be 18
-    post-Reflecting-Pool-C2 — Meteor Crater C2 landed the 16 → 17
-    bump (adding ``AddOneManaOfChosenPermanentColor``); Reflecting
-    Pool C2 (2026-05-27) landed the 17 → 18 bump (adding
-    ``AddOneManaFromControlledLandsProductions``).
+    Reflecting Pool C2 to count 18; rebased at Ancient Tomb C2 to
+    count 19).** The ``_carrier_aa_phase_1_effect_classes`` admit-set
+    size MUST be 19 post-Ancient-Tomb-C2 — Meteor Crater C2 landed
+    the 16 → 17 bump (adding ``AddOneManaOfChosenPermanentColor``);
+    Reflecting Pool C2 (2026-05-27) landed the 17 → 18 bump (adding
+    ``AddOneManaFromControlledLandsProductions``); Ancient Tomb C2
+    (2026-05-27) landed the 18 → 19 bump (adding
+    ``DealDamageToControllerAndAddMana``).
 
     Renamed from ``test_meteor_crater_carrier_aa_effect_classes_
-    count_stays_16``; pin the new count so a future widen / drift
-    surfaces here before a silent admit-gate flip beyond the C2
-    closure.
+    count_stays_16`` (→ ``_is_17_post_cycle_2`` → ``_is_19_post_at_
+    c2``); pin the new count so a future widen / drift surfaces here
+    before a silent admit-gate flip beyond the C2 closure.
     """
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 18, (
+    assert len(_carrier_aa_phase_1_effect_classes()) == 19, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 18 entries post-Reflecting-Pool-Cycle-"
+        "set MUST have exactly 19 entries post-Ancient-Tomb-Cycle-"
         "2 — Meteor Crater C2 lands the 16 → 17 bump adding "
         "AddOneManaOfChosenPermanentColor; Reflecting Pool C2 lands "
         "the 17 → 18 bump adding "
-        "AddOneManaFromControlledLandsProductions."
+        "AddOneManaFromControlledLandsProductions; Ancient Tomb C2 "
+        "lands the 18 → 19 bump adding "
+        "DealDamageToControllerAndAddMana."
     )

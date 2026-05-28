@@ -796,24 +796,29 @@ def test_reflecting_pool_now_admits_at_admit_gate_post_cycle_2():
     )
 
 
-def test_reflecting_pool_carrier_aa_effect_classes_count_is_18_post_cycle_2():
-    """**Flip count sentinel (INVERTED at Cycle 2).** The
-    ``_carrier_aa_phase_1_effect_classes`` admit-set size MUST be
-    18 post-C2 — the C2 widen lands the 17 → 18 bump (adding
-    ``AddOneManaFromControlledLandsProductions``).
+def test_reflecting_pool_carrier_aa_effect_classes_count_is_19_post_at_c2():
+    """**Flip count sentinel (INVERTED at Cycle 2; rebased at Ancient
+    Tomb C2 to count 19).** The ``_carrier_aa_phase_1_effect_
+    classes`` admit-set size MUST be 19 post-Ancient-Tomb-C2 —
+    Reflecting Pool C2 landed the 17 → 18 bump (adding
+    ``AddOneManaFromControlledLandsProductions``); Ancient Tomb C2
+    (2026-05-27) landed the 18 → 19 bump (adding
+    ``DealDamageToControllerAndAddMana``).
 
     Renamed from ``test_reflecting_pool_carrier_aa_effect_classes_
-    count_stays_17``; pin the new count so a future widen / drift
-    surfaces here before a silent admit-gate flip beyond the C2
-    closure.
+    count_stays_17`` (→ ``_is_18_post_cycle_2`` → ``_is_19_post_at_
+    c2``); pin the new count so a future widen / drift surfaces here
+    before a silent admit-gate flip beyond the C2 closure.
     """
     from mtg_bot.parity.trajectory import (
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 18, (
+    assert len(_carrier_aa_phase_1_effect_classes()) == 19, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 18 entries post-Cycle-2 — Reflecting "
-        "Pool C2 lands the 17 → 18 bump adding "
-        "AddOneManaFromControlledLandsProductions."
+        "set MUST have exactly 19 entries post-Ancient-Tomb-Cycle-2 "
+        "— Reflecting Pool C2 lands the 17 → 18 bump adding "
+        "AddOneManaFromControlledLandsProductions; Ancient Tomb C2 "
+        "lands the 18 → 19 bump adding "
+        "DealDamageToControllerAndAddMana."
     )
