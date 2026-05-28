@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **444 / 475 EoE cards (93.5%) are byte-equal at the Effect+bridge level**; of those, **415 (87.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 29 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **444 / 475 EoE cards (93.5%) are byte-equal at the Effect+bridge level**; of those, **420 (88.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 24 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **31 (6.5%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 415 | 87.4% |
-| Effect+bridge covered (not individually probed) | 29 | 6.1% |
+| PROBED byte-equal | 420 | 88.4% |
+| Effect+bridge covered (not individually probed) | 24 | 5.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -163,6 +163,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Fear of Surveillance
 - Fell Gravship
 - Final Vengeance
+- Flesh Burrower
 - Flight-Deck Coordinator
 - Floodfarm Verge
 - Focus Fire
@@ -235,6 +236,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Kav Landseeker
 - Kavaron Harrier
 - Kavaron Skywarden
+- Kavaron Turbodrone
 - Kavaron, Memorial World
 - Keys to the House
 - Killer's Mask
@@ -248,6 +250,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Live or Die
 - Living Phone
 - Lost in Space
+- Lumbering Falls
 - Lumen-Class Frigate
 - Luxknight Breacher
 - Magus of the Moon
@@ -287,6 +290,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Mystifying Maze
 - Nanoform Sentinel
 - Nebula Dragon
+- Needle Spires
 - Neglected Manor
 - Nova Hellkite
 - Nutrient Block
@@ -317,6 +321,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Quantum Riddler
 - Radiant Strike
 - Ragged Playmate
+- Raging Ravine
 - Ragost, Deft Gastronaut
 - Raucous Carnival
 - Rayblade Trooper
