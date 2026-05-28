@@ -6126,6 +6126,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             AddOneManaFromControlledLandsProductions,
         )
         return AddOneManaFromControlledLandsProductions()
+    if kind == "deal_damage_to_controller_and_add_mana":
+        # **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27 — spec
+        # at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3
+        # Ancient Tomb).** Reverse arm rehydrating Rust's
+        # ``Effect::DealDamageToControllerAndAddMana`` (fields variant
+        # — `damage: u32` + `produces: Vec<(u8, u32)>` on the wire as
+        # `damage: int` + `produces: list[[color_str, count]]`) to
+        # Python's ``DealDamageToControllerAndAddMana(damage,
+        # produces)`` dataclass at ``effects/generic/damage.py:170``.
+        #
+        # Ancient Tomb's single ``{T}: Add {C}{C}. This land deals 2
+        # damage to you.`` AA pilot — see the scout doc §#3 row for
+        # the full closure shape. Sibling of the Meteor Crater /
+        # Reflecting Pool C1 reverse arms above; the structural
+        # delta is that this variant carries fields (damage int +
+        # produces tuple) instead of being a pure unit.
+        #
+        # **Substrate-only at Cycle 1.** Ancient Tomb STAYS DECLINED
+        # at the admit gate post-C1 — the Effect-class admit set
+        # ``_carrier_aa_phase_1_effect_classes`` does NOT yet include
+        # this class. The widen + admit-set pin bump + per-card
+        # real-EoE probe all ship Cycle 2 as the FLIP. This reverse
+        # arm is exercised by synthetic unit pins at C1.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToControllerAndAddMana,
+        )
+        damage_raw = eff_dict.get("damage", 2)
+        produces_raw = eff_dict.get("produces", [])
+        # Project the wire-side list-of-lists onto the Python tuple-
+        # of-tuples surface. Each inner pair is (color_str, count).
+        produces_tuple = tuple(
+            (str(color), int(count))
+            for color, count in produces_raw
+        )
+        return DealDamageToControllerAndAddMana(
+            damage=int(damage_raw),
+            produces=produces_tuple,
+        )
     if kind == "tap_target_artifact_or_creature":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "tap target artifact
         # or creature" (TapTargetArtifactOrCreature family,
@@ -15458,6 +15496,26 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.mana import (
         AddOneManaFromControlledLandsProductions,
     )
+    # **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27 — spec at
+    # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3 Ancient
+    # Tomb).** Forward-emit arm for Ancient Tomb's single ``{T}: Add
+    # {C}{C}. This land deals 2 damage to you.`` AA. Fields variant —
+    # the Python class is `DealDamageToControllerAndAddMana(damage:
+    # int, produces: tuple[tuple[str, int], ...])`. The Rust mirror's
+    # parse + resolve + to_pydict arms all treat the variant
+    # symmetrically with `damage: u32 + produces: Vec<(u8, u32)>`
+    # backing storage; on the wire both sides exchange `damage: int`
+    # + `produces: list[[color_str, count]]`.
+    #
+    # **Substrate-only at Cycle 1.** Ancient Tomb STAYS DECLINED at
+    # the admit gate post-C1 because the Effect-class admit set
+    # ``_carrier_aa_phase_1_effect_classes`` doesn't yet include this
+    # class. The C2 widen + admit-set pin bump + per-card real-EoE
+    # probe land the FLIP; this forward arm is exercised by synthetic
+    # unit pins at C1.
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToControllerAndAddMana,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -16008,9 +16066,46 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         effect_dict = {
             "kind": "add_one_mana_from_controlled_lands_productions",
         }
+    elif isinstance(effect, DealDamageToControllerAndAddMana):
+        # **Ancient Tomb substrate Phase 4 Cycle 1 (2026-05-27 — spec
+        # at docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3
+        # Ancient Tomb).** Forward-emit arm for Ancient Tomb's single
+        # ``{T}: Add {C}{C}. This land deals 2 damage to you.`` AA.
+        # Fields variant — emit the ``kind`` discriminator + the
+        # ``damage`` int + the ``produces`` list-of-lists projection
+        # of Python's tuple-of-tuples (each inner pair `[color_str,
+        # count]`). The Rust mirror's parse + resolve + to_pydict
+        # arms all treat the variant symmetrically; the wire surface
+        # is byte-stable round-trippable.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``DealDamageToControllerAndAddMana`` — NOT any parent
+        # ``Effect`` class — consistent with the Phase-3A/3B/3C/4B/
+        # 4C/4D/4E/Meteor-Crater/Reflecting-Pool specificity
+        # contract. The class has no subclasses in the live tree
+        # (today's only printing that emits it is Ancient Tomb
+        # itself, via the pain-two-mana-line parser regex at
+        # ``cards/parser/land_builder.py:1366``).
+        #
+        # **Substrate-only at Cycle 1.** Ancient Tomb STAYS DECLINED
+        # at the live admit gate post-C1 because
+        # ``_carrier_aa_phase_1_effect_classes`` does NOT yet include
+        # this class. The Cycle 2 widen + admit-set pin bump + per-
+        # card real-EoE probe ship together as the FLIP; this
+        # forward arm is exercised by synthetic unit pins at C1.
+        produces_wire = [
+            [str(color), int(count)]
+            for color, count in effect.produces
+        ]
+        effect_dict = {
+            "kind": "deal_damage_to_controller_and_add_mana",
+            "damage": int(effect.damage),
+            "produces": produces_wire,
+        }
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b/3/4E/Spacecraft-4/
-        # Meteor-Crater/Reflecting-Pool admit set — decline.
+        # Meteor-Crater/Reflecting-Pool/Ancient-Tomb admit set —
+        # decline.
         return None
     result_dict: dict = {
         "cost": cost_dict,
