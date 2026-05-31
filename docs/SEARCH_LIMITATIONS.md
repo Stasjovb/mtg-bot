@@ -17277,6 +17277,31 @@ Wandering Fumarole.
 
 ---
 
+## Rust `Effect::SacrificeNLandsYouControl` — deterministic no-agent land pick + Lotus Field composite-admit honest-stop (2026-05-31)
+
+**Where:** `rust/src/cards.rs` (`Effect::SacrificeNLandsYouControl { count }` decl + `parse_effect` + `effect_to_pydict`), `rust/src/state_ops_resolve.rs` (resolve arm — the `while remaining > 0` rescan-pick-first-eligible-land-excluding-source loop), `src/mtg_bot/parity/cross_engine.py` (`_ta_dict_to_python_effect` reverse arm).
+
+**What the shortcut is:**
+- The Rust resolve arm mirrors Python's `SacrificeNLandsYouControl.resolve` (`effects/generic/zone_moves.py:236`) deterministic NO-AGENT path: each loop iteration rescans the source-controller's battlefield for the smallest-index LAND whose id != source (the entering Lotus Field is excluded), picks it (Python's `options[0]`), and sacrifices it. Real MTG (CR 701.16) lets the controller choose WHICH lands to sacrifice; both engines instead pick the canonical-first land under the no-agent harness. This is the SAME no-agent-first-legal convention already documented for `choose_sacrifice` in §5 and the round-31 `SacrificeFirstPermanentYouControl` bridge target.
+- **Lotus Field STAYS BLOCKED at the loader admit gate this slice (substrate-only landing).** The scout (`docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Lotus Field) estimated the only uncovered piece was the `SacrificeNLandsYouControl` ETB Effect, with enters-tapped + hexproof "already covered". That under-counted the loader admit surface: Lotus Field is a COMPOSITE carrier (chosen-color mana AA + `enters_tapped=True` + `keywords={hexproof}` + an ETB `triggered_abilities`). NO existing bridge admit predicate accepts that combination — `_printing_is_bridge_simple_carrier_aa_land` hard-declines any printing with `keywords` (`trajectory.py:9847`) AND any with `triggered_abilities` (`trajectory.py:9849`); the tapped-mana-land predicates decline any printing with activated/triggered abilities. Admitting Lotus Field needs a brand-new composite-admit path (mana AA + enters_tapped + hexproof + ETB trigger co-gated on one printing) — left as characterized follow-up work.
+
+**Why this is OK:**
+- The deterministic land pick is byte-equal cross-engine (both engines pick `options[0]` / smallest-index eligible land per rescan), so the resulting battlefield/graveyard split agrees bit-for-bit on the controlled probe. Under the bench play strategy (no agent installed), this is the only path taken.
+- The substrate is genuinely uncovered (no prior Rust `SacrificeNLandsYouControl` variant) and amortizes to any future card with that ETB effect. Landing it cleared the Effect-uncovered axis for Lotus Field (BLOCKED → covered-by-construction) without a fragile composite-admit flip — a characterized honest-stop per the campaign policy.
+- The ETB-effect resolve dispatch is the same `apply_effect` path whether the effect rode a trigger or an AA, so the Rust unit pins (driving it as a mana-ability AA for harness convenience) exercise the real resolve semantics.
+
+**Failure mode:**
+- A real game where the optimal play is to sacrifice a DIFFERENT land (e.g. keeping a dual, sac'ing basics) is not modeled — both engines sac the canonical-first lands. Same class as the existing `choose_sacrifice → first legal` default.
+- A future composite-admit widen that flips Lotus Field to loader-admitted will trip the LOAD-BEARING `test_lotus_field_stays_declined_at_loader_admit_gate` pin — the author must then update it to the PROBED-tier expectation deliberately rather than silently auto-admitting the unmodeled rider cluster.
+
+**Fix scope:** Substrate-only this slice — new Rust `Effect::SacrificeNLandsYouControl` end-to-end (decl + parse + to_pydict + resolve) + cross-engine bridge reverse arm + the per-card real-EoE probe (SAC-TWO / SAC-UNDER / MINT-3 byte-equal). The composite-admit path (chosen-color-mana-land + enters_tapped + hexproof + ETB trigger co-gated) is a future cycle.
+
+**Impact estimate:** Lotus Field moves BLOCKED (Effect-uncovered) → covered-by-construction. PROBED 446 (unchanged — Lotus Field is NOT loader-admitted, so it cannot be PROBED this slice); covered_by_construction 0 → 1; BLOCKED-SG 29 → 28. 0 strength cost — the substrate is byte-equal cross-engine on the real-EoE drive of both the ETB sac path and the {T}:add-3-chosen-color mana path.
+
+**Pinned by:** `tests/test_lotus_field_parity.py` (8 pins — parser SoT verify-first + the LOAD-BEARING loader-decline honest-stop + bridge reverse-arm round-trip + Rust register acceptance + cross-engine real-EoE SAC-TWO (2 of 3 lands sac'd, source survives) + SAC-UNDER (under-count) + MINT-3 ({T}: 3-of-chosen-color W mint)) + `tests_rust/test_sacrifice_n_lands_you_control.py` (9 Rust-engine pins — parse register / reject-negative / alt-count / resolve-sac-two-excludes-source / under-count / no-other-lands-noop / count-zero-noop / skips-non-land-permanents / source-controller-scoping). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Lotus Field.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

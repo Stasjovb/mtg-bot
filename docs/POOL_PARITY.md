@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **447 / 475 EoE cards (94.1%) are byte-equal at the Effect+bridge level**; of those, **447 (94.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 0 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **447 / 475 EoE cards (94.1%) are byte-equal at the Effect+bridge level**; of those, **446 (93.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 1 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **28 (5.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 447 | 94.1% |
-| Effect+bridge covered (not individually probed) | 0 | 0.0% |
+| PROBED byte-equal | 446 | 93.9% |
+| Effect+bridge covered (not individually probed) | 1 | 0.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -208,6 +208,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Gravkill
 - Gravpack Monoist
 - Gremlin Tamer
+- Grove of the Burnwillows
 - Haliya, Ascendant Cadet
 - Haliya, Guided by Light
 - Hand That Feeds
@@ -255,7 +256,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Lakeside Shack
 - Larval Scoutlander
 - Lashwhip Predator
-- Lavaclaw Reaches
 - Let's Play a Game
 - Lightless Evangel
 - Lightstall Inquisitor
@@ -473,7 +473,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Virus Beetle
 - Voidforged Titan
 - Vote Out
-- Wandering Fumarole
 - Warmaker Gunship
 - Warping Wail
 - Wary Watchdog
@@ -514,7 +513,7 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Planeswalker loyalty | 1 | 0 | 1 | 0 | 0 | sprawling |
 | Carrier activated abilities | 13 | 0 | 13 | 0 | 0 | sprawling |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
-| Non-safe triggered ability (unbridged event/shape) | 12 | 0 | 12 | 0 | 0 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 11 | 0 | 11 | 0 | 0 | diffuse |
 | Effect-uncovered (no covered Rust counterpart) | 20 | 0 | 20 | 0 | 0 | diffuse |
 
 **Reconciliation:** 28 subsystem-gated = 5 single-gated + 23 multi-gated; the per-subsystem `1gate` column sums to 5 (== single-gated total). The breakout partitions exactly the same 28 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
@@ -533,11 +532,10 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Echoing Deeps
 - Exalted Sunborn
 - Green Sun's Zenith
-- Grove of the Burnwillows
 - Haunted Screen
+- Lavaclaw Reaches
 - Leyline of Mutation
 - Loading Zone
-- Lotus Field
 - Meat Locker // Drowned Diner
 - Nesting Grounds
 - Nexus of Fate
@@ -550,5 +548,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Starfield Vocalist
 - Tezzeret, Cruel Captain
 - Unholy Annex // Ritual Chamber
+- Wandering Fumarole
 - Wildfire Wickerfolk
 
