@@ -3212,6 +3212,122 @@ fn apply_effect(
                 .push(leaving_obj_id);
             }
         },
+        // Lotus Field substrate (2026-05-31). SacrificeNLandsYouControl
+        // -- the SOURCE's controller sacrifices `count` LANDS they
+        // control, EXCLUDING the source. Mirrors Python's
+        // `SacrificeNLandsYouControl.resolve` at
+        // `effects/generic/zone_moves.py:236`: a `while remaining > 0`
+        // loop that rescans the controller's battlefield each iteration
+        // for lands (`o.printing.is_land`) whose id != source_id, breaks
+        // when no eligible land remains, otherwise picks `options[0]`
+        // (the canonical-first under the no-agent deterministic harness)
+        // and routes it through `turn.sacrifice`.
+        //
+        // The per-iteration rescan matters: each sacrifice mutates the
+        // controller's battlefield, so the candidate set shrinks. The
+        // loop sacrifices min(count, eligible_lands) lands, picking the
+        // smallest-index eligible land each pass -- bit-identical to
+        // Python's `options[0]`.
+        //
+        // Source-controller resolution mirrors round-24 DiscardSelf /
+        // round-26 EachOpponentLosesLife's 5-zone walk + stack scan.
+        Effect::SacrificeNLandsYouControl { count } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "SacrificeNLandsYouControl count must be non-negative, got {count}"
+                )));
+            }
+            // Recover the source's controller (the sacrificing player).
+            let mut source_controller: Option<u8> = None;
+            'outer_sac_n_lands: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sac_n_lands;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let controller_idx = controller as usize;
+            let mut remaining = *count;
+            while remaining > 0 {
+                // Rescan the controller's battlefield for the smallest-
+                // index LAND whose id != source_obj_id. Mirrors Python's
+                // per-iteration `options = [...]; options[0]`.
+                let target_id = {
+                    let bf = &state.players[controller_idx].battlefield;
+                    let mut found: Option<u32> = None;
+                    for obj in bf.iter() {
+                        if obj.id == source_obj_id {
+                            continue; // exclude the source land
+                        }
+                        let is_land = state
+                            .registry
+                            .lookup(obj.printing_id)
+                            .map(|p| p.card_types.iter().any(|t| t == "Land"))
+                            .unwrap_or(false);
+                        if is_land {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                    found
+                };
+                let Some(target_id) = target_id else {
+                    break; // no eligible land remains: stop (Python's `if not options: break`)
+                };
+                // Pop the chosen land from the controller's battlefield
+                // and route it to their graveyard -- same stamp shape as
+                // the `Effect::Sacrifice { AnyCreature }` arm above.
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was scanned from bf but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.damage = 0;
+                obj.attached_to = None;
+                obj.original_printing_id = None;
+                obj.door_states = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[controller_idx].graveyard).push(obj);
+                // A sacrificed land is a battlefield-exit. The land is
+                // by definition NOT nonland, so the Void LTB nonland
+                // flag never flips here -- but call the helper for
+                // parity with the Sacrifice arm (it self-guards on
+                // nonland).
+                mark_left_battlefield_if_nonland(state, printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+                state
+                    .pending_is_sacrificed_dispatches
+                    .push(leaving_obj_id);
+                remaining -= 1;
+            }
+        }
         // Round-15: AddCounters. Routes through round-2's signed net-
         // i32 counter model — positive `count` adds +1/+1 counters,
         // negative `count` adds -1/-1 counters; both deltas land on

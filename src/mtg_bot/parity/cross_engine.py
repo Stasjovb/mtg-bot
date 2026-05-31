@@ -980,6 +980,25 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # that omits it, mirroring the Python dataclass default.
         from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
         return GrantLifeToEachOpponent(amount=eff_dict.get("amount", 1))
+    if kind == "sacrifice_n_lands_you_control":
+        # **Lotus Field substrate (2026-05-31).** The source-controller
+        # sacrifices ``count`` LANDS they control, excluding the source.
+        # Reverse arm for the Rust ``Effect::SacrificeNLandsYouControl
+        # { count: i32 }`` mirror; Lotus Field's ETB trigger ("When
+        # Lotus Field enters, sacrifice two lands."). Python's
+        # ``SacrificeNLandsYouControl(count: int = 2)`` at
+        # ``effects/generic/zone_moves.py:220``. The wire dict always
+        # emits ``count`` explicitly (the forward arm + Rust
+        # ``to_pydict`` both set it); default to 2 for forward-compat
+        # with a dict that omits it, mirroring the Python dataclass
+        # default. Both engines resolve the no-agent deterministic
+        # shortcut (rescan-pick-first-land-excluding-source per
+        # iteration), so the resulting battlefield/graveyard split is
+        # byte-equal.
+        from mtg_bot.effects.generic.zone_moves import (
+            SacrificeNLandsYouControl,
+        )
+        return SacrificeNLandsYouControl(count=eff_dict.get("count", 2))
     if kind == "damage_each_opponent":
         # Untargeted "deals N damage to each opponent". Rust's
         # ``Effect::DamageEachOpponent`` resolves to a single
