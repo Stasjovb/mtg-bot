@@ -4188,6 +4188,13 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_exalted_sunborn_parity.py",
     REPO_ROOT / "tests" / "test_starfield_vocalist_parity.py",
     REPO_ROOT / "tests" / "test_loading_zone_parity.py",
+    # **Blast Zone closure (2026-05-31).** New Rust Effect
+    # ``DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters``
+    # (the genuinely-uncovered piece) + the ``test_cross_engine_real_
+    # eoe_blast_zone_*_parity`` probes flip Blast Zone from
+    # blocked_subsystem_gated -> PROBED. Net delta: +1 PROBED / -1
+    # BLOCKED-subsystem-gated. PROBED 459 -> 460; BLOCKED-SG 16 -> 15.
+    REPO_ROOT / "tests" / "test_blast_zone_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

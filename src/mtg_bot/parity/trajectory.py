@@ -5617,6 +5617,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.destroy import (
         DestroyAllCreatures,
+        DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
         DestroyTargetArtifact,
         DestroyTargetArtifactEnchantmentOrFlyingCreature,
         DestroyTargetArtifactOrTappedCreature,
@@ -6597,6 +6598,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             ):
                 return None
             return {"kind": "destroy_all_creatures"}
+        # **Blast Zone payoff (2026-05-31).** Unit-variant leaf —
+        # ``DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters``.
+        # Field-free covered Rust variant (parse arm
+        # ``"destroy_each_nonland_permanent_with_mv_equal_to_source_
+        # charge_counters"`` + dict→Python bridge arm in cross_engine.py
+        # both take/emit NO fields). The filter MV is an intrinsic
+        # resolve-time read of the source's ``charge_counters``; no
+        # serialized payload. Mirrors the ``destroy_all_creatures`` /
+        # ``exile_all_creatures_and_spacecraft`` unit-leaf idiom — keeps
+        # the serializer symmetric with the bridge arm's coverage.
+        if isinstance(
+            eff, DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters
+        ):
+            return {
+                "kind": (
+                    "destroy_each_nonland_permanent_with_mv_equal_to_"
+                    "source_charge_counters"
+                ),
+            }
         # **Beyond-the-Quiet slice (2026-05-21).** Wrath-shape exile
         # leaf — ``ExileAllCreaturesAndSpacecraft``. Pid-FREE covered
         # unit variant — Rust's ``parse_effect``
