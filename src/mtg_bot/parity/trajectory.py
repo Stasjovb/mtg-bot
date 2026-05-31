@@ -5686,6 +5686,9 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         PumpTargetArtifactOrCreatureUntilEOT,
         ThreatenTargetCreatureUEOT,
     )
+    from mtg_bot.effects.generic.control import (
+        ChangeControllerToCombatDamageSource,
+    )
     from mtg_bot.effects.combinators import (
         ConditionalIfCastFromHand,
         IfNot,
@@ -6293,6 +6296,21 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # unit-leaf idiom.
         if isinstance(eff, ThreatenTargetCreatureUEOT):
             return {"kind": "threaten_target_creature_ueot"}
+        # **Contested War Zone substrate (2026-05-31).** The Rust
+        # ``parse_effect`` ``"change_controller_to_combat_damage_source"``
+        # arm takes NO fields and the dict→Python bridge arm
+        # (cross_engine.py ``change_controller_to_combat_damage_source``)
+        # constructs the field-free
+        # ``ChangeControllerToCombatDamageSource()``. The new controller
+        # rides on the transient
+        # ``resolving_combat_damage_source_controller_id`` state slot
+        # (mirrored on both engines); the source (the Land) is the
+        # resolving source. No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is the
+        # clean ``threaten_target_creature_ueot`` /
+        # ``mutinous_massacre_effect`` unit-leaf idiom.
+        if isinstance(eff, ChangeControllerToCombatDamageSource):
+            return {"kind": "change_controller_to_combat_damage_source"}
         # **Vengeful Possession Cycle 1 — looter-rider composite leaves
         # (2026-05-22).** Vengeful Possession's spell_effect is
         # ``Sequence(ThreatenTargetCreatureUEOT,

@@ -460,6 +460,10 @@ pub fn make_state(
         // Spacecraft Phase 3C Cycle 3 — DISCARDS_CARD discarding-player
         // slot; sentinel "no active discarding player" at game start.
         resolving_discards_card_player_id: u8::MAX,
+        // Contested War Zone substrate (2026-05-31) — DEALS_COMBAT_DAMAGE
+        // source-controller slot; sentinel "no active source controller"
+        // at game start.
+        resolving_combat_damage_source_controller_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))` after
