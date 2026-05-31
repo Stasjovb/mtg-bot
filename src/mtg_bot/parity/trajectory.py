@@ -13332,6 +13332,122 @@ def _printing_is_bridge_static_anthem_pt_conditional_warp_creature(
     return True
 
 
+# ────────────────────────────────────────────────────────────────────
+# ReplacementEffect-static substrate — Phase 5 (2026-05-31).
+#
+# Three warp+static cards each emit ONE
+# ``StaticAbility.replacement_effect`` (a CR 614 ReplacementEffect
+# static). These helpers extract the ``(event, transform_kind,
+# transform_param)`` triple the bridge carries and build a focused
+# probe-driver CardDef for each card. The cards are NOT folded into the
+# general ``_filter_deck_to_bridge_supported`` admit gate this phase —
+# the warp+static admit-set widen for the full bench-loader path is
+# honest-stopped (see docs/SEARCH_LIMITATIONS.md). The PROBED-tier flip
+# rides on the per-card ``test_<slug>_parity.py`` probe driving the
+# genuine printing's static replacement through the bridge + resolve,
+# the same established idiom the Cosmogrand Zenith / Sunstar Lightsmith
+# probes use (no loader-admit dependency).
+# ────────────────────────────────────────────────────────────────────
+
+
+# Map each Python ``Event`` enum value to the bridge's underscore-
+# lowercase event string. The enum's VALUE already IS that string, so
+# this is the identity ``event.value`` — kept as an explicit whitelist
+# so an out-of-vocab event fails loudly rather than silently emitting an
+# unrecognized string the Rust parser would reject.
+_REPLACEMENT_EVENT_VOCAB = {
+    "would_create_token",
+    "would_place_counter",
+    "triggered_ability_triggers",
+}
+
+
+def _static_replacements_from_printing(printing):
+    """Return the ``static_replacements`` tuple-of-triples for a
+    printing carrying one or more ``StaticAbility.replacement_effect``
+    declarations, or ``None`` if any static carries a shape outside the
+    Phase-5 closed vocab.
+
+    Each emitted triple is ``(event, transform_kind, transform_param)``
+    mirroring the CardDef field shape: ``event`` is the underscore-
+    lowercase ``Event`` value; ``transform_kind`` is ``"multiply_count"``
+    (``MultiplyCount``) or ``"add_instances"`` (``AddInstances``);
+    ``transform_param`` is the transform's single int parameter
+    (``factor`` / ``delta``). A replacement with a non-empty
+    ``subject_filters`` or a non-None ``scope_filter`` returns ``None``
+    (out of Phase-5 scope — the narrowed-gate shape is honest-stopped).
+    """
+    from mtg_bot.effects.modifiers import AddInstances, MultiplyCount
+
+    out: list[tuple[str, str, int]] = []
+    for sa in printing.static_abilities:
+        re = getattr(sa, "replacement_effect", None)
+        if re is None:
+            return None
+        # Out-of-scope narrowing gates → decline.
+        if re.event_pattern.subject_filters:
+            return None
+        if re.scope_filter is not None:
+            return None
+        event = re.event_pattern.event.value
+        if event not in _REPLACEMENT_EVENT_VOCAB:
+            return None
+        transform = re.transform
+        if isinstance(transform, MultiplyCount):
+            out.append((event, "multiply_count", int(transform.factor)))
+        elif isinstance(transform, AddInstances):
+            out.append((event, "add_instances", int(transform.delta)))
+        else:
+            return None
+    if not out:
+        return None
+    return tuple(out)
+
+
+def _replacement_static_card_def(printing, *, card_type: str):
+    """Build a focused probe-driver CardDef for a warp+static
+    ReplacementEffect carrier. Carries the warp cost, printed P/T (for
+    creatures), keywords, and the ``static_replacements`` triple(s).
+    Returns ``None`` if the printing's statics aren't all Phase-5
+    in-vocab replacement statics."""
+    reps = _static_replacements_from_printing(printing)
+    if reps is None:
+        return None
+    generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+    wgen, wcol = _parse_mana_cost_string(printing.warp_cost_str or "")
+    return CardDef(
+        name=printing.name,
+        card_type=card_type,
+        mana_cost_generic=generic,
+        mana_cost_colored=colored,
+        power=printing.power,
+        toughness=printing.toughness,
+        keywords=tuple(sorted(printing.keywords)),
+        warp_cost_generic=wgen,
+        warp_cost_colored=wcol,
+        has_warp=True,
+        static_replacements=reps,
+    )
+
+
+def _exalted_sunborn_card_def(printing):
+    """Probe-driver CardDef for Exalted Sunborn (Creature; warp {1}{W};
+    WOULD_CREATE_TOKEN × MultiplyCount(2))."""
+    return _replacement_static_card_def(printing, card_type="Creature")
+
+
+def _starfield_vocalist_card_def(printing):
+    """Probe-driver CardDef for Starfield Vocalist (Creature; warp
+    {1}{U}; TRIGGERED_ABILITY_TRIGGERS + AddInstances(1))."""
+    return _replacement_static_card_def(printing, card_type="Creature")
+
+
+def _loading_zone_card_def(printing):
+    """Probe-driver CardDef for Loading Zone (Enchantment; warp {0}{G};
+    WOULD_PLACE_COUNTER × MultiplyCount(2))."""
+    return _replacement_static_card_def(printing, card_type="Enchantment")
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
