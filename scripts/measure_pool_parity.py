@@ -4137,6 +4137,27 @@ PROBE_MODULES: tuple[Path, ...] = (
     # 1/1 on the seated cross-bf target) + bridge/recognizer arms. Flips
     # the former honest-stop module to a positive probe.
     REPO_ROOT / "tests" / "test_atomic_microsizer_parity.py",
+    # Contested War Zone FLIP (2026-05-31). The DEALS_COMBAT_DAMAGE
+    # "whenever a creature deals combat damage to you, that creature's
+    # controller gains control of this land" live trigger. Closes the
+    # two engine-deep walls the substrate-only landing documented:
+    #   (1) the ``ControlledByYou { slot }`` predicate arm is now
+    #       slot-aware (``slot=="target"`` reads the defending-player id
+    #       off ``resolving_combat_damage_target_player_id`` — the
+    #       multi-subject DEALS_COMBAT_DAMAGE path); and
+    #   (2) ``TriggerPayload`` now carries the
+    #       ``combat_damage_source_controller_id`` (+ ``_amount`` sibling),
+    #       seated at push time and re-mirrored at trigger-resolve time by
+    #       both resolve entry points (the deferred-StackItem mirror —
+    #       which ALSO unblocks the production write of the sibling
+    #       ``resolving_combat_damage_amount`` slot).
+    # The ``test_cross_engine_real_eoe_contested_war_zone_parity`` probe
+    # drives the ACTUAL parsed printing on BOTH engines through a creature
+    # dealing combat damage to the Land's controller → the Land's
+    # ``controller`` flips to the attacker's controller, byte-equal.
+    # Net delta: +1 PROBED / -1 covered_by_construction. PROBED 454 ->
+    # 455; covered_by_construction 1 -> 0; BLOCKED-SG unchanged at 20.
+    REPO_ROOT / "tests" / "test_contested_war_zone_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

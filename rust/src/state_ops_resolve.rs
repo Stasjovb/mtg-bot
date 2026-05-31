@@ -1630,6 +1630,29 @@ pub(crate) fn push_triggered_ability(
             .stack
             .push(StackItem::new_trigger(source_id, controller, effect, ability_index)),
     }
+    // **Contested War Zone flip (2026-05-31) — deferred combat-damage
+    // carry.** Snapshot the live combat-damage transient slots onto the
+    // just-pushed trigger's payload so they survive to resolve time
+    // (the slots are reset to their sentinels after the synchronous
+    // observer walk in `dispatch_combat_damage_to_player` returns).
+    // Mirrors Python's `push_triggered_ability(...,
+    // combat_damage_amount=..., combat_damage_source_controller_id=...)`
+    // thread-through onto the StackItem (`actions.py:3445-3447`). Only
+    // seated when the source-controller slot is live (`!= u8::MAX`) —
+    // i.e. inside a `dispatch_combat_damage_to_player` dispatch; every
+    // non-combat-damage trigger push sees the sentinel and leaves the
+    // payload fields `None` (byte-equal to the pre-flip path). The push
+    // above never fails, so the just-pushed item is the stack top.
+    if state.resolving_combat_damage_source_controller_id != u8::MAX {
+        if let Some(top) = state.stack.last_mut() {
+            if let Some(payload) = top.trigger_payload.as_mut() {
+                payload.combat_damage_source_controller_id =
+                    Some(state.resolving_combat_damage_source_controller_id);
+                payload.combat_damage_amount =
+                    Some(state.resolving_combat_damage_amount);
+            }
+        }
+    }
     if once_per_turn {
         state
             .triggered_this_turn
@@ -27119,6 +27142,33 @@ impl GameState {
             // resolution boundaries.
             let saved_target_2 = self.current_resolve_payload_target_id_2;
             self.current_resolve_payload_target_id_2 = payload.target_id_2;
+            // **Contested War Zone flip (2026-05-31).** Re-mirror the
+            // payload's carried combat-damage source-controller +
+            // amount back into the transient state slots for the
+            // duration of the trigger's `apply_effect`. A combat-damage
+            // trigger resolves LATER from the stack, after
+            // `dispatch_combat_damage_to_player` restored the slots to
+            // their sentinels — so `Effect::ChangeControllerToCombatDamageSource`
+            // (which reads `resolving_combat_damage_source_controller_id`)
+            // and the amount-reading effects (which read
+            // `resolving_combat_damage_amount`) would see the sentinel
+            // without this re-mirror. Mirrors Python's
+            // `state.resolving_combat_damage_source_controller_id =
+            // item.combat_damage_source_controller_id` /
+            // `state.resolving_combat_damage_amount =
+            // item.combat_damage_amount` swap at `actions.py:2680-2686`.
+            // Save → set → restore-bracketed exactly like the target
+            // slots. `None` payload (every non-combat-damage trigger)
+            // leaves the slots at their sentinels (u8::MAX / 0),
+            // byte-equal to the pre-flip path.
+            let saved_cd_src = self.resolving_combat_damage_source_controller_id;
+            let saved_cd_amt = self.resolving_combat_damage_amount;
+            if let Some(cid) = payload.combat_damage_source_controller_id {
+                self.resolving_combat_damage_source_controller_id = cid;
+            }
+            if let Some(amt) = payload.combat_damage_amount {
+                self.resolving_combat_damage_amount = amt;
+            }
             // DrawCards controller-of-effect fix: also swap in the
             // trigger's controller so `Effect::DrawCards` (and any
             // future arm that opts into the source-controller
@@ -27129,6 +27179,8 @@ impl GameState {
             self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
             self.current_resolve_source_controller = saved_ctrl;
+            self.resolving_combat_damage_amount = saved_cd_amt;
+            self.resolving_combat_damage_source_controller_id = saved_cd_src;
             self.current_resolve_payload_target_id_2 = saved_target_2;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
@@ -27481,12 +27533,29 @@ impl GameState {
             // single-/non-target trigger.
             let saved_target_2 = self.current_resolve_payload_target_id_2;
             self.current_resolve_payload_target_id_2 = payload.target_id_2;
+            // **Contested War Zone flip (2026-05-31, `_pause` sibling).**
+            // Same combat-damage source-controller + amount re-mirror as
+            // `resolve_top_of_stack` above — mirrored across BOTH resolve
+            // entry points per the §3.4 sibling-parity requirement. See
+            // the longer comment there for the rationale. `None` payload
+            // (every non-combat-damage trigger) leaves the slots at their
+            // sentinels, byte-equal to the pre-flip path.
+            let saved_cd_src = self.resolving_combat_damage_source_controller_id;
+            let saved_cd_amt = self.resolving_combat_damage_amount;
+            if let Some(cid) = payload.combat_damage_source_controller_id {
+                self.resolving_combat_damage_source_controller_id = cid;
+            }
+            if let Some(amt) = payload.combat_damage_amount {
+                self.resolving_combat_damage_amount = amt;
+            }
             // DrawCards controller-of-effect fix: same controller
             // swap as `resolve_top_of_stack` above.
             let saved_ctrl = self.current_resolve_source_controller;
             self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
             self.current_resolve_source_controller = saved_ctrl;
+            self.resolving_combat_damage_amount = saved_cd_amt;
+            self.resolving_combat_damage_source_controller_id = saved_cd_src;
             self.current_resolve_payload_target_id_2 = saved_target_2;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
