@@ -3944,6 +3944,15 @@ PROBE_MODULES: tuple[Path, ...] = (
     # covered_by_construction (Nesting Grounds slug flips). PROBED
     # 449 -> 450; covered_by_construction 1 -> 0; BLOCKED-SG unchanged.
     REPO_ROOT / "tests" / "test_nesting_grounds_parity.py",
+    # Sliver Overlord (2026-05-31): the FIRST Carrier-AA CREATURE carrier
+    # FLIP (BLOCKED -> PROBED). New Rust
+    # ``Effect::GainControlOfTargetSliverPermanently`` (permanent
+    # control-change-of-target, reusing the Contested-War-Zone direct-
+    # controller-write substrate) + no-tap mana cost-gate widen +
+    # ``_printing_is_bridge_simple_carrier_aa_creature`` admit predicate +
+    # builder. Sibling AA[0] ``SearchLibraryForCard(filter="sliver")`` was
+    # already Rust-covered. PROBED 455 -> 456; BLOCKED-SG 20 -> 19.
+    REPO_ROOT / "tests" / "test_sliver_overlord_parity.py",
     # Batch 6 (2026-05-27): 6 manlands extending the batch-5
     # JJJJ-idiom BecomeLandCreatureUEOT lane to the remaining EoE
     # manlands.  Rebased onto Worker B's Reflecting Pool Cycle 2 FLIP

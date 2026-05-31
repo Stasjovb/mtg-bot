@@ -3999,6 +3999,86 @@ impl GameState {
                     }
                 } else if matches!(
                     ability.effect,
+                    crate::cards::Effect::GainControlOfTargetSliverPermanently,
+                ) {
+                    // **Sliver Overlord substrate (2026-05-31).**
+                    // Sliver-creature target fan-out arm (Sliver
+                    // Overlord's AA[1] — "{3}: Gain control of target
+                    // Sliver."). Enumerates every battlefield
+                    // ``GameObject`` on EITHER player's bf whose printing
+                    // is a Creature carrying the "Sliver" subtype — ANY
+                    // controller (the printed text reads "target Sliver",
+                    // no own-control qualifier; CR 109.3). Mirrors
+                    // Python's
+                    // ``GainControlOfTargetSliverPermanently.legal_targets``
+                    // walk at ``effects/generic/control.py:128-136``:
+                    // ``[("creature", o.id) for o in state.battlefield if
+                    // o.printing.is_creature and "Sliver" in
+                    // eff_subtypes(o)]`` — ``state.battlefield`` is the
+                    // union of BOTH players' bfs.
+                    //
+                    // **Both bfs walked.** Same shape as the Phase-3C
+                    // ``BecomesCopyOfTargetLand`` arm (any-controller
+                    // both-bf walk) but filtered to printed-Creature +
+                    // Sliver-subtype (mirrors the search AA's ``sliver``
+                    // filter at ``state_ops_resolve.rs:15231``).
+                    //
+                    // **Source self-eligibility.** Sliver Overlord is
+                    // itself a Sliver creature; Python's ``legal_targets``
+                    // does NOT exclude the source, so a self-target is
+                    // enumerated. The resolve arm's same-controller
+                    // short-circuit makes a self-target a no-op (the
+                    // activator already controls Sliver Overlord), so
+                    // self-eligibility is Python-parity-harmless.
+                    //
+                    // **No legal targets → no emission.** A Sliver
+                    // Overlord on a bf with no Sliver creatures anywhere
+                    // (other than itself — which is always present, so the
+                    // emit-zero case requires the activator to also not
+                    // control the Overlord, impossible) emits the
+                    // self-target at minimum (CR 601.2c). Same shape as
+                    // the Thespian's Stage self-eligible no-target arm.
+                    //
+                    // **Target dict slot.** Reuses ``target_creature_id``
+                    // as the generic single-target object-id slot — same
+                    // shape as the Phase-2a / Phase-3A / Phase-3C sibling
+                    // arms. The apply-time validator at
+                    // ``state_ops_actions.rs`` re-validates the chosen
+                    // target's Sliver subtype + bf presence; the resolve
+                    // arm at ``state_ops_resolve.rs`` reads
+                    // ``state.current_resolve_payload_target_id``.
+                    for player in self.players.iter() {
+                        for target in player.battlefield.iter() {
+                            let Some(t_printing) =
+                                self.registry.lookup(target.printing_id)
+                            else {
+                                continue;
+                            };
+                            if !t_printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                continue;
+                            }
+                            if !t_printing
+                                .subtypes
+                                .iter()
+                                .any(|s| s == "Sliver")
+                            {
+                                continue;
+                            }
+                            actions.push(activate_ability_dict(
+                                py,
+                                obj.id,
+                                ability_index as u32,
+                                Some(target.id),
+                                None,
+                            )?);
+                        }
+                    }
+                } else if matches!(
+                    ability.effect,
                     crate::cards::Effect::CreateTokenCopyOfTargetCreatureYouControl,
                 ) {
                     // **Carrier-AA substrate Phase 4B Cycle 1 (2026-05-

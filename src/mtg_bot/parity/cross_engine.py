@@ -11477,6 +11477,40 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ChangeControllerToCombatDamageSource,
         )
         return ChangeControllerToCombatDamageSource()
+    if kind == "gain_control_of_target_sliver_permanently":
+        # **Sliver Overlord substrate (2026-05-31).** Rust substrate
+        # ``Effect::GainControlOfTargetSliverPermanently`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"gain_control_of_target_sliver_permanently"``; resolve in
+        # state_ops_resolve.rs beside the
+        # ``ChangeControllerToCombatDamageSource`` arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "gain_control_of_target_sliver_permanently"}``.
+        # Python's ``GainControlOfTargetSliverPermanently``
+        # (effects/generic/control.py:115) is a frozen dataclass with no
+        # constructor parameters. The chosen Sliver-creature target
+        # rides on the AA action-dict's ``target_creature_id`` slot
+        # (mirrored on both engines via
+        # ``current_resolve_payload_target_id``); the activator (gaining
+        # player) is the AA's controller.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines read the
+        # chosen target id, re-validate it is a Sliver creature on a
+        # battlefield, and — if its current controller differs from the
+        # activator — write the target's controller DIRECTLY (a PERMANENT
+        # control change — NOT the UEOT ``controller_override`` path).
+        # Same direct-write substrate proven byte-equal by
+        # ``ChangeControllerToCombatDamageSource`` above.
+        #
+        # **Real test-pool consumer**: Sliver Overlord — Legendary
+        # Creature, "{3}: Search your library for a Sliver card... {3}:
+        # Gain control of target Sliver. (This effect lasts
+        # indefinitely.)".
+        from mtg_bot.effects.generic.control import (
+            GainControlOfTargetSliverPermanently,
+        )
+        return GainControlOfTargetSliverPermanently()
     if kind == "remove_charge_counters_from_source_delayed":
         # **Control-change-UEOT subsystem — Cycle 5 delayed-trigger
         # complement (2026-05-22).** Rust substrate
@@ -15920,6 +15954,17 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.combinators import Sequence
     from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
     from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
+    # **Sliver Overlord substrate (2026-05-31).** Forward-emit arm for
+    # ``GainControlOfTargetSliverPermanently`` — Sliver Overlord's
+    # AA[1] ("{3}: Gain control of target Sliver."). Unit variant —
+    # only the ``kind`` discriminator on the wire; the chosen Sliver-
+    # creature target rides on the action-dict's ``target_creature_id``
+    # slot at activation time (the generic single-target object-id
+    # slot). The Rust mirror's parse + resolve + to_pydict arms all
+    # treat the variant symmetrically as a unit.
+    from mtg_bot.effects.generic.control import (
+        GainControlOfTargetSliverPermanently,
+    )
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -16531,6 +16576,23 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
         # pins + the per-card real-EoE resolve-arm-direct probe.
         effect_dict = {
             "kind": "move_plus_one_counter_between_permanents_you_control",
+        }
+    elif isinstance(effect, GainControlOfTargetSliverPermanently):
+        # **Sliver Overlord substrate (2026-05-31).** Forward-emit arm.
+        # Unit variant — only the ``kind`` discriminator on the wire
+        # (the chosen Sliver-creature target comes from the
+        # ``target_creature_id`` action-dict slot at resolve time, not
+        # the AA dict). The Rust mirror's parse + resolve + to_pydict
+        # arms all treat the variant symmetrically as a unit.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``GainControlOfTargetSliverPermanently`` — consistent with the
+        # Phase-3A/3B/3C/4B/4C/4D/4E/Meteor-Crater/Reflecting-Pool/
+        # Ancient-Tomb/Grove/Nesting-Grounds specificity contract. The
+        # class has no subclasses in the live tree (today's only
+        # printing that emits it is Sliver Overlord itself).
+        effect_dict = {
+            "kind": "gain_control_of_target_sliver_permanently",
         }
     elif isinstance(effect, AddNManaOfChosenColor):
         # **Grove of the Burnwillows substrate (2026-05-31).** Forward-

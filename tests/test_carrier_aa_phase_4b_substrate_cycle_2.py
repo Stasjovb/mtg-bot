@@ -283,6 +283,9 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
+    from mtg_bot.effects.generic.control import (
+        GainControlOfTargetSliverPermanently,
+    )
     from mtg_bot.effects.generic.counters import (
         MovePlusOneCounterBetweenPermanentsYouControl,
     )
@@ -367,11 +370,15 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         # Nesting Grounds flip (2026-05-31) -- the dual-target AA
         # 2nd-target-slot closure:
         MovePlusOneCounterBetweenPermanentsYouControl,
+        # Sliver Overlord flip (2026-05-31) -- the first Creature carrier
+        # + no-tap-mana cost lane; permanent control-change-of-target:
+        GainControlOfTargetSliverPermanently,
     })
     assert admit_set == expected_post_c4, (
         "Grove admit set sentinel: post-C4 + post-Meteor-Crater-"
         f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 + Grove "
-        f"+ Nesting-Grounds admit set must be the 22-class set; got "
+        f"+ Nesting-Grounds + Sliver-Overlord admit set must be the "
+        f"23-class set; got "
         f"{len(admit_set)} classes, delta = added "
         f"{admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
@@ -527,14 +534,20 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
         # into the full-pool admit set via the
         # MovePlusOneCounterBetweenPermanentsYouControl Effect-class
         # widen + the dual-target AA 2nd-target-slot closure.
-        + ("Nesting Grounds",),
+        + ("Nesting Grounds",)
+        # **Sliver Overlord flip (2026-05-31).** Sliver Overlord FLIPS
+        # into the full-pool admit set via the FIRST Creature-carrier
+        # admit predicate + builder + the no-tap-mana cost-gate widen +
+        # the GainControlOfTargetSliverPermanently Effect-class widen
+        # (new Rust Effect::GainControlOfTargetSliverPermanently).
+        + ("Sliver Overlord",),
     )
     assert admitted == expected, (
         f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 + "
-        f"Ancient Tomb C2 + Grove + Nesting Grounds invariant: full-"
-        f"pool admit set must be exactly the C2 baseline + Mirrorpool "
-        f"+ Meteor Crater + Reflecting Pool + Ancient Tomb + Grove + "
-        f"Nesting Grounds; got admit delta = "
+        f"Ancient Tomb C2 + Grove + Nesting Grounds + Sliver Overlord "
+        f"invariant: full-pool admit set must be exactly the C2 baseline "
+        f"+ Mirrorpool + Meteor Crater + Reflecting Pool + Ancient Tomb + "
+        f"Grove + Nesting Grounds + Sliver Overlord; got admit delta = "
         f"added {admitted - expected} / missing {expected - admitted}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** Mirrorpool MUST appear

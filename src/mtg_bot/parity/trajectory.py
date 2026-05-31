@@ -5688,6 +5688,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     )
     from mtg_bot.effects.generic.control import (
         ChangeControllerToCombatDamageSource,
+        GainControlOfTargetSliverPermanently,
     )
     from mtg_bot.effects.combinators import (
         ConditionalIfCastFromHand,
@@ -6311,6 +6312,21 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # ``mutinous_massacre_effect`` unit-leaf idiom.
         if isinstance(eff, ChangeControllerToCombatDamageSource):
             return {"kind": "change_controller_to_combat_damage_source"}
+        # **Sliver Overlord substrate (2026-05-31).** The Rust
+        # ``parse_effect`` ``"gain_control_of_target_sliver_permanently"``
+        # arm takes NO fields and the dict→Python bridge arm
+        # (cross_engine.py ``gain_control_of_target_sliver_permanently``)
+        # constructs the field-free
+        # ``GainControlOfTargetSliverPermanently()``. The chosen Sliver-
+        # creature target rides on the AA action-dict's
+        # ``target_creature_id`` slot
+        # (``current_resolve_payload_target_id``); the activator is the
+        # AA's controller. No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is the
+        # clean ``change_controller_to_combat_damage_source`` /
+        # ``threaten_target_creature_ueot`` unit-leaf idiom.
+        if isinstance(eff, GainControlOfTargetSliverPermanently):
+            return {"kind": "gain_control_of_target_sliver_permanently"}
         # **Vengeful Possession Cycle 1 — looter-rider composite leaves
         # (2026-05-22).** Vengeful Possession's spell_effect is
         # ``Sequence(ThreatenTargetCreatureUEOT,
@@ -9545,6 +9561,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
+    from mtg_bot.effects.generic.control import (
+        GainControlOfTargetSliverPermanently,
+    )
     from mtg_bot.effects.generic.counters import (
         MovePlusOneCounterBetweenPermanentsYouControl,
     )
@@ -9597,6 +9616,27 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
         LockOrUnlockDoorOfTargetRoomYouControl,
         SearchLibraryForCard,
+        # **Sliver Overlord substrate (2026-05-31).** Adds Sliver
+        # Overlord's AA[1] pilot Effect class
+        # ``GainControlOfTargetSliverPermanently`` (the permanent
+        # control-change-of-target AA). The Rust substrate (new
+        # ``Effect::GainControlOfTargetSliverPermanently`` unit variant +
+        # parse + to_pydict + valid-kinds + Sliver-creature target
+        # fan-out in ``state_ops_legal.rs`` + apply-time validation in
+        # ``state_ops_actions.rs`` + direct-controller-write resolve arm
+        # in ``state_ops_resolve.rs`` + cross-engine forward/reverse
+        # bridge arms + trajectory reverse-serializer leaf) all land in
+        # this same slice. Reuses the direct-permanent-controller-write
+        # mechanic proven byte-equal by Contested War Zone's
+        # ``ChangeControllerToCombatDamageSource`` (merge ``66fd21fd``) —
+        # the only new dimension is the TARGET (a Sliver creature on
+        # either bf) vs. that effect's source-self write. Sliver
+        # Overlord's sibling AA[0] ``SearchLibraryForCard`` (filter
+        # ``"sliver"``) is already in this set (round-21 substrate +
+        # Phase-4D-C2 bridge); combined with the no-tap mana cost-gate
+        # widen + the new Creature-carrier admit predicate, Sliver
+        # Overlord FLIPS DECLINED → ADMITTED.
+        GainControlOfTargetSliverPermanently,
         # **Phase 4B Cycle 2 widen (2026-05-26 — Option A partial widen
         # per ``docs/CARRIER_AA_SUBSTRATE_PHASE_4_DESIGN.md`` §5.4 +
         # §7.2.) Adds Mirrorpool's AA[1] pilot Effect class.** The Rust
@@ -9997,9 +10037,34 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     # Sac-a-Desert:) — generic-only mana, optional sacrifice_self
     # OR sacrifice_a_desert (the both-at-once combo declines via the
     # defense-in-depth guard below; no live EoE carrier sets both).
+    #
+    # **Sliver Overlord substrate (2026-05-31).** Cost-gate widen to
+    # additionally admit a PURE generic-mana cost with NO tap (``{N}``
+    # alone, ``tap_self=False``). Sliver Overlord's two AAs are both
+    # ``{3}`` (no tap) — a Creature carrier paying mana only, the first
+    # non-tap-cost Carrier-AA shape. The Rust legal-emit gate handles
+    # ``tap_self=False`` gracefully (the tap-gate at
+    # ``state_ops_legal.rs:3467`` is conditional on
+    # ``ability.cost.tap_self``); the cross-engine AA cost serializer at
+    # ``cross_engine.py:15637`` simply omits the ``tap_self`` key when
+    # False, so the no-tap shape round-trips byte-equal with ZERO new
+    # Rust cost-shape machinery. The all-or-nothing per-AA contract +
+    # the Effect-class teeth keep every OTHER no-tap-mana-only carrier
+    # in the pool (Equipment equip / pump / draw AAs whose Effect
+    # classes are NOT in the admit set) DECLINED — only Sliver
+    # Overlord, whose BOTH AAs carry admitted Effect classes
+    # (``SearchLibraryForCard`` + ``GainControlOfTargetSliverPermanently``),
+    # clears the combined gate. A bare ``{N}`` cost MUST carry at least
+    # one generic pip (the ``generic <= 0`` defense-in-depth below
+    # rejects a degenerate all-zero no-tap cost — a free AA is not a
+    # Carrier-AA admit shape).
     cost = aa.cost
     if not cost.tap_self:
-        return False
+        # No-tap admit: REQUIRE a non-empty generic-mana cost. A no-tap
+        # cost with no mana at all (``cost.mana is None``) is a free /
+        # zero-cost AA — outside the Carrier-AA admit shape; decline.
+        if cost.mana is None:
+            return False
     if cost.mana is not None:
         # Phase 1.5a admits generic-only mana costs ({N}, {T} shape).
         # Colored / hybrid / X-pip mana costs are Phase N honest-stops.
@@ -10364,6 +10429,159 @@ def _printing_is_bridge_simple_carrier_aa_artifact(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_simple_carrier_aa_creature(printing) -> bool:
+    """Sibling of :func:`_printing_is_bridge_simple_carrier_aa_land` /
+    :func:`_printing_is_bridge_simple_carrier_aa_artifact` for Carrier-AA
+    Creature carriers.
+
+    **Sliver Overlord substrate (2026-05-31).** Opens the admit gate to
+    single-card-type Creature carriers with the same per-AA + bridge-
+    floor gates as the Land / Artifact siblings, plus the §5.2 multi-AA
+    all-or-nothing walk. Pilot: Sliver Overlord (Legendary Creature —
+    Sliver Mutant, 7/7, two ``{3}`` no-tap AAs:
+    ``SearchLibraryForCard(filter="sliver")`` +
+    ``GainControlOfTargetSliverPermanently``).
+
+    **Differences from the Land / Artifact siblings:**
+
+    * A Creature carrier DOES carry non-default P/T (the printed power /
+      toughness). The builder threads them into the CardDef's
+      ``power`` / ``toughness`` fields — UNLIKE the Land / Artifact
+      siblings whose P/T-non-None guard rejects. The admit predicate
+      here REQUIRES both P/T to be present (a Creature with no P/T is
+      malformed) and rejects a dynamic-P/T formula (the
+      ``dynamic_pt_formula`` guard below stays — only fixed printed P/T
+      admits; ``*/*`` Tarmogoyf-style carriers defer to Phase N).
+    * The ``Legendary`` supertype is admitted (Sliver Overlord is
+      Legendary). The supertype is data-carrying on the CardDef and
+      round-trips byte-equal (the Rust ``register_printing``
+      ``supertypes`` Vec + the Python ``CardPrinting.supertypes`` both
+      carry it). Other supertypes (``Snow`` / ``World`` / ...) likewise
+      ride through as data; none of them perturb the bench play
+      strategy.
+
+    **§2 teeth (must reject):**
+
+      * Non-Creature — wrong card type.
+      * Multi-card-type — no Artifact—Creature / Land—Creature /
+        Enchantment—Creature overlap (those carry their own rider
+        clusters deferred to Phase N).
+      * Non-empty ``subtypes`` are ADMITTED here (a Creature always
+        carries creature-type subtypes — e.g. Sliver Overlord's
+        ``Sliver Mutant``). The subtypes ride through as data on the
+        CardDef (Rust ``register_printing`` ``subtypes`` Vec + Python
+        ``CardPrinting.subtypes``); they are byte-equal-relevant only
+        for the Sliver-target fan-out, which both engines compute from
+        the same printed ``subtypes``. UNLIKE the Artifact sibling
+        (which strict-rejects subtypes because Equipment / Vehicle /
+        Spacecraft subtypes carry rider clusters) — creature-type
+        subtypes are plain data with no rider machinery.
+      * Missing P/T (a Creature must have both) or a dynamic-P/T
+        formula (``*/*`` shapes defer to Phase N).
+      * Every Phase-2+ rider field on the printing (keywords /
+        triggered / static / spell_effect / warp / kicker / impending /
+        room_halves / loyalty / cost_reductions / station_threshold /
+        ward_cost) — the same exclusion-set as the Land / Artifact
+        siblings. Sliver Overlord carries NONE of these.
+      * Zero AAs — not a carrier.
+      * Any AA failing :func:`_aa_is_phase1_sub_shape_a` — the §5.2
+        multi-AA all-or-nothing contract.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    extra_card_types = tuple(
+        t for t in printing.card_types if t != "Creature"
+    )
+    if extra_card_types:
+        return False
+    # A Creature carrier MUST carry both printed power and toughness.
+    if printing.power is None or printing.toughness is None:
+        return False
+    # Fixed printed P/T only — ``*/*`` dynamic-P/T shapes defer to
+    # Phase N (the formula is a non-byte-equal rider the bridge floor
+    # doesn't carry).
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    # Same per-printing rider guards as the Land / Artifact siblings.
+    # (Subtypes are NOT guarded — creature-type subtypes are plain data
+    # carried byte-equal on both engines; see the docstring §2 teeth.)
+    if printing.keywords:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # **Multi-AA all-or-nothing per-AA walk** (Phase 4A substrate).
+    aas = tuple(printing.activated_abilities or ())
+    if len(aas) == 0:
+        return False
+    for aa in aas:
+        if not _aa_is_phase1_sub_shape_a(aa):
+            return False
+    return True
+
+
+def _carrier_aa_creature_card_def(printing) -> "Optional[CardDef]":
+    """Build a CardDef from a Carrier-AA-admitted non-token Creature.
+
+    Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_simple_carrier_aa_creature`. Serializes
+    every AA into the bridge dict shape via
+    :func:`cross_engine._python_aa_to_safe_dict`, threading the printed
+    P/T + supertypes + subtypes into the synthesized CardDef. Returns
+    ``None`` if any AA fails the safe-dict round-trip (defense-in-depth
+    honest decline).
+
+    The synthesized CardDef carries:
+
+    * ``card_type="Creature"`` (single-typed — admit predicate rejects
+      any extra card type).
+    * ``power`` / ``toughness`` — the printed fixed P/T (UNLIKE the
+      Land / Artifact siblings which carry no P/T).
+    * ``supertypes`` / ``subtypes`` — carried byte-equal (Legendary +
+      the creature-type subtypes).
+    * ``activated_abilities=tuple(aa_dicts)`` carrying every AA in the
+      bridge dict shape.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef as _CardDef,
+        _python_aa_to_safe_dict,
+    )
+
+    if not _printing_is_bridge_simple_carrier_aa_creature(printing):
+        return None
+    aa_dicts: list = []
+    for aa in printing.activated_abilities:
+        aa_dict = _python_aa_to_safe_dict(aa)
+        if aa_dict is None:
+            return None
+        aa_dicts.append(aa_dict)
+    return _CardDef(
+        name=printing.name,
+        card_type="Creature",
+        supertypes=tuple(printing.supertypes or ()),
+        subtypes=tuple(printing.subtypes or ()),
+        keywords=(),  # admit predicate rejects keywords.
+        power=int(printing.power),
+        toughness=int(printing.toughness),
+        activated_abilities=tuple(aa_dicts),
+    )
+
+
 def _printing_is_bridge_simple_carrier_aa_any(printing) -> bool:
     """Top-level Carrier-AA admit dispatcher across the Land + Artifact
     sibling predicates.
@@ -10384,10 +10602,18 @@ def _printing_is_bridge_simple_carrier_aa_any(printing) -> bool:
     ``card_types`` and still pass either sibling — both reject
     multi-card-type carriers via their ``extra_card_types`` guards),
     so the OR short-circuit semantics are well-defined.
+
+    **Sliver Overlord substrate (2026-05-31).** Adds the Creature-typed
+    sibling :func:`_printing_is_bridge_simple_carrier_aa_creature` to the
+    OR-chain (Sliver Overlord pilot). The three sibling predicates are
+    mutually exclusive (single-card-type carriers; each rejects
+    multi-card-type via its ``extra_card_types`` guard), so the OR
+    short-circuit stays well-defined.
     """
     return (
         _printing_is_bridge_simple_carrier_aa_land(printing)
         or _printing_is_bridge_simple_carrier_aa_artifact(printing)
+        or _printing_is_bridge_simple_carrier_aa_creature(printing)
     )
 
 
@@ -13255,6 +13481,19 @@ def _printing_to_card_def(printing) -> CardDef:
         # mutually exclusive by their ``extra_card_types`` guards, so
         # the OR short-circuit is well-defined).
         card_def = _carrier_aa_artifact_card_def(printing)
+        if card_def is not None:
+            return card_def
+    if _printing_is_bridge_simple_carrier_aa_creature(printing):
+        # **Sliver Overlord substrate (2026-05-31).** Creature-typed
+        # sibling of the Land / Artifact builders above. Pilot: Sliver
+        # Overlord (Legendary Creature, 7/7, two ``{3}`` no-tap AAs).
+        # The builder threads the printed P/T + supertypes + subtypes
+        # into the CardDef (UNLIKE the Land / Artifact siblings).
+        # Routed AFTER the Land + Artifact siblings; all three
+        # predicates are mutually exclusive by their ``extra_card_types``
+        # guards, so the OR short-circuit is well-defined. Returning
+        # ``None`` from the builder is a defense-in-depth honest decline.
+        card_def = _carrier_aa_creature_card_def(printing)
         if card_def is not None:
             return card_def
     if _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(printing):
