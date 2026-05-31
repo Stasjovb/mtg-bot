@@ -3123,6 +3123,27 @@ pub struct GameState {
     /// game start. Not serialized into the fingerprint (transient
     /// resolve-time slot).
     pub resolving_discards_card_player_id: u8,
+    /// **Contested War Zone substrate (2026-05-31).** The controller id
+    /// (0 or 1) of the creature that just dealt combat damage during a
+    /// `DEALS_COMBAT_DAMAGE` (Rust `Event::DealsDamage`) dispatch.
+    /// Written by `dispatch_combat_damage_to_player` before
+    /// `dispatch_event` fires the observer triggers, and reset to
+    /// `u8::MAX` (sentinel "no active combat-damage source controller")
+    /// after the dispatch returns.
+    ///
+    /// Read by `Effect::ChangeControllerToCombatDamageSource.resolve`
+    /// (Contested War Zone: "Whenever a creature deals combat damage to
+    /// you, that creature's controller gains control of this land") to
+    /// find the NEW controller of the land. Mirrors Python's
+    /// `state.resolving_combat_damage_source_controller_id`
+    /// (`game.py:2671`), which `_fire_combat_damage_to_player_triggers`
+    /// (`combat.py:758-767`) threads via
+    /// `combat_damage_source_controller_id=attacker_controller_id`.
+    ///
+    /// Initialized to `u8::MAX` (= "no active source controller") at
+    /// game start. Not serialized into the fingerprint (transient
+    /// resolve-time slot).
+    pub resolving_combat_damage_source_controller_id: u8,
     /// **CE12 closure — sticky winner_id shadow.** Mirrors Python's
     /// `GameState.winner_id`: a write-once `Option<u8>` field set by
     /// `apply_sbas` the FIRST time the SBA pass observes "exactly one
@@ -3726,6 +3747,8 @@ impl Clone for GameState {
             resolving_counter_amount: self.resolving_counter_amount,
             resolving_combat_damage_target_player_id: self.resolving_combat_damage_target_player_id,
             resolving_discards_card_player_id: self.resolving_discards_card_player_id,
+            resolving_combat_damage_source_controller_id: self
+                .resolving_combat_damage_source_controller_id,
             winner_id_sticky: self.winner_id_sticky,
             rng,
             triggered_this_turn: self.triggered_this_turn.clone(),
@@ -4074,6 +4097,36 @@ impl GameState {
     #[getter]
     fn resolving_combat_damage_amount(&self) -> i32 {
         self.resolving_combat_damage_amount
+    }
+
+    /// **Contested War Zone substrate (2026-05-31).** Test-only setter
+    /// for the resolving-combat-damage SOURCE-CONTROLLER slot. Mirrors
+    /// Python's `state.resolving_combat_damage_source_controller_id`.
+    /// `dispatch_combat_damage_to_player` seats this slot for the
+    /// DURATION of the synchronous observer dispatch, but a
+    /// combat-damage-triggered ability resolves LATER from the stack —
+    /// Python re-mirrors the value from the StackItem's
+    /// `combat_damage_source_controller_id` field at resolve time
+    /// (`game.py:2322-2329`). The Rust StackItem-carry + resolve-time
+    /// re-mirror path is DEFERRED (the same deferral
+    /// `resolving_combat_damage_amount` carries — its production write
+    /// site is honest-stopped too); for now tests inject the value
+    /// directly to exercise the read side
+    /// (`Effect::ChangeControllerToCombatDamageSource`). The sentinel
+    /// `u8::MAX` means "no active source controller" (= Python's
+    /// `None`). See `docs/SEARCH_LIMITATIONS.md`.
+    fn set_resolving_combat_damage_source_controller_id(&mut self, pid: u8) {
+        self.resolving_combat_damage_source_controller_id = pid;
+    }
+
+    /// Read-only getter for the resolving-combat-damage source-controller
+    /// slot. Mirrors Python's
+    /// `state.resolving_combat_damage_source_controller_id` (with
+    /// `u8::MAX` as the "no active source controller" sentinel for
+    /// Python's `None`).
+    #[getter]
+    fn resolving_combat_damage_source_controller_id(&self) -> u8 {
+        self.resolving_combat_damage_source_controller_id
     }
 
     /// Test-only setter for the resolving-counter-amount slot.
@@ -4767,6 +4820,11 @@ pub fn make_synthetic_state(
         // `Event::DiscardsCard` branch before the trigger push loop;
         // reset to `u8::MAX` after the loop returns.
         resolving_discards_card_player_id: u8::MAX,
+        // Contested War Zone substrate (2026-05-31): sentinel "no active
+        // combat-damage source controller"; written by
+        // `dispatch_combat_damage_to_player` before the trigger push
+        // loop, reset to `u8::MAX` after the dispatch returns.
+        resolving_combat_damage_source_controller_id: u8::MAX,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
         // smoke callers opt in via `set_external_rng(Some(rng))`.

@@ -1187,13 +1187,39 @@ pub(crate) fn dispatch_combat_damage_to_player(
     // through _fire_combat_damage_to_player_triggers -> StackItem.targets).
     let prev_target_pid = state.resolving_combat_damage_target_player_id;
     state.resolving_combat_damage_target_player_id = target_player;
+    // **Contested War Zone substrate (2026-05-31).** Seat the
+    // damage-dealing creature's controller id so the observer effect
+    // ``Effect::ChangeControllerToCombatDamageSource`` (Contested War
+    // Zone: "that creature's controller gains control of this land")
+    // can read the NEW land controller at resolve time. Mirrors
+    // Python's ``combat_damage_source_controller_id=
+    // attacker_controller_id`` threaded through
+    // ``_fire_combat_damage_to_player_triggers``
+    // (``combat.py:758-767``) into
+    // ``state.resolving_combat_damage_source_controller_id``. The
+    // source's controller is read from its (still-on-bf, guarded
+    // above) GameObject; sentinel ``u8::MAX`` if not found (defensive
+    // — the bf-guard already returned early when the source left).
+    let prev_src_controller =
+        state.resolving_combat_damage_source_controller_id;
+    let attacker_controller = state
+        .players
+        .iter()
+        .flat_map(|p| p.battlefield.iter())
+        .find(|o| o.id == source_id)
+        .map(|o| o.controller)
+        .unwrap_or(u8::MAX);
+    state.resolving_combat_damage_source_controller_id =
+        attacker_controller;
 
     dispatch_event(state, crate::cards::Event::DealsDamage, source_id)?;
 
-    // Reset both slots after dispatch so they don't leak into
+    // Reset all three slots after dispatch so they don't leak into
     // unrelated resolves (mirrors the ``apply_damage_pass`` reset).
     state.resolving_combat_damage_amount = 0;
     state.resolving_combat_damage_target_player_id = prev_target_pid;
+    state.resolving_combat_damage_source_controller_id =
+        prev_src_controller;
 
     Ok(())
 }
@@ -11891,6 +11917,76 @@ fn apply_effect(
                 break;
             }
             let _ = source_obj_id; // source is the spell; not needed
+        }
+        // **Contested War Zone substrate (2026-05-31).** Permanent
+        // control-change-of-self triggered by combat damage. Mirrors
+        // Python's `ChangeControllerToCombatDamageSource.resolve`
+        // (`effects/generic/control.py:92-107`) STEP-FOR-STEP:
+        //
+        // ```python
+        // source = state.resolving_source          # Rust: source_obj_id
+        // if source is None: return
+        // new_cid = state.resolving_combat_damage_source_controller_id
+        // if new_cid is None or new_cid == source.controller_id: return
+        // source.controller_id = new_cid           # direct, PERMANENT
+        // ```
+        //
+        // The source is the Land (`source_obj_id`). The new controller
+        // is read from the transient
+        // `resolving_combat_damage_source_controller_id` slot (seated by
+        // `dispatch_combat_damage_to_player`; `u8::MAX` sentinel = "no
+        // active source controller"). If the slot is unset OR the new
+        // controller already equals the Land's current controller, this
+        // is a silent no-op (mirrors Python's
+        // `if new_cid is None or new_cid == source.controller_id`).
+        //
+        // **Direct PERMANENT write — NOT the UEOT override path.**
+        // Writes `obj.controller = new_cid` directly (no
+        // `controller_override` stamp, no `continuous_effects` layer-2
+        // entry, no cleanup drain). Byte-equal with Python's direct
+        // `source.controller_id = new_cid`: the snapshot's
+        // `controller_id` key (`obj.controller`) carries the change and
+        // `controller_override` stays `None` on both engines.
+        Effect::ChangeControllerToCombatDamageSource => {
+            // new_cid: the damage-dealing creature's controller, seated
+            // by the combat-damage dispatch. Sentinel u8::MAX = unset.
+            let new_cid = state.resolving_combat_damage_source_controller_id;
+            if new_cid == u8::MAX {
+                return Ok(()); // mirrors Python's `if new_cid is None`
+            }
+            // Locate the source (the Land) on either battlefield. Off-bf
+            // → silent no-op (mirrors Python's `if source is None`).
+            let mut owner_idx: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    owner_idx = Some(pidx);
+                    break;
+                }
+            }
+            let Some(owner_idx) = owner_idx else {
+                return Ok(());
+            };
+            // Same-controller short-circuit (mirrors Python's
+            // `new_cid == source.controller_id` guard). Read the current
+            // controller before the mutating borrow.
+            let current_controller: u8 = state.players[owner_idx]
+                .battlefield
+                .iter()
+                .find(|o| o.id == source_obj_id)
+                .map(|o| o.controller)
+                .unwrap_or(u8::MAX);
+            if new_cid == current_controller {
+                return Ok(());
+            }
+            // Direct, PERMANENT controller write on the Land.
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[owner_idx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.controller = new_cid;
+                    break;
+                }
+            }
         }
         // **Control-change-UEOT subsystem — Cycle 5 (2026-05-22).**
         // Delayed-trigger "remove `amount` charge counters from

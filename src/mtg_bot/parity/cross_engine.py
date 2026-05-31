@@ -11440,6 +11440,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ThreatenTargetCreatureUEOT,
         )
         return ThreatenTargetCreatureUEOT()
+    if kind == "change_controller_to_combat_damage_source":
+        # **Contested War Zone substrate (2026-05-31).** Rust substrate
+        # ``Effect::ChangeControllerToCombatDamageSource`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"change_controller_to_combat_damage_source"``; resolve in
+        # state_ops_resolve.rs beside the ``ThreatenTargetCreatureUEOT``
+        # arm).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "change_controller_to_combat_damage_source"}``.
+        # Python's ``ChangeControllerToCombatDamageSource``
+        # (effects/generic/control.py:78) is a frozen dataclass with no
+        # constructor parameters. The new controller rides on the
+        # transient ``resolving_combat_damage_source_controller_id``
+        # state slot (mirrored on both engines); the source (the Land)
+        # is the resolving source.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines read the
+        # combat-damage source's controller off the transient slot and,
+        # if it differs from the Land's current controller, write the
+        # Land's controller DIRECTLY (a PERMANENT control change — NOT
+        # the UEOT ``controller_override`` path the Mutinous Massacre /
+        # Threaten family uses). Byte-equal via the snapshot's
+        # ``controller_id`` key; ``controller_override`` stays ``None``
+        # on both engines.
+        #
+        # **Real test-pool consumer**: Contested War Zone — Land,
+        # "Whenever a creature deals combat damage to you, that
+        # creature's controller gains control of this land. {T}: Add
+        # {C}. {1}, {T}: Attacking creatures get +1/+0 until end of
+        # turn." SUBSTRATE-ONLY landing — the live DEALS_COMBAT_DAMAGE
+        # trigger flip to PROBED is blocked on multi-subject predicate
+        # dispatch (see docs/SEARCH_LIMITATIONS.md).
+        from mtg_bot.effects.generic.control import (
+            ChangeControllerToCombatDamageSource,
+        )
+        return ChangeControllerToCombatDamageSource()
     if kind == "remove_charge_counters_from_source_delayed":
         # **Control-change-UEOT subsystem — Cycle 5 delayed-trigger
         # complement (2026-05-22).** Rust substrate
