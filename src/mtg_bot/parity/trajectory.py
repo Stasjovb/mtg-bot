@@ -1977,6 +1977,19 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # the bare targeted-ATTACKS shape (negative-pinned in
     # tests/test_trajectory.py).
     ("attacks", "source_is_self", "put_plus_one_counter_on_opponents_creature"),
+    # **Equipment-AA family — Baseball Bat (2026-05-31) — the FIRST
+    # ``is_host_attacker`` predicate triple.** The equipped-creature-
+    # attacks rider: "Whenever equipped creature attacks, you may tap up
+    # to one target creature." The Equipment fires the trigger when its
+    # host (the attacker) is the ATTACKS event subject (the
+    # ``IsHost(subject="attacker")`` predicate, collapsed to the
+    # ``is_host_attacker`` sentinel in ``_is_safe_trigger_dict``). The
+    # ``tap_up_to_one_target_creature`` leaf rides the SHARED Tier-C
+    # deterministic push-time seat (count_min=0 optional edge — same
+    # decline-on-empty / first-legal-on-nonempty shape as Exosuit
+    # Savior). Sole EoE consumer: Baseball Bat ({3} Equipment), pinned
+    # end-to-end by ``tests/test_baseball_bat_parity.py``.
+    ("attacks", "is_host_attacker", "tap_up_to_one_target_creature"),
     # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
     # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
     # DIES+IsSelf arm (after round-42's surveil), completing the natural
@@ -2841,6 +2854,12 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # :func:`_python_ta_to_safe_dict` gates this whitelist; the
     # ``_is_safe_trigger_dict`` extra-key refusal is the backstop.
     "return_target_permanent_you_control": frozenset({"kind"}),
+    # Equipment-AA family — Baseball Bat (2026-05-31). Bare unit-shape:
+    # only ``kind`` (the count_min=0 / count_max=1 / IsCreature() slot is
+    # structural to the variant — no payload field, same as the sibling
+    # ``return_target_permanent_you_control``). The cross-engine round-
+    # trip backstop against any future schema extension.
+    "tap_up_to_one_target_creature": frozenset({"kind"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -3033,6 +3052,27 @@ def _is_safe_trigger_dict(ta_dict: dict) -> bool:
         # parser emits today (``cards/parser/triggers.py:603-1266``)
         # and what cross_engine's bridge arms parse on both engines.
         pred_kind = _LANDFALL_PREDICATE_KIND
+    elif (
+        isinstance(pred, dict)
+        and tuple(sorted(pred.keys())) == ("kind", "subject")
+        and pred.get("kind") == "is_host"
+        and pred.get("subject") == "attacker"
+    ):
+        # **Equipment-AA family — Baseball Bat (2026-05-31).** The
+        # ``IsHost(subject="attacker")`` equipped-creature-attacks
+        # predicate dict ``{"kind": "is_host", "subject": "attacker"}``
+        # collapses to the sentinel kind ``"is_host_attacker"`` so it
+        # composes with the leaf-shape ``_SAFE_TRIGGERS`` allowlist (the
+        # ``("attacks", "is_host_attacker",
+        # "tap_up_to_one_target_creature")`` entry). STRICT on exactly
+        # the two keys + the ``"attacker"`` slot value — the
+        # ``IsHost(subject=None)`` Aura-DEALT_DAMAGE shape (Pain for All)
+        # does NOT collapse here (it carries ``subject=None`` and is not
+        # in the ATTACKS safe set), and any other slot value falls to the
+        # decline path below. The bridge arms on both engines round-trip
+        # this exact two-key dict (``is_host`` reverse arm reads the
+        # ``subject`` slot identically).
+        pred_kind = "is_host_attacker"
     else:
         # Any other predicate carrying nested fields (subject, inner,
         # left, right, ...) is NOT in the safe set.
@@ -3554,6 +3594,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.predicates import (
         And,
         Controlled,
+        IsHost,
         IsSelf,
         Event,
         Subject,
@@ -3576,6 +3617,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         Surveil,
     )
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
     from mtg_bot.effects.generic.tokens import CreateToken
     # **Anticausal Vestige Cycle 2 (2026-05-24).** The bespoke
     # unit-variant whose LEAVES_BATTLEFIELD+IsSelf safe-trigger leaf
@@ -3956,6 +3998,44 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # rejects any other event/predicate pairing that isn't an
             # explicit ``_SAFE_TRIGGERS`` entry.
             safe_effect_kinds = ("anticausal_vestige_leaves_effect",)
+    elif (
+        isinstance(pred, IsHost)
+        and pred.subject == "attacker"
+        and ta.event is Event.ATTACKS
+    ):
+        # **Equipment-AA family — Baseball Bat (2026-05-31) — the FIRST
+        # ``IsHost(subject="attacker")`` safe-trigger predicate branch.**
+        # The equipped-creature-attacks relational predicate ("Whenever
+        # equipped creature attacks"): the trigger fires from the
+        # Equipment when its host (the attacker) is the ATTACKS event
+        # subject. Distinct from every prior arm (all ``IsSelf`` /
+        # landfall) — this is the Equipment carrier's HOST-relational
+        # shape.
+        #
+        # **The substrate already exists (verify-first).** The
+        # ``IsHost`` predicate match is byte-equal cross-engine: Python's
+        # ``IsHost.matches`` reads ``source.attached_to`` and returns
+        # ``host_id == subject.id``; Rust's ``Predicate::IsHost`` match
+        # (cards.rs:10770-10800) reads ``find_object_attached_to(source)``
+        # and returns ``host_id == subject_id`` — the SAME relation, NOT
+        # Aura-restricted (it works for any source whose ``attached_to``
+        # is the event subject, including an Equipment stamped onto its
+        # equipped attacker). The ATTACKS event dispatch itself is
+        # proven byte-equal by the round-43/44 surveil/draw/gain ATTACKS
+        # pins + every ATTACKS probe. The ``subject="attacker"`` slot is
+        # round-tripped by the ``is_host`` bridge arm (cross_engine.py:
+        # 13775-13797) IDENTICALLY on both engines.
+        #
+        # The sole safe leaf under (ATTACKS, IsHost(attacker)) today is
+        # ``tap_up_to_one_target_creature`` (Baseball Bat's ATTACKS
+        # rider). The predicate-effect product is enforced by the
+        # ``("attacks", "is_host_attacker",
+        # "tap_up_to_one_target_creature")`` ``_SAFE_TRIGGERS`` entry
+        # (necessary, not sufficient); the effect-class arm below is the
+        # §2 silent-mistranslation teeth (the bare count_min=0 /
+        # count_max=1 single-slot gate).
+        pred_dict = {"kind": "is_host", "subject": "attacker"}
+        safe_effect_kinds = ("tap_up_to_one_target_creature",)
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
@@ -4364,6 +4444,57 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             return None
         eff_kind = "return_target_permanent_you_control"
         eff_dict = {"kind": "return_target_permanent_you_control"}
+    elif isinstance(eff, TapUpToOneTargetCreature):
+        # **Equipment-AA family — Baseball Bat (2026-05-31) — the FIRST
+        # ATTACKS+IsHost(attacker) targeted-safe leaf.** Python's
+        # ``TapUpToOneTargetCreature`` (effects/generic/tap.py:363 — a
+        # ``Tap`` subclass whose ``__post_init__`` wires the single slot
+        # ``TargetSpec(IsCreature(), count_min=0, count_max=1)``).
+        # Baseball Bat's equipped-creature-attacks rider is the sole EoE
+        # consumer ({3} Artifact — Equipment; ETB auto-attach +
+        # Equip {3} — both already covered: ``AttachToTargetCreature
+        # YouControl`` + ``EquipToTargetCreatureYouControl``).
+        #
+        # **The count_min=0 optional edge (rides the SHARED Tier-C seat
+        # — same shape as Exosuit Savior's
+        # ``return_target_permanent_you_control``).** ``requires_target()``
+        # reads ``False`` (CR "you may tap … up to one") but the slot is
+        # a real ``TargetSpec``. With no eligible creature both engines
+        # DECLINE: Rust's ``first_legal_trigger_target`` returns ``None``
+        # → push-with-no-target → resolve no-op; Python's ``targets=()``
+        # ``Tap.resolve`` early-return — byte-equal. With an eligible
+        # creature both deterministically pick the SAME
+        # smallest-ETB-timestamp creature on EITHER bf (the bare
+        # ``IsCreature()`` filter — NO controller restriction, NO
+        # source exclusion) and tap it. The
+        # ``tap_up_to_one_target_creature`` bridge arm round-trips the
+        # UNIT shape (no payload — the slot shape is structural to the
+        # class / the seat's scan). See the ``("attacks",
+        # "is_host_attacker", "tap_up_to_one_target_creature")``
+        # ``_SAFE_TRIGGERS`` entry for the full provenance.
+        #
+        # **Bare-shape gate (§2 silent-mistranslation teeth).** Only the
+        # EXACT single-implicit-target shape is admitted: exactly one
+        # ``TargetSpec`` slot, ``count_min == 0`` (Baseball Bat is the
+        # optional edge), ``count_max == 1``, ``slot_kinds() == ()``, no
+        # ``SlotRef`` / ``distinct_from``. (Baseball Bat's parsed effect
+        # satisfies this exactly — verified live: ``count_range=(0,1)``,
+        # ``slot_kinds=()``.)
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        slots = tuple(getattr(eff, "targets", ()) or ())
+        if len(slots) != 1:
+            return None
+        slot = slots[0]
+        if isinstance(slot, SlotRef) or not isinstance(slot, TargetSpec):
+            return None
+        if slot.count_min != 0 or slot.count_max != 1:
+            return None
+        if getattr(slot, "distinct_from", ()) not in ((), None):
+            return None
+        if eff.target_slot_kinds() != ():
+            return None
+        eff_kind = "tap_up_to_one_target_creature"
+        eff_dict = {"kind": "tap_up_to_one_target_creature"}
     elif isinstance(eff, LookTopNPutOneInHandRestToGraveyard):
         # **Codecracker Hound Cycle 2 (2026-05-24) — the 9th ENTERS+IsSelf
         # leaf.** Python's
@@ -4627,6 +4758,14 @@ _TARGET_SEATED_EFFECT_KINDS: frozenset[str] = frozenset({
     # ``len(chosen_list)=0 >= min_t=0`` — byte-equal with the Rust
     # no-seat no-op).
     "return_target_permanent_you_control",
+    # Baseball Bat (Equipment-AA family — the ATTACKS+IsHost(attacker)
+    # count_min=0 optional-tap edge) — joins via this slice, reusing the
+    # shared seat shipped with Sunset Saboteur / Exosuit Savior. Same
+    # gate: the Python no-agent ``pool[0]`` seat fires for this kind too;
+    # the count_min=0 edge means an empty ``pool`` simply declines the
+    # optional (``len(chosen_list)=0 >= min_t=0``) — byte-equal with the
+    # Rust no-seat no-op.
+    "tap_up_to_one_target_creature",
 })
 
 

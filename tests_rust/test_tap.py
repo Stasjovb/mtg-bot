@@ -653,3 +653,114 @@ def test_resolve_tap_enchanted_permanent_idempotent_on_tapped(synthetic_state):
         d for d in synthetic_state.battlefield_snapshot() if d["id"] == p1_first_bear_id
     )
     assert bear_after["tapped"] is True
+
+
+# -------------------- Equipment-AA family — Baseball Bat (2026-05-31) --------------------
+# `Effect::TapUpToOneTargetCreature`: the ATTACKS + IsHost(attacker)
+# rider. Distinct from `TapAnotherTargetCreature` (no source exclusion,
+# count_min=0 optional) — rides the shared Tier-C push-time first-legal
+# seat. Driven via the Equipment attach + declare_attacker(host) path.
+
+
+def _baseball_bat_dict():
+    """Synthetic Baseball Bat carrier — only the ATTACKS rider (the
+    bridge-dict shape the cross-engine probe drives)."""
+    return {
+        "name": "Synthetic Baseball Bat",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "is_host", "subject": "attacker"},
+                "effect": {"kind": "tap_up_to_one_target_creature"},
+            },
+        ],
+    }
+
+
+def test_register_tap_up_to_one_target_creature(engine):
+    """The effect kind round-trips through register → to_pydict."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Tap Up To One",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 1},
+            "effects": [{"kind": "tap_up_to_one_target_creature"}],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "tap_up_to_one_target_creature"
+
+
+def test_tap_up_to_one_seats_first_creature_on_host_attack(synthetic_state):
+    """Equip the Bat to p0's first Bears, declare it as attacker → the
+    ATTACKS+IsHost(attacker) trigger fires → the push-time seat picks
+    the FIRST creature in bf-ETB order (p0's first Bears, smallest
+    timestamp) and taps it. Drives the genuine Equipment → ATTACKS →
+    seat → tap path Rust-side."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    equip_id = synthetic_state.register_and_inject_object(
+        _baseball_bat_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.attach(equip_id, p0_first_bear_id) is True
+    synthetic_state.clear_summoning_sick_for_player(0)
+
+    assert synthetic_state.declare_attacker(p0_first_bear_id) is True
+    # The ATTACKS trigger pushed (a legal creature target exists).
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    # p0's first Bears (the seat) is tapped (from attacking AND
+    # re-selected by the idempotent rider).
+    bear_after = next(
+        d for d in synthetic_state.battlefield_snapshot()
+        if d["id"] == p0_first_bear_id
+    )
+    assert bear_after["tapped"] is True
+
+
+def test_tap_up_to_one_no_creature_optional_declines(synthetic_state):
+    """With NO creature anywhere on the battlefield, the optional
+    count_min=0 trigger does NOT fizzle-skip-push — the host itself is
+    the seat (it is a creature). Clear all creatures EXCEPT the host:
+    the host is still the first-legal seat, and after it attacks
+    (tapping itself) the rider taps the already-tapped host (no-op).
+    The observable (host tapped, nothing else changed, no raise) pins
+    the count_min=0 decline / no-op edge."""
+    state = synthetic_state.clone_once()
+    snap = state.battlefield_snapshot()
+    host_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    # Remove every OTHER creature (move to owner's graveyard) so the
+    # host is the only creature left.
+    for d in snap:
+        if d["printing_name"] == "Grizzly Bears" and d["id"] != host_id:
+            state.move_object(d["id"], 3, d["controller_id"])
+    equip_id = state.register_and_inject_object(
+        _baseball_bat_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert state.attach(equip_id, host_id) is True
+    state.clear_summoning_sick_for_player(0)
+
+    assert state.declare_attacker(host_id) is True
+    # Drain whatever the ATTACKS trigger pushed (should not raise).
+    while state.stack_size() > 0:
+        state.resolve_top_of_stack()
+    host_after = next(
+        d for d in state.battlefield_snapshot() if d["id"] == host_id
+    )
+    # Host tapped from attacking; the rider's tap on the (already-tapped)
+    # host is a no-op. No raise, byte-equal observable.
+    assert host_after["tapped"] is True

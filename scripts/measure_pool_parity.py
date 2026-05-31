@@ -4103,6 +4103,15 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_lavaclaw_reaches_parity.py",
     REPO_ROOT / "tests" / "test_wandering_fumarole_parity.py",
     REPO_ROOT / "tests" / "test_lotus_field_parity.py",
+    # Equipment-AA family — Baseball Bat (2026-05-31,
+    # feature/equipment-aa-substrate). The FIRST ATTACKS+IsHost(attacker)
+    # targeted-safe probe: drives the real parsed Baseball Bat ATTACKS
+    # rider (TapUpToOneTargetCreature) through both engines via the
+    # attach + ATTACKS path. The shared Equipment-attached-carrier
+    # substrate (the IsHost(attacker) predicate branch + the
+    # tap_up_to_one_target_creature Rust Effect/bridge) amortizes to the
+    # three siblings (Atomic Microsizer / Auxiliary Boosters / Saw).
+    REPO_ROOT / "tests" / "test_baseball_bat_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

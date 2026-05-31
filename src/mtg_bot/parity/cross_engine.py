@@ -7059,6 +7059,38 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # its own carrier beyond the bare bridge-arm slice).
         from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
         return TapAnotherTargetCreature()
+    if kind == "tap_up_to_one_target_creature":
+        # **Equipment-AA family — Baseball Bat (2026-05-31).** Reverse
+        # bridge arm for Rust's ``Effect::TapUpToOneTargetCreature``
+        # (cards.rs unit variant added immediately after
+        # ``TapAnotherTargetCreature``; parse + to_pydict arms in
+        # cards.rs; first_legal_trigger_target seat + resolve arm in
+        # state_ops_resolve.rs). Mirrors Python's
+        # ``TapUpToOneTargetCreature`` (effects/generic/tap.py:363 — a
+        # ``Tap`` subclass whose ``__post_init__`` wires the single slot
+        # ``TargetSpec(IsCreature(), count_min=0, count_max=1)``).
+        #
+        # **Unit variant.** No constructor args (the count_min=0 /
+        # count_max=1 / bare-``IsCreature()`` slot is wired in
+        # ``__post_init__`` and is structural to the class — the Rust
+        # variant encodes it in its seat scan + resolve re-check). Extra
+        # dict keys silently dropped (unit-variant contract; sibling
+        # ``tap_another_target_creature`` / ``return_target_permanent_
+        # you_control`` shape).
+        #
+        # **The count_min=0 optional edge (shared Tier-C seat).**
+        # Distinct from ``tap_another_target_creature`` (count_min=1, no
+        # source exclusion is the only difference in filter; that arm has
+        # no optional edge) — here the slot is OPTIONAL: with no eligible
+        # creature both engines DECLINE (Rust's seat returns None →
+        # push-with-no-target → resolve no-op; Python's ``targets=()``
+        # ``Tap.resolve`` early-return), byte-equal. With an eligible
+        # creature both pick the SAME smallest-ETB-timestamp creature
+        # (the shared push-time first-legal seat) and tap it. The sole
+        # EoE consumer is **Baseball Bat** ({3} Equipment), pinned
+        # end-to-end by ``tests/test_baseball_bat_parity.py``.
+        from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
+        return TapUpToOneTargetCreature()
     if kind == "tap_enchanted_permanent":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap enchanted
         # permanent" (TapEnchantedPermanent family,
