@@ -33,25 +33,39 @@ serializer leaf. Flips Contested War Zone **BLOCKED → covered-by-
 construction** (every Effect class the card emits now has a live+bridged
 Rust counterpart).
 
-**SUBSTRATE-ONLY landing — NOT a PROBED flip.** The live
-DEALS_COMBAT_DAMAGE trigger-driven flip to PROBED is BLOCKED on
-multi-subject predicate dispatch. The trigger's predicate
-``Controlled(by=YOU, subject="target")`` constrains "the damaged player
-== the Land's controller", but Rust's ``dispatch_event`` passes only a
-single ``subject_id`` (the damaging creature) and the
-``ControlledByYou`` arm has no ``slot="target"`` path that reads
-``resolving_combat_damage_target_player_id`` (the defending player).
-Additionally, Rust does not yet carry the source-controller on the
-StackItem to re-mirror at trigger-resolve time (the same deferral the
-``resolving_combat_damage_amount`` StackItem mirror carries). See
-``docs/SEARCH_LIMITATIONS.md`` (Contested War Zone substrate-only
-entry).
+**THE FLIP — covered_by_construction → PROBED (2026-05-31).** The live
+DEALS_COMBAT_DAMAGE trigger-driven control change now drives byte-equal
+on BOTH engines; the two engine-deep walls the substrate-only landing
+documented are closed:
 
-The probes below pin the substrate end-to-end: the parser SoT, the
-round-trip dict shape, the covered-class flip, and the Rust resolve arm
-(driven directly with the source-controller slot seated via the
-test-only setter — the byte-equal mirror of Python's
-``ChangeControllerToCombatDamageSource.resolve``).
+  1. **Multi-subject predicate dispatch.** The Rust
+     ``ControlledByYou { slot }`` arm (``cards.rs``) is now slot-aware:
+     ``slot == "target"`` reads the defending-player id off
+     ``state.resolving_combat_damage_target_player_id`` (seated by
+     ``dispatch_combat_damage_to_player`` for the synchronous observer
+     walk) and compares it to the source's controller — the byte-equal
+     mirror of Python's ``Controlled(by=YOU, subject="target")``
+     evaluating ``defending_player.id == source.controller_id``.
+
+  2. **Deferred StackItem source-controller mirror.** Rust now carries
+     ``combat_damage_source_controller_id`` (+ the ``combat_damage_amount``
+     sibling) on ``TriggerPayload``, seated at push time in
+     ``push_triggered_ability`` from the live state slot and re-mirrored
+     into ``state.resolving_combat_damage_source_controller_id`` at
+     trigger-resolve time by BOTH resolve entry points — the byte-equal
+     mirror of Python's ``StackItem.combat_damage_source_controller_id``
+     re-mirror at ``actions.py:2680-2686``. (This ALSO unblocks the
+     deferred production write of the sibling
+     ``resolving_combat_damage_amount`` slot.)
+
+The probes below pin the lever end-to-end: the parser SoT, the
+round-trip dict shape, the covered-class flip, the Rust resolve-arm
+unit pins (driven directly with the source-controller slot seated via
+the test-only setter), AND the per-card real-EoE LIVE-trigger byte-equal
+flip probe ``test_cross_engine_real_eoe_contested_war_zone_parity``
+(drives the ACTUAL parsed printing through a combat-damage event on both
+engines). See ``docs/SEARCH_LIMITATIONS.md`` (Contested War Zone FLIP
+entry).
 
 Lives in its own module per the established per-card-module convention
 (cf. ``test_systems_override_parity.py``, ``test_vengeful_possession_
@@ -404,4 +418,193 @@ def test_cross_engine_real_eoe_contested_war_zone_change_controller_substrate_pa
         "Rust: permanent direct control change must NOT stamp the UEOT "
         "controller_override field (byte-equal with Python's direct "
         "source.controller_id write — no continuous_effects entry)"
+    )
+
+
+# -------------------------------------------------------------------
+# THE FLIP — per-card real-EoE LIVE-trigger byte-equal probe
+# (covered_by_construction -> PROBED).
+# -------------------------------------------------------------------
+#
+# The two engine-deep walls the substrate landing documented are now
+# closed:
+#
+#   1. **Multi-subject predicate dispatch.** The Rust
+#      ``ControlledByYou { slot }`` arm (cards.rs) is now slot-aware:
+#      when ``slot == Some("target")`` it reads the defending-player id
+#      off ``state.resolving_combat_damage_target_player_id`` (seated by
+#      ``dispatch_combat_damage_to_player`` for the observer walk) and
+#      compares it to the source's controller — the byte-equal mirror of
+#      Python's ``Controlled(by=YOU, subject="target")`` evaluating
+#      ``defending_player.id == source.controller_id``.
+#
+#   2. **Deferred StackItem source-controller mirror.** Rust now carries
+#      ``combat_damage_source_controller_id`` (+ the ``combat_damage_amount``
+#      sibling) on ``TriggerPayload``, seated at push time in
+#      ``push_triggered_ability`` and re-mirrored into the transient
+#      ``state.resolving_combat_damage_source_controller_id`` slot at
+#      trigger-resolve time by BOTH resolve entry points — the byte-equal
+#      mirror of Python's ``StackItem.combat_damage_source_controller_id``
+#      re-mirror at ``actions.py:2680-2686``.
+#
+# This probe drives the ACTUAL parsed Contested War Zone printing on
+# BOTH engines through a creature dealing combat damage to the Land's
+# controller and asserts the Land's ``controller`` flips to the
+# attacker's controller, byte-equal.
+
+
+def test_cross_engine_real_eoe_contested_war_zone_parity():
+    """**THE FLIP — live DEALS_COMBAT_DAMAGE trigger byte-equal probe.**
+
+    Drive the LIVE parsed Contested War Zone printing through a real
+    combat-damage-to-the-Land's-controller event on BOTH engines and
+    assert byte-equal control change:
+
+      * **Python:** Land controlled by p0 on the battlefield, attacker
+        controlled by p1 on the battlefield;
+        ``_fire_combat_damage_to_player_triggers(state, [(attacker, 0,
+        amount)])`` pushes the DEALS_COMBAT_DAMAGE trigger, ``drain_stack``
+        resolves it → the Land's ``controller_id`` flips to 1 (the
+        attacker's controller). No layer-2 ``continuous_effects`` entry
+        (permanent direct write).
+
+      * **Rust:** the SAME parsed printing, bridged into a Rust registry
+        via the dict the reverse serializer emits, injected as a Land
+        controlled by p0; an attacker controlled by p1 on the
+        battlefield; ``dispatch_combat_damage_to_player(attacker, 0,
+        amount)`` pushes the trigger, ``resolve_top_of_stack`` resolves
+        it → the Land's ``controller_id`` snapshot key flips to 1,
+        ``controller_override`` stays ``None``.
+
+    Both engines change the Land's controller to the attacker's
+    controller PERMANENTLY, byte-equal on the observable controller key.
+    This is the live-trigger flip the substrate-only landing deferred —
+    Contested War Zone moves covered_by_construction → PROBED.
+    """
+    import mtg_bot_engine
+    from mtg_bot.agents import RandomAgent
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.actions import drain_stack
+    from mtg_bot.combat import _fire_combat_damage_to_player_triggers
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.generic.control import (
+        ChangeControllerToCombatDamageSource,
+    )
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_triggered_ability
+
+    printings = get_active_source().get_printings()
+    p = printings.get("Contested War Zone")
+    if p is None:
+        pytest.skip("Contested War Zone absent from active CardSource")
+
+    # The genuine parsed trigger on the live printing.
+    trig = next(
+        ta
+        for ta in p.triggered_abilities
+        if ta.event is Event.DEALS_COMBAT_DAMAGE
+    )
+    assert isinstance(trig.effect, ChangeControllerToCombatDamageSource)
+
+    AMOUNT = 2
+
+    # ----- Python side: drive the LIVE printing's trigger -----
+    py_state = GameState()
+    py_state.players.append(Player(id=0, agent=RandomAgent()))
+    py_state.players.append(Player(id=1, agent=RandomAgent()))
+    # Land controlled by p0 (the defending player who will take damage).
+    land_obj = py_state.new_object(p, 0, Zone.BATTLEFIELD)
+    py_state.battlefield.append(land_obj)
+    # Attacker controlled by p1.
+    attacker = py_state.new_object(
+        SYNTHETIC_CREATURES["Wild Bear"], 1, Zone.BATTLEFIELD,
+    )
+    py_state.battlefield.append(attacker)
+    assert land_obj.controller_id == 0
+    # p1's bear deals AMOUNT combat damage to p0 (the Land's controller).
+    _fire_combat_damage_to_player_triggers(
+        py_state, [(attacker.id, 0, AMOUNT)]
+    )
+    drain_stack(py_state)
+    # The Land's controller is now p1 (the attacker's controller).
+    py_land_controller = land_obj.controller_id
+    assert py_land_controller == 1, (
+        f"Python: Land must change controller to the attacker's "
+        f"controller (1); got {py_land_controller}"
+    )
+    # Permanent direct write — no layer-2 continuous control-change entry.
+    assert getattr(land_obj, "controller_override", None) is None
+
+    # ----- Rust side: drive the SAME bridged printing -----
+    # Bridge the live trigger to the Rust trigger-dict shape: the event
+    # string Rust parses is ``"deals_damage"`` (``Event::DealsDamage``);
+    # the predicate is the Contested War Zone compound
+    # ``And(SubjectIsCreature, ControlledByYou{slot:"target"})``; the
+    # effect is the round-tripped change-controller leaf.
+    eff_dict = trajectory._python_spell_effect_to_dict(trig.effect)
+    assert eff_dict == {"kind": "change_controller_to_combat_damage_source"}
+    # Sanity: the bridged trigger dict round-trips back to the live
+    # Python TriggeredAbility (event + predicate + effect).
+    rust_ta_dict = {
+        "event": "deals_damage",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_creature"},
+            "right": {"kind": "controlled_by_you", "subject": "target"},
+        },
+        "effect": eff_dict,
+    }
+    rebuilt_ta = _ta_dict_to_python_triggered_ability(rust_ta_dict)
+    assert rebuilt_ta.event is Event.DEALS_COMBAT_DAMAGE
+    assert isinstance(
+        rebuilt_ta.effect, ChangeControllerToCombatDamageSource
+    )
+
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    rust_land = rs.register_and_inject_object(
+        {
+            "name": "Contested War Zone",
+            "card_types": ["Land"],
+            "triggered_abilities": [rust_ta_dict],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_attacker = rs.register_and_inject_object(
+        {
+            "name": "Wild Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    before = next(
+        e for e in rs.battlefield_snapshot() if e["id"] == rust_land
+    )
+    assert before["controller_id"] == 0
+    # p1's bear deals AMOUNT combat damage to p0 — pushes the live
+    # trigger, then resolve it from the stack.
+    rs.dispatch_combat_damage_to_player(rust_attacker, 0, AMOUNT)
+    rs.resolve_top_of_stack()
+    after = next(
+        e for e in rs.battlefield_snapshot() if e["id"] == rust_land
+    )
+    rust_land_controller = after["controller_id"]
+    assert rust_land_controller == 1, (
+        f"Rust: Land must change controller to the attacker's "
+        f"controller (1) via the live trigger; got {rust_land_controller}"
+    )
+    assert after["controller_override"] is None, (
+        "Rust: permanent direct control change must NOT stamp the UEOT "
+        "controller_override field"
+    )
+
+    # ----- byte-equal cross-engine -----
+    assert py_land_controller == rust_land_controller == 1, (
+        f"cross-engine control-change mismatch: Python "
+        f"{py_land_controller} vs Rust {rust_land_controller}"
     )
