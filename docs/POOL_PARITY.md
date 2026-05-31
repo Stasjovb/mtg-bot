@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **451 / 475 EoE cards (94.9%) are byte-equal at the Effect+bridge level**; of those, **450 (94.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 1 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **451 / 475 EoE cards (94.9%) are byte-equal at the Effect+bridge level**; of those, **451 (94.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 0 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **24 (5.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 450 | 94.7% |
-| Effect+bridge covered (not individually probed) | 1 | 0.2% |
+| PROBED byte-equal | 451 | 94.9% |
+| Effect+bridge covered (not individually probed) | 0 | 0.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -309,6 +309,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Nebula Dragon
 - Needle Spires
 - Neglected Manor
+- Nesting Grounds
 - Nova Hellkite
 - Nutrient Block
 - Optimistic Scavenger
@@ -550,4 +551,5 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Tezzeret, Cruel Captain
 - Unholy Annex // Ritual Chamber
 - Wildfire Wickerfolk
+
 
