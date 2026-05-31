@@ -7149,6 +7149,37 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``tests/test_saw_parity.py``.
         from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
         return SawAttacksOptionalSacDrawEffect()
+    if kind == "atomic_microsizer_attack_effect":
+        # **Equipment-AA family — Atomic Microsizer (2026-05-31).**
+        # Reverse bridge arm for Rust's
+        # ``Effect::AtomicMicrosizerAttackEffect`` (cards.rs unit variant
+        # added immediately after ``SawAttacksOptionalSacDrawEffect``;
+        # parse + to_pydict arms in cards.rs; first_legal_trigger_target
+        # seat + compound-UEOT resolve arm in state_ops_resolve.rs).
+        # Mirrors Python's ``AtomicMicrosizerAttackEffect``
+        # (effects/bespoke.py:723).
+        #
+        # **Unit variant.** No constructor args (the count_min=0 /
+        # count_max=1 / bare-``IsCreature()`` slot + the compound
+        # unblockable + base-PT-1/1 UEOT payload are structural to the
+        # class — the Rust variant encodes them in its seat scan +
+        # resolve arm). Extra dict keys silently dropped (unit-variant
+        # contract; sibling ``tap_up_to_one_target_creature`` shape).
+        #
+        # **The count_min=0 optional edge (shared Tier-C seat).** Same
+        # seat as ``tap_up_to_one_target_creature``: with no eligible
+        # creature both engines DECLINE (Rust's seat returns None →
+        # push-with-no-target → resolve no-op; Python's ``if not targets:
+        # return``); with an eligible creature both pick the SAME
+        # smallest-ETB-timestamp creature on EITHER bf and apply the
+        # compound UEOT (can't-be-blocked + base-P/T-1/1). Both observed
+        # cross-engine via ``is_cant_be_blocked`` (Py) /
+        # ``has_keyword("unblockable")`` (Rust) — observably equivalent —
+        # and ``effective_power``/``effective_toughness`` (both). The
+        # sole EoE consumer is **Atomic Microsizer** ({U} Equipment),
+        # pinned end-to-end by ``tests/test_atomic_microsizer_parity.py``.
+        from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
+        return AtomicMicrosizerAttackEffect()
     if kind == "tap_enchanted_permanent":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap enchanted
         # permanent" (TapEnchantedPermanent family,

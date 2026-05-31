@@ -6632,6 +6632,47 @@ per-card-module convention). Pinned by
 reuse of the Sunset Saboteur / Exosuit Savior shared seat; the only
 genuinely-new Rust Effect is `TapUpToOneTargetCreature`.
 
+**Equipment-AA family sibling — Atomic Microsizer (2026-05-31,
+`feature/equipment-aa-siblings`).** A SECOND consumer of this same
+shared `ATTACKS` + `IsHost(subject="attacker")` Tier-C seat (after
+Baseball Bat). Atomic Microsizer ({U} Equipment) rider: "choose up to
+one target creature. That creature can't be blocked this turn and has
+base power and toughness 1/1 until end of turn." The new Rust Effect
+`Effect::AtomicMicrosizerAttackEffect` REUSES the shared
+`first_legal_trigger_target` seat (identical to
+`TapUpToOneTargetCreature` — bare `IsCreature()`, count_min=0, either
+bf); its resolve arm reads the seated `current_resolve_payload_target_id`
+and pushes a COMPOUND UEOT payload onto the target: `UeotModifier::
+GrantKeyword { keyword: "unblockable" }` + `UeotModifier::SetBasePT {
+power: 1, toughness: 1 }`.
+
+**Deliberate representation divergence (unblockable — documented).**
+Python's `GrantUnblockable` writes a layer-6 `cant_be_blocked`
+continuous-effect registry entry (read by `game.is_cant_be_blocked`);
+Rust models "can't be blocked" as a UEOT `unblockable` keyword grant
+(read by `has_keyword(id, "unblockable")`). These are DIFFERENT internal
+representations of the SAME rule ("this creature can't be blocked") —
+the cross-engine probe compares the observably-equivalent predicates
+(`is_cant_be_blocked` ⇔ `has_keyword("unblockable")`), NOT the raw
+internal modifier shape. Why it's OK: the engine's block-legality
+consumer must read EITHER form to mean "can't be blocked"; the
+Rust-side combat-blocking enumeration already DEFERS keyword-driven
+block-legality filters (the `state_ops_legal.rs` `is_cant_be_blocked`
+deferral noted elsewhere), so neither engine's blocking enumeration
+honors the grant at the enumeration stage today — the divergence is
+purely in the post-resolve *state representation*, observed identically
+through the two equivalent getters. Failure mode: if a future slice
+wires block-legality into the Rust enumeration reading `has_keyword`
+while Python reads the registry, the two must stay semantically
+aligned (both already mean the same thing). Fix scope: none needed
+today (the representations are observably equivalent); a future
+unification would map both to one canonical "cant_be_blocked" flag.
+The base-P/T-1/1 half (`SetBasePT 1/1` ⇔ Python's
+`BecomeType(base_pt=(1,1))`) IS byte-equal through
+`effective_power`/`effective_toughness`. Pinned by
+`tests/test_atomic_microsizer_parity.py` +
+`tests_rust/test_equipment_aa_siblings.py`.
+
 **Equipment-AA family sibling — Saw (2026-05-31,
 `feature/equipment-aa-siblings`).** Saw (`{2}` Artifact — Equipment)
 rides the SAME `ATTACKS` + `IsHost(subject="attacker")` predicate

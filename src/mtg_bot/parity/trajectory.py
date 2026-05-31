@@ -2002,6 +2002,19 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # target). Sole EoE consumer: Saw ({2} Equipment), pinned end-to-end
     # by ``tests/test_saw_parity.py``.
     ("attacks", "is_host_attacker", "saw_attacks_optional_sac_draw_effect"),
+    # **Equipment-AA family — Atomic Microsizer (2026-05-31) — the THIRD
+    # ``is_host_attacker`` predicate triple.** The equipped-creature-
+    # attacks rider: "Whenever equipped creature attacks, choose up to
+    # one target creature. That creature can't be blocked this turn and
+    # has base power and toughness 1/1 until end of turn." Same ATTACKS +
+    # ``IsHost(subject="attacker")`` shape as Baseball Bat (collapsed to
+    # the ``is_host_attacker`` sentinel). The
+    # ``atomic_microsizer_attack_effect`` leaf rides the SHARED Tier-C
+    # deterministic push-time seat (count_min=0 optional edge — same
+    # decline-on-empty / first-legal-on-nonempty shape as Baseball Bat).
+    # Sole EoE consumer: Atomic Microsizer ({U} Equipment), pinned
+    # end-to-end by ``tests/test_atomic_microsizer_parity.py``.
+    ("attacks", "is_host_attacker", "atomic_microsizer_attack_effect"),
     # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
     # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
     # DIES+IsSelf arm (after round-42's surveil), completing the natural
@@ -2888,6 +2901,12 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # variant). The cross-engine round-trip backstop against any future
     # schema extension.
     "saw_attacks_optional_sac_draw_effect": frozenset({"kind"}),
+    # Equipment-AA family — Atomic Microsizer (2026-05-31). Bare unit-
+    # shape: only ``kind`` (the count_min=0 / count_max=1 / IsCreature()
+    # slot + the compound unblockable + base-PT-1/1 UEOT payload are
+    # structural to the variant — no payload field). The cross-engine
+    # round-trip backstop against any future schema extension.
+    "atomic_microsizer_attack_effect": frozenset({"kind"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -3671,6 +3690,11 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # ``is_host_attacker`` predicate branch, after Baseball Bat's
     # ``tap_up_to_one_target_creature``).
     from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
+    # **Equipment-AA family — Atomic Microsizer (2026-05-31).** The
+    # bespoke ATTACKS+IsHost(attacker) compound-UEOT (can't-be-blocked +
+    # base-P/T-1/1) rider whose safe leaf this slice admits (the THIRD
+    # leaf under the shared ``is_host_attacker`` predicate branch).
+    from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
     # **Weftwalking Cycle 2 (2026-05-24).** The recursive composer
     # whose narrow ConditionalIfCastFromHand(Sequence(Shuffle..., Draw))
     # shape this slice admits. Imported alongside the other effect
@@ -4093,6 +4117,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         safe_effect_kinds = (
             "tap_up_to_one_target_creature",
             "saw_attacks_optional_sac_draw_effect",
+            "atomic_microsizer_attack_effect",
         )
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
@@ -4613,6 +4638,53 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             return None
         eff_kind = "saw_attacks_optional_sac_draw_effect"
         eff_dict = {"kind": "saw_attacks_optional_sac_draw_effect"}
+    elif isinstance(eff, AtomicMicrosizerAttackEffect):
+        # **Equipment-AA family — Atomic Microsizer (2026-05-31) — the
+        # THIRD ATTACKS+IsHost(attacker) targeted-safe leaf.** Python's
+        # ``AtomicMicrosizerAttackEffect`` (effects/bespoke.py:723):
+        # "choose up to one target creature. That creature can't be
+        # blocked this turn and has base power and toughness 1/1 until
+        # end of turn." Atomic Microsizer's equipped-creature-attacks
+        # rider is the sole EoE consumer ({U} Equipment; Equip {2} is a
+        # campaign-wide §2-decline activated ability that doesn't gate
+        # the ATTACKS-trigger admit).
+        #
+        # **The count_min=0 optional edge (rides the SHARED Tier-C seat
+        # — same shape as Baseball Bat's tap_up_to_one_target_creature).**
+        # ``requires_target()`` is True but the slot is OPTIONAL
+        # (count_min=0). With no eligible creature both engines DECLINE
+        # (Rust's ``first_legal_trigger_target`` returns None →
+        # push-with-no-target → resolve no-op; Python's ``if not targets:
+        # return``). With an eligible creature both deterministically
+        # pick the SAME smallest-ETB-timestamp creature on EITHER bf
+        # (the recognizer + bespoke ``legal_targets`` return creatures
+        # on BOTH bfs — NO controller restriction) and apply the compound
+        # UEOT (can't-be-blocked + base-P/T-1/1).
+        #
+        # **Compound-UEOT byte-equality (the representation choice — see
+        # SEARCH_LIMITATIONS.md).** Python writes a layer-6
+        # ``cant_be_blocked`` registry entry (``GrantUnblockable``) +
+        # a ``BecomeType(base_pt=(1,1))`` layer-7b override; Rust pushes
+        # a UEOT ``GrantKeyword "unblockable"`` + ``SetBasePT 1/1``. The
+        # observables are equivalent: ``game.is_cant_be_blocked`` (Py) ==
+        # ``has_keyword(id,"unblockable")`` (Rust) — both "can't be
+        # blocked" — and ``effective_power``/``effective_toughness`` ==
+        # (1,1) on both. See the ``("attacks", "is_host_attacker",
+        # "atomic_microsizer_attack_effect")`` ``_SAFE_TRIGGERS`` entry.
+        #
+        # **Bare optional-target gate (§2 silent-mistranslation teeth).**
+        # Exactly the up-to-one single-implicit-target shape:
+        # ``requires_target()`` True, ``target_count_range() == (0, 1)``,
+        # ``target_slot_kinds() == ()`` (no SlotRef / typed slot — the
+        # bespoke effect's ``legal_targets`` is the bare-IsCreature pool).
+        if not eff.requires_target():
+            return None
+        if eff.target_count_range() != (0, 1):
+            return None
+        if eff.target_slot_kinds() != ():
+            return None
+        eff_kind = "atomic_microsizer_attack_effect"
+        eff_dict = {"kind": "atomic_microsizer_attack_effect"}
     elif isinstance(eff, LookTopNPutOneInHandRestToGraveyard):
         # **Codecracker Hound Cycle 2 (2026-05-24) — the 9th ENTERS+IsSelf
         # leaf.** Python's
@@ -4884,6 +4956,14 @@ _TARGET_SEATED_EFFECT_KINDS: frozenset[str] = frozenset({
     # optional (``len(chosen_list)=0 >= min_t=0``) — byte-equal with the
     # Rust no-seat no-op.
     "tap_up_to_one_target_creature",
+    # Atomic Microsizer (Equipment-AA family — the ATTACKS+IsHost(attacker)
+    # count_min=0 optional compound-UEOT edge) — joins via this slice,
+    # reusing the shared seat shipped with Baseball Bat. Same gate: the
+    # Python no-agent ``pool[0]`` seat fires for this kind too; the
+    # count_min=0 edge means an empty ``pool`` simply declines the
+    # optional — byte-equal with the Rust no-seat no-op. The seated
+    # target id flows to the compound-UEOT resolve arm on both engines.
+    "atomic_microsizer_attack_effect",
 })
 
 

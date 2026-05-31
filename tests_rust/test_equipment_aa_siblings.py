@@ -244,3 +244,83 @@ def test_aux_boosters_etb_creates_robot_and_attaches_self(engine):
     assert tok["summoning_sick"] is True
     # The Equipment attached to its freshly-created token.
     assert post[aux_id]["attached_to"] == tok_id
+
+
+# ============== Atomic Microsizer (2026-05-31) ==============
+# `Effect::AtomicMicrosizerAttackEffect`: the ATTACKS + IsHost(attacker)
+# "choose up to one target creature. That creature can't be blocked this
+# turn and has base P/T 1/1 UEOT" rider. Rides the SHARED Tier-C
+# push-time first-legal seat (bare IsCreature, count_min=0, either bf);
+# the resolve arm pushes GrantKeyword "unblockable" + SetBasePT 1/1 onto
+# the seated target.
+
+
+def _microsizer_dict():
+    return {
+        "name": "Synthetic Atomic Microsizer",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "is_host", "subject": "attacker"},
+                "effect": {"kind": "atomic_microsizer_attack_effect"},
+            },
+        ],
+    }
+
+
+def test_register_atomic_microsizer_attack_effect(engine):
+    """The effect kind round-trips through register → to_pydict."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Microsizer Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 1},
+            "effects": [{"kind": "atomic_microsizer_attack_effect"}],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "atomic_microsizer_attack_effect"
+
+
+def test_microsizer_seats_first_creature_and_applies_compound_ueot(
+    synthetic_state,
+):
+    """Equip Atomic Microsizer to p0's first Bears, declare it as
+    attacker → the ATTACKS+IsHost(attacker) trigger fires → the push-time
+    seat picks the FIRST creature in bf-ETB order (p0's first Bears,
+    smallest timestamp) and applies the compound UEOT: it becomes
+    unblockable + base P/T 1/1."""
+    ZONE_BATTLEFIELD = 2
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    equip_id = synthetic_state.register_and_inject_object(
+        _microsizer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.attach(equip_id, p0_first_bear_id) is True
+    synthetic_state.clear_summoning_sick_for_player(0)
+
+    # Pre-resolve: the seat target is a vanilla 2/2 Grizzly Bears, not
+    # unblockable.
+    assert synthetic_state.has_keyword(p0_first_bear_id, "unblockable") is False
+    assert synthetic_state.effective_power(p0_first_bear_id) == 2
+    assert synthetic_state.effective_toughness(p0_first_bear_id) == 2
+
+    assert synthetic_state.declare_attacker(p0_first_bear_id) is True
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    # Post-resolve: the seated creature (p0's first Bears) is unblockable
+    # + base P/T 1/1.
+    assert synthetic_state.has_keyword(p0_first_bear_id, "unblockable") is True
+    assert synthetic_state.effective_power(p0_first_bear_id) == 1
+    assert synthetic_state.effective_toughness(p0_first_bear_id) == 1

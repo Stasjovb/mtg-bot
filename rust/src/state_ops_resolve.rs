@@ -1330,6 +1330,28 @@ fn first_legal_trigger_target(
                     }
                 })
         }
+        // Equipment-AA family — Atomic Microsizer (2026-05-31). The
+        // ATTACKS + IsHost(attacker) rider `AtomicMicrosizerAttackEffect`:
+        // SAME slot shape as `TapUpToOneTargetCreature` (bare
+        // `IsCreature()`, count_min=0, count_max=1 — ANY creature on
+        // EITHER bf, no controller restriction). Scan `bf_iter_etb_sorted`
+        // and pick the FIRST creature; the seated id flows via
+        // `current_resolve_payload_target_id` to the compound-UEOT
+        // resolve arm. `count_min=0`: `None` here ⇒ push-with-no-target ⇒
+        // resolve no-op (the optional declined). Identical seat to the
+        // Baseball Bat sibling above (the shared Tier-C seat).
+        Effect::AtomicMicrosizerAttackEffect => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+        }
         // **G7 follow-up f8e3a2b1.** DepressurizeEffect as a TRIGGER
         // payload — the synthetic test pin shape at
         // `tests/test_parity_smoke.py::_build_rust_depressurize_state`
@@ -20732,6 +20754,78 @@ fn apply_effect(
                 }
             }
             // else: no legal permanent → silent no-op (no draw).
+        }
+        // Equipment-AA family — Atomic Microsizer (2026-05-31).
+        // `AtomicMicrosizerAttackEffect`: apply the compound UEOT
+        // ("can't be blocked this turn" + "base P/T 1/1 UEOT") to the
+        // push-time-seated target (`current_resolve_payload_target_id`).
+        // count_min=0 optional: no seat → no-op (the optional was
+        // DECLINED; byte-equal with Python's `if not targets: return`).
+        // CR 608.2b resolve-time re-legality: the seated target must
+        // still be a creature on a battlefield; an illegal/left-bf
+        // target fizzles silently. Mirrors Python's
+        // `AtomicMicrosizerAttackEffect.resolve` (effects/bespoke.py:747):
+        // `ApplyEffect(GrantUnblockable(), EndOfTurn())` +
+        // `ApplyEffect(BecomeType(base_pt=(1,1)), EndOfTurn())` on the
+        // target.
+        Effect::AtomicMicrosizerAttackEffect => {
+            // count_min=0 optional: no seat → declined (no-op).
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // CR 608.2b re-legality: still a creature on a battlefield.
+            // Locate the (player_idx) holding the target so we can mutate
+            // its ueot_modifiers Vec.
+            let mut tgt_pidx: Option<usize> = None;
+            'rl: for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.battlefield.iter() {
+                    if obj.id == payload_target {
+                        if let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        {
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                tgt_pidx = Some(pidx);
+                            }
+                        }
+                        break 'rl;
+                    }
+                }
+            }
+            let Some(pidx) = tgt_pidx else {
+                // Target left bf / became non-creature → silent fizzle.
+                return Ok(());
+            };
+            // Push BOTH UEOT modifiers onto the seated target:
+            //   1. GrantKeyword "unblockable" (the can't-be-blocked
+            //      rider — Rust models it as a UEOT keyword read by
+            //      `has_keyword(id,"unblockable")`; Python's
+            //      `GrantUnblockable` writes a layer-6 `cant_be_blocked`
+            //      registry entry read by `game.is_cant_be_blocked` —
+            //      observably equivalent, see SEARCH_LIMITATIONS.md).
+            //   2. SetBasePT 1/1 (the base-P/T-1/1-UEOT rider — read by
+            //      `effective_power`/`effective_toughness`; byte-equal
+            //      with Python's `BecomeType(base_pt=(1,1))`).
+            // Push order mirrors Python's resolve (GrantUnblockable
+            // first, then BecomeType).
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == payload_target {
+                    obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                        keyword: "unblockable".to_string(),
+                    });
+                    obj.ueot_modifiers.push(UeotModifier::SetBasePT {
+                        power: 1,
+                        toughness: 1,
+                    });
+                    break;
+                }
+            }
         }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both

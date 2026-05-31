@@ -4128,6 +4128,15 @@ PROBE_MODULES: tuple[Path, ...] = (
     # }`` Rust variant + bridge/recognizer arms, reusing the existing
     # CreateToken token-printing substrate (the Robot token is vanilla).
     REPO_ROOT / "tests" / "test_auxiliary_boosters_parity.py",
+    # Atomic Microsizer (Equipment-AA family sibling — 2026-05-31). The
+    # ATTACKS + IsHost(attacker) "choose up to one target creature. That
+    # creature can't be blocked this turn and has base P/T 1/1 UEOT"
+    # rider. Rides the SHARED Baseball-Bat Tier-C push-time first-legal
+    # seat; the new piece is the ``Effect::AtomicMicrosizerAttackEffect``
+    # Rust variant (compound UEOT: GrantKeyword "unblockable" + SetBasePT
+    # 1/1 on the seated cross-bf target) + bridge/recognizer arms. Flips
+    # the former honest-stop module to a positive probe.
+    REPO_ROOT / "tests" / "test_atomic_microsizer_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -1,8 +1,9 @@
-"""Cross-engine parity probes for Atomic Microsizer — verify-first
-HONEST-STOP close (2026-05-22, `feature/atomic-microsizer-cycle-1-p1`).
+"""Cross-engine parity probe for Atomic Microsizer — Equipment-AA family
+closure (2026-05-31, `feature/equipment-aa-siblings`).
 
-**Atomic Microsizer Cycle 1 — multi-cycle substrate scope.** ``{U}``
-Artifact — Equipment (EoE pool, ~14 17lands decks). Oracle:
+**Atomic Microsizer — the fourth Equipment-AA closure (sibling of
+Baseball Bat / Saw / Auxiliary Boosters).** ``{U}`` Artifact —
+Equipment (EoE pool, ~14 17lands decks). Oracle:
 
     "Equipped creature gets +1/+0.
      Whenever equipped creature attacks, choose up to one target
@@ -10,41 +11,42 @@ Artifact — Equipment (EoE pool, ~14 17lands decks). Oracle:
      power and toughness 1/1 until end of turn.
      Equip {2}"
 
-**Verify-first finding (2026-05-22, see `docs/SEARCH_LIMITATIONS.md` —
-"Atomic Microsizer Cycle 1 LANDED" section).** The pool-parity
-attribution scout reports Atomic Microsizer in
-`blocked_subsystem_gated` with THREE gates tripped:
+**HONEST-STOP -> PROBED flip (2026-05-31).** The earlier
+``feature/atomic-microsizer-cycle-1-p1`` slice landed this module as an
+HONEST-STOP pin: the Python side was fully wired but no Rust
+``Effect::AtomicMicrosizerAttackEffect`` existed, so the card stayed in
+``blocked_subsystem_gated``. This slice lands the substrate and flips
+the honest-stop pins into positive cross-engine probes:
 
-  - `effect_uncovered` (no Rust counterpart for
-    `AtomicMicrosizerAttackEffect`)
-  - `carrier_activated_abilities` (the Equip {2} ability — Rust CardDef
-    has NO `activated_abilities` field; round-42 §2-decline,
-    campaign-wide)
-  - `nonsafe_triggered_ability` (the `equipped_creature_attacks` trigger
-    shape — fails `_python_ta_to_safe_dict` because the effect isn't
-    covered)
+  * Rust ``Effect::AtomicMicrosizerAttackEffect`` (enum variant + parse
+    + to_pydict + valid-kinds string + ``first_legal_trigger_target``
+    seat arm + compound-UEOT resolve arm). Rides the SHARED Tier-C
+    push-time first-legal seat (same as Baseball Bat's
+    ``TapUpToOneTargetCreature`` — bare ``IsCreature()`` filter,
+    count_min=0 optional, target on EITHER bf).
+  * cross_engine reverse bridge arm ``atomic_microsizer_attack_effect``.
+  * The trajectory recognizer arm (the THIRD ``is_host_attacker``
+    targeted-safe leaf) + the ``("attacks", "is_host_attacker",
+    "atomic_microsizer_attack_effect")`` ``_SAFE_TRIGGERS`` entry +
+    ``_SAFE_EFFECT_KEYS`` + ``_TARGET_SEATED_EFFECT_KINDS``.
 
-**No sibling Equipment with an ATTACKS trigger is PROBED.** The three
-PROBED Equipment in EoE (Glimmerlight, Hylderblade, Meltstrider's Gear)
-all carry ENTERS / BEGINNING_OF_END_STEP triggers; the three
-ATTACKS-triggered Equipment (Saw, Baseball Bat, Auxiliary Boosters) are
-ALL in `blocked_subsystem_gated` alongside Atomic Microsizer with
-identical three-gate attribution. That's strong evidence the gap is the
-ATTACKS-triggered-Equipment substrate as a whole, NOT a single per-card
-slice.
+**Compound-UEOT representation choice (verify-first, documented in
+``docs/SEARCH_LIMITATIONS.md``).** The effect applies TWO continuous
+effects to the seated target: "can't be blocked" + "base P/T 1/1
+UEOT". Python writes a layer-6 ``cant_be_blocked`` registry entry
+(``GrantUnblockable``) + a ``BecomeType(base_pt=(1,1))`` layer-7b
+override; Rust pushes a UEOT ``GrantKeyword "unblockable"`` +
+``SetBasePT 1/1``. The observables are EQUIVALENT:
+``game.is_cant_be_blocked`` (Py) == ``has_keyword(id,"unblockable")``
+(Rust) — both "this creature can't be blocked" — and
+``effective_power``/``effective_toughness`` == (1,1) on both. The probe
+compares these semantically-equal observables.
 
-This module is the **HONEST-STOP pin** for the multi-cycle scope. It
-verifies-first that the Python side is fully wired (parser SoT, effect
-class, trigger shape) AND pins the Rust gap (no `Effect::
-AtomicMicrosizerAttackEffect` variant, the card stays in
-`blocked_subsystem_gated`, `_python_ta_to_safe_dict` returns None on
-the ATTACKS trigger). When a future cycle lands the substrate, the
-honest-stop arms below will fail loud to flag that the pin needs to
-flip to a Hylderblade-style real-EoE cross-engine probe.
+This module is the GENUINE real-EoE cross-engine byte-equality probe
+(registered in ``scripts/measure_pool_parity.py`` PROBE_MODULES).
 
 Lives in its own module per the established per-card-module convention
-(cf. `test_darkness_parity.py`, `test_mutinous_massacre_parity.py`,
-`test_systems_override_parity.py`).
+(cf. ``test_baseball_bat_parity.py``, ``test_saw_parity.py``).
 """
 
 from __future__ import annotations
@@ -59,8 +61,11 @@ def _require_engine():
         pytest.skip("mtg_bot_engine PyO3 extension not installed")
 
 
+ZONE_BATTLEFIELD = 2
+
+
 # ---------------------------------------------------------------------------
-# Verify-first: parser SoT pin — the Python side is fully wired.
+# Verify-first: parser SoT + recognizer round-trip pins.
 # ---------------------------------------------------------------------------
 
 
@@ -94,6 +99,11 @@ def test_real_atomic_microsizer_parser_sot_attack_trigger_with_microsizer_effect
     assert isinstance(ta.predicate, IsHost)
     assert ta.predicate.subject == "attacker"
     assert isinstance(ta.effect, AtomicMicrosizerAttackEffect)
+    # Up-to-one optional target (count_min=0) — the §2 gate the
+    # recognizer enforces.
+    assert ta.effect.requires_target() is True
+    assert ta.effect.target_count_range() == (0, 1)
+    assert ta.effect.target_slot_kinds() == ()
     # Equip {2} activated ability surfaces as a single activated
     # ability entry on the printing.
     assert len(p.activated_abilities) >= 1
@@ -103,11 +113,8 @@ def test_atomic_microsizer_effect_target_count_is_up_to_one_creature():
     """**Verify-first.** ``AtomicMicrosizerAttackEffect.target_count_range
     `` is ``(0, 1)`` (choose up to one), ``requires_target`` is True,
     and ``legal_targets`` returns ALL battlefield creatures (not just
-    controller-owned). This is the load-bearing shape the Rust
-    target-binding substrate would have to match in a future cycle —
-    `GrantKeywordToTargetCreatureUntilEOT` / `SetBasePTUntilEOT` are
-    both first-slice-controller-only today and can NOT compose into
-    this surface without a target-id substrate slice."""
+    controller-owned) — the bare-IsCreature cross-bf pool the SHARED
+    Tier-C seat picks the first-legal from."""
     from mtg_bot.cards import SYNTHETIC_CREATURES
     from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
     from mtg_bot.game import GameState, Player, Zone
@@ -116,7 +123,6 @@ def test_atomic_microsizer_effect_target_count_is_up_to_one_creature():
     e = AtomicMicrosizerAttackEffect()
     assert e.requires_target()
     assert e.target_count_range() == (0, 1)
-    # legal_targets returns creatures from BOTH controllers' bf.
     state = GameState()
     state.players.append(Player(id=0, agent=RandomAgent()))
     state.players.append(Player(id=1, agent=RandomAgent()))
@@ -132,234 +138,327 @@ def test_atomic_microsizer_effect_target_count_is_up_to_one_creature():
     legal_ids = {tid for (_kind, tid) in legal}
     assert p0_bear.id in legal_ids and p1_bear.id in legal_ids, (
         "AtomicMicrosizerAttackEffect.legal_targets must return creatures "
-        "on BOTH players' battlefields — Rust's first-slice-controller-only "
-        "variants (GrantKeywordToTargetCreatureUntilEOT / SetBasePTUntilEOT) "
-        "cannot compose into this surface without a target-id substrate slice"
+        "on BOTH players' battlefields — the bare-IsCreature cross-bf pool"
     )
 
 
-# ---------------------------------------------------------------------------
-# Honest-stop pins — the Rust gap.
-# ---------------------------------------------------------------------------
-
-
-def test_atomic_microsizer_effect_class_NOT_in_covered_set():
-    """**Honest-stop pin.** ``AtomicMicrosizerAttackEffect`` is NOT in
-    the covered-by-rust set today. No `Effect::AtomicMicrosizerAttackEffect`
-    Rust variant exists, so the spell-card-bridge admit-set §2 teeth
-    refuse to flip the card.
-
-    When a future cycle lands the substrate, this test will FAIL loud
-    to remind us to flip the honest-stop into a real cross-engine
-    probe.
-    """
-    from mtg_bot.parity.effect_coverage import covered_python_class_set
-
-    covered = covered_python_class_set()
-    assert "AtomicMicrosizerAttackEffect" not in covered, (
-        "AtomicMicrosizerAttackEffect is now in the covered set — the "
-        "honest-stop pin in this module needs to flip to a Hylderblade-"
-        "style real-EoE cross-engine probe. See `docs/SEARCH_LIMITATIONS.md` "
-        "'Atomic Microsizer Cycle 1 LANDED' for the cycle-list scope."
-    )
-
-
-def test_atomic_microsizer_attack_trigger_is_NOT_safe_dict_today():
-    """**Honest-stop pin.** The parsed Atomic Microsizer printing's
-    ATTACKS-trigger TriggeredAbility does NOT round-trip through
-    `_python_ta_to_safe_dict` today — the trigger is classified
-    `nonsafe_triggered_ability` because its effect
-    (`AtomicMicrosizerAttackEffect`) has no covered Rust counterpart.
-
-    When the effect is covered AND the predicate/event are safe-dict-
-    encodable, this assertion flips and the honest-stop arm needs to
-    become a positive bridge test.
-    """
+def test_atomic_microsizer_attack_trigger_round_trips_through_safe_dict():
+    """**Verify-first (FLIPPED from honest-stop).** Atomic Microsizer's
+    ATTACKS rider now serializes to the canonical safe-trigger dict, is
+    accepted by ``_is_safe_trigger_dict``, is a target-seated trigger,
+    and the bridge round-trips it back to the genuine Python class."""
     from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
+    from mtg_bot.effects.predicates import Event, IsHost
     from mtg_bot.parity import trajectory as T
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
 
     p = get_active_source().get_printings().get("Atomic Microsizer")
     if p is None:
         pytest.skip("Atomic Microsizer absent from active CardSource")
     [ta] = list(p.triggered_abilities)
-    safe_dict = T._python_ta_to_safe_dict(ta)
-    assert safe_dict is None, (
-        "Atomic Microsizer's ATTACKS trigger now serializes to a safe "
-        "dict — the AtomicMicrosizerAttackEffect Rust variant must have "
-        "landed. Flip this honest-stop arm into a positive bridge "
-        "round-trip pin (mirror `test_darkness_serializer_round_trip_*`)."
+
+    d = T._python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "attacks",
+        "predicate": {"kind": "is_host", "subject": "attacker"},
+        "effect": {"kind": "atomic_microsizer_attack_effect"},
+    }
+    assert T._is_safe_trigger_dict(d) is True
+    assert T._is_target_seated_safe_trigger(p, ta) is True
+
+    bridged = _ta_dict_to_python_triggered_ability(d)
+    assert bridged.event is Event.ATTACKS
+    assert isinstance(bridged.predicate, IsHost)
+    assert bridged.predicate.subject == "attacker"
+    assert isinstance(bridged.effect, AtomicMicrosizerAttackEffect)
+
+
+def test_atomic_microsizer_effect_class_now_covered():
+    """**Verify-first (FLIPPED from honest-stop).**
+    ``AtomicMicrosizerAttackEffect`` is now in the covered-by-rust set
+    (the ``Effect::AtomicMicrosizerAttackEffect`` Rust variant landed
+    this slice), and all of Atomic Microsizer's emitted Effect classes
+    are covered."""
+    from mtg_bot.parity.effect_coverage import (
+        card_effect_classes,
+        covered_python_class_set,
+    )
+    from mtg_bot.cards.source import get_active_source
+
+    cov = covered_python_class_set()
+    assert "AtomicMicrosizerAttackEffect" in cov
+    p = get_active_source().get_printings().get("Atomic Microsizer")
+    if p is None:
+        pytest.skip("Atomic Microsizer absent from active CardSource")
+    assert card_effect_classes(p).issubset(cov)
+
+
+# ---------------------------------------------------------------------------
+# GENUINE real-EoE cross-engine byte-equality probe.
+# ---------------------------------------------------------------------------
+
+
+def _saw_microsizer_inj():
+    """The bridge-dict equivalent of Atomic Microsizer (only the ATTACKS
+    rider — the Equip {2} AA is a §2-decline that doesn't gate the
+    trigger admit)."""
+    return {
+        "name": "Atomic Microsizer",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "is_host", "subject": "attacker"},
+                "effect": {"kind": "atomic_microsizer_attack_effect"},
+            },
+        ],
+    }
+
+
+def _bear_inj(name):
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+    }
+
+
+def _py_inject_bf(py_state, d, controller, *, attached_to=None):
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
     )
 
-
-def test_atomic_microsizer_stays_in_blocked_subsystem_gated_tier():
-    """**Honest-stop pin — the tier classification.** Pool-parity
-    classifies Atomic Microsizer in `blocked_subsystem_gated` today;
-    it MUST stay there until the multi-cycle substrate lands. When
-    the closure flips it to `probed`, this pin fails loud to remind
-    us to update both the tier expectation AND the
-    `docs/SEARCH_LIMITATIONS.md` "Atomic Microsizer Cycle 1 LANDED"
-    block (to a multi-cycle LANDED entry mirroring Darkness / Mutinous
-    Massacre / Systems Override).
-    """
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    from measure_pool_parity import classify_pool
-
-    res = classify_pool()
-    assert "Atomic Microsizer" in res.tiers["blocked_subsystem_gated"], (
-        "Atomic Microsizer is no longer in blocked_subsystem_gated — the "
-        "multi-cycle substrate has landed. Flip this honest-stop pin into "
-        "a `'probed' in res.tiers` assertion mirroring "
-        "`test_darkness_parity.py`'s admit-gate flip pin, AND update the "
-        "`docs/SEARCH_LIMITATIONS.md` 'Atomic Microsizer Cycle 1 LANDED' "
-        "block to a multi-cycle LANDED entry."
+    mc = d.get("mana_cost", {})
+    gen = int(mc.get("generic", 0))
+    col = tuple((k, int(v)) for k, v in mc.items() if k != "generic")
+    pr = CardPrinting(
+        name=d["name"],
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=gen, colored=col),
+        type_line=" ".join(d["card_types"]),
+        supertypes=tuple(d.get("supertypes", ())),
+        card_types=tuple(d["card_types"]),
+        subtypes=tuple(d.get("subtypes", ())),
+        power=d.get("power"),
+        toughness=d.get("toughness"),
+        produces=frozenset(),
+        keywords=frozenset(d.get("keywords", ())),
+        triggered_abilities=tuple(
+            _ta_dict_to_python_triggered_ability(t)
+            for t in d.get("triggered_abilities", ())
+        ),
     )
+    obj = py_state.new_object(pr, owner_id=controller, zone=Zone.BATTLEFIELD)
+    obj.summoning_sick = False
+    obj.tapped = False
+    obj.damage = 0
+    obj.attached_to = attached_to
+    obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(obj)
+    return obj
 
 
-def test_atomic_microsizer_subsystem_gates_attribution_three_gates():
-    """**Verify-first.** The subsystem-attribution scout classifies
-    Atomic Microsizer with the THREE gates the honest-stop docs cite:
-    `effect_uncovered`, `carrier_activated_abilities`,
-    `nonsafe_triggered_ability`. Pins the doc against scout drift —
-    if the scout's classification function changes shape, this test
-    surfaces the gap before the docs go stale.
-    """
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    from scout_r58_subsystem_attribution import subsystem_attribution
-
-    attrib = subsystem_attribution()
-    cards = attrib["cards"]
-    info = cards.get("Atomic Microsizer")
-    assert info is not None, (
-        "Atomic Microsizer is no longer in the subsystem-gated cards dict "
-        "— if it has flipped tiers, update the docs + the tier-pin above"
+def _build():
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
     )
-    gates = set(info["gates"])
-    assert gates == {
-        "effect_uncovered",
-        "carrier_activated_abilities",
-        "nonsafe_triggered_ability",
-    }, (
-        f"Atomic Microsizer gate attribution has shifted away from the "
-        f"three gates documented in `docs/SEARCH_LIMITATIONS.md` "
-        f"'Atomic Microsizer Cycle 1 LANDED' — observed gates: {sorted(gates)}. "
-        f"Update either the docs or this pin to match."
-    )
-    # Multi-gated — no single-mile closure.
-    assert info["multi_gated"] is True
-    assert info["last_mile"] is None
-    # Missing effect classes points at the load-bearing per-card piece.
-    assert info["missing_effect_classes"] == ["AtomicMicrosizerAttackEffect"]
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    return build_python_state(spec), build_rust_state(spec)
 
 
-def test_no_atomic_microsizer_effect_variant_in_rust_today():
-    """**Honest-stop pin — the Rust side.** No
-    ``Effect::AtomicMicrosizerAttackEffect`` parse arm exists today,
-    so a synthetic `register_and_inject_object` with that effect kind
-    in its `triggered_abilities[0].effect` dict raises at registration
-    time. The PyO3 error message names the unknown effect kind.
+def _drain_both(py_state, rust_state):
+    from mtg_bot.actions import resolve_top_of_stack
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
 
-    When the cycle 3 mint-site arm lands, this raises stops raising;
-    flip the arm to a positive Hylderblade-pattern probe.
+
+def _py_obj(py_state, obj_id):
+    return next((o for o in py_state.battlefield if o.id == obj_id), None)
+
+
+def test_cross_engine_real_eoe_atomic_microsizer_attack_trigger_parity():
+    """**GENUINE real-EoE probe — Equipment-AA family (Atomic
+    Microsizer).**
+
+    Drives the real parsed Atomic Microsizer ATTACKS rider end-to-end
+    through the production ATTACKS path with NO agent seated, asserting
+    byte-equal cross-engine compound-UEOT state (can't-be-blocked +
+    base-P/T-1/1) on the seated target.
+
+    Scenario A2 (opponent creature seated FIRST → it is the seat):
+    inject an opponent bear FIRST (smallest ETB), then the host bear,
+    then the Atomic Microsizer attached to the host. The host attacks →
+    the ``IsHost(subject="attacker")`` ATTACKS trigger fires → the
+    SHARED deterministic push-time seat picks the FIRST creature
+    (smallest-ETB on EITHER bf = the OPPONENT bear) and applies the
+    compound UEOT to EXACTLY it, byte-equal on both engines (proving the
+    cross-bf seat). The host (the attacker) is unchanged by the rider.
     """
     _require_engine()
-    import mtg_bot_engine
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import is_cant_be_blocked, effective_power, \
+        effective_toughness
 
-    rs = mtg_bot_engine.make_synthetic_state()
-    # Try to register a synthetic carrier with the missing effect kind
-    # in a triggered_abilities slot — the parser should reject it.
-    with pytest.raises(Exception) as exc_info:
-        rs.register_and_inject_object(
-            {
-                "name": "Atomic Microsizer Probe",
-                "card_types": ["Artifact"],
-                "subtypes": ["Equipment"],
-                "supertypes": [],
-                "keywords": [],
-                "effects": [],
-                "triggered_abilities": [
-                    {
-                        "event": "attacks",
-                        "predicate": {
-                            "kind": "is_host",
-                            "subject": "attacker",
-                        },
-                        "effect": {"kind": "atomic_microsizer_attack_effect"},
-                    },
-                ],
-            },
-            0, 2,  # owner=p0, zone=battlefield
-        )
-    msg = str(exc_info.value).lower()
+    real = get_active_source().get_printings().get("Atomic Microsizer")
+    if real is None:
+        pytest.skip("Atomic Microsizer absent from active CardSource")
+
+    equip = _saw_microsizer_inj()
+
+    py_state, rust_state = _build()
+    # Inject the OPPONENT bear FIRST (smallest ETB → the seat), then the
+    # host bear, then the Equipment attached to the host. The opponent
+    # bear is the first-legal cross-bf seat — proving the rider hits an
+    # UNTAPPED opponent creature, NOT a controller-only walk.
+    rs_opp = rust_state.register_and_inject_object(
+        _bear_inj("Opp Bear"), 1, ZONE_BATTLEFIELD
+    )
+    rs_host = rust_state.register_and_inject_object(
+        _bear_inj("Host Bear"), 0, ZONE_BATTLEFIELD
+    )
+    rs_equip = rust_state.register_and_inject_object(
+        equip, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.attach(rs_equip, rs_host) is True
+    rust_state.clear_summoning_sick_for_player(0)
+
+    py_opp = _py_inject_bf(py_state, _bear_inj("Opp Bear"), 1)
+    py_host = _py_inject_bf(py_state, _bear_inj("Host Bear"), 0)
+    py_equip = _py_inject_bf(py_state, equip, 0, attached_to=py_host.id)
+
+    assert py_state.players[0].agent is None
+    assert py_state.players[1].agent is None
+
+    assert rust_state.declare_attacker(rs_host) is True
+    assert rust_state.stack_size() == 1, (
+        "Rust: the equipped host attacking must push the Atomic "
+        "Microsizer ATTACKS trigger (a legal creature target exists)"
+    )
+    declare_attackers(py_state, [py_host.id])
+    assert len(py_state.stack) == 1, (
+        "Python: the equipped host attacking must push the Atomic "
+        "Microsizer ATTACKS trigger"
+    )
+    _drain_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0 and len(py_state.stack) == 0
+
+    # The OPPONENT bear (smallest ETB → the seat) is the target.
+    # Compound UEOT observables, byte-equal cross-engine:
+    #   * can't-be-blocked: Python is_cant_be_blocked == Rust
+    #     has_keyword("unblockable") (the equivalent representation).
+    #   * base P/T 1/1: effective_power/toughness == (1,1) on both.
+    assert rust_state.has_keyword(rs_opp, "unblockable") is True
+    assert is_cant_be_blocked(py_state, _py_obj(py_state, py_opp.id)) is True
+    assert rust_state.effective_power(rs_opp) == 1
+    assert rust_state.effective_toughness(rs_opp) == 1
+    assert effective_power(py_state, _py_obj(py_state, py_opp.id)) == 1
+    assert effective_toughness(py_state, _py_obj(py_state, py_opp.id)) == 1
+    # Cross-engine byte-equal on the meaning of each observable.
     assert (
-        "atomic_microsizer_attack_effect" in msg
-        or "unknown" in msg
-        or "unsupported" in msg
-        or "missing" in msg
-        or "invalid" in msg
-        or "not yet wired" in msg
-    ), (
-        f"Expected the Rust parser to reject the unknown "
-        f"'atomic_microsizer_attack_effect' kind with a recognisable "
-        f"error; got: {exc_info.value!r}. If the kind has been added "
-        f"to the parser, flip this honest-stop arm into a positive "
-        f"register-and-resolve probe."
+        rust_state.has_keyword(rs_opp, "unblockable")
+        == is_cant_be_blocked(py_state, _py_obj(py_state, py_opp.id))
+        is True
+    )
+    assert (
+        rust_state.effective_power(rs_opp)
+        == effective_power(py_state, _py_obj(py_state, py_opp.id))
+        == 1
+    )
+    assert (
+        rust_state.effective_toughness(rs_opp)
+        == effective_toughness(py_state, _py_obj(py_state, py_opp.id))
+        == 1
+    )
+
+    # The host (the attacker) is NOT affected by the rider (the seat
+    # picked the smaller-ETB opponent bear). Its base P/T is its printed
+    # 2/2 (the +1/+0 equipment anthem is not modeled on these synthetic
+    # bridge-dict equips — both engines see the same un-anthemed body,
+    # so the host's effective P/T is byte-equal at the printed 2/2).
+    assert rust_state.has_keyword(rs_host, "unblockable") is False
+    assert is_cant_be_blocked(py_state, _py_obj(py_state, py_host.id)) is False
+    assert (
+        rust_state.effective_power(rs_host)
+        == effective_power(py_state, _py_obj(py_state, py_host.id))
+        == 2
+    )
+    assert (
+        rust_state.effective_toughness(rs_host)
+        == effective_toughness(py_state, _py_obj(py_state, py_host.id))
+        == 2
     )
 
 
-# ---------------------------------------------------------------------------
-# Future-cycle SCAFFOLD (skip-by-default).
-# ---------------------------------------------------------------------------
+def test_cross_engine_real_eoe_atomic_microsizer_no_creature_optional_declines():
+    """**GENUINE real-EoE probe — the count_min=0 optional decline edge.**
 
+    With only the host on the battlefield (it IS a creature, so it is
+    the first-legal seat), the host attacks → the rider picks the host
+    itself and applies the compound UEOT to it. With NO creature at all
+    (host removed), the optional declines and nothing changes. Here we
+    pin the FIRST shape (host is the only creature → it is the seat):
+    after attacking, the host is unblockable + base P/T 1/1, byte-equal
+    on both engines — proving the seat picks the host when it is the
+    only legal creature (the count_min=0 optional resolves to the host,
+    NOT a fizzle-skip)."""
+    _require_engine()
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.game import is_cant_be_blocked, effective_power, \
+        effective_toughness
 
-@pytest.mark.skip(
-    reason=(
-        "Honest-stop — multi-cycle substrate scope. When the "
-        "AtomicMicrosizerAttackEffect Rust variant + target-id-binding "
-        "substrate + bridge arms land (see `docs/SEARCH_LIMITATIONS.md` "
-        "'Atomic Microsizer Cycle 1 LANDED' for the cycle list), un-skip "
-        "this test and pattern it after `test_probe_remaining_lll.py`'s "
-        "Hylderblade probe (inject Equipment onto bf via `rs.attach`-"
-        "stamped to the attacker, dispatch Event::Attacks, observe "
-        "post-resolve unblockable + base-PT 1/1 byte-equal across "
-        "engines)."
+    real = get_active_source().get_printings().get("Atomic Microsizer")
+    if real is None:
+        pytest.skip("Atomic Microsizer absent from active CardSource")
+
+    equip = _saw_microsizer_inj()
+    py_state, rust_state = _build()
+    rs_host = rust_state.register_and_inject_object(
+        _bear_inj("Host Bear"), 0, ZONE_BATTLEFIELD
     )
-)
-def test_cross_engine_real_eoe_atomic_microsizer_attack_trigger_parity():
-    """**Future-cycle scaffold.** GENUINE real-EoE cross-engine probe
-    for Atomic Microsizer's equipped-creature-attacks trigger.
+    rs_equip = rust_state.register_and_inject_object(
+        equip, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.attach(rs_equip, rs_host) is True
+    rust_state.clear_summoning_sick_for_player(0)
 
-    Will mirror `test_probe_remaining_lll.py`'s Hylderblade probe:
+    py_host = _py_inject_bf(py_state, _bear_inj("Host Bear"), 0)
+    py_equip = _py_inject_bf(py_state, equip, 0, attached_to=py_host.id)
 
-      * Both engines: p0 has an alive Wild Bear (the attacker — the
-        Equipment's host) on bf.
-      * Rust: inject the Atomic Microsizer synthetic carrier with a
-        bridged `triggered_abilities` dict {`event: attacks`, predicate:
-        `is_host(subject="attacker")`, effect:
-        `atomic_microsizer_attack_effect`}; stamp `attached_to` to the
-        bear's id via `rs.attach(microsizer_id, bear_id)`. p1 has a
-        second Wild Bear (the trigger target).
-      * Python: inject the parsed Atomic Microsizer printing onto p0's
-        bf directly with `attached_to` set to the bear's id.
-      * Both engines: declare the bear as attacker → ATTACKS dispatch
-        fires the IsHost(subject="attacker")-matching trigger from
-        the Equipment.
-      * Resolve the trigger with a `_PickFirstLegalTargetAgent` →
-        targets p1's bear (the first legal creature on bf).
-      * Assert byte-equal observable state post-resolve:
-        - The targeted creature has the cant-be-blocked UEOT
-          continuous effect.
-        - The targeted creature's effective base P/T == (1, 1).
-        - The +1/+0 anthem on the equipped attacker is unchanged
-          (covered by ContinuousModifier infrastructure already).
-    """
-    raise NotImplementedError(
-        "Multi-cycle substrate not landed yet — see honest-stop pins "
-        "above and `docs/SEARCH_LIMITATIONS.md` 'Atomic Microsizer "
-        "Cycle 1 LANDED' for the cycle-list scope."
+    assert rust_state.declare_attacker(rs_host) is True
+    declare_attackers(py_state, [py_host.id])
+    _drain_both(py_state, rust_state)
+
+    # The host is the only creature → it is the first-legal seat → it
+    # gets the compound UEOT (byte-equal observables on both engines).
+    assert (
+        rust_state.has_keyword(rs_host, "unblockable")
+        == is_cant_be_blocked(py_state, _py_obj(py_state, py_host.id))
+        is True
+    )
+    assert (
+        rust_state.effective_power(rs_host)
+        == effective_power(py_state, _py_obj(py_state, py_host.id))
+        == 1
+    )
+    assert (
+        rust_state.effective_toughness(rs_host)
+        == effective_toughness(py_state, _py_obj(py_state, py_host.id))
+        == 1
     )
