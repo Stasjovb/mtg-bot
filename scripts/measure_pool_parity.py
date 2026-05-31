@@ -4112,6 +4112,14 @@ PROBE_MODULES: tuple[Path, ...] = (
     # tap_up_to_one_target_creature Rust Effect/bridge) amortizes to the
     # three siblings (Atomic Microsizer / Auxiliary Boosters / Saw).
     REPO_ROOT / "tests" / "test_baseball_bat_parity.py",
+    # Saw (Equipment-AA family sibling — 2026-05-31). The ATTACKS +
+    # IsHost(attacker) "you may sacrifice a permanent other than that
+    # creature or this Equipment; if you do, draw a card" rider. Rides
+    # the SHARED Baseball-Bat substrate (the IsHost(attacker) predicate
+    # branch); the single new piece is the
+    # ``Effect::SawAttacksOptionalSacDrawEffect`` Rust variant +
+    # bridge/recognizer arms. NOT a targeted effect (internal sac seat).
+    REPO_ROOT / "tests" / "test_saw_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

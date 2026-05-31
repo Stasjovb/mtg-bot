@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **196 of 227 Python Effect classes covered (86.3%)** — by distinct-class count.
-- **659 of 690 per-card emissions covered (95.5%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **230 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **197 of 227 Python Effect classes covered (86.8%)** — by distinct-class count.
+- **660 of 690 per-card emissions covered (95.7%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **231 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **WARNING: 1 Rust variant(s) with no Python counterpart**: `Effect::ReturnExiledPermanentToOwnerTapped` -> `ReturnExiledPermanentToOwnerTapped`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
 - **21 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `DealSelfMVDamageToEachCreature`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `RemoveChargeCountersFromSourceDelayed`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `SacrificeSourceDelayed`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`, `WarpExileSelf`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -43,7 +43,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 1 (159 singletons)
 
-- Covered by Rust: **128 / 159** (80.5%)
+- Covered by Rust: **129 / 159** (81.1%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -222,63 +222,63 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 170 | `Effect::EnduringDiesReturnAsEnchantmentEffect` | `EnduringDiesReturnAsEnchantmentEffect` | 1 |
 | 171 | `Effect::TapAnotherTargetCreature` | `TapAnotherTargetCreature` | 1 |
 | 172 | `Effect::TapUpToOneTargetCreature` | `TapUpToOneTargetCreature` | 1 |
-| 173 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
-| 174 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
-| 175 | `Effect::SetBasePTConditionalUntilEOT` | `SetBasePTConditionalUntilEOT` | 1 |
-| 176 | `Effect::ManifestDread` | `ManifestDread` | 10 |
-| 177 | `Effect::ManifestDreadThenAttachSelf` | `ManifestDreadThenAttachSelf` | 3 |
-| 178 | `Effect::ManifestDreadThenPutPlusOneCountersOnIt` | `ManifestDreadThenPutPlusOneCountersOnIt` | 2 |
-| 179 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
-| 180 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
-| 181 | `Effect::LookAtTopNRevealOrCounter` | `LookAtTopNRevealOrCounter` | 2 |
-| 182 | `Effect::BecomeLandCreatureUEOT` | `BecomeLandCreatureUEOT` | 13 |
-| 183 | `Effect::PumpSelfXPowerUEOT` | `PumpSelfXPowerUEOT` | 1 |
-| 184 | `Effect::SwitchSourcePowerToughnessUEOT` | `SwitchSourcePowerToughnessUEOT` | 1 |
-| 185 | `Effect::OptionalManaCostThenEffect` | `OptionalManaCostThenEffect` | 2 |
-| 186 | `Effect::DrawCardsEqualToResolvingCombatDamage` | `DrawCardsEqualToResolvingCombatDamage` | 2 |
-| 187 | `Effect::DrawCardsEqualToResolvingCounterAmount` | `DrawCardsEqualToResolvingCounterAmount` | 1 |
-| 188 | `Effect::WarpExileSelf` | `WarpExileSelf` | 0 |
-| 189 | `Effect::DefendingPlayerLosesHalfLifeRoundedUp` | `DefendingPlayerLosesHalfLifeRoundedUp` | 1 |
-| 190 | `Effect::ConditionalIfYouGainedLifeAtLeast` | `ConditionalIfYouGainedLifeAtLeast` | 1 |
-| 191 | `Effect::ConditionalIfSourcePowerAtLeast` | `ConditionalIfSourcePowerAtLeast` | 1 |
-| 192 | `Effect::DyadrineAttackEffect` | `DyadrineAttackEffect` | 1 |
-| 193 | `Effect::PutPoisonCountersOnTargetPlayer` | `PutPoisonCountersOnTargetPlayer` | 1 |
-| 194 | `Effect::ExileAllArtifactsWithManaValueAtMost` | `ExileAllArtifactsWithManaValueAtMost` | 1 |
-| 195 | `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | 1 |
-| 196 | `Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | 1 |
-| 197 | `Effect::ZeroPointBalladEffect` | `ZeroPointBalladEffect` | 1 |
-| 198 | `Effect::PreventAllCombatDamageThisTurn` | `PreventAllCombatDamageThisTurn` | 1 |
-| 199 | `Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac` | `CreateXTokensOfTargetPermanentWithHasteEndStepSac` | 1 |
-| 200 | `Effect::SacrificeSourceDelayed` | `SacrificeSourceDelayed` | 0 |
-| 201 | `Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` | `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` | 1 |
-| 202 | `Effect::ReturnUpToNCreaturesFromYourGraveyardToHand` | `ReturnUpToNCreaturesFromYourGraveyardToHand` | 1 |
-| 203 | `Effect::TerminalVelocityEffect` | `TerminalVelocityEffect` | 1 |
-| 204 | `Effect::DealSelfMVDamageToEachCreature` | `DealSelfMVDamageToEachCreature` | 0 |
-| 205 | `Effect::OptionalSacAnotherForPumpSelfUEOT` | `OptionalSacAnotherForPumpSelfUEOT` | 1 |
-| 206 | `Effect::OptionalSacAnotherForEffect` | `OptionalSacAnotherForEffect` | 1 |
-| 207 | `Effect::ExileTargetCreature` | `ExileTargetCreature` | 3 |
-| 208 | `Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl` | `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl` | 1 |
-| 209 | `Effect::BoilerbilgesRipperETBEffect` | `BoilerbilgesRipperETBEffect` | 1 |
-| 210 | `Effect::FanaticOfTheHarrowingETBEffect` | `FanaticOfTheHarrowingETBEffect` | 1 |
-| 211 | `Effect::TerrapactIntimidatorETBEffect` | `TerrapactIntimidatorETBEffect` | 1 |
-| 212 | `Effect::TerritorialBruntarLandfallEffect` | `TerritorialBruntarLandfallEffect` | 1 |
-| 213 | `Effect::PossibilityTechnicianETBEffect` | `PossibilityTechnicianETBEffect` | 1 |
-| 214 | `Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` | `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` | 1 |
-| 215 | `Effect::ScheduleSelfSacAtNextEndStep` | `ScheduleSelfSacAtNextEndStep` | 1 |
-| 216 | `Effect::PeekTopMayBattlefieldIfLandElseHand` | `PeekTopMayBattlefieldIfLandElseHand` | 1 |
-| 217 | `Effect::SingularityRuptureEffect` | `SingularityRuptureEffect` | 1 |
-| 218 | `Effect::CoordinatedClobberingEffect` | `CoordinatedClobberingEffect` | 1 |
-| 219 | `Effect::RegenerateTargetCreature` | `RegenerateTargetCreature` | 1 |
-| 220 | `Effect::UntapTargetLand` | `UntapTargetLand` | 1 |
-| 221 | `Effect::ReturnTargetLandFromGraveyardToHand` | `ReturnTargetLandFromGraveyardToHand` | 1 |
-| 222 | `Effect::PutBasicLandFromHandOntoBattlefieldTapped` | `PutBasicLandFromHandOntoBattlefieldTapped` | 1 |
-| 223 | `Effect::ExileTargetAttackingCreatureUntilEndStep` | `ExileTargetAttackingCreatureUntilEndStep` | 1 |
-| 224 | `Effect::ReturnExiledPermanentToOwnerTapped` | `ReturnExiledPermanentToOwnerTapped` | 0 |
-| 225 | `Effect::ExileAllGraveyards` | `ExileAllGraveyards` | 1 |
-| 226 | `Effect::BecomesCopyOfTargetLand` | `BecomesCopyOfTargetLand` | 1 |
-| 227 | `Effect::LockOrUnlockDoorOfTargetRoomYouControl` | `LockOrUnlockDoorOfTargetRoomYouControl` | 1 |
-| 228 | `Effect::DrawCardsByConditionMultiplier` | `DrawCardsByConditionMultiplier` | 1 |
-| 229 | `Effect::ExileTargetCardFromGraveyard` | `ExileTargetCardFromGraveyard` | 1 |
-| 230 | `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | 1 |
-
+| 173 | `Effect::SawAttacksOptionalSacDrawEffect` | `SawAttacksOptionalSacDrawEffect` | 1 |
+| 174 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
+| 175 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
+| 176 | `Effect::SetBasePTConditionalUntilEOT` | `SetBasePTConditionalUntilEOT` | 1 |
+| 177 | `Effect::ManifestDread` | `ManifestDread` | 10 |
+| 178 | `Effect::ManifestDreadThenAttachSelf` | `ManifestDreadThenAttachSelf` | 3 |
+| 179 | `Effect::ManifestDreadThenPutPlusOneCountersOnIt` | `ManifestDreadThenPutPlusOneCountersOnIt` | 2 |
+| 180 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
+| 181 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
+| 182 | `Effect::LookAtTopNRevealOrCounter` | `LookAtTopNRevealOrCounter` | 2 |
+| 183 | `Effect::BecomeLandCreatureUEOT` | `BecomeLandCreatureUEOT` | 13 |
+| 184 | `Effect::PumpSelfXPowerUEOT` | `PumpSelfXPowerUEOT` | 1 |
+| 185 | `Effect::SwitchSourcePowerToughnessUEOT` | `SwitchSourcePowerToughnessUEOT` | 1 |
+| 186 | `Effect::OptionalManaCostThenEffect` | `OptionalManaCostThenEffect` | 2 |
+| 187 | `Effect::DrawCardsEqualToResolvingCombatDamage` | `DrawCardsEqualToResolvingCombatDamage` | 2 |
+| 188 | `Effect::DrawCardsEqualToResolvingCounterAmount` | `DrawCardsEqualToResolvingCounterAmount` | 1 |
+| 189 | `Effect::WarpExileSelf` | `WarpExileSelf` | 0 |
+| 190 | `Effect::DefendingPlayerLosesHalfLifeRoundedUp` | `DefendingPlayerLosesHalfLifeRoundedUp` | 1 |
+| 191 | `Effect::ConditionalIfYouGainedLifeAtLeast` | `ConditionalIfYouGainedLifeAtLeast` | 1 |
+| 192 | `Effect::ConditionalIfSourcePowerAtLeast` | `ConditionalIfSourcePowerAtLeast` | 1 |
+| 193 | `Effect::DyadrineAttackEffect` | `DyadrineAttackEffect` | 1 |
+| 194 | `Effect::PutPoisonCountersOnTargetPlayer` | `PutPoisonCountersOnTargetPlayer` | 1 |
+| 195 | `Effect::ExileAllArtifactsWithManaValueAtMost` | `ExileAllArtifactsWithManaValueAtMost` | 1 |
+| 196 | `Effect::PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | `PutChargeCountersOnTargetSpacecraftOrPlanetYouControl` | 1 |
+| 197 | `Effect::ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` | 1 |
+| 198 | `Effect::ZeroPointBalladEffect` | `ZeroPointBalladEffect` | 1 |
+| 199 | `Effect::PreventAllCombatDamageThisTurn` | `PreventAllCombatDamageThisTurn` | 1 |
+| 200 | `Effect::CreateXTokensOfTargetPermanentWithHasteEndStepSac` | `CreateXTokensOfTargetPermanentWithHasteEndStepSac` | 1 |
+| 201 | `Effect::SacrificeSourceDelayed` | `SacrificeSourceDelayed` | 0 |
+| 202 | `Effect::ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` | `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` | 1 |
+| 203 | `Effect::ReturnUpToNCreaturesFromYourGraveyardToHand` | `ReturnUpToNCreaturesFromYourGraveyardToHand` | 1 |
+| 204 | `Effect::TerminalVelocityEffect` | `TerminalVelocityEffect` | 1 |
+| 205 | `Effect::DealSelfMVDamageToEachCreature` | `DealSelfMVDamageToEachCreature` | 0 |
+| 206 | `Effect::OptionalSacAnotherForPumpSelfUEOT` | `OptionalSacAnotherForPumpSelfUEOT` | 1 |
+| 207 | `Effect::OptionalSacAnotherForEffect` | `OptionalSacAnotherForEffect` | 1 |
+| 208 | `Effect::ExileTargetCreature` | `ExileTargetCreature` | 3 |
+| 209 | `Effect::PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl` | `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl` | 1 |
+| 210 | `Effect::BoilerbilgesRipperETBEffect` | `BoilerbilgesRipperETBEffect` | 1 |
+| 211 | `Effect::FanaticOfTheHarrowingETBEffect` | `FanaticOfTheHarrowingETBEffect` | 1 |
+| 212 | `Effect::TerrapactIntimidatorETBEffect` | `TerrapactIntimidatorETBEffect` | 1 |
+| 213 | `Effect::TerritorialBruntarLandfallEffect` | `TerritorialBruntarLandfallEffect` | 1 |
+| 214 | `Effect::PossibilityTechnicianETBEffect` | `PossibilityTechnicianETBEffect` | 1 |
+| 215 | `Effect::OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` | `OwnerPutsTargetWarpedExileCardOnBottomOfLibrary` | 1 |
+| 216 | `Effect::ScheduleSelfSacAtNextEndStep` | `ScheduleSelfSacAtNextEndStep` | 1 |
+| 217 | `Effect::PeekTopMayBattlefieldIfLandElseHand` | `PeekTopMayBattlefieldIfLandElseHand` | 1 |
+| 218 | `Effect::SingularityRuptureEffect` | `SingularityRuptureEffect` | 1 |
+| 219 | `Effect::CoordinatedClobberingEffect` | `CoordinatedClobberingEffect` | 1 |
+| 220 | `Effect::RegenerateTargetCreature` | `RegenerateTargetCreature` | 1 |
+| 221 | `Effect::UntapTargetLand` | `UntapTargetLand` | 1 |
+| 222 | `Effect::ReturnTargetLandFromGraveyardToHand` | `ReturnTargetLandFromGraveyardToHand` | 1 |
+| 223 | `Effect::PutBasicLandFromHandOntoBattlefieldTapped` | `PutBasicLandFromHandOntoBattlefieldTapped` | 1 |
+| 224 | `Effect::ExileTargetAttackingCreatureUntilEndStep` | `ExileTargetAttackingCreatureUntilEndStep` | 1 |
+| 225 | `Effect::ReturnExiledPermanentToOwnerTapped` | `ReturnExiledPermanentToOwnerTapped` | 0 |
+| 226 | `Effect::ExileAllGraveyards` | `ExileAllGraveyards` | 1 |
+| 227 | `Effect::BecomesCopyOfTargetLand` | `BecomesCopyOfTargetLand` | 1 |
+| 228 | `Effect::LockOrUnlockDoorOfTargetRoomYouControl` | `LockOrUnlockDoorOfTargetRoomYouControl` | 1 |
+| 229 | `Effect::DrawCardsByConditionMultiplier` | `DrawCardsByConditionMultiplier` | 1 |
+| 230 | `Effect::ExileTargetCardFromGraveyard` | `ExileTargetCardFromGraveyard` | 1 |
+| 231 | `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | 1 |
 

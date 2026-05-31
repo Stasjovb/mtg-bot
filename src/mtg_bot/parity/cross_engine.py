@@ -7091,6 +7091,30 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # end-to-end by ``tests/test_baseball_bat_parity.py``.
         from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
         return TapUpToOneTargetCreature()
+    if kind == "saw_attacks_optional_sac_draw_effect":
+        # **Equipment-AA family — Saw (2026-05-31).** Reverse bridge arm
+        # for Rust's ``Effect::SawAttacksOptionalSacDrawEffect`` (cards.rs
+        # unit variant added immediately after
+        # ``TapUpToOneTargetCreature``; parse + to_pydict arms in
+        # cards.rs; resolve arm in state_ops_resolve.rs). Mirrors Python's
+        # ``SawAttacksOptionalSacDrawEffect`` (effects/bespoke.py:2498).
+        #
+        # **Unit variant.** No constructor args (the no-agent
+        # deterministic ``options[0]`` seat + the source/host exclusion
+        # are structural to the class — the Rust variant encodes them in
+        # its resolve arm). Extra dict keys silently dropped (unit-variant
+        # contract; sibling ``tap_up_to_one_target_creature`` shape).
+        #
+        # **NOT a targeted effect** (no ``TargetSpec``). The optional
+        # ``may``-sacrifice + which-permanent decisions are agent calls
+        # in Python; with NO agent both engines ACCEPT and sacrifice the
+        # FIRST controlled permanent (excluding the source Equipment + its
+        # equipped host) in ETB-timestamp order, then draw one card. No
+        # legal permanent ⇒ silent no-op (no draw). The sole EoE consumer
+        # is **Saw** ({2} Equipment), pinned end-to-end by
+        # ``tests/test_saw_parity.py``.
+        from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
+        return SawAttacksOptionalSacDrawEffect()
     if kind == "tap_enchanted_permanent":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap enchanted
         # permanent" (TapEnchantedPermanent family,

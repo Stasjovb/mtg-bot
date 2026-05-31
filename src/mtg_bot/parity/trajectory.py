@@ -1990,6 +1990,18 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Savior). Sole EoE consumer: Baseball Bat ({3} Equipment), pinned
     # end-to-end by ``tests/test_baseball_bat_parity.py``.
     ("attacks", "is_host_attacker", "tap_up_to_one_target_creature"),
+    # **Equipment-AA family — Saw (2026-05-31) — the SECOND
+    # ``is_host_attacker`` predicate triple.** The equipped-creature-
+    # attacks rider: "Whenever equipped creature attacks, you may
+    # sacrifice a permanent other than that creature or this Equipment.
+    # If you do, draw a card." Same ATTACKS + ``IsHost(subject=
+    # "attacker")`` shape as Baseball Bat (collapsed to the
+    # ``is_host_attacker`` sentinel). The
+    # ``saw_attacks_optional_sac_draw_effect`` leaf is NOT target-seated
+    # (the sacrifice pool is an internal deterministic seat, not a
+    # target). Sole EoE consumer: Saw ({2} Equipment), pinned end-to-end
+    # by ``tests/test_saw_parity.py``.
+    ("attacks", "is_host_attacker", "saw_attacks_optional_sac_draw_effect"),
     # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
     # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
     # DIES+IsSelf arm (after round-42's surveil), completing the natural
@@ -2860,6 +2872,12 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # ``return_target_permanent_you_control``). The cross-engine round-
     # trip backstop against any future schema extension.
     "tap_up_to_one_target_creature": frozenset({"kind"}),
+    # Equipment-AA family — Saw (2026-05-31). Bare unit-shape: only
+    # ``kind`` (no ``TargetSpec`` slot, no payload field — the no-agent
+    # deterministic seat + source/host exclusion are structural to the
+    # variant). The cross-engine round-trip backstop against any future
+    # schema extension.
+    "saw_attacks_optional_sac_draw_effect": frozenset({"kind"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -3624,6 +3642,12 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # this slice admits. Imported alongside the other effect classes
     # so the ``isinstance`` dispatch below recognizes it.
     from mtg_bot.effects.bespoke import AnticausalVestigeLeavesEffect
+    # **Equipment-AA family — Saw (2026-05-31).** The bespoke
+    # ATTACKS+IsHost(attacker) optional-sac-then-draw rider whose safe
+    # leaf this slice admits (the SECOND leaf under the shared
+    # ``is_host_attacker`` predicate branch, after Baseball Bat's
+    # ``tap_up_to_one_target_creature``).
+    from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
     # **Weftwalking Cycle 2 (2026-05-24).** The recursive composer
     # whose narrow ConditionalIfCastFromHand(Sequence(Shuffle..., Draw))
     # shape this slice admits. Imported alongside the other effect
@@ -4026,16 +4050,17 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # round-tripped by the ``is_host`` bridge arm (cross_engine.py:
         # 13775-13797) IDENTICALLY on both engines.
         #
-        # The sole safe leaf under (ATTACKS, IsHost(attacker)) today is
-        # ``tap_up_to_one_target_creature`` (Baseball Bat's ATTACKS
-        # rider). The predicate-effect product is enforced by the
-        # ``("attacks", "is_host_attacker",
-        # "tap_up_to_one_target_creature")`` ``_SAFE_TRIGGERS`` entry
-        # (necessary, not sufficient); the effect-class arm below is the
-        # §2 silent-mistranslation teeth (the bare count_min=0 /
-        # count_max=1 single-slot gate).
+        # The safe leaves under (ATTACKS, IsHost(attacker)) today are the
+        # Equipment-AA family riders: ``tap_up_to_one_target_creature``
+        # (Baseball Bat), ``saw_attacks_optional_sac_draw_effect`` (Saw).
+        # The predicate-effect product is enforced by the per-leaf
+        # ``_SAFE_TRIGGERS`` entries (necessary, not sufficient); the
+        # effect-class arms below are the §2 silent-mistranslation teeth.
         pred_dict = {"kind": "is_host", "subject": "attacker"}
-        safe_effect_kinds = ("tap_up_to_one_target_creature",)
+        safe_effect_kinds = (
+            "tap_up_to_one_target_creature",
+            "saw_attacks_optional_sac_draw_effect",
+        )
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
@@ -4495,6 +4520,35 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             return None
         eff_kind = "tap_up_to_one_target_creature"
         eff_dict = {"kind": "tap_up_to_one_target_creature"}
+    elif isinstance(eff, SawAttacksOptionalSacDrawEffect):
+        # **Equipment-AA family — Saw (2026-05-31) — the SECOND
+        # ATTACKS+IsHost(attacker) safe leaf.** Python's
+        # ``SawAttacksOptionalSacDrawEffect`` (effects/bespoke.py:2498):
+        # "you may sacrifice a permanent other than that creature or this
+        # Equipment. If you do, draw a card." Saw's equipped-creature-
+        # attacks rider is the sole EoE consumer ({2} Artifact —
+        # Equipment; Equip {2} already a §2-decline activated ability,
+        # campaign-wide — the carrier's other surfaces don't gate the
+        # ATTACKS-trigger admit).
+        #
+        # **Bare unit shape (§2 silent-mistranslation teeth).** No
+        # ``TargetSpec`` slot (NOT a targeted effect — the sacrifice pool
+        # is "permanents you control excluding the host + this
+        # Equipment", an internal deterministic seat, not a target). Gate
+        # on the exact parameterless-frozen-dataclass shape: no
+        # ``requires_target``, empty ``target_count_range`` lower bound.
+        # The no-agent deterministic ``options[0]`` seat is byte-equal
+        # cross-engine (Rust's resolve arm ACCEPTS + sacrifices the FIRST
+        # controlled permanent excluding source + host, then draws). See
+        # the ``("attacks", "is_host_attacker",
+        # "saw_attacks_optional_sac_draw_effect")`` ``_SAFE_TRIGGERS``
+        # entry for the full provenance.
+        if eff.requires_target():
+            return None
+        if eff.target_count_range() != (0, 0):
+            return None
+        eff_kind = "saw_attacks_optional_sac_draw_effect"
+        eff_dict = {"kind": "saw_attacks_optional_sac_draw_effect"}
     elif isinstance(eff, LookTopNPutOneInHandRestToGraveyard):
         # **Codecracker Hound Cycle 2 (2026-05-24) — the 9th ENTERS+IsSelf
         # leaf.** Python's

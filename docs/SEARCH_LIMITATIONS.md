@@ -6632,6 +6632,36 @@ per-card-module convention). Pinned by
 reuse of the Sunset Saboteur / Exosuit Savior shared seat; the only
 genuinely-new Rust Effect is `TapUpToOneTargetCreature`.
 
+**Equipment-AA family sibling — Saw (2026-05-31,
+`feature/equipment-aa-siblings`).** Saw (`{2}` Artifact — Equipment)
+rides the SAME `ATTACKS` + `IsHost(subject="attacker")` predicate
+bridge as Baseball Bat (the `is_host_attacker` sentinel + the shared
+ATTACKS dispatch), but its rider — `SawAttacksOptionalSacDrawEffect`
+("you may sacrifice a permanent other than that creature or this
+Equipment; if you do, draw a card") — is **NOT a targeted effect**, so
+it does NOT ride this Tier-C target-seating seat (it is NOT in
+`_TARGET_SEATED_EFFECT_KINDS`). The single new Rust Effect
+`Effect::SawAttacksOptionalSacDrawEffect`
+(`state_ops_resolve.rs`) reads the source Equipment's controller
+(`current_resolve_source_controller`) + its `attached_to` host, then
+deterministically sacrifices the FIRST controlled permanent in
+`bf_iter_etb_sorted` order EXCLUDING the source + host (via the shared
+`sacrifice_source_inline`) and draws one card (inlined
+`Effect::DrawCards { count: 1 }` shape). **Deliberate no-agent shortcut
+(documented divergence):** Python's `SawAttacksOptionalSacDrawEffect`
+defers the optional `may`-decision + the which-permanent choice to the
+controller's AGENT (`choose_yes_no` / `choose_sacrifice`); the Rust
+resolve arm + the cross-engine probe path (NO agent) ALWAYS ACCEPT and
+pick `options[0]` — byte-equal with Python's `if p.agent is None:
+chosen = options[0]` no-agent branch (`effects/bespoke.py:2545`). The
+agent-driven decline / non-first-pick branches are NOT modeled
+cross-engine (same no-agent-determinism shortcut as every other
+optional-decision Effect in the parity harness; impact: parity probes
+exercise the no-agent path only — the agent-choice branches are a
+search-strength concern, not a state-divergence one, since both engines
+collapse to the deterministic seat when no agent is present). Pinned by
+`tests/test_saw_parity.py` + `tests_rust/test_equipment_aa_siblings.py`.
+
 ---
 
 ## Tier-C target-seating sub-substrate — original entry (lever-a: Sunset Saboteur + Exosuit Savior)

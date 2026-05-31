@@ -20581,6 +20581,71 @@ fn apply_effect(
             }
             // else: target left bf / became non-creature → silent fizzle.
         }
+        // Equipment-AA family — Saw (2026-05-31).
+        // `SawAttacksOptionalSacDrawEffect`: "you may sacrifice a
+        // permanent other than that creature [the equipped host] or this
+        // Equipment [the source]. If you do, draw a card." NOT a targeted
+        // effect — the sacrifice pool is the source-controller's
+        // permanents excluding source + host. The no-agent deterministic
+        // seat (the cross-engine-probe / Rust path) ACCEPTS and
+        // sacrifices `options[0]` — the FIRST controlled permanent in
+        // `bf_iter_etb_sorted` order excluding source + host — then draws
+        // one card. Byte-equal with Python's no-agent branch
+        // (`effects/bespoke.py:2545` `if p.agent is None: chosen =
+        // options[0]` → `turn.sacrifice(chosen)` → `draw_n_cards(.,1)`).
+        // No legal permanent ⇒ silent no-op (Python's `if not options:
+        // return` — no draw).
+        Effect::SawAttacksOptionalSacDrawEffect => {
+            // Source controller (the resolving trigger's controller —
+            // CR 603.3d the Equipment's controller). Mirrors the
+            // DealDamage / DrawCards arms' `current_resolve_source_
+            // controller` read.
+            let source_controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // The equipped host = the source Equipment's `attached_to`
+            // (the trigger source object). Find it across both bfs.
+            let host_id: Option<u32> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find(|o| o.id == source_obj_id)
+                .and_then(|o| o.attached_to);
+            // Deterministic seat: FIRST permanent in ETB order
+            // controlled by `source_controller`, excluding the source
+            // Equipment + its host. Mirrors Python's `options = [o for
+            // o in state.battlefield if o.controller_id == controller
+            // and o.id != source.id and o.id != host_id]` then
+            // `options[0]`.
+            let chosen: Option<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find(|o| {
+                        o.controller as u8 == source_controller
+                            && o.id != source_obj_id
+                            && Some(o.id) != host_id
+                    })
+                    .map(|o| (o.controller as usize, o.id));
+            if let Some((pidx, chosen_id)) = chosen {
+                // No-agent: ACCEPT the optional, sacrifice options[0],
+                // draw one card. Empty pool above ⇒ no-op (no draw).
+                sacrifice_source_inline(state, pidx, chosen_id)?;
+                // Draw one card for the source controller. Inlined to
+                // mirror the `Effect::DrawCards { count: 1 }` arm verbatim
+                // (top of library = lib[0]; empty-library flags the
+                // CR 704.5b loss). Byte-equal with Python's
+                // `draw_n_cards(state, controller_id, 1)`.
+                let cidx = source_controller as usize;
+                let player = &mut state.players[cidx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    player.attempted_draw_on_empty = true;
+                } else {
+                    let mut obj = lib.remove(0);
+                    obj.zone = ZONE_HAND;
+                    Arc::make_mut(&mut player.hand).push(obj);
+                }
+            }
+            // else: no legal permanent → silent no-op (no draw).
+        }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both
             // players' battlefields.
