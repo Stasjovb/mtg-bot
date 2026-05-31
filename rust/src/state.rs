@@ -1404,6 +1404,20 @@ pub struct TriggerPayload {
     /// activation (the pre-Slice-4 shape — ETB triggers, Bear-Caster-
     /// style draw activations, sacrifice-self activations).
     pub target_id: Option<u32>,
+    /// **Nesting Grounds flip (2026-05-31).** SECOND chosen target for
+    /// dual-target activated abilities — today the only consumer is
+    /// `Effect::MovePlusOneCounterBetweenPermanentsYouControl`
+    /// (Nesting Grounds's {1}{T} AA: slot 0 = donor permanent,
+    /// slot 1 = recipient permanent, both you control). The
+    /// AA-activation path seats this from
+    /// `Action::ActivateAbility.target_creature_id_2`, and the trigger
+    /// resolve entry points swap it into
+    /// `current_resolve_payload_target_id_2` (mirroring how the
+    /// spell-cast path's `StackItem.target_obj_id_2` rides into the
+    /// same transient). `None` for every single-target /
+    /// non-target trigger / activation (the pre-flip shape) — so the
+    /// dual-target resolve arm sees slot 1 `None` and short-circuits.
+    pub target_id_2: Option<u32>,
 }
 
 /// One pending entry on the stack. Two kinds today: spells and
@@ -1955,6 +1969,9 @@ impl StackItem {
                 effect,
                 ability_index,
                 target_id: None,
+                // Nesting Grounds flip (2026-05-31): single-/non-target
+                // triggers carry no 2nd target.
+                target_id_2: None,
             }),
             // Spell-card-bridge lever (round-70): the spell-target
             // slot is Spell-kind-only; a trigger carries its target
@@ -2019,6 +2036,10 @@ impl StackItem {
                 effect,
                 ability_index,
                 target_id: Some(target_id),
+                // Nesting Grounds flip (2026-05-31): single-target
+                // constructor carries no 2nd target. The dual-target
+                // AA path uses `new_trigger_with_two_targets` below.
+                target_id_2: None,
             }),
             // Spell-card-bridge lever (round-70): Spell-kind-only
             // slot — a trigger's target rides on
@@ -2040,6 +2061,53 @@ impl StackItem {
             x_value: None,
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Trigger
             // with target — not a CR-707.2 spell copy.
+            is_copy: false,
+        }
+    }
+
+    /// **Nesting Grounds flip (2026-05-31).** Trigger-shape
+    /// constructor for DUAL-TARGET activated abilities — today the
+    /// only consumer is
+    /// `Effect::MovePlusOneCounterBetweenPermanentsYouControl`
+    /// (Nesting Grounds's {1}{T} AA, which moves one +1/+1 counter
+    /// from `target_id` (donor) onto `target_id_2` (recipient), both
+    /// permanents the activator controls). Both ids are read at
+    /// resolve-time by the trigger resolve entry points, which swap
+    /// `payload.target_id` → `current_resolve_payload_target_id` and
+    /// `payload.target_id_2` → `current_resolve_payload_target_id_2`
+    /// (mirroring the spell-cast path's two-slot swap). This is the
+    /// AA-activation analog of the spell path's
+    /// `new_spell_with_targets` 2-slot constructor — it closes the
+    /// gap the substrate landing flagged (the spell path seated
+    /// `target_obj_id_2`, the AA path bound only slot 0).
+    pub(crate) fn new_trigger_with_two_targets(
+        source_obj_id: u32,
+        controller: u8,
+        effect: crate::cards::Effect,
+        ability_index: u32,
+        target_id: u32,
+        target_id_2: u32,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::TriggeredAbility,
+            trigger_payload: Some(TriggerPayload {
+                effect,
+                ability_index,
+                target_id: Some(target_id),
+                target_id_2: Some(target_id_2),
+            }),
+            // Spell-kind-only target slots — a trigger's targets ride
+            // on `trigger_payload.target_id` / `target_id_2`.
+            target_obj_id: None,
+            target_obj_id_2: None,
+            target_obj_id_3: None,
+            chosen_mode_idx: None,
+            additional_cost_choice_id: None,
+            chosen_mode_idxs: None,
+            x_value: None,
+            // Dual-target trigger — not a CR-707.2 spell copy.
             is_copy: false,
         }
     }

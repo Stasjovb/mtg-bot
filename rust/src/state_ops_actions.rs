@@ -778,6 +778,7 @@ impl GameState {
                 target_creature_id,
                 sacrifice_target_id,
                 chosen_mode_idx,
+                target_creature_id_2,
             } => {
                 // CE20 Slice 1 + bridge follow-up dispatch: single
                 // unified path through `printing.activated_abilities`.
@@ -1121,6 +1122,30 @@ impl GameState {
                 let is_copy_target_instant_or_sorcery_effect = matches!(
                     resolved.effect,
                     crate::cards::Effect::CopyTargetInstantOrSorceryYouControl,
+                );
+                // **Nesting Grounds flip (2026-05-31).** Recognize
+                // `Effect::MovePlusOneCounterBetweenPermanentsYouControl`
+                // as the DUAL-TARGET shape — `target_creature_id`
+                // carries the donor permanent (slot 0) and
+                // `target_creature_id_2` the recipient permanent
+                // (slot 1), both permanents the activator controls.
+                // Both ids are validated below (on the activator's
+                // battlefield) and threaded onto the StackItem's
+                // 2-slot trigger payload so the dual-target resolve
+                // arm reads BOTH `current_resolve_payload_target_id`
+                // (donor) AND `current_resolve_payload_target_id_2`
+                // (recipient). Mirrors Python's `_activate_ability`
+                // multi-target picker at `actions.py:2012-2047`
+                // (`Nesting Grounds`'s `(2, 2)` target_count_range —
+                // two permanents-you-control slots). BOTH ids are
+                // OPTIONAL on this effect: the resolve arm
+                // short-circuits when slot 1 is absent (mirrors
+                // Python's `if len(targets) < 2: return`), so a
+                // synthetic / direct caller can omit one to drive the
+                // fizzle path.
+                let is_move_plus_one_counter_effect = matches!(
+                    resolved.effect,
+                    crate::cards::Effect::MovePlusOneCounterBetweenPermanentsYouControl,
                 );
                 let validated_target_id: Option<u32> =
                     if resolved.requires_target_creature_you_control {
@@ -1612,11 +1637,78 @@ impl GameState {
                             }
                             None => None,
                         }
+                    } else if is_move_plus_one_counter_effect {
+                        // **Nesting Grounds flip (2026-05-31) — donor
+                        // (slot 0) validation.** Donor must be a
+                        // permanent on the ACTIVATOR's battlefield (a
+                        // permanent you control). `target_creature_id`
+                        // is OPTIONAL — omitting it drives the resolve
+                        // arm's `<2 targets` fizzle. Mirrors Python's
+                        // `legal_targets` permanents-you-control filter
+                        // at `counters.py` + the `_activate_ability`
+                        // picker.
+                        match target_creature_id {
+                            Some(donor_id) => {
+                                let on_activator_bf = state.players
+                                    [controller_idx]
+                                    .battlefield
+                                    .iter()
+                                    .any(|obj| obj.id == donor_id);
+                                if !on_activator_bf {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         donor target {donor_id} not a \
+                                         permanent on the activator's \
+                                         battlefield (Nesting Grounds moves a \
+                                         +1/+1 counter between permanents you \
+                                         control)"
+                                    )));
+                                }
+                                Some(donor_id)
+                            }
+                            None => None,
+                        }
                     } else {
                         // Non-target activation: accept None or
                         // ignore a stray target_creature_id key. The
                         // payload won't be threaded into the
                         // StackItem / current_resolve_payload_target_id.
+                        None
+                    };
+                // **Nesting Grounds flip (2026-05-31) — recipient
+                // (slot 1) validation.** For the dual-target
+                // `MovePlusOneCounterBetweenPermanentsYouControl`
+                // effect, `target_creature_id_2` carries the recipient
+                // permanent. Must be on the activator's battlefield (a
+                // permanent you control). OPTIONAL — omitting it (or
+                // omitting the donor) drives the resolve arm's
+                // `<2 targets` fizzle. For every OTHER effect a stray
+                // `target_creature_id_2` is accept-and-ignored (parity
+                // with the slot-0 stray-key handling above).
+                let validated_target_id_2: Option<u32> =
+                    if is_move_plus_one_counter_effect {
+                        match target_creature_id_2 {
+                            Some(recipient_id) => {
+                                let on_activator_bf = state.players
+                                    [controller_idx]
+                                    .battlefield
+                                    .iter()
+                                    .any(|obj| obj.id == recipient_id);
+                                if !on_activator_bf {
+                                    return Err(PyValueError::new_err(format!(
+                                        "ActivateAbility: source {source_id} \
+                                         recipient target {recipient_id} not a \
+                                         permanent on the activator's \
+                                         battlefield (Nesting Grounds moves a \
+                                         +1/+1 counter between permanents you \
+                                         control)"
+                                    )));
+                                }
+                                Some(recipient_id)
+                            }
+                            None => None,
+                        }
+                    } else {
                         None
                     };
                 // Phase 2.7: CE20 follow-up Slice 6 + Slice 7
@@ -2215,15 +2307,44 @@ impl GameState {
                     // push the legacy `new_trigger` shape (target_id
                     // = None in the payload).
                     let controller = controller_idx as u8;
-                    let mut stack_item = match validated_target_id {
-                        Some(tid) => crate::state::StackItem::new_trigger_with_target(
-                            source_id,
-                            controller,
-                            resolved.effect.clone(),
-                            ability_index,
-                            tid,
-                        ),
-                        None => crate::state::StackItem::new_trigger(
+                    // **Nesting Grounds flip (2026-05-31).** Three-way
+                    // push shape:
+                    //   - BOTH slots seated (dual-target AA — Nesting
+                    //     Grounds): `new_trigger_with_two_targets`, so
+                    //     the resolver swaps both
+                    //     `current_resolve_payload_target_id` (donor)
+                    //     AND `_2` (recipient) before firing the
+                    //     dual-target resolve arm.
+                    //   - slot 0 only (single-target AA — Equipment-
+                    //     equip etc.): `new_trigger_with_target`.
+                    //   - neither (non-target AA): `new_trigger`.
+                    // The dual-target arm requires slot 0 present too
+                    // (a recipient with no donor is a malformed pick;
+                    // the resolve arm would fizzle on `<2` anyway, but
+                    // the constructor needs a concrete donor id, so we
+                    // only take the 2-slot shape when BOTH are Some).
+                    let mut stack_item = match (validated_target_id, validated_target_id_2)
+                    {
+                        (Some(donor), Some(recipient)) => {
+                            crate::state::StackItem::new_trigger_with_two_targets(
+                                source_id,
+                                controller,
+                                resolved.effect.clone(),
+                                ability_index,
+                                donor,
+                                recipient,
+                            )
+                        }
+                        (Some(tid), None) => {
+                            crate::state::StackItem::new_trigger_with_target(
+                                source_id,
+                                controller,
+                                resolved.effect.clone(),
+                                ability_index,
+                                tid,
+                            )
+                        }
+                        (None, _) => crate::state::StackItem::new_trigger(
                             source_id,
                             controller,
                             resolved.effect.clone(),
