@@ -17300,6 +17300,34 @@ Wandering Fumarole.
 
 **Pinned by:** `tests/test_lotus_field_parity.py` (8 pins — parser SoT verify-first + the LOAD-BEARING loader-decline honest-stop + bridge reverse-arm round-trip + Rust register acceptance + cross-engine real-EoE SAC-TWO (2 of 3 lands sac'd, source survives) + SAC-UNDER (under-count) + MINT-3 ({T}: 3-of-chosen-color W mint)) + `tests_rust/test_sacrifice_n_lands_you_control.py` (9 Rust-engine pins — parse register / reject-negative / alt-count / resolve-sac-two-excludes-source / under-count / no-other-lands-noop / count-zero-noop / skips-non-land-permanents / source-controller-scoping). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Lotus Field.
 
+> **Update (2026-05-31 — composite-admit follow-up landed; supersedes the "STAYS BLOCKED / characterized follow-up" framing above):** The composite loader-admit path described above as future work has now landed (Python-only, no Rust change). Lotus Field flips covered-by-construction → PROBED. See the next entry.
+
+---
+
+## Lotus Field composite loader-admit — `enters_tapped` symmetric drop + narrow composite carrier path (2026-05-31)
+
+**Where:** `src/mtg_bot/parity/trajectory.py` (`_printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword` composite-admit predicate + `_carrier_aa_land_with_etb_sac_and_keyword_card_def` builder + the `_printing_to_card_def` dispatch arm + the `_filter_deck_to_bridge_supported` OR-disjunct). PYTHON-ONLY — no `rust/` change (the `Effect::SacrificeNLandsYouControl` Rust variant + reverse bridge arm landed at merge `5dbb9c37`; the keyword + mana-AA pieces round-trip through the pre-existing `keywords` Vec + `_python_aa_to_safe_dict` floor with Phase-4E's mana-AA lift).
+
+**What the shortcut is:**
+- **Composite carrier admit (the closure).** A brand-new NARROW admit predicate co-gates all four Lotus Field riders on one printing: a single chosen-color mana AA (`AddNManaOfChosenColor(3, WUBRG)`) + `enters_tapped=True` + `keywords ⊆ {hexproof}` + EXACTLY one ETB `IsSelf` triggered ability whose effect is the bridge-admitted `SacrificeNLandsYouControl`. It admits ONLY the exact Lotus Field shape (Phase-1 specificity contract — NOT a widen of the Carrier-AA Land predicate, which still hard-declines on `keywords` + `triggered_abilities`). The builder emits all four pieces all-or-nothing (the mana AA via the safe-dict round-trip floor, the keyword via the CardDef `keywords` field, the ETB trigger emitted directly as a `{"event": "enters", "predicate": {"kind": "source_is_self"}, "effect": {"kind": "sacrifice_n_lands_you_control", "count": N}}` round-trip dict — NOT via the generic `_python_ta_to_safe_dict` gate, keeping that gate un-widened).
+- **`enters_tapped` symmetric drop (the deliberate simplification).** The CardDef bridge carries no plain `enters_tapped` field, and Rust's `register_printing` has no land-tapped-entry path. The predicate POSITIVELY requires `enters_tapped=True` (to identify Lotus Field's shape), but the builder DROPS it symmetrically — both engines materialize Lotus Field as an UNTAPPED land. This is the round-85 Planet land / Cathedral of War symmetric-drop precedent extended to the composite shape.
+- **`hexproof` admitted as a static Land keyword.** `hexproof` is NOT in `_SAFE_KEYWORDS` (that set is the combat-relevant creature-keyword whitelist; hexproof's targeting-protection lifecycle is fragile in the trajectory CREATURE context). On a LAND it round-trips as a pure stored `keywords` data field (Python frozenset ↔ Rust Vec), gated by a dedicated single-member `_LOTUS_FIELD_COMPOSITE_SAFE_KEYWORDS = {hexproof}` set so the Phase-1 specificity contract holds (a future keyword on this shape fails loudly at the subset gate rather than riding through).
+
+**Why this is OK:**
+- The `enters_tapped` drop is byte-equal cross-engine — both engines build the land untapped from the CardDef default; neither honors a tapped-entry it never received. Under the bench play strategy (no agent) the tapped-vs-untapped delta only affects whether the land could tap for mana the turn it entered; the symmetric drop means both engines agree bit-for-bit at every observable.
+- The `hexproof` drop-into-data is byte-equal — neither engine's bench moves target a land, so the land's hexproof is never exercised; it round-trips as identical stored data on both sides.
+- The ETB sac + the chosen-color mana mint both resolve byte-equal cross-engine on the loader-built printing (the SAC-TWO / SAC-UNDER / MINT-3 probes drive the ACTUAL `_printing_to_card_def(Lotus Field)` → Rust registry dict end-to-end, not a hand-wired synthetic). The composite admit therefore proves the full real-EoE Lotus Field shape, not just its primitives.
+
+**Failure mode:**
+- A real game where Lotus Field's tapped-entry matters (e.g. a turn-timing line that depends on it not being available for mana the turn it's played) is not modeled — both engines treat it as untapped. CR-incomplete; same class as the round-85 Planet land / Cathedral of War tapped-entry drops.
+- A regression that drops the composite admit (or silently auto-admits Lotus Field via the broad Carrier-AA path) trips the `test_lotus_field_admitted_at_loader_admit_gate` ADMIT pin.
+
+**Fix scope:** A full-fidelity tapped-entry would need a plain `enters_tapped` bool on CardDef + a matching Rust land-tapped-entry play path (distinct from the existing conditional-painland `enters_tapped_unless_any_player_life_at_most` threshold). Deferred — the symmetric drop is byte-equal under the bench, and the tapped-entry fidelity gap is shared with every other admitted tapped land.
+
+**Impact estimate:** Lotus Field moves covered-by-construction → PROBED. PROBED 448 → 449; covered_by_construction 1 → 0; BLOCKED-SG 26 unchanged. 0 strength cost — byte-equal cross-engine on the real-EoE loader-built drive of the ETB sac path AND the {T}:add-3-chosen-color mana path; the two drops (tapped-entry, land-hexproof) are symmetric and bench-unobservable.
+
+**Pinned by:** `tests/test_lotus_field_parity.py` (11 pins — the original 8 [parser SoT verify-first, the now-flipped LOADER-ADMIT pin, bridge reverse-arm round-trip, Rust register acceptance, synthetic-driven SAC-TWO / SAC-UNDER / MINT-3] + 3 NEW composite-loader-admit real-EoE probes driving the ACTUAL `_printing_to_card_def` → Rust registry dict end-to-end [loader-admit SAC-TWO / SAC-UNDER / MINT-3]). Probe module registered in `scripts/measure_pool_parity.py` PROBE_MODULES; PROBED attribution via the existing `test_cross_engine_real_eoe_lotus_field_*_parity` functions' `_PRINTINGS["Lotus Field"]` references.
+
 ---
 
 When you take a deliberate shortcut (heuristic, approximation,

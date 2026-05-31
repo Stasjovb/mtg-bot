@@ -10102,6 +10102,250 @@ def _carrier_aa_artifact_card_def(printing) -> "Optional[CardDef]":
     )
 
 
+# **Lotus Field composite-admit substrate (2026-05-31).** The narrow
+# keyword set this composite-admit path round-trips byte-equal as a
+# STATIC keyword on a Land CardDef. ``hexproof`` is the SOLE member —
+# it is deliberately NOT in :data:`_SAFE_KEYWORDS` (that set is the
+# combat-relevant creature-keyword whitelist; hexproof's targeting-
+# protection lifecycle is fragile in the trajectory creature context,
+# per the :data:`_SAFE_KEYWORDS` docstring). On a LAND, however, the
+# keyword is purely a static data field — neither engine exercises a
+# land's hexproof during the bench play strategy (lands are never
+# targeted by either engine's bench moves), so it round-trips byte-
+# equal as a stored ``keywords`` member: the CardDef carries it
+# through to BOTH the Python ``CardPrinting.keywords`` frozenset AND
+# the Rust ``register_printing`` ``keywords`` Vec (underscore-
+# translated; ``hexproof`` has no space so the translation is a
+# no-op). Kept as a dedicated single-member set (NOT a widen of
+# ``_SAFE_KEYWORDS``) so the Phase-1 specificity contract holds — only
+# the exact Lotus Field keyword shape admits here, and a future
+# keyword on this composite shape fails loudly at the subset gate
+# rather than silently riding through.
+_LOTUS_FIELD_COMPOSITE_SAFE_KEYWORDS: frozenset[str] = frozenset({"hexproof"})
+
+
+def _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(
+    printing,
+) -> bool:
+    """True iff a CardPrinting is the EXACT Lotus Field composite shape:
+    a chosen-color mana-producing Land carrier with ``enters_tapped`` +
+    a ``hexproof`` static keyword + exactly one ETB triggered ability
+    whose effect is the bridge-admitted ``SacrificeNLandsYouControl``.
+
+    **Lotus Field composite-admit substrate (2026-05-31 — the
+    composite loader-admit follow-up to the SacrificeNLandsYouControl
+    substrate honest-stop, merge ``5dbb9c37``.)** Lotus Field (Land,
+    EoE) is the printed card::
+
+        Lotus Field enters tapped.
+        When Lotus Field enters, sacrifice two lands.
+        Hexproof.
+        {T}: Add three mana of any one color.
+
+    The live ``OracleParserCardSource`` flattens this to a COMPOSITE
+    carrier — a chosen-color mana AA + ``enters_tapped=True`` +
+    ``keywords={hexproof}`` + ONE ETB ``triggered_abilities`` carrying
+    ``SacrificeNLandsYouControl(count=2)``. NO existing bridge admit
+    predicate accepts that combination: the Carrier-AA Land predicate
+    hard-declines on ``keywords`` AND ``triggered_abilities``
+    (``trajectory.py:9847,9849``); the tapped-mana-land predicates
+    decline any printing with activated or triggered abilities. This
+    predicate is the brand-new composite admit path that co-gates all
+    four riders on one printing.
+
+    **§2 teeth — admit ONLY the exact Lotus Field shape (Phase-1
+    specificity contract; NOT a broad widen):**
+
+      * Non-Land, or any extra card type (no Land—Desert /
+        Land—Artifact overlap).
+      * Non-default P/T (a Land carrier has neither).
+      * ``loyalty`` / ``spell_effect`` / ``static_abilities`` /
+        ``warp`` / ``kicker`` / ``impending`` / ``room_halves`` /
+        ``cost_reductions`` / ``external_cost_reductions`` /
+        ``station_threshold`` / ``dynamic_pt_formula`` / ``ward_cost``
+        — every Phase-2+ rider / other subsystem (mirrors the
+        Carrier-AA Land exclusion set).
+      * ``enters_tapped`` NOT set — the composite REQUIRES the tapped-
+        entry rider that identifies Lotus Field's shape. The CardDef
+        bridge carries no plain ``enters_tapped`` field, so the rider
+        is DROPPED symmetrically on both engines (the round-85 Planet
+        land / Cathedral of War symmetric-drop precedent); the
+        predicate gates on it positively so the admit decision is
+        explicit, not silent.
+      * ``produces`` non-empty — Lotus Field's mana comes from a
+        chosen-color AA, NOT a ``{T}: Add <c>`` produces line; a
+        non-empty produces is a DIFFERENT (and already-owned) land
+        sub-shape.
+      * ``enters_tapped_unless_any_player_life_at_most`` set — the
+        conditional-tapped painland sub-shape (round-59 painland
+        predicate owns those).
+      * Keywords not a subset of
+        :data:`_LOTUS_FIELD_COMPOSITE_SAFE_KEYWORDS` (``{hexproof}``),
+        OR an EMPTY keyword set — the composite REQUIRES the hexproof
+        rider; a keyword-free tapped mana land is a different sub-
+        shape (the tapped-mana-land predicates own those).
+      * NOT exactly one ETB triggered ability whose effect is
+        ``SacrificeNLandsYouControl``, OR the trigger carries a non-
+        ``IsSelf`` predicate / a ``once_per_turn`` / a ``tier_threshold``
+        rider — every shape outside the bare ETB-sac trigger.
+      * Zero AAs, more than one AA, OR any AA failing the safe-dict
+        round-trip floor (the same per-AA contract the Carrier-AA Land
+        predicate uses). Lotus Field carries EXACTLY ONE AA (the
+        chosen-color mana AA), so the single-AA gate is honest-tight
+        here.
+    """
+    from mtg_bot.effects import SacrificeNLandsYouControl
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.parity.cross_engine import _python_aa_to_safe_dict
+
+    if "Land" not in printing.card_types:
+        return False
+    extra_card_types = tuple(
+        t for t in printing.card_types if t != "Land"
+    )
+    if extra_card_types:
+        return False
+    if printing.power is not None or printing.toughness is not None:
+        return False
+    # Phase-2+ rider / other-subsystem exclusion set (mirrors the
+    # Carrier-AA Land predicate's exclusion guards) — EXCEPT keywords +
+    # triggered_abilities, which this composite predicate positively
+    # co-gates below.
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    # **enters_tapped tooth.** REQUIRE the tapped-entry rider (the
+    # composite shape's identifying flag). Dropped symmetrically by the
+    # CardDef builder (no plain enters_tapped bridge field).
+    if not getattr(printing, "enters_tapped", False):
+        return False
+    if getattr(printing, "enters_tapped_unless_any_player_life_at_most", 0):
+        return False
+    # **produces tooth.** Lotus Field's mana rides the chosen-color AA,
+    # NOT a ``{T}: Add <c>`` produces line — empty produces is the
+    # composite signature.
+    if printing.produces:
+        return False
+    # **keyword tooth.** REQUIRE a non-empty keyword set that is a
+    # subset of the narrow {hexproof} composite-safe set.
+    keywords = getattr(printing, "keywords", frozenset())
+    if not keywords:
+        return False
+    if not keywords <= _LOTUS_FIELD_COMPOSITE_SAFE_KEYWORDS:
+        return False
+    # **ETB-trigger tooth.** EXACTLY one triggered ability — an ENTERS +
+    # bare ``IsSelf`` trigger whose effect is the bridge-admitted
+    # ``SacrificeNLandsYouControl``, with no once_per_turn /
+    # tier_threshold rider.
+    tas = tuple(printing.triggered_abilities or ())
+    if len(tas) != 1:
+        return False
+    ta = tas[0]
+    if ta.event is not Event.ENTERS:
+        return False
+    if not isinstance(ta.predicate, IsSelf) or ta.predicate.subject is not None:
+        return False
+    if not isinstance(ta.effect, SacrificeNLandsYouControl):
+        return False
+    if getattr(ta, "once_per_turn", False):
+        return False
+    if getattr(ta, "tier_threshold", 0):
+        return False
+    # **AA tooth.** EXACTLY one AA (Lotus Field's chosen-color mana AA),
+    # and it must serialize through the safe-dict round-trip floor.
+    aas = tuple(printing.activated_abilities or ())
+    if len(aas) != 1:
+        return False
+    if _python_aa_to_safe_dict(aas[0]) is None:
+        return False
+    return True
+
+
+def _carrier_aa_land_with_etb_sac_and_keyword_card_def(
+    printing,
+) -> "Optional[CardDef]":
+    """Build a CardDef from a Lotus-Field composite-admit Land carrier.
+
+    Pre-condition: ``printing`` must pass
+    :func:`_printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword`.
+    The builder serializes ALL FOUR pieces all-or-nothing — the
+    chosen-color mana AA (via the safe-dict round-trip floor) + the
+    ``hexproof`` static keyword + the ETB
+    ``SacrificeNLandsYouControl`` triggered ability — onto a single
+    Land CardDef. Returns ``None`` (an honest decline) if ANY piece
+    fails its forward serialization, so a piece with no forward arm
+    DECLINES the whole printing rather than silently dropping it
+    (mirrors the established bridge-floor discipline — the Carrier-AA
+    Land builder's defense-in-depth ``None`` return).
+
+    **enters_tapped symmetric drop.** The CardDef bridge carries no
+    plain ``enters_tapped`` field and Rust's ``register_printing`` has
+    no land-tapped-entry path, so the parser's ``enters_tapped=True``
+    is dropped symmetrically on BOTH engines (the round-85 Planet land
+    / Cathedral of War symmetric-drop precedent). Both engines
+    materialize Lotus Field as an UNTAPPED land — bit-equal cross-
+    engine, CR-incomplete (a real Lotus Field enters tapped). A
+    documented deliberate simplification (``SEARCH_LIMITATIONS.md``).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef as _CardDef,
+        _python_aa_to_safe_dict,
+    )
+
+    if not _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(
+        printing,
+    ):
+        return None
+    # ---- AA piece (chosen-color mana AA).
+    aa_dict = _python_aa_to_safe_dict(printing.activated_abilities[0])
+    if aa_dict is None:
+        return None
+    # ---- ETB trigger piece. The predicate guarantees exactly one
+    # ENTERS + IsSelf + SacrificeNLandsYouControl(count=N) trigger; emit
+    # the matching round-trip dict directly (the SAME shape Rust's
+    # ``parse_triggered_ability`` consumes and
+    # ``cross_engine._ta_dict_to_python_triggered_ability`` reconstructs
+    # — ``{"event": "enters", "predicate": {"kind": "source_is_self"},
+    # "effect": {"kind": "sacrifice_n_lands_you_control", "count": N}}``).
+    # Emitted directly (not via ``_python_ta_to_safe_dict``) so the
+    # composite stays NARROW — the generic safe-trigger gate is NOT
+    # widened to admit ``sacrifice_n_lands_you_control``, keeping the
+    # Phase-1 specificity contract.
+    ta = printing.triggered_abilities[0]
+    ta_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "sacrifice_n_lands_you_control",
+            "count": int(ta.effect.count),
+        },
+    }
+    return _CardDef(
+        name=printing.name,
+        card_type="Land",
+        supertypes=tuple(printing.supertypes or ()),
+        subtypes=tuple(printing.subtypes or ()),
+        keywords=tuple(sorted(printing.keywords)),
+        triggered_abilities=(ta_dict,),
+        activated_abilities=(aa_dict,),
+    )
+
+
 def _printing_is_bridge_pure_station_spacecraft(printing) -> bool:
     """True iff a CardPrinting is a Phase-1 bridge-supported Spacecraft.
 
@@ -12614,6 +12858,31 @@ def _printing_to_card_def(printing) -> CardDef:
         card_def = _carrier_aa_artifact_card_def(printing)
         if card_def is not None:
             return card_def
+    if _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(printing):
+        # **Lotus Field composite-admit substrate (2026-05-31).** A
+        # chosen-color mana-AA Land carrier with ``enters_tapped`` + a
+        # ``hexproof`` static keyword + an ETB
+        # ``SacrificeNLandsYouControl`` trigger flattens to a Land
+        # CardDef carrying all four pieces all-or-nothing (the mana AA
+        # via the safe-dict round-trip floor, the keyword via the
+        # CardDef ``keywords`` field, the ETB trigger as a
+        # ``{"event": "enters", "predicate": {"kind": "source_is_self"},
+        # "effect": {"kind": "sacrifice_n_lands_you_control", ...}}``
+        # round-trip dict). ``enters_tapped`` is dropped symmetrically
+        # on both engines (no plain enters_tapped bridge field — the
+        # round-85 Planet land / Cathedral of War symmetric-drop
+        # precedent). Sole admit in the EoE pool = Lotus Field.
+        # Returning ``None`` from the builder is defense-in-depth (the
+        # admit predicate already gates every forward-arm the builder
+        # needs); we fall through to the tail (which raises on no-match)
+        # so an unexpected None surfaces loudly. Routed AFTER every
+        # other Land disjunct so a printing only reaches here when the
+        # preceding land arms decline.
+        card_def = _carrier_aa_land_with_etb_sac_and_keyword_card_def(
+            printing,
+        )
+        if card_def is not None:
+            return card_def
     if _printing_is_bridge_pure_station_spacecraft(printing):
         # **Spacecraft Station substrate Phase 1 Cycle 3 (2026-05-25).**
         # A zero-ability Spacecraft (sole admit = Galvanizing Sawship)
@@ -14538,6 +14807,29 @@ def _filter_deck_to_bridge_supported(
             # — Phase-4B/C/D/E widen the per-AA Effect-class admit
             # set in lockstep per design doc §5.4-§5.7.
             or _printing_is_bridge_simple_carrier_aa_any(printing)
+            # **Lotus Field composite-admit substrate (2026-05-31).**
+            # The composite carrier-AA Land disjunct. Admits EXACTLY
+            # Lotus Field in the EoE pool — the SOLE printing carrying
+            # the combined shape (chosen-color mana AA + enters_tapped +
+            # ``keywords={hexproof}`` + one ETB
+            # ``SacrificeNLandsYouControl`` trigger). Routed AFTER the
+            # Carrier-AA-any disjunct (which hard-declines on keywords +
+            # triggered_abilities) and every other Land disjunct so a
+            # printing only falls through here when the simpler arms
+            # decline. The §2 teeth on
+            # :func:`_printing_is_bridge_carrier_aa_land_with_etb_sac_
+            # and_keyword` co-gate all four riders narrowly — only the
+            # exact Lotus Field shape admits (Phase-1 specificity
+            # contract; NOT a broad widen). The Rust
+            # ``Effect::SacrificeNLandsYouControl`` substrate + its
+            # cross-engine reverse bridge arm landed at merge
+            # ``5dbb9c37``; the keyword + AA pieces round-trip through
+            # the existing ``keywords`` Vec + ``_python_aa_to_safe_dict``
+            # floor (Phase-4E lifted the mana-AA decline). No Rust
+            # change this slice (Python-only composite loader-admit).
+            or _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(
+                printing,
+            )
             # **Spacecraft Station substrate Phase 1 Cycle 3
             # (2026-05-25).** The bridge-pure station Spacecraft
             # disjunct. Admits EXACTLY Galvanizing Sawship in the EoE

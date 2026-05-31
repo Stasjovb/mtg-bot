@@ -4080,6 +4080,7 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Python-side swap resolve.)
     REPO_ROOT / "tests" / "test_lavaclaw_reaches_parity.py",
     REPO_ROOT / "tests" / "test_wandering_fumarole_parity.py",
+    REPO_ROOT / "tests" / "test_lotus_field_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
@@ -4765,6 +4766,17 @@ def loader_admits(printing) -> bool:
             # this fold is pure metric-truthfulness (tier counts
             # unchanged).
             or traj._printing_is_bridge_simple_carrier_aa_any(printing)
+            # **Lotus Field composite-admit substrate (2026-05-31).**
+            # Mirrors the real loader's new composite carrier-AA Land
+            # disjunct in ``_filter_deck_to_bridge_supported``. Admits
+            # EXACTLY Lotus Field in the EoE pool — the sole printing
+            # carrying the combined shape (chosen-color mana AA +
+            # enters_tapped + ``keywords={hexproof}`` + one ETB
+            # ``SacrificeNLandsYouControl`` trigger). Flips Lotus Field
+            # covered-by-construction → PROBED.
+            or traj._printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(
+                printing,
+            )
             # **Spacecraft Station substrate Phase 1 Cycle 3
             # (2026-05-25).** Mirrors the real loader's new admit arm
             # in ``_filter_deck_to_bridge_supported``. Admits exactly
