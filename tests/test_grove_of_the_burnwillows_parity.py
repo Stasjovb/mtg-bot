@@ -725,9 +725,12 @@ def test_grove_carrier_aa_effect_classes_count():
     classes = _carrier_aa_phase_1_effect_classes()
     assert AddNManaOfChosenColor in classes
     assert GrantLifeToEachOpponent in classes
-    # 19 (post Ancient Tomb C2) + 2 (Grove) = 21.
-    assert len(classes) == 21, (
-        f"Carrier-AA Phase-1 Effect-class admit set must be 21 after the "
-        f"Grove FLIP (19 + AddNManaOfChosenColor + "
-        f"GrantLifeToEachOpponent); got {len(classes)}"
+    # 19 (post Ancient Tomb C2) + 2 (Grove) + 1 (Nesting Grounds flip:
+    # MovePlusOneCounterBetweenPermanentsYouControl) = 22.
+    assert len(classes) == 22, (
+        f"Carrier-AA Phase-1 Effect-class admit set must be 22 after the "
+        f"Grove FLIP + the Nesting Grounds flip (19 + "
+        f"AddNManaOfChosenColor + GrantLifeToEachOpponent + "
+        f"MovePlusOneCounterBetweenPermanentsYouControl); got "
+        f"{len(classes)}"
     )

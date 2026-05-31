@@ -69,6 +69,9 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
+    from mtg_bot.effects.generic.counters import (
+        MovePlusOneCounterBetweenPermanentsYouControl,
+    )
     from mtg_bot.effects.generic.destroy import RegenerateTargetCreature
     from mtg_bot.effects.generic.draw_mill import (
         DrawCardsByConditionMultiplier,
@@ -143,18 +146,24 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         # leaf classes (the Sequence-IN-AA admit closure):
         AddNManaOfChosenColor,
         GrantLifeToEachOpponent,
+        # Nesting Grounds flip (2026-05-31) -- the dual-target AA
+        # 2nd-target-slot closure:
+        MovePlusOneCounterBetweenPermanentsYouControl,
     })
     assert admit_set == expected_post_c4, (
         "Grove admit set sentinel: post-C4 + post-Meteor-Crater-"
         f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 + Grove "
-        f"admit set must be the 21-class set; got {len(admit_set)} "
-        f"classes, delta = added {admit_set - expected_post_c4} / "
+        f"+ Nesting-Grounds admit set must be the 22-class set; got "
+        f"{len(admit_set)} classes, delta = added "
+        f"{admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
-    assert len(admit_set) == 21, (
-        f"Grove admit-set size sentinel: expected 21 classes "
-        f"post-Grove (19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor "
-        f"+ GrantLifeToEachOpponent); got {len(admit_set)}"
+    assert len(admit_set) == 22, (
+        f"Grove admit-set size sentinel: expected 22 classes "
+        f"post-Grove + post-Nesting-Grounds (19 post-Ancient-Tomb-C2 + "
+        f"AddNManaOfChosenColor + GrantLifeToEachOpponent + "
+        f"MovePlusOneCounterBetweenPermanentsYouControl); got "
+        f"{len(admit_set)}"
     )
     assert CopyTargetInstantOrSorceryYouControl in admit_set, (
         "Phase 4B C4 FLIP: CopyTargetInstantOrSorceryYouControl must "
@@ -461,6 +470,9 @@ PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Ancient Tomb",
     # Grove of the Burnwillows (2026-05-31) -- Sequence-IN-AA admit.
     "Grove of the Burnwillows",
+    # Nesting Grounds (2026-05-31) -- dual-target AA 2nd-target-slot
+    # FLIP (MovePlusOneCounterBetweenPermanentsYouControl).
+    "Nesting Grounds",
 )
 
 PHASE_4D_ADMITTED_ARTIFACT_CARRIERS = (

@@ -9190,6 +9190,9 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
+    from mtg_bot.effects.generic.counters import (
+        MovePlusOneCounterBetweenPermanentsYouControl,
+    )
     from mtg_bot.effects.generic.damage import (
         DealDamageToControllerAndAddMana,
     )
@@ -9503,6 +9506,47 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # ``GrantLifeToEachOpponent`` leaf is fully fixed (amount=1).
         AddNManaOfChosenColor,
         GrantLifeToEachOpponent,
+        # **Nesting Grounds flip (2026-05-31 — THE FLIP per the
+        # substrate worker's handoff / ``docs/BLOCKED_TAIL_TRACTABILITY
+        # _SCOUT_2026-05-27.md`` §Group-1 Nesting Grounds row).** Adds
+        # Nesting Grounds' AA[0] pilot Effect class
+        # ``MovePlusOneCounterBetweenPermanentsYouControl`` (CR-121.5 —
+        # move a +1/+1 counter from target permanent you control onto a
+        # second target permanent you control). The Rust substrate (new
+        # ``Effect::MovePlusOneCounterBetweenPermanentsYouControl`` unit
+        # variant + parse / resolve via the 2-slot
+        # ``current_resolve_payload_target_id`` / ``_2`` plumbing /
+        # to_pydict + cross-engine bridge forward / reverse arms) shipped
+        # at the substrate merge ``c995ac04``. THIS slice closes the
+        # DUAL-TARGET AA-activation gap the substrate landing flagged: a
+        # SECOND ``Action::ActivateAbility.target_creature_id_2`` field
+        # threads the recipient onto the StackItem's
+        # ``trigger_payload.target_id_2`` (via the new
+        # ``new_trigger_with_two_targets`` constructor), and the trigger
+        # resolve entry points swap it into
+        # ``current_resolve_payload_target_id_2`` (mirroring the spell-
+        # cast path's ``target_obj_id_2`` swap). With the gap closed,
+        # combined with the Phase-1.5a ``{N}, {T}`` cost gate +
+        # ``sorcery_speed=True`` AA-rider widen, the per-AA admit
+        # predicate :func:`_aa_is_phase1_sub_shape_a` FLIPS DECLINED →
+        # ADMITTED on AA[0]; the printing-level admit cascades through
+        # :func:`_printing_is_bridge_simple_carrier_aa_land` /
+        # :func:`_printing_is_bridge_simple_carrier_aa_any` and Nesting
+        # Grounds admits end-to-end at the deck loader (Nesting Grounds
+        # is the SOLE EoE carrier of this Effect class — verified no-
+        # auto-grow). The neither-target-count nor dual-target-shape
+        # gates exist on the admit predicates; the only wall was the
+        # Effect-class omission + the now-closed AA 2nd-target slot.
+        #
+        # **Doubler / observer simplification (un-mirrored).** Python's
+        # ``add_plus_one_counters`` applies Loading-Zone-style counter-
+        # DOUBLING + fires Terrasymbiosis observer triggers; the Rust
+        # resolve arm mirrors the bare ``+1`` increment ONLY. This is
+        # safe for the FLIP: the per-card real-EoE PROBE seats NO
+        # doublers (factor 1) + a non-triggering recipient, so both
+        # engines move exactly one counter byte-equal. Documented in
+        # ``docs/SEARCH_LIMITATIONS.md`` (Nesting Grounds entry).
+        MovePlusOneCounterBetweenPermanentsYouControl,
     })
 
 
