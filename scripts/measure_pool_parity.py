@@ -3986,6 +3986,71 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_vanish_from_sight_parity.py",
     REPO_ROOT / "tests" / "test_dawnsire_sunstar_dreadnought_parity.py",
     REPO_ROOT / "tests" / "test_requiem_monolith_parity.py",
+    # covered-probe-batch-8 (this batch): the 11 remaining
+    # covered_by_construction cards at HEAD, each flipped COVERED ->
+    # PROBED by a per-card real-EoE cross-engine byte-equal probe via
+    # the same parse SoT + bridge round-trip + Python-side resolve
+    # idiom batch-5/6/7 established (the 0-Effect Aura / cast-restriction
+    # cards use the printing-flag cross-engine round-trip variant the
+    # Deafening Silence Cycle-1 file established, but binding the REAL
+    # parsed printing in the credited ``*_parity`` body so the scanner
+    # predicate at measure_pool_parity.py:4080+ credits them):
+    #   * Crystal Quarry           -- Land {5},{T} five-color filtering
+    #     mana ability; AddManaToPool five-color batch (bridge narrows
+    #     to the Rust scalar single-color mint).
+    #   * Power Depot               -- Artifact-Land {T} artifact-spell-
+    #     restricted mana; AddManaToPool ('any',1) +
+    #     spend_restriction (rider drops on Rust scalar round-trip).
+    #   * Steelswarm Operator       -- Artifact-Creature dual artifact-
+    #     restricted mana abilities (artifact_spell + artifact_
+    #     activation, single + UU mints).
+    #   * Dust Bowl                 -- Land {3},{T},Sac-a-land
+    #     DestroyTargetLand(nonbasic_only=True) (nonbasic-narrowing
+    #     rider drops to the bare parametric-target variant).
+    #   * Clammy Prowler            -- Enchantment-Creature ATTACKS
+    #     trigger GrantUnblockableUEOT (attacking_only/exclude_self
+    #     team riders drop to the bare unblockable-keyword arm).
+    #   * Let's Play a Game         -- ModalChooseOne Sorcery; the
+    #     nested Sequence(EachOpponentLosesLife(3), GainLife(3)) drain
+    #     mode resolves an observable byte-equal life swing.
+    #   * Lithobraking              -- Instant Sequence(CreateToken,
+    #     OptionalSacArtifactForEffect(DealNDamageToEachCreature(2)));
+    #     slug pinned via the optional-sac Pyroclasm wrapper (the
+    #     non-token half).
+    #   * Weapons Manufacturing     -- Enchantment ENTERS-trigger
+    #     CreateToken(<Munitions>); slug pinned via the Munitions
+    #     token's LTB DealDamageAnyTarget(2) payoff arm.
+    #   * Sami, Ship's Engineer     -- Creature end-step
+    #     ConditionalOnTappedCreatures(CreateToken(<Robot>),
+    #     min_count=2); slug pinned via the intervening-if tapped-
+    #     count gate wrapper (the round-26 conditional_on_tapped_
+    #     creatures arm; the DDDD honest-stop is superseded now that
+    #     the wrapper arm has shipped + bridges with min_count
+    #     preserved).
+    #   * Duskmourn's Domination    -- 0-Effect Aura (control-magic +
+    #     lose-all-abilities attach-grant flags); GENUINE cross-engine
+    #     byte-equal round-trip of the aura-grant booleans through
+    #     BOTH the Python printing materialization AND the Rust
+    #     registry getters.
+    #   * Deafening Silence         -- 0-Effect cast-restriction
+    #     enchantment; NEW file binds the REAL printing in the credited
+    #     ``*_parity`` body (the pre-existing
+    #     test_deafening_silence_parity.py used a SYNTHETIC CardDef in
+    #     its ``*_parity`` body, so the scanner never credited it --
+    #     measure_pool_parity.py:296-345 audit).
+    # Net delta: +11 PROBED / -11 covered_by_construction; PROBED
+    # 434 -> 445; covered_by_construction 11 -> 0; BLOCKED-SG unchanged.
+    REPO_ROOT / "tests" / "test_crystal_quarry_parity.py",
+    REPO_ROOT / "tests" / "test_power_depot_parity.py",
+    REPO_ROOT / "tests" / "test_steelswarm_operator_parity.py",
+    REPO_ROOT / "tests" / "test_dust_bowl_parity.py",
+    REPO_ROOT / "tests" / "test_clammy_prowler_parity.py",
+    REPO_ROOT / "tests" / "test_lets_play_a_game_parity.py",
+    REPO_ROOT / "tests" / "test_lithobraking_parity.py",
+    REPO_ROOT / "tests" / "test_weapons_manufacturing_parity.py",
+    REPO_ROOT / "tests" / "test_sami_ships_engineer_parity.py",
+    REPO_ROOT / "tests" / "test_duskmourns_domination_parity.py",
+    REPO_ROOT / "tests" / "test_deafening_silence_real_eoe_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
