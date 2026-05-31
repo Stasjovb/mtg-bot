@@ -22,14 +22,12 @@ The live ``OracleParserCardSource`` flattens this to::
     activated_abilities = (AA[0] -- {T}: AddNManaOfChosenColor(
                               amount=3, options=('W','U','B','R','G')),)
 
-**This slice is a SUBSTRATE-ONLY landing -- Lotus Field STAYS BLOCKED
-at the loader admit gate.** The scout's tractability estimate
-(``effect_uncovered`` -- the only uncovered piece being the
-``SacrificeNLandsYouControl`` ETB Effect) was correct about the Effect
-gap but UNDER-counted the loader admit surface: Lotus Field is a
-COMPOSITE carrier (a mana-producing land + ``enters_tapped`` +
-``keywords={hexproof}`` + an ETB ``triggered_abilities``). NONE of the
-existing bridge admit predicates accept that combination:
+**This slice is the COMPOSITE LOADER-ADMIT landing -- Lotus Field is
+now ADMITTED at the loader admit gate and flips covered-by-construction
+-> PROBED.** Lotus Field is a COMPOSITE carrier (a chosen-color mana AA
++ ``enters_tapped`` + ``keywords={hexproof}`` + an ETB
+``triggered_abilities``). NONE of the pre-existing bridge admit
+predicates accept that combination:
 
   * ``_printing_is_bridge_simple_carrier_aa_land`` hard-DECLINES any
     printing with ``keywords`` (``trajectory.py:9847``) AND any with
@@ -38,20 +36,30 @@ existing bridge admit predicates accept that combination:
     colorless-tapped sibling) DECLINE any printing carrying activated
     OR triggered abilities.
 
-Admitting Lotus Field through the loader therefore needs a brand-new
-COMPOSITE admit path (chosen-color mana AA + enters_tapped + hexproof +
-ETB trigger co-gated on one printing) -- well beyond a single Effect
-port. Per the campaign honest-stop policy that composite-admit
-substrate is left as characterized follow-up work; this slice lands the
-solid, genuinely-uncovered ``SacrificeNLandsYouControl`` Rust Effect
-mirror + its cross-engine bridge reverse arm, proven byte-equal on a
-synthetic-bridged Rust state vs the REAL parsed Lotus Field printing on
-Python.
+The brand-new composite admit path
+``_printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword`` co-
+gates all four riders on one printing (chosen-color mana AA +
+enters_tapped + hexproof + ETB trigger), admitting EXACTLY the Lotus
+Field shape (Phase-1 specificity contract -- NOT a broad widen). The
+matching builder
+``_carrier_aa_land_with_etb_sac_and_keyword_card_def`` emits all four
+pieces all-or-nothing onto one Land CardDef (the mana AA via the safe-
+dict round-trip floor, the keyword via the CardDef ``keywords`` field,
+the ETB trigger as a ``{"event": "enters", "predicate": {"kind":
+"source_is_self"}, "effect": {"kind": "sacrifice_n_lands_you_control",
+...}}`` round-trip dict). ``enters_tapped`` is dropped symmetrically on
+both engines (no plain enters_tapped bridge field -- the round-85
+Planet land / Cathedral of War symmetric-drop precedent). This is a
+PYTHON-ONLY landing: the ``SacrificeNLandsYouControl`` Rust Effect +
+its reverse bridge arm already landed at merge ``5dbb9c37``, and the
+keyword + mana-AA pieces round-trip through the existing ``keywords``
+Vec + ``_python_aa_to_safe_dict`` floor (Phase-4E lifted the mana-AA
+decline). No Rust change this slice.
 
-The LOAD-BEARING honest-stop pin
-``test_lotus_field_stays_declined_at_loader_admit_gate`` asserts the
-printing-level decline so a future composite-admit widen surfaces here
-loudly rather than silently auto-admitting an unmodeled rider cluster.
+The ADMIT pin ``test_lotus_field_admitted_at_loader_admit_gate``
+asserts the printing-level admit + the emitted CardDef carrying all
+four pieces, so a future regression that drops the composite admit
+surfaces here loudly.
 
 Scenarios:
 
@@ -193,45 +201,78 @@ def test_lotus_field_printed_attrs():
 
 
 # ---------------------------------------------------------------------------
-# (2) LOAD-BEARING honest-stop: Lotus Field STAYS DECLINED at the loader
-# admit gate. The composite carrier-shape (mana AA + enters_tapped +
-# hexproof + ETB trigger) is admitted by NO existing bridge predicate.
+# (2) LOAD-BEARING admit pin: Lotus Field is ADMITTED at the loader
+# admit gate via the composite carrier-shape path (mana AA +
+# enters_tapped + hexproof + ETB trigger), and the emitted CardDef
+# carries all four pieces.
 # ---------------------------------------------------------------------------
 
 
-def test_lotus_field_stays_declined_at_loader_admit_gate():
-    """**The substrate-only invariant.** Lotus Field must DECLINE at
-    every relevant bridge admit predicate post-substrate: the Carrier-AA
-    Land predicate (declines on ``keywords`` + ``triggered_abilities``),
-    AND the end-to-end ``_filter_deck_to_bridge_supported`` loader
-    (Lotus Field is filtered OUT of the supported set).
+def test_lotus_field_admitted_at_loader_admit_gate():
+    """**The composite loader-admit invariant.** Lotus Field must:
 
-    A future composite-admit widen that flips Lotus Field will trip this
-    pin -- the author must then update it to the PROBED-tier expectation
-    deliberately rather than silently auto-admitting an unmodeled rider.
+      * DECLINE at the pre-existing Carrier-AA Land predicate (it still
+        hard-declines on ``keywords`` + ``triggered_abilities``) -- the
+        composite is NOT admitted by widening that predicate.
+      * ADMIT at the NEW composite predicate
+        ``_printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword``.
+      * ADMIT end-to-end through ``_filter_deck_to_bridge_supported``,
+        with the emitted CardDef carrying all four pieces (the
+        ``hexproof`` keyword, the ETB
+        ``sacrifice_n_lands_you_control`` triggered ability, and the
+        ``add_n_mana_of_chosen_color`` mana AA; ``enters_tapped`` is
+        symmetrically dropped -- no plain enters_tapped bridge field).
+
+    A future regression that drops the composite admit (or silently
+    auto-admits via the broad Carrier-AA path) trips this pin.
     """
     from mtg_bot.parity.trajectory import (
         _filter_deck_to_bridge_supported,
+        _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword,
         _printing_is_bridge_simple_carrier_aa_any,
         _printing_is_bridge_simple_carrier_aa_land,
     )
 
     p = _PRINTINGS["Lotus Field"]
-    # Carrier-AA predicates decline (keywords + triggered_abilities teeth).
+    # The pre-existing broad Carrier-AA predicates STILL decline (the
+    # composite admit is a NEW narrow path, not a widen of those).
     assert _printing_is_bridge_simple_carrier_aa_land(p) is False
     assert _printing_is_bridge_simple_carrier_aa_any(p) is False
 
-    # End-to-end loader: Lotus Field is filtered OUT.
+    # The new composite predicate admits Lotus Field.
+    assert (
+        _printing_is_bridge_carrier_aa_land_with_etb_sac_and_keyword(p)
+        is True
+    )
+
+    # End-to-end loader: Lotus Field is ADMITTED.
     filt, defs = _filter_deck_to_bridge_supported(
         ["Lotus Field"], _PRINTINGS,
     )
-    assert filt == [], (
-        "Lotus Field must STAY DECLINED at the loader admit gate post-"
-        "substrate (composite carrier shape: mana AA + enters_tapped + "
-        "hexproof + ETB trigger -- no existing bridge predicate admits "
-        "it). Got filt={filt!r}".format(filt=filt)
+    assert filt == ["Lotus Field"], (
+        "Lotus Field must be ADMITTED at the loader admit gate via the "
+        "composite carrier-shape path. Got filt={filt!r}".format(filt=filt)
     )
-    assert defs == []
+    assert len(defs) == 1
+    cd = defs[0]
+    assert cd.name == "Lotus Field"
+    assert cd.card_type == "Land"
+    # The four-piece all-or-nothing emit (enters_tapped symmetrically
+    # dropped -- no CardDef field for it).
+    assert cd.keywords == ("hexproof",)
+    assert len(cd.triggered_abilities) == 1
+    ta_dict = cd.triggered_abilities[0]
+    assert ta_dict["event"] == "enters"
+    assert ta_dict["predicate"] == {"kind": "source_is_self"}
+    assert ta_dict["effect"] == {
+        "kind": "sacrifice_n_lands_you_control",
+        "count": 2,
+    }
+    assert len(cd.activated_abilities) == 1
+    aa_dict = cd.activated_abilities[0]
+    assert aa_dict["effect"]["kind"] == "add_n_mana_of_chosen_color"
+    assert aa_dict["effect"]["amount"] == 3
+    assert aa_dict["is_mana_ability"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -512,4 +553,178 @@ def test_cross_engine_real_eoe_lotus_field_mint_three_parity():
     )
     assert py_pool == rs_pool, (
         f"Cross-engine byte-equal (3-W-coin mint): py={py_pool}, rs={rs_pool}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (8) COMPOSITE LOADER-ADMIT real-EoE cross-engine probes. The
+# scenarios above drive a HAND-WRITTEN synthetic Rust source (the
+# sac-leaf wired as an AA). These probes instead drive the ACTUAL
+# loader-emitted CardDef -> Rust registry dict (via
+# ``_printing_to_card_def`` -> ``_spec_card_to_printing_dict``), so the
+# composite admit path's CardDef serialization is exercised end-to-end:
+# the ETB ``SacrificeNLandsYouControl`` trigger fires from the
+# loader-built printing's ``triggered_abilities`` (NOT a hand-wired AA),
+# AND the ``{T}: AddNManaOfChosenColor(3, WUBRG)`` mana AA mints from
+# the loader-built printing's ``activated_abilities``. Byte-equal vs the
+# real parsed Lotus Field on Python.
+#
+# Rust ETB driver note: ``register_and_inject_object`` ALREADY queues
+# the printing's ENTERS-triggered abilities onto the stack at inject
+# time (the production ``drain_pending_etb_dispatches`` path), so the
+# probe drives the resolve with ``process_stack_until_empty()`` alone
+# -- calling ``dispatch_enters`` on top would double-fire.
+# ---------------------------------------------------------------------------
+
+
+def _rust_lotus_field_registry_dict():
+    """The Rust registry dict for the LOADER-BUILT Lotus Field CardDef
+    (the composite-admit path: ``_printing_to_card_def`` ->
+    ``_spec_card_to_printing_dict``). Carries the ``hexproof`` keyword +
+    the ETB ``sacrifice_n_lands_you_control`` trigger + the
+    ``add_n_mana_of_chosen_color`` mana AA all on one printing.
+    """
+    from mtg_bot.parity.cross_engine import _spec_card_to_printing_dict
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    return _spec_card_to_printing_dict(
+        _printing_to_card_def(_PRINTINGS["Lotus Field"]),
+    )
+
+
+@_rust_skip
+def test_cross_engine_loader_admit_lotus_field_sac_two_parity():
+    """**Composite loader-admit real-EoE probe -- SAC-TWO.** The ETB
+    ``SacrificeNLandsYouControl(count=2)`` fires from the LOADER-BUILT
+    Lotus Field printing's ``triggered_abilities`` on Rust (queued at
+    inject, resolved via ``process_stack_until_empty``); the real parsed
+    Lotus Field resolves the same ETB on Python. Both sacrifice exactly
+    2 non-source lands; source + 1 plain land survive. Byte-equal on the
+    land split.
+    """
+    import mtg_bot_engine
+    from mtg_bot.effects import SacrificeNLandsYouControl
+
+    # ---- Python: real Lotus Field + 3 Mountains; resolve the ETB sac.
+    py, source = _build_python_sac_state(3)
+    py.resolving_source = source
+    try:
+        SacrificeNLandsYouControl(count=2).resolve(py, 0, ())
+    finally:
+        py.resolving_source = None
+    py_split = _py_land_split(py, source)
+    assert py_split == (1, 2)
+
+    # ---- Rust: loader-built Lotus Field + 3 plain lands; the ETB sac
+    # is queued at inject and resolved by draining the stack.
+    rd = _rust_lotus_field_registry_dict()
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    for _ in range(3):
+        rs.register_and_inject_object(_RUST_PLAIN_LAND, 0, ZONE_BATTLEFIELD)
+    rs_src = rs.register_and_inject_object(rd, 0, ZONE_BATTLEFIELD)
+    rs.process_stack_until_empty()
+    rs_non_source_lands = sum(
+        1
+        for o in rs.battlefield_snapshot()
+        if o["controller_id"] == 0 and o["id"] != rs_src
+    )
+    rs_split = (rs_non_source_lands, len(rs.graveyard_snapshot(0)))
+    assert rs_split == (1, 2)
+
+    # ---- Cross-engine byte-equal + source survives on both.
+    assert py_split == rs_split, (
+        f"Cross-engine byte-equal (loader-admit SAC-TWO land split): "
+        f"py={py_split}, rs={rs_split}"
+    )
+    assert source in py.battlefield
+    assert any(o["id"] == rs_src for o in rs.battlefield_snapshot())
+
+
+@_rust_skip
+def test_cross_engine_loader_admit_lotus_field_sac_under_count_parity():
+    """**Composite loader-admit real-EoE probe -- SAC-UNDER.** Only 1
+    non-source land present but ``count=2``; the loader-built printing's
+    ETB sac (Rust) and the real parsed ETB sac (Python) both sacrifice
+    the 1 available and stop. Byte-equal on the land split.
+    """
+    import mtg_bot_engine
+    from mtg_bot.effects import SacrificeNLandsYouControl
+
+    py, source = _build_python_sac_state(1)
+    py.resolving_source = source
+    try:
+        SacrificeNLandsYouControl(count=2).resolve(py, 0, ())
+    finally:
+        py.resolving_source = None
+    py_split = _py_land_split(py, source)
+    assert py_split == (0, 1)
+
+    rd = _rust_lotus_field_registry_dict()
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    rs.register_and_inject_object(_RUST_PLAIN_LAND, 0, ZONE_BATTLEFIELD)
+    rs_src = rs.register_and_inject_object(rd, 0, ZONE_BATTLEFIELD)
+    rs.process_stack_until_empty()
+    rs_non_source_lands = sum(
+        1
+        for o in rs.battlefield_snapshot()
+        if o["controller_id"] == 0 and o["id"] != rs_src
+    )
+    rs_split = (rs_non_source_lands, len(rs.graveyard_snapshot(0)))
+    assert rs_split == (0, 1)
+    assert py_split == rs_split
+
+
+@_rust_skip
+def test_cross_engine_loader_admit_lotus_field_mint_three_parity():
+    """**Composite loader-admit real-EoE probe -- MINT-3.** The
+    ``{T}: AddNManaOfChosenColor(3, WUBRG)`` mana AA mints 3 W coins
+    (options[0] no-agent fallback) from the LOADER-BUILT Lotus Field
+    printing's ``activated_abilities`` on Rust; the real parsed Lotus
+    Field mints the same on Python. Byte-equal on the mana pool.
+
+    The Rust source's ETB sac (no other lands -> no-op) is drained
+    first; the mana pool is then emptied so only the AA mint is
+    observed.
+    """
+    import mtg_bot_engine
+    from mtg_bot.actions import ActivateAbility, apply_action
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.turn import Step
+
+    # ---- Python: real Lotus Field on p0's bf, no agent (options[0]=W).
+    py = GameState()
+    py.players.append(Player(id=0, agent=None))
+    py.players.append(Player(id=1, agent=None))
+    py.active_player_idx = 0
+    py.priority_player_idx = 0
+    py.step = Step.PRECOMBAT_MAIN
+    lotus = py.new_object(_PRINTINGS["Lotus Field"], 0, Zone.BATTLEFIELD)
+    lotus.summoning_sick = False
+    py.battlefield.append(lotus)
+    apply_action(
+        py, 0, ActivateAbility(source_id=lotus.id, ability_index=0),
+    )
+    py_pool = _py_mana_pool_counts(py, 0)
+    expected = dict(_EMPTY_MANA_POOL, W=3)
+    assert py_pool == expected
+
+    # ---- Rust: loader-built Lotus Field; drain ETB (no-op, no other
+    # lands), empty the pool, then activate the mana AA (index 0).
+    rd = _rust_lotus_field_registry_dict()
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    rs_src = rs.register_and_inject_object(rd, 0, ZONE_BATTLEFIELD)
+    rs.process_stack_until_empty()
+    rs.empty_all_mana_pools()
+    rs.force_set_summoning_sick(rs_src, False)
+    assert rs.printing_aa_count_of(rs_src) == 1
+    rs.apply_action({
+        "kind": "activate_ability",
+        "source_id": rs_src,
+        "ability_index": 0,
+    })
+    rs_pool = rs.mana_pool_snapshot(0)
+    assert rs_pool == expected
+    assert py_pool == rs_pool, (
+        f"Cross-engine byte-equal (loader-admit 3-W-coin mint): "
+        f"py={py_pool}, rs={rs_pool}"
     )
