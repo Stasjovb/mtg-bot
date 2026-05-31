@@ -283,6 +283,9 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.bounce import (
         ReturnTargetLandFromGraveyardToHand,
     )
+    from mtg_bot.effects.generic.counters import (
+        MovePlusOneCounterBetweenPermanentsYouControl,
+    )
     from mtg_bot.effects.generic.damage import (
         DealDamageToControllerAndAddMana,
     )
@@ -361,12 +364,16 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         # leaf classes (the Sequence-IN-AA admit closure):
         AddNManaOfChosenColor,
         GrantLifeToEachOpponent,
+        # Nesting Grounds flip (2026-05-31) -- the dual-target AA
+        # 2nd-target-slot closure:
+        MovePlusOneCounterBetweenPermanentsYouControl,
     })
     assert admit_set == expected_post_c4, (
         "Grove admit set sentinel: post-C4 + post-Meteor-Crater-"
         f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 + Grove "
-        f"admit set must be the 21-class set; got {len(admit_set)} "
-        f"classes, delta = added {admit_set - expected_post_c4} / "
+        f"+ Nesting-Grounds admit set must be the 22-class set; got "
+        f"{len(admit_set)} classes, delta = added "
+        f"{admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s class IS in the
@@ -515,13 +522,19 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
         # the full-pool admit set via the Sequence-IN-AA admit + the
         # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class
         # widens (new Rust Effect::GrantLifeToEachOpponent).
-        + ("Grove of the Burnwillows",),
+        + ("Grove of the Burnwillows",)
+        # **Nesting Grounds flip (2026-05-31).** Nesting Grounds FLIPS
+        # into the full-pool admit set via the
+        # MovePlusOneCounterBetweenPermanentsYouControl Effect-class
+        # widen + the dual-target AA 2nd-target-slot closure.
+        + ("Nesting Grounds",),
     )
     assert admitted == expected, (
         f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 + "
-        f"Ancient Tomb C2 + Grove invariant: full-pool admit set must "
-        f"be exactly the C2 baseline + Mirrorpool + Meteor Crater + "
-        f"Reflecting Pool + Ancient Tomb + Grove; got admit delta = "
+        f"Ancient Tomb C2 + Grove + Nesting Grounds invariant: full-"
+        f"pool admit set must be exactly the C2 baseline + Mirrorpool "
+        f"+ Meteor Crater + Reflecting Pool + Ancient Tomb + Grove + "
+        f"Nesting Grounds; got admit delta = "
         f"added {admitted - expected} / missing {expected - admitted}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** Mirrorpool MUST appear

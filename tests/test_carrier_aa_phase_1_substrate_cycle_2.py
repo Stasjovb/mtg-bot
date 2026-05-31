@@ -619,6 +619,11 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
     # class widens FLIP Grove DECLINED → ADMITTED. Grove's AA[1] is a
     # Sequence — the first carrier to flip on the Sequence-IN-AA
     # substrate. Admit set 11 → 12 (Grove is THE new entry).
+    # **Nesting Grounds (2026-05-31).** The dual-target AA
+    # 2nd-target-slot closure + the
+    # MovePlusOneCounterBetweenPermanentsYouControl Effect-class widen
+    # FLIP Nesting Grounds DECLINED → ADMITTED. Admit set 12 → 13
+    # (Nesting Grounds is THE new entry).
     assert admits == [
         "Ancient Tomb",
         "Deserted Temple",
@@ -626,6 +631,7 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
+        "Nesting Grounds",
         "Petrified Field",
         "Reflecting Pool",
         "Scavenger Grounds",
@@ -633,12 +639,12 @@ def test_carrier_aa_30_no_silent_auto_grow_admit_set_swarmyard_plus_deserted_tem
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Grove admit-set pin violated: "
+        f"Carrier-AA Grove + Nesting-Grounds admit-set pin violated: "
         f"expected admit set = ['Ancient Tomb', 'Deserted Temple', "
         f"'Grove of the Burnwillows', 'Meteor Crater', 'Mirrorpool', "
-        f"'Mystifying Maze', 'Petrified Field', 'Reflecting Pool', "
-        f"'Scavenger Grounds', 'Swarmyard', 'Terrain Generator', "
-        f"\"Thespian's Stage\"], "
+        f"'Mystifying Maze', 'Nesting Grounds', 'Petrified Field', "
+        f"'Reflecting Pool', 'Scavenger Grounds', 'Swarmyard', "
+        f"'Terrain Generator', \"Thespian's Stage\"], "
         f"got {admits}. A widen in a sibling substrate or predicate "
         f"would surface here as a silent auto-grow — investigate "
         f"before merging."

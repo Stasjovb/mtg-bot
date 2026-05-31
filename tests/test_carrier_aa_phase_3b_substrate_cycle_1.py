@@ -824,6 +824,9 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
     # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class widens.
     # (This sentinel was last refreshed at the Grove closure; the prior
     # 8-card expectation predated the MC/RP/AT/Grove flips.)
+    # **Nesting Grounds (2026-05-31).** FLIPped ADMITTED via the dual-
+    # target AA 2nd-target-slot closure + the
+    # MovePlusOneCounterBetweenPermanentsYouControl Effect-class widen.
     assert admits == [
         "Ancient Tomb",
         "Deserted Temple",
@@ -831,6 +834,7 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
+        "Nesting Grounds",
         "Petrified Field",
         "Reflecting Pool",
         "Scavenger Grounds",
@@ -838,9 +842,10 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Grove admit-set pin violated: expected the 12-card "
-        f"admit set (Phase-3 7 + Mirrorpool + Meteor Crater + Reflecting "
-        f"Pool + Ancient Tomb + Grove of the Burnwillows), got {admits}. "
+        f"Carrier-AA Grove + Nesting-Grounds admit-set pin violated: "
+        f"expected the 13-card admit set (Phase-3 7 + Mirrorpool + "
+        f"Meteor Crater + Reflecting Pool + Ancient Tomb + Grove + "
+        f"Nesting Grounds), got {admits}. "
         f"A widen in a sibling substrate or predicate would surface "
         f"here as a silent auto-grow — investigate before merging."
     )

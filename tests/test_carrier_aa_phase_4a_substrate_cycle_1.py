@@ -231,13 +231,18 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
             "Reflecting Pool",
             "Ancient Tomb",
             "Grove of the Burnwillows",
+            # Nesting Grounds (2026-05-31): dual-target AA 2nd-target-
+            # slot closure + MovePlusOneCounterBetweenPermanentsYouControl
+            # Effect-class widen.
+            "Nesting Grounds",
         }
     )
     assert set(loader_land_admits) == set(expected_land_admits), (
-        f"LOADER-SIDE Land admit set diverged from the post-Grove "
-        f"baseline; got {loader_land_admits}, expected "
+        f"LOADER-SIDE Land admit set diverged from the post-Grove + "
+        f"Nesting-Grounds baseline; got {loader_land_admits}, expected "
         f"{expected_land_admits} (Gemstone Caverns + Mirrorpool + "
-        f"Meteor Crater + Reflecting Pool + Ancient Tomb + Grove FLIPs)"
+        f"Meteor Crater + Reflecting Pool + Ancient Tomb + Grove + "
+        f"Nesting Grounds FLIPs)"
     )
     # Phase 4E C2.5 FULL FLIP: All-Fates Scroll's AA[0] AddManaToPool
     # 'any' forward arm admits at C2.5; the cross-engine builder

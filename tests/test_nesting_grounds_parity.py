@@ -1,6 +1,24 @@
 """Nesting Grounds -- per-card real-EoE cross-engine byte-equal probe
-(SUBSTRATE-ONLY landing; ``BLOCKED-SG -> covered_by_construction``;
-composite-admit wall honest-stop, NOT a PROBED flip).
+(THE FLIP; ``covered_by_construction -> PROBED``).
+
+**FLIP landing (2026-05-31).** The substrate landing
+(``c995ac04``) shipped the Rust
+``Effect::MovePlusOneCounterBetweenPermanentsYouControl`` end-to-end
+(enum + parse + to_pydict + dual-target resolve via the 2-slot
+``current_resolve_payload_target_id`` / ``_2`` plumbing + cross-engine
+bridge arms) but left Nesting Grounds DECLINED because the Rust
+Carrier-AA *activation* path bound only ONE target. THIS slice closes
+that gap: a SECOND ``Action::ActivateAbility.target_creature_id_2``
+field threads the recipient onto the StackItem's
+``trigger_payload.target_id_2`` (via the new
+``StackItem::new_trigger_with_two_targets`` constructor), and the
+trigger resolve entry points swap it into
+``current_resolve_payload_target_id_2`` (mirroring the spell-cast path's
+``target_obj_id_2`` swap). With the gap closed, the Effect class joins
+``_carrier_aa_phase_1_effect_classes`` and Nesting Grounds admits at the
+loader. The decline pin below is now an ADMIT pin + a NEW real-EoE
+AA-activation byte-equal probe drives the actual parsed Nesting Grounds
+``{1}{T}`` AA on BOTH engines via ``apply_action``.
 
 Nesting Grounds is a plain Land in the EoE pool with ONE Carrier-AA:
 
@@ -114,6 +132,34 @@ _RUST_PERMANENT = {
 }
 
 
+# **The FLIP probe's Rust dict.** Nesting Grounds' REAL parsed shape: a
+# bare Land carrying ONE non-mana ``{1}{T}`` sorcery-speed AA whose
+# effect is the move-counter leaf. The byte-equal AA-activation probe
+# below drives THIS dict's AA[0] via ``apply_action`` with BOTH targets
+# seated (``target_creature_id`` = donor, ``target_creature_id_2`` =
+# recipient) -- the path the 2nd-target slot closes. Mirrors the live
+# EoE ``_python_aa_to_safe_dict(aa)`` shape
+# (``{'cost': {'mana': {'generic': 1}, 'tap_self': True}, 'effect':
+# {'kind': 'move_plus_one_counter_between_permanents_you_control'},
+# 'sorcery_speed': True}``).
+_RUST_NESTING_GROUNDS_DICT = {
+    "name": "Nesting Grounds",
+    "card_types": ["Land"],
+    "mana_cost": {},
+    "effects": [],
+    "activated_abilities": [
+        {
+            "cost": {"mana": {"generic": 1}, "tap_self": True},
+            "effect": {
+                "kind": "move_plus_one_counter_between_permanents_you_control",
+            },
+            "is_mana_ability": False,
+            "sorcery_speed": True,
+        },
+    ],
+}
+
+
 # ---------------------------------------------------------------------------
 # (1) Parser SoT -- verify-first: Nesting Grounds' parsed shape (the §2
 # teeth the substrate + the loader-decline both depend on).
@@ -170,33 +216,25 @@ def test_nesting_grounds_printed_attrs():
 
 
 # ---------------------------------------------------------------------------
-# (2) LOAD-BEARING substrate-only invariant: Nesting Grounds STAYS
-# DECLINED at the loader admit gate. The COST + Land-carrier-bridge
-# predicates would ACCEPT the printing once the Effect class joins the
-# admit set -- but the Effect class is deliberately NOT added this cycle
-# (the dual-target AA can't be activated byte-equal; Rust binds one AA
-# target). This pin is the composite-admit wall marker.
+# (2) LOAD-BEARING FLIP invariant: Nesting Grounds now ADMITS at the
+# loader admit gate. The 2nd AA-activation target slot landed (the
+# substrate landing's documented follow-up), so the Effect class joined
+# the admit set and the COST + Land-carrier-bridge predicates ACCEPT the
+# printing end-to-end. This pin is the PROBED-tier flip marker (inverted
+# from the prior substrate-only DECLINE pin).
 # ---------------------------------------------------------------------------
 
 
-def test_nesting_grounds_stays_declined_at_loader_admit_gate():
-    """**The substrate-only invariant + the composite-admit wall.**
-    Nesting Grounds must DECLINE at the end-to-end loader because the
-    Effect class is NOT in the Phase-1 Carrier-AA admit set this cycle.
-
-    Crucially -- and unlike Lotus Field -- the decline is NOT a cost /
-    rider / keyword wall: it is ONLY the deliberate effect-class
-    omission. We pin BOTH halves:
-      * The per-AA admit predicate ``_aa_is_phase1_sub_shape_a`` declines
-        SOLELY on the effect-class gate (cost + riders all pass).
-      * The end-to-end ``_filter_deck_to_bridge_supported`` filters
-        Nesting Grounds OUT.
-
-    A future cycle that adds the effect class to the admit set AND ships
-    the 2nd AA-activation target slot will trip this pin -- the author
-    must then update it to the PROBED-tier expectation deliberately
-    (NOT silently auto-admit a dual-target AA the activation path can't
-    drive byte-equal).
+def test_nesting_grounds_now_admits_at_loader_admit_gate():
+    """**The FLIP invariant (inverted from the substrate-only DECLINE
+    pin).** Nesting Grounds must ADMIT at the end-to-end loader because
+    the Effect class is now in the Phase-1 Carrier-AA admit set AND the
+    Rust AA-activation path binds BOTH targets (the dual-target slot
+    landed). We pin BOTH halves:
+      * The per-AA admit predicate ``_aa_is_phase1_sub_shape_a`` ADMITS
+        (effect-class gate now passes; cost + riders always passed).
+      * The end-to-end ``_filter_deck_to_bridge_supported`` admits
+        Nesting Grounds.
     """
     from mtg_bot.parity.trajectory import (
         _aa_is_phase1_sub_shape_a,
@@ -209,27 +247,25 @@ def test_nesting_grounds_stays_declined_at_loader_admit_gate():
     p = _PRINTINGS["Nesting Grounds"]
     aa = p.activated_abilities[0]
 
-    # The effect-class gate is the SOLE decline reason: the effect class
-    # is NOT admitted, so the per-AA predicate declines.
-    assert _carrier_aa_effect_class_admitted(aa.effect) is False
-    assert _aa_is_phase1_sub_shape_a(aa) is False
+    # The effect-class gate now passes (the FLIP); the per-AA predicate
+    # ADMITS (cost {1}{T} + sorcery_speed rider always passed).
+    assert _carrier_aa_effect_class_admitted(aa.effect) is True
+    assert _aa_is_phase1_sub_shape_a(aa) is True
 
-    # Carrier-AA Land + Any printing predicates decline (effect-class
-    # gated through the per-AA predicate above).
-    assert _printing_is_bridge_simple_carrier_aa_land(p) is False
-    assert _printing_is_bridge_simple_carrier_aa_any(p) is False
+    # Carrier-AA Land + Any printing predicates admit.
+    assert _printing_is_bridge_simple_carrier_aa_land(p) is True
+    assert _printing_is_bridge_simple_carrier_aa_any(p) is True
 
-    # End-to-end loader: Nesting Grounds is filtered OUT.
+    # End-to-end loader: Nesting Grounds is ADMITTED.
     filt, defs = _filter_deck_to_bridge_supported(
         ["Nesting Grounds"], _PRINTINGS,
     )
-    assert filt == [], (
-        "Nesting Grounds must STAY DECLINED at the loader admit gate "
-        "(substrate-only landing; the dual-target AA can't be activated "
-        "byte-equal -- the Rust AA path binds one target). Got "
+    assert filt == ["Nesting Grounds"], (
+        "Nesting Grounds must ADMIT at the loader admit gate (the FLIP: "
+        "the dual-target AA's 2nd-target slot landed). Got "
         "filt={filt!r}".format(filt=filt)
     )
-    assert defs == []
+    assert len(defs) == 1
 
 
 def test_nesting_grounds_cost_and_riders_would_admit_if_effect_class_added():
@@ -545,4 +581,189 @@ def test_cross_engine_real_eoe_nesting_grounds_multi_counter_parity():
 
     assert py_pair == rs_pair, (
         f"Cross-engine byte-equal (multi): py={py_pair}, rs={rs_pair}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (6) THE FLIP PROBE -- GENUINE real-EoE cross-engine byte-equal probe
+# driving the ACTUAL parsed Nesting Grounds {1}{T} AA via the
+# AA-ACTIVATION path on BOTH engines. This is the load-bearing PROBED-
+# tier evidence: the substrate probes above drive the resolve arm via
+# the spell-cast 2-slot plumbing, but THIS probe exercises the path the
+# 2nd-target slot closes -- ``apply_action(ActivateAbility(...))`` with
+# the donor + recipient threaded through, byte-equal cross-engine.
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedTargetAgent:
+    """Minimal agent that returns a pre-scripted sequence of target picks
+    (one per ``choose_target`` call). Drives Python's ``_activate_ability``
+    multi-target picker to the SAME (donor, recipient) ids the Rust
+    ``apply_action`` carries explicitly -- so the cross-engine compare is
+    on the SAME two permanents (avoids the no-agent ``pool[0]`` fallback,
+    which would pick the Nesting Grounds land itself as the donor).
+    """
+
+    def __init__(self, picks):
+        self._picks = list(picks)
+        self._i = 0
+
+    def choose_target(self, state, player_id, legal_targets):
+        pick = self._picks[self._i]
+        self._i += 1
+        assert pick in legal_targets, (
+            f"scripted pick {pick!r} not in legal_targets {legal_targets!r}"
+        )
+        return pick
+
+
+def _build_python_aa_state(donor_counters: int):
+    """Seat the REAL parsed Nesting Grounds + two creature permanents on
+    p0's bf, donor seeded with ``donor_counters`` counters, 1 floating
+    {C} coin in p0's pool to pay the AA's {1}. A scripted agent picks
+    (donor, recipient). Returns ``(state, ng, donor, recipient)``.
+    """
+    from mtg_bot.cards import SYNTHETIC_CREATURES
+    from mtg_bot.game import GameState, ManaCoin, Player, Zone
+    from mtg_bot.turn import Step
+
+    ng_printing = _PRINTINGS["Nesting Grounds"]
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=None))
+    state.players.append(Player(id=1, agent=None))
+    state.active_player_idx = 0
+    state.priority_player_idx = 0
+    state.step = Step.PRECOMBAT_MAIN
+
+    ng = state.new_object(ng_printing, 0, Zone.BATTLEFIELD)
+    ng.controller_id = 0
+    ng.summoning_sick = False
+    state.battlefield.append(ng)
+
+    names = list(SYNTHETIC_CREATURES)[:2]
+    donor = state.new_object(SYNTHETIC_CREATURES[names[0]], 0, Zone.BATTLEFIELD)
+    donor.controller_id = 0
+    state.battlefield.append(donor)
+    recipient = state.new_object(
+        SYNTHETIC_CREATURES[names[1]], 0, Zone.BATTLEFIELD,
+    )
+    recipient.controller_id = 0
+    state.battlefield.append(recipient)
+    donor.plus_one_counters = donor_counters
+
+    # Floating {C} to pay the AA's {1} generic cost.
+    state.players[0].mana_pool.append(ManaCoin("C"))
+    # Scripted agent: pick donor (slot 0) then recipient (slot 1).
+    state.players[0].agent = _ScriptedTargetAgent([
+        ("permanent", donor.id),
+        ("permanent", recipient.id),
+    ])
+    return state, ng, donor, recipient
+
+
+def _build_rust_aa_state(donor_counters: int):
+    """Mirror of ``_build_python_aa_state`` on Rust: the REAL Nesting
+    Grounds AA dict + two creature permanents on p0's bf (donor seeded),
+    1 floating {C} coin to pay the {1}. Returns ``(rs, ng, donor_id,
+    recipient_id)``.
+    """
+    import mtg_bot_engine
+
+    rs = mtg_bot_engine.make_synthetic_state(0, 0, 0)
+    ng = rs.register_and_inject_object(
+        _RUST_NESTING_GROUNDS_DICT, 0, ZONE_BATTLEFIELD,
+    )
+    rs.force_set_summoning_sick(ng, False)
+    donor = rs.register_and_inject_object(_RUST_PERMANENT, 0, ZONE_BATTLEFIELD)
+    recipient = rs.register_and_inject_object(
+        _RUST_PERMANENT, 0, ZONE_BATTLEFIELD,
+    )
+    assert rs.set_counters(donor, donor_counters) is True
+    rs.add_mana(0, "C", 1)
+    return rs, ng, donor, recipient
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_nesting_grounds_aa_activation_move_parity():
+    """**THE FLIP PROBE -- GENUINE real-EoE AA-activation byte-equal.**
+    Drives the ACTUAL parsed Nesting Grounds AA[0] (``{1}{T}: move a
+    +1/+1 counter from target permanent you control onto a second target
+    permanent you control``) via the AA-ACTIVATION path on BOTH engines:
+
+      * Python: ``apply_action(ActivateAbility(source_id=ng, 0))`` with a
+        scripted agent picking (donor, recipient), then resolve the stack.
+      * Rust: ``apply_action({kind: activate_ability, source_id: ng,
+        ability_index: 0, target_creature_id: donor,
+        target_creature_id_2: recipient})`` -- the 2nd-target slot the
+        FLIP landed -- then ``resolve_top_of_stack``.
+
+    Both move exactly one counter (donor 2 -> 1, recipient 0 -> 1) AND
+    tap Nesting Grounds (tap_self cost) AND drain the {1} from the pool.
+    Byte-equal on the (donor_counters, recipient_counters, ng_tapped)
+    triple. This is the path the substrate landing could NOT drive --
+    closing the AA-activation 2nd-target gap is the whole FLIP.
+    """
+    # Real-EoE-signal discipline: bind the genuine parsed printing inside
+    # the *_parity body so the pool-parity classifier credits THIS slug.
+    ng_printing = _PRINTINGS.get("Nesting Grounds")
+    if ng_printing is None:
+        pytest.skip("Nesting Grounds absent from active CardSource")
+
+    from mtg_bot.actions import (
+        ActivateAbility,
+        apply_action,
+        resolve_top_of_stack,
+    )
+
+    # ---- Python: real-EoE AA activation via apply_action + scripted
+    # agent, then resolve the stack (non-mana AA uses the stack).
+    py, py_ng, py_donor, py_recipient = _build_python_aa_state(2)
+    apply_action(py, 0, ActivateAbility(source_id=py_ng.id, ability_index=0))
+    # The AA goes on the stack (non-mana); resolve it.
+    assert len(py.stack) == 1, (
+        "Python: the non-mana AA must push exactly one stack item"
+    )
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_triple = (
+        _py_counters(py, py_donor.id),
+        _py_counters(py, py_recipient.id),
+        py_ng.tapped,
+    )
+    assert py_triple == (1, 1, True), (
+        f"Python: AA activation moves one counter (donor 2 -> 1, "
+        f"recipient 0 -> 1) + taps Nesting Grounds; got {py_triple}"
+    )
+
+    # ---- Rust: real AA activation via apply_action with BOTH targets
+    # seated (the 2nd-target slot the FLIP landed), then resolve.
+    rs, rs_ng, rs_donor, rs_recipient = _build_rust_aa_state(2)
+    rs.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": rs_ng,
+            "ability_index": 0,
+            "target_creature_id": rs_donor,
+            "target_creature_id_2": rs_recipient,
+        }
+    )
+    assert rs.stack_size() == 1, (
+        "Rust: the non-mana AA must push exactly one stack item"
+    )
+    rs.resolve_top_of_stack()
+    rs_triple = (
+        rs.get_counters(rs_donor),
+        rs.get_counters(rs_recipient),
+        rs.is_tapped(rs_ng),
+    )
+    assert rs_triple == (1, 1, True), (
+        f"Rust: AA activation moves one counter (donor 2 -> 1, "
+        f"recipient 0 -> 1) + taps Nesting Grounds; got {rs_triple}"
+    )
+
+    # ---- Cross-engine byte-equal on the full (counters, tapped) triple.
+    assert py_triple == rs_triple, (
+        f"Cross-engine byte-equal (AA-activation counter move + tap): "
+        f"py={py_triple}, rs={rs_triple}"
     )

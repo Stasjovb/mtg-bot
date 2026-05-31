@@ -3922,6 +3922,28 @@ PROBE_MODULES: tuple[Path, ...] = (
     # -1 covered_by_construction (Grove slug flips). PROBED 434 -> 435;
     # BLOCKED-SG 30 -> 29.
     REPO_ROOT / "tests" / "test_grove_of_the_burnwillows_parity.py",
+    # Nesting Grounds (2026-05-31): per-card real-EoE cross-engine
+    # byte-equal probe (covered_by_construction -> PROBED tier flip;
+    # THE FLIP). Nesting Grounds is a bare Land carrying ONE non-mana
+    # ``{1}{T}`` sorcery-speed AA whose effect is the DUAL-TARGET
+    # ``MovePlusOneCounterBetweenPermanentsYouControl`` (move a +1/+1
+    # counter from target permanent you control onto a second target
+    # permanent you control). The substrate landing (``c995ac04``)
+    # shipped the Rust Effect end-to-end but left it declined because
+    # the AA-activation path bound only ONE target; THIS slice closed
+    # the gap with a 2nd ``Action::ActivateAbility.target_creature_id_2``
+    # field threaded onto the StackItem's
+    # ``trigger_payload.target_id_2`` (new
+    # ``StackItem::new_trigger_with_two_targets`` constructor) +
+    # swapped into ``current_resolve_payload_target_id_2`` at resolve.
+    # The probe's load-bearing scenario drives the ACTUAL parsed
+    # Nesting Grounds AA[0] via ``apply_action`` with BOTH targets
+    # seated on both engines (the path the substrate could NOT drive)
+    # -- moving one counter (donor 2 -> 1, recipient 0 -> 1) + tapping
+    # the source, byte-equal. Net delta: +1 PROBED / -1
+    # covered_by_construction (Nesting Grounds slug flips). PROBED
+    # 449 -> 450; covered_by_construction 1 -> 0; BLOCKED-SG unchanged.
+    REPO_ROOT / "tests" / "test_nesting_grounds_parity.py",
     # Batch 6 (2026-05-27): 6 manlands extending the batch-5
     # JJJJ-idiom BecomeLandCreatureUEOT lane to the remaining EoE
     # manlands.  Rebased onto Worker B's Reflecting Pool Cycle 2 FLIP

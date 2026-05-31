@@ -219,6 +219,21 @@ _GROVE_FULL_FLIP_LAND_CARRIERS = (
     "Grove of the Burnwillows",
 )
 
+# Nesting Grounds FULL FLIP (2026-05-31). Nesting Grounds was in the
+# Phase-N decline residue (the dual-target AA-activation 2nd-target
+# gap kept it declined even after the substrate landed). The FLIP ships
+# the AA-activation 2nd-target slot (Action::ActivateAbility.
+# target_creature_id_2 -> StackItem::new_trigger_with_two_targets ->
+# trigger_payload.target_id_2 -> current_resolve_payload_target_id_2)
+# + the MovePlusOneCounterBetweenPermanentsYouControl Effect-class
+# widen. With the gap closed, Nesting Grounds admits at the dispatcher
+# AND the cross-engine Land builder. See
+# ``tests/test_nesting_grounds_parity.py`` for the per-card real-EoE
+# probe + admit-gate FLIP pins.
+_NESTING_GROUNDS_FULL_FLIP_LAND_CARRIERS = (
+    "Nesting Grounds",
+)
+
 
 # ---------------------------------------------------------------------------
 # §6.4 #25 — live-printing parametrized walk (admit + decline sides)
@@ -417,6 +432,20 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Land builder "
             f"gate post the Grove closure"
         )
+    elif card_name in _NESTING_GROUNDS_FULL_FLIP_LAND_CARRIERS:
+        # Nesting Grounds FULL FLIP (2026-05-31) — Nesting Grounds
+        # admits at every gate post the FLIP (the dual-target AA
+        # 2nd-target-slot closure + the
+        # MovePlusOneCounterBetweenPermanentsYouControl Effect-class
+        # widen + cross-engine forward / reverse arms).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post the "
+            f"Nesting Grounds FULL FLIP (dual-target AA 2nd-target slot)"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post the Nesting Grounds FLIP"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -475,6 +504,10 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     # Grove of the Burnwillows (2026-05-31) added Grove — dual-AA Land
     # carrier FULL FLIP via the Sequence-IN-AA admit + the
     # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class widens.
+    # Nesting Grounds (2026-05-31) added Nesting Grounds — single-AA
+    # Land carrier FULL FLIP via the dual-target AA 2nd-target-slot
+    # closure + the MovePlusOneCounterBetweenPermanentsYouControl
+    # Effect-class widen.
     expected_post_grove = sorted(
         set(_PHASE_3_ADMIT_SET) | {
             "Gemstone Caverns",
@@ -483,12 +516,14 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
             "Reflecting Pool",
             "Ancient Tomb",
             "Grove of the Burnwillows",
+            "Nesting Grounds",
         }
     )
     assert admits == expected_post_grove, (
-        f"Grove subsystem-attribution LOADER-SIDE LAND pin violated. "
-        f"_carrier_aa_land_card_def must admit EXACTLY the post-Grove "
-        f"13-card set {expected_post_grove}, got {admits}. A silent "
+        f"Grove + Nesting-Grounds subsystem-attribution LOADER-SIDE "
+        f"LAND pin violated. _carrier_aa_land_card_def must admit "
+        f"EXACTLY the post-Grove + Nesting-Grounds 14-card set "
+        f"{expected_post_grove}, got {admits}. A silent "
         f"auto-grow indicates a Phase-4+ widen landed without inverting "
         f"this assertion — investigate before merging."
     )
@@ -586,6 +621,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "Reflecting Pool",      # Reflecting Pool P4 C2 FULL FLIP (Land admit + builder)
             "Ancient Tomb",         # Ancient Tomb P4 C2 FULL FLIP (Land admit + builder)
             "Grove of the Burnwillows",  # Grove FULL FLIP (Sequence-IN-AA admit; Land admit + builder)
+            "Nesting Grounds",      # Nesting Grounds FULL FLIP (dual-target AA 2nd-target slot; Land admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -709,16 +745,17 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
     )
     # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5 + Phase-4B-C5
     # (Mirrorpool FULL FLIP) + Meteor-Crater-C2 + Reflecting-Pool-C2 +
-    # Ancient-Tomb-C2 + Grove: the LOADER-SIDE admit set grows to 16 (13
-    # Land admits = 7-card Phase-3-close + Gemstone Caverns + Mirrorpool
-    # + Meteor Crater + Reflecting Pool + Ancient Tomb + Grove of the
-    # Burnwillows; 3 Artifact admits = Ghost Vacuum + Keys to the House +
-    # All-Fates Scroll).
-    assert loader_admit_count == 16, (
-        f"Grove close LOADER-SIDE admit-set size invariant violated: "
-        f"expected exactly 16 cards (13 Land = 7 Phase-3 + Gemstone "
-        f"Caverns + Mirrorpool + Meteor Crater + Reflecting Pool + "
-        f"Ancient Tomb + Grove of the Burnwillows; 3 Artifact = Ghost "
+    # Ancient-Tomb-C2 + Grove + Nesting Grounds: the LOADER-SIDE admit
+    # set grows to 17 (14 Land admits = 7-card Phase-3-close + Gemstone
+    # Caverns + Mirrorpool + Meteor Crater + Reflecting Pool + Ancient
+    # Tomb + Grove of the Burnwillows + Nesting Grounds; 3 Artifact
+    # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
+    assert loader_admit_count == 17, (
+        f"Grove + Nesting-Grounds close LOADER-SIDE admit-set size "
+        f"invariant violated: expected exactly 17 cards (14 Land = 7 "
+        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater + "
+        f"Reflecting Pool + Ancient Tomb + Grove of the Burnwillows + "
+        f"Nesting Grounds; 3 Artifact = Ghost "
         f"Vacuum + Keys to the House + All-Fates Scroll) post-Grove, "
         f"got {loader_admit_count}. Further Phase-4+ FLIPs MUST "
         f"update this size in lockstep."

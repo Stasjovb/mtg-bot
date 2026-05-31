@@ -184,6 +184,27 @@ pub enum Action {
         /// `Effect::LockOrUnlockDoorOfTargetRoomYouControl` resolve
         /// arm reads the transient slot to pick the toggle bit.
         chosen_mode_idx: Option<u8>,
+        /// **Nesting Grounds flip (2026-05-31).** SECOND chosen target
+        /// for DUAL-TARGET activated abilities — today the only
+        /// consumer is
+        /// `Effect::MovePlusOneCounterBetweenPermanentsYouControl`
+        /// (Nesting Grounds's {1}{T} AA: `target_creature_id` is the
+        /// donor permanent you control, `target_creature_id_2` the
+        /// recipient permanent you control, and the AA moves one
+        /// +1/+1 counter from the donor onto the recipient).
+        ///
+        /// **Round-trip semantics.** Parsed from the action dict's
+        /// `"target_creature_id_2"` key (missing OR explicit None →
+        /// None; integer → Some). Serialized back to the same key.
+        /// When `Some`, the AA-activation apply arm pushes the
+        /// `StackItem::new_trigger_with_two_targets` shape so the
+        /// resolver seats BOTH `current_resolve_payload_target_id`
+        /// (slot 0 = donor) AND `current_resolve_payload_target_id_2`
+        /// (slot 1 = recipient) before firing the dual-target resolve
+        /// arm. `None` for every single-target / non-target
+        /// activation (every other AA today) — the pre-flip shape,
+        /// byte-clean round-trip.
+        target_creature_id_2: Option<u32>,
     },
     /// Cast a spell from hand (CR 601). `card_id` is the GameObject
     /// id in the priority player's hand. The 5 optional fields carry
@@ -518,12 +539,24 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                     Some(v) if !v.is_none() => Some(v.extract()?),
                     _ => None,
                 };
+            // **Nesting Grounds flip (2026-05-31).** Optional
+            // `target_creature_id_2` carries the recipient permanent
+            // for dual-target AAs (today only
+            // `Effect::MovePlusOneCounterBetweenPermanentsYouControl`).
+            // Same shape as `target_creature_id` — missing key OR
+            // explicit None maps to None.
+            let target_creature_id_2: Option<u32> =
+                match dict.get_item("target_creature_id_2")? {
+                    Some(v) if !v.is_none() => Some(v.extract()?),
+                    _ => None,
+                };
             Ok(Action::ActivateAbility {
                 source_id,
                 ability_index,
                 target_creature_id,
                 sacrifice_target_id,
                 chosen_mode_idx,
+                target_creature_id_2,
             })
         }
         "cast_spell" => {
@@ -705,6 +738,7 @@ pub fn action_to_pydict<'py>(
             target_creature_id,
             sacrifice_target_id,
             chosen_mode_idx,
+            target_creature_id_2,
         } => {
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
@@ -731,6 +765,12 @@ pub fn action_to_pydict<'py>(
             // re-parsed Action is bit-identical (None default for
             // non-modal activations).
             d.set_item("chosen_mode_idx", *chosen_mode_idx)?;
+            // **Nesting Grounds flip (2026-05-31).** Always emit
+            // `target_creature_id_2` for round-trip symmetry (None →
+            // Python None / Some(id) → Python int). The re-parsed
+            // Action is bit-identical (None default for single-target
+            // activations).
+            d.set_item("target_creature_id_2", *target_creature_id_2)?;
         }
         Action::CastSpell {
             card_id,

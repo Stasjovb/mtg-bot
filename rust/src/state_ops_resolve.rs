@@ -26690,6 +26690,21 @@ impl GameState {
             // follow-up).
             let saved_target = self.current_resolve_payload_target_id;
             self.current_resolve_payload_target_id = payload.target_id;
+            // **Nesting Grounds flip (2026-05-31).** Swap in the
+            // SECOND chosen target for dual-target activated abilities
+            // (today only
+            // `Effect::MovePlusOneCounterBetweenPermanentsYouControl`).
+            // Mirrors the slot-0 swap immediately above + the spell
+            // path's `current_resolve_payload_target_id_2 =
+            // top.target_obj_id_2` swap — closes the AA-activation
+            // 2nd-target gap the substrate landing flagged. `None` for
+            // every single-/non-target trigger (back-compat — the
+            // dual-target resolve arm sees slot 1 `None` and
+            // short-circuits). Save → set → restore-bracketed exactly
+            // like slot 0 so no observable state leaks across
+            // resolution boundaries.
+            let saved_target_2 = self.current_resolve_payload_target_id_2;
+            self.current_resolve_payload_target_id_2 = payload.target_id_2;
             // DrawCards controller-of-effect fix: also swap in the
             // trigger's controller so `Effect::DrawCards` (and any
             // future arm that opts into the source-controller
@@ -26700,6 +26715,7 @@ impl GameState {
             self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
             self.current_resolve_source_controller = saved_ctrl;
+            self.current_resolve_payload_target_id_2 = saved_target_2;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
             let popped = self
@@ -27044,12 +27060,20 @@ impl GameState {
             // there for the rationale.
             let saved_target = self.current_resolve_payload_target_id;
             self.current_resolve_payload_target_id = payload.target_id;
+            // **Nesting Grounds flip (2026-05-31, `_pause` sibling).**
+            // Same slot-1 swap as `resolve_top_of_stack` above —
+            // mirrored across BOTH resolve entry points per the §3.4
+            // sibling-parity requirement. `None → None` for every
+            // single-/non-target trigger.
+            let saved_target_2 = self.current_resolve_payload_target_id_2;
+            self.current_resolve_payload_target_id_2 = payload.target_id_2;
             // DrawCards controller-of-effect fix: same controller
             // swap as `resolve_top_of_stack` above.
             let saved_ctrl = self.current_resolve_source_controller;
             self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
             self.current_resolve_source_controller = saved_ctrl;
+            self.current_resolve_payload_target_id_2 = saved_target_2;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
             let popped = self
