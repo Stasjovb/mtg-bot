@@ -156,3 +156,91 @@ def test_saw_empty_pool_declines_no_sac_no_draw(engine):
     assert equip_id in bf_ids
     assert len(state.hand_snapshot(0)) == hand_before
     assert len(state.graveyard_snapshot(0)) == gy_before
+
+
+# ============== Auxiliary Boosters (2026-05-31) ==============
+# `Effect::CreateTokenAndAttachSelf { token_printing_id }`: the ENTERS +
+# IsSelf "create a 2/2 Robot token, then attach this Equipment to it"
+# rider. Creates one fixed-printing token under the source Equipment's
+# controller, then stamps the source's attached_to to the token id.
+
+
+_ROBOT_TOKEN_DICT = {
+    "name": "Robot",
+    "card_types": ["Artifact", "Creature"],
+    "subtypes": ["Robot"],
+    "supertypes": ["Token"],
+    "mana_cost": {},
+    "effects": [],
+    "power": 2,
+    "toughness": 2,
+}
+
+
+def test_register_create_token_and_attach_self(engine):
+    """The effect kind round-trips through register → to_pydict, carrying
+    only the token_printing_id (no count field)."""
+    reg = engine.Registry()
+    reg.register_printing(_ROBOT_TOKEN_DICT)
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Aux Boosters Spell",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "effects": [
+                {
+                    "kind": "create_token_and_attach_self",
+                    "token_printing_id": 0,
+                }
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "create_token_and_attach_self"
+    assert eff["token_printing_id"] == 0
+
+
+def test_aux_boosters_etb_creates_robot_and_attaches_self(engine):
+    """Inject Auxiliary Boosters via ETB → the ENTERS+IsSelf trigger
+    fires → one Robot 2/2 token spawns under the Equipment's controller
+    (summoning_sick, untapped) and the Equipment's attached_to points at
+    it."""
+    ZONE_BATTLEFIELD = 2
+    rs = engine.make_synthetic_state()
+    robot_pid = rs.registry_size
+    # Seed the Robot printing into p1's library (inert pid holder).
+    rs.register_and_inject_object(_ROBOT_TOKEN_DICT, 1, 1)
+    aux = {
+        "name": "Synthetic Auxiliary Boosters",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token_and_attach_self",
+                    "token_printing_id": robot_pid,
+                },
+            },
+        ],
+    }
+    pre_ids = {d["id"] for d in rs.battlefield_snapshot()}
+    aux_id = rs.register_and_inject_object(aux, 0, ZONE_BATTLEFIELD)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+
+    post = {d["id"]: d for d in rs.battlefield_snapshot()}
+    new_ids = set(post.keys()) - pre_ids - {aux_id}
+    assert len(new_ids) == 1
+    tok_id = next(iter(new_ids))
+    tok = post[tok_id]
+    assert tok["printing_name"] == "Robot"
+    assert tok["controller_id"] == 0
+    assert tok["tapped"] is False
+    assert tok["summoning_sick"] is True
+    # The Equipment attached to its freshly-created token.
+    assert post[aux_id]["attached_to"] == tok_id

@@ -4199,6 +4199,93 @@ fn apply_effect(
                 state.created_tokens_this_turn[active as usize] = true;
             }
         }
+        // Equipment-AA family — Auxiliary Boosters (2026-05-31).
+        // `CreateTokenAndAttachSelf { token_printing_id }`: create one
+        // fixed-printing token (the Robot 2/2) under the source
+        // Equipment's controller, then stamp the source's `attached_to`
+        // to the new token's id. Mirrors Python's
+        // `CreateTokenAndAttachSelf.resolve` (`tokens.py:88`): create the
+        // token via `state.new_object` + `put_into_battlefield`, then
+        // `source.attached_to = token.id`. Silent no-op if the source is
+        // not on a battlefield (Python's `if source is None: return`).
+        Effect::CreateTokenAndAttachSelf { token_printing_id } => {
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "token_printing_id {token_pid} not in registry"
+                )));
+            }
+            // Locate the source Equipment on a battlefield → its
+            // controller. Silent fizzle if absent (mirror of Python's
+            // `state.resolving_source is None` guard).
+            let mut src_loc: Option<(usize, u8)> = None; // (player_idx, controller)
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) =
+                    player.battlefield.iter().find(|o| o.id == source_obj_id)
+                {
+                    src_loc = Some((pidx, obj.controller));
+                    break;
+                }
+            }
+            let Some((src_pidx, controller)) = src_loc else {
+                return Ok(()); // source not on bf → silent fizzle
+            };
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+            // Fresh monotonic id + ETB timestamp (byte-equal with
+            // Python's per-object next_object_id / next_timestamp).
+            let tok_id = crate::state::reserve_object_id(state);
+            let tok_etb = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+            let cidx = controller as usize;
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            bf.push(GameObject {
+                id: tok_id,
+                printing_id: token_pid,
+                controller,
+                zone: ZONE_BATTLEFIELD,
+                tapped: false,
+                summoning_sick: token_is_creature,
+                damage: 0,
+                counters: 0,
+                charge_counters: 0,
+                loyalty_counters: 0,
+                attached_to: None,
+                exiled_with_source: None,
+                stun_counters: 0,
+                regeneration_shield: false,
+                publicly_known_to_caster_bits: 0,
+                etb_timestamp: tok_etb,
+                ueot_modifiers: Vec::new(),
+                warp_exile_pending: false,
+                warped: false,
+                cast_from_exile_with_lightstall_surcharge: false,
+                controller_baseline: None,
+                token_supertype_override: false,
+                controller_override: None,
+                original_printing_id: None,
+                door_states: None,
+            });
+            // Then attach self: stamp the source Equipment's
+            // `attached_to` to the new token's id. The source is on
+            // `src_pidx`'s battlefield (located above).
+            let src_bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[src_pidx].battlefield);
+            if let Some(src_obj) =
+                src_bf.iter_mut().find(|o| o.id == source_obj_id)
+            {
+                src_obj.attached_to = Some(tok_id);
+            }
+            // Queue the token's ENTERS dispatch (drained by the
+            // surrounding resolver). The Robot token is vanilla — no
+            // nested ETB trigger — so this is an inert fan-out, byte-
+            // equal with Python's `put_into_battlefield` ETB pipeline.
+            state.pending_etb_dispatches.push(tok_id);
+        }
         // BLOCKED-RUST-EFFECT slice (round 43) -- each living player
         // creates `count` tokens of the given printing under their
         // own control. Sister of the `Effect::CreateToken` arm

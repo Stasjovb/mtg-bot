@@ -6662,6 +6662,31 @@ search-strength concern, not a state-divergence one, since both engines
 collapse to the deterministic seat when no agent is present). Pinned by
 `tests/test_saw_parity.py` + `tests_rust/test_equipment_aa_siblings.py`.
 
+**Equipment-AA family sibling — Auxiliary Boosters (2026-05-31,
+`feature/equipment-aa-siblings`).** Auxiliary Boosters ({2} Artifact —
+Equipment, +1/+2 + flying anthem) is the ENTERS+IsSelf sibling — it does
+NOT use the Equipment-AA ATTACKS+IsHost(attacker) branch (its rider is
+an ETB, so it rides the EXISTING ENTERS+IsSelf safe-trigger branch).
+The single new Rust Effect `Effect::CreateTokenAndAttachSelf {
+token_printing_id }` (`state_ops_resolve.rs`) creates one fixed-printing
+token (the Robot 2/2 — VANILLA) under the source Equipment's controller
+(via the shared monotonic `reserve_object_id`, so the token id is
+byte-equal cross-engine), then stamps the source's `attached_to` to the
+new token's id (the self-attach idiom — mirror of
+`ManifestDreadThenAttachSelf`). It REUSES the existing `CreateToken`
+token-printing substrate (`register_token_printing` /
+`_seat_token_printings`, now extended to recognize the
+`create_token_and_attach_self` `kind`) — no new token-registration
+machinery. NO shortcut / no-op: the create-token + self-attach are both
+byte-equal idioms; the probe drives the real ETB path and asserts the
+token shape (Robot 2/2, summoning_sick, untapped) + the self-attach
+linkage byte-equal on both engines. (The cross-engine probe's ABSOLUTE
+token id differs by one only because the Rust-side pid-registration
+scaffold seeds an inert holder object into a library — a TEST artifact,
+not an engine divergence; the per-engine Equipment→token linkage is
+byte-equal.) Pinned by `tests/test_auxiliary_boosters_parity.py` +
+`tests_rust/test_equipment_aa_siblings.py`.
+
 ---
 
 ## Tier-C target-seating sub-substrate — original entry (lever-a: Sunset Saboteur + Exosuit Savior)

@@ -2481,6 +2481,16 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # (non-vanilla-token / tapped-rider / each-player-rider stay
     # dropped) so the predicate-effect product gate stays honest.
     ("enters", "source_is_self", "create_token"),
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).** The
+    # ENTERS + IsSelf create-token-then-self-attach Equipment rider:
+    # "When Auxiliary Boosters enters, create a 2/2 Robot token, then
+    # attach Auxiliary Boosters to it." Rides the SAME ENTERS+IsSelf
+    # dispatch + safe-trigger machinery as every other ENTERS+IsSelf
+    # carrier (NOT the Equipment-AA ATTACKS branch) + the same vanilla-
+    # token printing substrate as ``create_token`` (the Robot token is
+    # vanilla). Sole EoE consumer: Auxiliary Boosters ({2} Equipment),
+    # pinned end-to-end by ``tests/test_auxiliary_boosters_parity.py``.
+    ("enters", "source_is_self", "create_token_and_attach_self"),
     # DIES + source_is_self + create_token_tapped (Phase 6 token-
     # printing substrate, Phase 4 — round 50). The FIRST real-card
     # token-substrate lever after Phase 1: it admits the real EoE card
@@ -2897,6 +2907,14 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # PumpSelf ``granted_keywords`` rider-exclusion pattern). See
     # ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §2.3.
     "create_token": frozenset({"kind", "count", "token_printing_id"}),
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+    # CreateTokenAndAttachSelf — POST-SEATING payload is a single
+    # ``token_printing_id`` (NO ``count`` — always one token; the
+    # self-attach is structural to the variant, no field). Mirrors Rust's
+    # ``Effect::CreateTokenAndAttachSelf { token_printing_id }``. The
+    # pre-seating symbolic ``_token_card_def`` is rewritten to the
+    # numeric ``token_printing_id`` by ``_seat_token_printings``.
+    "create_token_and_attach_self": frozenset({"kind", "token_printing_id"}),
     # CreateTokenTapped (Phase 6 token-printing substrate, Phase 4 —
     # round 50). Same POST-SEATING two-key payload as the sister
     # ``create_token`` whitelist above (``count`` +
@@ -3637,6 +3655,11 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
     from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
     from mtg_bot.effects.generic.tokens import CreateToken
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).** The
+    # ENTERS+IsSelf create-token-then-self-attach Equipment rider whose
+    # safe leaf this slice admits (rides the existing ENTERS+IsSelf
+    # branch + the CreateToken token-printing substrate).
+    from mtg_bot.effects.generic.tokens import CreateTokenAndAttachSelf
     # **Anticausal Vestige Cycle 2 (2026-05-24).** The bespoke
     # unit-variant whose LEAVES_BATTLEFIELD+IsSelf safe-trigger leaf
     # this slice admits. Imported alongside the other effect classes
@@ -3865,6 +3888,16 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
                 "create_token", "create_token_tapped",
+                # **Equipment-AA family — Auxiliary Boosters
+                # (2026-05-31) — the ENTERS+IsSelf create-token-then-
+                # self-attach leaf.** Rides the existing ENTERS+IsSelf
+                # branch (NOT the Equipment-AA ATTACKS branch). The
+                # predicate-effect product is enforced by the
+                # ``("enters", "source_is_self",
+                # "create_token_and_attach_self")`` ``_SAFE_TRIGGERS``
+                # entry; the effect-class arm's vanilla-token gate is
+                # the §2 teeth.
+                "create_token_and_attach_self",
                 "return_target_permanent_you_control",
                 "look_top_n_put_one_in_hand_rest_to_graveyard",
                 "conditional_if_cast_from_hand",
@@ -4337,6 +4370,37 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # Symbolic token reference — replaced with a numeric
             # ``token_printing_id`` by ``_seat_token_printings``
             # (which preserves this ``kind``).
+            "_token_card_def": token_cd,
+        }
+    elif isinstance(eff, CreateTokenAndAttachSelf):
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31) — the
+        # ENTERS+IsSelf create-token-then-self-attach leaf.** Python's
+        # ``CreateTokenAndAttachSelf(token_printing)``
+        # (effects/generic/tokens.py:79): "create a <token> token, then
+        # attach this Equipment to it." Auxiliary Boosters ({2} Artifact
+        # — Equipment, +1/+2 + flying anthem) is the sole EoE consumer;
+        # its token is the Robot 2/2 Artifact Creature (VANILLA — no
+        # abilities/keywords).
+        #
+        # **Vanilla-token §2 gate (reuses the CreateToken token-printing
+        # substrate).** Same as the ``CreateToken`` arm above: the loader
+        # synthesizes a token CardDef from the parsed ``token_printing``;
+        # CardDef has NO activated-ability field, so a non-vanilla token
+        # would silently drop its abilities on the bridge. Require a
+        # vanilla creature token (creature body, no abilities/keywords).
+        # The Robot 2/2 passes; any ability-bearing token stays DECLINED.
+        #
+        # **The self-attach is structural to the variant** — no extra
+        # rider to gate (unlike CreateToken's count/tapped/each_player).
+        # The emitted dict carries the SYMBOLIC ``_token_card_def``
+        # (replaced with a numeric ``token_printing_id`` by
+        # ``_seat_token_printings``, which preserves this ``kind``).
+        token_cd = _token_vanilla_card_def(eff.token_printing)
+        if token_cd is None:
+            return None
+        eff_kind = "create_token_and_attach_self"
+        eff_dict = {
+            "kind": "create_token_and_attach_self",
             "_token_card_def": token_cd,
         }
     elif isinstance(eff, PutPlusOneCounterOnOpponentsCreature):
@@ -14445,6 +14509,16 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         "create_token",
         "create_token_tapped",
         "create_token_per_multicolored_permanent",
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+        # The ENTERS+IsSelf create-token-then-self-attach kind. Seated
+        # identically to the static ``create_token*`` carriers — same
+        # deterministic-pid token CardDef append + the SAME
+        # ``register_token_printing`` bridge map. The carrier-rewrite
+        # branch copies every non-symbolic field through unchanged (it
+        # has NO ``count`` field — always one token; the self-attach is
+        # structural), only swapping ``_token_card_def`` for
+        # ``token_printing_id``.
+        "create_token_and_attach_self",
     )
 
     # Lander-spell-token-seating sub-substrate (round-73). The two

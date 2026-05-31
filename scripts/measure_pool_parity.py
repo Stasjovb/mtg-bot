@@ -4120,6 +4120,14 @@ PROBE_MODULES: tuple[Path, ...] = (
     # ``Effect::SawAttacksOptionalSacDrawEffect`` Rust variant +
     # bridge/recognizer arms. NOT a targeted effect (internal sac seat).
     REPO_ROOT / "tests" / "test_saw_parity.py",
+    # Auxiliary Boosters (Equipment-AA family sibling — 2026-05-31). The
+    # ENTERS + IsSelf "create a 2/2 Robot token, then attach this
+    # Equipment to it" rider. Does NOT use the Equipment-AA ATTACKS
+    # branch (rides the existing ENTERS+IsSelf branch); the single new
+    # piece is the ``Effect::CreateTokenAndAttachSelf { token_printing_id
+    # }`` Rust variant + bridge/recognizer arms, reusing the existing
+    # CreateToken token-printing substrate (the Robot token is vanilla).
+    REPO_ROOT / "tests" / "test_auxiliary_boosters_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

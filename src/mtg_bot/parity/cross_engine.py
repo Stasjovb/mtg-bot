@@ -3633,6 +3633,40 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             token_printing=token_printing,
             count=eff_dict.get("count", 1),
         )
+    if kind == "create_token_and_attach_self":
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+        # Reverse bridge arm for Rust's
+        # ``Effect::CreateTokenAndAttachSelf { token_printing_id }``
+        # (cards.rs sister-variant of ``CreateToken``; parse + to_pydict
+        # arms in cards.rs; resolve arm in state_ops_resolve.rs). Mirrors
+        # Python's ``CreateTokenAndAttachSelf(token_printing)``
+        # (effects/generic/tokens.py:79).
+        #
+        # **Single fixed-printing token + self-attach.** No ``count``
+        # field (always one token — the Robot 2/2). The variant creates
+        # the token under the source Equipment's controller then stamps
+        # the source's ``attached_to`` to the new token's id (the
+        # self-attach is structural to the variant). Same
+        # ``_TOKEN_PRINTING_BY_PID`` registration map as the sister
+        # ``create_token`` arm: probes that drive this arm cross-engine
+        # must call ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state. The sole EoE consumer is **Auxiliary
+        # Boosters** ({2} Equipment), pinned end-to-end by
+        # ``tests/test_auxiliary_boosters_parity.py``.
+        from mtg_bot.effects.generic.tokens import CreateTokenAndAttachSelf
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token_and_attach_self bridge: no "
+                f"Python CardPrinting registered for token_printing_id="
+                f"{token_pid!r}. Probes that drive the "
+                f"create_token_and_attach_self arm cross-engine must call "
+                f"register_token_printing(pid, py_printing) BEFORE "
+                f"building either state."
+            ) from exc
+        return CreateTokenAndAttachSelf(token_printing=token_printing)
     if kind == "create_token_each_player":
         # BLOCKED-RUST-EFFECT slice (round 43) -- "Each player
         # creates N tokens of the given printing under their own

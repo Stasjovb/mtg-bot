@@ -329,6 +329,34 @@ pub enum Effect {
     /// exist when they leave the battlefield" CR 110.5g handling is
     /// deferred. Negative `count` raises.
     CreateToken { count: i32, token_printing_id: u32 },
+    /// **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+    /// Mirrors Python's `CreateTokenAndAttachSelf(token_printing)`
+    /// (`effects/generic/tokens.py:79`). Auxiliary Boosters (`{2}`
+    /// Artifact — Equipment) ETB: "When Auxiliary Boosters enters,
+    /// create a 2/2 colorless Robot artifact creature token, then attach
+    /// Auxiliary Boosters to it." The ENTERS + `IsSelf` trigger (the
+    /// SHARED ENTERS+IsSelf branch — same dispatch + safe-trigger shape
+    /// as every other ENTERS+IsSelf carrier; NOT the Equipment-AA
+    /// ATTACKS branch).
+    ///
+    /// **Token printing.** A single fixed-printing token referenced by
+    /// `token_printing_id` (the Robot 2/2 Artifact Creature — VANILLA,
+    /// no abilities, so it round-trips through the token-printing
+    /// substrate byte-equal). Created under the source Equipment's
+    /// controller on that controller's battlefield, summoning-sick (it's
+    /// a creature), via the shared monotonic `reserve_object_id` (so the
+    /// token's id is byte-equal cross-engine).
+    ///
+    /// **Then attach self.** After the token is on the battlefield,
+    /// stamp the source Equipment's `attached_to = Some(token_id)` (the
+    /// self-attach idiom — mirror of `ManifestDreadThenAttachSelf`'s
+    /// `then_attach_to_source` follow-up, but synchronous since the
+    /// token is a fixed printing, not a manifest-from-library choice).
+    /// No-op if the source isn't on a battlefield (silent fizzle). The
+    /// post-resolve observable (token on bf + Equipment's `attached_to`
+    /// pointing at it) is byte-equal with Python's
+    /// `source.attached_to = token.id`.
+    CreateTokenAndAttachSelf { token_printing_id: u32 },
     /// **BLOCKED-RUST-EFFECT slice (round 43) -- each living player
     /// creates `count` token creatures under their own control.**
     /// Sister of the static `CreateToken { count, token_printing_id }`
@@ -12858,6 +12886,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::CreateToken { count, token_printing_id })
         }
+        "create_token_and_attach_self" => {
+            // Equipment-AA family — Auxiliary Boosters (2026-05-31).
+            // Single fixed-printing token (the Robot 2/2) referenced by
+            // `token_printing_id`; the resolve arm creates it then stamps
+            // the source Equipment's `attached_to`. No `count` field
+            // (always one token). Sister of the static `create_token`
+            // arm; distinguished by variant (closed-vocab convention).
+            // Mirrors Python's `CreateTokenAndAttachSelf(token_printing=
+            // ...)` (`tokens.py:79`).
+            let token_printing_id: u32 =
+                require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::CreateTokenAndAttachSelf { token_printing_id })
+        }
         "create_token_each_player" => {
             // BLOCKED-RUST-EFFECT slice (round 43) -- each living
             // player creates `count` tokens of the given printing
@@ -16901,7 +16942,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, tap_up_to_one_target_creature, saw_attacks_optional_sac_draw_effect, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted, pump_self_x_power_ueot, switch_source_power_toughness_ueot, sacrifice_n_lands_you_control"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, create_token_and_attach_self, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, tap_up_to_one_target_creature, saw_attacks_optional_sac_draw_effect, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted, pump_self_x_power_ueot, switch_source_power_toughness_ueot, sacrifice_n_lands_you_control"
         ))),
     }
 }
@@ -19338,6 +19379,13 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::CreateToken { count, token_printing_id } => {
             d.set_item("kind", "create_token")?;
             d.set_item("count", *count)?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::CreateTokenAndAttachSelf { token_printing_id } => {
+            // Equipment-AA family — Auxiliary Boosters (2026-05-31).
+            // Single fixed-printing token (no `count` field); the
+            // self-attach is structural to the variant.
+            d.set_item("kind", "create_token_and_attach_self")?;
             d.set_item("token_printing_id", *token_printing_id)?;
         }
         Effect::CreateTokenEachPlayer { count, token_printing_id } => {
