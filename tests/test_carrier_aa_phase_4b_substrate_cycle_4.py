@@ -82,9 +82,11 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
     from mtg_bot.effects.generic.damage import (
         DealDamageToControllerAndAddMana,
     )
+    from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddNManaOfChosenColor,
         AddOneManaFromControlledLandsProductions,
         AddOneManaOfChosenPermanentColor,
     )
@@ -135,21 +137,24 @@ def test_phase_4b_c4_admit_set_widened_by_exactly_one():
         AddOneManaOfChosenPermanentColor,
         # Reflecting Pool Phase 4 C2:
         AddOneManaFromControlledLandsProductions,
-        # Ancient Tomb Phase 4 C2 (the new one):
+        # Ancient Tomb Phase 4 C2:
         DealDamageToControllerAndAddMana,
+        # Grove of the Burnwillows (2026-05-31) -- the two Sequence
+        # leaf classes (the Sequence-IN-AA admit closure):
+        AddNManaOfChosenColor,
+        GrantLifeToEachOpponent,
     })
     assert admit_set == expected_post_c4, (
-        "Phase 4B C4 admit set sentinel: post-C4 + post-Meteor-Crater-"
-        f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 admit "
-        f"set must be the 19-class set; got {len(admit_set)} classes, "
-        f"delta = added {admit_set - expected_post_c4} / "
+        "Grove admit set sentinel: post-C4 + post-Meteor-Crater-"
+        f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 + Grove "
+        f"admit set must be the 21-class set; got {len(admit_set)} "
+        f"classes, delta = added {admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
-    assert len(admit_set) == 19, (
-        f"Phase 4B C4 admit-set size sentinel: expected 19 classes "
-        f"post-C4 (rebased onto Spacecraft P4 C2 at ``4a2485f1`` + "
-        f"post-Meteor-Crater-C2 + post-Reflecting-Pool-C2 + post-"
-        f"Ancient-Tomb-C2); got {len(admit_set)}"
+    assert len(admit_set) == 21, (
+        f"Grove admit-set size sentinel: expected 21 classes "
+        f"post-Grove (19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor "
+        f"+ GrantLifeToEachOpponent); got {len(admit_set)}"
     )
     assert CopyTargetInstantOrSorceryYouControl in admit_set, (
         "Phase 4B C4 FLIP: CopyTargetInstantOrSorceryYouControl must "
@@ -452,8 +457,10 @@ PHASE_1_3_4D_4B_ADMITTED_LAND_CARRIERS = (
     "Meteor Crater",
     # Reflecting Pool P4 C2.
     "Reflecting Pool",
-    # Ancient Tomb P4 C2 (the new one).
+    # Ancient Tomb P4 C2.
     "Ancient Tomb",
+    # Grove of the Burnwillows (2026-05-31) -- Sequence-IN-AA admit.
+    "Grove of the Burnwillows",
 )
 
 PHASE_4D_ADMITTED_ARTIFACT_CARRIERS = (

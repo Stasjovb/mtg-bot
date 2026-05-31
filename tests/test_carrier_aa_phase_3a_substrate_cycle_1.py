@@ -1062,9 +1062,13 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
     # **Ancient Tomb Phase 4 C2 (2026-05-27).** Effect-class widen
     # 18 → 19 (adds ``DealDamageToControllerAndAddMana``) FLIPs
     # Ancient Tomb DECLINED → ADMITTED. 10 → 11 admits.
+    # **Grove of the Burnwillows (2026-05-31).** The Sequence-IN-AA
+    # admit + the AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-
+    # class widens FLIP Grove DECLINED → ADMITTED. 11 → 12 admits.
     assert admits == [
         "Ancient Tomb",
         "Deserted Temple",
+        "Grove of the Burnwillows",
         "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
@@ -1075,11 +1079,12 @@ def test_no_silent_auto_grow_admit_set_post_phase_3a_c2():
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Ancient Tomb C2 admit-set pin violated: "
+        f"Carrier-AA Grove admit-set pin violated: "
         f"expected admit set = ['Ancient Tomb', 'Deserted Temple', "
-        f"'Meteor Crater', 'Mirrorpool', 'Mystifying Maze', "
-        f"'Petrified Field', 'Reflecting Pool', 'Scavenger Grounds', "
-        f"'Swarmyard', 'Terrain Generator', \"Thespian's Stage\"], "
+        f"'Grove of the Burnwillows', 'Meteor Crater', 'Mirrorpool', "
+        f"'Mystifying Maze', 'Petrified Field', 'Reflecting Pool', "
+        f"'Scavenger Grounds', 'Swarmyard', 'Terrain Generator', "
+        f"\"Thespian's Stage\"], "
         f"got {admits}. A widen in a sibling substrate or predicate "
         f"would surface here as a silent auto-grow — investigate "
         f"before merging."

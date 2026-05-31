@@ -204,6 +204,21 @@ _ANCIENT_TOMB_C2_FULL_FLIP_LAND_CARRIERS = (
     "Ancient Tomb",
 )
 
+# Grove of the Burnwillows FULL FLIP (2026-05-31). Grove was in the
+# Phase-N cost-shape decline residue; the Grove closure ships the
+# Sequence-IN-AA admit (the per-AA Effect-class gate grew a recursive
+# Sequence arm) + the two leaf Effect-class widens
+# (AddNManaOfChosenColor + the NEW Rust GrantLifeToEachOpponent) +
+# cross-engine forward / reverse arms. Grove's AA[1] body is a
+# Sequence -- the FIRST Carrier-AA carrier to flip on the Sequence-IN-AA
+# substrate. Both AAs round-trip clean through the bridge floor, so
+# Grove admits at the dispatcher AND the cross-engine Land builder. See
+# ``tests/test_grove_of_the_burnwillows_parity.py`` for the per-card
+# real-EoE probe + admit-gate FLIP pins.
+_GROVE_FULL_FLIP_LAND_CARRIERS = (
+    "Grove of the Burnwillows",
+)
+
 
 # ---------------------------------------------------------------------------
 # §6.4 #25 — live-printing parametrized walk (admit + decline sides)
@@ -387,6 +402,21 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Land builder "
             f"gate post-Ancient-Tomb-C2"
         )
+    elif card_name in _GROVE_FULL_FLIP_LAND_CARRIERS:
+        # Grove of the Burnwillows FULL FLIP (2026-05-31) — Grove admits
+        # at every gate post the Grove closure (the Sequence-IN-AA admit
+        # + the AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-
+        # class widens + cross-engine forward / reverse arms). Grove's
+        # AA[1] is a Sequence -- the FIRST carrier to flip on the
+        # Sequence-IN-AA substrate.
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post the "
+            f"Grove FULL FLIP (Sequence-IN-AA admit)"
+        )
+        assert traj._carrier_aa_land_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Land builder "
+            f"gate post the Grove closure"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -442,20 +472,23 @@ def test_phase_3c_close_carrier_aa_land_admit_set_is_exhaustive_over_eoe_pool():
     # Ancient Tomb P4 C2 (2026-05-27) added Ancient Tomb — single-AA
     # Land carrier FULL FLIP via the DealDamageToControllerAndAddMana
     # Effect-class widen.
-    expected_post_ancient_tomb_c2 = sorted(
+    # Grove of the Burnwillows (2026-05-31) added Grove — dual-AA Land
+    # carrier FULL FLIP via the Sequence-IN-AA admit + the
+    # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class widens.
+    expected_post_grove = sorted(
         set(_PHASE_3_ADMIT_SET) | {
             "Gemstone Caverns",
             "Mirrorpool",
             "Meteor Crater",
             "Reflecting Pool",
             "Ancient Tomb",
+            "Grove of the Burnwillows",
         }
     )
-    assert admits == expected_post_ancient_tomb_c2, (
-        f"Ancient Tomb P4 C2 subsystem-attribution LOADER-SIDE LAND "
-        f"pin violated. _carrier_aa_land_card_def must admit EXACTLY "
-        f"the post-Ancient-Tomb-C2 12-card set "
-        f"{expected_post_ancient_tomb_c2}, got {admits}. A silent "
+    assert admits == expected_post_grove, (
+        f"Grove subsystem-attribution LOADER-SIDE LAND pin violated. "
+        f"_carrier_aa_land_card_def must admit EXACTLY the post-Grove "
+        f"13-card set {expected_post_grove}, got {admits}. A silent "
         f"auto-grow indicates a Phase-4+ widen landed without inverting "
         f"this assertion — investigate before merging."
     )
@@ -552,6 +585,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "Meteor Crater",        # Meteor Crater P4 C2 FULL FLIP (Land admit + builder)
             "Reflecting Pool",      # Reflecting Pool P4 C2 FULL FLIP (Land admit + builder)
             "Ancient Tomb",         # Ancient Tomb P4 C2 FULL FLIP (Land admit + builder)
+            "Grove of the Burnwillows",  # Grove FULL FLIP (Sequence-IN-AA admit; Land admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor
@@ -561,7 +595,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
         }
     )
     assert admits == expected_post_c2, (
-        f"Ancient Tomb P4 C2 dispatcher exhaustive-walk pin violated. "
+        f"Grove dispatcher exhaustive-walk pin violated. "
         f"Expected {expected_post_c2}, got {admits}. The dispatcher "
         f"delegates LAND ∪ ARTIFACT; silent admit-set growth on either "
         f"sub-predicate surfaces here. NOTE: the predicate-level admit "
@@ -675,16 +709,17 @@ def test_phase_3c_close_loader_side_admit_set_size_matches_design_doc():
     )
     # Post-Phase-4C-C2 + Phase-4D-C2 + Phase-4E-C2.5 + Phase-4B-C5
     # (Mirrorpool FULL FLIP) + Meteor-Crater-C2 + Reflecting-Pool-C2 +
-    # Ancient-Tomb-C2: the LOADER-SIDE admit set grows to 15 (12 Land
-    # admits = 7-card Phase-3-close + Gemstone Caverns + Mirrorpool +
-    # Meteor Crater + Reflecting Pool + Ancient Tomb; 3 Artifact
-    # admits = Ghost Vacuum + Keys to the House + All-Fates Scroll).
-    assert loader_admit_count == 15, (
-        f"Ancient Tomb P4 C2 close LOADER-SIDE admit-set size "
-        f"invariant violated: expected exactly 15 cards (12 Land = 7 "
-        f"Phase-3 + Gemstone Caverns + Mirrorpool + Meteor Crater + "
-        f"Reflecting Pool + Ancient Tomb; 3 Artifact = Ghost Vacuum + "
-        f"Keys to the House + All-Fates Scroll) post-Ancient-Tomb-C2, "
+    # Ancient-Tomb-C2 + Grove: the LOADER-SIDE admit set grows to 16 (13
+    # Land admits = 7-card Phase-3-close + Gemstone Caverns + Mirrorpool
+    # + Meteor Crater + Reflecting Pool + Ancient Tomb + Grove of the
+    # Burnwillows; 3 Artifact admits = Ghost Vacuum + Keys to the House +
+    # All-Fates Scroll).
+    assert loader_admit_count == 16, (
+        f"Grove close LOADER-SIDE admit-set size invariant violated: "
+        f"expected exactly 16 cards (13 Land = 7 Phase-3 + Gemstone "
+        f"Caverns + Mirrorpool + Meteor Crater + Reflecting Pool + "
+        f"Ancient Tomb + Grove of the Burnwillows; 3 Artifact = Ghost "
+        f"Vacuum + Keys to the House + All-Fates Scroll) post-Grove, "
         f"got {loader_admit_count}. Further Phase-4+ FLIPs MUST "
         f"update this size in lockstep."
     )

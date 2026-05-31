@@ -704,13 +704,17 @@ def test_meteor_crater_carrier_aa_effect_classes_count_is_19_post_at_c2():
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 19, (
+    # NOTE: the absolute admit-set size grew 19 → 21 with the Grove of
+    # the Burnwillows closure (2026-05-31 — AddNManaOfChosenColor +
+    # GrantLifeToEachOpponent). Meteor Crater's C2 contribution
+    # (AddOneManaOfChosenPermanentColor) stays in the set; this sentinel
+    # tracks the live total.
+    classes = _carrier_aa_phase_1_effect_classes()
+    from mtg_bot.effects.generic.mana import AddOneManaOfChosenPermanentColor
+    assert AddOneManaOfChosenPermanentColor in classes
+    assert len(classes) == 21, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 19 entries post-Ancient-Tomb-Cycle-"
-        "2 — Meteor Crater C2 lands the 16 → 17 bump adding "
-        "AddOneManaOfChosenPermanentColor; Reflecting Pool C2 lands "
-        "the 17 → 18 bump adding "
-        "AddOneManaFromControlledLandsProductions; Ancient Tomb C2 "
-        "lands the 18 → 19 bump adding "
-        "DealDamageToControllerAndAddMana."
+        "set MUST have exactly 21 entries post the Grove closure "
+        "(19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor + "
+        "GrantLifeToEachOpponent)."
     )

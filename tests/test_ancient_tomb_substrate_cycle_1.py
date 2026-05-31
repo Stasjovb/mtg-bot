@@ -754,9 +754,22 @@ def test_ancient_tomb_carrier_aa_effect_classes_count_is_19_post_cycle_2():
         _carrier_aa_phase_1_effect_classes,
     )
 
-    assert len(_carrier_aa_phase_1_effect_classes()) == 19, (
+    # NOTE: the absolute admit-set size grew 19 → 21 with the Grove of
+    # the Burnwillows closure (2026-05-31 — adds AddNManaOfChosenColor +
+    # GrantLifeToEachOpponent). Ancient Tomb's C2 contribution
+    # (DealDamageToControllerAndAddMana) remains in the set; this
+    # sentinel tracks the live total, so it bumps in lockstep with any
+    # later legitimate widen.
+    classes = _carrier_aa_phase_1_effect_classes()
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToControllerAndAddMana,
+    )
+    assert DealDamageToControllerAndAddMana in classes, (
+        "Ancient Tomb C2's Effect class must stay in the admit set."
+    )
+    assert len(classes) == 21, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 19 entries post-Cycle-2 — Ancient "
-        "Tomb C2 lands the 18 → 19 bump adding "
-        "DealDamageToControllerAndAddMana."
+        "set MUST have exactly 21 entries post the Grove closure "
+        "(19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor + "
+        "GrantLifeToEachOpponent)."
     )

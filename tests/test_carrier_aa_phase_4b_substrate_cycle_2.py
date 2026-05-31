@@ -296,9 +296,11 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
+    from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddNManaOfChosenColor,
         AddOneManaFromControlledLandsProductions,
         AddOneManaOfChosenPermanentColor,
     )
@@ -353,15 +355,18 @@ def test_phase_4b_c2_admit_set_widened_by_exactly_one():
         AddOneManaOfChosenPermanentColor,
         # Reflecting Pool Phase 4 C2:
         AddOneManaFromControlledLandsProductions,
-        # Ancient Tomb Phase 4 C2 (the new one):
+        # Ancient Tomb Phase 4 C2:
         DealDamageToControllerAndAddMana,
+        # Grove of the Burnwillows (2026-05-31) -- the two Sequence
+        # leaf classes (the Sequence-IN-AA admit closure):
+        AddNManaOfChosenColor,
+        GrantLifeToEachOpponent,
     })
     assert admit_set == expected_post_c4, (
-        "Phase 4B C4 admit set sentinel: post-C4 + post-Meteor-Crater-"
-        f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 admit "
-        f"set must be the 19-class set (rebased onto Spacecraft P4 C2 "
-        f"at ``4a2485f1``); got {len(admit_set)} classes, delta = "
-        f"added {admit_set - expected_post_c4} / "
+        "Grove admit set sentinel: post-C4 + post-Meteor-Crater-"
+        f"C2 + post-Reflecting-Pool-C2 + post-Ancient-Tomb-C2 + Grove "
+        f"admit set must be the 21-class set; got {len(admit_set)} "
+        f"classes, delta = added {admit_set - expected_post_c4} / "
         f"missing {expected_post_c4 - admit_set}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** AA[0]'s class IS in the
@@ -505,14 +510,19 @@ def test_full_pool_admit_set_unchanged_post_phase_4b_c2():
         # FLIPS into the full-pool admit set via the Effect-class
         # widen for DealDamageToControllerAndAddMana (C1 Rust
         # substrate at ``c250a60d``).
-        + ("Ancient Tomb",),
+        + ("Ancient Tomb",)
+        # **Grove of the Burnwillows (2026-05-31).** Grove FLIPS into
+        # the full-pool admit set via the Sequence-IN-AA admit + the
+        # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class
+        # widens (new Rust Effect::GrantLifeToEachOpponent).
+        + ("Grove of the Burnwillows",),
     )
     assert admitted == expected, (
         f"Phase 4B C4 + Meteor Crater C2 + Reflecting Pool C2 + "
-        f"Ancient Tomb C2 invariant: full-pool admit set must be "
-        f"exactly the C2 baseline + Mirrorpool + Meteor Crater + "
-        f"Reflecting Pool + Ancient Tomb; got admit delta = added "
-        f"{admitted - expected} / missing {expected - admitted}"
+        f"Ancient Tomb C2 + Grove invariant: full-pool admit set must "
+        f"be exactly the C2 baseline + Mirrorpool + Meteor Crater + "
+        f"Reflecting Pool + Ancient Tomb + Grove; got admit delta = "
+        f"added {admitted - expected} / missing {expected - admitted}"
     )
     # **Phase 4B C4 inversion (2026-05-26).** Mirrorpool MUST appear
     # in the admit set post-C4 (was DECLINED pre-C4).

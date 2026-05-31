@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **445 / 475 EoE cards (93.7%) are byte-equal at the Effect+bridge level**; of those, **445 (93.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 0 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **446 / 475 EoE cards (93.9%) are byte-equal at the Effect+bridge level**; of those, **435 (91.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 11 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **30 (6.3%)** are BLOCKED, broken out below.
+- **29 (6.1%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -16,12 +16,12 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 445 | 93.7% |
-| Effect+bridge covered (not individually probed) | 0 | 0.0% |
+| PROBED byte-equal | 435 | 91.6% |
+| Effect+bridge covered (not individually probed) | 11 | 2.3% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 30 | 6.3% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 29 | 6.1% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -93,7 +93,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cerebral Download
 - Chorale of the Void
 - Chrome Companion
-- Clammy Prowler
 - Close Encounter
 - Cloudsculpt Technician
 - Codecracker Hound
@@ -109,7 +108,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Creeping Tar Pit
 - Cryogen Relic
 - Cryoshatter
-- Crystal Quarry
 - Cult Healer
 - Cursed Windbreaker
 - Cut Propulsion
@@ -120,7 +118,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Dauntless Scrapbot
 - Dawnsire, Sunstar Dreadnought
 - Dawnstrike Vanguard
-- Deafening Silence
 - Debris Field Crusher
 - Decode Transmissions
 - Defiant Survivor
@@ -140,8 +137,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Dual-Sun Adepts
 - Dual-Sun Technique
 - Dubious Delicacy
-- Duskmourn's Domination
-- Dust Bowl
 - Dyadrine, Synthesis Amalgam
 - Edge Rover
 - Eldrazi Temple
@@ -208,6 +203,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Gravkill
 - Gravpack Monoist
 - Gremlin Tamer
+- Grove of the Burnwillows
 - Haliya, Ascendant Cadet
 - Haliya, Guided by Light
 - Hand That Feeds
@@ -255,11 +251,9 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Lakeside Shack
 - Larval Scoutlander
 - Lashwhip Predator
-- Let's Play a Game
 - Lightless Evangel
 - Lightstall Inquisitor
 - Lionheart Glimmer
-- Lithobraking
 - Live or Die
 - Living Phone
 - Lost in Space
@@ -328,7 +322,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Plasma Bolt
 - Plaza of Heroes
 - Possibility Technician
-- Power Depot
 - Pull Through the Weft
 - Pulsar Squadron Ace
 - Pyroclasm
@@ -356,7 +349,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Rust Harvester
 - Sacred Foundry
 - Sami's Curiosity
-- Sami, Ship's Engineer
 - Sami, Wildcat Captain
 - Savior of the Small
 - Scavenger Grounds
@@ -401,7 +393,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Starwinder
 - Station Monitor
 - Stay Hidden, Stay Silent
-- Steelswarm Operator
 - Stirring Wildwood
 - Stomping Ground
 - Strangled Cemetery
@@ -476,7 +467,6 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Warping Wail
 - Wary Watchdog
 - Watery Grave
-- Weapons Manufacturing
 - Wedgelight Rammer
 - Weftblade Enhancer
 - Weftstalker Ardent
@@ -498,7 +488,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 
 - (none)
 
-## BLOCKED — subsystem-gated / Effect-uncovered (30)
+## BLOCKED — subsystem-gated / Effect-uncovered (29)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
@@ -510,12 +500,12 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Static / layered abilities | 7 | 2 | 5 | 0 | 0 | sprawling |
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 0 | 0 | sprawling |
-| Carrier activated abilities | 15 | 0 | 15 | 0 | 0 | sprawling |
+| Carrier activated abilities | 14 | 0 | 14 | 0 | 0 | sprawling |
 | Unclassified (honest residual — needs hand re-walk) | 1 | 1 | 0 | 0 | 0 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 12 | 0 | 12 | 0 | 0 | diffuse |
-| Effect-uncovered (no covered Rust counterpart) | 22 | 0 | 22 | 0 | 0 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 21 | 0 | 21 | 0 | 0 | diffuse |
 
-**Reconciliation:** 30 subsystem-gated = 5 single-gated + 25 multi-gated; the per-subsystem `1gate` column sums to 5 (== single-gated total). The breakout partitions exactly the same 30 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 29 subsystem-gated = 5 single-gated + 24 multi-gated; the per-subsystem `1gate` column sums to 5 (== single-gated total). The breakout partitions exactly the same 29 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (1):** `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -531,7 +521,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Echoing Deeps
 - Exalted Sunborn
 - Green Sun's Zenith
-- Grove of the Burnwillows
 - Haunted Screen
 - Lavaclaw Reaches
 - Leyline of Mutation
@@ -551,4 +540,5 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Unholy Annex // Ritual Chamber
 - Wandering Fumarole
 - Wildfire Wickerfolk
+
 

@@ -817,21 +817,30 @@ def test_no_silent_auto_grow_admit_set_post_phase_3b_c2():
         if _printing_is_bridge_simple_carrier_aa_land(ps[name])
     )
     # **Phase 4B C4 (2026-05-26).** Mirrorpool FLIPped ADMITTED via
-    # the full Option A widen.
+    # the full Option A widen. **Meteor Crater / Reflecting Pool /
+    # Ancient Tomb P4 C2 (2026-05-27).** Each FLIPped ADMITTED via its
+    # Effect-class widen. **Grove of the Burnwillows (2026-05-31).**
+    # FLIPped ADMITTED via the Sequence-IN-AA admit + the
+    # AddNManaOfChosenColor + GrantLifeToEachOpponent leaf-class widens.
+    # (This sentinel was last refreshed at the Grove closure; the prior
+    # 8-card expectation predated the MC/RP/AT/Grove flips.)
     assert admits == [
+        "Ancient Tomb",
         "Deserted Temple",
+        "Grove of the Burnwillows",
+        "Meteor Crater",
         "Mirrorpool",
         "Mystifying Maze",
         "Petrified Field",
+        "Reflecting Pool",
         "Scavenger Grounds",
         "Swarmyard",
         "Terrain Generator",
         "Thespian's Stage",
     ], (
-        f"Carrier-AA Phase 4B C4 admit-set pin violated: expected "
-        f"admit set = ['Deserted Temple', 'Mirrorpool', 'Mystifying Maze', "
-        f"'Petrified Field', 'Scavenger Grounds', 'Swarmyard', "
-        f"'Terrain Generator', \"Thespian's Stage\"], got {admits}. "
+        f"Carrier-AA Grove admit-set pin violated: expected the 12-card "
+        f"admit set (Phase-3 7 + Mirrorpool + Meteor Crater + Reflecting "
+        f"Pool + Ancient Tomb + Grove of the Burnwillows), got {admits}. "
         f"A widen in a sibling substrate or predicate would surface "
         f"here as a silent auto-grow — investigate before merging."
     )

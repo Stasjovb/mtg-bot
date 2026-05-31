@@ -9203,9 +9203,11 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         ExileTargetCardFromGraveyard,
         PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
     )
+    from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
     from mtg_bot.effects.generic.mana import (
         AddChargeCounterManaOfChosenColor,
         AddManaToPool,
+        AddNManaOfChosenColor,
         AddOneManaFromControlledLandsProductions,
         AddOneManaOfChosenPermanentColor,
     )
@@ -9451,6 +9453,56 @@ def _carrier_aa_phase_1_effect_classes() -> "frozenset[type]":
         # shape is structurally distinct from MC/RP's chosen-color
         # shape, verified no-auto-grow via full-pool re-derivation).
         DealDamageToControllerAndAddMana,
+        # **Grove of the Burnwillows substrate (2026-05-31 — THE FLIP
+        # per ``docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md`` §#3
+        # Grove).** Adds the two Effect classes Grove's AA[1]
+        # ``Sequence`` carries as leaves:
+        #
+        #   * ``AddNManaOfChosenColor`` (Sequence leaf #0 — "Add {R} or
+        #     {G}", ``AddNManaOfChosenColor(1, ('R','G'))``). The Rust
+        #     ``Effect::AddNManaOfChosenColor { amount, options }``
+        #     variant + parse + resolve + to_pydict have been live since
+        #     the round-21 / Phase-4E mana-ability bridge slice; this
+        #     slice adds the cross-engine forward arm
+        #     (``_carrier_aa_add_n_mana_chosen_color_to_dict``) and the
+        #     Effect-class admit-set entry. (The reverse arm already
+        #     round-tripped at ``cross_engine.py:5922``.)
+        #   * ``GrantLifeToEachOpponent`` (Sequence leaf #1 — "Each
+        #     opponent gains 1 life", ``GrantLifeToEachOpponent(1)``).
+        #     The NEW Rust ``Effect::GrantLifeToEachOpponent { amount }``
+        #     variant + parse + resolve (life-GAIN sister of
+        #     ``each_opponent_loses_life``, with ``life_gained_this_turn``
+        #     tracker) + to_pydict + cross-engine forward / reverse arms
+        #     all ship this slice.
+        #
+        # **The load-bearing piece is the Sequence-IN-AA admit**, NOT
+        # the Effect-class widen alone. Grove's AA[1] effect is a
+        # ``Sequence`` (a combinator), not a bare leaf — so the
+        # per-AA admit predicate :func:`_aa_is_phase1_sub_shape_a` had
+        # to grow a Sequence arm that admits a ``Sequence`` iff EVERY
+        # leaf class is itself in this admit set (see the Effect-class
+        # gate at the bottom of that predicate). The forward bridge arm
+        # in :func:`cross_engine._python_aa_to_safe_dict` recurses each
+        # Sequence child through ``_carrier_aa_seq_leaf_to_dict`` (all-
+        # or-nothing); the reverse arm at ``cross_engine.py:2543``
+        # already recursed each child. Grove FLIPS DECLINED → ADMITTED
+        # on the combined Sequence-in-AA admit + the two leaf-class
+        # widens; the printing-level admit cascades through
+        # :func:`_printing_is_bridge_simple_carrier_aa_land` /
+        # :func:`_printing_is_bridge_simple_carrier_aa_any` and Grove
+        # admits end-to-end at the deck loader.
+        #
+        # **No no-agent-fallback divergence to gate around for the probe
+        # PROBE path.** Grove's ``AddNManaOfChosenColor(1, ('R','G'))``
+        # picks ``options[0]='R'`` under the no-agent fallback on BOTH
+        # engines (Python ``effects/generic/mana.py:115`` ``opts[0]``;
+        # Rust ``state_ops_resolve.rs:14055+`` first-option fallback) —
+        # the options list is a FIXED 2-tuple ``('R','G')`` from the
+        # parser, not a board-walk union, so both engines deterministic-
+        # mint ``R`` byte-equal with no seating constraint. The
+        # ``GrantLifeToEachOpponent`` leaf is fully fixed (amount=1).
+        AddNManaOfChosenColor,
+        GrantLifeToEachOpponent,
     })
 
 
@@ -9678,9 +9730,60 @@ def _aa_is_phase1_sub_shape_a(aa) -> bool:
     if aa.activate_only_once:
         return False
     # Effect-class gate.
-    if type(aa.effect) not in _carrier_aa_phase_1_effect_classes():
+    #
+    # **Grove of the Burnwillows substrate (2026-05-31) — Sequence-IN-AA
+    # admit.** The Phase-1 admit was LEAF-only: ``type(aa.effect) in
+    # _carrier_aa_phase_1_effect_classes()``. Grove's AA[1] body is a
+    # ``Sequence(AddNManaOfChosenColor(1, ('R','G')),
+    # GrantLifeToEachOpponent(1))`` — a combinator, not a bare leaf. The
+    # admit now additionally accepts a ``Sequence`` iff EVERY leaf is
+    # itself an admitted Phase-1 effect (recursively — a nested Sequence
+    # is admitted iff its own leaves all admit). This amortizes to any
+    # future Carrier-AA card with a multi-step Sequence resolve body
+    # whose leaves are all in the admit set.
+    #
+    # The bridge floor :func:`cross_engine._python_aa_to_safe_dict`
+    # provides the byte-equality teeth in lockstep: it emits the
+    # ``{"kind": "sequence", "effects": [...]}`` dict by recursing each
+    # child through ``_carrier_aa_seq_leaf_to_dict`` (all-or-nothing —
+    # a child with no forward arm declines the whole Sequence). So a
+    # Sequence whose leaf classes are admitted here but whose forward
+    # arms are missing still declines at the bridge round-trip floor
+    # (defense-in-depth against admit-set / bridge-floor drift) —
+    # mirroring the round-trip-floor discipline the rest of the
+    # predicate relies on.
+    if not _carrier_aa_effect_class_admitted(aa.effect):
         return False
     return True
+
+
+def _carrier_aa_effect_class_admitted(effect) -> bool:
+    """True iff ``effect`` is admitted at the Carrier-AA Phase-1 Effect-
+    class gate — either a bare leaf whose class is in
+    :func:`_carrier_aa_phase_1_effect_classes`, OR a ``Sequence`` whose
+    every child is itself recursively admitted.
+
+    **Grove of the Burnwillows substrate (2026-05-31).** Factored out of
+    :func:`_aa_is_phase1_sub_shape_a` to support the Sequence-IN-AA
+    admit. An empty ``Sequence`` (no children) admits vacuously — it is
+    a no-op resolve on both engines (Rust ``Effect::Sequence`` with an
+    empty ``effects`` Vec + Python ``Sequence(effects=())``), so the
+    round-trip stays byte-equal; no live EoE carrier emits an empty-
+    Sequence AA today, but the vacuous-truth case is harmless.
+    """
+    from mtg_bot.effects.combinators import Sequence
+
+    if isinstance(effect, Sequence):
+        # Recurse: a Sequence admits iff every child admits. ``type(...)
+        # in ...`` on the LEAF classes (exact-class match, not
+        # isinstance) preserves the Phase-1 specificity contract — a
+        # subclass of an admitted leaf does NOT auto-admit; only the
+        # exact classes in the admit set + Sequences thereof.
+        return all(
+            _carrier_aa_effect_class_admitted(child)
+            for child in effect.effects
+        )
+    return type(effect) in _carrier_aa_phase_1_effect_classes()
 
 
 def _printing_is_bridge_simple_carrier_aa_land(printing) -> bool:

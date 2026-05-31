@@ -217,14 +217,27 @@ def test_phase_1_3_admits_unchanged_full_walk(printings):
     # Rust ManaPool; Gemstone Caverns (the only EoE Land whose AA[0]
     # uses produces=(("any", 1),)) FLIPs at the cross-engine LAND
     # builder gate. The Land admit set grows from 7 → 8.
+    # Subsequent single-card Land FLIPs (refreshed at the Grove closure,
+    # 2026-05-31): Mirrorpool (Phase 4B C4), Meteor Crater + Reflecting
+    # Pool + Ancient Tomb (each P4 C2), and Grove of the Burnwillows
+    # (the Sequence-IN-AA admit). The loader-side Land admit set is now
+    # the 7-card Phase-3 baseline + these 6 single-card FLIPs.
     expected_land_admits = sorted(
-        set(PHASE_1_3_ADMITTED_LAND_CARRIERS) | {"Gemstone Caverns"}
+        set(PHASE_1_3_ADMITTED_LAND_CARRIERS)
+        | {
+            "Gemstone Caverns",
+            "Mirrorpool",
+            "Meteor Crater",
+            "Reflecting Pool",
+            "Ancient Tomb",
+            "Grove of the Burnwillows",
+        }
     )
     assert set(loader_land_admits) == set(expected_land_admits), (
-        f"Phase-4E-C2.5 LOADER-SIDE Land admit set diverged from "
+        f"LOADER-SIDE Land admit set diverged from the post-Grove "
         f"baseline; got {loader_land_admits}, expected "
-        f"{expected_land_admits} (Gemstone Caverns FLIPs via the Rust "
-        f"ManaPool 'any' coin substrate at C2.5)"
+        f"{expected_land_admits} (Gemstone Caverns + Mirrorpool + "
+        f"Meteor Crater + Reflecting Pool + Ancient Tomb + Grove FLIPs)"
     )
     # Phase 4E C2.5 FULL FLIP: All-Fates Scroll's AA[0] AddManaToPool
     # 'any' forward arm admits at C2.5; the cross-engine builder
