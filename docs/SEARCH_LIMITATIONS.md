@@ -6606,7 +6606,35 @@ cross-engine harness use first-legal).
 
 ---
 
-## Tier-C target-seating sub-substrate — deterministic no-agent push-time target seat for SAFE targeted triggered abilities (lever-a: Sunset Saboteur + Exosuit Savior)
+## Tier-C target-seating sub-substrate — deterministic no-agent push-time target seat for SAFE targeted triggered abilities (lever-a: Sunset Saboteur + Exosuit Savior + Baseball Bat)
+
+**Equipment-AA family extension (2026-05-31, `feature/equipment-aa-substrate`).**
+A THIRD consumer rides this shared seat: **Baseball Bat** (`{3}`
+Artifact — Equipment), via the FIRST `ATTACKS` + `IsHost(subject="attacker")`
+targeted-safe trigger (`TapUpToOneTargetCreature`, `count_min=0` — the
+same optional edge as Exosuit Savior). The seat arm
+(`first_legal_trigger_target`'s `Effect::TapUpToOneTargetCreature`
+match) scans `bf_iter_etb_sorted` for the FIRST creature on EITHER
+battlefield (bare `IsCreature()` filter — NO controller restriction,
+NO source exclusion); the resolve arm taps the seated target via
+`tap_permanent_and_dispatch` with a CR 608.2b re-legality check (no
+seat ⇒ no-op, the optional declined). The Equipment fires the trigger
+from its `attached_to` host: the `Predicate::IsHost` match
+(`cards.rs:10770`, NOT Aura-restricted — reads
+`find_object_attached_to(source)`) and the `is_host_attacker` sentinel
+collapse in `_is_safe_trigger_dict` are the load-bearing shared
+Equipment-attached-carrier bridge. The probe stamps `attached_to` via
+the PyO3 `attach(equip_id, host_id)` method (the ETB auto-attach
+`AttachToTargetCreatureYouControl` is a separately-covered Effect; the
+probe exercises the ATTACKS rider in isolation per the established
+per-card-module convention). Pinned by
+`tests/test_baseball_bat_parity.py`. NO new seat machinery — pure
+reuse of the Sunset Saboteur / Exosuit Savior shared seat; the only
+genuinely-new Rust Effect is `TapUpToOneTargetCreature`.
+
+---
+
+## Tier-C target-seating sub-substrate — original entry (lever-a: Sunset Saboteur + Exosuit Savior)
 
 **Location**: `rust/src/state_ops_resolve.rs`
 (`first_legal_trigger_target` next to `push_triggered_ability` — the

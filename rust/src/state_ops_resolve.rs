@@ -1302,6 +1302,34 @@ fn first_legal_trigger_target(
             }
             None
         }
+        // Equipment-AA family — Baseball Bat (2026-05-31). The ATTACKS +
+        // IsHost(attacker) rider `TapUpToOneTargetCreature`: slot filter
+        // is a BARE `IsCreature()` — ANY creature on EITHER battlefield
+        // (no controller restriction, no "another"/source exclusion;
+        // contrast `TapAnotherTargetCreature`'s ~IsSource filter and
+        // `PutPlusOneCounterOnOpponentsCreature`'s opponent-only filter).
+        // Scan `bf_iter_etb_sorted` (ETB-timestamp order across both bfs)
+        // and pick the FIRST creature — mirrors Python's centralized
+        // `state.battlefield` walk via the base `Tap` class's
+        // `legal_targets` (IsCreature() filter, no exclusions). `count_min
+        // =0` (optional): `None` here means "no eligible creature" →
+        // `push_triggered_ability` pushes via the UNCHANGED `new_trigger`
+        // path → the resolve arm no-ops (byte-equal with Python's
+        // `targets=()` decline). NOT in `lever_trigger_requires_target`
+        // — the optional is DECLINED, never fizzle-skipped (the same
+        // count_min=0 edge as Exosuit Savior above).
+        Effect::TapUpToOneTargetCreature => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+        }
         // **G7 follow-up f8e3a2b1.** DepressurizeEffect as a TRIGGER
         // payload — the synthetic test pin shape at
         // `tests/test_parity_smoke.py::_build_rust_depressurize_state`
@@ -20508,6 +20536,50 @@ fn apply_effect(
                 )?;
             }
             // else: no eligible creature → silent fizzle.
+        }
+        // Equipment-AA family — Baseball Bat (2026-05-31).
+        // `TapUpToOneTargetCreature`: tap the push-time-seated target
+        // (`current_resolve_payload_target_id`). count_min=0 optional:
+        // no seat → no-op (the optional was DECLINED; byte-equal with
+        // Python's `targets=()` `Tap.resolve` early-return). CR 608.2b
+        // resolve-time re-legality: the seated target must still be a
+        // creature on a battlefield; an illegal/left-bf target fizzles
+        // silently. Routes the tap through the centralized
+        // `tap_permanent_and_dispatch` chokepoint so the
+        // no-op-if-already-tapped gate (no BECOMES_TAPPED event on an
+        // already-tapped target) matches Python's `turn.tap_permanent`.
+        Effect::TapUpToOneTargetCreature => {
+            // count_min=0 optional: no seat → declined (no-op).
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // CR 608.2b re-legality: still a creature on a battlefield.
+            let mut still_legal = false;
+            'rl: for player in &state.players {
+                for obj in player.battlefield.iter() {
+                    if obj.id == payload_target {
+                        if let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        {
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                still_legal = true;
+                            }
+                        }
+                        break 'rl;
+                    }
+                }
+            }
+            if still_legal {
+                crate::state_ops_resolve::tap_permanent_and_dispatch(
+                    state, payload_target,
+                )?;
+            }
+            // else: target left bf / became non-creature → silent fizzle.
         }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both
