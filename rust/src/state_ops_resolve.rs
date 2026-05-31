@@ -22414,6 +22414,113 @@ fn apply_effect(
                 crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
+        // **Blast Zone payoff (2026-05-31).** "Destroy each nonland
+        // permanent with mana value equal to the number of charge
+        // counters on this land." Mirrors Python's
+        // `DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters
+        // .resolve` at `effects/generic/destroy.py:442-464`.
+        //
+        // **Step 1 — read the source's charge counters (the filter MV).**
+        // Look up `source_obj_id` across ALL zones (the real card
+        // sacrifices Blast Zone as a cost, so at resolution the source
+        // is typically in the graveyard; `move_off_battlefield` does
+        // NOT zero `charge_counters`, so the count survives). Python's
+        // `state.resolving_source.charge_counters` read at
+        // `destroy.py:448-451`. If the source can't be found anywhere,
+        // mirror Python's `source is None` early-return.
+        Effect::DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters => {
+            let mut target_mv: Option<i32> = None;
+            'find_src: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        target_mv = Some(obj.charge_counters);
+                        break 'find_src;
+                    }
+                }
+            }
+            // Also check the stack (the source's own ability is mid-
+            // resolve; the source object itself may be on the stack in
+            // some synthetic drives — mirrors the all-zones scan
+            // convention of `CreateTokenCopyOfTargetCreatureYouControl`).
+            if target_mv.is_none() {
+                if let Some(item) =
+                    state.stack.iter().find(|i| i.source_obj_id == source_obj_id)
+                {
+                    let _ = item; // stack items don't carry charge_counters
+                }
+            }
+            let Some(target_mv) = target_mv else {
+                return Ok(()); // source not found → Python `source is None` no-op
+            };
+            // **Step 2 — collect (controller_idx, obj_id) for every
+            // destroyable NONLAND permanent on either bf whose printed
+            // mana value == target_mv.** ETB-timestamp order (Python
+            // walks the centralized, also-ETB-monotone
+            // `state.battlefield`). Skip lands (`printing.is_land`) and
+            // indestructible permanents (CR 702.12, honored inline —
+            // mirrors `DestroyAllCreatures`). MV computation mirrors
+            // `ExileAllArtifactsWithManaValueAtMost` (generic + W + U +
+            // B + R + G; X = 0 off-stack per CR 202.3b).
+            let destroyable: Vec<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .filter_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    let mc = &printing.mana_cost;
+                    let total = mc.generic as i32
+                        + mc.white as i32
+                        + mc.blue as i32
+                        + mc.black as i32
+                        + mc.red as i32
+                        + mc.green as i32;
+                    if total != target_mv {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                })
+                .collect();
+            // **Step 3 — move each victim to its OWN controller's
+            // graveyard.** Mirrors the `DestroyAllCreatures` arm body
+            // verbatim (counters retained per R77-CFI1; LEAVES +
+            // token-cease queued for the post-pop drain).
+            for (pidx, target_id) in destroyable {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = match bf_mut.iter().position(|o| o.id == target_id) {
+                    Some(p) => p,
+                    None => continue, // defensively skip — should never miss
+                };
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // summoning_sick NOT reset (CR 302.1; see I35) — mirrors
+                // `DestroyAllCreatures`.
+                obj.damage = 0;
+                // counters NOT cleared (R77-CFI1) — mirrors
+                // `DestroyAllCreatures`.
+                obj.attached_to = None;
+                obj.original_printing_id = None;
+                obj.door_states = None;
+                obj.exiled_with_source = None;
+                let leaving_printing_id = obj.printing_id;
+                let leaving_obj_id = obj.id;
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+                mark_left_battlefield_if_nonland(state, leaving_printing_id);
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            }
+        }
         // **ModalChooseOne envelope — Cycle 6 (Drill Too Deep closure,
         // 2026-05-21).** Put `amount` charge counters on the
         // cast-time-bound target IF the target is still a Spacecraft

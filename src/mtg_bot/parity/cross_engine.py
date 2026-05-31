@@ -6556,6 +6556,28 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # this bridge arm closes the to_dict round-trip surface).
         from mtg_bot.effects.generic.destroy import DestroyAllCreatures
         return DestroyAllCreatures()
+    if kind == "destroy_each_nonland_permanent_with_mv_equal_to_source_charge_counters":
+        # **Blast Zone payoff (2026-05-31; Blast Zone BLOCKED → PROBED).**
+        # Rust substrate
+        # ``Effect::DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters``
+        # (cards.rs unit variant beside ``ExileAllCreaturesAndSpacecraft``;
+        # parser ``"destroy_each_nonland_permanent_with_mv_equal_to_source_
+        # charge_counters"``; resolve in state_ops_resolve.rs beside the
+        # ``ExileAllArtifactsWithManaValueAtMost`` arm). This bridge arm
+        # closes the dict→Python direction.
+        #
+        # **Field shape (unit variant).** Python's
+        # ``DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters``
+        # is a frozen dataclass with no constructor parameters — the
+        # filter MV is a resolve-time read of the source's
+        # ``charge_counters`` (NOT a serialized field), so the bare
+        # ``{"kind": ...}`` dict round-trips losslessly. Mirrors the
+        # ``destroy_all_creatures`` / ``exile_all_creatures_and_spacecraft``
+        # unit-leaf idiom.
+        from mtg_bot.effects.generic.destroy import (
+            DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters,
+        )
+        return DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters()
     if kind == "exile_all_creatures_and_spacecraft":
         # **Beyond-the-Quiet slice (2026-05-21; 4,698 17lands decks).**
         # Rust substrate ``Effect::ExileAllCreaturesAndSpacecraft``
