@@ -767,11 +767,12 @@ def test_ancient_tomb_carrier_aa_effect_classes_count_is_19_post_cycle_2():
     assert DealDamageToControllerAndAddMana in classes, (
         "Ancient Tomb C2's Effect class must stay in the admit set."
     )
-    assert len(classes) == 22, (
+    assert len(classes) == 23, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 22 entries post the Grove closure + "
-        "the Nesting Grounds flip "
+        "set MUST have exactly 23 entries post the Grove closure + "
+        "the Nesting Grounds flip + the Sliver Overlord flip "
         "(19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor + "
         "GrantLifeToEachOpponent + "
-        "MovePlusOneCounterBetweenPermanentsYouControl)."
+        "MovePlusOneCounterBetweenPermanentsYouControl + "
+        "GainControlOfTargetSliverPermanently)."
     )

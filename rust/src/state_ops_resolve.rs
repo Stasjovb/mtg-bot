@@ -12011,6 +12011,85 @@ fn apply_effect(
                 }
             }
         }
+        // **Sliver Overlord substrate (2026-05-31).** Permanent
+        // control-change of a TARGET Sliver. Mirrors Python's
+        // `GainControlOfTargetSliverPermanently.resolve`
+        // (`effects/generic/control.py:138-170`) STEP-FOR-STEP:
+        //
+        // ```python
+        // if not targets: return
+        // kind, target_id = targets[0]
+        // if kind != "creature": return
+        // obj = <bf object with id == target_id> or None
+        // if obj is None: return
+        // if "Sliver" not in eff_subtypes(obj): return
+        // if obj.controller_id == controller_id: <log>; return
+        // obj.controller_id = controller_id          # direct, PERMANENT
+        // ```
+        //
+        // The chosen creature target rides on the AA action-dict's
+        // `target_creature_id` slot, seated into
+        // `current_resolve_payload_target_id` at apply time. The
+        // activator (gaining player) is the AA's controller, read from
+        // `current_resolve_source_controller` (the same transient slot
+        // the DealDamage / DrawCards source-controller arms read).
+        //
+        // **Direct PERMANENT write — NOT the UEOT override path.** Same
+        // direct-write substrate proven byte-equal by
+        // `ChangeControllerToCombatDamageSource` above: writes
+        // `obj.controller = activator` directly, no `controller_override`
+        // stamp, no `continuous_effects` layer-2 entry, no cleanup drain.
+        Effect::GainControlOfTargetSliverPermanently => {
+            // No seated target → silent no-op (mirrors Python's
+            // `if not targets: return`).
+            let Some(target_id) = state.current_resolve_payload_target_id
+            else {
+                return Ok(());
+            };
+            // The activator (gaining player) = the AA's controller.
+            let activator = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // Locate the target on EITHER battlefield (the printed text
+            // is "target Sliver" — any controller, not own-only). Record
+            // the owning player index + current controller, re-validating
+            // the printed Sliver subtype (mirrors Python's
+            // `"Sliver" not in eff_subtypes(obj)` silent-fizzle guard).
+            let mut found: Option<(usize, u8)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) =
+                    player.battlefield.iter().find(|o| o.id == target_id)
+                {
+                    let is_sliver = state
+                        .registry
+                        .printings
+                        .get(obj.printing_id as usize)
+                        .map(|p| p.subtypes.iter().any(|s| s == "Sliver"))
+                        .unwrap_or(false);
+                    if is_sliver {
+                        found = Some((pidx, obj.controller));
+                    }
+                    break;
+                }
+            }
+            let Some((owner_idx, current_controller)) = found else {
+                return Ok(()); // off-bf or non-Sliver → silent fizzle
+            };
+            // Already the activator's → no change (mirrors Python's
+            // `if obj.controller_id == controller_id` early return).
+            if current_controller == activator {
+                return Ok(());
+            }
+            // Direct, PERMANENT controller write on the target Sliver.
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[owner_idx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.controller = activator;
+                    break;
+                }
+            }
+        }
         // **Control-change-UEOT subsystem — Cycle 5 (2026-05-22).**
         // Delayed-trigger "remove `amount` charge counters from
         // CARDNAME" effect, scheduled by Systems Override and drained

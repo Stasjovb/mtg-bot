@@ -234,6 +234,23 @@ _NESTING_GROUNDS_FULL_FLIP_LAND_CARRIERS = (
     "Nesting Grounds",
 )
 
+# Sliver Overlord FULL FLIP (2026-05-31). Sliver Overlord was in the
+# Phase-N rider-cluster decline residue. The FLIP ships the FIRST
+# Carrier-AA CREATURE carrier admit (the new
+# _printing_is_bridge_simple_carrier_aa_creature predicate + builder,
+# threading printed P/T + Legendary supertype + Sliver/Mutant subtypes)
+# + the FIRST no-tap-mana cost-gate widen ({3} no tap) + the new Rust
+# Effect::GainControlOfTargetSliverPermanently (permanent control-change-
+# of-target, reusing the Contested-War-Zone direct-controller-write
+# substrate) + the AddManaToPool-sibling SearchLibraryForCard AA[0]
+# (already Rust-covered). Sliver Overlord admits at the dispatcher AND
+# the cross-engine Creature builder. See
+# ``tests/test_sliver_overlord_parity.py`` for the per-card real-EoE
+# probe + admit-gate FLIP pins.
+_SLIVER_OVERLORD_FULL_FLIP_CREATURE_CARRIERS = (
+    "Sliver Overlord",
+)
+
 
 # ---------------------------------------------------------------------------
 # §6.4 #25 — live-printing parametrized walk (admit + decline sides)
@@ -446,6 +463,23 @@ def test_phase_3c_close_dispatcher_declines_each_phase_2_residue(card_name):
             f"{card_name} must ADMIT at the cross-engine Land builder "
             f"gate post the Nesting Grounds FLIP"
         )
+    elif card_name in _SLIVER_OVERLORD_FULL_FLIP_CREATURE_CARRIERS:
+        # Sliver Overlord FULL FLIP (2026-05-31) — Sliver Overlord admits
+        # at every gate post the FLIP (the first Creature-carrier admit
+        # predicate + builder + the no-tap-mana cost-gate widen + the
+        # GainControlOfTargetSliverPermanently Effect-class widen +
+        # cross-engine forward / reverse arms). The first CREATURE-typed
+        # Carrier-AA carrier — admits at the cross-engine CREATURE
+        # builder (NOT the Land / Artifact siblings).
+        assert traj._printing_is_bridge_simple_carrier_aa_any(p) is True, (
+            f"{card_name} must PASS the Carrier-AA dispatcher post the "
+            f"Sliver Overlord FULL FLIP (first Creature carrier + no-tap "
+            f"mana cost lane)"
+        )
+        assert traj._carrier_aa_creature_card_def(p) is not None, (
+            f"{card_name} must ADMIT at the cross-engine Creature builder "
+            f"gate post the Sliver Overlord FLIP"
+        )
     else:
         assert traj._printing_is_bridge_simple_carrier_aa_any(p) is False, (
             f"{card_name} must DECLINE at the Carrier-AA dispatcher "
@@ -622,6 +656,7 @@ def test_phase_3c_close_dispatcher_admit_set_is_exhaustive_over_eoe_pool():
             "Ancient Tomb",         # Ancient Tomb P4 C2 FULL FLIP (Land admit + builder)
             "Grove of the Burnwillows",  # Grove FULL FLIP (Sequence-IN-AA admit; Land admit + builder)
             "Nesting Grounds",      # Nesting Grounds FULL FLIP (dual-target AA 2nd-target slot; Land admit + builder)
+            "Sliver Overlord",      # Sliver Overlord FULL FLIP (first Creature carrier + no-tap mana lane; Creature admit + builder)
             # Live EoE mana-ability lands that pass the per-AA gate
             # post-Phase-4E-C2 widens but decline at the builder.
             "Crystal Quarry",       # multi-pair WUBRG declines at bridge floor

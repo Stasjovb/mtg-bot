@@ -712,11 +712,12 @@ def test_meteor_crater_carrier_aa_effect_classes_count_is_19_post_at_c2():
     classes = _carrier_aa_phase_1_effect_classes()
     from mtg_bot.effects.generic.mana import AddOneManaOfChosenPermanentColor
     assert AddOneManaOfChosenPermanentColor in classes
-    assert len(classes) == 22, (
+    assert len(classes) == 23, (
         "Flip invariant: the Carrier-AA Phase-1 Effect-class admit "
-        "set MUST have exactly 22 entries post the Grove closure + "
-        "the Nesting Grounds flip "
+        "set MUST have exactly 23 entries post the Grove closure + "
+        "the Nesting Grounds flip + the Sliver Overlord flip "
         "(19 post-Ancient-Tomb-C2 + AddNManaOfChosenColor + "
         "GrantLifeToEachOpponent + "
-        "MovePlusOneCounterBetweenPermanentsYouControl)."
+        "MovePlusOneCounterBetweenPermanentsYouControl + "
+        "GainControlOfTargetSliverPermanently)."
     )
