@@ -286,3 +286,4 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 234 | `Effect::ExileTargetCardFromGraveyard` | `ExileTargetCardFromGraveyard` | 1 |
 | 235 | `Effect::PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | `PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl` | 1 |
 
+
