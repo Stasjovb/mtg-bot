@@ -4112,6 +4112,31 @@ PROBE_MODULES: tuple[Path, ...] = (
     # tap_up_to_one_target_creature Rust Effect/bridge) amortizes to the
     # three siblings (Atomic Microsizer / Auxiliary Boosters / Saw).
     REPO_ROOT / "tests" / "test_baseball_bat_parity.py",
+    # Saw (Equipment-AA family sibling — 2026-05-31). The ATTACKS +
+    # IsHost(attacker) "you may sacrifice a permanent other than that
+    # creature or this Equipment; if you do, draw a card" rider. Rides
+    # the SHARED Baseball-Bat substrate (the IsHost(attacker) predicate
+    # branch); the single new piece is the
+    # ``Effect::SawAttacksOptionalSacDrawEffect`` Rust variant +
+    # bridge/recognizer arms. NOT a targeted effect (internal sac seat).
+    REPO_ROOT / "tests" / "test_saw_parity.py",
+    # Auxiliary Boosters (Equipment-AA family sibling — 2026-05-31). The
+    # ENTERS + IsSelf "create a 2/2 Robot token, then attach this
+    # Equipment to it" rider. Does NOT use the Equipment-AA ATTACKS
+    # branch (rides the existing ENTERS+IsSelf branch); the single new
+    # piece is the ``Effect::CreateTokenAndAttachSelf { token_printing_id
+    # }`` Rust variant + bridge/recognizer arms, reusing the existing
+    # CreateToken token-printing substrate (the Robot token is vanilla).
+    REPO_ROOT / "tests" / "test_auxiliary_boosters_parity.py",
+    # Atomic Microsizer (Equipment-AA family sibling — 2026-05-31). The
+    # ATTACKS + IsHost(attacker) "choose up to one target creature. That
+    # creature can't be blocked this turn and has base P/T 1/1 UEOT"
+    # rider. Rides the SHARED Baseball-Bat Tier-C push-time first-legal
+    # seat; the new piece is the ``Effect::AtomicMicrosizerAttackEffect``
+    # Rust variant (compound UEOT: GrantKeyword "unblockable" + SetBasePT
+    # 1/1 on the seated cross-bf target) + bridge/recognizer arms. Flips
+    # the former honest-stop module to a positive probe.
+    REPO_ROOT / "tests" / "test_atomic_microsizer_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

@@ -1,0 +1,326 @@
+"""Rust-engine pins for the Equipment-AA family siblings (Saw, Atomic
+Microsizer, Auxiliary Boosters) — 2026-05-31,
+``feature/equipment-aa-siblings``.
+
+These siblings share the Equipment-attached-carrier ATTACKS / ETB
+trigger substrate the Baseball Bat closure landed (`tests_rust/
+test_tap.py` covers Baseball Bat's `Effect::TapUpToOneTargetCreature`).
+Each sibling adds ONE new Rust `Effect` variant; the pins here drive
+each variant through the genuine Equipment attach + declare_attacker /
+ETB path and assert the observable.
+"""
+
+from __future__ import annotations
+
+ZONE_HAND = 0
+ZONE_LIBRARY = 1
+ZONE_BATTLEFIELD = 2
+ZONE_GRAVEYARD = 3
+
+
+# ===================== Saw (2026-05-31) =====================
+# `Effect::SawAttacksOptionalSacDrawEffect`: the ATTACKS +
+# IsHost(attacker) "you may sacrifice a permanent other than that
+# creature or this Equipment; if you do, draw a card" rider. NOT a
+# targeted effect — the sacrifice pool is the source-controller's
+# permanents excluding source + host; the no-agent deterministic seat
+# ACCEPTS and sacrifices options[0] then draws.
+
+
+def _saw_dict():
+    return {
+        "name": "Synthetic Saw",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "is_host", "subject": "attacker"},
+                "effect": {"kind": "saw_attacks_optional_sac_draw_effect"},
+            },
+        ],
+    }
+
+
+def _trinket_dict(name):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "subtypes": [],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+    }
+
+
+def test_register_saw_attacks_optional_sac_draw_effect(engine):
+    """The effect kind round-trips through register → to_pydict."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Saw Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 1},
+            "effects": [{"kind": "saw_attacks_optional_sac_draw_effect"}],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "saw_attacks_optional_sac_draw_effect"
+
+
+def test_saw_sacs_first_controlled_permanent_and_draws_on_host_attack(
+    synthetic_state,
+):
+    """Equip Saw to p0's first Bears, seed a clean state, declare the
+    host as attacker → the ATTACKS+IsHost(attacker) trigger fires → the
+    no-agent seat ACCEPTS and sacrifices the FIRST p0-controlled
+    permanent excluding source + host (the first Forest in the
+    synthetic state, id 0 — lowest ETB) and draws one card."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    # The first p0-controlled permanent excluding source + host: the
+    # lowest-id Forest (synthetic state seeds 5 Forests at ids 0-4).
+    first_forest_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Forest"
+    )
+    equip_id = synthetic_state.register_and_inject_object(
+        _saw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.attach(equip_id, p0_first_bear_id) is True
+    synthetic_state.clear_summoning_sick_for_player(0)
+
+    hand_before = len(synthetic_state.hand_snapshot(0))
+
+    assert synthetic_state.declare_attacker(p0_first_bear_id) is True
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    # The first Forest was sacrificed (now in p0's graveyard, off bf);
+    # the host + the Saw remain.
+    bf_ids = {d["id"] for d in synthetic_state.battlefield_snapshot()}
+    assert first_forest_id not in bf_ids
+    assert p0_first_bear_id in bf_ids
+    assert equip_id in bf_ids
+    gy_ids = {d["id"] for d in synthetic_state.graveyard_snapshot(0)}
+    assert first_forest_id in gy_ids
+    # And p0 drew exactly one card.
+    assert len(synthetic_state.hand_snapshot(0)) == hand_before + 1
+
+
+def test_saw_empty_pool_declines_no_sac_no_draw(engine):
+    """With NO sacrificable permanent (only the host + the Saw on p0's
+    bf — the host excluded as 'that creature', the Saw as 'this
+    Equipment'), the optional trigger's pool is EMPTY → silent no-op:
+    no sacrifice, no draw, no raise. Built on a clean 2-player state
+    (the default synthetic state has Forests that would be sacrificed,
+    so use an empty-battlefield state here)."""
+    rs = engine.make_synthetic_state()
+    snap = rs.battlefield_snapshot()
+    # Remove every p0 permanent except one bear (the host).
+    p0_objs = [d for d in snap if d["controller_id"] == 0]
+    host_id = next(
+        d["id"] for d in p0_objs if d["printing_name"] == "Grizzly Bears"
+    )
+    state = rs.clone_once()
+    for d in p0_objs:
+        if d["id"] != host_id:
+            state.move_object(d["id"], ZONE_GRAVEYARD, 0)
+    equip_id = state.register_and_inject_object(
+        _saw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert state.attach(equip_id, host_id) is True
+    state.clear_summoning_sick_for_player(0)
+
+    # Move every other-zone clutter aside is unnecessary; just snapshot
+    # the pre-attack hand + graveyard for p0.
+    hand_before = len(state.hand_snapshot(0))
+    gy_before = len(state.graveyard_snapshot(0))
+
+    assert state.declare_attacker(host_id) is True
+    while state.stack_size() > 0:
+        state.resolve_top_of_stack()
+
+    # The host + the Saw both remain (neither is a legal sacrifice pool
+    # member); no draw occurred; graveyard unchanged by the trigger
+    # (the only legal pool was empty).
+    bf_ids = {d["id"] for d in state.battlefield_snapshot()}
+    assert host_id in bf_ids
+    assert equip_id in bf_ids
+    assert len(state.hand_snapshot(0)) == hand_before
+    assert len(state.graveyard_snapshot(0)) == gy_before
+
+
+# ============== Auxiliary Boosters (2026-05-31) ==============
+# `Effect::CreateTokenAndAttachSelf { token_printing_id }`: the ENTERS +
+# IsSelf "create a 2/2 Robot token, then attach this Equipment to it"
+# rider. Creates one fixed-printing token under the source Equipment's
+# controller, then stamps the source's attached_to to the token id.
+
+
+_ROBOT_TOKEN_DICT = {
+    "name": "Robot",
+    "card_types": ["Artifact", "Creature"],
+    "subtypes": ["Robot"],
+    "supertypes": ["Token"],
+    "mana_cost": {},
+    "effects": [],
+    "power": 2,
+    "toughness": 2,
+}
+
+
+def test_register_create_token_and_attach_self(engine):
+    """The effect kind round-trips through register → to_pydict, carrying
+    only the token_printing_id (no count field)."""
+    reg = engine.Registry()
+    reg.register_printing(_ROBOT_TOKEN_DICT)
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Aux Boosters Spell",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "effects": [
+                {
+                    "kind": "create_token_and_attach_self",
+                    "token_printing_id": 0,
+                }
+            ],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "create_token_and_attach_self"
+    assert eff["token_printing_id"] == 0
+
+
+def test_aux_boosters_etb_creates_robot_and_attaches_self(engine):
+    """Inject Auxiliary Boosters via ETB → the ENTERS+IsSelf trigger
+    fires → one Robot 2/2 token spawns under the Equipment's controller
+    (summoning_sick, untapped) and the Equipment's attached_to points at
+    it."""
+    ZONE_BATTLEFIELD = 2
+    rs = engine.make_synthetic_state()
+    robot_pid = rs.registry_size
+    # Seed the Robot printing into p1's library (inert pid holder).
+    rs.register_and_inject_object(_ROBOT_TOKEN_DICT, 1, 1)
+    aux = {
+        "name": "Synthetic Auxiliary Boosters",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token_and_attach_self",
+                    "token_printing_id": robot_pid,
+                },
+            },
+        ],
+    }
+    pre_ids = {d["id"] for d in rs.battlefield_snapshot()}
+    aux_id = rs.register_and_inject_object(aux, 0, ZONE_BATTLEFIELD)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+
+    post = {d["id"]: d for d in rs.battlefield_snapshot()}
+    new_ids = set(post.keys()) - pre_ids - {aux_id}
+    assert len(new_ids) == 1
+    tok_id = next(iter(new_ids))
+    tok = post[tok_id]
+    assert tok["printing_name"] == "Robot"
+    assert tok["controller_id"] == 0
+    assert tok["tapped"] is False
+    assert tok["summoning_sick"] is True
+    # The Equipment attached to its freshly-created token.
+    assert post[aux_id]["attached_to"] == tok_id
+
+
+# ============== Atomic Microsizer (2026-05-31) ==============
+# `Effect::AtomicMicrosizerAttackEffect`: the ATTACKS + IsHost(attacker)
+# "choose up to one target creature. That creature can't be blocked this
+# turn and has base P/T 1/1 UEOT" rider. Rides the SHARED Tier-C
+# push-time first-legal seat (bare IsCreature, count_min=0, either bf);
+# the resolve arm pushes GrantKeyword "unblockable" + SetBasePT 1/1 onto
+# the seated target.
+
+
+def _microsizer_dict():
+    return {
+        "name": "Synthetic Atomic Microsizer",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "supertypes": [],
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "is_host", "subject": "attacker"},
+                "effect": {"kind": "atomic_microsizer_attack_effect"},
+            },
+        ],
+    }
+
+
+def test_register_atomic_microsizer_attack_effect(engine):
+    """The effect kind round-trips through register → to_pydict."""
+    reg = engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Synthetic Microsizer Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"generic": 1},
+            "effects": [{"kind": "atomic_microsizer_attack_effect"}],
+        }
+    )
+    eff = reg.get_printing_effects(pid)[0]
+    assert eff["kind"] == "atomic_microsizer_attack_effect"
+
+
+def test_microsizer_seats_first_creature_and_applies_compound_ueot(
+    synthetic_state,
+):
+    """Equip Atomic Microsizer to p0's first Bears, declare it as
+    attacker → the ATTACKS+IsHost(attacker) trigger fires → the push-time
+    seat picks the FIRST creature in bf-ETB order (p0's first Bears,
+    smallest timestamp) and applies the compound UEOT: it becomes
+    unblockable + base P/T 1/1."""
+    ZONE_BATTLEFIELD = 2
+    snap = synthetic_state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    equip_id = synthetic_state.register_and_inject_object(
+        _microsizer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.attach(equip_id, p0_first_bear_id) is True
+    synthetic_state.clear_summoning_sick_for_player(0)
+
+    # Pre-resolve: the seat target is a vanilla 2/2 Grizzly Bears, not
+    # unblockable.
+    assert synthetic_state.has_keyword(p0_first_bear_id, "unblockable") is False
+    assert synthetic_state.effective_power(p0_first_bear_id) == 2
+    assert synthetic_state.effective_toughness(p0_first_bear_id) == 2
+
+    assert synthetic_state.declare_attacker(p0_first_bear_id) is True
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    # Post-resolve: the seated creature (p0's first Bears) is unblockable
+    # + base P/T 1/1.
+    assert synthetic_state.has_keyword(p0_first_bear_id, "unblockable") is True
+    assert synthetic_state.effective_power(p0_first_bear_id) == 1
+    assert synthetic_state.effective_toughness(p0_first_bear_id) == 1

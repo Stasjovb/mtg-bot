@@ -1330,6 +1330,28 @@ fn first_legal_trigger_target(
                     }
                 })
         }
+        // Equipment-AA family — Atomic Microsizer (2026-05-31). The
+        // ATTACKS + IsHost(attacker) rider `AtomicMicrosizerAttackEffect`:
+        // SAME slot shape as `TapUpToOneTargetCreature` (bare
+        // `IsCreature()`, count_min=0, count_max=1 — ANY creature on
+        // EITHER bf, no controller restriction). Scan `bf_iter_etb_sorted`
+        // and pick the FIRST creature; the seated id flows via
+        // `current_resolve_payload_target_id` to the compound-UEOT
+        // resolve arm. `count_min=0`: `None` here ⇒ push-with-no-target ⇒
+        // resolve no-op (the optional declined). Identical seat to the
+        // Baseball Bat sibling above (the shared Tier-C seat).
+        Effect::AtomicMicrosizerAttackEffect => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+        }
         // **G7 follow-up f8e3a2b1.** DepressurizeEffect as a TRIGGER
         // payload — the synthetic test pin shape at
         // `tests/test_parity_smoke.py::_build_rust_depressurize_state`
@@ -4198,6 +4220,93 @@ fn apply_effect(
             if (active as usize) < state.created_tokens_this_turn.len() {
                 state.created_tokens_this_turn[active as usize] = true;
             }
+        }
+        // Equipment-AA family — Auxiliary Boosters (2026-05-31).
+        // `CreateTokenAndAttachSelf { token_printing_id }`: create one
+        // fixed-printing token (the Robot 2/2) under the source
+        // Equipment's controller, then stamp the source's `attached_to`
+        // to the new token's id. Mirrors Python's
+        // `CreateTokenAndAttachSelf.resolve` (`tokens.py:88`): create the
+        // token via `state.new_object` + `put_into_battlefield`, then
+        // `source.attached_to = token.id`. Silent no-op if the source is
+        // not on a battlefield (Python's `if source is None: return`).
+        Effect::CreateTokenAndAttachSelf { token_printing_id } => {
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "token_printing_id {token_pid} not in registry"
+                )));
+            }
+            // Locate the source Equipment on a battlefield → its
+            // controller. Silent fizzle if absent (mirror of Python's
+            // `state.resolving_source is None` guard).
+            let mut src_loc: Option<(usize, u8)> = None; // (player_idx, controller)
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) =
+                    player.battlefield.iter().find(|o| o.id == source_obj_id)
+                {
+                    src_loc = Some((pidx, obj.controller));
+                    break;
+                }
+            }
+            let Some((src_pidx, controller)) = src_loc else {
+                return Ok(()); // source not on bf → silent fizzle
+            };
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+            // Fresh monotonic id + ETB timestamp (byte-equal with
+            // Python's per-object next_object_id / next_timestamp).
+            let tok_id = crate::state::reserve_object_id(state);
+            let tok_etb = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+            let cidx = controller as usize;
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            bf.push(GameObject {
+                id: tok_id,
+                printing_id: token_pid,
+                controller,
+                zone: ZONE_BATTLEFIELD,
+                tapped: false,
+                summoning_sick: token_is_creature,
+                damage: 0,
+                counters: 0,
+                charge_counters: 0,
+                loyalty_counters: 0,
+                attached_to: None,
+                exiled_with_source: None,
+                stun_counters: 0,
+                regeneration_shield: false,
+                publicly_known_to_caster_bits: 0,
+                etb_timestamp: tok_etb,
+                ueot_modifiers: Vec::new(),
+                warp_exile_pending: false,
+                warped: false,
+                cast_from_exile_with_lightstall_surcharge: false,
+                controller_baseline: None,
+                token_supertype_override: false,
+                controller_override: None,
+                original_printing_id: None,
+                door_states: None,
+            });
+            // Then attach self: stamp the source Equipment's
+            // `attached_to` to the new token's id. The source is on
+            // `src_pidx`'s battlefield (located above).
+            let src_bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[src_pidx].battlefield);
+            if let Some(src_obj) =
+                src_bf.iter_mut().find(|o| o.id == source_obj_id)
+            {
+                src_obj.attached_to = Some(tok_id);
+            }
+            // Queue the token's ENTERS dispatch (drained by the
+            // surrounding resolver). The Robot token is vanilla — no
+            // nested ETB trigger — so this is an inert fan-out, byte-
+            // equal with Python's `put_into_battlefield` ETB pipeline.
+            state.pending_etb_dispatches.push(tok_id);
         }
         // BLOCKED-RUST-EFFECT slice (round 43) -- each living player
         // creates `count` tokens of the given printing under their
@@ -20580,6 +20689,143 @@ fn apply_effect(
                 )?;
             }
             // else: target left bf / became non-creature → silent fizzle.
+        }
+        // Equipment-AA family — Saw (2026-05-31).
+        // `SawAttacksOptionalSacDrawEffect`: "you may sacrifice a
+        // permanent other than that creature [the equipped host] or this
+        // Equipment [the source]. If you do, draw a card." NOT a targeted
+        // effect — the sacrifice pool is the source-controller's
+        // permanents excluding source + host. The no-agent deterministic
+        // seat (the cross-engine-probe / Rust path) ACCEPTS and
+        // sacrifices `options[0]` — the FIRST controlled permanent in
+        // `bf_iter_etb_sorted` order excluding source + host — then draws
+        // one card. Byte-equal with Python's no-agent branch
+        // (`effects/bespoke.py:2545` `if p.agent is None: chosen =
+        // options[0]` → `turn.sacrifice(chosen)` → `draw_n_cards(.,1)`).
+        // No legal permanent ⇒ silent no-op (Python's `if not options:
+        // return` — no draw).
+        Effect::SawAttacksOptionalSacDrawEffect => {
+            // Source controller (the resolving trigger's controller —
+            // CR 603.3d the Equipment's controller). Mirrors the
+            // DealDamage / DrawCards arms' `current_resolve_source_
+            // controller` read.
+            let source_controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // The equipped host = the source Equipment's `attached_to`
+            // (the trigger source object). Find it across both bfs.
+            let host_id: Option<u32> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find(|o| o.id == source_obj_id)
+                .and_then(|o| o.attached_to);
+            // Deterministic seat: FIRST permanent in ETB order
+            // controlled by `source_controller`, excluding the source
+            // Equipment + its host. Mirrors Python's `options = [o for
+            // o in state.battlefield if o.controller_id == controller
+            // and o.id != source.id and o.id != host_id]` then
+            // `options[0]`.
+            let chosen: Option<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find(|o| {
+                        o.controller as u8 == source_controller
+                            && o.id != source_obj_id
+                            && Some(o.id) != host_id
+                    })
+                    .map(|o| (o.controller as usize, o.id));
+            if let Some((pidx, chosen_id)) = chosen {
+                // No-agent: ACCEPT the optional, sacrifice options[0],
+                // draw one card. Empty pool above ⇒ no-op (no draw).
+                sacrifice_source_inline(state, pidx, chosen_id)?;
+                // Draw one card for the source controller. Inlined to
+                // mirror the `Effect::DrawCards { count: 1 }` arm verbatim
+                // (top of library = lib[0]; empty-library flags the
+                // CR 704.5b loss). Byte-equal with Python's
+                // `draw_n_cards(state, controller_id, 1)`.
+                let cidx = source_controller as usize;
+                let player = &mut state.players[cidx];
+                let lib = Arc::make_mut(&mut player.library);
+                if lib.is_empty() {
+                    player.attempted_draw_on_empty = true;
+                } else {
+                    let mut obj = lib.remove(0);
+                    obj.zone = ZONE_HAND;
+                    Arc::make_mut(&mut player.hand).push(obj);
+                }
+            }
+            // else: no legal permanent → silent no-op (no draw).
+        }
+        // Equipment-AA family — Atomic Microsizer (2026-05-31).
+        // `AtomicMicrosizerAttackEffect`: apply the compound UEOT
+        // ("can't be blocked this turn" + "base P/T 1/1 UEOT") to the
+        // push-time-seated target (`current_resolve_payload_target_id`).
+        // count_min=0 optional: no seat → no-op (the optional was
+        // DECLINED; byte-equal with Python's `if not targets: return`).
+        // CR 608.2b resolve-time re-legality: the seated target must
+        // still be a creature on a battlefield; an illegal/left-bf
+        // target fizzles silently. Mirrors Python's
+        // `AtomicMicrosizerAttackEffect.resolve` (effects/bespoke.py:747):
+        // `ApplyEffect(GrantUnblockable(), EndOfTurn())` +
+        // `ApplyEffect(BecomeType(base_pt=(1,1)), EndOfTurn())` on the
+        // target.
+        Effect::AtomicMicrosizerAttackEffect => {
+            // count_min=0 optional: no seat → declined (no-op).
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // CR 608.2b re-legality: still a creature on a battlefield.
+            // Locate the (player_idx) holding the target so we can mutate
+            // its ueot_modifiers Vec.
+            let mut tgt_pidx: Option<usize> = None;
+            'rl: for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.battlefield.iter() {
+                    if obj.id == payload_target {
+                        if let Some(printing) =
+                            state.registry.lookup(obj.printing_id)
+                        {
+                            if printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                            {
+                                tgt_pidx = Some(pidx);
+                            }
+                        }
+                        break 'rl;
+                    }
+                }
+            }
+            let Some(pidx) = tgt_pidx else {
+                // Target left bf / became non-creature → silent fizzle.
+                return Ok(());
+            };
+            // Push BOTH UEOT modifiers onto the seated target:
+            //   1. GrantKeyword "unblockable" (the can't-be-blocked
+            //      rider — Rust models it as a UEOT keyword read by
+            //      `has_keyword(id,"unblockable")`; Python's
+            //      `GrantUnblockable` writes a layer-6 `cant_be_blocked`
+            //      registry entry read by `game.is_cant_be_blocked` —
+            //      observably equivalent, see SEARCH_LIMITATIONS.md).
+            //   2. SetBasePT 1/1 (the base-P/T-1/1-UEOT rider — read by
+            //      `effective_power`/`effective_toughness`; byte-equal
+            //      with Python's `BecomeType(base_pt=(1,1))`).
+            // Push order mirrors Python's resolve (GrantUnblockable
+            // first, then BecomeType).
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == payload_target {
+                    obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                        keyword: "unblockable".to_string(),
+                    });
+                    obj.ueot_modifiers.push(UeotModifier::SetBasePT {
+                        power: 1,
+                        toughness: 1,
+                    });
+                    break;
+                }
+            }
         }
         Effect::UntapTargetOtherPermanent => {
             // Find first eligible (tapped, not source) across both

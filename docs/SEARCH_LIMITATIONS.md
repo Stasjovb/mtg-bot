@@ -6632,6 +6632,102 @@ per-card-module convention). Pinned by
 reuse of the Sunset Saboteur / Exosuit Savior shared seat; the only
 genuinely-new Rust Effect is `TapUpToOneTargetCreature`.
 
+**Equipment-AA family sibling — Atomic Microsizer (2026-05-31,
+`feature/equipment-aa-siblings`).** A SECOND consumer of this same
+shared `ATTACKS` + `IsHost(subject="attacker")` Tier-C seat (after
+Baseball Bat). Atomic Microsizer ({U} Equipment) rider: "choose up to
+one target creature. That creature can't be blocked this turn and has
+base power and toughness 1/1 until end of turn." The new Rust Effect
+`Effect::AtomicMicrosizerAttackEffect` REUSES the shared
+`first_legal_trigger_target` seat (identical to
+`TapUpToOneTargetCreature` — bare `IsCreature()`, count_min=0, either
+bf); its resolve arm reads the seated `current_resolve_payload_target_id`
+and pushes a COMPOUND UEOT payload onto the target: `UeotModifier::
+GrantKeyword { keyword: "unblockable" }` + `UeotModifier::SetBasePT {
+power: 1, toughness: 1 }`.
+
+**Deliberate representation divergence (unblockable — documented).**
+Python's `GrantUnblockable` writes a layer-6 `cant_be_blocked`
+continuous-effect registry entry (read by `game.is_cant_be_blocked`);
+Rust models "can't be blocked" as a UEOT `unblockable` keyword grant
+(read by `has_keyword(id, "unblockable")`). These are DIFFERENT internal
+representations of the SAME rule ("this creature can't be blocked") —
+the cross-engine probe compares the observably-equivalent predicates
+(`is_cant_be_blocked` ⇔ `has_keyword("unblockable")`), NOT the raw
+internal modifier shape. Why it's OK: the engine's block-legality
+consumer must read EITHER form to mean "can't be blocked"; the
+Rust-side combat-blocking enumeration already DEFERS keyword-driven
+block-legality filters (the `state_ops_legal.rs` `is_cant_be_blocked`
+deferral noted elsewhere), so neither engine's blocking enumeration
+honors the grant at the enumeration stage today — the divergence is
+purely in the post-resolve *state representation*, observed identically
+through the two equivalent getters. Failure mode: if a future slice
+wires block-legality into the Rust enumeration reading `has_keyword`
+while Python reads the registry, the two must stay semantically
+aligned (both already mean the same thing). Fix scope: none needed
+today (the representations are observably equivalent); a future
+unification would map both to one canonical "cant_be_blocked" flag.
+The base-P/T-1/1 half (`SetBasePT 1/1` ⇔ Python's
+`BecomeType(base_pt=(1,1))`) IS byte-equal through
+`effective_power`/`effective_toughness`. Pinned by
+`tests/test_atomic_microsizer_parity.py` +
+`tests_rust/test_equipment_aa_siblings.py`.
+
+**Equipment-AA family sibling — Saw (2026-05-31,
+`feature/equipment-aa-siblings`).** Saw (`{2}` Artifact — Equipment)
+rides the SAME `ATTACKS` + `IsHost(subject="attacker")` predicate
+bridge as Baseball Bat (the `is_host_attacker` sentinel + the shared
+ATTACKS dispatch), but its rider — `SawAttacksOptionalSacDrawEffect`
+("you may sacrifice a permanent other than that creature or this
+Equipment; if you do, draw a card") — is **NOT a targeted effect**, so
+it does NOT ride this Tier-C target-seating seat (it is NOT in
+`_TARGET_SEATED_EFFECT_KINDS`). The single new Rust Effect
+`Effect::SawAttacksOptionalSacDrawEffect`
+(`state_ops_resolve.rs`) reads the source Equipment's controller
+(`current_resolve_source_controller`) + its `attached_to` host, then
+deterministically sacrifices the FIRST controlled permanent in
+`bf_iter_etb_sorted` order EXCLUDING the source + host (via the shared
+`sacrifice_source_inline`) and draws one card (inlined
+`Effect::DrawCards { count: 1 }` shape). **Deliberate no-agent shortcut
+(documented divergence):** Python's `SawAttacksOptionalSacDrawEffect`
+defers the optional `may`-decision + the which-permanent choice to the
+controller's AGENT (`choose_yes_no` / `choose_sacrifice`); the Rust
+resolve arm + the cross-engine probe path (NO agent) ALWAYS ACCEPT and
+pick `options[0]` — byte-equal with Python's `if p.agent is None:
+chosen = options[0]` no-agent branch (`effects/bespoke.py:2545`). The
+agent-driven decline / non-first-pick branches are NOT modeled
+cross-engine (same no-agent-determinism shortcut as every other
+optional-decision Effect in the parity harness; impact: parity probes
+exercise the no-agent path only — the agent-choice branches are a
+search-strength concern, not a state-divergence one, since both engines
+collapse to the deterministic seat when no agent is present). Pinned by
+`tests/test_saw_parity.py` + `tests_rust/test_equipment_aa_siblings.py`.
+
+**Equipment-AA family sibling — Auxiliary Boosters (2026-05-31,
+`feature/equipment-aa-siblings`).** Auxiliary Boosters ({2} Artifact —
+Equipment, +1/+2 + flying anthem) is the ENTERS+IsSelf sibling — it does
+NOT use the Equipment-AA ATTACKS+IsHost(attacker) branch (its rider is
+an ETB, so it rides the EXISTING ENTERS+IsSelf safe-trigger branch).
+The single new Rust Effect `Effect::CreateTokenAndAttachSelf {
+token_printing_id }` (`state_ops_resolve.rs`) creates one fixed-printing
+token (the Robot 2/2 — VANILLA) under the source Equipment's controller
+(via the shared monotonic `reserve_object_id`, so the token id is
+byte-equal cross-engine), then stamps the source's `attached_to` to the
+new token's id (the self-attach idiom — mirror of
+`ManifestDreadThenAttachSelf`). It REUSES the existing `CreateToken`
+token-printing substrate (`register_token_printing` /
+`_seat_token_printings`, now extended to recognize the
+`create_token_and_attach_self` `kind`) — no new token-registration
+machinery. NO shortcut / no-op: the create-token + self-attach are both
+byte-equal idioms; the probe drives the real ETB path and asserts the
+token shape (Robot 2/2, summoning_sick, untapped) + the self-attach
+linkage byte-equal on both engines. (The cross-engine probe's ABSOLUTE
+token id differs by one only because the Rust-side pid-registration
+scaffold seeds an inert holder object into a library — a TEST artifact,
+not an engine divergence; the per-engine Equipment→token linkage is
+byte-equal.) Pinned by `tests/test_auxiliary_boosters_parity.py` +
+`tests_rust/test_equipment_aa_siblings.py`.
+
 ---
 
 ## Tier-C target-seating sub-substrate — original entry (lever-a: Sunset Saboteur + Exosuit Savior)

@@ -1990,6 +1990,31 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Savior). Sole EoE consumer: Baseball Bat ({3} Equipment), pinned
     # end-to-end by ``tests/test_baseball_bat_parity.py``.
     ("attacks", "is_host_attacker", "tap_up_to_one_target_creature"),
+    # **Equipment-AA family — Saw (2026-05-31) — the SECOND
+    # ``is_host_attacker`` predicate triple.** The equipped-creature-
+    # attacks rider: "Whenever equipped creature attacks, you may
+    # sacrifice a permanent other than that creature or this Equipment.
+    # If you do, draw a card." Same ATTACKS + ``IsHost(subject=
+    # "attacker")`` shape as Baseball Bat (collapsed to the
+    # ``is_host_attacker`` sentinel). The
+    # ``saw_attacks_optional_sac_draw_effect`` leaf is NOT target-seated
+    # (the sacrifice pool is an internal deterministic seat, not a
+    # target). Sole EoE consumer: Saw ({2} Equipment), pinned end-to-end
+    # by ``tests/test_saw_parity.py``.
+    ("attacks", "is_host_attacker", "saw_attacks_optional_sac_draw_effect"),
+    # **Equipment-AA family — Atomic Microsizer (2026-05-31) — the THIRD
+    # ``is_host_attacker`` predicate triple.** The equipped-creature-
+    # attacks rider: "Whenever equipped creature attacks, choose up to
+    # one target creature. That creature can't be blocked this turn and
+    # has base power and toughness 1/1 until end of turn." Same ATTACKS +
+    # ``IsHost(subject="attacker")`` shape as Baseball Bat (collapsed to
+    # the ``is_host_attacker`` sentinel). The
+    # ``atomic_microsizer_attack_effect`` leaf rides the SHARED Tier-C
+    # deterministic push-time seat (count_min=0 optional edge — same
+    # decline-on-empty / first-legal-on-nonempty shape as Baseball Bat).
+    # Sole EoE consumer: Atomic Microsizer ({U} Equipment), pinned
+    # end-to-end by ``tests/test_atomic_microsizer_parity.py``.
+    ("attacks", "is_host_attacker", "atomic_microsizer_attack_effect"),
     # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
     # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
     # DIES+IsSelf arm (after round-42's surveil), completing the natural
@@ -2469,6 +2494,16 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # (non-vanilla-token / tapped-rider / each-player-rider stay
     # dropped) so the predicate-effect product gate stays honest.
     ("enters", "source_is_self", "create_token"),
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).** The
+    # ENTERS + IsSelf create-token-then-self-attach Equipment rider:
+    # "When Auxiliary Boosters enters, create a 2/2 Robot token, then
+    # attach Auxiliary Boosters to it." Rides the SAME ENTERS+IsSelf
+    # dispatch + safe-trigger machinery as every other ENTERS+IsSelf
+    # carrier (NOT the Equipment-AA ATTACKS branch) + the same vanilla-
+    # token printing substrate as ``create_token`` (the Robot token is
+    # vanilla). Sole EoE consumer: Auxiliary Boosters ({2} Equipment),
+    # pinned end-to-end by ``tests/test_auxiliary_boosters_parity.py``.
+    ("enters", "source_is_self", "create_token_and_attach_self"),
     # DIES + source_is_self + create_token_tapped (Phase 6 token-
     # printing substrate, Phase 4 — round 50). The FIRST real-card
     # token-substrate lever after Phase 1: it admits the real EoE card
@@ -2860,6 +2895,18 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # ``return_target_permanent_you_control``). The cross-engine round-
     # trip backstop against any future schema extension.
     "tap_up_to_one_target_creature": frozenset({"kind"}),
+    # Equipment-AA family — Saw (2026-05-31). Bare unit-shape: only
+    # ``kind`` (no ``TargetSpec`` slot, no payload field — the no-agent
+    # deterministic seat + source/host exclusion are structural to the
+    # variant). The cross-engine round-trip backstop against any future
+    # schema extension.
+    "saw_attacks_optional_sac_draw_effect": frozenset({"kind"}),
+    # Equipment-AA family — Atomic Microsizer (2026-05-31). Bare unit-
+    # shape: only ``kind`` (the count_min=0 / count_max=1 / IsCreature()
+    # slot + the compound unblockable + base-PT-1/1 UEOT payload are
+    # structural to the variant — no payload field). The cross-engine
+    # round-trip backstop against any future schema extension.
+    "atomic_microsizer_attack_effect": frozenset({"kind"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -2879,6 +2926,14 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # PumpSelf ``granted_keywords`` rider-exclusion pattern). See
     # ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §2.3.
     "create_token": frozenset({"kind", "count", "token_printing_id"}),
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+    # CreateTokenAndAttachSelf — POST-SEATING payload is a single
+    # ``token_printing_id`` (NO ``count`` — always one token; the
+    # self-attach is structural to the variant, no field). Mirrors Rust's
+    # ``Effect::CreateTokenAndAttachSelf { token_printing_id }``. The
+    # pre-seating symbolic ``_token_card_def`` is rewritten to the
+    # numeric ``token_printing_id`` by ``_seat_token_printings``.
+    "create_token_and_attach_self": frozenset({"kind", "token_printing_id"}),
     # CreateTokenTapped (Phase 6 token-printing substrate, Phase 4 —
     # round 50). Same POST-SEATING two-key payload as the sister
     # ``create_token`` whitelist above (``count`` +
@@ -3619,11 +3674,27 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
     from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
     from mtg_bot.effects.generic.tokens import CreateToken
+    # **Equipment-AA family — Auxiliary Boosters (2026-05-31).** The
+    # ENTERS+IsSelf create-token-then-self-attach Equipment rider whose
+    # safe leaf this slice admits (rides the existing ENTERS+IsSelf
+    # branch + the CreateToken token-printing substrate).
+    from mtg_bot.effects.generic.tokens import CreateTokenAndAttachSelf
     # **Anticausal Vestige Cycle 2 (2026-05-24).** The bespoke
     # unit-variant whose LEAVES_BATTLEFIELD+IsSelf safe-trigger leaf
     # this slice admits. Imported alongside the other effect classes
     # so the ``isinstance`` dispatch below recognizes it.
     from mtg_bot.effects.bespoke import AnticausalVestigeLeavesEffect
+    # **Equipment-AA family — Saw (2026-05-31).** The bespoke
+    # ATTACKS+IsHost(attacker) optional-sac-then-draw rider whose safe
+    # leaf this slice admits (the SECOND leaf under the shared
+    # ``is_host_attacker`` predicate branch, after Baseball Bat's
+    # ``tap_up_to_one_target_creature``).
+    from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
+    # **Equipment-AA family — Atomic Microsizer (2026-05-31).** The
+    # bespoke ATTACKS+IsHost(attacker) compound-UEOT (can't-be-blocked +
+    # base-P/T-1/1) rider whose safe leaf this slice admits (the THIRD
+    # leaf under the shared ``is_host_attacker`` predicate branch).
+    from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
     # **Weftwalking Cycle 2 (2026-05-24).** The recursive composer
     # whose narrow ConditionalIfCastFromHand(Sequence(Shuffle..., Draw))
     # shape this slice admits. Imported alongside the other effect
@@ -3841,6 +3912,16 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
                 "create_token", "create_token_tapped",
+                # **Equipment-AA family — Auxiliary Boosters
+                # (2026-05-31) — the ENTERS+IsSelf create-token-then-
+                # self-attach leaf.** Rides the existing ENTERS+IsSelf
+                # branch (NOT the Equipment-AA ATTACKS branch). The
+                # predicate-effect product is enforced by the
+                # ``("enters", "source_is_self",
+                # "create_token_and_attach_self")`` ``_SAFE_TRIGGERS``
+                # entry; the effect-class arm's vanilla-token gate is
+                # the §2 teeth.
+                "create_token_and_attach_self",
                 "return_target_permanent_you_control",
                 "look_top_n_put_one_in_hand_rest_to_graveyard",
                 "conditional_if_cast_from_hand",
@@ -4026,16 +4107,18 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # round-tripped by the ``is_host`` bridge arm (cross_engine.py:
         # 13775-13797) IDENTICALLY on both engines.
         #
-        # The sole safe leaf under (ATTACKS, IsHost(attacker)) today is
-        # ``tap_up_to_one_target_creature`` (Baseball Bat's ATTACKS
-        # rider). The predicate-effect product is enforced by the
-        # ``("attacks", "is_host_attacker",
-        # "tap_up_to_one_target_creature")`` ``_SAFE_TRIGGERS`` entry
-        # (necessary, not sufficient); the effect-class arm below is the
-        # §2 silent-mistranslation teeth (the bare count_min=0 /
-        # count_max=1 single-slot gate).
+        # The safe leaves under (ATTACKS, IsHost(attacker)) today are the
+        # Equipment-AA family riders: ``tap_up_to_one_target_creature``
+        # (Baseball Bat), ``saw_attacks_optional_sac_draw_effect`` (Saw).
+        # The predicate-effect product is enforced by the per-leaf
+        # ``_SAFE_TRIGGERS`` entries (necessary, not sufficient); the
+        # effect-class arms below are the §2 silent-mistranslation teeth.
         pred_dict = {"kind": "is_host", "subject": "attacker"}
-        safe_effect_kinds = ("tap_up_to_one_target_creature",)
+        safe_effect_kinds = (
+            "tap_up_to_one_target_creature",
+            "saw_attacks_optional_sac_draw_effect",
+            "atomic_microsizer_attack_effect",
+        )
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
@@ -4314,6 +4397,37 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # (which preserves this ``kind``).
             "_token_card_def": token_cd,
         }
+    elif isinstance(eff, CreateTokenAndAttachSelf):
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31) — the
+        # ENTERS+IsSelf create-token-then-self-attach leaf.** Python's
+        # ``CreateTokenAndAttachSelf(token_printing)``
+        # (effects/generic/tokens.py:79): "create a <token> token, then
+        # attach this Equipment to it." Auxiliary Boosters ({2} Artifact
+        # — Equipment, +1/+2 + flying anthem) is the sole EoE consumer;
+        # its token is the Robot 2/2 Artifact Creature (VANILLA — no
+        # abilities/keywords).
+        #
+        # **Vanilla-token §2 gate (reuses the CreateToken token-printing
+        # substrate).** Same as the ``CreateToken`` arm above: the loader
+        # synthesizes a token CardDef from the parsed ``token_printing``;
+        # CardDef has NO activated-ability field, so a non-vanilla token
+        # would silently drop its abilities on the bridge. Require a
+        # vanilla creature token (creature body, no abilities/keywords).
+        # The Robot 2/2 passes; any ability-bearing token stays DECLINED.
+        #
+        # **The self-attach is structural to the variant** — no extra
+        # rider to gate (unlike CreateToken's count/tapped/each_player).
+        # The emitted dict carries the SYMBOLIC ``_token_card_def``
+        # (replaced with a numeric ``token_printing_id`` by
+        # ``_seat_token_printings``, which preserves this ``kind``).
+        token_cd = _token_vanilla_card_def(eff.token_printing)
+        if token_cd is None:
+            return None
+        eff_kind = "create_token_and_attach_self"
+        eff_dict = {
+            "kind": "create_token_and_attach_self",
+            "_token_card_def": token_cd,
+        }
     elif isinstance(eff, PutPlusOneCounterOnOpponentsCreature):
         # **Tier-C target-seating sub-substrate (lever-a, Sunset
         # Saboteur).** The FIRST targeted-safe-trigger leaf. Python's
@@ -4495,6 +4609,82 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             return None
         eff_kind = "tap_up_to_one_target_creature"
         eff_dict = {"kind": "tap_up_to_one_target_creature"}
+    elif isinstance(eff, SawAttacksOptionalSacDrawEffect):
+        # **Equipment-AA family — Saw (2026-05-31) — the SECOND
+        # ATTACKS+IsHost(attacker) safe leaf.** Python's
+        # ``SawAttacksOptionalSacDrawEffect`` (effects/bespoke.py:2498):
+        # "you may sacrifice a permanent other than that creature or this
+        # Equipment. If you do, draw a card." Saw's equipped-creature-
+        # attacks rider is the sole EoE consumer ({2} Artifact —
+        # Equipment; Equip {2} already a §2-decline activated ability,
+        # campaign-wide — the carrier's other surfaces don't gate the
+        # ATTACKS-trigger admit).
+        #
+        # **Bare unit shape (§2 silent-mistranslation teeth).** No
+        # ``TargetSpec`` slot (NOT a targeted effect — the sacrifice pool
+        # is "permanents you control excluding the host + this
+        # Equipment", an internal deterministic seat, not a target). Gate
+        # on the exact parameterless-frozen-dataclass shape: no
+        # ``requires_target``, empty ``target_count_range`` lower bound.
+        # The no-agent deterministic ``options[0]`` seat is byte-equal
+        # cross-engine (Rust's resolve arm ACCEPTS + sacrifices the FIRST
+        # controlled permanent excluding source + host, then draws). See
+        # the ``("attacks", "is_host_attacker",
+        # "saw_attacks_optional_sac_draw_effect")`` ``_SAFE_TRIGGERS``
+        # entry for the full provenance.
+        if eff.requires_target():
+            return None
+        if eff.target_count_range() != (0, 0):
+            return None
+        eff_kind = "saw_attacks_optional_sac_draw_effect"
+        eff_dict = {"kind": "saw_attacks_optional_sac_draw_effect"}
+    elif isinstance(eff, AtomicMicrosizerAttackEffect):
+        # **Equipment-AA family — Atomic Microsizer (2026-05-31) — the
+        # THIRD ATTACKS+IsHost(attacker) targeted-safe leaf.** Python's
+        # ``AtomicMicrosizerAttackEffect`` (effects/bespoke.py:723):
+        # "choose up to one target creature. That creature can't be
+        # blocked this turn and has base power and toughness 1/1 until
+        # end of turn." Atomic Microsizer's equipped-creature-attacks
+        # rider is the sole EoE consumer ({U} Equipment; Equip {2} is a
+        # campaign-wide §2-decline activated ability that doesn't gate
+        # the ATTACKS-trigger admit).
+        #
+        # **The count_min=0 optional edge (rides the SHARED Tier-C seat
+        # — same shape as Baseball Bat's tap_up_to_one_target_creature).**
+        # ``requires_target()`` is True but the slot is OPTIONAL
+        # (count_min=0). With no eligible creature both engines DECLINE
+        # (Rust's ``first_legal_trigger_target`` returns None →
+        # push-with-no-target → resolve no-op; Python's ``if not targets:
+        # return``). With an eligible creature both deterministically
+        # pick the SAME smallest-ETB-timestamp creature on EITHER bf
+        # (the recognizer + bespoke ``legal_targets`` return creatures
+        # on BOTH bfs — NO controller restriction) and apply the compound
+        # UEOT (can't-be-blocked + base-P/T-1/1).
+        #
+        # **Compound-UEOT byte-equality (the representation choice — see
+        # SEARCH_LIMITATIONS.md).** Python writes a layer-6
+        # ``cant_be_blocked`` registry entry (``GrantUnblockable``) +
+        # a ``BecomeType(base_pt=(1,1))`` layer-7b override; Rust pushes
+        # a UEOT ``GrantKeyword "unblockable"`` + ``SetBasePT 1/1``. The
+        # observables are equivalent: ``game.is_cant_be_blocked`` (Py) ==
+        # ``has_keyword(id,"unblockable")`` (Rust) — both "can't be
+        # blocked" — and ``effective_power``/``effective_toughness`` ==
+        # (1,1) on both. See the ``("attacks", "is_host_attacker",
+        # "atomic_microsizer_attack_effect")`` ``_SAFE_TRIGGERS`` entry.
+        #
+        # **Bare optional-target gate (§2 silent-mistranslation teeth).**
+        # Exactly the up-to-one single-implicit-target shape:
+        # ``requires_target()`` True, ``target_count_range() == (0, 1)``,
+        # ``target_slot_kinds() == ()`` (no SlotRef / typed slot — the
+        # bespoke effect's ``legal_targets`` is the bare-IsCreature pool).
+        if not eff.requires_target():
+            return None
+        if eff.target_count_range() != (0, 1):
+            return None
+        if eff.target_slot_kinds() != ():
+            return None
+        eff_kind = "atomic_microsizer_attack_effect"
+        eff_dict = {"kind": "atomic_microsizer_attack_effect"}
     elif isinstance(eff, LookTopNPutOneInHandRestToGraveyard):
         # **Codecracker Hound Cycle 2 (2026-05-24) — the 9th ENTERS+IsSelf
         # leaf.** Python's
@@ -4766,6 +4956,14 @@ _TARGET_SEATED_EFFECT_KINDS: frozenset[str] = frozenset({
     # optional (``len(chosen_list)=0 >= min_t=0``) — byte-equal with the
     # Rust no-seat no-op.
     "tap_up_to_one_target_creature",
+    # Atomic Microsizer (Equipment-AA family — the ATTACKS+IsHost(attacker)
+    # count_min=0 optional compound-UEOT edge) — joins via this slice,
+    # reusing the shared seat shipped with Baseball Bat. Same gate: the
+    # Python no-agent ``pool[0]`` seat fires for this kind too; the
+    # count_min=0 edge means an empty ``pool`` simply declines the
+    # optional — byte-equal with the Rust no-seat no-op. The seated
+    # target id flows to the compound-UEOT resolve arm on both engines.
+    "atomic_microsizer_attack_effect",
 })
 
 
@@ -14391,6 +14589,16 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         "create_token",
         "create_token_tapped",
         "create_token_per_multicolored_permanent",
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+        # The ENTERS+IsSelf create-token-then-self-attach kind. Seated
+        # identically to the static ``create_token*`` carriers — same
+        # deterministic-pid token CardDef append + the SAME
+        # ``register_token_printing`` bridge map. The carrier-rewrite
+        # branch copies every non-symbolic field through unchanged (it
+        # has NO ``count`` field — always one token; the self-attach is
+        # structural), only swapping ``_token_card_def`` for
+        # ``token_printing_id``.
+        "create_token_and_attach_self",
     )
 
     # Lander-spell-token-seating sub-substrate (round-73). The two

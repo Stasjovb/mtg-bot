@@ -3633,6 +3633,40 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             token_printing=token_printing,
             count=eff_dict.get("count", 1),
         )
+    if kind == "create_token_and_attach_self":
+        # **Equipment-AA family — Auxiliary Boosters (2026-05-31).**
+        # Reverse bridge arm for Rust's
+        # ``Effect::CreateTokenAndAttachSelf { token_printing_id }``
+        # (cards.rs sister-variant of ``CreateToken``; parse + to_pydict
+        # arms in cards.rs; resolve arm in state_ops_resolve.rs). Mirrors
+        # Python's ``CreateTokenAndAttachSelf(token_printing)``
+        # (effects/generic/tokens.py:79).
+        #
+        # **Single fixed-printing token + self-attach.** No ``count``
+        # field (always one token — the Robot 2/2). The variant creates
+        # the token under the source Equipment's controller then stamps
+        # the source's ``attached_to`` to the new token's id (the
+        # self-attach is structural to the variant). Same
+        # ``_TOKEN_PRINTING_BY_PID`` registration map as the sister
+        # ``create_token`` arm: probes that drive this arm cross-engine
+        # must call ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state. The sole EoE consumer is **Auxiliary
+        # Boosters** ({2} Equipment), pinned end-to-end by
+        # ``tests/test_auxiliary_boosters_parity.py``.
+        from mtg_bot.effects.generic.tokens import CreateTokenAndAttachSelf
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token_and_attach_self bridge: no "
+                f"Python CardPrinting registered for token_printing_id="
+                f"{token_pid!r}. Probes that drive the "
+                f"create_token_and_attach_self arm cross-engine must call "
+                f"register_token_printing(pid, py_printing) BEFORE "
+                f"building either state."
+            ) from exc
+        return CreateTokenAndAttachSelf(token_printing=token_printing)
     if kind == "create_token_each_player":
         # BLOCKED-RUST-EFFECT slice (round 43) -- "Each player
         # creates N tokens of the given printing under their own
@@ -7091,6 +7125,61 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # end-to-end by ``tests/test_baseball_bat_parity.py``.
         from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
         return TapUpToOneTargetCreature()
+    if kind == "saw_attacks_optional_sac_draw_effect":
+        # **Equipment-AA family — Saw (2026-05-31).** Reverse bridge arm
+        # for Rust's ``Effect::SawAttacksOptionalSacDrawEffect`` (cards.rs
+        # unit variant added immediately after
+        # ``TapUpToOneTargetCreature``; parse + to_pydict arms in
+        # cards.rs; resolve arm in state_ops_resolve.rs). Mirrors Python's
+        # ``SawAttacksOptionalSacDrawEffect`` (effects/bespoke.py:2498).
+        #
+        # **Unit variant.** No constructor args (the no-agent
+        # deterministic ``options[0]`` seat + the source/host exclusion
+        # are structural to the class — the Rust variant encodes them in
+        # its resolve arm). Extra dict keys silently dropped (unit-variant
+        # contract; sibling ``tap_up_to_one_target_creature`` shape).
+        #
+        # **NOT a targeted effect** (no ``TargetSpec``). The optional
+        # ``may``-sacrifice + which-permanent decisions are agent calls
+        # in Python; with NO agent both engines ACCEPT and sacrifice the
+        # FIRST controlled permanent (excluding the source Equipment + its
+        # equipped host) in ETB-timestamp order, then draw one card. No
+        # legal permanent ⇒ silent no-op (no draw). The sole EoE consumer
+        # is **Saw** ({2} Equipment), pinned end-to-end by
+        # ``tests/test_saw_parity.py``.
+        from mtg_bot.effects.bespoke import SawAttacksOptionalSacDrawEffect
+        return SawAttacksOptionalSacDrawEffect()
+    if kind == "atomic_microsizer_attack_effect":
+        # **Equipment-AA family — Atomic Microsizer (2026-05-31).**
+        # Reverse bridge arm for Rust's
+        # ``Effect::AtomicMicrosizerAttackEffect`` (cards.rs unit variant
+        # added immediately after ``SawAttacksOptionalSacDrawEffect``;
+        # parse + to_pydict arms in cards.rs; first_legal_trigger_target
+        # seat + compound-UEOT resolve arm in state_ops_resolve.rs).
+        # Mirrors Python's ``AtomicMicrosizerAttackEffect``
+        # (effects/bespoke.py:723).
+        #
+        # **Unit variant.** No constructor args (the count_min=0 /
+        # count_max=1 / bare-``IsCreature()`` slot + the compound
+        # unblockable + base-PT-1/1 UEOT payload are structural to the
+        # class — the Rust variant encodes them in its seat scan +
+        # resolve arm). Extra dict keys silently dropped (unit-variant
+        # contract; sibling ``tap_up_to_one_target_creature`` shape).
+        #
+        # **The count_min=0 optional edge (shared Tier-C seat).** Same
+        # seat as ``tap_up_to_one_target_creature``: with no eligible
+        # creature both engines DECLINE (Rust's seat returns None →
+        # push-with-no-target → resolve no-op; Python's ``if not targets:
+        # return``); with an eligible creature both pick the SAME
+        # smallest-ETB-timestamp creature on EITHER bf and apply the
+        # compound UEOT (can't-be-blocked + base-P/T-1/1). Both observed
+        # cross-engine via ``is_cant_be_blocked`` (Py) /
+        # ``has_keyword("unblockable")`` (Rust) — observably equivalent —
+        # and ``effective_power``/``effective_toughness`` (both). The
+        # sole EoE consumer is **Atomic Microsizer** ({U} Equipment),
+        # pinned end-to-end by ``tests/test_atomic_microsizer_parity.py``.
+        from mtg_bot.effects.bespoke import AtomicMicrosizerAttackEffect
+        return AtomicMicrosizerAttackEffect()
     if kind == "tap_enchanted_permanent":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap enchanted
         # permanent" (TapEnchantedPermanent family,
