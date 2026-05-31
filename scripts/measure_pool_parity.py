@@ -4066,6 +4066,20 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_sami_ships_engineer_parity.py",
     REPO_ROOT / "tests" / "test_duskmourns_domination_parity.py",
     REPO_ROOT / "tests" / "test_deafening_silence_real_eoe_parity.py",
+    # **Manland nested-granted-AA closure (2026-05-31).** Lavaclaw
+    # Reaches + Wandering Fumarole -- the two EoE manlands whose
+    # animate AA grants a NESTED activated ability while the land is a
+    # creature (Lavaclaw: {X} +X/+0 pump; Fumarole: {0} P/T switch).
+    # The nested Effect classes ``PumpSelfXPowerUEOT`` /
+    # ``SwitchSourcePowerToughnessUEOT`` landed as Rust unit variants
+    # this slice (parse + to_pydict + resolve + cross-engine bridge),
+    # moving both cards' full Effect sets into the covered-class set;
+    # these probes give the PROBED credit. BLOCKED-SG 30 -> 28.
+    # (Fumarole's Rust resolve is substrate-only -- layer-7e P/T-switch
+    # deferred per docs/SEARCH_LIMITATIONS.md; the probe pins the
+    # Python-side swap resolve.)
+    REPO_ROOT / "tests" / "test_lavaclaw_reaches_parity.py",
+    REPO_ROOT / "tests" / "test_wandering_fumarole_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

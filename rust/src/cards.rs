@@ -7302,6 +7302,52 @@ pub enum Effect {
         toughness: i32,
         granted_subtype: Option<String>,
     },
+    /// **Manland nested-granted-AA substrate (2026-05-31 — Lavaclaw
+    /// Reaches closure).** Source gets `+X/+0` until end of turn, where
+    /// X is read from the X-cost activation pipeline
+    /// (`state.current_resolve_x_value`). Mirrors Python's
+    /// `PumpSelfXPowerUEOT` (`effects/generic/pump.py:896`).
+    ///
+    /// **Consumer.** Lavaclaw Reaches' nested granted activated ability
+    /// `{X}: This creature gets +X/+0 until end of turn` — granted only
+    /// while the land is animated via `BecomeLandCreatureUEOT`. The
+    /// effect itself is a bare unit variant; the X value flows in
+    /// through the resolver's X-cost binding, not a static field.
+    ///
+    /// **Mechanism.** Reads `state.current_resolve_x_value` (defaulting
+    /// to 0 / clamping negatives on the no-agent harness path), and on
+    /// `X > 0` pushes a `UeotModifier::PowerToughnessBonus { power: X,
+    /// toughness: 0 }` onto the source object's `ueot_modifiers` Vec
+    /// (auto-expiring at the CR 514.3 cleanup pass). On `X <= 0` or a
+    /// source no longer on a battlefield zone, the resolve is a silent
+    /// no-op — matching Python's `if source is None: return` /
+    /// `if x <= 0: return` short-circuits.
+    PumpSelfXPowerUEOT,
+    /// **Manland nested-granted-AA substrate (2026-05-31 — Wandering
+    /// Fumarole closure).** Switch the source's power and toughness
+    /// until end of turn. Mirrors Python's
+    /// `SwitchSourcePowerToughnessUEOT` (`effects/generic/pump.py:925`).
+    ///
+    /// **Consumer.** Wandering Fumarole's nested granted activated
+    /// ability `{0}: Switch this creature's power and toughness until
+    /// end of turn` — granted only while the land is animated via
+    /// `BecomeLandCreatureUEOT`. The `{0}` cost means it is freely
+    /// re-activatable; each activation appends another switch.
+    ///
+    /// **Substrate-only landing (layer-7e P/T-switch deferred).** Rust
+    /// has no layer-7e P/T-switch continuous-effect machinery today
+    /// (the `_compute_effective_pt` walker has no `switch_pt` sublayer-4
+    /// pass). The Rust resolve arm is therefore a documented silent
+    /// no-op — the variant exists for cross-engine round-trip
+    /// (parse + to_pydict + bridge) and to put the emitting card into
+    /// the covered-class set, but does NOT yet replay the P/T swap in a
+    /// real Rust trajectory. The Python side carries the full layer-7e
+    /// swap (`pump.py:948`); the cross-engine probe pins the Python-side
+    /// resolve. See `docs/SEARCH_LIMITATIONS.md`. Adding the Rust
+    /// layer-7e swap is follow-up work (it interacts with the
+    /// effective-P/T reader + the `BecomesLandCreature` layer-7b
+    /// override ordering).
+    SwitchSourcePowerToughnessUEOT,
     /// **Round 29 optional-mana-cost wrapper.** "You may pay {cost}. If
     /// you do, [inner_effect]." Mirrors Python's
     /// `OptionalManaCostThenEffect(cost_str, inner_effect)`
@@ -15328,6 +15374,26 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 granted_subtype,
             })
         }
+        "pump_self_x_power_ueot" => {
+            // Manland nested-granted-AA substrate (2026-05-31 —
+            // Lavaclaw Reaches). Unit variant; no payload fields beyond
+            // `kind` (the +X comes from the X-cost binding at resolve
+            // time, not a static field). Extra dict fields silently
+            // ignored for round-trip dict-shape consistency (mirrors
+            // every other unit-variant parse arm — round 30/31/.../42
+            // precedent). Mirrors Python's `PumpSelfXPowerUEOT()`
+            // (no-arg dataclass, `pump.py:896`).
+            Ok(Effect::PumpSelfXPowerUEOT)
+        }
+        "switch_source_power_toughness_ueot" => {
+            // Manland nested-granted-AA substrate (2026-05-31 —
+            // Wandering Fumarole). Unit variant; no payload fields
+            // beyond `kind`. Extra dict fields silently ignored for
+            // round-trip dict-shape consistency. Mirrors Python's
+            // `SwitchSourcePowerToughnessUEOT()` (no-arg dataclass,
+            // `pump.py:925`).
+            Ok(Effect::SwitchSourcePowerToughnessUEOT)
+        }
         "grant_keyword_to_target_creature_until_eot" => {
             // Required `keyword` field: non-empty lowercase string.
             let keyword_raw = dict.get_item("keyword")?.ok_or_else(|| {
@@ -16634,7 +16700,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted, pump_self_x_power_ueot, switch_source_power_toughness_ueot"
         ))),
     }
 }
@@ -20456,6 +20522,21 @@ pub(crate) fn effect_to_pydict<'py>(
                 Some(s) => d.set_item("granted_subtype", s.as_str())?,
                 None => d.set_item("granted_subtype", py.None())?,
             }
+        }
+        Effect::PumpSelfXPowerUEOT => {
+            // Manland nested-granted-AA substrate (2026-05-31 —
+            // Lavaclaw Reaches). Unit variant; no payload fields beyond
+            // `kind` (the +X is dynamic — read from the X-cost binding
+            // at resolve time). Mirrors Python's `PumpSelfXPowerUEOT()`
+            // dict shape.
+            d.set_item("kind", "pump_self_x_power_ueot")?;
+        }
+        Effect::SwitchSourcePowerToughnessUEOT => {
+            // Manland nested-granted-AA substrate (2026-05-31 —
+            // Wandering Fumarole). Unit variant; no payload fields
+            // beyond `kind`. Mirrors Python's
+            // `SwitchSourcePowerToughnessUEOT()` dict shape.
+            d.set_item("kind", "switch_source_power_toughness_ueot")?;
         }
         Effect::Sequence { effects } => {
             d.set_item("kind", "sequence")?;

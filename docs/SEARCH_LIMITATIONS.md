@@ -17200,6 +17200,80 @@ The C3 per-card real-EoE probe at `tests/test_the_eternity_elevator_parity.py` s
 **Impact estimate:** Grove FLIPS BLOCKED-SG → PROBED (covered_by_construction → PROBED via the probe). PROBED 434 → 435; BLOCKED-SG 30 → 29; Carrier-AA BLOCKED bucket 15 → 14; Effect-uncovered 22 → 21. Rust Effect coverage 190 → 191 Python classes (224 → 225 Rust variants). 0 strength cost — the substrate is byte-equal cross-engine on both AAs' real-EoE drive.
 
 **Pinned by:** `tests/test_grove_of_the_burnwillows_parity.py` (9 pins — parser SoT verify-first + Python dual-AA shape pin + bridge round-trip canonical Rust dict + reverse-arm rehydration of both AAs + Rust register acceptance + loader end-to-end admit + cross-engine real-EoE Scenario MINT-C (AA[0] 1-C mint) + cross-engine real-EoE Scenario MINT-R+LIFE (AA[1] Sequence: 1-R chosen-color mint + each-opponent +1 life, LOAD-BEARING) + Sequence-IN-AA admit invariant (admits valid Sequence, declines Sequence-with-non-admitted-leaf, declines bare non-admitted leaf, admits nested Sequence) + 21-entry count sentinel). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#3 Grove of the Burnwillows.
+## Rust port — `Effect::SwitchSourcePowerToughnessUEOT` resolve is a substrate-only no-op (layer-7e P/T-switch deferred)
+
+**Location**: `rust/src/state_ops_resolve.rs`
+`Effect::SwitchSourcePowerToughnessUEOT` resolve arm (the
+`let _ = source_obj_id; // substrate-only no-op` arm); variant decl +
+`parse_effect` + `to_pydict` in `rust/src/cards.rs`.
+
+**What we do today**: the Rust `Effect::SwitchSourcePowerToughnessUEOT`
+unit variant parses, serializes (`to_pydict`), and bridges
+(`cross_engine.py` `switch_source_power_toughness_ueot` arm) cleanly,
+but its resolve arm is a documented silent no-op — it does NOT swap the
+source's effective power and toughness. The Python side
+(`effects/generic/pump.py:948` `SwitchSourcePowerToughnessUEOT.resolve`)
+carries the full implementation: it adds a layer-7 sublayer-4
+`"switch_pt"` continuous effect that `_compute_effective_pt` walks in
+timestamp order (two switches cancel, three is one swap, applied AFTER
+the layer-7b base-P/T override per CR 613.4 layer 7e).
+
+**Why the Rust resolve is deferred**: Rust's effective-P/T reader
+(`_compute_effective_pt` analog) has no layer-7e `switch_pt` sublayer-4
+pass today. Adding it interacts with the `UeotModifier::BecomesLandCreature`
+layer-7b base-P/T override ordering (the swap must operate on the
+post-7b/c/d effective P/T, so the reader needs the switch applied as a
+final-layer transform after the manland-animate base override). That is
+its own surface — a layered-effects reader change, not a single resolve
+arm — so it is split out from the substrate slice.
+
+**Why this is OK as a substrate-only landing**: the only EoE consumer
+is Wandering Fumarole's NESTED granted activated ability (`{0}: Switch
+this creature's P/T UEOT`), which is granted only while the manland is
+animated via `BecomeLandCreatureUEOT`. The Rust
+`BecomeLandCreatureUEOT` substrate does NOT yet carry the
+`granted_activated_abilities` rider (the `become_land_creature_ueot`
+bridge arm narrows it away), so the nested switch AA is not reachable
+in a real Rust trajectory today regardless — the resolve arm being a
+no-op changes no observable Rust behavior. The variant exists to (a)
+round-trip cross-engine and (b) put Wandering Fumarole into the
+covered-class set so its per-card real-EoE probe can pin it PROBED. The
+probe (`tests/test_wandering_fumarole_parity.py`) exercises the
+Python-side swap resolve, where the full layer-7e implementation lives.
+
+**Failure mode**: if a future slice wires
+`BecomeLandCreatureUEOT.granted_activated_abilities` through the Rust
+substrate (so the nested switch AA becomes activatable on an animated
+Fumarole in a real Rust game), the no-op resolve would silently fail to
+swap P/T — an animated Fumarole's `{0}` activation would be a dead
+action in Rust while Python swaps. That would surface as a cross-engine
+divergence in any full-trajectory parity run touching an animated
+Fumarole. The fix at that point is to implement the layer-7e
+`switch_pt` pass in the Rust effective-P/T reader and replace this
+no-op arm with the real push.
+
+**Fix scope estimate**: ~1-2 cycles — add a `UeotModifier::SwitchPT`
+(or equivalent) entry kind, push it in the resolve arm, and add a
+final-pass swap in the Rust effective-P/T computation that applies
+AFTER the layer-7b `BecomesLandCreature` base override and layer-7c/d
+bonuses (CR 613.4 layer 7e ordering). Gated by the
+`BecomeLandCreatureUEOT.granted_activated_abilities` Rust rider also
+landing (otherwise the swap arm is unreachable anyway).
+
+**Impact estimate**: 0 strength cost today — the arm is unreachable in
+real Rust trajectories (no nested-granted-AA plumbing on the Rust
+manland substrate). The card moves BLOCKED-subsystem-gated → PROBED on
+the Effect+bridge metric this slice; full-trajectory P/T-switch parity
+on an animated Fumarole waits for the layered-reader follow-up.
+
+**Pinned by**: `tests/test_wandering_fumarole_parity.py` (Python-side
+cross-engine probe — parse SoT + bridge round-trip + Python swap
+resolve) + `tests_rust/test_manland_nested_granted_effects.py`
+(`test_switch_source_power_toughness_ueot_is_substrate_noop` — pins the
+Rust resolve runs without error + leaves P/T unchanged; +
+`test_register_switch_source_power_toughness_ueot` parse pin). Scout
+doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` Group-1
+Wandering Fumarole.
 
 ---
 

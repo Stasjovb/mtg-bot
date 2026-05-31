@@ -11915,6 +11915,54 @@ fn apply_effect(
                 }
             }
         }
+        // Manland nested-granted-AA substrate (2026-05-31 — Lavaclaw
+        // Reaches). Source gets +X/+0 UEOT, X from the X-cost binding.
+        // Mirrors Python's `PumpSelfXPowerUEOT.resolve` (`pump.py:905`):
+        // `x = state.resolving_x_value; if x <= 0: return;
+        // source.temp_power_bonus += x`. Same source-locate + push as
+        // `PumpSelfUntilEOT`, but the `power` bonus is the dynamic X.
+        Effect::PumpSelfXPowerUEOT => {
+            // Read X (no-agent harness mints `None`; clamp negatives).
+            let x: i32 = state.current_resolve_x_value.unwrap_or(0).max(0);
+            if x <= 0 {
+                return Ok(()); // X <= 0 -> silent no-op (mirrors Python)
+            }
+            // Walk both battlefields to find the source object.
+            for pidx in 0..state.players.len() {
+                if state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == source_obj_id)
+                {
+                    let zone: &mut Vec<GameObject> =
+                        Arc::make_mut(&mut state.players[pidx].battlefield);
+                    for obj in zone.iter_mut() {
+                        if obj.id == source_obj_id {
+                            obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                                power: x,
+                                toughness: 0,
+                            });
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        // Manland nested-granted-AA substrate (2026-05-31 — Wandering
+        // Fumarole). **Substrate-only: layer-7e P/T-switch deferred.**
+        // Rust has no layer-7e P/T-switch continuous-effect machinery
+        // (the effective-P/T reader has no `switch_pt` pass), so this
+        // resolve is a documented silent no-op. The variant exists for
+        // cross-engine round-trip (parse + to_pydict + bridge) and to
+        // put Wandering Fumarole into the covered-class set; the
+        // cross-engine probe pins the Python-side swap resolve. Adding
+        // the Rust swap is follow-up work (interacts with the
+        // `BecomesLandCreature` layer-7b override ordering). See
+        // `docs/SEARCH_LIMITATIONS.md`.
+        Effect::SwitchSourcePowerToughnessUEOT => {
+            let _ = source_obj_id; // substrate-only no-op
+        }
         // Round-28 UEOT-coverage extension. Same mechanism as
         // PumpSelfUntilEOT but on a TARGET creature: the first
         // creature on the source's controller's battlefield (mirrors
