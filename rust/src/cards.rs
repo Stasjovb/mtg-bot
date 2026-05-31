@@ -4451,6 +4451,73 @@ pub enum Effect {
         damage: u32,
         produces: Vec<(u8, u32)>,
     },
+    /// **Nesting Grounds substrate (2026-05-31 — spec at
+    /// `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Group-1
+    /// Nesting Grounds row).** Move one `+1/+1` counter from one
+    /// permanent the source's controller controls (the donor) onto a
+    /// second permanent that same player controls (the recipient).
+    ///
+    /// Mirrors Python's `MovePlusOneCounterBetweenPermanentsYouControl()`
+    /// (unit dataclass — no fields) at
+    /// `effects/generic/counters.py:322` — Nesting Grounds' single
+    /// `{1}, {T}: Move a counter from target permanent you control onto
+    /// a second target permanent. Activate only as a sorcery.` AA pilot
+    /// effect.
+    ///
+    /// **Dual-target effect.** `target_count_range() == (2, 2)` on the
+    /// Python side: slot 0 is the donor, slot 1 is the recipient. The
+    /// resolve arm reads slot 0 from
+    /// `state.current_resolve_payload_target_id` and slot 1 from
+    /// `state.current_resolve_payload_target_id_2` (the 2-slot payload
+    /// plumbing shared with `Effect::CoordinatedClobberingEffect` /
+    /// `Effect::DiplomaticRelationsEffect`).
+    ///
+    /// **Resolve semantics (mirror Python `counters.py:353-383`).**
+    /// (1) require both target ids present; (2) donor == recipient →
+    /// no-op (Python's `if donor_id == recipient_id: return`); (3)
+    /// both must be on a battlefield (donor on any bf, recipient on
+    /// any bf — Python re-fetches from `state.battlefield`); (4) if the
+    /// donor has `plus_one_counters <= 0` the ability fizzles (Python's
+    /// `if donor.plus_one_counters <= 0: ... return`); (5) otherwise
+    /// decrement the donor's `plus_one_counters` by 1 and add one
+    /// `+1/+1` counter to the recipient via the same
+    /// `plus_one_counters` field (Python routes the add through
+    /// `game.add_plus_one_counters` which simply increments
+    /// `plus_one_counters`; Rust mirrors the field increment directly).
+    ///
+    /// **Simplification carried from Python.** Oracle says "a counter"
+    /// (any type); both engines model exactly one `+1/+1` counter move
+    /// (charge / loyalty / stun counter movement unmodeled). This is an
+    /// Effect-level simplification documented in
+    /// `docs/SEARCH_LIMITATIONS.md`, NOT a cross-engine divergence —
+    /// both engines move one `+1/+1` counter byte-equal.
+    ///
+    /// **Unit variant.** No fields — the donor + recipient are derived
+    /// at resolve time from the 2-slot payload plumbing.
+    ///
+    /// **Substrate-only landing (2026-05-31 — composite-admit wall, NOT
+    /// a FLIP).** Nesting Grounds STAYS DECLINED at the live loader
+    /// admit gate. The Python admit predicate
+    /// `_aa_is_phase1_sub_shape_a` + the Land-carrier bridge
+    /// `_printing_is_bridge_simple_carrier_aa_land` BOTH accept the
+    /// `{1}{T}` printing once this Effect class is in
+    /// `_carrier_aa_phase_1_effect_classes` — they do NOT gate on
+    /// target count. But the Rust Carrier-AA activation path
+    /// (`state_ops_actions.rs::ActivateAbility` → `new_trigger_with_
+    /// target`) binds at most ONE target via the single
+    /// `target_creature_id` slot (→ `current_resolve_payload_target_id`).
+    /// The 2-slot payload plumbing (`current_resolve_payload_target_
+    /// id_2`) is set ONLY by the spell-cast StackItem path, never the
+    /// AA path. So Nesting Grounds' 2-target AA cannot be driven byte-
+    /// equal cross-engine (Rust can't carry the recipient). The
+    /// substrate (this variant + parse + to_pydict + dual-target
+    /// resolve via `_2` + cross-engine bridge arms) lands here so a
+    /// future AA-activation 2nd-target slot ships the FLIP cheaply;
+    /// the resolve arm + bridge round-trip are exercised by synthetic
+    /// unit pins + the per-card real-EoE PROBE drives the resolve arm
+    /// directly with both payload slots seated. See
+    /// `docs/SEARCH_LIMITATIONS.md` for the composite-admit wall entry.
+    MovePlusOneCounterBetweenPermanentsYouControl,
     /// **Round 28 coverage extension.** Search the source-controller's
     /// library for a card matching `filter_name`, reveal it, put it
     /// into that player's hand. Mirrors Python's
@@ -16213,6 +16280,23 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::DealDamageToControllerAndAddMana { damage, produces })
         }
+        "move_plus_one_counter_between_permanents_you_control" => {
+            // **Nesting Grounds substrate (2026-05-31 — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §Group-1 Nesting Grounds row).** Unit variant — only
+            // the `kind` discriminator on the wire. The donor +
+            // recipient targets are derived at resolve time from the
+            // 2-slot payload plumbing (`current_resolve_payload_target
+            // _id` / `_2`).
+            //
+            // Mirrors Python's
+            // `MovePlusOneCounterBetweenPermanentsYouControl()` unit
+            // dataclass at `effects/generic/counters.py:322` — Nesting
+            // Grounds' single `{1}, {T}: Move a counter from target
+            // permanent you control onto a second target permanent.`
+            // AA pilot effect.
+            Ok(Effect::MovePlusOneCounterBetweenPermanentsYouControl)
+        }
         "put_plus_one_counter_on_creature_you_control" => {
             // Python's PutPlusOneCounterOnCreatureYouControl uses
             // PutPlusOneCounters base default of amount=1.
@@ -20019,6 +20103,21 @@ pub(crate) fn effect_to_pydict<'py>(
                 })
                 .collect();
             d.set_item("produces", produces_pylist)?;
+        }
+        Effect::MovePlusOneCounterBetweenPermanentsYouControl => {
+            // **Nesting Grounds substrate (2026-05-31 — spec at
+            // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md
+            // §Group-1 Nesting Grounds row).** Unit variant — emit
+            // only the `kind` discriminator. The donor + recipient
+            // targets are derived at resolve time from the 2-slot
+            // payload plumbing; the Python
+            // `MovePlusOneCounterBetweenPermanentsYouControl()` unit
+            // dataclass mirror at `effects/generic/counters.py:322`
+            // carries no fields either.
+            d.set_item(
+                "kind",
+                "move_plus_one_counter_between_permanents_you_control",
+            )?;
         }
         Effect::SearchLibraryForCard {
             filter_name,

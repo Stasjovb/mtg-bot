@@ -6196,6 +6196,39 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             damage=int(damage_raw),
             produces=produces_tuple,
         )
+    if kind == "move_plus_one_counter_between_permanents_you_control":
+        # **Nesting Grounds substrate (2026-05-31 — spec at
+        # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §Group-1
+        # Nesting Grounds row).** Reverse arm rehydrating Rust's
+        # ``Effect::MovePlusOneCounterBetweenPermanentsYouControl``
+        # (unit variant — only the ``kind`` discriminator on the wire)
+        # to Python's ``MovePlusOneCounterBetweenPermanentsYouControl()``
+        # (unit dataclass at ``effects/generic/counters.py:322``). The
+        # donor + recipient targets are derived at resolve time from
+        # the 2-slot payload plumbing on both engines.
+        #
+        # Nesting Grounds' single ``{1}, {T}: Move a counter from
+        # target permanent you control onto a second target permanent.
+        # Activate only as a sorcery.`` AA pilot — see the scout doc
+        # §Group-1 row for the full closure shape.
+        #
+        # **Substrate-only landing (composite-admit wall, NOT a FLIP).**
+        # Nesting Grounds STAYS DECLINED at the live loader admit gate:
+        # the dual-target effect (``target_count_range() == (2, 2)``)
+        # cannot be driven byte-equal cross-engine because the Rust
+        # Carrier-AA activation path binds only ONE target
+        # (``new_trigger_with_target`` → ``current_resolve_payload_
+        # target_id``); the 2nd slot (``_2``) is only seated by the
+        # spell-cast StackItem path. The Effect-class admit-set widen
+        # is therefore NOT applied this cycle; this reverse arm is
+        # exercised by synthetic unit pins + the per-card real-EoE
+        # probe (which drives the resolve arm directly with both
+        # payload slots seated). See ``docs/SEARCH_LIMITATIONS.md`` for
+        # the composite-admit wall entry.
+        from mtg_bot.effects.generic.counters import (
+            MovePlusOneCounterBetweenPermanentsYouControl,
+        )
+        return MovePlusOneCounterBetweenPermanentsYouControl()
     if kind == "tap_target_artifact_or_creature":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "tap target artifact
         # or creature" (TapTargetArtifactOrCreature family,
@@ -15692,6 +15725,26 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.damage import (
         DealDamageToControllerAndAddMana,
     )
+    # **Nesting Grounds substrate (2026-05-31 — spec at
+    # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §Group-1
+    # Nesting Grounds row).** Forward-emit arm for Nesting Grounds'
+    # single ``{1}, {T}: Move a counter from target permanent you
+    # control onto a second target permanent.`` AA. Unit variant —
+    # only the ``kind`` discriminator on the wire. The donor +
+    # recipient targets are derived at resolve time from the 2-slot
+    # payload plumbing on both engines.
+    #
+    # **Substrate-only landing (composite-admit wall, NOT a FLIP).**
+    # Nesting Grounds STAYS DECLINED at the live loader admit gate —
+    # the dual-target effect (``target_count_range() == (2, 2)``)
+    # cannot be driven byte-equal cross-engine because the Rust
+    # Carrier-AA activation path binds only ONE target. The Effect-
+    # class admit-set widen is NOT applied this cycle; this forward
+    # arm is exercised by synthetic unit pins + the per-card real-EoE
+    # probe (resolve-arm-direct, both payload slots seated).
+    from mtg_bot.effects.generic.counters import (
+        MovePlusOneCounterBetweenPermanentsYouControl,
+    )
     # **Grove of the Burnwillows substrate (2026-05-31 — spec at
     # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3 Grove).**
     # Grove's AA[1] body is a ``Sequence`` whose leaves are
@@ -16294,6 +16347,32 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             "kind": "deal_damage_to_controller_and_add_mana",
             "damage": int(effect.damage),
             "produces": produces_wire,
+        }
+    elif isinstance(effect, MovePlusOneCounterBetweenPermanentsYouControl):
+        # **Nesting Grounds substrate (2026-05-31 — spec at
+        # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §Group-1
+        # Nesting Grounds row).** Forward-emit arm. Unit variant —
+        # only the ``kind`` discriminator on the wire (the donor +
+        # recipient targets come from the 2-slot payload plumbing at
+        # resolve time, not the AA dict). The Rust mirror's parse +
+        # resolve + to_pydict arms all treat the variant symmetrically
+        # as a unit.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``MovePlusOneCounterBetweenPermanentsYouControl`` — consistent
+        # with the Phase-3A/3B/3C/4B/4C/4D/4E/Meteor-Crater/Reflecting-
+        # Pool/Ancient-Tomb/Grove specificity contract. The class has
+        # no subclasses in the live tree (today's only printing that
+        # emits it is Nesting Grounds itself).
+        #
+        # **Substrate-only — Nesting Grounds STAYS DECLINED.** The
+        # Effect class is NOT added to
+        # ``_carrier_aa_phase_1_effect_classes`` this cycle (the dual-
+        # target AA can't be activated byte-equal — Rust binds one AA
+        # target). This forward arm is exercised by synthetic unit
+        # pins + the per-card real-EoE resolve-arm-direct probe.
+        effect_dict = {
+            "kind": "move_plus_one_counter_between_permanents_you_control",
         }
     elif isinstance(effect, AddNManaOfChosenColor):
         # **Grove of the Burnwillows substrate (2026-05-31).** Forward-
