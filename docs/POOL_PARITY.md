@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **446 / 475 EoE cards (93.9%) are byte-equal at the Effect+bridge level**; of those, **435 (91.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 11 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **446 / 475 EoE cards (93.9%) are byte-equal at the Effect+bridge level**; of those, **446 (93.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 0 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **29 (6.1%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 435 | 91.6% |
-| Effect+bridge covered (not individually probed) | 11 | 2.3% |
+| PROBED byte-equal | 446 | 93.9% |
+| Effect+bridge covered (not individually probed) | 0 | 0.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -93,6 +93,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Cerebral Download
 - Chorale of the Void
 - Chrome Companion
+- Clammy Prowler
 - Close Encounter
 - Cloudsculpt Technician
 - Codecracker Hound
@@ -108,6 +109,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Creeping Tar Pit
 - Cryogen Relic
 - Cryoshatter
+- Crystal Quarry
 - Cult Healer
 - Cursed Windbreaker
 - Cut Propulsion
@@ -118,6 +120,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Dauntless Scrapbot
 - Dawnsire, Sunstar Dreadnought
 - Dawnstrike Vanguard
+- Deafening Silence
 - Debris Field Crusher
 - Decode Transmissions
 - Defiant Survivor
@@ -137,6 +140,8 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Dual-Sun Adepts
 - Dual-Sun Technique
 - Dubious Delicacy
+- Duskmourn's Domination
+- Dust Bowl
 - Dyadrine, Synthesis Amalgam
 - Edge Rover
 - Eldrazi Temple
@@ -251,9 +256,11 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Lakeside Shack
 - Larval Scoutlander
 - Lashwhip Predator
+- Let's Play a Game
 - Lightless Evangel
 - Lightstall Inquisitor
 - Lionheart Glimmer
+- Lithobraking
 - Live or Die
 - Living Phone
 - Lost in Space
@@ -322,6 +329,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Plasma Bolt
 - Plaza of Heroes
 - Possibility Technician
+- Power Depot
 - Pull Through the Weft
 - Pulsar Squadron Ace
 - Pyroclasm
@@ -349,6 +357,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Rust Harvester
 - Sacred Foundry
 - Sami's Curiosity
+- Sami, Ship's Engineer
 - Sami, Wildcat Captain
 - Savior of the Small
 - Scavenger Grounds
@@ -393,6 +402,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Starwinder
 - Station Monitor
 - Stay Hidden, Stay Silent
+- Steelswarm Operator
 - Stirring Wildwood
 - Stomping Ground
 - Strangled Cemetery
@@ -467,6 +477,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Warping Wail
 - Wary Watchdog
 - Watery Grave
+- Weapons Manufacturing
 - Wedgelight Rammer
 - Weftblade Enhancer
 - Weftstalker Ardent
@@ -540,5 +551,4 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Unholy Annex // Ritual Chamber
 - Wandering Fumarole
 - Wildfire Wickerfolk
-
 
