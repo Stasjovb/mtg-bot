@@ -1418,6 +1418,39 @@ pub struct TriggerPayload {
     /// non-target trigger / activation (the pre-flip shape) — so the
     /// dual-target resolve arm sees slot 1 `None` and short-circuits.
     pub target_id_2: Option<u32>,
+    /// **Contested War Zone flip (2026-05-31).** The combat-damage
+    /// source's controller id, carried on a DEALS_COMBAT_DAMAGE
+    /// trigger while it sits on the stack. Mirrors Python's
+    /// `StackItem.combat_damage_source_controller_id` (`game.py:2329`):
+    /// a combat-damage-triggered ability resolves LATER from the stack,
+    /// so the transient `state.resolving_combat_damage_source_controller_id`
+    /// slot (seated for the synchronous observer walk in
+    /// `dispatch_combat_damage_to_player` and restored after dispatch)
+    /// is gone by resolve time. `push_triggered_ability` snapshots the
+    /// live slot onto this field at push time; both trigger resolve
+    /// entry points re-mirror it back into the state slot for the
+    /// duration of the trigger's `apply_effect` so
+    /// `Effect::ChangeControllerToCombatDamageSource` reads the correct
+    /// new controller. `None` (the back-compat default) for every
+    /// non-combat-damage trigger / activation — the slot stays at its
+    /// `u8::MAX` sentinel and the change-controller arm short-circuits,
+    /// byte-equal to the pre-flip path.
+    pub combat_damage_source_controller_id: Option<u8>,
+    /// **Contested War Zone flip (2026-05-31) — sibling slot.** The
+    /// combat-damage amount carried on a DEALS_COMBAT_DAMAGE trigger
+    /// while it sits on the stack. Mirrors Python's
+    /// `StackItem.combat_damage_amount` (`game.py:2321`). Same deferral
+    /// gap as the source-controller sibling above: the transient
+    /// `state.resolving_combat_damage_amount` slot is restored after
+    /// the synchronous observer walk, so an amount-reading effect that
+    /// resolves later (Starwinder's `DrawCardsEqualToResolvingCombatDamage`)
+    /// needs the value re-mirrored at resolve. Seated at push time, re-
+    /// mirrored at resolve. This UNBLOCKS the production write of the
+    /// sibling `resolving_combat_damage_amount` slot — pre-flip its
+    /// production write was honest-stopped to a test-only setter because
+    /// the deferral mirror didn't exist. `None` (back-compat default)
+    /// for every non-combat-damage trigger.
+    pub combat_damage_amount: Option<i32>,
 }
 
 /// One pending entry on the stack. Two kinds today: spells and
@@ -1972,6 +2005,14 @@ impl StackItem {
                 // Nesting Grounds flip (2026-05-31): single-/non-target
                 // triggers carry no 2nd target.
                 target_id_2: None,
+                // Contested War Zone flip (2026-05-31): seated AFTER
+                // construction by `push_triggered_ability` from the live
+                // `state.resolving_combat_damage_source_controller_id` /
+                // `_amount` slots. `None` here is the default for every
+                // non-combat-damage trigger (the slot stays at u8::MAX /
+                // 0 sentinel and the change-controller arm short-circuits).
+                combat_damage_source_controller_id: None,
+                combat_damage_amount: None,
             }),
             // Spell-card-bridge lever (round-70): the spell-target
             // slot is Spell-kind-only; a trigger carries its target
@@ -2040,6 +2081,11 @@ impl StackItem {
                 // constructor carries no 2nd target. The dual-target
                 // AA path uses `new_trigger_with_two_targets` below.
                 target_id_2: None,
+                // Contested War Zone flip (2026-05-31): seated AFTER
+                // construction by `push_triggered_ability`. `None`
+                // default for non-combat-damage triggers.
+                combat_damage_source_controller_id: None,
+                combat_damage_amount: None,
             }),
             // Spell-card-bridge lever (round-70): Spell-kind-only
             // slot — a trigger's target rides on
@@ -2097,6 +2143,11 @@ impl StackItem {
                 ability_index,
                 target_id: Some(target_id),
                 target_id_2: Some(target_id_2),
+                // Contested War Zone flip (2026-05-31): seated AFTER
+                // construction by `push_triggered_ability`. `None`
+                // default for non-combat-damage triggers.
+                combat_damage_source_controller_id: None,
+                combat_damage_amount: None,
             }),
             // Spell-kind-only target slots — a trigger's targets ride
             // on `trigger_payload.target_id` / `target_id_2`.

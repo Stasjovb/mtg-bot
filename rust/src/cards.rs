@@ -10854,7 +10854,41 @@ impl Predicate {
             Predicate::SubjectIsEnchantment => {
                 subject_has_card_type(state, subject_id, "Enchantment")
             }
-            Predicate::ControlledByYou { slot: _ } => {
+            Predicate::ControlledByYou { slot } => {
+                // **Contested War Zone flip (2026-05-31) — slot="target"
+                // multi-subject path.** For the DEALS_COMBAT_DAMAGE
+                // two-subject event, the `target` subject is the
+                // DEFENDING PLAYER (the player the creature dealt combat
+                // damage to), NOT the dispatched creature `subject_id`.
+                // Rust's `dispatch_event` carries a single `subject_id`
+                // (the damaging creature), so a slot-blind read here
+                // would resolve the CREATURE's controller — semantically
+                // inverted (the trigger would only fire when the
+                // attacker's controller == the Land's controller, a
+                // same-controller no-op). Mirrors Python's
+                // `Controlled(by=YOU, subject="target")` evaluating
+                // against the Player object: `defending_player.id ==
+                // source.controller_id`. We read the defending player id
+                // from the transient `resolving_combat_damage_target_player_id`
+                // slot (seated by `dispatch_combat_damage_to_player` for
+                // the duration of the observer walk) and compare it to
+                // the source's controller. Sentinel `u8::MAX` (no active
+                // combat-damage dispatch) → `false` (loud-but-safe;
+                // the only producer of a `slot="target"` predicate is the
+                // DEALS_COMBAT_DAMAGE bridge, so the slot is always live
+                // when this arm runs for the target slot).
+                if slot.as_deref() == Some("target") {
+                    let target_pid = state.resolving_combat_damage_target_player_id;
+                    if target_pid == u8::MAX {
+                        return false;
+                    }
+                    let source_controller =
+                        find_object_controller(state, source_id);
+                    return match source_controller {
+                        Some(sc) => sc == target_pid,
+                        None => false,
+                    };
+                }
                 // Subject's controller == source's controller. Mirrors
                 // Python's `Controlled(by=YOU)` on a permanent subject:
                 // ``obj.controller_id == source.controller_id``.
