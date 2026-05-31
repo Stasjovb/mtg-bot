@@ -7891,6 +7891,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             toughness=eff_dict["toughness"],
             granted_subtype=granted_subtype,
         )
+    if kind == "pump_self_x_power_ueot":
+        # **Manland nested-granted-AA substrate (2026-05-31 — Lavaclaw
+        # Reaches).** "This creature gets +X/+0 until end of turn"
+        # (PumpSelfXPowerUEOT family) — the nested granted activated
+        # ability granted while the manland is animated. Rust substrate
+        # ``Effect::PumpSelfXPowerUEOT`` (unit variant; parse +
+        # to_pydict in cards.rs, resolve in state_ops_resolve.rs reads
+        # the X-cost binding ``current_resolve_x_value`` and pushes a
+        # ``PowerToughnessBonus { power: X, toughness: 0 }``).
+        #
+        # **Field shape.** Unit variant — the bridge dict is just
+        # ``{"kind": "pump_self_x_power_ueot"}`` (the +X is dynamic,
+        # read from state at resolve time, not a static field).
+        # Python's ``PumpSelfXPowerUEOT()`` is a no-arg frozen dataclass.
+        from mtg_bot.effects.generic.pump import PumpSelfXPowerUEOT
+        return PumpSelfXPowerUEOT()
+    if kind == "switch_source_power_toughness_ueot":
+        # **Manland nested-granted-AA substrate (2026-05-31 — Wandering
+        # Fumarole).** "Switch this creature's power and toughness until
+        # end of turn" (SwitchSourcePowerToughnessUEOT family) — the
+        # nested granted activated ability granted while the manland is
+        # animated. Rust substrate
+        # ``Effect::SwitchSourcePowerToughnessUEOT`` (unit variant;
+        # parse + to_pydict in cards.rs). The Rust resolve is a
+        # documented substrate-only no-op (layer-7e P/T-switch deferred
+        # — see docs/SEARCH_LIMITATIONS.md); the cross-engine probe pins
+        # the Python-side swap resolve, which carries the full layer-7e
+        # ``switch_pt`` continuous effect.
+        #
+        # **Field shape.** Unit variant — the bridge dict is just
+        # ``{"kind": "switch_source_power_toughness_ueot"}``. Python's
+        # ``SwitchSourcePowerToughnessUEOT()`` is a no-arg frozen
+        # dataclass.
+        from mtg_bot.effects.generic.pump import (
+            SwitchSourcePowerToughnessUEOT,
+        )
+        return SwitchSourcePowerToughnessUEOT()
     if kind == "add_mana_to_pool":
         # **Round-27 BLOCKED-BRIDGE-ARM slice -- "add {color} mana"
         # mana-ability resolve family (AddManaToPool; the universal
