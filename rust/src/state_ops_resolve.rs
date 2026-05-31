@@ -25077,6 +25077,130 @@ fn apply_effect(
                 }
             }
         }
+        // **Nesting Grounds substrate (2026-05-31 — spec at
+        // docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §Group-1
+        // Nesting Grounds row).** Move one `+1/+1` counter from the
+        // donor (slot 0, `current_resolve_payload_target_id`) onto the
+        // recipient (slot 1, `current_resolve_payload_target_id_2`),
+        // both permanents the source's controller controls. Mirrors
+        // Python's `MovePlusOneCounterBetweenPermanentsYouControl.
+        // resolve` at `effects/generic/counters.py:353-383`.
+        //
+        // **Dual-target via the 2-slot payload plumbing.** Reads both
+        // target ids the same way `Effect::CoordinatedClobberingEffect`
+        // does (slot 0 / slot 1). The Rust Carrier-AA *activation* path
+        // only seats slot 0 (`new_trigger_with_target`) — so in
+        // production this arm sees `current_resolve_payload_target_id_2
+        // == None` and short-circuits (the composite-admit wall: a real
+        // FLIP needs a 2nd AA-activation target slot, deferred per the
+        // SL entry). The per-card real-EoE PROBE drives this arm by
+        // seating BOTH payload slots directly on a synthetic resolved
+        // state, byte-equal with Python's `targets=(donor, recipient)`.
+        //
+        // **Resolve steps (mirror Python verbatim).**
+        //   1. Require both slot 0 + slot 1 present (Python's
+        //      `if len(targets) < 2: return`).
+        //   2. donor_id == recipient_id → no-op (Python's
+        //      `if donor_id == recipient_id: return`).
+        //   3. Both must be on a battlefield — donor on any bf,
+        //      recipient on any bf (Python re-fetches from
+        //      `state.battlefield`; absence → silent return).
+        //   4. donor.counters <= 0 → fizzle (Python's
+        //      `if donor.plus_one_counters <= 0: ... return`).
+        //   5. Decrement donor.counters by 1, increment recipient.
+        //      counters by 1 (Python: `donor.plus_one_counters -= 1`
+        //      then `add_plus_one_counters(state, recipient, 1)`).
+        //
+        // **Doubling / observer-trigger simplification.** Python's
+        // `add_plus_one_counters` applies Loading-Zone-style doubling
+        // and fires Terrasymbiosis observer triggers. This arm mirrors
+        // the bare `+1` increment ONLY — the doubler factor + observer
+        // triggers are NOT replicated. This is safe for the substrate-
+        // only landing: the per-card probe seats no doublers (factor 1)
+        // and a non-triggering recipient, so both engines move exactly
+        // one counter byte-equal. Documented in
+        // `docs/SEARCH_LIMITATIONS.md` (Nesting Grounds entry).
+        Effect::MovePlusOneCounterBetweenPermanentsYouControl => {
+            // Step 1: both target slots must be present.
+            let (Some(donor_id), Some(recipient_id)) = (
+                state.current_resolve_payload_target_id,
+                state.current_resolve_payload_target_id_2,
+            ) else {
+                return Ok(()); // <2 targets seated → no-op
+            };
+            // Step 2: donor == recipient → no-op.
+            if donor_id == recipient_id {
+                return Ok(());
+            }
+            // Step 3a: locate the donor on any battlefield + snapshot
+            // its current counter count.
+            let mut donor_loc: Option<(usize, i32)> = None;
+            'find_donor: for (pidx, player) in
+                state.players.iter().enumerate()
+            {
+                if let Some(obj) = player
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == donor_id)
+                {
+                    donor_loc = Some((pidx, obj.counters));
+                    break 'find_donor;
+                }
+            }
+            let Some((donor_pidx, donor_counters)) = donor_loc else {
+                return Ok(()); // donor not on a bf → silent return
+            };
+            // Step 3b: locate the recipient on any battlefield.
+            let mut recipient_pidx: Option<usize> = None;
+            'find_recipient: for (pidx, player) in
+                state.players.iter().enumerate()
+            {
+                if player
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == recipient_id)
+                {
+                    recipient_pidx = Some(pidx);
+                    break 'find_recipient;
+                }
+            }
+            let Some(recipient_pidx) = recipient_pidx else {
+                return Ok(()); // recipient not on a bf → silent return
+            };
+            // Step 4: donor must carry at least one +1/+1 counter.
+            if donor_counters <= 0 {
+                return Ok(()); // fizzle (donor has no counters)
+            }
+            // Step 5a: decrement the donor's counter.
+            {
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[donor_pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == donor_id {
+                        obj.counters -= 1;
+                        break;
+                    }
+                }
+            }
+            // Step 5b: increment the recipient's counter (bare +1 —
+            // doubling / observer triggers not mirrored; see the SL
+            // entry). `Arc::make_mut` again because the donor + the
+            // recipient may live on different players' battlefields
+            // (or the same one — the second make_mut is a cheap
+            // identity when the Arc is already uniquely owned).
+            {
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[recipient_pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == recipient_id {
+                        obj.counters += 1;
+                        break;
+                    }
+                }
+            }
+        }
         // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
         // `RegenerateTargetCreature` resolve.** Mirrors Python's
         // `RegenerateTargetCreature.resolve` at

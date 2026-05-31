@@ -17330,6 +17330,40 @@ Wandering Fumarole.
 
 ---
 
+## Rust `Effect::MovePlusOneCounterBetweenPermanentsYouControl` — substrate-only landing + Nesting Grounds dual-target-AA composite-admit honest-stop + bare-`+1` increment (doubling / observer-trigger surface not mirrored) (2026-05-31)
+
+**Location:** `rust/src/cards.rs` (`Effect::MovePlusOneCounterBetweenPermanentsYouControl` unit variant decl + parse_effect arm + to_pydict arm), `rust/src/state_ops_resolve.rs` (`apply_effect` dual-target resolve arm reading `current_resolve_payload_target_id` / `_2`), `src/mtg_bot/parity/cross_engine.py` (`_python_aa_to_safe_dict` forward arm + `_ta_dict_to_python_effect` reverse arm).
+
+**What the shortcuts are (two distinct items):**
+
+1. **Nesting Grounds STAYS DECLINED at the loader admit gate (composite-admit wall, NOT a FLIP) — the dual-target AA-activation gap.** The scout (`docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Group-1 Nesting Grounds row, ~3 cycle estimate) located the only uncovered piece as the `MovePlusOneCounterBetweenPermanentsYouControl` Effect, with the `{1}{T}` cost "already covered". Verify-first found the cost/rider/Land-carrier surface is INDEED fully accepted — UNLIKE Lotus Field, Nesting Grounds is a CLEAN single-AA Land carrier: `_aa_is_phase1_sub_shape_a` accepts the `{1}{T}` generic-only-mana cost (the Phase-1.5a `{N}, {T}` widen at `trajectory.py:9604`), the `sorcery_speed=True` rider (Phase 4C C2 widen at `trajectory.py:9707`), and `is_mana_ability=False`; `_printing_is_bridge_simple_carrier_aa_land` accepts the printing. Both predicates return True the instant the Effect class joins `_carrier_aa_phase_1_effect_classes` (verified live — see the LOAD-BEARING pin `test_nesting_grounds_cost_and_riders_would_admit_if_effect_class_added`). The REAL wall is downstream: `MovePlusOneCounterBetweenPermanentsYouControl` is a 2-target effect (`target_count_range() == (2, 2)` — donor + recipient permanents you control). The Rust Carrier-AA activation path (`state_ops_actions.rs::ActivateAbility` → `new_trigger_with_target`) binds AT MOST ONE target via the single `target_creature_id` slot (→ `current_resolve_payload_target_id`). The 2nd payload slot (`current_resolve_payload_target_id_2`) is seated ONLY by the spell-cast StackItem path (Coordinated Clobbering / Diplomatic Relations — `state_ops_resolve.rs:26802`), never the AA path. Python's `_activate_ability` DOES drive multi-target AAs (`actions.py:2009` explicitly names Nesting Grounds, picking `max_t` targets per activation). So a loader-admit FLIP cannot be proven byte-equal cross-engine: the Rust AA path cannot carry the recipient. The Effect class is therefore deliberately NOT added to `_carrier_aa_phase_1_effect_classes` this slice; Nesting Grounds STAYS DECLINED.
+
+2. **Bare-`+1` increment — Loading-Zone doubling + Terrasymbiosis observer triggers NOT mirrored.** Python's recipient-side counter add routes through `game.add_plus_one_counters` (`game.py:2023`), which (a) multiplies the count by `_counter_doubling_factor` (Loading-Zone-style doublers controlled by the recipient's controller) and (b) fires `fire_counters_added_to_your_creature_triggers` (Terrasymbiosis-style observer triggers) when the recipient is a creature. The Rust resolve arm increments `obj.counters` by a flat `+1` ONLY — neither the doubling factor nor the observer triggers are replicated.
+
+**Why each is OK:**
+
+1. *Composite wall:* this is the honest-stop policy verbatim — land the genuinely-uncovered Rust Effect substrate (decl + parse + to_pydict + dual-target resolve + cross-engine bridge arms) so a future AA-activation 2nd-target slot ships the FLIP cheaply (~1 cycle: add a `target_creature_id_2` slot to the `ActivateAbility` action + thread it onto the StackItem's `target_obj_id_2` + add the Effect class to the admit set + invert the substrate-only invariant pin + register the probe in `PROBE_MODULES`). A characterized substrate-only landing (BLOCKED-SG → covered_by_construction) is valued over a forced fragile flip per the campaign policy.
+
+2. *Bare `+1`:* the substrate-only landing means the live admit gate is NEVER exercised on Nesting Grounds in production (it stays declined), so the doubling/observer divergence is unreachable from real play this slice. The per-card probe + tests_rust pins seat NO doublers (factor 1) and use a recipient where the observer-trigger surface is dormant, so both engines move exactly one counter byte-equal. The doubler + observer ports are deferred to the FLIP cycle (when Nesting Grounds becomes loader-admitted and the recipient could legitimately be a doubler-affected / Terrasymbiosis-controlling creature).
+
+**Failure mode:**
+
+1. A future cycle that adds the Effect class to the admit set but does NOT add the 2nd AA-activation target slot would FLIP Nesting Grounds loader-admitted while the Rust AA path silently drops the recipient (slot 1 unseated → the resolve arm's `<2 targets` short-circuit fires → counter never moves on Rust, but Python moves it). The LOAD-BEARING `test_nesting_grounds_stays_declined_at_loader_admit_gate` pin trips the instant the admit set widens, forcing the author to confront the 2nd-target gap deliberately. The `test_resolve_single_target_slot_is_noop` tests_rust pin documents exactly this short-circuit.
+
+2. If a future FLIP cycle admits Nesting Grounds without porting the doubler + observer surface, a board with a recipient-controlled Loading Zone (or a Terrasymbiosis-style observer) would diverge: Python moves 2 counters / fires the observer; Rust moves 1 / fires nothing.
+
+**Fix scope:**
+
+1. ~1 cycle — `Action::ActivateAbility` 2nd-target slot + StackItem `target_obj_id_2` threading on the AA path + admit-set widen + invariant-pin inversion + `PROBE_MODULES` registration. Amortizes to any future dual-target Carrier-AA.
+
+2. Port `_counter_doubling_factor` (Loading-Zone replacement) + the `fire_counters_added_to_your_creature_triggers` observer to the Rust counter-add path; ships with the FLIP cycle.
+
+**Impact estimate:** Nesting Grounds moves BLOCKED (Effect-uncovered / Carrier-AA) → covered-by-construction. PROBED 448 (unchanged — Nesting Grounds is NOT loader-admitted, so it cannot be PROBED this slice); covered_by_construction 1 → 2; BLOCKED-SG 26 → 25. 0 strength cost — the substrate is byte-equal cross-engine on the real-EoE drive of the move-counter effect (MOVE / FIZZLE / MULTI scenarios).
+
+**Pinned by:** `tests/test_nesting_grounds_parity.py` (11 pins — parser SoT verify-first + printed-attrs incl. the dual-target teeth + the LOAD-BEARING loader-decline honest-stop + the composite-wall characterization (`..._would_admit_if_effect_class_added`) + bridge forward/reverse/effect-level round-trip + Rust register acceptance + cross-engine real-EoE MOVE (donor 2→1, recipient 0→1) + FIZZLE (0-counter donor) + MULTI (3-counter donor moves exactly one)) + `tests_rust/test_move_plus_one_counter_between_permanents_you_control.py` (8 Rust-engine pins — parse register / resolve-move-one / resolve-multi-moves-one / donor-no-counters-fizzles / donor==recipient-noop / recipient-absent-noop / single-target-slot-noop (the composite wall) / cross-player-recipient). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §Group-1 Nesting Grounds.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
