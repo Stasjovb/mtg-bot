@@ -967,6 +967,19 @@ def _ta_dict_to_python_effect(eff_dict: dict):
     if kind == "gain_life":
         from mtg_bot.effects.generic.life import GainLife
         return GainLife(amount=eff_dict.get("amount", 0))
+    if kind == "grant_life_to_each_opponent":
+        # **Grove of the Burnwillows substrate (2026-05-31).** Each
+        # opponent of the source-controller GAINS ``amount`` life.
+        # Reverse arm for the Rust ``Effect::GrantLifeToEachOpponent
+        # { amount: i32 }`` mirror; Grove's AA[1] life-gain rider
+        # (inside a ``Sequence`` alongside ``AddNManaOfChosenColor``).
+        # Python's ``GrantLifeToEachOpponent(amount: int = 1)`` at
+        # ``effects/generic/life.py:596``. The wire dict always emits
+        # ``amount`` explicitly (the forward arm + Rust ``to_pydict``
+        # both set it); default to 1 for forward-compat with a dict
+        # that omits it, mirroring the Python dataclass default.
+        from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
+        return GrantLifeToEachOpponent(amount=eff_dict.get("amount", 1))
     if kind == "damage_each_opponent":
         # Untargeted "deals N damage to each opponent". Rust's
         # ``Effect::DamageEachOpponent`` resolves to a single
@@ -15117,6 +15130,113 @@ def _aa_dict_to_python_activated_ability(aa_dict: dict):
     )
 
 
+# Closed mana-symbol vocabulary the Rust ``validate_mana_symbol`` arm
+# accepts (``cards.rs:15905``). The Carrier-AA leaf emitters reject any
+# option outside this set so the bridge never emits a dict Rust would
+# reject at ``register_printing`` time.
+_CARRIER_AA_MANA_VOCAB = ("W", "U", "B", "R", "G", "C")
+
+
+def _carrier_aa_add_n_mana_chosen_color_to_dict(effect) -> "Optional[dict]":
+    """Emit the Rust-shape dict for ``AddNManaOfChosenColor`` — Grove's
+    AA[1] Sequence leaf #0 (``AddNManaOfChosenColor(1, ('R','G'))``).
+
+    Two-key dict on the wire: ``{"kind": "add_n_mana_of_chosen_color",
+    "amount": <int>, "options": [<color_str>, ...]}``. Mirrors the Rust
+    ``Effect::AddNManaOfChosenColor { amount: i32, options: Vec<String> }``
+    parse arm at ``cards.rs:15870`` (``amount`` non-negative int +
+    non-empty ``options`` list of closed-vocab color strings). The
+    reverse arm round-trips at ``cross_engine.py:5922``.
+
+    Declines (returns ``None``) on: negative amount (Rust parse rejects),
+    empty options (Rust parse rejects), or any option outside the closed
+    W/U/B/R/G/C vocabulary (Rust ``validate_mana_symbol`` rejects) — the
+    same honest-stop discipline every other leaf emitter uses.
+    """
+    amount = effect.amount
+    options = effect.options
+    if not isinstance(amount, int):
+        return None
+    if amount < 0:
+        return None
+    if not options:
+        return None
+    opts: list = []
+    for c in options:
+        if not isinstance(c, str) or c not in _CARRIER_AA_MANA_VOCAB:
+            return None
+        opts.append(c)
+    return {
+        "kind": "add_n_mana_of_chosen_color",
+        "amount": int(amount),
+        "options": opts,
+    }
+
+
+def _carrier_aa_grant_life_to_each_opponent_to_dict(
+    effect,
+) -> "Optional[dict]":
+    """Emit the Rust-shape dict for ``GrantLifeToEachOpponent`` —
+    Grove's AA[1] Sequence leaf #1 (``GrantLifeToEachOpponent(1)``).
+
+    Two-key dict on the wire: ``{"kind": "grant_life_to_each_opponent",
+    "amount": <int>}``. Mirrors the NEW Rust ``Effect::
+    GrantLifeToEachOpponent { amount: i32 }`` parse arm
+    (``grant_life_to_each_opponent``; life-GAIN sister of
+    ``each_opponent_loses_life``). Declines on negative amount (Rust
+    parse rejects).
+    """
+    amount = effect.amount
+    if not isinstance(amount, int):
+        return None
+    if amount < 0:
+        return None
+    return {
+        "kind": "grant_life_to_each_opponent",
+        "amount": int(amount),
+    }
+
+
+def _carrier_aa_seq_leaf_to_dict(effect) -> "Optional[dict]":
+    """Emit the Rust-shape dict for ONE leaf of a Carrier-AA
+    ``Sequence`` (Grove of the Burnwillows substrate, 2026-05-31).
+
+    Dispatches the flat leaf classes Grove's AA[1] Sequence carries
+    (``AddNManaOfChosenColor`` + ``GrantLifeToEachOpponent``) plus a
+    recursive ``Sequence`` arm so nested Sequences round-trip for free.
+    Returns ``None`` for any class without a forward arm — the caller
+    (the ``Sequence`` arm of :func:`_python_aa_to_safe_dict`) treats a
+    ``None`` child as an all-or-nothing decline of the whole Sequence,
+    keeping the round-trip byte-equal (no silently-dropped child).
+
+    This is the byte-equality teeth that complements the admit
+    predicate's Effect-class gate: a leaf whose class is admitted but
+    whose forward arm is missing still declines here (defense-in-depth
+    against admit-set / bridge-floor drift).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+
+    if isinstance(effect, AddNManaOfChosenColor):
+        return _carrier_aa_add_n_mana_chosen_color_to_dict(effect)
+    if isinstance(effect, GrantLifeToEachOpponent):
+        return _carrier_aa_grant_life_to_each_opponent_to_dict(effect)
+    if isinstance(effect, Sequence):
+        # Nested Sequence: recurse each child through this same leaf
+        # dispatch. All-or-nothing — a non-round-trippable grandchild
+        # declines the whole nested Sequence.
+        nested: list = []
+        for child in effect.effects:
+            child_dict = _carrier_aa_seq_leaf_to_dict(child)
+            if child_dict is None:
+                return None
+            nested.append(child_dict)
+        return {"kind": "sequence", "effects": nested}
+    # No forward arm for this leaf class — honest decline.
+    return None
+
+
 def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     """Convert a Python ``ActivatedAbility`` back to the Rust-shape
     dict iff its cost + effect round-trip cleanly through the existing
@@ -15516,6 +15636,23 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
     from mtg_bot.effects.generic.damage import (
         DealDamageToControllerAndAddMana,
     )
+    # **Grove of the Burnwillows substrate (2026-05-31 — spec at
+    # docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md §#3 Grove).**
+    # Grove's AA[1] body is a ``Sequence`` whose leaves are
+    # ``AddNManaOfChosenColor(1, ('R','G'))`` (already round-tripped
+    # end-to-end via the round-21 mana bridge slice) and the NEW
+    # ``GrantLifeToEachOpponent(1)`` (Rust ``Effect::
+    # GrantLifeToEachOpponent`` shipped this slice). The forward arm
+    # therefore needs a ``Sequence``-IN-AA emit path (the load-bearing
+    # novel substrate) PLUS the two leaf arms. The Sequence arm recurses
+    # each child through the SAME leaf-emit dispatch via the nested
+    # ``_emit_leaf`` helper below; a child that doesn't round-trip
+    # (returns None) declines the WHOLE Sequence (all-or-nothing,
+    # mirroring the top-level Sequence composer discipline at
+    # ``cross_engine.py:2543`` and the reverse arm's recursion).
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+    from mtg_bot.effects.generic.life import GrantLifeToEachOpponent
 
     effect = aa.effect
     effect_dict: "Optional[dict]" = None
@@ -16102,9 +16239,85 @@ def _python_aa_to_safe_dict(aa) -> "Optional[dict]":
             "damage": int(effect.damage),
             "produces": produces_wire,
         }
+    elif isinstance(effect, AddNManaOfChosenColor):
+        # **Grove of the Burnwillows substrate (2026-05-31).** Forward-
+        # emit arm for ``AddNManaOfChosenColor(amount, options)`` —
+        # Grove's AA[1] Sequence leaf #0 (``AddNManaOfChosenColor(1,
+        # ('R','G'))``: "Add {R} or {G}"). Two-key dict on the wire per
+        # the Rust ``Effect::AddNManaOfChosenColor { amount: i32,
+        # options: Vec<String> }`` mirror + its parse arm at
+        # ``cards.rs:15870`` (``amount`` int + ``options`` list of
+        # closed-vocab color strings). Reverse arm round-trips at
+        # ``cross_engine.py:5922``.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``AddNManaOfChosenColor`` — no subclasses in the live tree.
+        # Options are validated against the closed W/U/B/R/G/C vocab
+        # (Rust ``validate_mana_symbol`` rejects unknowns at register
+        # time); a non-vocab option declines honestly here.
+        effect_dict = _carrier_aa_add_n_mana_chosen_color_to_dict(effect)
+    elif isinstance(effect, GrantLifeToEachOpponent):
+        # **Grove of the Burnwillows substrate (2026-05-31).** Forward-
+        # emit arm for ``GrantLifeToEachOpponent(amount)`` — Grove's
+        # AA[1] Sequence leaf #1 (``GrantLifeToEachOpponent(1)``: "Each
+        # opponent gains 1 life"). Two-key dict on the wire (kind +
+        # amount int) per the NEW Rust ``Effect::GrantLifeToEachOpponent
+        # { amount: i32 }`` mirror shipped this slice (parse +
+        # to_pydict + resolve arms; life-GAIN sister of
+        # ``each_opponent_loses_life``). Reverse arm at
+        # ``cross_engine.py``'s ``grant_life_to_each_opponent`` branch.
+        #
+        # **isinstance specificity.** Uses the SPECIFIC class
+        # ``GrantLifeToEachOpponent`` — no subclasses in the live tree.
+        effect_dict = _carrier_aa_grant_life_to_each_opponent_to_dict(
+            effect,
+        )
+    elif isinstance(effect, Sequence):
+        # **Grove of the Burnwillows substrate (2026-05-31 — THE LOAD-
+        # BEARING novel piece).** Sequence-IN-AA emit. Grove's AA[1]
+        # body is ``Sequence(AddNManaOfChosenColor(1, ('R','G')),
+        # GrantLifeToEachOpponent(1))``. Emit ``{"kind": "sequence",
+        # "effects": [<child dict>, ...]}`` mirroring the Rust
+        # ``Effect::Sequence { effects: Vec<Effect> }`` parse arm at
+        # ``cards.rs:4046`` (recursively parses each child) and the
+        # reverse arm at ``cross_engine.py:2543`` (recursively
+        # translates each child).
+        #
+        # **All-or-nothing recursion.** Each child is emitted through
+        # the SAME leaf-emit dispatch (the nested ``_emit_seq_leaf``
+        # helper below). A child that doesn't round-trip (returns
+        # None) declines the WHOLE Sequence — mirrors the top-level
+        # Sequence composer discipline and keeps the round-trip byte-
+        # equal (no silently-dropped child). The admit predicate
+        # ``trajectory._aa_is_phase1_sub_shape_a`` independently checks
+        # that every leaf class is in the Phase-1 admit set, but the
+        # bridge-floor recursion here is the byte-equality teeth: a
+        # leaf with no forward arm declines even if its class is in the
+        # admit set (defense-in-depth against admit-set / bridge-floor
+        # drift).
+        #
+        # **Leaf-only nesting (Phase-1 Grove scope).** Today's Grove
+        # leaves are both flat (non-composer) Effects. A nested
+        # composer child (Sequence-in-Sequence) would recurse into
+        # ``_emit_seq_leaf`` which only dispatches the flat leaf
+        # classes + a recursive Sequence arm — so nested Sequences
+        # round-trip for free, but every leaf must still have a
+        # forward arm. A non-leaf composer child (IfYouDo / MayDo /
+        # ...) declines (returns None) because ``_emit_seq_leaf`` has
+        # no arm for it — honest-stop until a future slice ports it.
+        child_dicts: list = []
+        for child in effect.effects:
+            child_dict = _carrier_aa_seq_leaf_to_dict(child)
+            if child_dict is None:
+                return None
+            child_dicts.append(child_dict)
+        effect_dict = {
+            "kind": "sequence",
+            "effects": child_dicts,
+        }
     else:
         # Effect class not in the Phase-1/1.5a/2a/2b/3/4E/Spacecraft-4/
-        # Meteor-Crater/Reflecting-Pool/Ancient-Tomb admit set —
+        # Meteor-Crater/Reflecting-Pool/Ancient-Tomb/Grove admit set —
         # decline.
         return None
     result_dict: dict = {

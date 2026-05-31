@@ -6197,6 +6197,87 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // Grove of the Burnwillows substrate (2026-05-31).
+        // GrantLifeToEachOpponent -- each opponent of the SOURCE's
+        // controller GAINS `amount` life. Life-GAIN sister of round-26
+        // EachOpponentLosesLife: identical source-finder dispatch
+        // (5-zone walk + stack scan to recover the source's
+        // `controller`) and identical recipient set (each opponent of
+        // the source-controller); only the apply step flips from
+        // `saturating_sub` to `saturating_add`.
+        //
+        // Mirrors Python's `GrantLifeToEachOpponent.resolve` at
+        // `effects/generic/life.py:603` -- walks `state.players`,
+        // skips the controller and any `has_lost` player, and routes
+        // each remaining player through `game.gain_life`. In 2-player
+        // land "each opponent" reduces to "the one opponent"
+        // (`opponent_id = 1 - controller`); the `has_lost` guard is a
+        // no-op pre-SBA because a lost player would already have been
+        // pruned, and Grove's AA[1] is a mana ability that resolves
+        // immediately (CR 605.3b) so no opponent can be in a lost
+        // state mid-resolution.
+        //
+        // **amount<0 raises** loudly (defense-in-depth; parse_effect
+        // catches at register time). **amount=0 is a legal no-op.**
+        // **Source not found anywhere = silent fizzle** (lost-track-
+        // of-source tolerance, mirrors EachOpponentLosesLife shape).
+        Effect::GrantLifeToEachOpponent { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "GrantLifeToEachOpponent amount must be non-negative, got {amount}"
+                )));
+            }
+            // Source-controller resolution mirrors round-24
+            // DiscardSelf's / round-26 EachOpponentLosesLife's 5-zone
+            // walk + stack scan.
+            let mut source_controller: Option<u8> = None;
+            'outer_grant_life: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_grant_life;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Each opponent: the OTHER player in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            // Direct life GAIN via `game.gain_life` semantics. Mirrors
+            // Python's `gain_life` (game.py:1358): adds `amount` to the
+            // opponent's life AND increments their
+            // `life_gained_this_turn` tracker (used by
+            // ConditionalIfYouGainedLifeAtLeast / Ragost). Only
+            // positive amounts count toward the tracker, mirroring
+            // Python's `if amount <= 0: return 0` guard (the resolve
+            // arm already early-raises on amount<0, and amount==0 is a
+            // no-op for both the life add and the tracker). saturating_
+            // add for defense-in-depth against i32 overflow.
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_add(*amount);
+            if *amount > 0 {
+                state.players[opponent_idx].life_gained_this_turn += *amount;
+            }
+        }
         // BLOCKED-RUST-EFFECT slice (round 44) -- each opponent of the
         // source-controller loses life equal to the source-controller's
         // artifact count. Sister of round-26's

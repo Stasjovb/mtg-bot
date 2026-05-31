@@ -3907,6 +3907,21 @@ PROBE_MODULES: tuple[Path, ...] = (
     # (Ancient Tomb slug flips). PROBED 421 -> 422;
     # covered_by_construction 23 -> 22; BLOCKED-SG unchanged.
     REPO_ROOT / "tests" / "test_ancient_tomb_parity.py",
+    # Grove of the Burnwillows (2026-05-31): per-card real-EoE cross-
+    # engine byte-equal probe (covered_by_construction -> PROBED tier
+    # flip; Grove closure marker). Grove is a {T}-cost dual-AA mana-
+    # ability Land whose AA[1] body is a ``Sequence(
+    # AddNManaOfChosenColor(1, ('R','G')), GrantLifeToEachOpponent(1))``
+    # -- the LOAD-BEARING Sequence-IN-AA admit (Phase-1 admit was leaf-
+    # only) + the NEW Rust ``Effect::GrantLifeToEachOpponent`` (life-
+    # GAIN sister of ``each_opponent_loses_life``). The probe drives
+    # BOTH AAs on both engines: AA[0] ({T}: Add {C}) mints 1 C coin;
+    # AA[1] ({T}: Add {R} or {G}, each opponent gains 1 life) mints 1 R
+    # coin (no-agent ``options[0]`` fallback, deterministic + byte-equal
+    # both engines) + the opponent gains 1 life. Net delta: +1 PROBED /
+    # -1 covered_by_construction (Grove slug flips). PROBED 434 -> 435;
+    # BLOCKED-SG 30 -> 29.
+    REPO_ROOT / "tests" / "test_grove_of_the_burnwillows_parity.py",
     # Batch 6 (2026-05-27): 6 manlands extending the batch-5
     # JJJJ-idiom BecomeLandCreatureUEOT lane to the remaining EoE
     # manlands.  Rebased onto Worker B's Reflecting Pool Cycle 2 FLIP
