@@ -340,6 +340,61 @@ pub(crate) fn moonlit_token_substitution(
     (pid, override_flag)
 }
 
+/// **ReplacementEffect-static substrate — Phase 5 (2026-05-31) —
+/// Exalted Sunborn token-creation count doubling.**
+///
+/// Returns the post-replacement multiplier a `CreateToken`-family arm
+/// applies to its requested token count for `controller_idx`. The
+/// default return is `1` — no doubler in play. Walks every battlefield
+/// permanent under `controller_idx`'s control whose printing carries a
+/// `static_replacements` entry with `event == "would_create_token"`
+/// AND `transform_kind == "multiply_count"`, and folds the factors
+/// multiplicatively (two Exalted Sunborns → ×4, matching CR 614 +
+/// Python's `dispatch_replacement` applying each matching replacement
+/// once per event).
+///
+/// Mirrors Python's `dispatch_replacement(state,
+/// Event.WOULD_CREATE_TOKEN, affected_player_id=recipient,
+/// payload={"count": N})` call at
+/// `effects/generic/tokens.py:259-267`: the dispatcher's implicit
+/// "source.controller_id == affected_player_id" gate keys the doubler
+/// on the carrier's controller (= the token recipient). Phase-5 EoE
+/// carriers have empty `subject_filters` + no `scope_filter`, so the
+/// per-subject narrowing Python's dispatcher supports is a no-op here;
+/// the controller-match gate is the whole story.
+///
+/// **Why a multiplicative fold.** `MultiplyCount(factor)` multiplies
+/// the count; two independent doublers compose to ×(f1·f2) under CR
+/// 616.1's "apply each once" — the affected player's chosen order
+/// doesn't change the product for pure multiplications, so the fold is
+/// order-independent and byte-equal to Python regardless of the
+/// dispatcher's `choose_replacement_order` outcome.
+pub(crate) fn token_creation_count_multiplier(
+    state: &GameState,
+    controller_idx: u8,
+) -> i64 {
+    let mut factor: i64 = 1;
+    for owner in &state.players {
+        for obj in owner.battlefield.iter() {
+            if obj.controller != controller_idx {
+                continue;
+            }
+            let printing = match state.registry.lookup(obj.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            for rep in printing.static_replacements.iter() {
+                if rep.event == "would_create_token"
+                    && rep.transform_kind == "multiply_count"
+                {
+                    factor = factor.saturating_mul(rep.transform_param as i64);
+                }
+            }
+        }
+    }
+    factor
+}
+
 /// Take the GameObject with id `obj_id` out of whichever of the
 /// four tracked zones currently holds it. Returns the owned
 /// `GameObject` (and the player_idx + source_zone constant for
@@ -4084,6 +4139,32 @@ fn apply_effect(
             let active = state
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
+
+            // **ReplacementEffect-static Phase 5 (2026-05-31) — Exalted
+            // Sunborn token-creation count doubling.** Per CR 614, if a
+            // permanent under `active`'s control carries a
+            // `would_create_token` × `MultiplyCount` replacement, the
+            // requested count is multiplied before the token batch is
+            // minted. `token_creation_count_multiplier` folds every
+            // matching doubler multiplicatively (default 1 = no doubler).
+            // Mirrors Python's `dispatch_replacement(WOULD_CREATE_TOKEN,
+            // payload={"count": self.count})` at
+            // `effects/generic/tokens.py:259`. Applied to `n` (the
+            // requested count, validated non-negative above) BEFORE the
+            // Moonlit substitution + id-reservation loop so every
+            // downstream consumer (`n_u32`, `token_ids`,
+            // `next_etb_timestamp` advance) sees the post-replacement
+            // count, byte-equal to Python's `effective_count` loop.
+            let n = {
+                let mult = token_creation_count_multiplier(state, active);
+                // `n` is usize; `mult >= 1` for any real doubler (the
+                // parser whitelists `multiply_count` with a positive
+                // factor — every EoE carrier is ×2). Saturating guard
+                // keeps a pathological huge product from overflowing
+                // usize on 32-bit targets; the product is always small
+                // in practice (count ≤ a few, factor = 2).
+                (n as i64).saturating_mul(mult).max(0) as usize
+            };
 
             // **Aura-attachment Phase 4 S3 closure (2026-05-21) —
             // Moonlit Meditation replacement.** Per CR 614, if the

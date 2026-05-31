@@ -566,6 +566,37 @@ class CardDef:
         ],
         ...,
     ] = ()
+    # ReplacementEffect-static substrate — Phase 5 (2026-05-31). CR 614
+    # replacement effects carried by a printing's
+    # ``StaticAbility.replacement_effect`` slot. Each entry is a frozen
+    # ``(event, transform_kind, transform_param)`` triple:
+    #
+    #   * ``event`` — the WOULD_X / triggered-ability event the
+    #     replacement intercepts, as the underscore-lowercase enum-name
+    #     string: ``"would_create_token"`` (Exalted Sunborn),
+    #     ``"would_place_counter"`` (Loading Zone), or
+    #     ``"triggered_ability_triggers"`` (Starfield Vocalist).
+    #   * ``transform_kind`` — the ``EventTransform`` discriminant:
+    #     ``"multiply_count"`` (MultiplyCount) or ``"add_instances"``
+    #     (AddInstances).
+    #   * ``transform_param`` — the transform's single int parameter:
+    #     ``MultiplyCount.factor`` (2 for the doublers) or
+    #     ``AddInstances.delta`` (1 for the extra-trigger shape).
+    #
+    # Empty tuple = no replacement statics — the back-compat default;
+    # every pre-Phase-5 CardDef leaves this at its empty-tuple default
+    # and the registry-dict emitter skips the ``static_replacements``
+    # key, keeping every pre-substrate registry dict byte-identical. The
+    # tuple-of-triples shape (NOT a ``ReplacementEffect`` object) keeps
+    # CardDef frozen-hashable and matches the flat-codec field
+    # convention (mirroring ``static_anthems`` / ``cost_reductions``).
+    # The Rust mirror is ``CardPrinting.static_replacements:
+    # Vec<StaticReplacement>`` (added Phase 5). Round-trips Python ↔ Rust
+    # through :func:`_spec_card_to_printing_dict` (forward emit) and
+    # :func:`_card_def_to_python_printing` (reverse re-materialization to
+    # Python's ``StaticAbility(replacement_effect=ReplacementEffect(...))``
+    # at ``effects/modifiers.py``).
+    static_replacements: tuple[tuple[str, str, int], ...] = ()
     # Static rule-text substrate — Deafening Silence Cycle 1
     # (2026-05-22). Printing-level bool — when ``True``, any permanent
     # with this flag on the battlefield restricts EACH player to
@@ -14996,6 +15027,28 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
                 ]
             anthem_entries.append(anthem_dict)
         printing_dict["static_anthems"] = anthem_entries
+    # ReplacementEffect-static substrate — Phase 5 (2026-05-31). Emit
+    # the ``static_replacements`` list — one
+    # ``{event, transform_kind, transform_param}`` dict per
+    # ``(event, transform_kind, transform_param)`` CardDef triple. The
+    # key is omitted entirely when the CardDef carries no replacement
+    # statics (the empty-tuple back-compat default), keeping every
+    # pre-Phase-5 registry dict byte-identical. Mirrors the
+    # ``static_anthems`` emit shape; the Rust parser whitelists the
+    # event + transform_kind vocabularies and maps the absent key to an
+    # empty Vec.
+    if card.static_replacements:
+        rep_entries: list[dict] = []
+        for entry in card.static_replacements:
+            event, transform_kind, transform_param = entry
+            rep_entries.append(
+                {
+                    "event": event,
+                    "transform_kind": transform_kind,
+                    "transform_param": int(transform_param),
+                }
+            )
+        printing_dict["static_replacements"] = rep_entries
     # Aura-attachment substrate — Phase 2 S2 extension (Tractor
     # Beam closure, 2026-05-20). Emit ``aura_prevents_host_untap``
     # only when set so every pre-extension CardDef registry dict is
@@ -17325,6 +17378,52 @@ def _card_def_to_python_printing(card: "CardDef"):
                     )
                 )
         static_abilities = (*static_abilities, *ssb_list)
+    # ReplacementEffect-static substrate — Phase 5 (2026-05-31).
+    # Materialize each CardDef ``static_replacements`` triple into one
+    # Python ``StaticAbility(scope="self",
+    # replacement_effect=ReplacementEffect(event_pattern=EventPattern(
+    # event), transform=<EventTransform>))`` instance, mirroring the
+    # shape the parser emits for Exalted Sunborn / Loading Zone /
+    # Starfield Vocalist. The ``event`` string is the underscore-
+    # lowercase ``Event`` enum value (``Event(event)`` round-trips it);
+    # the ``transform_kind`` discriminant rehydrates the matching
+    # ``EventTransform`` subclass with its single int parameter. Empty
+    # tuple is the back-compat default. Appended after every other
+    # static so deterministic ordering is preserved (anthems →
+    # uncounterable → self-bonuses → replacements).
+    if card.static_replacements:
+        from mtg_bot.cards.base import StaticAbility
+        from mtg_bot.effects.modifiers import (
+            AddInstances,
+            EventPattern,
+            MultiplyCount,
+            ReplacementEffect,
+        )
+        from mtg_bot.effects.predicates import Event as _Event
+
+        rep_list: list[StaticAbility] = []
+        for event, transform_kind, transform_param in card.static_replacements:
+            if transform_kind == "multiply_count":
+                transform = MultiplyCount(factor=int(transform_param))
+            elif transform_kind == "add_instances":
+                transform = AddInstances(delta=int(transform_param))
+            else:
+                raise ValueError(
+                    f"static_replacements transform_kind must be "
+                    f"'multiply_count' or 'add_instances' (got: "
+                    f"{transform_kind!r})"
+                )
+            rep_list.append(
+                StaticAbility(
+                    scope="self",
+                    replacement_effect=ReplacementEffect(
+                        event_pattern=EventPattern(event=_Event(event)),
+                        transform=transform,
+                    ),
+                    continuous_effect=None,
+                )
+            )
+        static_abilities = (*static_abilities, *rep_list)
     # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24). Reverse-
     # materialize the CardDef ``cost_reductions`` tuple-of-triples
     # into Python's structural ``CostReduction(amount, condition)``

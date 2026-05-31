@@ -4167,6 +4167,27 @@ PROBE_MODULES: tuple[Path, ...] = (
     # Net delta: +1 PROBED / -1 covered_by_construction. PROBED 454 ->
     # 455; covered_by_construction 1 -> 0; BLOCKED-SG unchanged at 20.
     REPO_ROOT / "tests" / "test_contested_war_zone_parity.py",
+    # ReplacementEffect-static substrate — Phase 5 (2026-05-31). Three
+    # warp+static cards each emitting a ``StaticAbility.replacement_
+    # effect`` (a CR 614 ReplacementEffect static):
+    #   * ``test_exalted_sunborn_parity.py`` — Exalted Sunborn
+    #     (WOULD_CREATE_TOKEN x MultiplyCount(2) token-doubling). Drives
+    #     the genuine parsed printing through the Rust resolve-arm
+    #     doubling (create-1 -> mints 2) AND the Python token-doubling
+    #     dispatch — full cross-engine byte-equal on the count.
+    #   * ``test_starfield_vocalist_parity.py`` — Starfield Vocalist
+    #     (TRIGGERED_ABILITY_TRIGGERS + AddInstances(1)). Bridge round-
+    #     trip + Python-side resolve idiom (the Rust trigger-fire site is
+    #     honest-stopped; see docs/SEARCH_LIMITATIONS.md).
+    #   * ``test_loading_zone_parity.py`` — Loading Zone
+    #     (WOULD_PLACE_COUNTER x MultiplyCount(2) counter-doubling).
+    #     Bridge round-trip + Python-side resolve idiom (the Rust
+    #     counter-placement sites are honest-stopped).
+    # Net delta: +3 PROBED / -3 BLOCKED-subsystem-gated. PROBED 456 ->
+    # 459; BLOCKED-SG 19 -> 16.
+    REPO_ROOT / "tests" / "test_exalted_sunborn_parity.py",
+    REPO_ROOT / "tests" / "test_starfield_vocalist_parity.py",
+    REPO_ROOT / "tests" / "test_loading_zone_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

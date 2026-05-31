@@ -12506,6 +12506,39 @@ pub struct CardPrinting {
     /// table or a `RemoveKeyword` payload the Rust reader does
     /// not yet fold).
     pub static_self_bonuses: Vec<StaticSelfBonus>,
+    /// **ReplacementEffect-static substrate — Phase 5 (2026-05-31).**
+    /// CR 614 replacement effects carried by this printing as a
+    /// `StaticAbility.replacement_effect` slot. Each `StaticReplacement`
+    /// declares one `(event, transform)` pair the controller's matching
+    /// in-flight events are rewritten through (token-creation count
+    /// doubling, +1/+1-counter count doubling, extra-trigger-instance
+    /// add). `Vec::new()` (the back-compat default — every
+    /// pre-Phase-5 registry dict omits the `static_replacements` key)
+    /// for every non-replacement-static printing.
+    ///
+    /// Mirrors Python's `CardPrinting.static_abilities` tuple filtered
+    /// to the `StaticAbility.replacement_effect: ReplacementEffect`
+    /// sub-shape (per `effects/modifiers.py`: `EventPattern(event) +
+    /// EventTransform`). The three EoE carriers are Exalted Sunborn
+    /// (`would_create_token` × `MultiplyCount(2)`), Loading Zone
+    /// (`would_place_counter` × `MultiplyCount(2)`), and Starfield
+    /// Vocalist (`triggered_ability_triggers` + `AddInstances(1)`).
+    ///
+    /// **Reader sites (Phase-5 scope teeth).** Only the
+    /// `would_create_token` × `MultiplyCount` shape has a live Rust
+    /// resolve-arm consumer this phase — the `Effect::CreateToken`
+    /// resolve arm consults `token_creation_count_multiplier` (a
+    /// battlefield walk that folds every controller-matching
+    /// `would_create_token` `MultiplyCount` factor) before minting the
+    /// token batch (Exalted Sunborn ×2). The `would_place_counter` and
+    /// `triggered_ability_triggers` shapes parse + bridge + round-trip
+    /// but have NO Rust resolve-arm consumer yet (the counter-placement
+    /// and trigger-fire sites are scattered across many arms — the
+    /// resolve-arm wiring for those two is honest-stopped to a later
+    /// slice; see `docs/SEARCH_LIMITATIONS.md`). The parse path accepts
+    /// all three so the bridge round-trip + synthetic-carrier pins hold
+    /// for every carrier.
+    pub static_replacements: Vec<StaticReplacement>,
     /// **Static rule-text substrate — Deafening Silence Cycle 1
     /// (2026-05-22).** Printing-level bool — when `true`, any
     /// permanent with this flag on the battlefield restricts EACH
@@ -12710,6 +12743,45 @@ pub struct StaticAnthem {
     /// (arg-less) and the unconditional default. Bridge
     /// serialization uses a `[int, ...]` list.
     pub condition_args: Vec<i32>,
+}
+
+/// **ReplacementEffect-static substrate — Phase 5 (2026-05-31).** One
+/// CR 614 replacement effect carried by a printing's
+/// `StaticAbility.replacement_effect` slot: an `(event, transform)`
+/// pair the controller's matching in-flight events are rewritten
+/// through. Mirrors Python's `ReplacementEffect(event_pattern=
+/// EventPattern(event), transform=<EventTransform>)` shape collapsed
+/// into the closed-vocab `(event, transform_kind, factor_or_delta)`
+/// tuple — the bridge serializes the transform as a string discriminant
+/// + a single int parameter (the Phase-5 transforms each carry exactly
+/// one int: `MultiplyCount.factor` / `AddInstances.delta`).
+///
+/// **Closed-vocab teeth.** `event` is one of `"would_create_token"` /
+/// `"would_place_counter"` / `"triggered_ability_triggers"`;
+/// `transform_kind` is one of `"multiply_count"` / `"add_instances"`.
+/// The parser whitelists both vocabularies — an unknown event or
+/// transform is a bridge-vs-Rust disagreement and fails loudly. The
+/// `scope_filter` / `subject_filters` Python supports are NOT carried
+/// (every Phase-5 EoE carrier has the implicit "under your control"
+/// gate the dispatcher applies by default + empty subject_filters);
+/// a future carrier that narrows the gate is honest-stopped.
+#[derive(Clone, Debug)]
+pub struct StaticReplacement {
+    /// The CR 614 event whose in-flight payload this replacement
+    /// rewrites. One of `"would_create_token"` / `"would_place_counter"`
+    /// / `"triggered_ability_triggers"` (the Phase-5 closed vocab).
+    /// Lockstep with Python's `Event` enum WOULD_X / triggered-ability
+    /// family used by the `dispatch_replacement` call sites.
+    pub event: String,
+    /// The `EventTransform` discriminant. `"multiply_count"`
+    /// (Exalted Sunborn / Loading Zone) or `"add_instances"`
+    /// (Starfield Vocalist).
+    pub transform_kind: String,
+    /// The transform's single int parameter:
+    /// `MultiplyCount.factor` (2 for the doublers) for
+    /// `"multiply_count"`, `AddInstances.delta` (1 for the extra-
+    /// trigger shape) for `"add_instances"`.
+    pub transform_param: i32,
 }
 
 /// **Static / layered abilities substrate — Phase 3 (round-81,
@@ -17887,6 +17959,110 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // ReplacementEffect-static substrate — Phase 5 (2026-05-31). Parse
+    // the `static_replacements` list — each entry is a dict
+    // `{"event": str, "transform_kind": str, "transform_param": int}`.
+    // Missing top-level key parses to an empty Vec (back-compat default
+    // — every pre-Phase-5 registry dict omits the key, mirroring the
+    // `static_anthems` Option-parse shape).
+    let static_replacements: Vec<StaticReplacement> =
+        match dict.get_item("static_replacements")? {
+            Some(reps_any) => {
+                let iter = reps_any.try_iter().map_err(|_| {
+                    PyValueError::new_err(
+                        "static_replacements must be an iterable of \
+                         {event, transform_kind, transform_param} dicts",
+                    )
+                })?;
+                let mut out = Vec::new();
+                for item in iter {
+                    let item = item?;
+                    let rep_dict =
+                        item.downcast::<PyDict>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_replacements entries must be \
+                                 dicts {event, transform_kind, \
+                                 transform_param}",
+                            )
+                        })?;
+                    let event = match rep_dict.get_item("event")? {
+                        Some(v) => v.extract::<String>().map_err(|_| {
+                            PyValueError::new_err(
+                                "static_replacements[].event must be a \
+                                 string",
+                            )
+                        })?,
+                        None => {
+                            return Err(PyValueError::new_err(
+                                "static_replacements[] is missing required \
+                                 key 'event'",
+                            ))
+                        }
+                    };
+                    // Whitelist the event to the Phase-5 closed vocab.
+                    // An unrecognized event is a bridge-vs-Rust
+                    // disagreement that would silently no-op the
+                    // replacement — fail loudly.
+                    if event != "would_create_token"
+                        && event != "would_place_counter"
+                        && event != "triggered_ability_triggers"
+                    {
+                        return Err(PyValueError::new_err(format!(
+                            "static_replacements[].event must be \
+                             'would_create_token', 'would_place_counter', \
+                             or 'triggered_ability_triggers' (got: {})",
+                            event
+                        )));
+                    }
+                    let transform_kind =
+                        match rep_dict.get_item("transform_kind")? {
+                            Some(v) => v.extract::<String>().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_replacements[].transform_kind \
+                                     must be a string",
+                                )
+                            })?,
+                            None => {
+                                return Err(PyValueError::new_err(
+                                    "static_replacements[] is missing \
+                                     required key 'transform_kind'",
+                                ))
+                            }
+                        };
+                    if transform_kind != "multiply_count"
+                        && transform_kind != "add_instances"
+                    {
+                        return Err(PyValueError::new_err(format!(
+                            "static_replacements[].transform_kind must be \
+                             'multiply_count' or 'add_instances' (got: {})",
+                            transform_kind
+                        )));
+                    }
+                    let transform_param =
+                        match rep_dict.get_item("transform_param")? {
+                            Some(v) => v.extract::<i32>().map_err(|_| {
+                                PyValueError::new_err(
+                                    "static_replacements[].transform_param \
+                                     must be an integer",
+                                )
+                            })?,
+                            None => {
+                                return Err(PyValueError::new_err(
+                                    "static_replacements[] is missing \
+                                     required key 'transform_param'",
+                                ))
+                            }
+                        };
+                    out.push(StaticReplacement {
+                        event,
+                        transform_kind,
+                        transform_param,
+                    });
+                }
+                out
+            }
+            None => Vec::new(),
+        };
     // Static / layered abilities substrate — Phase 2 (round-80,
     // 2026-05-20). Frenzied Baloth's two uncounterable flags. Both
     // default to false; the bridge emits the keys only when True.
@@ -18731,6 +18907,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         aura_prevents_host_untap,
         aura_replaces_first_tokens_with_copies,
         static_anthems,
+        static_replacements,
         spell_is_uncounterable,
         grants_creature_spells_uncounterable,
         static_self_bonuses,

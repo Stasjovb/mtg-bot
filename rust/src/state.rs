@@ -4509,6 +4509,7 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        static_replacements: Vec::new(),
         // Static / layered abilities substrate — Phase 2 (round-80,
         // 2026-05-20): synthetic-state printings have no
         // uncounterable flags. Back-compat default.
@@ -4625,6 +4626,7 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        static_replacements: Vec::new(),
         // Static / layered abilities substrate — Phase 2 (round-80,
         // 2026-05-20): synthetic-state printings have no
         // uncounterable flags. Back-compat default.
@@ -4754,6 +4756,7 @@ pub fn make_synthetic_state(
         // anthem statics. Back-compat default (every pre-substrate
         // registry dict omits the `static_anthems` key).
         static_anthems: Vec::new(),
+        static_replacements: Vec::new(),
         // Static / layered abilities substrate — Phase 2 (round-80,
         // 2026-05-20): synthetic-state printings have no
         // uncounterable flags. Back-compat default.
