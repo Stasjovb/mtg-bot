@@ -3464,6 +3464,16 @@ def dispatch_event(
     # dispatch must not themselves see those new permanents on the
     # original event's pass.
     permanents = list(state.battlefield)
+    # Command-zone emblems (CR 114) are an additional trigger SOURCE:
+    # their abilities (e.g. Tezzeret's emblem "at the beginning of
+    # combat on your turn, …") fire from the command zone, not the
+    # battlefield. Scan them alongside battlefield permanents so the
+    # emblem's predicate-style triggered abilities observe the event.
+    # Empty for almost every state (no emblems), so this is a cheap
+    # no-op on the common path. Mirrors Rust's dispatch_event emblem-
+    # source extension.
+    if state.emblems:
+        permanents.extend(state.emblems)
     if extra_observers:
         seen_ids = {p.id for p in permanents}
         for extra in extra_observers:

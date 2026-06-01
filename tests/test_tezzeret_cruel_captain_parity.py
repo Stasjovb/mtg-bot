@@ -138,15 +138,22 @@ def test_tezzeret_loyalty_gain_trigger_shape():
 
 
 def test_tezzeret_loyalty_activated_abilities_shape():
-    """The parsed printing now models Tezzeret's 0 and −3 loyalty
-    abilities (Stage 1+2 of the loyalty-activation subsystem). The −7
-    EMBLEM ability is stripped (no emblem-object substrate; honest-
-    stopped — see docs/SEARCH_LIMITATIONS.md).
+    """The parsed printing now models ALL THREE of Tezzeret's loyalty
+    abilities — 0 / −3 / −7. The −7 emblem is now modeled (the emblem
+    substrate landed): it emits a ``CreateEmblem`` effect. The emblem's
+    begin-combat 3-counter body is byte-equal cross-engine; only the
+    "becomes a 0/0 Robot artifact creature" permanent-animate half is
+    honest-stopped (see docs/SEARCH_LIMITATIONS.md + emblem.py).
 
     Each modeled ability carries the signed-loyalty ``ActivationCost``
     + ``sorcery_speed=True`` (CR 606.3 timing). Sign convention: a
     printed ``0:`` stamps ``loyalty=0``; a printed ``−3:`` stamps
-    ``loyalty=3`` (pay-loyalty)."""
+    ``loyalty=3`` (pay-loyalty); a printed ``−7:`` stamps
+    ``loyalty=7``."""
+    from mtg_bot.effects.generic.emblem import (
+        TEZZERET_CRUEL_CAPTAIN_EMBLEM,
+        CreateEmblem,
+    )
     from mtg_bot.effects.generic.search import SearchLibraryForCard
     from mtg_bot.effects.generic.tap import (
         UntapTargetArtifactOrCreatureConditionalCounter,
@@ -154,9 +161,9 @@ def test_tezzeret_loyalty_activated_abilities_shape():
 
     p = _PRINTINGS["Tezzeret, Cruel Captain"]
     aas = p.activated_abilities
-    assert len(aas) == 2, (
-        f"Tezzeret must model exactly 2 loyalty abilities (0 / −3); "
-        f"the −7 emblem is stripped. Got {len(aas)}"
+    assert len(aas) == 3, (
+        f"Tezzeret must model exactly 3 loyalty abilities (0 / −3 / −7); "
+        f"the −7 emblem is now modeled. Got {len(aas)}"
     )
     # All loyalty abilities are sorcery-speed (CR 606.3).
     assert all(aa.sorcery_speed for aa in aas), (
@@ -180,6 +187,14 @@ def test_tezzeret_loyalty_activated_abilities_shape():
     )
     assert minus3.effect.filter_name == "artifact_small"
     assert minus3.effect.max_mv == 1
+
+    # The −7 ability — loyalty cost +7 (pay-loyalty), CreateEmblem.
+    minus7 = next(aa for aa in aas if aa.cost.loyalty == 7)
+    assert isinstance(minus7.effect, CreateEmblem), (
+        f"−7 ability effect must be CreateEmblem; got "
+        f"{type(minus7.effect).__name__}"
+    )
+    assert minus7.effect.emblem_kind == TEZZERET_CRUEL_CAPTAIN_EMBLEM
 
 
 # ---------------------------------------------------------------------------

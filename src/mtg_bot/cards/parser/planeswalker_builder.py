@@ -53,6 +53,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.generic.emblem import (
+    TEZZERET_CRUEL_CAPTAIN_EMBLEM,
+    CreateEmblem,
+)
 from mtg_bot.effects.generic.search import SearchLibraryForCard
 from mtg_bot.effects.generic.tap import (
     UntapTargetArtifactOrCreatureConditionalCounter,
@@ -110,6 +114,17 @@ _LOYALTY_ABILITY_EFFECTS: dict[str, object] = {
         SearchLibraryForCard(
             filter_name="artifact_small", max_mv=1, may_fail=True,
         ),
+    # Tezzeret, Cruel Captain's -7 ability — "You get an emblem with
+    # '...'." The emblem's begin-combat trigger puts three +1/+1
+    # counters on a target artifact you control (byte-equal cross-
+    # engine); the "if it's not a creature it becomes a 0/0 Robot
+    # artifact creature" permanent-animate half is HONEST-STOPPED (no
+    # permanent layer type+P/T-set animate substrate — see
+    # docs/SEARCH_LIMITATIONS.md + emblem.py).
+    'You get an emblem with "At the beginning of combat on your turn, '
+    "put three +1/+1 counters on target artifact you control. If it's "
+    'not a creature, it becomes a 0/0 Robot artifact creature."':
+        CreateEmblem(emblem_kind=TEZZERET_CRUEL_CAPTAIN_EMBLEM),
 }
 
 
