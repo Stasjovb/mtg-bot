@@ -917,6 +917,17 @@ impl GameState {
                     /// (increment by |N|); zero = no cost. Committed
                     /// in Phase 5d.
                     loyalty: i32,
+                    /// **Secluded Starforge tap-X-artifacts cost
+                    /// (2026-06-01).** `true` when the cost flags
+                    /// `tap_x_untapped_artifacts_you_control`. The
+                    /// dispatcher taps the lowest-id-first X untapped
+                    /// artifacts the activator controls (X = the full
+                    /// untapped-artifact count under the deterministic-
+                    /// first no-agent convention) and seats X onto the
+                    /// pushed StackItem's `x_value` (Phase 5f). Mirrors
+                    /// Python's `_activate_ability` tap-X path at
+                    /// `actions.py:2011-2043`.
+                    tap_x_untapped_artifacts_you_control: bool,
                 }
                 let resolved: ResolvedAbility = {
                     let printing = state.registry.lookup(printing_id).ok_or_else(|| {
@@ -954,6 +965,8 @@ impl GameState {
                             sacrifice_food: ab.cost.sacrifice_food,
                             sacrifice_a_desert: ab.cost.sacrifice_a_desert,
                             loyalty: ab.cost.loyalty,
+                            tap_x_untapped_artifacts_you_control:
+                                ab.cost.tap_x_untapped_artifacts_you_control,
                         }
                     } else {
                         // ability_index out of range. Loud fail —
@@ -2103,6 +2116,75 @@ impl GameState {
                         source_id,
                     )?;
                 }
+                // Phase 5a-X: commit the "Tap X untapped artifacts you
+                // control" cost (Secluded Starforge AA2). Mirrors
+                // Python's `_activate_ability` tap-X path at
+                // `src/mtg_bot/actions.py:2011-2043`: gather the
+                // activator's untapped artifacts (excluding the source),
+                // sorted lowest-id-first; X = the chosen count; tap the
+                // first X; seat X onto the pushed StackItem's `x_value`
+                // (Phase 6 below) so the resolving
+                // `PumpTargetCreatureUntilEOT { power_bonus_from_x }`
+                // reads it via `state.current_resolve_x_value`.
+                //
+                // **Deterministic-X (no-agent) convention.** The Rust
+                // dispatch path has no agent hook. Following the
+                // deterministic-first convention used across this
+                // campaign, X = the FULL untapped-artifact count (the
+                // upper bound) — tap every eligible artifact. Python's
+                // `choose_x` is agent-driven and clamps to the same
+                // upper bound; tests drive byte-equality by pre-tapping
+                // artifacts so the untapped count is identical on both
+                // engines and the Python agent returns that upper bound.
+                // Both engines then tap the SAME lowest-id-first set and
+                // seat the SAME X. Ordered AFTER tap_self (matching
+                // Python's order) and BEFORE sacrifice_self / target
+                // selection.
+                let mut tap_x_chosen: Option<i32> = None;
+                if resolved.tap_x_untapped_artifacts_you_control {
+                    // Gather eligible artifact ids: controller's bf,
+                    // not the source, printed Artifact, untapped.
+                    let mut artifact_ids: Vec<u32> = {
+                        let bf = &state.players[controller_idx].battlefield;
+                        let registry = &state.registry;
+                        let mut v: Vec<u32> = bf
+                            .iter()
+                            .filter(|o| {
+                                if o.id == source_id || o.tapped {
+                                    return false;
+                                }
+                                registry
+                                    .printings
+                                    .get(o.printing_id as usize)
+                                    .map(|p| {
+                                        p.card_types
+                                            .iter()
+                                            .any(|t| t == "Artifact")
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .map(|o| o.id)
+                            .collect();
+                        v.sort_unstable();
+                        v
+                    };
+                    // Deterministic-X: tap them all (X = upper bound).
+                    let chosen_n = artifact_ids.len() as i32;
+                    if chosen_n > 0 {
+                        let bf_mut = Arc::make_mut(
+                            &mut state.players[controller_idx].battlefield,
+                        );
+                        // Tap lowest-id-first (artifact_ids is sorted).
+                        for aid in artifact_ids.drain(..) {
+                            if let Some(obj) =
+                                bf_mut.iter_mut().find(|o| o.id == aid)
+                            {
+                                obj.tapped = true;
+                            }
+                        }
+                    }
+                    tap_x_chosen = Some(chosen_n);
+                }
                 // Phase 5b: commit sacrifice_self (CE20 follow-up
                 // Slice 2). Costs pay BEFORE effect resolves (CR
                 // 117.10 / 119) — the source moves to its
@@ -2475,6 +2557,20 @@ impl GameState {
                     // the resolve arm defaults to half-0 (no observable
                     // difference for non-Room effects).
                     stack_item.chosen_mode_idx = chosen_mode_idx;
+                    // **Secluded Starforge tap-X-artifacts cost
+                    // (2026-06-01).** When the activation paid the
+                    // tap-X cost (Phase 5a-X), seat the chosen X onto
+                    // the StackItem's `x_value` so the resolver's
+                    // `current_resolve_x_value` swap exposes it to the
+                    // `PumpTargetCreatureUntilEOT { power_bonus_from_x }`
+                    // resolve arm — byte-mirroring Python's
+                    // `StackItem(x_value=ability_x_value)` push at
+                    // `actions.py:2386`. None when the cost wasn't a
+                    // tap-X cost (leaves the constructor's `x_value:
+                    // None`).
+                    if let Some(x) = tap_x_chosen {
+                        stack_item.x_value = Some(x);
+                    }
                     state.stack.push(stack_item);
                 }
                 // Round-27 G4 closure: priority reset after the

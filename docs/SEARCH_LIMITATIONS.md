@@ -17867,7 +17867,7 @@ unit pins).
 
 ---
 
-## Secluded Starforge — FLIPPED BLOCKED-SG → PROBED: AA2 tap-X-artifacts → +X/+0 X-channel substrate LANDED on both engines + parser claim-ordering fix (2026-05-31, `feature/secluded-starforge-flip`)
+## Secluded Starforge — FLIPPED BLOCKED-SG → PROBED + Rust tap-X cost WIRED: AA2 tap-X-artifacts → +X/+0 X-channel substrate LANDED on both engines + parser claim-ordering fix (2026-05-31, `feature/secluded-starforge-flip`); Rust cost-payment wired (2026-06-01, `feature/secluded-tapx-rust` — see Scope-simplification-CLOSED below)
 
 **STATUS: FLIPPED to PROBED.** The variable-tap-cost X-channel substrate
 the map below described has LANDED on both engines, and the parser now
@@ -18011,16 +18011,50 @@ shipped vs the map above:
   line fails to parse — never silently drops). Static `lands.py`
   upgraded to the byte-identical 3-AA printing.
 
-**Scope simplification (documented divergence).** The PROBED probe and
-the Rust pump-by-X resolve seat X on the StackItem and resolve the pump
-directly; the cost-payment tap-X-artifacts **mint** path is implemented
-+ unit-tested **only on Python** (`_activate_ability`). Rust has no
-activated-ability-cost tap-X-subset minting hook today — it consumes a
-pre-seated `current_resolve_x_value` (same as every other Rust X
-consumer). This is byte-equal for the resolve observable (the +X/+0
-pump) which is what the probe asserts; a full Rust cost-payment mint is
-follow-up work and is not load-bearing for the PROBED flip (the campaign
-probes drive resolve, not the Rust activation cost pipeline).
+**Scope simplification — CLOSED (2026-06-01, `feature/secluded-tapx-rust`).**
+The prior version of this entry documented a Python-only cost-payment:
+the Rust side consumed a pre-seated `current_resolve_x_value` (set
+synthetically by the probe via `set_stack_top_x_value`) rather than
+paying the tap-X cost itself. **That deferral is now closed.** The Rust
+`ActivateAbility` cost-payment pays the tap-X cost end-to-end:
+
+- **New cost atom** `ActivationCost.tap_x_untapped_artifacts_you_control`
+  (`rust/src/cards.rs`) + `parse_activation_cost` arm + valid-key list +
+  the bridge-synth literal.
+- **Phase 5a-X commit** (`rust/src/state_ops_actions.rs`, in the
+  `Action::ActivateAbility` arm, threaded through `ResolvedAbility`):
+  gathers the activator's untapped artifacts (controller's bf, excluding
+  the source, printed `Artifact`), sorted **lowest-id-first**, taps the
+  full set, and seats the chosen X (= the untapped count) onto the
+  pushed `StackItem.x_value`. Ordered AFTER tap_self and BEFORE
+  sacrifice / target selection — byte-mirroring Python's
+  `_activate_ability` order (`actions.py:2011-2043`).
+- **Deterministic-X (no-agent) convention.** Rust's dispatch has no
+  agent hook; following the campaign's deterministic-first convention
+  (no-tap / dual-target cost-choice work picked deterministic-first), X
+  = the FULL untapped-artifact count (tap them all). Python's `choose_x`
+  is agent-driven and clamps to the same upper bound; the cross-engine
+  probe drives byte-equality by giving Python an agent that returns the
+  upper bound, so both engines tap the SAME lowest-id-first set and seat
+  the SAME X.
+- **Trigger-path `x_value` swap** (`rust/src/state_ops_resolve.rs`, BOTH
+  `resolve_top_of_stack` + `_pause` entry points): the
+  `StackItemKind::TriggeredAbility` resolve branch (which fires
+  non-mana activated abilities) now swaps `top.x_value` into
+  `current_resolve_x_value` for the duration of `apply_effect`, so the
+  `PumpTargetCreatureUntilEOT { power_bonus_from_x }` arm reads the
+  cost-minted X. Previously only the spell path did this swap; the gap
+  is why the pre-fix Rust drive needed the synthetic pre-seat.
+
+The cross-engine probe
+(`test_cross_engine_real_eoe_secluded_starforge_pump_by_x_parity`) now
+drives the GENUINE `ActivateAbility` activation on BOTH engines (pay
+`{2}` + tap-self + tap-X-artifacts) and asserts byte-equal: the X
+chosen, which artifacts got tapped, and the target's +X/+0. New
+`tests_rust/test_secluded_starforge_tapx_aa_activation.py` pins the
+cost-atom mechanics (tap set, X seat, pre-tapped exclusion,
+own-untapped-artifacts-only, X=0 no-op). **No remaining
+Secluded-Starforge cross-engine divergence.**
 
 ---
 
