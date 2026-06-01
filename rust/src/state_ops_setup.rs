@@ -217,6 +217,7 @@ fn push_object(
         // resolve arm of `Effect::RegenerateTargetCreature` is the
         // only writer.
         regeneration_shield: false,
+        phased_out: false,
 
         publicly_known_to_caster_bits: 0,
         // CE4 closure: make_state never places objects directly on

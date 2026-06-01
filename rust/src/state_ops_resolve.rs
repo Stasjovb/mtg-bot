@@ -4409,6 +4409,7 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+                    phased_out: false,
 
                     publicly_known_to_caster_bits: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
@@ -4519,6 +4520,7 @@ fn apply_effect(
                 exiled_with_source: None,
                 stun_counters: 0,
                 regeneration_shield: false,
+                phased_out: false,
                 publicly_known_to_caster_bits: 0,
                 etb_timestamp: tok_etb,
                 ueot_modifiers: Vec::new(),
@@ -4735,6 +4737,7 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+                        phased_out: false,
 
                         publicly_known_to_caster_bits: 0,
                         etb_timestamp: bf_etb_base.saturating_add(global_token_idx),
@@ -4916,6 +4919,7 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+                    phased_out: false,
 
                     publicly_known_to_caster_bits: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
@@ -7720,6 +7724,7 @@ fn apply_effect(
                     exiled_with_source: None,
                     stun_counters: 0,
                     regeneration_shield: false,
+                    phased_out: false,
                     publicly_known_to_caster_bits: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
@@ -9272,6 +9277,7 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+                        phased_out: false,
 
                         publicly_known_to_caster_bits: 0,
                         etb_timestamp: tok_etb,
@@ -9513,6 +9519,7 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+                    phased_out: false,
 
                     publicly_known_to_caster_bits: 0,
                     etb_timestamp: tok_etb,
@@ -9692,6 +9699,7 @@ fn apply_effect(
                         stun_counters: 0,
                         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                         regeneration_shield: false,
+                        phased_out: false,
 
                         publicly_known_to_caster_bits: 0,
                         etb_timestamp: tok_etb,
@@ -16239,6 +16247,7 @@ fn apply_effect(
                 stun_counters: 0,
                 // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                 regeneration_shield: false,
+                phased_out: false,
 
                 publicly_known_to_caster_bits: 0,
                 etb_timestamp: etb_ts,
@@ -23430,6 +23439,7 @@ fn apply_effect(
                     stun_counters: 0,
                     // Carrier-AA Phase 1 Cycle 1: shield defaults false.
                     regeneration_shield: false,
+                    phased_out: false,
 
                     publicly_known_to_caster_bits: 0,
                     etb_timestamp: etb_ts,
@@ -26274,6 +26284,72 @@ fn apply_effect(
             }
             // else: silent fizzle (no eligible creature).
         }
+        // **Phasing substrate — Robe of Stars (2026-05-31) —
+        // `PhaseOutEquippedCreature` resolve.** Mirrors Python's
+        // `PhaseOutEquippedCreature.resolve` at
+        // `effects/generic/tap.py:468-489`. Reads the resolving
+        // Equipment source (`source_obj_id`), follows its `attached_to`
+        // link to the equipped host, and stamps `phased_out = true` on
+        // the host. Also clears the host from ongoing combat
+        // (attackers / blockers vecs) to mirror Python's
+        // `creature.attacking = False; creature.blocking = None;
+        // creature.blocked_by = []`.
+        //
+        // **Silent no-op edges (byte-equal with Python).**
+        //   * Source not found / source has no `attached_to` ⇒ no-op
+        //     (Python's `if source is None or source.attached_to is
+        //     None: return`).
+        //   * `attached_to` host not on any battlefield (dangling ref)
+        //     ⇒ no-op (Python's `if creature is None: return`).
+        Effect::PhaseOutEquippedCreature => {
+            // Resolve the source Equipment's attached host id.
+            let host_id: Option<u32> = {
+                let mut found: Option<u32> = None;
+                'find_src: for player in &state.players {
+                    for obj in player.battlefield.iter() {
+                        if obj.id == source_obj_id {
+                            found = obj.attached_to;
+                            break 'find_src;
+                        }
+                    }
+                }
+                found
+            };
+            if let Some(hid) = host_id {
+                // Stamp `phased_out = true` on the host wherever it
+                // lives. If the host id doesn't resolve to a
+                // battlefield object (dangling `attached_to`), this is
+                // a silent no-op (no player owns it).
+                for pidx in 0..state.players.len() {
+                    let has_host = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .any(|o| o.id == hid);
+                    if has_host {
+                        let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                            &mut state.players[pidx].battlefield,
+                        );
+                        for obj in bf_mut.iter_mut() {
+                            if obj.id == hid {
+                                obj.phased_out = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                // Remove the host from ongoing combat (mirrors Python's
+                // attacking/blocking clear). `blockers` entries are
+                // (attacker_id, blocker_id) pairs — drop any pair the
+                // host participates in on either side. Idempotent when
+                // the host is not in combat.
+                state.attackers.retain(|&aid| aid != hid);
+                state
+                    .blockers
+                    .retain(|&(atk, blk)| atk != hid && blk != hid);
+            }
+            // else: silent no-op (no source / no attachment).
+        }
         // **Carrier-AA substrate Phase 1 Cycle 1 (2026-05-25) —
         // `UntapTargetLand` resolve.** Mirrors Python's
         // `UntapTargetLand.resolve` at `effects/generic/tap.py:193-
@@ -28373,6 +28449,7 @@ impl GameState {
             stun_counters: 0,
             // Carrier-AA Phase 1 Cycle 1: shield defaults false.
             regeneration_shield: false,
+            phased_out: false,
 
             publicly_known_to_caster_bits: 0,
             etb_timestamp: etb_ts,
@@ -28552,6 +28629,7 @@ impl GameState {
             stun_counters: 0,
             // Carrier-AA Phase 1 Cycle 1: shield defaults false.
             regeneration_shield: false,
+            phased_out: false,
 
             publicly_known_to_caster_bits: 0,
             etb_timestamp: 0,
