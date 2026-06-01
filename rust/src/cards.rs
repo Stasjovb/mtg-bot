@@ -12437,6 +12437,26 @@ pub struct CardPrinting {
     /// legal emitter (`state_ops_legal.rs`) offers the
     /// `use_warp=true` CastSpell variant iff this is `Some`.
     pub warp_cost: Option<ManaCost>,
+    /// **kicker_cost substrate (Consult-kicker-payment slice,
+    /// 2026-06-01).** The Kicker additional cost (CR 702.33) — the
+    /// `Some(cost)` mana paid ON TOP of `mana_cost` when the spell is
+    /// cast with `Action::CastSpell{kicked: true}`; `None` when the
+    /// printing has no kicker (back-compat default — every pre-slice
+    /// registry dict omits the `kicker_cost` key, which the parser maps
+    /// to `None`, identical to the `warp_cost` Option-parse shape).
+    ///
+    /// Mirrors Python's `CardPrinting.kicker_cost: ManaCost | None`
+    /// (`src/mtg_bot/cards/base.py`). The cast pipeline
+    /// (`state_ops_cast.rs::cast_spell_noncreature`) folds THIS onto
+    /// `mana_cost` (generic + per-color pips summed, CR 601.2f total
+    /// cost) when `kicked=true`, pays the combined cost via
+    /// `auto_tap_pay_for_cost`, and mints `StackItem.was_kicked = true`
+    /// — replacing the prior synthetic `set_stack_top_was_kicked` test
+    /// setter as the real cast-side mint site. The resolve-side rider
+    /// (`current_resolve_was_kicked`, Consult's keep-2-if-kicked) was
+    /// already wired; this field closes the cast-side gap so the
+    /// kicked/unkicked cast is byte-equal end-to-end.
+    pub kicker_cost: Option<ManaCost>,
     /// **warp_cost substrate (Phase 2).** Timeline Culler's "Warp—{B},
     /// Pay 2 life" life rider: the additional life paid as part of the
     /// warp cast (`0` = no rider, the back-compat default — every
@@ -17914,6 +17934,20 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => None,
     };
+    // kicker_cost substrate (Consult-kicker-payment slice, 2026-06-01).
+    // Same dict shape as `mana_cost` / `warp_cost` (`{"generic":N,"U":1}`).
+    // Missing key -> `None` (back-compat — every pre-slice registry dict
+    // omits it). Identical `match dict.get_item(...)? { Some => ...,
+    // None => default }` Option-parse shape as `warp_cost` above.
+    let kicker_cost = match dict.get_item("kicker_cost")? {
+        Some(kc_any) => {
+            let kc_dict = kc_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("kicker_cost must be a dict")
+            })?;
+            Some(parse_mana_cost(kc_dict)?)
+        }
+        None => None,
+    };
     // warp_cost substrate (Phase 2): Timeline Culler's two riders.
     // Same back-compat `match get_item { Some => extract, None =>
     // default }` shape as `warp_cost` above (no serde derive). Missing
@@ -19468,6 +19502,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         activated_abilities,
         starting_loyalty,
         warp_cost,
+        kicker_cost,
         warp_additional_life_cost,
         warp_castable_from_graveyard,
         additional_cost_sacrifice_creature_or_artifact,

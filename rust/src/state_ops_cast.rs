@@ -1771,10 +1771,18 @@ impl GameState {
     /// failures as `cast_creature` (object not in hand, no such
     /// printing, insufficient mana) PLUS "the printing is not a
     /// non-creature Instant/Sorcery".
+    ///
+    /// **Kicker mana-payment (Consult-kicker-payment slice, 2026-06-01).**
+    /// The optional `kicked` arg (defaults `false` — every pre-slice
+    /// 2-arg caller stays byte-identical) folds the printing's
+    /// `kicker_cost` onto the base cost and mints `StackItem.was_kicked
+    /// = true` when set. Mirrors Python's `_cast_spell(..., kicked=...)`.
+    #[pyo3(signature = (obj_id, player_id, kicked=false))]
     fn cast_spell_noncreature(
         &mut self,
         obj_id: u32,
         player_id: u8,
+        kicked: bool,
     ) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
         // Delta 1: hand lookup, with a fallback to the Lightstall
@@ -1857,6 +1865,44 @@ impl GameState {
                 }
             }
             None => return Ok(false),
+        };
+        // **Kicker mana-payment cast pipeline (Consult-kicker-payment
+        // slice, 2026-06-01).** When `kicked=true` AND the printing
+        // carries a `kicker_cost`, fold the kicker onto the base cost
+        // BEFORE X resolution — byte-mirroring Python's
+        // `actions._cast_spell` at `actions.py:1588-1601` (kicker is
+        // added to the generic+colored portion before X is resolved,
+        // CR 601.2f total-cost determination). Generic + each colored
+        // pip are summed; `x_pips` is preserved (the kicker rider on
+        // every EoE kicker printing is a fixed cost — Consult's
+        // `{1}{U}` — so this is a no-op on the X template, matching
+        // Python's `x_pips=cost.x_pips` carry-through). The combined
+        // cost flows into the SAME `auto_tap_pay_for_cost` payment
+        // below, so a kicked cast actually pays base+kicker (the prior
+        // deferral paid only the base). `was_kicked` is minted on the
+        // StackItem after the push (see the post-push set below) — the
+        // real cast-side mint replacing the synthetic
+        // `set_stack_top_was_kicked` test setter.
+        //
+        // `kicked=true` with NO `kicker_cost` on the printing is a
+        // no-op fold (the spell has no kicker to pay) — the legal
+        // emitter never offers a kicked cast for a non-kicker printing,
+        // so this branch is defensive parity only.
+        let cost = if kicked {
+            match self.registry.lookup(printing_id).and_then(|p| p.kicker_cost.clone()) {
+                Some(kc) => crate::cards::ManaCost {
+                    generic: cost.generic.saturating_add(kc.generic),
+                    white: cost.white.saturating_add(kc.white),
+                    blue: cost.blue.saturating_add(kc.blue),
+                    black: cost.black.saturating_add(kc.black),
+                    red: cost.red.saturating_add(kc.red),
+                    green: cost.green.saturating_add(kc.green),
+                    x_pips: cost.x_pips,
+                },
+                None => cost,
+            }
+        } else {
+            cost
         };
         // **X-value-subsystem-C2.5 (2026-05-22) — cast-pipeline
         // detector.** If the printing carries an X-cost
@@ -3257,6 +3303,24 @@ impl GameState {
                 // path (`actions.py:1762`).
                 bound_x_value,
             ));
+        }
+        // **Kicker mana-payment cast pipeline (Consult-kicker-payment
+        // slice, 2026-06-01) — mint `was_kicked`.** The StackItem
+        // constructors above default `was_kicked: false`; when this
+        // cast paid the kicker (the base+kicker fold above), set the
+        // just-pushed top item's flag to `true`. This is the REAL
+        // cast-side mint site — byte-mirroring Python's
+        // `StackItem(..., kicked=kicked)` at `actions.py:1762` (the
+        // flag is threaded from the cast action, not a synthetic
+        // setter). The resolve-side `current_resolve_was_kicked` swap
+        // (`state_ops_resolve.rs`) already reads `top.was_kicked` to
+        // drive Consult's keep-2-if-kicked rider, so the kicked cast
+        // now resolves byte-equal to Python end-to-end. Unkicked casts
+        // leave the default `false` — byte-identical to pre-slice.
+        if kicked {
+            if let Some(top) = self.stack.last_mut() {
+                top.was_kicked = true;
+            }
         }
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.

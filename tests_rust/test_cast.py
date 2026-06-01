@@ -1588,3 +1588,136 @@ def test_auto_tap_any_coin_partial_spend_leaves_remaining_any():
         "exactly one wildcard consumed; the other stays — partial-spend "
         "byte-mirror of the Python FIFO drain"
     )
+
+
+# ====================================================================
+# Kicker mana-payment cast pipeline (Consult-kicker-payment slice,
+# 2026-06-01). `cast_spell_noncreature(obj_id, player_id, kicked=true)`
+# folds the printing's `kicker_cost` onto `mana_cost` (CR 601.2f total
+# cost), pays base+kicker via `auto_tap_pay_for_cost`, and mints
+# `StackItem.was_kicked = true` — the REAL cast-side mint replacing the
+# synthetic `set_stack_top_was_kicked` test setter. Mirrors Python's
+# `_cast_spell(..., kicked=...)` kicker fold + `StackItem(kicked=...)`.
+# ====================================================================
+
+
+def _kicker_spell_dict():
+    """A {1}{U} Instant carrying a {1}{U} kicker (Consult-shape kicker
+    cost). The effect is an inert draw so these pins exercise the
+    cast-side payment + flag mint in isolation (the Consult resolve
+    rider has its own cross-engine probe)."""
+    return {
+        "name": "TestKickerSpell",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "kicker_cost": {"generic": 1, "U": 1},
+        "effects": [{"kind": "draw_cards", "count": 1}],
+    }
+
+
+def test_kicker_cost_parses_round_trip():
+    """Pin: a printing dict carrying a `kicker_cost` key registers
+    without error (the parser maps it to `Some(ManaCost)`); a dict
+    omitting the key registers identically (back-compat `None`)."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    pid_kicker = r.register_printing(_kicker_spell_dict())
+    assert isinstance(pid_kicker, int)
+    # Omitting kicker_cost still registers (back-compat None default).
+    no_kicker = dict(_kicker_spell_dict())
+    no_kicker.pop("kicker_cost")
+    no_kicker["name"] = "TestNoKicker"
+    pid_plain = r.register_printing(no_kicker)
+    assert isinstance(pid_plain, int)
+
+
+def test_kicked_cast_pays_base_plus_kicker_and_mints_was_kicked():
+    """Pin: a kicked cast of a {1}{U} + {1}{U}-kicker spell pays the
+    COMBINED {1}{U}{1}{U} (blue 2 + generic 2) and mints
+    `StackItem.was_kicked = true` — the real cast-side mint."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    spell = _kicker_spell_dict()
+    r.register_printing(spell)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(spell, 0, ZONE_HAND)
+    # Fund the full base+kicker: 2 blue + 2 generic.
+    gs.add_mana(0, "U", 2)
+    gs.add_mana(0, "C", 2)
+    stack_before = gs.stack_size()
+
+    ok = gs.cast_spell_noncreature(iid, 0, True)
+    assert ok, "kicked cast must succeed when base+kicker is payable"
+    assert gs.stack_size() == stack_before + 1
+    # was_kicked minted on the just-pushed StackItem (real cast mint).
+    assert gs.stack_top_was_kicked() is True
+    # Combined cost fully drained ({1}{U}{1}{U} = blue 2 + generic 2).
+    pool = gs.get_mana_pool(0)
+    assert pool.get("U", 0) == 0, "both blue pips (base+kicker) spent"
+    assert pool.get("C", 0) == 0, "both generic pips (base+kicker) spent"
+
+
+def test_unkicked_cast_pays_base_only_leaves_was_kicked_false():
+    """Pin: an unkicked cast (default `kicked=false`) of the SAME
+    kicker-carrying spell pays ONLY the base {1}{U} and leaves
+    `was_kicked = false` — byte-identical to a non-kicker spell. Proves
+    the kicker fold is gated on the flag, not the printing."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    spell = _kicker_spell_dict()
+    r.register_printing(spell)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(spell, 0, ZONE_HAND)
+    gs.add_mana(0, "U", 2)
+    gs.add_mana(0, "C", 2)
+
+    # Default kicked=false (2-arg call — back-compat signature).
+    ok = gs.cast_spell_noncreature(iid, 0)
+    assert ok, "unkicked cast must succeed (base {1}{U} payable)"
+    assert gs.stack_top_was_kicked() is False
+    # Only the base {1}{U} (2 mana) drained — the kicker's extra {1}{U}
+    # was NOT charged, so 2 of the original 4 mana remain (the precise
+    # per-color residue follows the FIFO colored-then-generic drain; the
+    # load-bearing claim is the TOTAL spend == base-only == 2).
+    pool = gs.get_mana_pool(0)
+    total_remaining = pool.get("U", 0) + pool.get("C", 0) + pool.get("any", 0)
+    assert total_remaining == 2, (
+        f"unkicked cast must spend ONLY the base {{1}}{{U}} (2 mana); "
+        f"4 funded - 2 base = 2 remain, got {total_remaining}"
+    )
+
+
+def test_kicked_cast_fails_when_only_base_payable():
+    """Pin (the load-bearing 'kicker is genuinely charged' guard): with
+    mana for ONLY the base {1}{U} (and no land headroom), a kicked cast
+    FAILS to pay (returns false, no mutation) — proving
+    `cast_spell_noncreature` actually charges the kicker, not a synthetic
+    flag. The unkicked cast of the same state succeeds."""
+    import mtg_bot_engine as e
+
+    r = e.Registry()
+    spell = _kicker_spell_dict()
+    r.register_printing(spell)
+    gs = e.make_state(r, [], [])
+    iid = gs.register_and_inject_object(spell, 0, ZONE_HAND)
+    # Only the base {1}{U}: 1 blue + 1 generic. No lands -> no auto-tap
+    # headroom, so the kicker's extra {1}{U} is unpayable.
+    gs.add_mana(0, "U", 1)
+    gs.add_mana(0, "C", 1)
+    pool_before = gs.get_mana_pool(0)
+    stack_before = gs.stack_size()
+
+    ok = gs.cast_spell_noncreature(iid, 0, True)
+    assert ok is False, "kicked cast must FAIL — kicker {1}{U} unpayable"
+    # No mutation: pool unchanged, card in hand, no stack push.
+    assert gs.get_mana_pool(0) == pool_before
+    assert gs.find_object_zone(iid) == ZONE_HAND
+    assert gs.stack_size() == stack_before
+
+    # Sanity: the unkicked cast of this exact state DOES succeed.
+    ok_unkicked = gs.cast_spell_noncreature(iid, 0, False)
+    assert ok_unkicked is True, "base-only cast must succeed"
+    assert gs.stack_top_was_kicked() is False
