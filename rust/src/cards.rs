@@ -11915,6 +11915,34 @@ pub struct ActivationCost {
     /// planeswalkers (CR 119.5 / Slice B), once-per-turn-per-walker
     /// ledger (CR 606.3 / Slice C).
     pub loyalty: i32,
+    /// **Secluded Starforge tap-X-artifacts cost (2026-06-01).**
+    /// "Tap X untapped artifacts you control" — a variable-X cost
+    /// where X = how many untapped artifacts the activator chooses to
+    /// tap (Secluded Starforge's AA2). When `true`, the dispatcher
+    /// taps the lowest-id-first X untapped artifacts the activator
+    /// controls (excluding the source) and seats the chosen X onto the
+    /// pushed `StackItem.x_value` so the resolving
+    /// `Effect::PumpTargetCreatureUntilEOT { power_bonus_from_x: true }`
+    /// reads it via `state.current_resolve_x_value`. Mirrors Python's
+    /// `ActivationCost.tap_x_untapped_artifacts_you_control` at
+    /// `effects/base.py:417` + the `_activate_ability` cost-payment at
+    /// `actions.py:2011-2043`.
+    ///
+    /// **Deterministic-X convention (no-agent fallback).** The Rust
+    /// dispatch has no agent hook; under the deterministic-first
+    /// convention used across this campaign (no-tap / dual-target
+    /// cost-choice work picked deterministic-first), the activator
+    /// taps the MAXIMUM affordable X (every untapped artifact they
+    /// control) — the unique deterministic non-trivial choice that
+    /// matches a test driving X via an agent that returns the upper
+    /// bound. Python's `choose_x` is agent-driven (X = agent's pick,
+    /// clamped to the untapped-artifact count); the Rust apply path
+    /// taps the full set and seats that count. Tests drive byte-equal
+    /// by pre-tapping artifacts on each engine so the untapped count
+    /// (the upper bound) is identical, and the Python agent returns
+    /// that upper bound — so both engines tap the SAME lowest-id-first
+    /// set and seat the SAME X.
+    pub tap_x_untapped_artifacts_you_control: bool,
 }
 
 // =====================================================================
@@ -17884,6 +17912,7 @@ pub fn apply_mana_produced_bridge(
                 sacrifice_food: false,
                 sacrifice_a_desert: false,
                 loyalty: 0,
+                tap_x_untapped_artifacts_you_control: false,
             },
             effect: Effect::AddManaToPool {
                 color: sym.clone(),
@@ -19646,7 +19675,8 @@ fn parse_activation_cost(
             | "sacrifice_another_artifact"
             | "sacrifice_food"
             | "sacrifice_a_desert"
-            | "loyalty" => {}
+            | "loyalty"
+            | "tap_x_untapped_artifacts_you_control" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown activation_cost key {other:?}; \
@@ -19655,7 +19685,7 @@ fn parse_activation_cost(
                      sacrifice_another_creature_or_artifact, \
                      sacrifice_a_land, sacrifice_another_artifact, \
                      sacrifice_food, sacrifice_a_desert, \
-                     loyalty"
+                     loyalty, tap_x_untapped_artifacts_you_control"
                 )));
             }
         }
@@ -19744,6 +19774,19 @@ fn parse_activation_cost(
                  positive = pay-loyalty, negative = add-loyalty)",
             )
         })?;
+    }
+    // Secluded Starforge tap-X-artifacts cost (2026-06-01). Optional
+    // bool; missing key is back-compat-OK (default false).
+    if let Some(tap_x_any) =
+        dict.get_item("tap_x_untapped_artifacts_you_control")?
+    {
+        cost.tap_x_untapped_artifacts_you_control =
+            tap_x_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.tap_x_untapped_artifacts_you_control \
+                     must be a bool",
+                )
+            })?;
     }
     Ok(cost)
 }

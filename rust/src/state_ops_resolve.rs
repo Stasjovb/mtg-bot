@@ -28732,7 +28732,26 @@ impl GameState {
             // after apply.
             let saved_ctrl = self.current_resolve_source_controller;
             self.current_resolve_source_controller = Some(top.controller);
+            // **Secluded Starforge tap-X-artifacts cost (2026-06-01).**
+            // Swap in the StackItem's `x_value` for the duration of the
+            // trigger/activation's `apply_effect` so the
+            // `Effect::PumpTargetCreatureUntilEOT { power_bonus_from_x }`
+            // resolve arm reads the cost-minted X via
+            // `current_resolve_x_value` — mirroring the spell path's
+            // identical swap below and Python's `state.resolving_x_value`
+            // swap at `actions.py:2711`. `None` for every pre-tap-X
+            // trigger / activation (back-compat — the field default is
+            // `None`, so the swap is a no-op `None → None` for them and
+            // every non-X-reading resolve arm ignores the slot).
+            // Save → set → restore-bracketed exactly like the
+            // payload-target / source-controller siblings so no
+            // observable state leaks across resolution boundaries.
+            // Mirrored into BOTH resolve entry points (resolve_top_of_
+            // stack + _pause) per the §3.4 sibling-parity requirement.
+            let saved_x_value = self.current_resolve_x_value;
+            self.current_resolve_x_value = top.x_value;
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_x_value = saved_x_value;
             self.current_resolve_source_controller = saved_ctrl;
             self.resolving_combat_damage_amount = saved_cd_amt;
             self.resolving_combat_damage_source_controller_id = saved_cd_src;
@@ -29119,7 +29138,26 @@ impl GameState {
             // swap as `resolve_top_of_stack` above.
             let saved_ctrl = self.current_resolve_source_controller;
             self.current_resolve_source_controller = Some(top.controller);
+            // **Secluded Starforge tap-X-artifacts cost (2026-06-01).**
+            // Swap in the StackItem's `x_value` for the duration of the
+            // trigger/activation's `apply_effect` so the
+            // `Effect::PumpTargetCreatureUntilEOT { power_bonus_from_x }`
+            // resolve arm reads the cost-minted X via
+            // `current_resolve_x_value` — mirroring the spell path's
+            // identical swap below and Python's `state.resolving_x_value`
+            // swap at `actions.py:2711`. `None` for every pre-tap-X
+            // trigger / activation (back-compat — the field default is
+            // `None`, so the swap is a no-op `None → None` for them and
+            // every non-X-reading resolve arm ignores the slot).
+            // Save → set → restore-bracketed exactly like the
+            // payload-target / source-controller siblings so no
+            // observable state leaks across resolution boundaries.
+            // Mirrored into BOTH resolve entry points (resolve_top_of_
+            // stack + _pause) per the §3.4 sibling-parity requirement.
+            let saved_x_value = self.current_resolve_x_value;
+            self.current_resolve_x_value = top.x_value;
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_x_value = saved_x_value;
             self.current_resolve_source_controller = saved_ctrl;
             self.resolving_combat_damage_amount = saved_cd_amt;
             self.resolving_combat_damage_source_controller_id = saved_cd_src;

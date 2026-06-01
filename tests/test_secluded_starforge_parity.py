@@ -29,10 +29,20 @@ substrate and flips the card BLOCKED-SG → PROBED:
 
 The genuine PROBED-tier evidence is
 ``test_cross_engine_real_eoe_secluded_starforge_pump_by_x_parity``: it
-drives AA2's +X/+0 pump on BOTH engines (seat a target creature + X,
-resolve, assert the target's effective power is byte-equal) PLUS AA1
-(mana) and AA3 (Robot token) parser pins so the WHOLE 3-AA printing is
-faithful.
+drives AA2's +X/+0 pump via the REAL ``ActivateAbility`` cost path on
+BOTH engines (``{2}`` + tap-self + tap-X-untapped-artifacts — X minted
+from really tapping artifacts, NOT pre-seated), resolves, and asserts
+the X chosen, the tapped-artifact set, and the target's effective power
+are byte-equal PLUS AA1 (mana) and AA3 (Robot token) parser pins so the
+WHOLE 3-AA printing is faithful.
+
+**Rust-cost-wired closure (2026-06-01, ``feature/secluded-tapx-rust``).**
+The Rust ``ActivateAbility`` cost-payment now pays the tap-X cost itself
+(new ``ActivationCost.tap_x_untapped_artifacts_you_control`` atom +
+Phase 5a-X commit in ``state_ops_actions.rs`` + a trigger-path
+``x_value`` swap in ``state_ops_resolve.rs``), instead of consuming a
+pre-seated ``current_resolve_x_value``. The cross-engine probe drives
+the genuine activation on both engines.
 
 This module IS registered in
 ``scripts/measure_pool_parity.PROBE_MODULES``.
@@ -273,138 +283,197 @@ def test_rust_pump_by_x_round_trips_flag():
 
 def test_cross_engine_real_eoe_secluded_starforge_pump_by_x_parity():
     """**GENUINE cross-engine probe — Secluded Starforge AA2 tap-X-
-    artifacts +X/+0 pump. PROBED-tier flip.**
+    artifacts +X/+0 pump, driven by the REAL AA ACTIVATION on BOTH
+    engines. PROBED-tier flip + Rust-cost-wired closure (2026-06-01).**
 
-    Drives AA2's variable-X pump on BOTH engines with X seated on the
-    StackItem (the established X-cost probe shape — GSZ / Zero Point
-    Ballad seat X directly via ``set_stack_top_x_value`` / a Python
-    ``StackItem(x_value=...)``; the cost-payment tap-X path that mints X
-    is exercised separately by the Python ``_activate_ability`` unit
-    tests below). A single 2/2 bear is the pump target on each engine,
-    X=3, so the byte-equal observable is the bear's effective power
-    2 → 5 (toughness unchanged at 2) on both engines.
+    Previously the Rust drive PRE-SEATED ``current_resolve_x_value``
+    synthetically (``set_stack_top_x_value``) while only Python paid the
+    tap-X cost. This now drives the genuine ``ActivateAbility`` cost path
+    on BOTH engines — ``{2}`` mana + tap-self + tap-X-untapped-artifacts
+    — so the X is MINTED from really tapping artifacts on each side, not
+    handed in.
+
+    Board (identical on both engines, p0): a 2/2 bear (the deterministic
+    pump target — only creature on the bf), 2 untapped artifacts, the
+    Secluded Starforge source carrying AA2's full cost, and ``{2}`` of
+    pool mana. Activating AA2 taps the source + both artifacts (X=2),
+    pushes the +X/+0 pump carrying X, and resolving it gives the bear
+    +2/+0.
+
+    Byte-equal observables asserted across engines:
+      * X chosen (2 — the untapped-artifact count),
+      * which artifacts got tapped (BOTH, the full set),
+      * the source tapped, ``{2}`` debited,
+      * the bear's effective power 2 → 4, toughness unchanged at 2.
+
+    Python's ``choose_x`` is agent-driven (returns the upper bound = the
+    untapped-artifact count); Rust's no-agent dispatch taps the full set
+    deterministically. With the same untapped set on both engines, both
+    tap the SAME lowest-id-first artifacts and seat the SAME X.
     """
     from mtg_bot.parity.cross_engine import (
         DeckSpec, build_python_state, build_rust_state,
     )
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
-    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.effects.base import ActivatedAbility, ActivationCost
     from mtg_bot.game import (
-        StackItem, Zone, effective_power, effective_toughness,
+        ManaCoin, Zone, effective_power, effective_toughness,
     )
 
-    # Verify-first: the real printing's AA2 is the X-pump.
+    # Verify-first: the real printing's AA2 is the tap-X X-pump with the
+    # full {2} + tap-self + tap-X-artifacts cost.
     real = get_active_source().get_printings().get("Secluded Starforge")
     if real is None:
         pytest.skip("Secluded Starforge absent from active CardSource")
     aa2 = real.activated_abilities[1]
     assert isinstance(aa2.effect, PumpTargetCreatureUntilEOT)
     assert aa2.effect.power_bonus_from_x is True
+    assert aa2.cost.tap_self is True
+    assert aa2.cost.tap_x_untapped_artifacts_you_control is True
+    assert aa2.cost.mana is not None and aa2.cost.mana.generic == 2
 
     spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
     py = build_python_state(spec)
     rs = build_rust_state(spec)
 
     _ZB = 2
-    _X = 3
+    _N_ARTIFACTS = 2  # both untapped → X = 2
 
-    # ---- Rust: seat a 2/2 bear, push the AA2 pump with X=3, resolve.
+    # ---- Rust: seat the bear, 2 artifacts, the Starforge source with
+    # the FULL AA2 cost, fund {2}, then drive the REAL activation.
     rs_bear = rs.register_and_inject_object(
-        {
-            "name": "Bear",
-            "card_types": ["Creature"],
-            "power": 2,
-            "toughness": 2,
-        },
+        {"name": "Bear", "card_types": ["Creature"], "power": 2, "toughness": 2},
         0,
         _ZB,
     )
-    rs_spell = rs.register_and_inject_object(
+    rs_arts = [
+        rs.register_and_inject_object(
+            {"name": "Trinket", "card_types": ["Artifact"]}, 0, _ZB
+        )
+        for _ in range(_N_ARTIFACTS)
+    ]
+    rs_src = rs.register_and_inject_object(
         {
             "name": "Secluded Starforge",
             "card_types": ["Land"],
-            "effects": [
+            "activated_abilities": [
                 {
-                    "kind": "pump_target_creature_until_eot",
-                    "power_bonus": 0,
-                    "toughness_bonus": 0,
-                    "power_bonus_from_x": True,
+                    "cost": {
+                        "mana": {"generic": 2},
+                        "tap_self": True,
+                        "tap_x_untapped_artifacts_you_control": True,
+                    },
+                    "effect": {
+                        "kind": "pump_target_creature_until_eot",
+                        "power_bonus": 0,
+                        "toughness_bonus": 0,
+                        "power_bonus_from_x": True,
+                    },
+                    "is_mana_ability": False,
                 }
             ],
         },
         0,
-        0,
+        _ZB,
     )
-    rs.push_to_stack(rs_spell, 0)
-    rs.set_stack_top_x_value(_X)
+    rs.add_mana(0, "C", 2)
     assert rs.effective_power(rs_bear) == 2
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": rs_src, "ability_index": 0}
+    )
+    rs_x = rs.stack_top_x_value()
+    rs_tapped_arts = sorted(a for a in rs_arts if rs.is_tapped(a))
+    assert rs.is_tapped(rs_src) is True
+    assert rs.get_mana_pool(0)["C"] == 0
     rs.resolve_top_of_stack()
     assert rs.stack_size() == 0
 
-    # ---- Python: seat a 2/2 bear, push the AA2 pump with x_value=3,
-    # resolve. The source is the Starforge; targets is the bear.
+    # ---- Python: identical board; an agent that taps every untapped
+    # artifact (choose_x returns the upper bound) + targets the bear.
+    class _TapAllAgent:
+        def choose_x(self, state, pid, name, upper):
+            return upper  # tap every untapped artifact
+
+        def choose_target(self, state, pid, options):
+            return options[0]
+
+    py.players[0].agent = _TapAllAgent()
+
     bear_printing = CardPrinting(
-        name="Bear",
-        mana_cost_str="",
-        mana_cost=ManaCost(),
-        type_line="Creature",
-        supertypes=(),
-        card_types=("Creature",),
-        subtypes=(),
-        power=2,
-        toughness=2,
-        produces=frozenset(),
+        name="Bear", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Creature", supertypes=(), card_types=("Creature",),
+        subtypes=(), power=2, toughness=2, produces=frozenset(),
     )
     py_bear = py.new_object(bear_printing, owner_id=0, zone=Zone.BATTLEFIELD)
     py_bear.summoning_sick = False
     py_bear.tapped = False
-    py_bear.damage = 0
-    py_bear.etb_timestamp = py.next_timestamp
-    py.next_timestamp += 1
     py.battlefield.append(py_bear)
-    assert effective_power(py, py_bear) == 2
+
+    art_printing = CardPrinting(
+        name="Trinket", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Artifact", supertypes=(), card_types=("Artifact",),
+        subtypes=(), produces=frozenset(),
+    )
+    py_arts = []
+    for _ in range(_N_ARTIFACTS):
+        o = py.new_object(art_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+        o.tapped = False
+        py.battlefield.append(o)
+        py_arts.append(o)
 
     starforge_printing = CardPrinting(
-        name="Secluded Starforge",
-        mana_cost_str="",
-        mana_cost=ManaCost(),
-        type_line="Land",
-        supertypes=(),
-        card_types=("Land",),
-        subtypes=(),
+        name="Secluded Starforge", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Land", supertypes=(), card_types=("Land",), subtypes=(),
         produces=frozenset({"C"}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=ManaCost(generic=2),
+                    tap_self=True,
+                    tap_x_untapped_artifacts_you_control=True,
+                ),
+                effect=PumpTargetCreatureUntilEOT(power_bonus_from_x=True),
+            ),
+        ),
     )
     py_src = py.new_object(
         starforge_printing, owner_id=0, zone=Zone.BATTLEFIELD,
     )
+    py_src.tapped = False
     py.battlefield.append(py_src)
-    pump_ability = ActivatedAbility(
-        cost=ActivationCost(),  # cost already paid; resolve-only here
-        effect=PumpTargetCreatureUntilEOT(power_bonus_from_x=True),
-    )
-    py.stack.append(
-        StackItem(
-            source=py_src,
-            controller_id=0,
-            ability=pump_ability,
-            targets=(("creature", py_bear.id),),
-            x_value=_X,
-        )
-    )
+    # Fund {2} as floating colorless pool mana (auto_tap_for_cost
+    # consumes the pool first, so no lands needed).
+    py.players[0].mana_pool.extend([ManaCoin(color="C"), ManaCoin(color="C")])
+
+    assert effective_power(py, py_bear) == 2
+    _activate_ability(py, 0, py_src.id, 0)
+    py_x = py.stack[-1].x_value
+    py_tapped_arts = sorted(o.id for o in py_arts if o.tapped)
+    assert py_src.tapped is True
+    assert len(py.players[0].mana_pool) == 0, "{2} consumed from pool"
     resolve_top_of_stack(py)
     assert len(py.stack) == 0
 
-    # ---- Byte-equal observable: the bear's effective power 2 → 5 on
-    # BOTH engines, toughness unchanged at 2.
-    assert effective_power(py, py_bear) == 5, (
-        "Python: bear gets +X/+0 with X=3 → power 5"
+    # ---- Byte-equal cross-engine observables.
+    # X chosen (both engines mint X = 2 from the untapped-artifact count).
+    assert rs_x == 2
+    assert py_x == 2
+    assert rs_x == py_x, "X minted from the tap-X cost is byte-equal"
+    # Which artifacts got tapped: the FULL set on each engine (the same
+    # lowest-id-first ids; both engines tapped both artifacts).
+    assert rs_tapped_arts == sorted(rs_arts)
+    assert py_tapped_arts == sorted(o.id for o in py_arts)
+    assert len(rs_tapped_arts) == len(py_tapped_arts) == _N_ARTIFACTS
+    # The bear's effective power 2 → 4 on BOTH engines, toughness 2.
+    assert effective_power(py, py_bear) == 4, (
+        "Python: bear gets +X/+0 with X=2 → power 4"
     )
     assert effective_toughness(py, py_bear) == 2
-    assert rs.effective_power(rs_bear) == 5, (
-        "Rust: bear gets +X/+0 with X=3 → power 5 (byte-equal)"
+    assert rs.effective_power(rs_bear) == 4, (
+        "Rust: bear gets +X/+0 with X=2 → power 4 (byte-equal)"
     )
     assert rs.effective_toughness(rs_bear) == 2
     assert effective_power(py, py_bear) == rs.effective_power(rs_bear)
