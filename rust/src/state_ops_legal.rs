@@ -3431,8 +3431,29 @@ impl GameState {
             //     controller must have the mana already in pool to
             //     activate); only emission widens. Pins I50.
             let headroom_pool = auto_tap_headroom_pool(self, idx);
+            // **Manland grant enum (2026-06-01).** Effective activated
+            // abilities = the printing's own AAs followed by any
+            // UEOT-granted AAs on the object (manland-animate grants:
+            // Wandering Fumarole's `{0}` switch, Lavaclaw Reaches' `{X}`
+            // pump). The granted AAs append AFTER the printing AAs, in
+            // push order — byte-equal with Python's
+            // `effective_activated_abilities` (own first, then layer-6
+            // `grant_activated_ability` entries in timestamp order). The
+            // `ability_index` therefore continues past the printing AAs,
+            // and `Action::ActivateAbility{ability_index}` resolves the
+            // same composed index (see `state_ops_actions.rs`). The
+            // common no-grant case allocates an empty Vec and is
+            // byte-identical to iterating `printing.activated_abilities`
+            // directly.
+            let granted = obj.ueot_granted_activated_abilities();
+            let effective_abilities: Vec<&crate::cards::ActivatedAbility> =
+                printing
+                    .activated_abilities
+                    .iter()
+                    .chain(granted.iter().copied())
+                    .collect();
             for (ability_index, ability) in
-                printing.activated_abilities.iter().enumerate()
+                effective_abilities.iter().copied().enumerate()
             {
                 // CE20 follow-up Slice 3 (Spacecraft station-charge):
                 // tier_threshold gates usability. The source must

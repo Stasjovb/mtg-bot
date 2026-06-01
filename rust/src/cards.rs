@@ -7851,19 +7851,31 @@ pub enum Effect {
     /// UEOT-clear pass (cleanup step), reverting the land to its
     /// non-creature state.
     ///
-    /// **Schema simplification vs Python.** Python's
-    /// `BecomeLandCreatureUEOT` carries `granted_keywords`,
-    /// `unblockable`, `granted_activated_abilities`, and
-    /// `granted_triggered_abilities`. The Rust first slice carries
-    /// only `power`, `toughness`, and optional `granted_subtype` —
-    /// the keyword / unblockable / granted-ability riders compose
-    /// via separate effect chains or wait for follow-up slices.
-    /// `(0, 0)` with no subtype is a legal no-op for parity edge
-    /// cases.
+    /// **Schema vs Python.** Python's `BecomeLandCreatureUEOT`
+    /// carries `granted_keywords`, `unblockable`,
+    /// `granted_activated_abilities`, and `granted_triggered_abilities`.
+    /// The Rust substrate carries `power`, `toughness`, optional
+    /// `granted_subtype`, and `granted_activated_abilities` (the nested
+    /// manland AAs — Wandering Fumarole's `{0}` switch / Lavaclaw
+    /// Reaches' `{X}` pump). The `granted_keywords` / `unblockable` /
+    /// `granted_triggered_abilities` riders still compose via separate
+    /// effect chains or wait for follow-up slices. `(0, 0)` with no
+    /// subtype and no grants is a legal no-op for parity edge cases.
+    ///
+    /// **`granted_activated_abilities` (2026-06-01 — manland grant
+    /// enum).** At resolve the animated land carries each nested AA via
+    /// a `UeotModifier::GrantedActivatedAbility` entry (in this Vec's
+    /// order, AFTER the land's own printing AAs). `legal_decisions`
+    /// then enumerates the granted AA at `ability_index = N_printing +
+    /// i`, matching Python's `effective_activated_abilities` append
+    /// order (own abilities first, then layer-6 grants in timestamp
+    /// order), so the `{0}` switch / `{X}` pump is byte-equal-enumerable
+    /// + activatable on Rust.
     BecomeLandCreatureUEOT {
         power: i32,
         toughness: i32,
         granted_subtype: Option<String>,
+        granted_activated_abilities: Vec<ActivatedAbility>,
     },
     /// **Manland nested-granted-AA substrate (2026-05-31 — Lavaclaw
     /// Reaches closure).** Source gets `+X/+0` until end of turn, where
@@ -11757,7 +11769,7 @@ pub struct TriggeredAbility {
 /// Cost composition for an `ActivatedAbility`. First-slice minimal —
 /// payable from the controller's mana pool, plus an optional implicit
 /// `{T}` tap-self.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ActivationCost {
     /// Mana portion of the cost. An all-zero `ManaCost` (the
     /// `Default::default()` shape) is a "free" cost — payable with no
@@ -12236,7 +12248,7 @@ pub enum ExternalCondition {
 /// `_python_aa_to_safe_dict` widen at Phase 4C C2 admits the rider
 /// onto the AA dict so Ghost Vacuum's AA[1] round-trips through the
 /// admit gate. Phase N closes the legality gate.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivatedAbility {
     /// Cost to activate the ability. The dispatcher checks
     /// affordability (mana-pool side) then commits the cost (tap +
@@ -16449,10 +16461,43 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 }
                 None => None,
             };
+            // `granted_activated_abilities` (2026-06-01 — manland grant
+            // enum). Optional list of nested AA dicts (parsed via the
+            // same `parse_activated_ability` recursion the printing's
+            // own AAs use). Missing / empty → no grants (back-compat
+            // with every prior emitter). Mirrors Python's
+            // `BecomeLandCreatureUEOT.granted_activated_abilities`
+            // tuple of `ActivatedAbility`.
+            let granted_activated_abilities: Vec<ActivatedAbility> =
+                match dict.get_item("granted_activated_abilities")? {
+                    Some(v) if !v.is_none() => {
+                        let list = v.downcast::<PyList>().map_err(|_| {
+                            PyValueError::new_err(
+                                "become_land_creature_ueot.\
+                                 granted_activated_abilities must be a list",
+                            )
+                        })?;
+                        let mut out = Vec::with_capacity(list.len());
+                        for item in list.iter() {
+                            let aa_dict =
+                                item.downcast::<PyDict>().map_err(|_| {
+                                    PyValueError::new_err(
+                                        "become_land_creature_ueot.\
+                                         granted_activated_abilities entries \
+                                         must be dicts",
+                                    )
+                                })?;
+                            out.push(parse_activated_ability(aa_dict)?);
+                        }
+                        out
+                    }
+                    _ => Vec::new(),
+                };
             Ok(Effect::BecomeLandCreatureUEOT {
                 power,
                 toughness,
                 granted_subtype,
+                granted_activated_abilities,
             })
         }
         "pump_self_x_power_ueot" => {
@@ -20326,6 +20371,78 @@ fn mana_cost_to_pydict<'py>(
     Ok(d)
 }
 
+/// **Manland grant enum (2026-06-01).** Serialize one `ActivationCost`
+/// to its registry-dict shape, the inverse of `parse_activation_cost`.
+/// Only emits non-default keys so the round-trip stays byte-equal with
+/// the minimal dicts the bridge / tests build. `mana` is emitted only
+/// when non-empty (an all-zero `ManaCost` is a free `{0}` cost — its
+/// dict is omitted entirely, matching `parse_activation_cost`'s
+/// "missing `mana` key → `ManaCost::default()`").
+fn activation_cost_to_pydict<'py>(
+    py: Python<'py>,
+    cost: &ActivationCost,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    if cost.mana != ManaCost::default() {
+        d.set_item("mana", mana_cost_to_pydict(py, &cost.mana)?)?;
+    }
+    if cost.tap_self {
+        d.set_item("tap_self", true)?;
+    }
+    if cost.sacrifice_self {
+        d.set_item("sacrifice_self", true)?;
+    }
+    if cost.requires_target_creature_you_control {
+        d.set_item("requires_target_creature_you_control", true)?;
+    }
+    if cost.sacrifice_another_creature_or_artifact {
+        d.set_item("sacrifice_another_creature_or_artifact", true)?;
+    }
+    if cost.sacrifice_a_land {
+        d.set_item("sacrifice_a_land", true)?;
+    }
+    if cost.sacrifice_another_artifact {
+        d.set_item("sacrifice_another_artifact", true)?;
+    }
+    if cost.sacrifice_food {
+        d.set_item("sacrifice_food", true)?;
+    }
+    if cost.sacrifice_a_desert {
+        d.set_item("sacrifice_a_desert", true)?;
+    }
+    if cost.loyalty != 0 {
+        d.set_item("loyalty", cost.loyalty)?;
+    }
+    if cost.tap_x_untapped_artifacts_you_control {
+        d.set_item("tap_x_untapped_artifacts_you_control", true)?;
+    }
+    Ok(d)
+}
+
+/// **Manland grant enum (2026-06-01).** Serialize one `ActivatedAbility`
+/// to its registry-dict shape, the inverse of `parse_activated_ability`.
+/// Used by the `become_land_creature_ueot` `effect_to_pydict` arm so the
+/// nested `granted_activated_abilities` round-trip
+/// (parse → to_pydict → parse) stays stable.
+fn activated_ability_to_pydict<'py>(
+    py: Python<'py>,
+    ab: &ActivatedAbility,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("cost", activation_cost_to_pydict(py, &ab.cost)?)?;
+    d.set_item("effect", effect_to_pydict(py, &ab.effect)?)?;
+    if ab.is_mana_ability {
+        d.set_item("is_mana_ability", true)?;
+    }
+    if ab.tier_threshold != 0 {
+        d.set_item("tier_threshold", ab.tier_threshold)?;
+    }
+    if ab.sorcery_speed {
+        d.set_item("sorcery_speed", true)?;
+    }
+    Ok(d)
+}
+
 fn target_filter_to_pydict<'py>(
     py: Python<'py>,
     target: &TargetFilter,
@@ -21933,6 +22050,7 @@ pub(crate) fn effect_to_pydict<'py>(
             power,
             toughness,
             granted_subtype,
+            granted_activated_abilities,
         } => {
             d.set_item("kind", "become_land_creature_ueot")?;
             d.set_item("power", *power)?;
@@ -21942,6 +22060,20 @@ pub(crate) fn effect_to_pydict<'py>(
             match granted_subtype {
                 Some(s) => d.set_item("granted_subtype", s.as_str())?,
                 None => d.set_item("granted_subtype", py.None())?,
+            }
+            // **Manland grant enum (2026-06-01).** Emit the nested
+            // granted AAs as a list of registry dicts when present
+            // (omitted entirely when empty, byte-equal with the
+            // pre-grant dict shape — every prior emitter has no
+            // grants). Round-trips through `parse_effect`'s optional
+            // `granted_activated_abilities` arm.
+            if !granted_activated_abilities.is_empty() {
+                let abilities: Vec<Bound<'_, PyDict>> =
+                    granted_activated_abilities
+                        .iter()
+                        .map(|ab| activated_ability_to_pydict(py, ab))
+                        .collect::<PyResult<Vec<_>>>()?;
+                d.set_item("granted_activated_abilities", abilities)?;
             }
         }
         Effect::PumpSelfXPowerUEOT => {

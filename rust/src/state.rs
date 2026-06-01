@@ -696,6 +696,30 @@ pub enum UeotModifier {
     /// `UeotModifier`, mirroring Python's `expires_at="cleanup"`
     /// layer-7 `switch_pt` registry entry.
     SwitchPT,
+    /// **CR 613.6 layer 6 — UEOT-granted activated ability (manland
+    /// grant enum, 2026-06-01).** Carries one nested `ActivatedAbility`
+    /// granted to the source while it is animated via
+    /// `Effect::BecomeLandCreatureUEOT` (Wandering Fumarole's `{0}`
+    /// switch / Lavaclaw Reaches' `{X}` pump). Pushed once per grant by
+    /// the `BecomeLandCreatureUEOT` resolve arm, in the
+    /// `granted_activated_abilities` Vec order.
+    ///
+    /// **Enumeration order.** `state_ops_legal.rs`'s
+    /// `effective_activated_abilities`-equivalent appends these grants
+    /// AFTER the source printing's own `activated_abilities`, in push
+    /// order — mirroring Python's `game.effective_activated_abilities`
+    /// (own abilities first, then layer-6 `grant_activated_ability`
+    /// entries in timestamp order). So a manland with N printing AAs
+    /// enumerates its first granted AA at `ability_index = N`, and
+    /// `Action::ActivateAbility{ability_index}` resolves the same index
+    /// into the same composed list — byte-equal with Python.
+    ///
+    /// Auto-expires at the next CR 514.3 UEOT-clear pass like every
+    /// other `UeotModifier`, mirroring Python's `expires_at="cleanup"`
+    /// layer-6 `grant_activated_ability` registry entry.
+    GrantedActivatedAbility {
+        ability: crate::cards::ActivatedAbility,
+    },
 }
 
 /// **CE4 closure — reserve the next monotonic ETB timestamp.**
@@ -810,6 +834,10 @@ impl GameObject {
                 // composed effective P/T by the readers, NOT as an
                 // additive bonus — it contributes nothing here.
                 UeotModifier::SwitchPT => {}
+                // Layer-6 granted activated ability (manland grant
+                // enum): no P/T effect — it only adds an enumerable
+                // legal action while the land is animated.
+                UeotModifier::GrantedActivatedAbility { .. } => {}
             }
         }
         sum
@@ -830,6 +858,8 @@ impl GameObject {
                 // Layer-7e swap: post-pass over composed P/T, not an
                 // additive bonus (see `ueot_power_bonus`).
                 UeotModifier::SwitchPT => {}
+                // Layer-6 granted activated ability: no P/T effect.
+                UeotModifier::GrantedActivatedAbility { .. } => {}
             }
         }
         sum
@@ -888,6 +918,36 @@ impl GameObject {
             }
         }
         last
+    }
+
+    /// **Manland grant enum (2026-06-01).** Collect every
+    /// UEOT-granted activated ability on this object, in push order
+    /// (`UeotModifier::GrantedActivatedAbility` entries — pushed by the
+    /// `Effect::BecomeLandCreatureUEOT` resolve in the source AA's
+    /// `granted_activated_abilities` Vec order). Returns references so
+    /// callers can compose them with the printing's own
+    /// `activated_abilities` for the effective-AA enumeration without
+    /// cloning. Empty Vec when no grants are live — every non-manland
+    /// object stays byte-identical.
+    ///
+    /// Mirrors the layer-6 `grant_activated_ability` tail of Python's
+    /// `game.effective_activated_abilities` (own abilities first, then
+    /// granted in timestamp order). Rust uses push order as the
+    /// timestamp proxy — each `GrantedActivatedAbility` is pushed in
+    /// the resolve loop's deterministic order, matching Python's
+    /// per-grant `ApplyEffect` resolve order.
+    pub fn ueot_granted_activated_abilities(
+        &self,
+    ) -> Vec<&crate::cards::ActivatedAbility> {
+        self.ueot_modifiers
+            .iter()
+            .filter_map(|m| match m {
+                UeotModifier::GrantedActivatedAbility { ability } => {
+                    Some(ability)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// True iff some `UeotModifier::BecomesLandCreature` is on this

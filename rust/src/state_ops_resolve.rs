@@ -21709,6 +21709,7 @@ fn apply_effect(
             power,
             toughness,
             granted_subtype,
+            granted_activated_abilities,
         } => {
             // Walk both battlefields to find the source object.
             for pidx in 0..state.players.len() {
@@ -21728,6 +21729,26 @@ fn apply_effect(
                                     .clone()
                                     .unwrap_or_default(),
                             });
+                            // **Manland grant enum (2026-06-01).** Push
+                            // one `GrantedActivatedAbility` per nested AA,
+                            // in the source AA's
+                            // `granted_activated_abilities` Vec order.
+                            // The legal-enumeration appends these AFTER
+                            // the land's printing AAs (byte-equal with
+                            // Python's `effective_activated_abilities`
+                            // append order), so the granted `{0}` switch /
+                            // `{X}` pump is enumerable + activatable by
+                            // index on Rust. Mirrors Python's per-grant
+                            // `ApplyEffect(GrantActivatedAbility(ab),
+                            // EndOfTurn())` loop in
+                            // `BecomeLandCreatureUEOT.resolve`.
+                            for ab in granted_activated_abilities.iter() {
+                                obj.ueot_modifiers.push(
+                                    UeotModifier::GrantedActivatedAbility {
+                                        ability: ab.clone(),
+                                    },
+                                );
+                            }
                             break;
                         }
                     }
