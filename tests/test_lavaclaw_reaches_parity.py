@@ -286,3 +286,200 @@ def test_cross_engine_real_eoe_lavaclaw_reaches_pump_self_x_power_parity():
         "Lavaclaw Reaches: no-resolving-source resolve must NOT mutate "
         "the battlefield"
     )
+
+
+# ---------------------------------------------------------------------------
+# (4) Manland granted-AA LEGAL-ENUMERATION + X-activation (feature/manland-
+#     grant-enum, 2026-06-01) -- the granted {X} pump-AA is now a Rust legal
+#     action at the SAME ability_index Python emits, and activating it with X
+#     mana pumps +X/+0 byte-equal.
+# ---------------------------------------------------------------------------
+
+
+_ZONE_BATTLEFIELD_BF = 2
+
+
+def _rust_lavaclaw_manland_dict():
+    """A Land carrying the manland-animate AA whose
+    ``become_land_creature_ueot`` effect grants the nested ``{X}`` pump-AA
+    -- the Rust mirror of the real parsed Lavaclaw Reaches printing's
+    AA[0]. The granted AA round-trips through the new
+    ``granted_activated_abilities`` field on the Rust
+    ``Effect::BecomeLandCreatureUEOT`` substrate.
+
+    No ``mana_produced`` (matching the real parsed Lavaclaw printing,
+    whose dual-mana production rides ``produces`` /
+    ``effective_land_produces``, NOT an enumerated activated ability), so
+    the animate AA is at ``ability_index=0`` and the granted ``{X}`` pump
+    at ``ability_index=1`` -- byte-equal with Python's
+    ``effective_activated_abilities`` ordering.
+    """
+    return {
+        "name": "Test Lavaclaw (manland)",
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"mana": {"generic": 1, "B": 1, "R": 1}},
+                "effect": {
+                    "kind": "become_land_creature_ueot",
+                    "power": 2,
+                    "toughness": 2,
+                    "granted_subtype": "Elemental",
+                    "granted_activated_abilities": [
+                        {
+                            "cost": {"mana": {"X": 1}},
+                            "effect": {"kind": "pump_self_x_power_ueot"},
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+@_rust_skip
+def test_rust_lavaclaw_granted_x_pump_aa_enumerates_and_activates_byte_equal():
+    """**Manland granted-AA legal-enumeration + X-activation parity.**
+
+    Drives the REAL animate -> ActivateAbility(ability_index=1, X=3) ->
+    +X/+0 flow on BOTH engines (no longer a Python-only resolve smoke):
+
+      * Python: the genuine parsed Lavaclaw Reaches printing.
+      * Rust: a faithful manland Land dict whose
+        ``become_land_creature_ueot`` AA carries the nested ``{X}`` pump
+        via the new ``granted_activated_abilities`` field.
+
+    Asserts (a) the granted ``{X}`` pump-AA appears in Rust's
+    ``legal_decisions`` at the SAME ``ability_index`` Python emits (index
+    1, AFTER the printing's own animate AA at index 0), AND (b)
+    activating it with an identical mana state binds the SAME X and pumps
+    byte-equal (2/2 -> 5/2 at X=3).
+
+    **Deterministic-X.** The manland is TAPPED before the X-pump on both
+    engines and an identical 3-mana floating pool is seeded, so the X
+    upper bound is exactly 3 on both sides (no untapped-land headroom).
+    Python's agent returns that upper bound; Rust's deterministic-first
+    no-agent path picks the same upper bound -- both bind X=3.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import (
+        GameState, Player, ManaCoin, effective_power, effective_toughness,
+        Zone, effective_activated_abilities,
+    )
+    from mtg_bot.turn import Step
+    from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
+    from mtg_bot.agents import Agent
+
+    printings = get_active_source().get_printings()
+    real = printings.get("Lavaclaw Reaches")
+    if real is None:
+        pytest.skip("Lavaclaw Reaches absent from active CardSource")
+
+    # ------------------------------------------------------------------
+    # PYTHON -- REAL flow: animate, enumerate, activate {X} by index.
+    # ------------------------------------------------------------------
+    class _MaxX(Agent):
+        def choose_x(self, state, player_id, card_name, upper_bound):
+            return upper_bound
+
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+    py = GameState()
+    py.players.append(Player(id=0, agent=_MaxX()))
+    py.players.append(Player(id=1, agent=_MaxX()))
+    py.active_player_idx = 0
+    py.priority_player_idx = 0
+    py.step = Step.PRECOMBAT_MAIN
+
+    land = py.new_object(real, 0, Zone.BATTLEFIELD)
+    py.battlefield.append(land)
+    p0 = py.players[0]
+    # Floating pool for {1}{B}{R} animate cost.
+    p0.mana_pool = [ManaCoin(color="C"), ManaCoin(color="B"), ManaCoin(color="R")]
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=0))
+    while py.stack:
+        resolve_top_of_stack(py)
+    assert (effective_power(py, land), effective_toughness(py, land)) == (2, 2)
+
+    # Python's effective_activated_abilities index for the granted pump.
+    py_eff = effective_activated_abilities(py, land)
+    py_pump_idx = next(
+        i for i, ab in enumerate(py_eff)
+        if isinstance(ab.effect, PumpSelfXPowerUEOT)
+    )
+    assert py_pump_idx == 1, (
+        "Python enumerates the granted {X} pump at index 1 (after the "
+        f"animate AA at 0); got {py_pump_idx}"
+    )
+
+    # Tap the manland + seed exactly 3 floating so X upper bound is 3.
+    land.tapped = True
+    p0.mana_pool = [ManaCoin(color="C"), ManaCoin(color="C"), ManaCoin(color="C")]
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=1))
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_after_pump = (effective_power(py, land), effective_toughness(py, land))
+
+    # ------------------------------------------------------------------
+    # RUST -- SAME flow: animate, enumerate, activate {X} by index.
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    land_id = rs.register_and_inject_object(
+        _rust_lavaclaw_manland_dict(), 0, _ZONE_BATTLEFIELD_BF,
+    )
+    rs.set_active_player(0)
+    rs.set_phase(3)  # PRECOMBAT_MAIN — open the sorcery-timing AA gate.
+    for color, n in [("C", 1), ("B", 1), ("R", 1)]:
+        rs.add_mana(0, color, n)
+
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": land_id, "ability_index": 0}
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert (rs.effective_power(land_id), rs.effective_toughness(land_id)) == (2, 2)
+
+    # The granted {X} pump-AA must appear at the SAME index Python emits.
+    acts = rs.legal_decisions(0)
+    rs_pump_idxs = sorted(
+        a["ability_index"]
+        for a in acts
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == land_id
+    )
+    assert rs_pump_idxs == [py_pump_idx], (
+        "Rust must enumerate exactly the granted {X} pump-AA at "
+        f"ability_index={py_pump_idx} on the animated land (byte-equal "
+        f"with Python); got {rs_pump_idxs}"
+    )
+
+    # Tap the manland + seed exactly 3 floating so X upper bound is 3.
+    rs.tap_object(land_id)
+    rs.empty_all_mana_pools()
+    for color, n in [("C", 3)]:
+        rs.add_mana(0, color, n)
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": land_id, "ability_index": 1}
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs_after_pump = (rs.effective_power(land_id), rs.effective_toughness(land_id))
+
+    # ------------------------------------------------------------------
+    # CROSS-ENGINE BYTE-EQUAL: both bind X=3 -> 2/2 becomes 5/2.
+    # ------------------------------------------------------------------
+    assert py_after_pump == (5, 2), (
+        f"Python X=3 pump must yield 5/2; got {py_after_pump}"
+    )
+    assert rs_after_pump == (5, 2), (
+        f"Rust X=3 pump must yield 5/2; got {rs_after_pump}"
+    )
+    assert py_after_pump == rs_after_pump, (
+        f"granted-AA X-pump P/T must be byte-equal cross-engine: "
+        f"py={py_after_pump} rust={rs_after_pump}"
+    )

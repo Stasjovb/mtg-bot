@@ -17324,12 +17324,79 @@ The C3 per-card real-EoE probe at `tests/test_the_eternity_elevator_parity.py` s
 **Impact estimate:** Grove FLIPS BLOCKED-SG → PROBED (covered_by_construction → PROBED via the probe). PROBED 434 → 435; BLOCKED-SG 30 → 29; Carrier-AA BLOCKED bucket 15 → 14; Effect-uncovered 22 → 21. Rust Effect coverage 190 → 191 Python classes (224 → 225 Rust variants). 0 strength cost — the substrate is byte-equal cross-engine on both AAs' real-EoE drive.
 
 **Pinned by:** `tests/test_grove_of_the_burnwillows_parity.py` (9 pins — parser SoT verify-first + Python dual-AA shape pin + bridge round-trip canonical Rust dict + reverse-arm rehydration of both AAs + Rust register acceptance + loader end-to-end admit + cross-engine real-EoE Scenario MINT-C (AA[0] 1-C mint) + cross-engine real-EoE Scenario MINT-R+LIFE (AA[1] Sequence: 1-R chosen-color mint + each-opponent +1 life, LOAD-BEARING) + Sequence-IN-AA admit invariant (admits valid Sequence, declines Sequence-with-non-admitted-leaf, declines bare non-admitted leaf, admits nested Sequence) + 21-entry count sentinel). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#3 Grove of the Burnwillows.
-## Rust port — `Effect::SwitchSourcePowerToughnessUEOT` resolve LANDED (layer-7e P/T-switch); manland nested-grant LEGAL-ENUMERATION honest-stopped
+## Rust port — manland nested-grant LEGAL-ENUMERATION + activation CLOSED (feature/manland-grant-enum, 2026-06-01)
+
+**STATUS: CLOSED (feature/manland-grant-enum, 2026-06-01).** The
+granted-AA legal-enumeration residual described below is now resolved.
+An animated manland's granted activated ability (Wandering Fumarole's
+`{0}` switch, Lavaclaw Reaches' `{X}` pump) is enumerated as a Rust
+LEGAL ACTION at the SAME `ability_index` Python emits, and is
+activatable by that index byte-equal with Python. Steps a–d from the
+map below all landed:
+
+- **(a)** `Effect::BecomeLandCreatureUEOT` gained a recursive
+  `granted_activated_abilities: Vec<ActivatedAbility>` field
+  (`rust/src/cards.rs`), with parse (`parse_effect` reuses
+  `parse_activated_ability`) + `effect_to_pydict` (new
+  `activated_ability_to_pydict` / `activation_cost_to_pydict` reverse
+  serializers so the round-trip stays stable). `ActivatedAbility` +
+  `ActivationCost` now derive `PartialEq, Eq` (required by the carrier
+  variant).
+- **(b)** The resolve arm (`state_ops_resolve.rs`) pushes one
+  `UeotModifier::GrantedActivatedAbility { ability }` per grant onto the
+  animated land, in the grant Vec order, alongside the existing
+  `BecomesLandCreature` push. Auto-expires at the CR 514.3 cleanup pass
+  like every other `UeotModifier`.
+- **(c)** `GameObject::ueot_granted_activated_abilities()`
+  (`rust/src/state.rs`) collects the grants in push order — the
+  carrier round-trips onto the object.
+- **(d)** Both `legal_decisions` (`state_ops_legal.rs`) and
+  `Action::ActivateAbility` (`state_ops_actions.rs`) now compose
+  EFFECTIVE abilities = `printing.activated_abilities` ++ the granted
+  AAs (printing first, then grants in push order), exactly mirroring
+  Python's `game.effective_activated_abilities` append order (own
+  abilities first, then layer-6 `grant_activated_ability` entries in
+  timestamp order). The granted AA enumerates at
+  `ability_index = N_printing + i` and `Action::ActivateAbility`
+  resolves the same composed index. **No action-encoding /
+  NN-codec change was required** — `ability_index` semantics are
+  unchanged (it indexes the effective list, which is byte-identical to
+  the printing list whenever no grant is live); non-manland permanents
+  with an empty granted Vec are byte-identical to the prior
+  `printing.activated_abilities` walk. NOT a v-chain break.
+
+**Generic `{X}`-mana-cost X-binding on ActivateAbility (additionally
+landed).** Lavaclaw's granted `{X}` pump needed an X value bound at
+activation. The `ActivateAbility` apply arm now binds X deterministically
+to the affordable upper bound (linear probe via `can_pay_cost`,
+mirroring Python's `_choose_and_apply_x` → `_x_upper_bound`), folds
+`x_pips * X` into generic before the mana pay, and seats X onto the
+pushed StackItem's `x_value` so `Effect::PumpSelfXPowerUEOT` reads it
+via `current_resolve_x_value`. Same deterministic-first no-agent
+convention the tap-X cost uses; the cross-engine test seeds identical
+mana (tapped manland + fixed floating pool) so both engines bind the
+SAME X.
+
+**Pinned by**: `tests/test_wandering_fumarole_parity.py`
+(`test_rust_fumarole_granted_switch_aa_enumerates_and_activates_byte_equal`
+— REAL animate→ActivateAbility(index 1)→swap on BOTH engines, granted
+`{0}` at the matching index + byte-equal 4/1↔1/4) +
+`tests/test_lavaclaw_reaches_parity.py`
+(`test_rust_lavaclaw_granted_x_pump_aa_enumerates_and_activates_byte_equal`
+— REAL animate→ActivateAbility(index 1, X=3)→+X/+0 byte-equal 5/2) +
+`tests_rust/test_manland_nested_granted_effects.py` (8 pins:
+parse-with-grants, pre-animate-no-grant, post-animate-index-1,
+activate-by-index-swaps, X-pump-enumerate-and-bind-X,
+granted-AA-clears-at-cleanup).
+
+---
+
+## (historical) Rust port — `Effect::SwitchSourcePowerToughnessUEOT` resolve LANDED (layer-7e P/T-switch); manland nested-grant LEGAL-ENUMERATION honest-stopped → now CLOSED above
 
 **Status (feature/fumarole-ptswitch, 2026-06-01): the layer-7e swap is
-REAL.** The prior substrate-only no-op is replaced. What remains
-honest-stopped is narrower: the granted-AA *legal enumeration* on the
-animated land (so the `{0}` AA appears as a Rust legal action). The
+REAL.** The prior substrate-only no-op is replaced. What remained
+honest-stopped (the granted-AA *legal enumeration*) is **now CLOSED**
+by feature/manland-grant-enum (see the entry directly above). The
 switch EFFECT itself is fully reachable + byte-equal.
 
 **Location (LANDED)**:
@@ -17357,16 +17424,19 @@ cancel, three is one net swap. Pinned byte-equal cross-engine:
 (animated 1/4 → 4/1 after one switch → 1/4 after two, byte-equal on
 BOTH engines).
 
-**What is STILL honest-stopped (the narrow remainder)**: Rust's
-`Effect::BecomeLandCreatureUEOT` substrate (`rust/src/cards.rs:7838`)
-carries only `power/toughness/granted_subtype` — no
+**What WAS honest-stopped (the narrow remainder) — NOW CLOSED by
+feature/manland-grant-enum (2026-06-01; see the entry at the top of this
+section)**: Rust's `Effect::BecomeLandCreatureUEOT` substrate previously
+carried only `power/toughness/granted_subtype` — no
 `granted_activated_abilities` field — and the `become_land_creature_ueot`
-bridge arm narrows the granted AAs away. So while the switch *effect*
-resolves byte-equal through any carrier (ETB / AA / trigger), the
-literal granted `{0}` switch-AA is NOT yet enumerated as a Rust legal
-action on the animated land: Rust's `legal_decisions` activation loop
-(`state_ops_legal.rs:3434`) walks only `printing.activated_abilities`,
-not granted-on-object abilities.
+bridge arm narrowed the granted AAs away, so the literal granted `{0}`
+switch-AA was not enumerated as a Rust legal action. As of
+feature/manland-grant-enum the substrate carries
+`granted_activated_abilities`, the resolve carries them onto the object
+via `UeotModifier::GrantedActivatedAbility`, and
+`legal_decisions`/`Action::ActivateAbility` enumerate + activate the
+granted AA at the index Python emits. The text below is retained for
+historical context; the gap it describes no longer exists.
 
 **Why this is OK**: the switch EFFECT — the load-bearing cross-engine
 parity behavior — is genuine and reachable on Rust now. The only gap

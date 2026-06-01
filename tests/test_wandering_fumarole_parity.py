@@ -485,3 +485,209 @@ def test_cross_engine_wandering_fumarole_switch_pt_swap_byte_equal():
         f"two-switch P/T must be byte-equal cross-engine: "
         f"py={py_after_two} rust={rs_after_two}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (5) Manland granted-AA LEGAL-ENUMERATION + activation (feature/manland-
+#     grant-enum, 2026-06-01) -- the granted {0} switch-AA is now a Rust
+#     legal action at the SAME ability_index Python emits, and activating it
+#     by index swaps byte-equal.
+# ---------------------------------------------------------------------------
+
+
+_ZONE_BATTLEFIELD_BF = 2
+
+
+def _rust_fumarole_manland_dict():
+    """A Land carrying the manland-animate AA whose
+    `become_land_creature_ueot` effect grants the nested `{0}` switch-AA
+    -- the Rust mirror of the real parsed Wandering Fumarole printing's
+    AA[0]. The granted AA round-trips through the new
+    `granted_activated_abilities` field on the Rust
+    `Effect::BecomeLandCreatureUEOT` substrate.
+
+    The printing carries NO `mana_produced` (matching the real parsed
+    Fumarole printing, whose dual-mana production rides `produces` /
+    `effective_land_produces`, NOT an enumerated activated ability) so
+    the animate AA is at `ability_index=0` and the granted `{0}` switch
+    at `ability_index=1` -- byte-equal with Python's
+    `effective_activated_abilities` ordering.
+    """
+    return {
+        "name": "Test Fumarole (manland)",
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"mana": {"generic": 2, "U": 1, "R": 1}},
+                "effect": {
+                    "kind": "become_land_creature_ueot",
+                    "power": 1,
+                    "toughness": 4,
+                    "granted_activated_abilities": [
+                        {
+                            "cost": {},
+                            "effect": {
+                                "kind": "switch_source_power_toughness_ueot"
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+@_rust_skip
+def test_rust_fumarole_granted_switch_aa_enumerates_and_activates_byte_equal():
+    """**Manland granted-AA legal-enumeration + activation parity.**
+
+    Drives the REAL animate -> ActivateAbility(ability_index=1) -> swap
+    flow on BOTH engines (no longer the ETB-carrier workaround):
+
+      * Python: the genuine parsed Wandering Fumarole printing.
+      * Rust: a faithful manland Land dict whose
+        `become_land_creature_ueot` AA carries the nested `{0}` switch
+        via the new `granted_activated_abilities` field.
+
+    Asserts (a) the granted `{0}` switch-AA appears in Rust's
+    `legal_decisions` at the SAME `ability_index` Python emits (index 1,
+    AFTER the printing's own animate AA at index 0), AND (b) activating
+    it by that index produces byte-equal swapped P/T (4/1 after one
+    switch; 1/4 after two).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import (
+        GameState, Player, effective_power, effective_toughness, Zone,
+    )
+    from mtg_bot.turn import Step
+    from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
+    from mtg_bot.actions import ActivateAbility, apply_action, resolve_top_of_stack
+    from mtg_bot.agents import Agent
+
+    printings = get_active_source().get_printings()
+    real = printings.get("Wandering Fumarole")
+    if real is None:
+        pytest.skip("Wandering Fumarole absent from active CardSource")
+
+    # ------------------------------------------------------------------
+    # PYTHON -- REAL flow: animate, enumerate, activate {0} by index.
+    # ------------------------------------------------------------------
+    class _FirstTarget(Agent):
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+    py = GameState()
+    py.players.append(Player(id=0, agent=_FirstTarget()))
+    py.players.append(Player(id=1, agent=_FirstTarget()))
+    py.active_player_idx = 0
+    py.priority_player_idx = 0
+    py.step = Step.PRECOMBAT_MAIN
+
+    def _put(printing, owner_id=0):
+        obj = py.new_object(printing, owner_id, Zone.BATTLEFIELD)
+        py.battlefield.append(obj)
+        return obj
+
+    land = _put(real)
+    for color, count in parse_mana_cost("{2}{U}{R}").colored:
+        basic = {"U": "Island", "R": "Mountain"}[color]
+        for _ in range(count):
+            _put(BASIC_LANDS[basic])
+    for _ in range(parse_mana_cost("{2}{U}{R}").generic):
+        _put(BASIC_LANDS["Mountain"])
+
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=0))
+    while py.stack:
+        resolve_top_of_stack(py)
+    assert (effective_power(py, land), effective_toughness(py, land)) == (1, 4)
+
+    # Python's effective_activated_abilities index for the granted AA.
+    from mtg_bot.game import effective_activated_abilities
+    py_eff = effective_activated_abilities(py, land)
+    from mtg_bot.effects.generic.pump import SwitchSourcePowerToughnessUEOT
+    py_switch_idx = next(
+        i for i, ab in enumerate(py_eff)
+        if isinstance(ab.effect, SwitchSourcePowerToughnessUEOT)
+    )
+    assert py_switch_idx == 1, (
+        f"Python enumerates the granted {{0}} switch at index 1 (after "
+        f"the animate AA at 0); got {py_switch_idx}"
+    )
+
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=1))
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_after_one = (effective_power(py, land), effective_toughness(py, land))
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=1))
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_after_two = (effective_power(py, land), effective_toughness(py, land))
+
+    # ------------------------------------------------------------------
+    # RUST -- SAME flow: animate, enumerate (legal_decisions), activate.
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    land_id = rs.register_and_inject_object(
+        _rust_fumarole_manland_dict(), 0, _ZONE_BATTLEFIELD_BF,
+    )
+    rs.set_active_player(0)
+    rs.set_phase(3)  # PRECOMBAT_MAIN — open the sorcery-timing AA gate.
+    for color, n in [("C", 2), ("U", 1), ("R", 1)]:
+        rs.add_mana(0, color, n)
+
+    # Animate via AA[0].
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": land_id, "ability_index": 0}
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert (rs.effective_power(land_id), rs.effective_toughness(land_id)) == (1, 4)
+
+    # The granted {0} switch-AA must now appear as a legal action at the
+    # SAME index Python emits (1).
+    acts = rs.legal_decisions(0)
+    rs_switch_idxs = sorted(
+        a["ability_index"]
+        for a in acts
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == land_id
+    )
+    assert rs_switch_idxs == [py_switch_idx], (
+        f"Rust must enumerate exactly the granted {{0}} switch-AA at "
+        f"ability_index={py_switch_idx} on the animated land (byte-equal "
+        f"with Python); got {rs_switch_idxs}"
+    )
+
+    # Activate by index — swap to 4/1, second cancels to 1/4.
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": land_id, "ability_index": 1}
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs_after_one = (rs.effective_power(land_id), rs.effective_toughness(land_id))
+    rs.apply_action(
+        {"kind": "activate_ability", "source_id": land_id, "ability_index": 1}
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs_after_two = (rs.effective_power(land_id), rs.effective_toughness(land_id))
+
+    # ------------------------------------------------------------------
+    # CROSS-ENGINE BYTE-EQUAL.
+    # ------------------------------------------------------------------
+    assert py_after_one == (4, 1)
+    assert rs_after_one == (4, 1)
+    assert py_after_one == rs_after_one, (
+        f"granted-AA one-switch P/T must be byte-equal: "
+        f"py={py_after_one} rust={rs_after_one}"
+    )
+    assert py_after_two == (1, 4)
+    assert rs_after_two == (1, 4)
+    assert py_after_two == rs_after_two, (
+        f"granted-AA two-switch P/T must be byte-equal: "
+        f"py={py_after_two} rust={rs_after_two}"
+    )

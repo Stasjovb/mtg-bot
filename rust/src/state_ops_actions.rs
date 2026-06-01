@@ -938,15 +938,35 @@ impl GameState {
                     })?;
                     let is_creature =
                         printing.card_types.iter().any(|t| t == "Creature");
+                    // **Manland grant enum (2026-06-01).** Effective
+                    // activated abilities = printing AAs + UEOT-granted
+                    // AAs (manland-animate grants), in the SAME order the
+                    // `legal_decisions` enumeration uses (printing AAs
+                    // first, then granted in push order). `ability_index`
+                    // resolves into this composed list, so the granted
+                    // `{0}` switch / `{X}` pump on an animated land
+                    // activates by the same index Python emits. The
+                    // common no-grant case is byte-identical to indexing
+                    // `printing.activated_abilities` directly.
+                    let granted = state.players[controller_idx].battlefield
+                        [bf_pos]
+                        .ueot_granted_activated_abilities();
+                    let effective_abilities: Vec<
+                        &crate::cards::ActivatedAbility,
+                    > = printing
+                        .activated_abilities
+                        .iter()
+                        .chain(granted.iter().copied())
+                        .collect();
                     // Bridge follow-up: the legacy `mana_produced`
                     // side-channel has been retired — every printing
                     // with `mana_produced.is_some()` carries a
                     // synthesized ActivatedAbility at ability_index=0
                     // (see `cards.rs::parse_printing` bridge synthesis).
-                    // ability_index must fall inside the
-                    // activated_abilities Vec.
-                    if (ability_index as usize) < printing.activated_abilities.len() {
-                        let ab = &printing.activated_abilities[ability_index as usize];
+                    // ability_index must fall inside the effective
+                    // (printing + granted) abilities range.
+                    if (ability_index as usize) < effective_abilities.len() {
+                        let ab = effective_abilities[ability_index as usize];
                         ResolvedAbility {
                             mana_cost: ab.cost.mana.clone(),
                             tap_self: ab.cost.tap_self,
@@ -976,8 +996,11 @@ impl GameState {
                         return Err(PyValueError::new_err(format!(
                             "ActivateAbility: source {source_id} has no \
                              ability at index {ability_index} \
-                             (printing has {} activated_abilities)",
+                             (printing has {} activated_abilities + {} \
+                             UEOT-granted = {} effective)",
                             printing.activated_abilities.len(),
+                            granted.len(),
+                            effective_abilities.len(),
                         )));
                     }
                 };
@@ -2067,9 +2090,72 @@ impl GameState {
                 // unpayable over-emit to the SAME no-mutation
                 // `Ok(false)` → raw-`ValueError` bail (no fallback
                 // hybrid; honest failure preserved).
+                // **Manland grant enum — generic `{X}` mana-cost
+                // X-binding (2026-06-01).** When the ability's mana cost
+                // carries `x_pips > 0` (Lavaclaw Reaches' granted
+                // `{X}: +X/+0` pump), bind X deterministically to the
+                // upper bound the controller can afford, fold
+                // `x_pips * X` into generic, and seat X onto the pushed
+                // StackItem (Phase 6) so the resolving
+                // `Effect::PumpSelfXPowerUEOT` reads it via
+                // `current_resolve_x_value`. Mirrors Python's
+                // `_activate_ability` X path (`actions.py:1960-1971`):
+                // `_choose_and_apply_x` clamps to `_x_upper_bound`, then
+                // `mana.generic += mana.x_pips * X`. The no-agent
+                // deterministic-first convention picks X = upper bound
+                // (the same convention the tap-X cost uses); the
+                // cross-engine test seeds identical mana so Python's
+                // agent returns that same upper bound — both engines
+                // bind the SAME X. Linear probe upward from 0 (X values
+                // are small) mirroring `_x_upper_bound`.
+                let mut effective_mana_cost = resolved.mana_cost.clone();
+                let mut x_mana_chosen: Option<i32> = None;
+                if effective_mana_cost.x_pips > 0 {
+                    let x_pips = effective_mana_cost.x_pips;
+                    let base_generic = effective_mana_cost.generic;
+                    let sk = crate::state_ops_mana::SpellKind::Any;
+                    let mut x: u8 = 0;
+                    loop {
+                        let next_x = x.saturating_add(1);
+                        let trial = crate::cards::ManaCost {
+                            generic: base_generic.saturating_add(
+                                x_pips.saturating_mul(next_x),
+                            ),
+                            white: effective_mana_cost.white,
+                            blue: effective_mana_cost.blue,
+                            black: effective_mana_cost.black,
+                            red: effective_mana_cost.red,
+                            green: effective_mana_cost.green,
+                            x_pips: 0,
+                        };
+                        if !crate::state_ops_mana::can_pay_cost(
+                            state, controller_idx, &trial, &sk,
+                        ) {
+                            break;
+                        }
+                        x = next_x;
+                        // Guard against the saturating-add fixpoint when
+                        // mana is effectively unbounded (defensive — real
+                        // X values are small).
+                        if x == u8::MAX {
+                            break;
+                        }
+                    }
+                    effective_mana_cost = crate::cards::ManaCost {
+                        generic: base_generic
+                            .saturating_add(x_pips.saturating_mul(x)),
+                        white: effective_mana_cost.white,
+                        blue: effective_mana_cost.blue,
+                        black: effective_mana_cost.black,
+                        red: effective_mana_cost.red,
+                        green: effective_mana_cost.green,
+                        x_pips: 0,
+                    };
+                    x_mana_chosen = Some(x as i32);
+                }
                 let mana_paid: bool =
                     crate::state_ops_cast::auto_tap_pay_for_cost(
-                        state, controller_idx, &resolved.mana_cost,
+                        state, controller_idx, &effective_mana_cost,
                     )?;
                 if !mana_paid {
                     return Err(PyValueError::new_err(format!(
@@ -2569,6 +2655,19 @@ impl GameState {
                     // tap-X cost (leaves the constructor's `x_value:
                     // None`).
                     if let Some(x) = tap_x_chosen {
+                        stack_item.x_value = Some(x);
+                    }
+                    // **Manland grant enum — generic `{X}` mana-cost
+                    // X-seat (2026-06-01).** When the activation paid a
+                    // generic `{X}` mana cost (Lavaclaw Reaches' granted
+                    // `{X}` pump), seat the bound X onto the StackItem so
+                    // the resolving `Effect::PumpSelfXPowerUEOT` reads it
+                    // via `current_resolve_x_value`. Mutually exclusive
+                    // with the tap-X cost (no EoE printing combines a
+                    // generic `{X}` mana cost AND a tap-X cost on one
+                    // ability), so this overwrite is safe — at most one
+                    // of `tap_x_chosen` / `x_mana_chosen` is `Some`.
+                    if let Some(x) = x_mana_chosen {
                         stack_item.x_value = Some(x);
                     }
                     state.stack.push(stack_item);
