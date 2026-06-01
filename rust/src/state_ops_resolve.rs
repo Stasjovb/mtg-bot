@@ -395,6 +395,179 @@ pub(crate) fn token_creation_count_multiplier(
     factor
 }
 
+/// **ReplacementEffect-static substrate — Phase 5 (Loading Zone,
+/// 2026-06-01) — +1/+1-counter-placement count doubling.**
+///
+/// Returns the post-replacement multiplier a +1/+1-counter-placement
+/// arm applies to its requested count when those counters are being
+/// placed on `recipient_printing_id` controlled by `recipient_controller`.
+/// The default return is `1` — no doubler in play.
+///
+/// **Scope gate (mirrors Python's `_counter_doubling_factor`,
+/// `game.py:1992`).** Python short-circuits to `1` UNLESS the recipient
+/// is a creature OR a Spacecraft (Loading Zone's printed scope: "a
+/// creature or Spacecraft you control"). A non-creature/non-Spacecraft
+/// recipient is never doubled — the dispatch is skipped entirely so
+/// broader-scope future doublers don't accidentally fire. We replicate
+/// that gate here: a recipient that is neither creature nor Spacecraft
+/// returns `1` before any battlefield walk.
+///
+/// **Controller key (mirrors the dispatcher's implicit
+/// `source.controller_id == affected_player_id` gate).** Python keys the
+/// doubler on `affected_player_id=obj.controller_id` — the RECIPIENT's
+/// controller, NOT the spell's caster. So a Loading Zone controlled by
+/// p0 doubles only counters landing on p0's own creatures/Spacecraft.
+/// `PutPlusOneCounterOnOpponentsCreature` therefore doubles iff the
+/// OPPONENT (the recipient's controller) controls a Loading Zone, never
+/// the caster. We walk every battlefield permanent under
+/// `recipient_controller`'s control whose printing carries a
+/// `static_replacements` entry with `event == "would_place_counter"` AND
+/// `transform_kind == "multiply_count"`, folding the factors
+/// multiplicatively (two Loading Zones → ×4, matching CR 614 + Python's
+/// `dispatch_replacement` applying each matching replacement once).
+///
+/// Mirrors Python's `dispatch_replacement(state,
+/// Event.WOULD_PLACE_COUNTER, affected_player_id=obj.controller_id,
+/// subjects={"obj": obj, "kind": "+1/+1"}, payload={"count": 1})` whose
+/// returned `count` IS the factor. The EoE carrier (Loading Zone) has
+/// empty `subject_filters` + no `scope_filter`, so the per-subject
+/// narrowing Python's dispatcher supports is a no-op here beyond the
+/// creature-or-Spacecraft gate above.
+pub(crate) fn counter_placement_count_multiplier(
+    state: &GameState,
+    recipient_controller: u8,
+    recipient_printing_id: u32,
+) -> i64 {
+    // Scope gate: only creatures and Spacecraft are in Loading Zone's
+    // printed scope. A recipient outside that scope is never doubled —
+    // matches Python's `_counter_doubling_factor` early `return 1`.
+    let in_scope = match state.registry.lookup(recipient_printing_id) {
+        Some(p) => {
+            p.card_types.iter().any(|t| t == "Creature")
+                || p.subtypes.iter().any(|s| s == "Spacecraft")
+        }
+        None => false,
+    };
+    if !in_scope {
+        return 1;
+    }
+    let mut factor: i64 = 1;
+    for owner in &state.players {
+        for obj in owner.battlefield.iter() {
+            if obj.controller != recipient_controller {
+                continue;
+            }
+            let printing = match state.registry.lookup(obj.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            for rep in printing.static_replacements.iter() {
+                if rep.event == "would_place_counter"
+                    && rep.transform_kind == "multiply_count"
+                {
+                    factor = factor.saturating_mul(rep.transform_param as i64);
+                }
+            }
+        }
+    }
+    factor
+}
+
+/// **Loading Zone +1/+1-counter doubling applicator (Phase 5,
+/// 2026-06-01).** Given a recipient `obj_id` somewhere on a
+/// battlefield and a `base_delta` count of +1/+1 counters about to be
+/// placed, return the post-replacement delta after folding every
+/// controller-matching `would_place_counter × multiply_count` doubler.
+///
+/// **Positive-delta only.** Mirrors Python's split: `add_plus_one_-
+/// counters` doubles, `add_minus_one_counters` does NOT. A `base_delta
+/// <= 0` (the net-counter model's -1/-1 path) passes through unchanged,
+/// so a doubler never amplifies a -1/-1 placement.
+///
+/// **Recipient lookup.** Walks both battlefields for `obj_id` to read
+/// its `controller` + `printing_id` (the scope gate + controller key
+/// for `counter_placement_count_multiplier`). If the recipient isn't on
+/// any battlefield (a fizzled / off-bf placement), returns `base_delta`
+/// unchanged. Takes `&GameState` (read-only) so it can be evaluated
+/// before the caller's `Arc::make_mut` mutable borrow.
+pub(crate) fn doubled_plus_one_counter_delta(
+    state: &GameState,
+    obj_id: u32,
+    base_delta: i32,
+) -> i32 {
+    if base_delta <= 0 {
+        return base_delta;
+    }
+    let recip = state
+        .players
+        .iter()
+        .flat_map(|p| p.battlefield.iter())
+        .find(|o| o.id == obj_id);
+    match recip {
+        Some(o) => {
+            let mult = counter_placement_count_multiplier(
+                state,
+                o.controller,
+                o.printing_id,
+            );
+            (base_delta as i64).saturating_mul(mult) as i32
+        }
+        None => base_delta,
+    }
+}
+
+/// **ReplacementEffect-static substrate — Phase 5 (Starfield Vocalist,
+/// 2026-06-01) — extra-trigger-instance fold.**
+///
+/// Returns how many times an ENTERS-caused triggered ability whose
+/// source is controlled by `controller_idx` should fire. The default
+/// return is `1` — no extra-instance replacement in play.
+///
+/// Walks every battlefield permanent under `controller_idx`'s control
+/// whose printing carries a `static_replacements` entry with
+/// `event == "triggered_ability_triggers"` AND `transform_kind ==
+/// "add_instances"`, and folds the deltas ADDITIVELY onto a base of 1
+/// (two Starfield Vocalists → 1 + 1 + 1 = 3 firings), exactly mirroring
+/// Python's `etb_trigger_multiplier` (`game.py:1955`) which dispatches
+/// `Event.TRIGGERED_ABILITY_TRIGGERS` with a base `instances=1` payload
+/// and returns the post-replacement `instances` (each matching
+/// `AddInstances(delta)` adds `delta`).
+///
+/// **ENTERS-only scope (deliberate Python-mirror simplification).**
+/// Python applies this multiplier ONLY for `Event.ENTERS` firings
+/// (`actions.py:3475`: `etb_trigger_multiplier(...) if event is
+/// Event.ENTERS else 1`); every other event uses a firing count of 1
+/// even though the printed Starfield Vocalist text covers ALL triggered
+/// abilities. The Rust consumer is gated identically (the
+/// `Event::Enters` arm in `dispatch_event` is the ONLY caller) so the
+/// per-engine firing set stays byte-equal — including the shared
+/// not-yet-modeled gap on non-ENTERS triggers.
+pub(crate) fn entered_trigger_instance_multiplier(
+    state: &GameState,
+    controller_idx: u8,
+) -> i64 {
+    let mut instances: i64 = 1;
+    for owner in &state.players {
+        for obj in owner.battlefield.iter() {
+            if obj.controller != controller_idx {
+                continue;
+            }
+            let printing = match state.registry.lookup(obj.printing_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            for rep in printing.static_replacements.iter() {
+                if rep.event == "triggered_ability_triggers"
+                    && rep.transform_kind == "add_instances"
+                {
+                    instances = instances.saturating_add(rep.transform_param as i64);
+                }
+            }
+        }
+    }
+    instances
+}
+
 /// Take the GameObject with id `obj_id` out of whichever of the
 /// four tracked zones currently holds it. Returns the owned
 /// `GameObject` (and the player_idx + source_zone constant for
@@ -1174,18 +1347,50 @@ pub(crate) fn dispatch_event(
     }
     // Push each matching firing onto the stack. Order matches the
     // bf walk (Python's "no APNAP simplification" — audit §2.5).
+    //
+    // **ReplacementEffect-static Phase 5 (Starfield Vocalist,
+    // 2026-06-01) — extra-trigger-instance fold.** For `Event::Enters`
+    // firings ONLY, each per-source firing is pushed
+    // `entered_trigger_instance_multiplier(state, controller)` times
+    // (default 1 — no extra-instance replacement → byte-identical to
+    // the pre-Phase-5 single push). This mirrors Python's
+    // `actions.dispatch_event`, which wraps the `push_triggered_ability`
+    // call in `for _ in range(etb_trigger_multiplier(...) if event is
+    // Event.ENTERS else 1)` (`actions.py:3475-3493`). The multiplier is
+    // keyed on the firing source's controller (Python:
+    // `etb_trigger_multiplier(state, source.controller_id)`). Non-ENTERS
+    // events use a firing count of 1, matching Python's `else 1` — the
+    // deliberate ENTERS-only simplification both engines share.
+    let instance_mult: i64 = if event == Event::Enters {
+        // Same per-controller question for every firing this dispatch
+        // round? No — each firing carries its own source controller,
+        // so we evaluate per firing below. (In the EoE pool every
+        // firing in a single ENTERS dispatch shares the entering
+        // permanent's controller, but the per-firing read keeps the
+        // mirror exact for any future multi-controller observer set.)
+        -1 // sentinel: compute per firing
+    } else {
+        1
+    };
     let mut push_result: PyResult<()> = Ok(());
-    for (source_id, controller, ability_index, effect, once_per_turn) in firings {
-        if let Err(e) = push_triggered_ability(
-            state,
-            source_id,
-            controller,
-            ability_index,
-            effect,
-            once_per_turn,
-        ) {
-            push_result = Err(e);
-            break;
+    'outer_push: for (source_id, controller, ability_index, effect, once_per_turn) in firings {
+        let firings_count: i64 = if instance_mult == -1 {
+            entered_trigger_instance_multiplier(state, controller).max(1)
+        } else {
+            1
+        };
+        for _ in 0..firings_count {
+            if let Err(e) = push_triggered_ability(
+                state,
+                source_id,
+                controller,
+                ability_index,
+                effect.clone(),
+                once_per_turn,
+            ) {
+                push_result = Err(e);
+                break 'outer_push;
+            }
         }
     }
     // Restore the discarding-player slot to its prior value (typically
@@ -3737,7 +3942,16 @@ fn apply_effect(
                     return Ok(()); // fizzle silently
                 }
                 let target_id = bf[0].id;
-                let delta = *count;
+                // **Loading Zone +1/+1-counter doubling (Phase 5,
+                // 2026-06-01).** Mirror Python's `add_plus_one_counters`
+                // → `_counter_doubling_factor` fold: a POSITIVE delta
+                // (adding +1/+1 counters, not -1/-1) onto a creature-or-
+                // Spacecraft recipient is multiplied by every controller-
+                // matching `would_place_counter × multiply_count` doubler.
+                // Negative deltas (the net-counter model's -1/-1 path,
+                // Python's `add_minus_one_counters` which does NOT double)
+                // pass through unchanged.
+                let delta = doubled_plus_one_counter_delta(state, target_id, *count);
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[defender].battlefield);
                 for obj in bf_mut.iter_mut() {
@@ -5464,6 +5678,11 @@ fn apply_effect(
                 Some(p) => p,
                 None => return Ok(()), // fizzle silently
             };
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01).** `amount` is already validated > 0 here, so
+            // the recipient-controller doubler fold applies when in
+            // scope. Mirrors `add_plus_one_counters`.
+            let delta = doubled_plus_one_counter_delta(state, source_obj_id, delta);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].battlefield);
             for obj in bf_mut.iter_mut() {
@@ -10272,6 +10491,14 @@ fn apply_effect(
                                 .any(|o| o.id == target_id)
                         });
                     if let Some(oidx) = target_owner_idx {
+                        // **Loading Zone +1/+1-counter doubling (Phase 5,
+                        // 2026-06-01).** Mirror Python's
+                        // `add_plus_one_counters` doubling fold (the
+                        // SEARCH_LIMITATIONS "NOT replicated here" caveat
+                        // is now closed for the counter-count). Computed
+                        // before the make_mut borrow.
+                        let counter_delta =
+                            doubled_plus_one_counter_delta(state, target_id, 1);
                         let zone: &mut Vec<GameObject> = Arc::make_mut(
                             &mut state.players[oidx].battlefield,
                         );
@@ -10280,7 +10507,7 @@ fn apply_effect(
                                 // +1/+1 counter (the established
                                 // saturating_add scalar shape).
                                 obj.counters =
-                                    obj.counters.saturating_add(1);
+                                    obj.counters.saturating_add(counter_delta);
                                 // 3-keyword UEOT grant (the proven
                                 // GrantKeyword push shape, lowercase).
                                 for kw in
@@ -13940,6 +14167,9 @@ fn apply_effect(
             }
             // Apply: add `count` +1/+1 counters to source. Mirrors
             // round-23 PutPlusOneCounterOnSelf mutation pattern.
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — mirror `add_plus_one_counters` fold.
+            let count = doubled_plus_one_counter_delta(state, source_obj_id, count);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].battlefield);
             for obj in bf_mut.iter_mut() {
@@ -14341,7 +14571,24 @@ fn apply_effect(
             if creature_ids.is_empty() {
                 return Ok(());
             }
-            let delta = *amount;
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01).** Every recipient is a creature controlled by
+            // `controller`, so the per-recipient multiplier is identical
+            // (it keys only on the recipient's controller + creature-or-
+            // Spacecraft scope, both satisfied). Fold once before the
+            // mutable borrow from a real recipient printing, then apply
+            // the doubled delta to each. Mirrors `add_plus_one_counters`
+            // running per-creature.
+            let recip_pid = state.players[cidx]
+                .battlefield
+                .iter()
+                .find(|o| creature_ids.contains(&o.id))
+                .map(|o| o.printing_id)
+                .unwrap_or(0);
+            let mult = counter_placement_count_multiplier(
+                state, controller, recip_pid,
+            );
+            let delta = (*amount as i64).saturating_mul(mult) as i32;
             let zone: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in zone.iter_mut() {
@@ -14435,7 +14682,22 @@ fn apply_effect(
             if creature_ids.is_empty() {
                 return Ok(());
             }
-            let delta = x;
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — closes the documented "no Loading Zone
+            // doubling" residual on this Ouroboroid arm. Every recipient
+            // is a creature controlled by `controller` → identical
+            // per-recipient multiplier; fold once before the mutable
+            // borrow. Mirrors `add_plus_one_counters` per-creature.
+            let recip_pid = state.players[cidx]
+                .battlefield
+                .iter()
+                .find(|o| creature_ids.contains(&o.id))
+                .map(|o| o.printing_id)
+                .unwrap_or(0);
+            let mult = counter_placement_count_multiplier(
+                state, controller, recip_pid,
+            );
+            let delta = (x as i64).saturating_mul(mult) as i32;
             let zone: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in zone.iter_mut() {
@@ -14720,7 +14982,9 @@ fn apply_effect(
             let Some(target_id) = target_id else {
                 return Ok(());
             };
-            let delta = *amount;
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — mirror `add_plus_one_counters` fold.
+            let delta = doubled_plus_one_counter_delta(state, target_id, *amount);
             let zone: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in zone.iter_mut() {
@@ -14795,7 +15059,11 @@ fn apply_effect(
             let Some(tidx) = tgt_loc else {
                 return Ok(()); // target left the bf → silent fizzle
             };
-            let delta = *amount;
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — mirror `add_plus_one_counters` fold (keyed
+            // on the recipient's controller, which here is the target's
+            // controller regardless of who cast the effect).
+            let delta = doubled_plus_one_counter_delta(state, payload_target, *amount);
             let zone: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[tidx].battlefield);
             for obj in zone.iter_mut() {
@@ -14913,7 +15181,15 @@ fn apply_effect(
             let Some(tidx) = tgt_loc else {
                 return Ok(()); // target left the bf → silent fizzle
             };
-            let delta = *amount;
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — keyed on the RECIPIENT's controller (the
+            // opponent of the source's controller). A doubler controlled
+            // by the caster does NOT fire; only one controlled by the
+            // opponent (the receiving creature's controller) does.
+            // Mirrors `add_plus_one_counters` + the
+            // `PutPlusOneCounterOnOpponentsCreature` docstring
+            // (counters.py:815-826).
+            let delta = doubled_plus_one_counter_delta(state, payload_target, *amount);
             let zone: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[tidx].battlefield);
             for obj in zone.iter_mut() {
@@ -16010,11 +16286,18 @@ fn apply_effect(
                 }
             }
             // Add to target on controller's battlefield.
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — the recipient add routes through Python's
+            // `add_plus_one_counters` (counters.py:305), so the moved
+            // counters double on the recipient's controller. The source-
+            // clear above is unaffected (it's a removal, not a placement).
+            let add_amount =
+                doubled_plus_one_counter_delta(state, target_id, src_counters);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in bf_mut.iter_mut() {
                 if obj.id == target_id {
-                    obj.counters = obj.counters.saturating_add(src_counters);
+                    obj.counters = obj.counters.saturating_add(add_amount);
                     break;
                 }
             }
@@ -16264,19 +16547,33 @@ fn apply_effect(
             if picked_ids.is_empty() {
                 return Ok(());
             }
-            // Apply +1 counter to each. Use Arc::make_mut once per
-            // affected battlefield.
-            // Group by player.
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01).** Recipients may sit on EITHER battlefield, so
+            // the doubler is keyed PER recipient (its own controller).
+            // Precompute the doubled +1-delta for each picked id under the
+            // read-only borrow BEFORE any `Arc::make_mut`. Mirrors
+            // `add_plus_one_counters` running once per target creature.
+            let doubled: Vec<(usize, u32, i32)> = picked_ids
+                .iter()
+                .map(|&(p, id)| {
+                    (p, id, doubled_plus_one_counter_delta(state, id, 1))
+                })
+                .collect();
+            // Apply per recipient. Use Arc::make_mut once per affected
+            // battlefield. Group by player.
             for &pidx in &[cidx, oidx] {
-                let any = picked_ids.iter().any(|(p, _)| *p == pidx);
+                let any = doubled.iter().any(|(p, _, _)| *p == pidx);
                 if !any {
                     continue;
                 }
                 let bf_mut: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[pidx].battlefield);
                 for obj in bf_mut.iter_mut() {
-                    if picked_ids.iter().any(|(p, id)| *p == pidx && *id == obj.id) {
-                        obj.counters = obj.counters.saturating_add(1);
+                    if let Some((_, _, d)) = doubled
+                        .iter()
+                        .find(|(p, id, _)| *p == pidx && *id == obj.id)
+                    {
+                        obj.counters = obj.counters.saturating_add(*d);
                     }
                 }
             }
@@ -16308,6 +16605,18 @@ fn apply_effect(
             let Some(pidx) = found_player else {
                 return Ok(()); // source not on battlefield → silent no-op
             };
+            // **Loading Zone counter doubling (Phase 5, 2026-06-01).**
+            // Rust collapses charge counters onto the same `counters`
+            // scalar as +1/+1 (the documented single-slot simplification).
+            // Python's `PutChargeCountersOnSelf` routes through
+            // `add_charge_counters`, which DOES double when the recipient
+            // is a Spacecraft (Loading Zone's "creature or Spacecraft"
+            // scope). The helper's scope gate admits Spacecraft, so this
+            // mirrors Python's charge-counter doubling for the in-pool
+            // self-charging Spacecraft case.
+            let effective_amount = doubled_plus_one_counter_delta(
+                state, source_obj_id, effective_amount,
+            );
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].battlefield);
             for obj in bf_mut.iter_mut() {
@@ -23264,10 +23573,6 @@ fn apply_effect(
                 obj.tapped = false;
                 obj.summoning_sick = true;
                 obj.damage = 0;
-                // Apply the +1/+1 counter rider. Mirrors Python's
-                // `add_plus_one_counters(state, card, 1)` post-move
-                // call at `effects/generic/graveyard.py:283`.
-                obj.counters = obj.counters.saturating_add(1);
                 obj.attached_to = None;
                 obj.original_printing_id = None;
                 obj.door_states = None;
@@ -23279,6 +23584,25 @@ fn apply_effect(
                 obj.controller = controller_idx as u8;
                 let entered_id = obj.id;
                 Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+                // Apply the +1/+1 counter rider AFTER the object is on
+                // the battlefield. Mirrors Python's
+                // `put_into_battlefield(...)` THEN
+                // `add_plus_one_counters(state, card, 1)` ordering at
+                // `effects/generic/graveyard.py:279-283` — the post-
+                // enter ordering is what lets the Loading Zone doubler
+                // (Phase 5, 2026-06-01) see the now-on-bf recipient and
+                // its controller. Computed under a read-only borrow,
+                // then applied via a fresh make_mut.
+                let counter_delta =
+                    doubled_plus_one_counter_delta(state, entered_id, 1);
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].battlefield);
+                for o in bf_mut.iter_mut() {
+                    if o.id == entered_id {
+                        o.counters = o.counters.saturating_add(counter_delta);
+                        break;
+                    }
+                }
                 state.pending_etb_dispatches.push(entered_id);
             }
         }
@@ -24976,14 +25300,21 @@ fn apply_effect(
             let Some(target_id) = target_id else {
                 return Ok(()); // no eligible target → silent fizzle
             };
+            // **Loading Zone +1/+1-counter doubling (Phase 5,
+            // 2026-06-01)** — the counter rider routes through Python's
+            // `add_plus_one_counters` (counters.py:703), so it doubles on
+            // the recipient's controller. Computed before the make_mut
+            // borrow; the UEOT keyword grants are unaffected.
+            let counter_delta =
+                doubled_plus_one_counter_delta(state, target_id, *amount);
             // Apply the resolve body: counters + UEOT keyword grants.
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in bf_mut.iter_mut() {
                 if obj.id == target_id {
-                    if *amount > 0 {
+                    if counter_delta > 0 {
                         obj.counters =
-                            obj.counters.saturating_add(*amount);
+                            obj.counters.saturating_add(counter_delta);
                     }
                     for kw in granted_keywords {
                         obj.ueot_modifiers

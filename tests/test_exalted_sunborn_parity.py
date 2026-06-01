@@ -149,8 +149,11 @@ def test_exalted_sunborn_card_def_carries_static_replacement():
 
     cd = _exalted_sunborn_card_def(_PRINTINGS["Exalted Sunborn"])
     assert cd is not None
+    # The `static_replacements` tuple carries a 4th `transform_dest`
+    # element (the GSZ/Nexus "replace" destination-redirect widen);
+    # `None` for the count-transform shapes.
     assert cd.static_replacements == (
-        ("would_create_token", "multiply_count", 2),
+        ("would_create_token", "multiply_count", 2, None),
     )
 
 

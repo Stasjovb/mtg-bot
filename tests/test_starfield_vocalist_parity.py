@@ -115,8 +115,11 @@ def test_starfield_vocalist_card_def_carries_static_replacement():
 
     cd = _starfield_vocalist_card_def(_PRINTINGS["Starfield Vocalist"])
     assert cd is not None
+    # The `static_replacements` tuple carries a 4th `transform_dest`
+    # element (the GSZ/Nexus "replace" destination-redirect widen);
+    # `None` for the count/instance-transform shapes.
     assert cd.static_replacements == (
-        ("triggered_ability_triggers", "add_instances", 1),
+        ("triggered_ability_triggers", "add_instances", 1, None),
     )
 
 
@@ -270,3 +273,202 @@ def test_cross_engine_real_eoe_starfield_vocalist_extra_trigger_parity():
         "With no Starfield Vocalist the trigger multiplier must be 1 "
         "(no extra instance)"
     )
+
+
+# ---------------------------------------------------------------------------
+# (5) GENUINE Rust resolve-arm cross-engine probe (2026-06-01) — the Rust
+# `dispatch_event` push loop now folds `entered_trigger_instance_-
+# multiplier` for `Event::Enters` firings. This probe drives the ACTUAL
+# Rust engine: with the genuine parsed Starfield Vocalist on p0's
+# battlefield, a creature p0 controls whose ETB triggers (gain_life)
+# enters → the trigger is pushed TWICE onto the Rust stack (one base + 1
+# extra instance), byte-equal to Python's `dispatch_event` ENTERS
+# multiplier; with no Starfield Vocalist it pushes ONCE.
+#
+# **ENTERS-only scope mirror.** Both engines apply the multiplier ONLY to
+# ENTERS-event firings (Python `actions.py:3475`; Rust the `Event::Enters`
+# arm in `dispatch_event`) — a deliberate, byte-equal simplification of
+# the printed "any triggered ability" text. The probe drives an ENTERS
+# trigger so it exercises the wired path on both engines.
+# ---------------------------------------------------------------------------
+
+
+ZONE_LIBRARY = 1
+
+
+def _etb_gain_life_creature_dict(name: str) -> dict:
+    """A vanilla creature whose ETB triggers a (source-controller)
+    gain_life — an observable trigger the Starfield Vocalist instance
+    multiplier fans out."""
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "subtypes": ["Bear"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 3},
+            },
+        ],
+    }
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_starfield_vocalist_rust_resolve_extra_trigger_parity():
+    """**GENUINE Rust resolve-arm cross-engine probe — Starfield Vocalist
+    TRIGGERED_ABILITY_TRIGGERS + AddInstances(1). Rust-side byte-equality.**
+
+    Closes the SEARCH_LIMITATIONS deferral: the Rust `dispatch_event`
+    push loop now folds the per-controller extra-trigger-instance
+    multiplier for ENTERS firings. With the genuine parsed Starfield
+    Vocalist on p0's battlefield, a creature p0 controls whose ETB fires
+    a (gain_life) trigger enters → the trigger is pushed TWICE onto the
+    Rust stack. Python's `etb_trigger_multiplier`-driven `dispatch_event`
+    pushes the SAME 2 instances. The negative control (no Starfield
+    Vocalist) pushes ONE on both.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        _spec_card_to_printing_dict,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.parity.trajectory import _starfield_vocalist_card_def
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.game import Zone
+
+    real = _PRINTINGS.get("Starfield Vocalist")
+    if real is None:
+        pytest.skip("Starfield Vocalist absent from active CardSource")
+
+    cd = _starfield_vocalist_card_def(real)
+    registry_dict = _spec_card_to_printing_dict(cd)
+
+    # ------------------------------------------------------------------
+    # Rust: Starfield Vocalist first, then an ETB-trigger creature.
+    # ------------------------------------------------------------------
+    rs = build_rust_state(DeckSpec(card_defs=(), p0_library=(), p1_library=()))
+    rs.register_and_inject_object(dict(registry_dict), 0, ZONE_BATTLEFIELD)
+    rs.register_and_inject_object(
+        _etb_gain_life_creature_dict("SV Probe Bear"), 0, ZONE_BATTLEFIELD
+    )
+    rust_instances = rs.stack_size()
+
+    # ------------------------------------------------------------------
+    # Python: genuine Starfield Vocalist + an ETB-trigger creature;
+    # dispatch ENTERS and count the pushed trigger instances.
+    # ------------------------------------------------------------------
+    etb_bear = CardPrinting(
+        name="SV Probe Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=GainLife(amount=3),
+            ),
+        ),
+    )
+    st = build_python_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    sv = st.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    sv.summoning_sick = False
+    st.battlefield.append(sv)
+    bear = st.new_object(etb_bear, owner_id=0, zone=Zone.BATTLEFIELD)
+    bear.summoning_sick = False
+    st.battlefield.append(bear)
+    before = len(st.stack)
+    dispatch_event(st, Event.ENTERS, obj=bear)
+    py_instances = len(st.stack) - before
+
+    assert rust_instances == 2, (
+        f"Rust Starfield Vocalist must push 2 ENTERS-trigger instances; "
+        f"got {rust_instances}"
+    )
+    assert py_instances == 2, (
+        f"Python Starfield Vocalist must push 2 ENTERS-trigger instances; "
+        f"got {py_instances}"
+    )
+    assert rust_instances == py_instances, (
+        f"Cross-engine trigger-instance divergence: Rust {rust_instances}, "
+        f"Python {py_instances}"
+    )
+
+
+@_rust_skip
+def test_cross_engine_starfield_vocalist_rust_negative_control_single_instance():
+    """Negative control: with NO Starfield Vocalist on the battlefield, an
+    ETB trigger pushes exactly ONE instance on BOTH engines — the Rust
+    extra-instance fold is gated on the carrier's presence."""
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.game import Zone
+
+    rs = build_rust_state(DeckSpec(card_defs=(), p0_library=(), p1_library=()))
+    rs.register_and_inject_object(
+        _etb_gain_life_creature_dict("Neg Control Bear"), 0, ZONE_BATTLEFIELD
+    )
+    rust_instances = rs.stack_size()
+
+    etb_bear = CardPrinting(
+        name="Neg Control Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=GainLife(amount=3),
+            ),
+        ),
+    )
+    st = build_python_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    bear = st.new_object(etb_bear, owner_id=0, zone=Zone.BATTLEFIELD)
+    bear.summoning_sick = False
+    st.battlefield.append(bear)
+    before = len(st.stack)
+    dispatch_event(st, Event.ENTERS, obj=bear)
+    py_instances = len(st.stack) - before
+
+    assert rust_instances == 1, (
+        f"Rust neg-control must push 1 instance; got {rust_instances}"
+    )
+    assert py_instances == 1, (
+        f"Python neg-control must push 1 instance; got {py_instances}"
+    )
+    assert rust_instances == py_instances

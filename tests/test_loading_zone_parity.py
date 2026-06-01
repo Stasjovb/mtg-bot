@@ -133,8 +133,11 @@ def test_loading_zone_card_def_carries_static_replacement():
     cd = _loading_zone_card_def(_PRINTINGS["Loading Zone"])
     assert cd is not None
     assert cd.card_type == "Enchantment"
+    # The `static_replacements` tuple carries a 4th `transform_dest`
+    # element (the GSZ/Nexus "replace" destination-redirect widen);
+    # `None` for the count-transform shapes (multiply_count/add_instances).
     assert cd.static_replacements == (
-        ("would_place_counter", "multiply_count", 2),
+        ("would_place_counter", "multiply_count", 2, None),
     )
 
 
@@ -290,3 +293,181 @@ def test_cross_engine_real_eoe_loading_zone_counter_doubling_parity():
         f"With no Loading Zone, place-1 must stay 1; got {placed2}"
     )
     assert bear2.plus_one_counters == 1
+
+
+# ---------------------------------------------------------------------------
+# (5) GENUINE Rust resolve-arm cross-engine probe (2026-06-01) — the Rust
+# `counter_placement_count_multiplier` resolve consumer is now wired into
+# every +1/+1-counter-placement arm. This probe drives the ACTUAL Rust
+# engine: with the genuine parsed Loading Zone on p0's battlefield, a
+# `put_plus_one_counter_on_self` ETB on a creature p0 controls places 2
+# counters (the ×2 doubling) on the RUST side, byte-equal to Python; with
+# no Loading Zone it places 1.
+# ---------------------------------------------------------------------------
+
+
+ZONE_LIBRARY = 1
+
+
+def _rust_bf_counters(rs, obj_id: int) -> int:
+    """Read object ``obj_id``'s scalar ``counters`` off the Rust
+    battlefield snapshot (mirrors Python ``plus_one_counters``)."""
+    for d in rs.battlefield_snapshot():
+        if d["id"] == obj_id:
+            return d["counters"]
+    raise AssertionError(f"object {obj_id} not on the Rust battlefield")
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_loading_zone_rust_resolve_doubling_parity():
+    """**GENUINE Rust resolve-arm cross-engine probe — Loading Zone
+    WOULD_PLACE_COUNTER × MultiplyCount(2). Rust-side byte-equality.**
+
+    Closes the SEARCH_LIMITATIONS deferral: the Rust counter-placement
+    arms now consult ``counter_placement_count_multiplier``. This probe
+    drives the genuine parsed Loading Zone printing through BOTH engines'
+    +1/+1-counter placement path:
+
+      * **Rust:** registers the genuine Loading Zone bridge dict, injects
+        it on p0's battlefield, then injects a creature p0 controls whose
+        ETB ``put_plus_one_counter_on_self`` places 1 counter. The
+        ``Effect::PutPlusOneCounterOnSelf`` arm consults the doubler →
+        the creature ends with TWO counters.
+      * **Python:** seats the genuine Loading Zone + a creature on p0's
+        battlefield and runs ``add_plus_one_counters(state, bear, 1)``;
+        the WOULD_PLACE_COUNTER dispatch folds the ×2 → 2 counters.
+
+    Both engines land the SAME post-replacement count (2), keyed on the
+    RECIPIENT's controller (p0). The negative control (no Loading Zone)
+    lands 1 on both — proving the doubling is gated on the carrier.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        _spec_card_to_printing_dict,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.parity.trajectory import _loading_zone_card_def
+    from mtg_bot.game import Zone, add_plus_one_counters
+
+    real = _PRINTINGS.get("Loading Zone")
+    if real is None:
+        pytest.skip("Loading Zone absent from active CardSource")
+
+    cd = _loading_zone_card_def(real)
+    registry_dict = _spec_card_to_printing_dict(cd)
+
+    # ------------------------------------------------------------------
+    # Rust: Loading Zone first (so it's on the bf when the ETB resolves),
+    # then a creature whose ETB puts 1 +1/+1 counter on itself.
+    # ------------------------------------------------------------------
+    rs = build_rust_state(DeckSpec(card_defs=(), p0_library=(), p1_library=()))
+    rs.register_and_inject_object(dict(registry_dict), 0, ZONE_BATTLEFIELD)
+    bear_id = rs.register_and_inject_object(
+        {
+            "name": "Loading Zone Probe Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": 1,
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rust_counters = _rust_bf_counters(rs, bear_id)
+
+    # ------------------------------------------------------------------
+    # Python: genuine Loading Zone + a Bear; add_plus_one_counters(1).
+    # ------------------------------------------------------------------
+    st = build_python_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    lz = st.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    st.battlefield.append(lz)
+    bear = st.new_object(_vanilla_bear(), owner_id=0, zone=Zone.BATTLEFIELD)
+    bear.summoning_sick = False
+    st.battlefield.append(bear)
+    add_plus_one_counters(st, bear, 1)
+    py_counters = bear.plus_one_counters
+
+    assert rust_counters == 2, (
+        f"Rust Loading Zone must double place-1 → 2 counters; got "
+        f"{rust_counters}"
+    )
+    assert py_counters == 2, (
+        f"Python Loading Zone must double place-1 → 2 counters; got "
+        f"{py_counters}"
+    )
+    assert rust_counters == py_counters, (
+        f"Cross-engine counter-count divergence: Rust {rust_counters}, "
+        f"Python {py_counters}"
+    )
+
+
+@_rust_skip
+def test_cross_engine_loading_zone_rust_negative_control_no_doubling():
+    """Negative control: with NO Loading Zone on the battlefield, a
+    put-1-+1/+1-counter ETB lands exactly ONE counter on BOTH engines —
+    the Rust doubling is gated on the carrier's presence."""
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.game import Zone, add_plus_one_counters
+
+    # Rust: a plain creature (no Loading Zone) self-placing 1 counter.
+    rs = build_rust_state(DeckSpec(card_defs=(), p0_library=(), p1_library=()))
+    bear_id = rs.register_and_inject_object(
+        {
+            "name": "Bear (neg control)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "power": 2,
+            "toughness": 2,
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": 1,
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rust_counters = _rust_bf_counters(rs, bear_id)
+
+    # Python: a plain Bear (no Loading Zone) → add 1 counter.
+    st = build_python_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    bear = st.new_object(_vanilla_bear(), owner_id=0, zone=Zone.BATTLEFIELD)
+    bear.summoning_sick = False
+    st.battlefield.append(bear)
+    add_plus_one_counters(st, bear, 1)
+
+    assert rust_counters == 1, f"Rust neg-control must land 1; got {rust_counters}"
+    assert bear.plus_one_counters == 1
+    assert rust_counters == bear.plus_one_counters
