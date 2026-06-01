@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from mtg_bot.effects import (
     ActivatedAbility, ActivationCost, AddManaToPool,
+    CreateToken, PumpTargetCreatureUntilEOT,
     SacrificeSelfUnlessTapPermanent, TriggeredAbility,
 )
 from mtg_bot.cards.base import (
     CardPrinting, make_basic_land, make_colorless_land, make_planet_land,
-    make_shock_land, make_utility_land,
+    make_shock_land, make_utility_land, parse_mana_cost,
 )
+from mtg_bot.cards.tokens import TOKEN_PRINTINGS
 from mtg_bot.effects.predicates import Event, IsSelf
 
 
@@ -49,11 +51,44 @@ PLANET_LANDS: dict[str, CardPrinting] = {
 
 
 UTILITY_LANDS: dict[str, CardPrinting] = {
-    # Secluded Starforge: simplified to just a {T}: Add {C} utility
-    # land. Dropped: the "{2},{T}, Tap X artifacts: +X/+0 UEOT" and
-    # "{5},{T}: create a Robot token" activated abilities (tap-X-things
-    # cost + Robot-token activated not worth wiring for one card).
-    "Secluded Starforge": make_colorless_land("Secluded Starforge"),
+    # Secluded Starforge: full faithful 3-AA printing (mirrors the
+    # parser's _try_build_colorless_utility_land multi-AA path):
+    #   AA1  {T}: Add {C}.
+    #   AA2  {2}, {T}, Tap X untapped artifacts you control: Target
+    #        creature gets +X/+0 until end of turn. Activate only as a
+    #        sorcery.  (X = number of artifacts tapped as cost; flows
+    #        through resolving_x_value into the power_bonus_from_x pump.)
+    #   AA3  {5}, {T}: Create a 2/2 colorless Robot artifact creature
+    #        token.
+    "Secluded Starforge": make_utility_land(
+        "Secluded Starforge",
+        produces=frozenset({"C"}),
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=(("C", 1),)),
+                is_mana_ability=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{2}"), mana_str="{2}",
+                    tap_self=True,
+                    tap_x_untapped_artifacts_you_control=True,
+                ),
+                effect=PumpTargetCreatureUntilEOT(power_bonus_from_x=True),
+                sorcery_speed=True,
+            ),
+            ActivatedAbility(
+                cost=ActivationCost(
+                    mana=parse_mana_cost("{5}"), mana_str="{5}",
+                    tap_self=True,
+                ),
+                effect=CreateToken(
+                    token_printing=TOKEN_PRINTINGS["Robot"], count=1,
+                ),
+            ),
+        ),
+    ),
     # Command Bridge: enters tapped; "When this land enters, sacrifice
     # it unless you tap an untapped permanent you control"; {T}: add
     # one mana of any color. The any-color tap is via an explicit

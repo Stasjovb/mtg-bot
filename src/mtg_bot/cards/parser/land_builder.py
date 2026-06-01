@@ -3125,12 +3125,43 @@ def _try_build_colorless_utility_land(
         return None
     if card.get("set") in {"eos", "spg"}:
         return None
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    if not lines:
+    raw_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not raw_lines:
         return None
+    lines = [_strip_reminder_text(ln) for ln in raw_lines]
     if lines[0] != _COLORLESS_TAP_LINE:
         return None
     produced = card.get("produced_mana")
     if produced is not None and set(produced) - {"C"}:
         return None
-    return make_colorless_land(name=card["name"])
+    # Single-line case: a plain ``{T}: Add {C}.`` colorless land with no
+    # other abilities. Preserve the historical ``make_colorless_land``
+    # simplification (byte-identical to before) — the land taps for {C}
+    # via the explicit-produces path / generic-mana fallback.
+    if len(lines) == 1:
+        return make_colorless_land(name=card["name"])
+    # Multi-line case (Secluded Starforge): the land prints additional
+    # activated abilities after the tap-for-{C} line. Route EVERY line
+    # through the activated-ability grammar so the full printed surface
+    # is faithful — NO silent drop of the trailing AAs. If ANY line
+    # fails to parse, fall through to ``None`` (don't claim) so an
+    # unmodeled rider is never silently dropped (parser CLAUDE.md
+    # no-op-recognizer rule).
+    abilities = []
+    for ln in lines:
+        ab = _parse_activated_ability_line(ln)
+        if ab is None:
+            return None
+        abilities.append(ab)
+    # ``produces`` is the union of colorless/colored mana the mana
+    # abilities add (here just {C} from AA1). Derived from the parsed
+    # AddManaToPool effects so it always matches the printed surface.
+    produces: set[str] = set()
+    for ab in abilities:
+        if ab.is_mana_ability and isinstance(ab.effect, AddManaToPool):
+            produces.update(sym for sym, _ in ab.effect.produces)
+    return make_utility_land(
+        card["name"],
+        produces=frozenset(produces),
+        activated_abilities=tuple(abilities),
+    )

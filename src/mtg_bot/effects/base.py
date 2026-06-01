@@ -404,6 +404,17 @@ class ActivationCost:
     # activator controls. Empty tuple disables the gate. Order does not
     # matter; matching is OR'd across the tuple.
     requires_control_of_subtype: tuple[str, ...] = ()
+    # "Tap X untapped artifacts you control" — Secluded Starforge's
+    # second ability. X is the number of untapped artifacts the
+    # activating player CHOOSES to tap as part of the cost (X may be 0,
+    # in which case the +X/+0 pump is a no-op). Bounded by the count of
+    # untapped artifacts the player controls. The chosen X is threaded
+    # onto the StackItem's ``x_value`` (the same channel ``{X}`` mana
+    # costs use) so the resolving ``power_bonus_from_x`` pump reads it
+    # via ``state.resolving_x_value``. The activating player picks the
+    # count via the existing ``choose_x`` agent hook; the engine taps
+    # the lowest-id-first X untapped artifacts deterministically.
+    tap_x_untapped_artifacts_you_control: bool = False
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -439,6 +450,8 @@ class ActivationCost:
             parts.append("Sacrifice a land")
         if self.sacrifice_a_desert:
             parts.append("Sacrifice a Desert")
+        if self.tap_x_untapped_artifacts_you_control:
+            parts.append("Tap X untapped artifacts you control")
         return ", ".join(parts) if parts else "0"
 
 
