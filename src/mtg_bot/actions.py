@@ -2168,6 +2168,32 @@ def _activate_ability(
             f"(cost for {source.printing.name}'s ability; life: {p.life})"
         )
 
+    # Planeswalker loyalty cost (CR 606). Signed subtraction handles
+    # both directions uniformly: positive cost.loyalty (a "-N" ability)
+    # decrements loyalty_counters; negative (a "+N" ability) increments.
+    # Zero ("0:" ability) is a no-op on the counter but still records
+    # the once-per-turn ledger below. Mirrors Rust's apply commit at
+    # state_ops_actions.rs (``obj.loyalty_counters -= cost.loyalty``).
+    # The loyalty-at-0 SBA (turn.py 704.5i) catches a drop to 0 on the
+    # next SBA pass — the commit itself is unconditional (CR 606.5).
+    if ability.cost.loyalty != 0:
+        source.loyalty_counters -= ability.cost.loyalty
+        state.log.append(
+            f"P{player_id} {'pays' if ability.cost.loyalty > 0 else 'adds'} "
+            f"{abs(ability.cost.loyalty)} loyalty "
+            f"({source.printing.name} now at {source.loyalty_counters})"
+        )
+    # CR 606.3 once-per-turn-per-walker ledger. Recorded for EVERY
+    # loyalty ability of a planeswalker source (including the "0"
+    # ability, where cost.loyalty == 0). Keyed on (controller, source)
+    # — per-walker, not per-ability. ``legal_actions`` reads this set
+    # to gate ALL of the walker's abilities off for the rest of the
+    # turn. Mirrors Rust's ledger insert at state_ops_actions.rs.
+    # Gated on the source being a planeswalker so a non-walker activated
+    # ability (which never carries loyalty) doesn't pollute the ledger.
+    if source.printing.is_planeswalker:
+        state.loyalty_activated_this_turn.add((player_id, source.id))
+
     # "Sacrifice a land" cost (Dust Bowl). Agent picks; excludes source.
     if ability.cost.sacrifice_a_land:
         from mtg_bot.turn import sacrifice as _sacrifice

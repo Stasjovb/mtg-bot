@@ -1559,10 +1559,14 @@ def make_planeswalker(
     when the planeswalker enters the battlefield. SBAs send it to
     graveyard at 0 loyalty.
 
-    Simplifications: loyalty-activated abilities aren't modeled yet
-    (Tezzeret's 0/−3/−7 abilities are dropped); damage redirection
-    to planeswalkers isn't modeled; attacking a planeswalker isn't
-    modeled. Triggered abilities on the walker still fire normally.
+    Loyalty-activated abilities ARE modeled via ``activated_abilities``
+    carrying ``ActivationCost.loyalty`` (signed cost) + ``sorcery_speed``
+    + the once-per-turn-per-walker gate (CR 606.3). Tezzeret, Cruel
+    Captain's 0 / −3 abilities are wired; the −7 emblem is deferred (no
+    emblem-object substrate — see docs/SEARCH_LIMITATIONS.md).
+    Simplifications still in place: damage redirection to planeswalkers
+    isn't modeled; attacking a planeswalker isn't modeled. Triggered
+    abilities on the walker still fire normally.
     """
     prefix = "Legendary " if legendary else ""
     type_line = f"{prefix}Planeswalker — {subtype}"

@@ -415,6 +415,27 @@ class ActivationCost:
     # count via the existing ``choose_x`` agent hook; the engine taps
     # the lowest-id-first X untapped artifacts deterministically.
     tap_x_untapped_artifacts_you_control: bool = False
+    # **Planeswalker loyalty cost (CR 606).** Signed loyalty cost.
+    # Positive values are PAY costs (the walker LOSES N loyalty
+    # counters); negative values are ADD costs (the walker GAINS |N|
+    # loyalty counters). Defaults to 0 (no loyalty cost). Convention:
+    # a printed "+2" ability stamps ``loyalty=-2``; a printed "-3"
+    # ability stamps ``loyalty=3``; a printed "0" ability stamps
+    # ``loyalty=0``. This mirrors Rust's ``ActivationCost.loyalty: i32``
+    # (cards.rs) sign convention exactly.
+    #
+    # Emission (``legal.py``): positive ``loyalty`` gates on the
+    # source's ``loyalty_counters`` — the walker needs at least
+    # ``cost.loyalty`` counters to afford. Negative / zero are always
+    # affordable. Plus the once-per-turn-per-walker gate (CR 606.3,
+    # via ``state.loyalty_activated_this_turn``).
+    #
+    # Apply (``actions._activate_ability``): ``obj.loyalty_counters -=
+    # cost.loyalty`` (signed subtraction handles both directions), then
+    # the (controller_id, source_id) pair is recorded in
+    # ``state.loyalty_activated_this_turn``. The loyalty-at-0 SBA
+    # (``turn.py`` 704.5i) catches a walker that drops to 0.
+    loyalty: int = 0
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -452,6 +473,13 @@ class ActivationCost:
             parts.append("Sacrifice a Desert")
         if self.tap_x_untapped_artifacts_you_control:
             parts.append("Tap X untapped artifacts you control")
+        if self.loyalty:
+            # Printed-sign convention: positive cost.loyalty is a "-N"
+            # ability, negative is "+N".
+            if self.loyalty > 0:
+                parts.append(f"-{self.loyalty}")
+            else:
+                parts.append(f"+{-self.loyalty}")
         return ", ".join(parts) if parts else "0"
 
 

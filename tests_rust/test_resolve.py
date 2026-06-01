@@ -17765,3 +17765,176 @@ def test_source_power_on_battlefield_with_counter_no_regression(engine):
     state.apply_sbas()
     state.resolve_top_of_stack()
     assert state.life_totals[1] == life_before[1] - 3
+
+
+# ---------------------------------------------------------------------------
+# Tezzeret, Cruel Captain loyalty-ability effect pins (2026-06-01).
+#   * Effect::UntapTargetArtifactOrCreatureConditionalCounter (the 0
+#     ability) — deterministic first-match self-side target pick:
+#     untap + conditional +1/+1 on an artifact creature.
+#   * SearchLibraryForCard "artifact_small" filter (the -3 ability) —
+#     artifact card with mana value <= max_mv (1).
+# ---------------------------------------------------------------------------
+
+
+def _untap_conditional_counter_dict():
+    """A planeswalker-shape carrier whose effects[0] is the 0-ability
+    untap-conditional-counter effect (unit shape, no target key)."""
+    return {
+        "name": "Tezz Zero Carrier",
+        "card_types": ["Planeswalker"],
+        "supertypes": ["Legendary"],
+        "subtypes": ["Tezzeret"],
+        "mana_cost": {"generic": 3},
+        "starting_loyalty": 4,
+        "effects": [
+            {
+                "kind": (
+                    "untap_target_artifact_or_creature_conditional_counter"
+                ),
+            }
+        ],
+    }
+
+
+def test_untap_conditional_counter_untaps_and_buffs_artifact_creature(engine):
+    """The 0 ability untaps the first artifact-or-creature on the
+    source-controller's battlefield, and — because it IS an artifact
+    creature — adds one +1/+1 counter. Deterministic first-match pick."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    robot_id = state.register_and_inject_object(
+        {
+            "name": "Assembly Robot",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    state.tap_object(robot_id)
+    src_id = state.register_and_inject_object(
+        _untap_conditional_counter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.is_tapped(robot_id) is False
+    assert state.get_counters(robot_id) == 1
+
+
+def test_untap_conditional_counter_no_counter_on_plain_creature(engine):
+    """When the target is a NON-artifact creature, the 0 ability untaps
+    it but adds NO counter (the "if it's an artifact creature" rider is
+    false)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    bear_id = state.register_and_inject_object(
+        {
+            "name": "Plain Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    state.tap_object(bear_id)
+    src_id = state.register_and_inject_object(
+        _untap_conditional_counter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.is_tapped(bear_id) is False
+    assert state.get_counters(bear_id) == 0
+
+
+def test_untap_conditional_counter_empty_board_fizzles(engine):
+    """No artifact-or-creature on the controller's battlefield → silent
+    fizzle (stack still pops, no error)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    src_id = state.register_and_inject_object(
+        _untap_conditional_counter_dict(), 0, ZONE_BATTLEFIELD
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.is_stack_empty() is True
+
+
+def _artifact_small_tutor_dict():
+    """A carrier whose effects[0] is the -3 ability's artifact-MV<=1
+    tutor (SearchLibraryForCard, filter artifact_small, max_mv 1)."""
+    return {
+        "name": "Tezz Minus3 Carrier",
+        "card_types": ["Planeswalker"],
+        "supertypes": ["Legendary"],
+        "subtypes": ["Tezzeret"],
+        "mana_cost": {"generic": 3},
+        "starting_loyalty": 4,
+        "effects": [
+            {
+                "kind": "search_library_for_card",
+                "filter_name": "artifact_small",
+                "max_mv": 1,
+                "may_fail": True,
+            }
+        ],
+    }
+
+
+def test_search_artifact_small_fetches_mv1_artifact(engine):
+    """The -3 tutor fetches an MV-1 artifact from library to hand
+    (deterministic first-match)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(
+        {
+            "name": "Tiny Relic",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_LIBRARY,
+    )
+    src_id = state.register_and_inject_object(
+        _artifact_small_tutor_dict(), 0, ZONE_BATTLEFIELD
+    )
+    hand_before = state.hand_sizes[0]
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.hand_sizes[0] == hand_before + 1
+
+
+def test_search_artifact_small_skips_mv2_artifact(engine):
+    """An MV-2 artifact is OVER the cap (max_mv=1) — the tutor finds no
+    match and fizzles (hand unchanged)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    state.register_and_inject_object(
+        {
+            "name": "Bigger Relic",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+        },
+        0,
+        ZONE_LIBRARY,
+    )
+    src_id = state.register_and_inject_object(
+        _artifact_small_tutor_dict(), 0, ZONE_BATTLEFIELD
+    )
+    hand_before = state.hand_sizes[0]
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+    assert state.hand_sizes[0] == hand_before

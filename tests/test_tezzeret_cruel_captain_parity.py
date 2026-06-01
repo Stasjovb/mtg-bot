@@ -117,10 +117,7 @@ def test_tezzeret_printed_planeswalker_surface():
 def test_tezzeret_loyalty_gain_trigger_shape():
     """The parsed printing emits exactly one ENTERS triggered ability
     whose effect is ``PutLoyaltyCounterOnSelf(amount=1)`` — the
-    loyalty-gain "whenever an artifact you control enters" rider. The
-    three loyalty-ACTIVATED abilities (0 / −3 / −7) are deliberately
-    stripped by ``planeswalker_builder.py`` (Python does not model
-    loyalty-ability activation), so ``activated_abilities`` is empty."""
+    loyalty-gain "whenever an artifact you control enters" rider."""
     p = _PRINTINGS["Tezzeret, Cruel Captain"]
     enters_tas = [
         ta for ta in p.triggered_abilities if ta.event is Event.ENTERS
@@ -138,12 +135,51 @@ def test_tezzeret_loyalty_gain_trigger_shape():
         f"PutLoyaltyCounterOnSelf amount must be 1; got "
         f"{ta.effect.amount}"
     )
-    # Loyalty-activated abilities are stripped (deferred Python
-    # substrate) — the printing carries none.
-    assert p.activated_abilities == (), (
-        "Tezzeret's loyalty-activated abilities (0/−3/−7) must be "
-        "stripped — Python does not model loyalty-ability activation"
+
+
+def test_tezzeret_loyalty_activated_abilities_shape():
+    """The parsed printing now models Tezzeret's 0 and −3 loyalty
+    abilities (Stage 1+2 of the loyalty-activation subsystem). The −7
+    EMBLEM ability is stripped (no emblem-object substrate; honest-
+    stopped — see docs/SEARCH_LIMITATIONS.md).
+
+    Each modeled ability carries the signed-loyalty ``ActivationCost``
+    + ``sorcery_speed=True`` (CR 606.3 timing). Sign convention: a
+    printed ``0:`` stamps ``loyalty=0``; a printed ``−3:`` stamps
+    ``loyalty=3`` (pay-loyalty)."""
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.effects.generic.tap import (
+        UntapTargetArtifactOrCreatureConditionalCounter,
     )
+
+    p = _PRINTINGS["Tezzeret, Cruel Captain"]
+    aas = p.activated_abilities
+    assert len(aas) == 2, (
+        f"Tezzeret must model exactly 2 loyalty abilities (0 / −3); "
+        f"the −7 emblem is stripped. Got {len(aas)}"
+    )
+    # All loyalty abilities are sorcery-speed (CR 606.3).
+    assert all(aa.sorcery_speed for aa in aas), (
+        "loyalty abilities must be sorcery-speed"
+    )
+
+    # The 0 ability — loyalty cost 0, untap-conditional-counter effect.
+    zero = next(aa for aa in aas if aa.cost.loyalty == 0)
+    assert isinstance(
+        zero.effect, UntapTargetArtifactOrCreatureConditionalCounter
+    ), (
+        f"0 ability effect must be UntapTargetArtifactOrCreature"
+        f"ConditionalCounter; got {type(zero.effect).__name__}"
+    )
+
+    # The −3 ability — loyalty cost +3 (pay-loyalty), artifact-MV≤1 tutor.
+    minus3 = next(aa for aa in aas if aa.cost.loyalty == 3)
+    assert isinstance(minus3.effect, SearchLibraryForCard), (
+        f"−3 ability effect must be SearchLibraryForCard; got "
+        f"{type(minus3.effect).__name__}"
+    )
+    assert minus3.effect.filter_name == "artifact_small"
+    assert minus3.effect.max_mv == 1
 
 
 # ---------------------------------------------------------------------------
@@ -394,3 +430,415 @@ def test_cross_engine_real_eoe_tezzeret_cruel_captain_loyalty_gain_parity():
         f"Cross-engine loyalty must be byte-equal (both 5); got "
         f"python={py_walker.loyalty_counters}, rust={rust_loyalty}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ZONE_LIBRARY constant (mirrors Rust's u8 zone IDs) used by the
+# loyalty-activation probes below.
+# ---------------------------------------------------------------------------
+ZONE_LIBRARY = 1
+
+
+# ---------------------------------------------------------------------------
+# (5) Loyalty-activation subsystem — Stage 1. The signed-loyalty
+# ``ActivationCost`` cost atom round-trips byte-equal cross-engine via the
+# bridge, and the once-per-turn-per-walker + sorcery-speed activation gate
+# behave identically on both engines.
+# ---------------------------------------------------------------------------
+
+
+def test_loyalty_cost_bridge_round_trip():
+    """The activation-cost bridge translates a signed ``loyalty`` int
+    byte-equal to the Python ``ActivationCost.loyalty`` field, and the
+    full activated-ability dict (cost + effect + sorcery_speed) round-
+    trips. Mirrors Rust's ``parse_activation_cost`` ``loyalty`` arm."""
+    from mtg_bot.parity.cross_engine import (
+        _aa_dict_to_python_activation_cost,
+        _aa_dict_to_python_activated_ability,
+    )
+
+    # Pay-loyalty (a "-3" ability stamps loyalty=3).
+    assert _aa_dict_to_python_activation_cost({"loyalty": 3}).loyalty == 3
+    # Add-loyalty (a "+2" ability stamps loyalty=-2).
+    assert _aa_dict_to_python_activation_cost({"loyalty": -2}).loyalty == -2
+    # Bare "0" ability.
+    assert _aa_dict_to_python_activation_cost({"loyalty": 0}).loyalty == 0
+    # Missing key defaults to 0 (no loyalty cost).
+    assert _aa_dict_to_python_activation_cost({}).loyalty == 0
+
+    # bool is disallowed (int-subclass guard mirrors Rust's i32 extract).
+    with pytest.raises(ValueError, match=r"loyalty must be an int"):
+        _aa_dict_to_python_activation_cost({"loyalty": True})
+
+    # Full ability dict round-trip — the -3 search ability.
+    aa = _aa_dict_to_python_activated_ability(
+        {
+            "cost": {"loyalty": 3},
+            "sorcery_speed": True,
+            "effect": {
+                "kind": "search_library_for_card",
+                "filter_name": "artifact_small",
+                "max_mv": 1,
+                "may_fail": True,
+            },
+        }
+    )
+    assert aa.cost.loyalty == 3
+    assert aa.sorcery_speed is True
+
+
+@_rust_skip
+def test_cross_engine_loyalty_activation_cost_and_once_per_turn_parity():
+    """**Cross-engine byte-equal — the loyalty-activation subsystem.**
+
+    Drives a full loyalty-ability activation through BOTH engines'
+    activation paths (Python ``_activate_ability`` / Rust
+    ``apply_action({"kind": "activate_ability"})``) and asserts:
+
+      * the signed loyalty COST is paid byte-equal (a -3 ability:
+        loyalty 4 -> 1 on both engines),
+      * the once-per-turn-per-walker gate (CR 606.3) refuses a second
+        activation on both engines.
+
+    Uses the -3 search ability (fully deterministic first-match tutor —
+    no agent seating required, byte-equal both engines)."""
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.actions import _activate_ability, ActivateAbility
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import legal_actions
+
+    tezz = get_active_source().get_printings()["Tezzeret, Cruel Captain"]
+    minus3_idx = next(
+        i for i, aa in enumerate(tezz.activated_abilities)
+        if aa.cost.loyalty == 3
+    )
+
+    # ---- PYTHON ----
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    relic = make_artifact("Tiny Relic", "{1}")
+    relic_obj = py.new_object(relic, owner_id=0, zone=Zone.LIBRARY)
+    py.player_by_id(0).library.append(relic_obj)
+    w = py.new_object(tezz, owner_id=0, zone=Zone.BATTLEFIELD)
+    w.loyalty_counters = 4
+    py.battlefield.append(w)
+
+    class _FetchAgent:
+        def choose_card_from_library(self, state, pid, options):
+            return options[0]
+
+    py.player_by_id(0).agent = _FetchAgent()
+    _activate_ability(py, 0, w.id, minus3_idx)
+    assert w.loyalty_counters == 1, (
+        f"Python: -3 ability must pay 3 loyalty (4 -> 1); got "
+        f"{w.loyalty_counters}"
+    )
+    assert (0, w.id) in py.loyalty_activated_this_turn, (
+        "Python: once-per-turn ledger must record the activation"
+    )
+    py_legal_aas = [
+        a for a in legal_actions(py, 0)
+        if isinstance(a, ActivateAbility) and a.source_id == w.id
+    ]
+    assert py_legal_aas == [], (
+        "Python: no loyalty ability may be offered after the walker "
+        "activated this turn (CR 606.3) / insufficient loyalty"
+    )
+
+    # ---- RUST ----
+    rust = build_rust_state(spec)
+    rust.register_and_inject_object(
+        {
+            "name": "Tiny Relic",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_LIBRARY,
+    )
+    walker_id = rust.register_and_inject_object(
+        {
+            "name": "Tezzeret, Cruel Captain",
+            "card_types": ["Planeswalker"],
+            "supertypes": ["Legendary"],
+            "subtypes": ["Tezzeret"],
+            "mana_cost": {"generic": 3},
+            "starting_loyalty": 4,
+            "effects": [],
+            "activated_abilities": [
+                {
+                    "cost": {"loyalty": 3},
+                    "sorcery_speed": True,
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "artifact_small",
+                        "max_mv": 1,
+                        "may_fail": True,
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust.set_loyalty_counters(walker_id, 4)
+    rust.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    assert rust.get_loyalty_counters(walker_id) == 1, (
+        f"Rust: -3 ability must pay 3 loyalty (4 -> 1); got "
+        f"{rust.get_loyalty_counters(walker_id)}"
+    )
+    with pytest.raises(ValueError):
+        rust.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 0,
+            }
+        )
+
+    # ---- CROSS-ENGINE byte-equality ----
+    assert w.loyalty_counters == rust.get_loyalty_counters(walker_id) == 1
+
+
+@_rust_skip
+def test_cross_engine_tezzeret_zero_ability_untap_conditional_counter_parity():
+    """**Cross-engine byte-equal — Tezzeret's 0 ability.**
+
+    "Untap target artifact or creature. If it's an artifact creature,
+    put a +1/+1 counter on it." Seats a single tapped artifact-creature
+    on the controller's battlefield (so both engines' deterministic
+    target pick lands on the same object), activates the 0 ability,
+    resolves it, and asserts byte-equal: target untapped + one +1/+1
+    counter; walker loyalty unchanged (0 cost)."""
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
+    from mtg_bot.cards.base import make_creature
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone
+
+    tezz = get_active_source().get_printings()["Tezzeret, Cruel Captain"]
+    zero_idx = next(
+        i for i, aa in enumerate(tezz.activated_abilities)
+        if aa.cost.loyalty == 0
+    )
+
+    # ---- PYTHON ----
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    robot = make_creature("Assembly Robot", "{2}", 2, 2, artifact=True)
+    ro = py.new_object(robot, owner_id=0, zone=Zone.BATTLEFIELD)
+    ro.tapped = True
+    py.battlefield.append(ro)
+    w = py.new_object(tezz, owner_id=0, zone=Zone.BATTLEFIELD)
+    w.loyalty_counters = 4
+    py.battlefield.append(w)
+
+    class _TargetAgent:
+        def choose_target(self, state, pid, pool):
+            return pool[0]
+
+    py.player_by_id(0).agent = _TargetAgent()
+    _activate_ability(py, 0, w.id, zero_idx)
+    resolve_top_of_stack(py)
+    assert ro.tapped is False, "Python: 0 ability must untap the target"
+    assert ro.plus_one_counters == 1, (
+        f"Python: artifact creature must get a +1/+1 counter; got "
+        f"{ro.plus_one_counters}"
+    )
+    assert w.loyalty_counters == 4, (
+        "Python: 0 ability is a 0-loyalty cost (no change)"
+    )
+
+    # ---- RUST ----
+    rust = build_rust_state(spec)
+    robot_id = rust.register_and_inject_object(
+        {
+            "name": "Assembly Robot",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust.tap_object(robot_id)
+    walker_id = rust.register_and_inject_object(
+        {
+            "name": "Tezzeret, Cruel Captain",
+            "card_types": ["Planeswalker"],
+            "supertypes": ["Legendary"],
+            "subtypes": ["Tezzeret"],
+            "mana_cost": {"generic": 3},
+            "starting_loyalty": 4,
+            "effects": [],
+            "activated_abilities": [
+                {
+                    "cost": {"loyalty": 0},
+                    "sorcery_speed": True,
+                    "effect": {
+                        "kind": (
+                            "untap_target_artifact_or_creature_"
+                            "conditional_counter"
+                        ),
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust.set_loyalty_counters(walker_id, 4)
+    rust.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    rust.resolve_top_of_stack()
+    assert rust.is_tapped(robot_id) is False, (
+        "Rust: 0 ability must untap the target"
+    )
+    assert rust.get_counters(robot_id) == 1, (
+        f"Rust: artifact creature must get a +1/+1 counter; got "
+        f"{rust.get_counters(robot_id)}"
+    )
+    assert rust.get_loyalty_counters(walker_id) == 4
+
+    # ---- CROSS-ENGINE byte-equality ----
+    assert ro.plus_one_counters == rust.get_counters(robot_id) == 1
+    assert ro.tapped == rust.is_tapped(robot_id) is False
+
+
+@_rust_skip
+def test_cross_engine_tezzeret_minus3_search_artifact_parity():
+    """**Cross-engine byte-equal — Tezzeret's -3 ability.**
+
+    "Search your library for an artifact card with mana value 1 or
+    less, reveal it, put it into your hand, then shuffle." Seats one
+    MV-1 artifact in the library; both engines' deterministic
+    first-match tutor fetches it to hand. Asserts byte-equal: the
+    artifact moves library -> hand, loyalty 4 -> 1."""
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.actions import _activate_ability, resolve_top_of_stack
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone
+
+    tezz = get_active_source().get_printings()["Tezzeret, Cruel Captain"]
+    minus3_idx = next(
+        i for i, aa in enumerate(tezz.activated_abilities)
+        if aa.cost.loyalty == 3
+    )
+
+    # ---- PYTHON ----
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    relic = make_artifact("Tiny Relic", "{1}")
+    relic_obj = py.new_object(relic, owner_id=0, zone=Zone.LIBRARY)
+    py.player_by_id(0).library.append(relic_obj)
+    w = py.new_object(tezz, owner_id=0, zone=Zone.BATTLEFIELD)
+    w.loyalty_counters = 4
+    py.battlefield.append(w)
+
+    class _FetchAgent:
+        def choose_card_from_library(self, state, pid, options):
+            return options[0]
+
+    py.player_by_id(0).agent = _FetchAgent()
+    hand_before = len(py.player_by_id(0).hand)
+    _activate_ability(py, 0, w.id, minus3_idx)
+    resolve_top_of_stack(py)
+    py_hand = py.player_by_id(0).hand
+    assert len(py_hand) == hand_before + 1, (
+        "Python: -3 tutor must add the artifact to hand"
+    )
+    assert any(c.printing.name == "Tiny Relic" for c in py_hand)
+    assert w.loyalty_counters == 1
+
+    # ---- RUST ----
+    rust = build_rust_state(spec)
+    rust.register_and_inject_object(
+        {
+            "name": "Tiny Relic",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_LIBRARY,
+    )
+    walker_id = rust.register_and_inject_object(
+        {
+            "name": "Tezzeret, Cruel Captain",
+            "card_types": ["Planeswalker"],
+            "supertypes": ["Legendary"],
+            "subtypes": ["Tezzeret"],
+            "mana_cost": {"generic": 3},
+            "starting_loyalty": 4,
+            "effects": [],
+            "activated_abilities": [
+                {
+                    "cost": {"loyalty": 3},
+                    "sorcery_speed": True,
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "artifact_small",
+                        "max_mv": 1,
+                        "may_fail": True,
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust.set_loyalty_counters(walker_id, 4)
+    rust_hand_before = rust.hand_sizes[0]
+    rust.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    rust.resolve_top_of_stack()
+    assert rust.hand_sizes[0] == rust_hand_before + 1, (
+        "Rust: -3 tutor must add the artifact to hand"
+    )
+    assert rust.get_loyalty_counters(walker_id) == 1
+
+    # ---- CROSS-ENGINE byte-equality ----
+    assert (len(py_hand) - hand_before) == (
+        rust.hand_sizes[0] - rust_hand_before
+    ) == 1
+    assert w.loyalty_counters == rust.get_loyalty_counters(walker_id) == 1

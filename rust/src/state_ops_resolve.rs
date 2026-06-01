@@ -3624,6 +3624,94 @@ fn apply_effect(
                 }
             }
         },
+        // Tezzeret, Cruel Captain's 0 ability — "Untap target artifact
+        // or creature. If it's an artifact creature, put a +1/+1 counter
+        // on it." Mirrors Python's
+        // `UntapTargetArtifactOrCreatureConditionalCounter.resolve`
+        // (effects/generic/tap.py).
+        //
+        // **Deterministic first-match target pick.** Like the sibling
+        // UntapTarget arm, the Rust port has no decision callback. The
+        // target pool is any artifact-or-creature on the
+        // SOURCE-controller's battlefield (Tezzeret untaps a permanent
+        // you control in practice; the byte-equal probe seats a single
+        // legal target). Pick the lowest battlefield-index match. Empty
+        // pool → silent fizzle (stack still pops).
+        Effect::UntapTargetArtifactOrCreatureConditionalCounter => {
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            // Find the first artifact-or-creature on the controller's bf.
+            let target_id: Option<u32> = {
+                let bf = &state.players[controller].battlefield;
+                let registry = &state.registry;
+                let mut found: Option<u32> = None;
+                for obj in bf.iter() {
+                    if let Some(printing) = registry.lookup(obj.printing_id) {
+                        let is_artifact =
+                            printing.card_types.iter().any(|t| t == "Artifact");
+                        let is_creature =
+                            printing.card_types.iter().any(|t| t == "Creature");
+                        if is_artifact || is_creature {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            let target_id = match target_id {
+                Some(id) => id,
+                None => return Ok(()), // fizzle silently
+            };
+            // Determine artifact-creature status (for the conditional
+            // counter) from the registry before mutating.
+            let is_artifact_creature: bool = state
+                .players[controller]
+                .battlefield
+                .iter()
+                .find(|o| o.id == target_id)
+                .and_then(|o| state.registry.lookup(o.printing_id))
+                .map(|p| {
+                    p.card_types.iter().any(|t| t == "Artifact")
+                        && p.card_types.iter().any(|t| t == "Creature")
+                })
+                .unwrap_or(false);
+            // "If it's an artifact creature, put a +1/+1 counter on it."
+            // Mirror Python's add_plus_one_counters doubling fold (a
+            // positive +1/+1 delta onto a creature recipient is doubled
+            // by any controller-matching doubler).
+            let delta = if is_artifact_creature {
+                doubled_plus_one_counter_delta(state, target_id, 1)
+            } else {
+                0
+            };
+            // Untap (idempotent) + apply the counter in one CoW pass.
+            {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.tapped = false;
+                        if delta > 0 {
+                            obj.counters = obj.counters.saturating_add(delta);
+                        }
+                        break;
+                    }
+                }
+            }
+            // Fire COUNTERS_ADDED after the mutation (mirrors Python's
+            // fire_counters_added_to_your_creature_triggers). Only when
+            // counters were actually added.
+            if delta > 0 {
+                dispatch_event(
+                    state,
+                    crate::cards::Event::CountersAdded,
+                    target_id,
+                )?;
+            }
+        }
         // Round-14: Sacrifice. CR 701.16 — a sacrificed permanent is
         // put into its owner's graveyard.
         //
@@ -15977,6 +16065,26 @@ fn apply_effect(
                             }
                         }
                         "artifact" => printing.card_types.iter().any(|t| t == "Artifact"),
+                        // Tezzeret, Cruel Captain's -3 ability — "an
+                        // artifact card with mana value 1 or less".
+                        // Artifact card type AND mana value <= max_mv.
+                        // Mirrors Python's `artifact_small` filter at
+                        // search.py:_matches (artifact + mana_cost.total
+                        // <= self.max_mv).
+                        "artifact_small" => {
+                            if !printing.card_types.iter().any(|t| t == "Artifact") {
+                                false
+                            } else {
+                                let mc = &printing.mana_cost;
+                                let total = mc.generic as i32
+                                    + mc.white as i32
+                                    + mc.blue as i32
+                                    + mc.black as i32
+                                    + mc.red as i32
+                                    + mc.green as i32;
+                                total <= max_mv_local
+                            }
+                        }
                         // Round-30 supertypes-substrate dispatch. Legendary
                         // creature card: type line carries both "Legendary"
                         // (supertype) and "Creature" (card type). Mirrors

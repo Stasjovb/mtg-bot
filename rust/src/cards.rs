@@ -199,6 +199,27 @@ pub enum Effect {
     /// Untap target permanent (CR 701.20b). Idempotent on already-
     /// untapped targets. AnyPlayer target raises.
     UntapTarget { target: TargetFilter },
+    /// **Tezzeret, Cruel Captain's `0` loyalty ability.** "Untap target
+    /// artifact or creature. If it's an artifact creature, put a +1/+1
+    /// counter on it." Mirrors Python's
+    /// `UntapTargetArtifactOrCreatureConditionalCounter`
+    /// (`effects/generic/tap.py`).
+    ///
+    /// **Deterministic first-match target pick (no decision callback).**
+    /// Like the sibling `UntapTarget` / `TapTarget` arms, the Rust port
+    /// picks deterministically rather than threading a real choice: the
+    /// FIRST (lowest battlefield-index) artifact-or-creature on the
+    /// SOURCE-controller's battlefield. (Python's effect target pool is
+    /// any artifact or creature on the battlefield, agent-picked; the
+    /// byte-equal cross-engine probe seats a single legal target so both
+    /// engines land on the same object.) Untaps the target (idempotent),
+    /// then — if the target is BOTH an artifact AND a creature (an
+    /// "artifact creature") — adds one +1/+1 counter. Empty pool →
+    /// silent fizzle. Unit dict shape: `{"kind":
+    /// "untap_target_artifact_or_creature_conditional_counter"}` (no
+    /// target key — the deterministic picker derives it, mirroring the
+    /// unit-shape convention of the other deterministic-target arms).
+    UntapTargetArtifactOrCreatureConditionalCounter,
     /// Sacrifice target permanent (CR 701.16). First-slice: target
     /// is the active player's first creature on their own
     /// battlefield (you sacrifice your own permanents). AnyPlayer
@@ -4765,6 +4786,10 @@ pub enum Effect {
     ///     means "creatures with cost <= 0" (rarely matches; specify
     ///     a real `max_mv` value).
     ///   - `"artifact"` → `card_types` contains `"Artifact"`.
+    ///   - `"artifact_small"` (with `max_mv`) → `card_types` contains
+    ///     `"Artifact"` AND `mana_cost.total() <= max_mv`. Tezzeret,
+    ///     Cruel Captain's `-3` tutor ("an artifact card with mana
+    ///     value 1 or less" → `max_mv=1`).
     ///   - `"legendary_creature"` → `card_types` contains `"Creature"`
     ///     AND `supertypes` contains `"Legendary"` (Round-30
     ///     substrate; powers The Seriema's tutor + Starfield Shepherd's
@@ -13441,6 +13466,11 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::UntapTarget { target })
         }
+        "untap_target_artifact_or_creature_conditional_counter" => {
+            // Tezzeret, Cruel Captain's 0 ability. Unit shape (no
+            // target key — deterministic first-match picker).
+            Ok(Effect::UntapTargetArtifactOrCreatureConditionalCounter)
+        }
         "sacrifice" => {
             let target_any = require(dict, "target")?;
             let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
@@ -20367,6 +20397,13 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::UntapTarget { target } => {
             d.set_item("kind", "untap_target")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::UntapTargetArtifactOrCreatureConditionalCounter => {
+            // Tezzeret, Cruel Captain's 0 ability. Unit dict shape.
+            d.set_item(
+                "kind",
+                "untap_target_artifact_or_creature_conditional_counter",
+            )?;
         }
         Effect::Sacrifice { target } => {
             d.set_item("kind", "sacrifice")?;

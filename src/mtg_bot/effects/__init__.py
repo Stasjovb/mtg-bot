@@ -238,6 +238,7 @@ from mtg_bot.effects.generic import (
     TargetPlayerLosesLife,
     ThreatenTargetCreatureUEOT,
     Untap,
+    UntapTargetArtifactOrCreatureConditionalCounter,
     UntapTargetLand,
     UntapTargetOtherPermanent,
     WarpExileSelf,

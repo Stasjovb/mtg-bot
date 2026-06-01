@@ -15628,12 +15628,12 @@ def _aa_dict_to_python_activation_cost(cost_dict: dict):
             "activated_ability.cost must be a dict (mirrors Rust "
             "parse_activated_ability)"
         )
-    unknown = set(cost_dict) - {"mana"} - _AA_COST_BOOL_KEYS
+    unknown = set(cost_dict) - {"mana"} - {"loyalty"} - _AA_COST_BOOL_KEYS
     if unknown:
         raise ValueError(
             f"cross_engine activated-ability bridge: unsupported "
             f"activation_cost key(s) {sorted(unknown)!r}; valid: "
-            f"'mana' + {sorted(_AA_COST_BOOL_KEYS)!r}. A cost "
+            f"'mana' + 'loyalty' + {sorted(_AA_COST_BOOL_KEYS)!r}. A cost "
             f"component outside this set would silently mistranslate "
             f"cross-engine (one engine would model the activation "
             f"differently than the other) — extend BOTH this bridge "
@@ -15672,6 +15672,22 @@ def _aa_dict_to_python_activation_cost(cost_dict: dict):
     kwargs: dict = {}
     if mana is not None:
         kwargs["mana"] = mana
+    # Planeswalker loyalty cost (CR 606). Signed int — positive =
+    # pay-loyalty (a "-N" ability), negative = add-loyalty (a "+N"
+    # ability), zero = no counter change (a "0" ability). Mirrors Rust's
+    # ``parse_activation_cost`` ``loyalty`` arm (cards.rs) which extracts
+    # an ``i32`` and rejects non-int. ``bool`` is an ``int`` subclass in
+    # Python so it's disallowed explicitly to avoid True/False being
+    # silently coerced to loyalty=1/0.
+    if "loyalty" in cost_dict:
+        loy = cost_dict["loyalty"]
+        if isinstance(loy, bool) or not isinstance(loy, int):
+            raise ValueError(
+                "activation_cost.loyalty must be an int (signed; "
+                "positive = pay-loyalty, negative = add-loyalty); "
+                "mirrors Rust parse_activation_cost"
+            )
+        kwargs["loyalty"] = loy
     for bk in _AA_COST_BOOL_KEYS:
         if bk in cost_dict:
             val = cost_dict[bk]

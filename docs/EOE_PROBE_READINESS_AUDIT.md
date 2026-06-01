@@ -565,7 +565,7 @@ narrative); the cron then re-baselines automatically on the next
      NOT count-shifting, implement-ready spec landed) AHEAD of
      Tier-C target-seating. Close Encounter / Diplomatic
      Relations still DECLINED. -->
-rust_effect_variants = 245
+rust_effect_variants = 246
 bridge_arms = 249
 safe_triggers = 31
 safe_keywords = 12

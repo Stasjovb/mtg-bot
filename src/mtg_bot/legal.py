@@ -614,10 +614,36 @@ def legal_actions(state: GameState, player_id: int) -> list[Action]:
         if obj.controller_id != player_id:
             continue
         from mtg_bot.game import effective_activated_abilities
+        # CR 606.3 — once-per-turn-per-walker loyalty gate. If this
+        # planeswalker has already had a loyalty ability activated this
+        # turn, ALL of its activated abilities are inert for the rest of
+        # the turn. Gate fires BEFORE the per-ability loop so none of the
+        # walker's abilities emit. Per-walker (not per-ability) keyed on
+        # (controller_id, source_id) — mirrors Rust's
+        # state_ops_legal.rs walker-skip. Today every walker's activated
+        # abilities are loyalty abilities by construction, so gating on
+        # the Planeswalker card type maps 1:1 to "has a loyalty ability".
+        if (
+            obj.printing.is_planeswalker
+            and (player_id, obj.id) in state.loyalty_activated_this_turn
+        ):
+            continue
         for idx, ability in enumerate(
             effective_activated_abilities(state, obj)
         ):
             if ability.sorcery_speed and not _is_sorcery_timing(state, player_id):
+                continue
+            # CR 606 — positive loyalty cost is a pay-loyalty cost: the
+            # walker must have at least ``cost.loyalty`` loyalty counters
+            # to afford the activation. Negative (add-loyalty) and zero
+            # costs are always affordable. Mirrors Rust's emission gate
+            # at state_ops_legal.rs. Fires early (before the other
+            # cost-payability gates) — a walker that can't afford its
+            # -N ability is outright unable regardless of other state.
+            if (
+                ability.cost.loyalty > 0
+                and obj.loyalty_counters < ability.cost.loyalty
+            ):
                 continue
             # ``Activate only once.`` rider — DSK Haunted Screen's
             # third activation. Once the source's

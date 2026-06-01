@@ -125,6 +125,7 @@ from mtg_bot.effects.generic.tap import (
     TapTargetOpponentPermanentAndStunIt,
     TapUpToOneTargetCreature,
     Untap,
+    UntapTargetArtifactOrCreatureConditionalCounter,
     UntapTargetLand,
     UntapTargetOtherPermanent,
 )
@@ -405,6 +406,7 @@ __all__ = [
     "TapTargetOpponentPermanentAndStunIt",
     "TapUpToOneTargetCreature",
     "Untap",
+    "UntapTargetArtifactOrCreatureConditionalCounter",
     "UntapTargetLand",
     "UntapTargetOtherPermanent",
     # exile
