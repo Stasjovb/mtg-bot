@@ -671,6 +671,31 @@ pub enum UeotModifier {
     /// loses the rider at cleanup, exactly as Python's EndOfTurn-
     /// bounded `ApplyEffect(GrantTriggeredAbility(...))` does.
     GrantedDiesReturnTapped,
+    /// **CR 613.4 layer 7e — switch power and toughness UEOT.** Each
+    /// `SwitchPT` entry on an object contributes exactly ONE swap of
+    /// its effective power and toughness. Walked as a COUNT (parity
+    /// the order doesn't matter — a swap is its own inverse): an odd
+    /// number of `SwitchPT` entries = one net swap; an even number =
+    /// no net swap. Applied AFTER the layer-7b base override
+    /// (`SetBasePT` / `BecomesLandCreature`), the layer-7c additive
+    /// bonus (`PowerToughnessBonus`), and the layer-7d counter scalar
+    /// (`GameObject.counters`) — so the swap operates on the fully
+    /// post-7b/c/d effective P/T, matching CR 613.4 layer 7e ordering
+    /// and Python's `_compute_effective_pt` 7e branch (game.py:2253-
+    /// 2264, where `for _ in layer7e: p, t = t, p`).
+    ///
+    /// **Consumer.** Wandering Fumarole's granted `{0}: Switch this
+    /// creature's power and toughness until end of turn` (granted
+    /// while the manland is animated via `BecomeLandCreatureUEOT`).
+    /// The `{0}` cost means it is freely re-activatable; each
+    /// activation pushes another `SwitchPT`, toggling the displayed
+    /// P/T (two activations cancel, three is one swap). Pushed by the
+    /// `Effect::SwitchSourcePowerToughnessUEOT` resolve arm. Carries
+    /// no params (each entry is a single unconditional swap). Auto-
+    /// expires at the next CR 514.3 UEOT-clear pass like every other
+    /// `UeotModifier`, mirroring Python's `expires_at="cleanup"`
+    /// layer-7 `switch_pt` registry entry.
+    SwitchPT,
 }
 
 /// **CE4 closure — reserve the next monotonic ETB timestamp.**
@@ -781,6 +806,10 @@ impl GameObject {
                 // Round-60 Perigee dies-rider marker: no P/T effect
                 // (it only changes what happens on death).
                 UeotModifier::GrantedDiesReturnTapped => {}
+                // Layer-7e swap is applied AS A POST-PASS over the
+                // composed effective P/T by the readers, NOT as an
+                // additive bonus — it contributes nothing here.
+                UeotModifier::SwitchPT => {}
             }
         }
         sum
@@ -798,9 +827,31 @@ impl GameObject {
                 UeotModifier::SetBasePT { .. } => {}
                 // Round-60 Perigee dies-rider marker: no P/T effect.
                 UeotModifier::GrantedDiesReturnTapped => {}
+                // Layer-7e swap: post-pass over composed P/T, not an
+                // additive bonus (see `ueot_power_bonus`).
+                UeotModifier::SwitchPT => {}
             }
         }
         sum
+    }
+
+    /// **CR 613.4 layer 7e — net P/T-swap parity.** Returns `true`
+    /// iff an ODD number of `UeotModifier::SwitchPT` entries are on
+    /// this object (a swap is its own inverse, so only the parity of
+    /// the count matters — two switches cancel, three is one net
+    /// swap). The effective-P/T readers
+    /// (`battlefield_creature_power` / `battlefield_creature_toughness`)
+    /// apply ONE swap of the fully-composed (post-7b/c/d) P/T when
+    /// this returns `true`. Mirrors Python's `_compute_effective_pt`
+    /// 7e branch (game.py:2253-2264 — `for _ in layer7e: p, t = t, p`,
+    /// which net-swaps iff the entry count is odd).
+    pub fn ueot_pt_swapped(&self) -> bool {
+        let count = self
+            .ueot_modifiers
+            .iter()
+            .filter(|m| matches!(m, UeotModifier::SwitchPT))
+            .count();
+        count % 2 == 1
     }
 
     /// **Round-28 base-P/T override (CR 613.4 layer 7b).** If any

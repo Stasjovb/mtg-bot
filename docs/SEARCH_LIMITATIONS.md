@@ -17324,78 +17324,103 @@ The C3 per-card real-EoE probe at `tests/test_the_eternity_elevator_parity.py` s
 **Impact estimate:** Grove FLIPS BLOCKED-SG → PROBED (covered_by_construction → PROBED via the probe). PROBED 434 → 435; BLOCKED-SG 30 → 29; Carrier-AA BLOCKED bucket 15 → 14; Effect-uncovered 22 → 21. Rust Effect coverage 190 → 191 Python classes (224 → 225 Rust variants). 0 strength cost — the substrate is byte-equal cross-engine on both AAs' real-EoE drive.
 
 **Pinned by:** `tests/test_grove_of_the_burnwillows_parity.py` (9 pins — parser SoT verify-first + Python dual-AA shape pin + bridge round-trip canonical Rust dict + reverse-arm rehydration of both AAs + Rust register acceptance + loader end-to-end admit + cross-engine real-EoE Scenario MINT-C (AA[0] 1-C mint) + cross-engine real-EoE Scenario MINT-R+LIFE (AA[1] Sequence: 1-R chosen-color mint + each-opponent +1 life, LOAD-BEARING) + Sequence-IN-AA admit invariant (admits valid Sequence, declines Sequence-with-non-admitted-leaf, declines bare non-admitted leaf, admits nested Sequence) + 21-entry count sentinel). Scout doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` §#3 Grove of the Burnwillows.
-## Rust port — `Effect::SwitchSourcePowerToughnessUEOT` resolve is a substrate-only no-op (layer-7e P/T-switch deferred)
+## Rust port — `Effect::SwitchSourcePowerToughnessUEOT` resolve LANDED (layer-7e P/T-switch); manland nested-grant LEGAL-ENUMERATION honest-stopped
 
-**Location**: `rust/src/state_ops_resolve.rs`
-`Effect::SwitchSourcePowerToughnessUEOT` resolve arm (the
-`let _ = source_obj_id; // substrate-only no-op` arm); variant decl +
-`parse_effect` + `to_pydict` in `rust/src/cards.rs`.
+**Status (feature/fumarole-ptswitch, 2026-06-01): the layer-7e swap is
+REAL.** The prior substrate-only no-op is replaced. What remains
+honest-stopped is narrower: the granted-AA *legal enumeration* on the
+animated land (so the `{0}` AA appears as a Rust legal action). The
+switch EFFECT itself is fully reachable + byte-equal.
 
-**What we do today**: the Rust `Effect::SwitchSourcePowerToughnessUEOT`
-unit variant parses, serializes (`to_pydict`), and bridges
-(`cross_engine.py` `switch_source_power_toughness_ueot` arm) cleanly,
-but its resolve arm is a documented silent no-op — it does NOT swap the
-source's effective power and toughness. The Python side
-(`effects/generic/pump.py:948` `SwitchSourcePowerToughnessUEOT.resolve`)
-carries the full implementation: it adds a layer-7 sublayer-4
-`"switch_pt"` continuous effect that `_compute_effective_pt` walks in
-timestamp order (two switches cancel, three is one swap, applied AFTER
-the layer-7b base-P/T override per CR 613.4 layer 7e).
+**Location (LANDED)**:
+- `rust/src/state.rs` — new `UeotModifier::SwitchPT` variant +
+  `GameObject::ueot_pt_swapped()` (odd-count parity).
+- `rust/src/state_ops_combat.rs` — `battlefield_creature_power` /
+  `battlefield_creature_toughness` now apply ONE swap of the
+  fully-composed (post-7b/c/d) effective P/T when `ueot_pt_swapped()`
+  is true (CR 613.4 layer 7e). Factored into `*_unswapped` inners so
+  the no-swap path is bit-identical to before. The public
+  `effective_power`/`effective_toughness` getters + combat-damage +
+  SBA-lethal all route through these two readers, so the swap is
+  honored everywhere they read.
+- `rust/src/state_ops_resolve.rs` — `Effect::SwitchSourcePowerToughnessUEOT`
+  resolve arm pushes `UeotModifier::SwitchPT` onto the source (the
+  same source-locate idiom as `PumpSelfXPowerUEOT`); `source is None`
+  is a silent no-op, matching Python.
 
-**Why the Rust resolve is deferred**: Rust's effective-P/T reader
-(`_compute_effective_pt` analog) has no layer-7e `switch_pt` sublayer-4
-pass today. Adding it interacts with the `UeotModifier::BecomesLandCreature`
-layer-7b base-P/T override ordering (the swap must operate on the
-post-7b/c/d effective P/T, so the reader needs the switch applied as a
-final-layer transform after the manland-animate base override). That is
-its own surface — a layered-effects reader change, not a single resolve
-arm — so it is split out from the substrate slice.
+This mirrors Python's `SwitchSourcePowerToughnessUEOT.resolve`
+(`effects/generic/pump.py:970`, a layer-7 sublayer-4 `"switch_pt"`
+continuous effect) + `_compute_effective_pt`'s 7e branch
+(`game.py:2253-2264`, `for _ in layer7e: p, t = t, p`). Two switches
+cancel, three is one net swap. Pinned byte-equal cross-engine:
+`tests/test_wandering_fumarole_parity.py::test_cross_engine_wandering_fumarole_switch_pt_swap_byte_equal`
+(animated 1/4 → 4/1 after one switch → 1/4 after two, byte-equal on
+BOTH engines).
 
-**Why this is OK as a substrate-only landing**: the only EoE consumer
-is Wandering Fumarole's NESTED granted activated ability (`{0}: Switch
-this creature's P/T UEOT`), which is granted only while the manland is
-animated via `BecomeLandCreatureUEOT`. The Rust
-`BecomeLandCreatureUEOT` substrate does NOT yet carry the
-`granted_activated_abilities` rider (the `become_land_creature_ueot`
-bridge arm narrows it away), so the nested switch AA is not reachable
-in a real Rust trajectory today regardless — the resolve arm being a
-no-op changes no observable Rust behavior. The variant exists to (a)
-round-trip cross-engine and (b) put Wandering Fumarole into the
-covered-class set so its per-card real-EoE probe can pin it PROBED. The
-probe (`tests/test_wandering_fumarole_parity.py`) exercises the
-Python-side swap resolve, where the full layer-7e implementation lives.
+**What is STILL honest-stopped (the narrow remainder)**: Rust's
+`Effect::BecomeLandCreatureUEOT` substrate (`rust/src/cards.rs:7838`)
+carries only `power/toughness/granted_subtype` — no
+`granted_activated_abilities` field — and the `become_land_creature_ueot`
+bridge arm narrows the granted AAs away. So while the switch *effect*
+resolves byte-equal through any carrier (ETB / AA / trigger), the
+literal granted `{0}` switch-AA is NOT yet enumerated as a Rust legal
+action on the animated land: Rust's `legal_decisions` activation loop
+(`state_ops_legal.rs:3434`) walks only `printing.activated_abilities`,
+not granted-on-object abilities.
 
-**Failure mode**: if a future slice wires
-`BecomeLandCreatureUEOT.granted_activated_abilities` through the Rust
-substrate (so the nested switch AA becomes activatable on an animated
-Fumarole in a real Rust game), the no-op resolve would silently fail to
-swap P/T — an animated Fumarole's `{0}` activation would be a dead
-action in Rust while Python swaps. That would surface as a cross-engine
-divergence in any full-trajectory parity run touching an animated
-Fumarole. The fix at that point is to implement the layer-7e
-`switch_pt` pass in the Rust effective-P/T reader and replace this
-no-op arm with the real push.
+**Why this is OK**: the switch EFFECT — the load-bearing cross-engine
+parity behavior — is genuine and reachable on Rust now. The only gap
+is the legal-action *surface* of the granted AA. In a no-agent bench
+trajectory the granted `{0}` AA is never the path that mutates state
+(the bench play strategy doesn't free-activate granted abilities), so
+the missing legal-action does not produce an observed divergence on
+the controlled probes. Python drives the REAL animate → activate {0}
+→ swap flow in `tests/test_manland_granted_abilities.py`; the
+cross-engine probe drives the switch effect on a matching carrier on
+BOTH engines and pins the swapped P/T byte-equal.
 
-**Fix scope estimate**: ~1-2 cycles — add a `UeotModifier::SwitchPT`
-(or equivalent) entry kind, push it in the resolve arm, and add a
-final-pass swap in the Rust effective-P/T computation that applies
-AFTER the layer-7b `BecomesLandCreature` base override and layer-7c/d
-bonuses (CR 613.4 layer 7e ordering). Gated by the
-`BecomeLandCreatureUEOT.granted_activated_abilities` Rust rider also
-landing (otherwise the swap arm is unreachable anyway).
+**Why the enumeration is deferred (NOT landed)**: wiring
+`granted_activated_abilities` onto the Rust manland substrate so the
+`{0}` AA becomes a legal action requires (a) a recursive
+`Vec<ActivatedAbility>` field on `Effect::BecomeLandCreatureUEOT` +
+parse/`to_pydict`/bridge un-narrowing, (b) a granted-AA-on-object
+carrier (`UeotModifier` or object field), (c) extending the
+`legal_decisions` activation loop to enumerate granted abilities with
+a NEW `ability_index` scheme, and (d) extending the `activate_ability`
+apply dispatch by that index. Step (c)/(d) touch the action-encoding
+codec's `ability_index` semantics — encoding-sensitive surface (see
+`mtg-bot/CLAUDE.md` "Action encoding versions") with combat/AA blast
+radius. Per the campaign honest-stop policy this broad codec rework is
+split out rather than risked alongside the layer-7e reader change.
 
-**Impact estimate**: 0 strength cost today — the arm is unreachable in
-real Rust trajectories (no nested-granted-AA plumbing on the Rust
-manland substrate). The card moves BLOCKED-subsystem-gated → PROBED on
-the Effect+bridge metric this slice; full-trajectory P/T-switch parity
-on an animated Fumarole waits for the layered-reader follow-up.
+**Failure mode**: a full-trajectory parity run in which an agent
+free-activates the granted `{0}` switch-AA on an animated Fumarole
+would see Python offer + take the AA while Rust offers no such legal
+action — a legal-set divergence (not a resolve divergence; the resolve
+is now correct on both sides). The fix is the granted-AA enumeration
+subsystem (steps a–d above).
 
-**Pinned by**: `tests/test_wandering_fumarole_parity.py` (Python-side
-cross-engine probe — parse SoT + bridge round-trip + Python swap
-resolve) + `tests_rust/test_manland_nested_granted_effects.py`
-(`test_switch_source_power_toughness_ueot_is_substrate_noop` — pins the
-Rust resolve runs without error + leaves P/T unchanged; +
-`test_register_switch_source_power_toughness_ueot` parse pin). Scout
+**Fix scope estimate (remaining enumeration)**: ~1-2 cycles —
+recursive granted-AA field + bridge + a granted-AA-on-object carrier +
+the `legal_decisions`/`activate_ability` index extension. Sibling
+benefit: the same plumbing makes Lavaclaw Reaches' granted `{X}`
+pump-AA enumerable on Rust too (its pump EFFECT is already reachable
+via carriers, same as the switch).
+
+**Impact estimate**: layer-7e swap is now byte-equal cross-engine (0
+divergence on the controlled probes; the swap is honored by all
+effective-P/T readers + combat + SBA). The remaining enumeration gap
+is 0 strength cost on bench trajectories (no-agent harness never
+free-activates granted AAs).
+
+**Pinned by**: `tests/test_wandering_fumarole_parity.py`
+(`test_cross_engine_wandering_fumarole_switch_pt_swap_byte_equal` —
+GENUINE cross-engine swap parity; REAL Python animate→{0}→swap flow vs
+Rust switch-effect carrier) + `tests_rust/test_manland_nested_granted_effects.py`
+(`test_switch_source_power_toughness_ueot_swaps_pt` 1/4→4/1,
+`test_switch_source_power_toughness_ueot_double_switch_cancels`
+two-cancel, `test_register_switch_source_power_toughness_ueot` parse) +
+`tests/test_manland_granted_abilities.py` (Python REAL flow). Scout
 doc at `docs/BLOCKED_TAIL_TRACTABILITY_SCOUT_2026-05-27.md` Group-1
 Wandering Fumarole.
 
