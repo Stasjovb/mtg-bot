@@ -489,7 +489,7 @@ impl GameState {
             Action::CastSpell {
                 card_id,
                 use_warp,
-                kicked: _,
+                kicked,
                 cast_for_free: _,
                 use_impending: _,
                 cast_room_half: _,
@@ -540,9 +540,22 @@ impl GameState {
                 // Otherwise the round-4 `cast_creature` path (which
                 // also serves the warp exile-recast: a `warped`
                 // exile object recast at NORMAL `mana_cost` arrives
-                // here with `use_warp=false`). The remaining flags
-                // (kicked / cast_for_free / use_impending /
-                // cast_room_half) stay deferred.
+                // here with `use_warp=false`).
+                //
+                // **Kicker mana-payment cast pipeline (Consult-kicker-
+                // payment slice, 2026-06-01): `kicked` is now LIVE for
+                // the noncreature Instant/Sorcery path.** The `kicked`
+                // flag is threaded into `cast_spell_noncreature`, which
+                // folds the printing's `kicker_cost` onto the base cost
+                // (CR 601.2f total cost), pays base+kicker via
+                // `auto_tap_pay_for_cost`, and mints
+                // `StackItem.was_kicked = true` — the real cast-side
+                // mint replacing the synthetic `set_stack_top_was_kicked`
+                // probe setter. Mirrors Python's `_cast_spell` kicker
+                // fold + `StackItem(kicked=...)`. The remaining flags
+                // (cast_for_free / use_impending / cast_room_half) +
+                // kicker on the CREATURE cast path (`cast_creature`)
+                // stay deferred.
                 //
                 // **Spell-card-bridge lever (round-70): the non-warp
                 // `else` now routes a non-creature Instant/Sorcery to
@@ -660,7 +673,7 @@ impl GameState {
                         let cast_spell_ok: bool = slf
                             .call_method1(
                                 "cast_spell_noncreature",
-                                (card_id, player_id),
+                                (card_id, player_id, kicked),
                             )?
                             .extract()?;
                         if !cast_spell_ok {

@@ -4668,6 +4668,9 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // kicker_cost substrate (Consult-kicker-payment slice): synthetic-
+        // state printings have no kicker. Back-compat default.
+        kicker_cost: None,
         // warp_cost substrate (Phase 2): no life / graveyard rider on
         // synthetic-state printings. Back-compat defaults.
         warp_additional_life_cost: 0,
@@ -4789,6 +4792,9 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // kicker_cost substrate (Consult-kicker-payment slice): synthetic-
+        // state printings have no kicker. Back-compat default.
+        kicker_cost: None,
         // warp_cost substrate (Phase 2): no life / graveyard rider on
         // synthetic-state printings. Back-compat defaults.
         warp_additional_life_cost: 0,
@@ -4923,6 +4929,9 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // kicker_cost substrate (Consult-kicker-payment slice): synthetic-
+        // state printings have no kicker. Back-compat default.
+        kicker_cost: None,
         // warp_cost substrate (Phase 2): no life / graveyard rider on
         // synthetic-state printings. Back-compat defaults.
         warp_additional_life_cost: 0,

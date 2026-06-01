@@ -82,6 +82,15 @@ _CONSULT_SYNTH = {
     "name": "Consult the Star Charts",
     "card_types": ["Instant"],
     "mana_cost": {"generic": 1, "U": 1},
+    # **Kicker mana-payment cast pipeline (Consult-kicker-payment slice,
+    # 2026-06-01).** The synthetic Rust carrier now carries the printing's
+    # genuine kicker cost ({1}{U}) so the kicked-branch probe drives a
+    # REAL Rust kicked cast (pays base+kicker via cast_spell_noncreature,
+    # which folds kicker_cost onto mana_cost and mints
+    # StackItem.was_kicked=true) instead of the prior synthetic
+    # set_stack_top_was_kicked test setter. Mirrors Python's parsed
+    # printing carrying kicker_cost = ManaCost(generic=1, colored=(("U",1),)).
+    "kicker_cost": {"generic": 1, "U": 1},
     "effects": [{"kind": "consult_the_star_charts_effect"}],
 }
 
@@ -203,7 +212,14 @@ def _build_rust(land_names, library_names, *, shared_seed=None):
         rs.set_external_rng(random.Random(shared_seed))
     for i, ln in enumerate(land_names):
         rs.register_and_inject_object(
-            {"name": ln, "card_types": ["Land"], "supertypes": ["Basic"]},
+            # **Kicker mana-payment cast pipeline (2026-06-01).** The
+            # lands now PRODUCE blue mana (Island subtype +
+            # mana_produced=["U"]) so the probe can drive a REAL kicked
+            # cast that pays the base {1}{U} + kicker {1}{U} via
+            # auto_tap. They still count as lands for Consult's X (the
+            # resolve arm counts battlefield lands tapped-or-not).
+            {"name": ln, "card_types": ["Land"], "subtypes": ["Island"],
+             "supertypes": ["Basic"], "mana_produced": ["U"]},
             0,
             ZONE_BATTLEFIELD,
         )
@@ -245,13 +261,17 @@ def _build_python(land_names, library_names, *, shared_seed=None):
         name="__land__",  # overridden per-land below
         mana_cost_str="",
         mana_cost=ManaCost(),
-        type_line="Basic Land",
+        type_line="Basic Land — Island",
         supertypes=("Basic",),
         card_types=("Land",),
-        subtypes=(),
+        # **Kicker mana-payment cast pipeline (2026-06-01).** Island
+        # subtype + produces={U} so the GENUINE Python _cast_spell can
+        # auto-tap these for the base {1}{U} + kicker {1}{U}. Byte-
+        # mirrors the Rust lands (which carry mana_produced=["U"]).
+        subtypes=("Island",),
         power=None,
         toughness=None,
-        produces=frozenset(),
+        produces=frozenset({"U"}),
     )
     for ln in land_names:
         lp = land_printing.__class__(
@@ -285,22 +305,36 @@ def _build_python(land_names, library_names, *, shared_seed=None):
 
 
 def _resolve_python(py_state, consult_obj, *, kicked):
-    from mtg_bot.actions import resolve_top_of_stack
-    from mtg_bot.game import StackItem, Zone
+    """Drive the GENUINE Python kicker cast pipeline end-to-end:
+    ``_cast_spell(..., kicked=kicked)`` folds the printing's kicker_cost
+    onto the base {1}{U} (kicked → {1}{U}{1}{U}), auto-taps the blue
+    Islands to pay it, and sets ``StackItem.kicked``. Then drain the
+    stack. No synthetic StackItem construction — the real cast mints
+    the kicked flag from the actual mana payment."""
+    from mtg_bot.actions import _cast_spell, resolve_top_of_stack
 
-    py_state.players[0].hand.remove(consult_obj)
-    consult_obj.zone = Zone.STACK
-    py_state.stack.append(
-        StackItem(source=consult_obj, controller_id=0, kicked=kicked)
-    )
+    _cast_spell(py_state, 0, consult_obj.id, kicked=kicked)
     while py_state.stack:
         resolve_top_of_stack(py_state)
 
 
 def _resolve_rust(rs, spell_id, *, kicked):
-    rs.push_to_stack(spell_id, 0)
+    """Drive the REAL Rust kicker cast pipeline:
+    ``cast_spell_noncreature(spell_id, 0, kicked)`` folds the printing's
+    kicker_cost onto the base {1}{U}, pays base+kicker via auto_tap, and
+    mints ``StackItem.was_kicked`` from the actual payment — replacing
+    the prior synthetic ``set_stack_top_was_kicked`` test setter. Then
+    drain the stack."""
+    cast_ok = rs.cast_spell_noncreature(spell_id, 0, kicked)
+    assert cast_ok, (
+        f"Rust kicked={kicked} cast must succeed (base+kicker payable "
+        f"from the blue Islands)"
+    )
     if kicked:
-        rs.set_stack_top_was_kicked(True)
+        # The real cast minted was_kicked from the mana payment — assert
+        # it (this is the closure: the kicked flag now comes from a real
+        # cast, not the synthetic setter).
+        assert rs.stack_top_was_kicked() is True
     while rs.stack_size() > 0:
         rs.resolve_top_of_stack()
 
@@ -326,12 +360,15 @@ def _py_lib(py_state):
 @_rust_skip
 def test_cross_engine_real_eoe_consult_the_star_charts_unkicked_parity():
     """**GENUINE real-EoE cross-engine probe — Consult the Star Charts,
-    UNKICKED.** X = 2 lands; library top-to-bottom = [A, B, C]. Examine
-    top 2 [A, B]; keep 1 (A) → hand; the rest [B] (single card → no
-    shuffle, deterministic) → bottom. Library after = [C, B] on both
-    engines. Drives the GENUINE parsed Consult printing's spell_effect
-    on Python (StackItem.kicked=False) and the bridged carrier on Rust
-    (default-unkicked push)."""
+    UNKICKED (REAL cast).** X = 2 lands; library top-to-bottom =
+    [A, B, C]. Examine top 2 [A, B]; keep 1 (A) → hand; the rest [B]
+    (single card → no shuffle, deterministic) → bottom. Library after =
+    [C, B] on both engines. Drives the GENUINE parsed Consult printing
+    through Python's real ``_cast_spell(kicked=False)`` (pays only the
+    base {1}{U}, StackItem.kicked=False) and the bridged carrier through
+    Rust's real ``cast_spell_noncreature(spell_id, 0, kicked=False)``
+    (pays only base, was_kicked=false). The unkicked path is byte-
+    identical to pre-slice — the kicker fold is gated on the flag."""
     real = _PRINTINGS.get("Consult the Star Charts")
     if real is None:
         pytest.skip("Consult the Star Charts absent from active CardSource")
@@ -371,19 +408,31 @@ def test_cross_engine_real_eoe_consult_the_star_charts_unkicked_parity():
 @_rust_skip
 def test_cross_engine_real_eoe_consult_the_star_charts_kicked_parity():
     """**GENUINE real-EoE cross-engine probe — Consult the Star Charts,
-    KICKED.** Same staging as the unkicked probe (X = 2; library
-    [A, B, C]); examine top 2 [A, B]; ``was_kicked`` → keep 2 [A, B] →
-    hand; the rest is EMPTY (no shuffle). Library after = [C] on both
-    engines. This is the load-bearing kicked-branch assertion: Python
-    drives ``StackItem.kicked=True`` → ``state.resolving_kicked``; Rust
-    drives ``set_stack_top_was_kicked(True)`` →
-    ``current_resolve_was_kicked``. A naive port that ignored the
-    kicked flag would keep only 1 here (a §2 silent divergence)."""
+    KICKED (REAL cast-time kicker payment).** X = 4 lands (so the base
+    {1}{U} + kicker {1}{U} = {1}{U}{1}{U} is auto-tap-payable); library
+    [A, B, C] (3 cards < X). Examine min(X, lib)=3 [A, B, C];
+    ``was_kicked`` → keep 2 [A, B] → hand; the rest [C] (single card →
+    deterministic, no shuffle) → bottom. Library after = [C] on both
+    engines.
+
+    **This is the closure's load-bearing assertion.** Python drives the
+    GENUINE ``_cast_spell(..., kicked=True)`` — folding the printing's
+    kicker_cost onto the base, auto-tapping the Islands, setting
+    ``StackItem.kicked`` → ``state.resolving_kicked``. Rust drives the
+    REAL ``cast_spell_noncreature(spell_id, 0, kicked=True)`` — folding
+    kicker_cost onto the base, paying base+kicker via auto_tap, minting
+    ``StackItem.was_kicked`` (NOT the prior synthetic
+    ``set_stack_top_was_kicked`` setter) → ``current_resolve_was_kicked``.
+    A port that ignored the kicked flag would keep only 1 here (a §2
+    silent divergence); one that under-charged the kicker would resolve
+    with was_kicked=false (also keep 1)."""
     real = _PRINTINGS.get("Consult the Star Charts")
     if real is None:
         pytest.skip("Consult the Star Charts absent from active CardSource")
 
-    lands = ["Island", "Island"]
+    # 4 blue Islands fund {1}{U}{1}{U}; X = 4 but only 3 library cards,
+    # so examine = min(4, 3) = 3 [A, B, C], keep 2, bottom 1 (no shuffle).
+    lands = ["Island", "Island", "Island", "Island"]
     lib = ["A", "B", "C"]
 
     rs, spell_id = _build_rust(lands, lib)

@@ -18117,42 +18117,78 @@ cross-engine copy probe, and the no-copy/empty-graveyard sibling).
 
 ---
 
-## Rust port — Consult the Star Charts: kicker mana-payment cast pipeline NOT modeled; probe drives the kicked branch via a synthetic StackItem flag (2026-05-31)
+## Rust port — Consult the Star Charts: kicker mana-payment cast pipeline NOW WIRED; probe drives a REAL Rust kicked cast (2026-06-01)
 
-**Where.** `rust/src/cards.rs` (`Effect::ConsultTheStarCharts` variant +
-parse/to_dict arms); `rust/src/state_ops_resolve.rs` (the resolve arm +
-the two spell-resolve `current_resolve_was_kicked` swaps);
-`rust/src/state.rs` (`StackItem.was_kicked` +
-`current_resolve_was_kicked`); `rust/src/state_ops_stack.rs`
-(`stack_top_was_kicked` / `set_stack_top_was_kicked`);
-`src/mtg_bot/parity/cross_engine.py` (the `consult_the_star_charts_effect`
-bridge arm); `tests/test_consult_the_star_charts_parity.py` (the probes).
+**Status.** The kicker mana-payment cast pipeline (shortcuts 1 & 2
+below) is **CLOSED** as of the `feature/consult-kicker-payment` slice
+(2026-06-01). `cast_spell_noncreature` now pays base+kicker and mints
+`StackItem.was_kicked` from the real payment; the cross-engine probe
+drives both engines through their genuine cast pipelines. Shortcut 3
+(no `reset_public_knowledge` mirror) remains an accepted divergence —
+it is byte-neutral on the fingerprint surface. The original deferral
+text is preserved below with the closure annotated inline.
 
-**What the shortcuts are.**
+**Where (current).** `rust/src/cards.rs` (`Effect::ConsultTheStarCharts`
+variant + `CardPrinting.kicker_cost: Option<ManaCost>` field +
+parse arm); `rust/src/state_ops_cast.rs`
+(`cast_spell_noncreature`'s `kicked` param — kicker-cost fold +
+`was_kicked` mint); `rust/src/state_ops_actions.rs` (the
+`Action::CastSpell{kicked}` dispatch thread-through);
+`rust/src/state_ops_resolve.rs` (the resolve arm + the two
+spell-resolve `current_resolve_was_kicked` swaps); `rust/src/state.rs`
+(`StackItem.was_kicked` + `current_resolve_was_kicked`);
+`rust/src/state_ops_stack.rs` (`stack_top_was_kicked` /
+`set_stack_top_was_kicked` — the synthetic getter/setter substrate
+stays for low-level pins but is NO LONGER the cross-engine kicked
+driver); `src/mtg_bot/parity/cross_engine.py` (the
+`consult_the_star_charts_effect` bridge arm);
+`tests/test_consult_the_star_charts_parity.py` (the probes — now real
+casts); `tests_rust/test_cast.py` (the kicker-payment pins).
 
-1. **Kicker mana-payment cast pipeline is NOT ported to Rust.** Consult
-   the Star Charts carries the Kicker additional-cost mechanic
-   (`kicker_cost = {1}{U}`). Python models kicker end-to-end (the
-   `CastSpell.kicked` flag, `legal.py`'s kicked/unkicked dual emission,
-   the base+kicker mana payment at `actions.py:1586`, the
-   `StackItem.kicked` field, the `state.resolving_kicked` swap). Rust's
-   `cast_spell_noncreature` still IGNORES the `kicked` flag (it pays only
-   the base `mana_cost`) — the kicker mana-payment + cost-stacking
-   pipeline stays deferred, the same "flags pass through silently"
-   contract every Rust `CastSpell` alt-cost flag (warp pre-r63 / kicked /
-   impending / free-cast) has carried. This slice ships ONLY the
-   **resolve-side** kicker rider (the `was_kicked`-conditional keep-2),
-   not the cast-side kicker payment.
+**What the shortcuts WERE (now closed except #3).**
 
-2. **The probe drives the kicked branch via a synthetic StackItem
-   setter, not a real kicked cast.** Because (1) leaves no Rust cast-path
-   way to MINT `was_kicked=true`, the cross-engine probe pushes the spell
-   directly to the stack and calls `set_stack_top_was_kicked(true)` (the
-   synthetic-test setter, parallel to `set_stack_top_is_copy`). On the
-   Python side it constructs `StackItem(..., kicked=True)` directly. Both
-   sidestep the legal-action kicker-choice emission + the mana payment.
+1. ~~**Kicker mana-payment cast pipeline is NOT ported to Rust.**~~
+   **CLOSED (2026-06-01).** Consult the Star Charts carries the Kicker
+   additional-cost mechanic (`kicker_cost = {1}{U}`). Python models
+   kicker end-to-end (the `CastSpell.kicked` flag, `legal.py`'s
+   kicked/unkicked dual emission, the base+kicker mana payment at
+   `actions.py:1588-1601`, the `StackItem.kicked` field, the
+   `state.resolving_kicked` swap). Rust now mirrors the cast side:
+   `CardPrinting.kicker_cost: Option<ManaCost>` carries the kicker;
+   `cast_spell_noncreature(obj_id, player_id, kicked=false)` (pyo3
+   optional arg — every pre-slice 2-arg caller stays byte-identical)
+   folds the kicker onto the base cost (CR 601.2f total cost — generic +
+   each colored pip summed, `x_pips` preserved) BEFORE X resolution,
+   pays the combined cost via the SAME `auto_tap_pay_for_cost`, and
+   mints `StackItem.was_kicked = true`. The `Action::CastSpell{kicked}`
+   dispatch threads the flag through. A kicked cast with only base-mana
+   available now correctly FAILS to pay (the kicker is genuinely
+   charged, not a synthetic flag). Kicker on the CREATURE cast path
+   (`cast_creature`) is still deferred (no kicker-carrying creature in
+   the live EoE pool); warp/impending/free-cast cast-payment stay
+   deferred under their own contracts (see the alt-cost map below).
 
-3. **No `reset_public_knowledge` mirror in Rust.** Python clears per-card
+2. ~~**The probe drives the kicked branch via a synthetic StackItem
+   setter, not a real kicked cast.**~~ **CLOSED (2026-06-01).** The
+   cross-engine probe now drives a REAL kicked cast on both engines:
+   Python's genuine `_cast_spell(..., kicked=True)` (folds kicker_cost,
+   auto-taps blue Islands, sets `StackItem.kicked`) and Rust's real
+   `cast_spell_noncreature(spell_id, 0, kicked=True)` (folds kicker_cost,
+   pays base+kicker, mints `was_kicked`). The lands now produce blue
+   mana (Island subtype + `mana_produced=["U"]`) so the {1}{U}{1}{U}
+   combined cost is auto-tap-payable; X (= land count) tracks the funding
+   land count, and the library staging is sized so the kept/bottomed
+   sets match across both engines byte-equal. The `set_stack_top_was_
+   kicked` synthetic setter is retained as a low-level substrate (pinned
+   by `test_rust_was_kicked_stack_flag_round_trips`) but is no longer the
+   parity-load-bearing driver. The legal-action kicked/unkicked dual
+   emission on the Rust legal-cast path was NOT needed for byte-equal
+   parity here (the probe calls the cast primitive directly, mirroring
+   every other cross-engine cast probe); Python's `legal.py` dual
+   emission is the SoT and unchanged.
+
+3. **No `reset_public_knowledge` mirror in Rust** (STILL an accepted
+   divergence). Python clears per-card
    public-knowledge reveal bits on the kept + bottomed cards
    (`effects/bespoke.py:1193/1201`). Rust has no public-knowledge surface
    in the cross-engine fingerprint (zone membership + per-object
@@ -18162,45 +18198,57 @@ bridge arm); `tests/test_consult_the_star_charts_parity.py` (the probes).
 **Why it's OK.** PROBED is precedence-1 (probe-driven; no loader admit).
 The probe asserts byte-equality on the post-resolve hand + library zones
 across BOTH cast modes (unkicked keep-1; kicked keep-2; + a shared-
-`random.Random` random-bottom). The kicker COST is a declined cost-
-mechanic — modeling its Rust mana payment is orthogonal to proving the
-resolve-side rider resolves byte-equal, which is the load-bearing
-parity claim. The `was_kicked` flag is the minimal substrate that lets a
-probe drive both modes identically on both engines (the legal-decision-
-for-the-kicker-choice would need to be emitted identically too, but
-that's the cast-pipeline work item, not the resolve rider). The flag is
-additive + NOT fingerprinted (mirrors `is_copy`), so every existing push
-is `false` and parity-NEUTRAL.
+`random.Random` random-bottom). As of 2026-06-01 both engines drive
+their GENUINE cast pipeline (cast-time kicker payment + `was_kicked`
+mint), so the byte-equal claim now covers the cast side end-to-end, not
+just the resolve rider. The `was_kicked` flag is additive + NOT
+fingerprinted (mirrors `is_copy`), so every non-kicked push is `false`
+and parity-NEUTRAL; the new `kicker_cost` printing field is `None` for
+every non-kicker printing (back-compat parse default), so non-kicker
+casts are byte-identical.
 
-**Failure mode.** A REAL game that casts Consult the Star Charts with
-the kicker paid would, on Rust, (a) pay only `{1}{U}` not `{1}{U}{1}{U}`
-(under-charge), and (b) resolve with `was_kicked=false` (keep 1, not 2)
-because no cast site mints the flag — a silent under-kick. This only
-bites once the kicker mana-payment cast pipeline is wired; until then
-Consult is NOT loader-admitted (the probe is the only cross-engine
-driver), so no real-game trajectory casts it on Rust.
+**Failure mode (post-closure).** None for the kicker cast path — a Rust
+kicked cast now pays `{1}{U}{1}{U}` and resolves `was_kicked=true`
+(keep 2), byte-equal to Python. The residual deferral is the CREATURE
+kicker cast path (`cast_creature` ignores `kicked`): no kicker-carrying
+creature is in the live EoE pool, so this is unreachable until such a
+card is admitted. Consult is still not loader-admitted (PROBED), so the
+only cross-engine driver remains the probe — which now exercises the
+real cast.
 
-**Fix scope estimate.** Porting the kicker mana-payment cast pipeline:
-~1 cycle — `cast_spell_noncreature` reads the printing's `kicker_cost`,
-stacks it onto the base when the `kicked` flag is set on the cast,
-pays the combined cost via `auto_tap_pay_for_cost`, and mints
-`StackItem.was_kicked = true`; plus the legal-action kicked/unkicked
-dual emission so the choice is offered identically on both engines.
-Self-contained but out of scope for this resolve-rider slice.
+**Remaining alt-cost cast-payment map (for a future cross-cutting
+slice).** The kicker slice is **kicker-isolated** — it did NOT touch the
+shared warp/impending/free-cast payment. Those stay deferred under their
+own contracts:
+  * **warp** — already LIVE on `cast_creature_warp` (pays `warp_cost`);
+    the noncreature warp cast path is not yet exercised.
+  * **impending** — `use_impending` flag still passes through silently
+    (needs `impending_cost` payment + time-counter ETB init).
+  * **free-cast** (`cast_for_free`) — flag still passes through silently
+    (needs the mana-cost bypass in the pay phase).
+  The kicker fold (`cast_spell_noncreature`'s `kicked` arm) is a clean
+  template the impending/free-cast arms could reuse (read the printing's
+  alt-cost, substitute/fold onto the base, pay via the SAME
+  `auto_tap_pay_for_cost`, mint the matching StackItem flag) — but each
+  is its own bounded slice; no general alt-cost refactor was attempted
+  (honest-stop policy: kicker-only, no risky broad rework).
 
-**Impact estimate.** PROBED 465 → 466 / BLOCKED-SG 10 → 9 (non-DSK
-312 → 313); **+1 card / +0 cumulative 17lands EoE decks** (Consult has
-0 attributed 17lands decks in the residue tally — card-count fidelity,
-not bench-signal yield). 0 strength cost (the Python model is unchanged;
-the Rust arm is new and only fires for the sole carrier, which is not
-loader-admitted).
+**Impact estimate.** No tier change (Consult was already PROBED). This
+slice hardens the Rust CAST side to byte-equality (the resolve side was
+already byte-equal). 0 strength cost (the Python model is unchanged; the
+Rust kicker fold is additive and only fires for a kicker-carrying
+printing cast with `kicked=true`, which is not loader-admitted).
 
 **Pinned by:** `tests/test_consult_the_star_charts_parity.py` (10 tests —
 parser SoT incl. the kicker-only / not-warp verify-first check, the
 bridge round-trip, Rust synthetic-carrier acceptance, the `was_kicked`
-flag round-trip, and the three genuine cross-engine byte-equal probes:
-unkicked keep-1, kicked keep-2, and the kicked random-bottom over a
-shared `random.Random`).
+flag round-trip, and the three genuine cross-engine byte-equal probes
+now driving REAL casts: unkicked keep-1, kicked keep-2, and the kicked
+random-bottom over a shared `random.Random`) + `tests_rust/test_cast.py`
+(4 kicker-payment pins: `kicker_cost` parse round-trip, kicked cast pays
+base+kicker & mints `was_kicked`, unkicked cast pays base-only, kicked
+cast FAILS when only base is payable — the "kicker genuinely charged"
+guard).
 
 ---
 
