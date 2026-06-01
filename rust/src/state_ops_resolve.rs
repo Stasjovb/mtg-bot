@@ -17844,6 +17844,163 @@ fn apply_effect(
             // `fire_landfall_triggers`.
             state.pending_etb_dispatches.extend(entered_ids);
         }
+        // **BLOCKED-RUST-EFFECT slice (2026-05-31) — Consult the Star
+        // Charts.** "Look at the top X cards of your library, where X
+        // is the number of lands you control. Put one of those cards
+        // into your hand. If this spell was kicked, put two of those
+        // cards into your hand instead. Put the rest on the bottom of
+        // your library in a random order." Mirrors Python's
+        // `ConsultTheStarChartsEffect.resolve` (`effects/bespoke.py:1150`)
+        // STEP-FOR-STEP so the post-resolve state is byte-equal:
+        //   p = state.player_by_id(controller_id)
+        //   x = sum(1 for o in bf if o.controller_id == ctrl
+        //                          and o.printing.is_land)
+        //   if x == 0 or not p.library: log + return
+        //   examined = p.library[:x]
+        //   keep = 2 if state.resolving_kicked else 1
+        //   pick keep cards from examined top-to-bottom (no-agent
+        //     fallback `remaining[0]` each iter → the first `keep`
+        //     examined cards), remove from library → hand
+        //   remove the rest from library; rng.shuffle(rest);
+        //     library.extend(rest)  (bottom in random order)
+        Effect::ConsultTheStarCharts => {
+            // Source-controller resolution (I61 / CR 119.5 / 608.2 —
+            // "your library" / "lands you control" = the SOURCE's
+            // controller, NOT active_player). Same shape as Famished
+            // Worldsire / LookTopN.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            // X = number of lands the controller controls (battlefield
+            // walk, `printing.is_land` = card_types contains "Land").
+            // Mirrors Python's `sum(1 for o in state.battlefield if
+            // o.controller_id == controller_id and o.printing.is_land)`.
+            let mut x: usize = 0;
+            for player in &state.players {
+                for obj in player.battlefield.iter() {
+                    if obj.controller != controller {
+                        continue;
+                    }
+                    let is_land = match state.registry.lookup(obj.printing_id)
+                    {
+                        Some(p) => p.card_types.iter().any(|t| t == "Land"),
+                        None => false,
+                    };
+                    if is_land {
+                        x += 1;
+                    }
+                }
+            }
+            let lib_len = state.players[controller_idx].library.len();
+            // `if x == 0 or not p.library: return` — silent no-op.
+            if x == 0 || lib_len == 0 {
+                // Nothing to look at. (Python also appends a log line;
+                // Rust has no parity-observable log surface.)
+                return Ok(());
+            }
+            // `examined = p.library[:x]` — top min(x, lib_len) cards.
+            let count = x.min(lib_len);
+            // keep = 2 if kicked else 1 (clamped to the examined count
+            // — Python's keep loop `break`s when `remaining` empties).
+            let keep_req = if state.current_resolve_was_kicked { 2 } else { 1 };
+            let keep = keep_req.min(count);
+            // Pop the examined window off the TOP (lib[0]) in order.
+            // Post-CE3 top = lib[0]; remove(0) `count` times yields the
+            // examined cards top-to-bottom.
+            let examined: Vec<GameObject> = {
+                let lib_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].library);
+                let mut ex: Vec<GameObject> = Vec::with_capacity(count);
+                for _ in 0..count {
+                    ex.push(lib_mut.remove(0));
+                }
+                ex
+            };
+            // The FIRST `keep` examined cards → hand (Python's no-agent
+            // fallback picks `remaining[0]` each iteration, i.e. the
+            // topmost survivor — so the kept set is the first `keep`
+            // examined cards, in popped order). The REST are the bottom
+            // block.
+            let mut examined = examined;
+            let rest: Vec<GameObject> = examined.split_off(keep);
+            let kept: Vec<GameObject> = examined;
+            // Route kept → hand, in popped (top-to-bottom) order.
+            {
+                let hand_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].hand);
+                for mut obj in kept.into_iter() {
+                    obj.zone = ZONE_HAND;
+                    hand_mut.push(obj);
+                }
+            }
+            // Shuffle `rest` (the non-kept examined cards) in place —
+            // CR 701.19-ish "random order" — then append to the BOTTOM
+            // of the library. Mirrors Python's `state.rng.shuffle(
+            // remaining); p.library.extend(remaining)`. External Python
+            // `random.Random` via `external_rng::next_below` (byte-
+            // identical to `random.Random.shuffle`) when installed;
+            // xorshift64 fallback otherwise (same dual-path block as
+            // Famished Worldsire / SearchLibraryForBasicLandTapped).
+            let mut rest = rest;
+            if rest.len() >= 2 {
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    let n = rest.len();
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            rest.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    // xorshift64 fallback: distinct seed per (turn, ap,
+                    // source, lib_len) tuple — same control flow as every
+                    // other xorshift site.
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (rest.len() as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
+                    }
+                    let n = rest.len();
+                    let mut x_rng = seed;
+                    for i in (1..n).rev() {
+                        x_rng ^= x_rng << 13;
+                        x_rng ^= x_rng >> 7;
+                        x_rng ^= x_rng << 17;
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x_rng;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x_rng = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        rest.swap(i, j);
+                    }
+                }
+            }
+            // Append the shuffled `rest` to the BOTTOM of the library
+            // (stamp zone back to library — they never left logically,
+            // but the pop/extend mirrors Python's remove-then-extend).
+            {
+                let lib_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[controller_idx].library);
+                for mut obj in rest.into_iter() {
+                    obj.zone = ZONE_LIBRARY;
+                    lib_mut.push(obj);
+                }
+            }
+        }
         // **Anticausal Vestige Cycle 1 (2026-05-24, substrate-only) —
         // LTB draw + may-put-permanent-from-hand-tapped.** "When this
         // creature leaves the battlefield, draw a card, then you may
@@ -28250,12 +28407,24 @@ impl GameState {
         // bracket landed pre-Cycle-3 reader).
         let saved_x_value = self.current_resolve_x_value;
         self.current_resolve_x_value = top.x_value;
+        // **Consult kicker-rider substrate (2026-05-31).** Save → set
+        // → restore bracket mirroring every sibling transient. The
+        // `Effect::ConsultTheStarCharts` resolve arm reads
+        // `current_resolve_was_kicked` to choose keep=2 (kicked) vs
+        // keep=1 (unkicked) — mirroring Python's `state.resolving_kicked`
+        // swap at `actions.py:2680/2710` (restored in the `finally` at
+        // `:2697/:2794`). `false` for every non-kicked push (every
+        // pre-substrate cast site + every trigger / activation), so the
+        // swap is a no-op (`false → false`) and back-compat byte-equal.
+        let saved_was_kicked = self.current_resolve_was_kicked;
+        self.current_resolve_was_kicked = top.was_kicked;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_was_kicked = saved_was_kicked;
         self.current_resolve_x_value = saved_x_value;
         self.current_resolve_chosen_mode_idxs = saved_mode_idxs;
         self.current_resolve_additional_cost_choice_id =
@@ -28560,12 +28729,24 @@ impl GameState {
         // + Effect reader.
         let saved_x_value = self.current_resolve_x_value;
         self.current_resolve_x_value = top.x_value;
+        // **Consult kicker-rider substrate (2026-05-31).** Save → set
+        // → restore bracket mirroring every sibling transient. The
+        // `Effect::ConsultTheStarCharts` resolve arm reads
+        // `current_resolve_was_kicked` to choose keep=2 (kicked) vs
+        // keep=1 (unkicked) — mirroring Python's `state.resolving_kicked`
+        // swap at `actions.py:2680/2710` (restored in the `finally` at
+        // `:2697/:2794`). `false` for every non-kicked push (every
+        // pre-substrate cast site + every trigger / activation), so the
+        // swap is a no-op (`false → false`) and back-compat byte-equal.
+        let saved_was_kicked = self.current_resolve_was_kicked;
+        self.current_resolve_was_kicked = top.was_kicked;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_was_kicked = saved_was_kicked;
         self.current_resolve_x_value = saved_x_value;
         self.current_resolve_chosen_mode_idxs = saved_mode_idxs;
         self.current_resolve_additional_cost_choice_id =
@@ -28975,6 +29156,9 @@ impl GameState {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Synthetic
             // bespoke spell push (test helper) — not a CR-707.2 copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).**
+            // Synthetic bespoke spell push — unkicked by default.
+            was_kicked: false,
         });
         Ok(next_id)
     }

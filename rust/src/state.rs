@@ -1732,6 +1732,39 @@ pub struct StackItem {
     /// constructor + back-compat synthetic test push leaves this
     /// field at `false`.
     pub is_copy: bool,
+    /// **Consult the Star Charts kicker-rider substrate
+    /// (2026-05-31).** Marks this `StackItemKind::Spell` as having
+    /// been cast with its Kicker additional cost paid (CR 702.33 —
+    /// "Kicker is a static ability ... 'You may pay an additional
+    /// [cost] as you cast this spell.'"). The resolve arm of a
+    /// kicker-conditional Effect (today: `Effect::ConsultTheStarCharts`,
+    /// whose "if this spell was kicked, put two of those cards into
+    /// your hand instead" rider keys off this flag) reads it via the
+    /// `state.current_resolve_was_kicked` transient (the save → set →
+    /// restore swap pattern mirroring `current_resolve_x_value` /
+    /// `current_resolve_chosen_mode_idx`).
+    ///
+    /// Mirrors Python's `StackItem.kicked: bool` field
+    /// (`game.py:2307`) which `actions.py:2680/2710` swaps into
+    /// `state.resolving_kicked` around the resolving effect (and the
+    /// `ConsultTheStarChartsEffect.resolve` reads
+    /// `state.resolving_kicked` to choose keep=1 vs keep=2).
+    ///
+    /// **First-slice scope.** Every StackItem constructor defaults
+    /// this `false`; the cross-engine probe harness opts a spell into
+    /// the kicked branch via the synthetic-test setter
+    /// `set_stack_top_was_kicked(true)` (parallel to
+    /// `set_stack_top_is_copy`). The production `cast_spell_noncreature`
+    /// path does NOT yet mint `was_kicked=true` (the kicker mana-payment
+    /// pipeline stays deferred — see `docs/SEARCH_LIMITATIONS.md`); so
+    /// for every non-probe push the field is `false` and parity-NEUTRAL.
+    ///
+    /// **NOT in the per-StackItem fingerprint tuple** so pre-substrate
+    /// stacks stay byte-equal — same discipline as `chosen_mode_idx` /
+    /// `additional_cost_choice_id` / `chosen_mode_idxs` / `x_value` /
+    /// `is_copy`. Every existing constructor + back-compat synthetic
+    /// test push leaves this field at `false`.
+    pub was_kicked: bool,
 }
 
 impl StackItem {
@@ -1777,6 +1810,11 @@ impl StackItem {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Every bare
             // spell push originates from a CR-601 cast, NOT a copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -1851,6 +1889,11 @@ impl StackItem {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Targeted
             // spell push originates from a real cast, NOT a copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -1943,6 +1986,11 @@ impl StackItem {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Cast
             // pipeline target-carrying push site — not a copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -2007,6 +2055,11 @@ impl StackItem {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** `or_both`
             // modal pushes originate from a CR-601 cast, NOT a copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -2080,6 +2133,11 @@ impl StackItem {
             // kind-only — triggers aren't "copies" in the CR-707.2
             // spell-copy sense.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -2138,6 +2196,11 @@ impl StackItem {
             // **Carrier-AA Phase 4B Cycle 3 (2026-05-26).** Trigger
             // with target — not a CR-707.2 spell copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 
@@ -2190,6 +2253,11 @@ impl StackItem {
             x_value: None,
             // Dual-target trigger — not a CR-707.2 spell copy.
             is_copy: false,
+            // **Consult kicker-rider substrate (2026-05-31).** Default
+            // false — every constructor / pre-substrate push is an
+            // unkicked spell. The cross-engine probe opts a spell into
+            // the kicked branch via `set_stack_top_was_kicked(true)`.
+            was_kicked: false,
         }
     }
 }
@@ -3747,6 +3815,32 @@ pub struct GameState {
     /// `x_value: None`, so the swap is a no-op and the back-compat
     /// invariant holds byte-identical.
     pub current_resolve_x_value: Option<i32>,
+    /// **Consult the Star Charts kicker-rider substrate
+    /// (2026-05-31).** Resolve-time transient mirror of the resolving
+    /// spell's `StackItem.was_kicked` flag. Set by the stack resolver
+    /// (`resolve_top_of_stack` / `resolve_top_of_stack_pause`) from
+    /// `top.was_kicked` BEFORE the per-effect `apply_effect` fan-out
+    /// for a `StackItemKind::Spell`; restored to its prior value
+    /// after. `Effect::ConsultTheStarCharts` reads this to choose
+    /// keep=2 (kicked) vs keep=1 (unkicked).
+    ///
+    /// **Mirrors Python's `state.resolving_kicked` swap** at
+    /// `actions.py:2680/2710` (set BEFORE the resolve closure,
+    /// restored in the `finally` at `:2697/:2794`). Same save → set →
+    /// restore bracketing as `current_resolve_x_value` /
+    /// `current_resolve_chosen_mode_idx`.
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect.** Same rationale as every sibling transient:
+    /// apply_effect has ~90 arms; threading a `bool` through every
+    /// signature is invasive for surfaces that don't care.
+    ///
+    /// **Not serialized into the fingerprint.** Transient like its
+    /// payload-target / source-controller / x-value siblings.
+    ///
+    /// `false` for every non-kicked / pre-substrate push (back-compat
+    /// byte-identical — `false → false` swap is a no-op).
+    pub current_resolve_was_kicked: bool,
     /// **Darkness-shape combat-damage prevention substrate — Cycle 1
     /// (2026-05-21).** State-level "all combat damage is prevented
     /// for the rest of this turn" flag. When `true`, every combat-
@@ -3945,6 +4039,7 @@ impl Clone for GameState {
             // construction, so any mid-resolve clone still sees a
             // deterministic snapshot.
             current_resolve_x_value: self.current_resolve_x_value,
+            current_resolve_was_kicked: self.current_resolve_was_kicked,
         }
     }
 }
@@ -5081,6 +5176,7 @@ pub fn make_synthetic_state(
         // `Effect::ZeroPointBallad` / `Effect::DevastatingOnslaught`
         // resolve arms to read it).
         current_resolve_x_value: None,
+        current_resolve_was_kicked: false,
         // Darkness-shape combat-damage prevention substrate —
         // Cycle 1 (2026-05-21): synthetic states start with no
         // active combat-damage prevention. Back-compat default;
