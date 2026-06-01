@@ -482,14 +482,44 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
     // Pull the printing's card_types into an owned Vec so we drop
     // the registry borrow before mutating zones.
     let printing_id = find_source_printing_id(state, source_obj_id)?;
-    let (destination, creature) = match state.registry.lookup(printing_id) {
-        Some(printing) => (
-            post_resolve_destination(&printing.card_types),
-            is_creature(&printing.card_types),
-        ),
-        None => return None,
-    };
-    let dest_zone = destination?; // empty card_types — leave source in place
+    let (destination, creature, redirects_gy_to_library) =
+        match state.registry.lookup(printing_id) {
+            Some(printing) => (
+                post_resolve_destination(&printing.card_types),
+                is_creature(&printing.card_types),
+                // **GSZ-flip destination-redirect (2026-05-31).** The
+                // resolving spell's OWN printing may carry a SELF-scope
+                // `would_go_to_graveyard -> library` `StaticReplacement`
+                // (Green Sun's Zenith / Nexus of Fate's shuffle-self
+                // redirect). Mirrors Python's
+                // `_send_to_graveyard_or_library`
+                // (`actions.py:2598-2636`), which dispatches
+                // `WOULD_GO_TO_GRAVEYARD` against the moving card's own
+                // statics and reroutes to library + shuffles when the
+                // replacement names `destination="library"`. The
+                // dispatcher's implicit `card.owner_id ==
+                // affected_player_id` gate is satisfied here because a
+                // resolving spell's source `controller` IS its owner
+                // (hand-cast origin — the only origin this mover sees).
+                printing.static_replacements.iter().any(|rep| {
+                    rep.event == "would_go_to_graveyard"
+                        && rep.transform_kind == "replace"
+                        && rep.transform_dest.as_deref() == Some("library")
+                }),
+            ),
+            None => return None,
+        };
+    let mut dest_zone = destination?; // empty card_types — leave source in place
+    // Apply the would-go-to-graveyard -> library redirect: only a
+    // graveyard-bound destination is intercepted (a permanent spell
+    // resolving to the battlefield is untouched, byte-equal to Python,
+    // whose `_send_to_graveyard_or_library` is reached ONLY on the
+    // graveyard-bound non-permanent path). Gated entirely on the
+    // replacement being present, so every non-GSZ spell movement stays
+    // byte-identical.
+    if dest_zone == ZONE_GRAVEYARD && redirects_gy_to_library {
+        dest_zone = ZONE_LIBRARY;
+    }
 
     // Take from current zone; if not found, treat as silent no-op.
     let (mut obj, controller, _src_zone) = take_source(state, source_obj_id)?;
@@ -539,7 +569,86 @@ fn move_source_post_resolve(state: &mut GameState, source_obj_id: u32) -> Option
         _ => &mut player.graveyard,
     };
     Arc::make_mut(dest).push(obj);
+    // **GSZ-flip destination-redirect (2026-05-31) — post-redirect
+    // shuffle.** When the would-go-to-graveyard -> library redirect
+    // fired, Python's `_send_to_graveyard_or_library` appends the card
+    // to the owner's library and then `shuffle_library(state, owner)`
+    // (`actions.py:2626-2629`). Mirror that shuffle here so the
+    // redirected card's library position is byte-equal across engines.
+    // Gated on the redirect having fired, so non-GSZ spell movement is
+    // untouched. Identical external-rng Fisher-Yates / xorshift block
+    // every other in-engine shuffle site uses (= `state.rng.shuffle`).
+    if dest_zone == ZONE_LIBRARY && redirects_gy_to_library {
+        shuffle_player_library(state, controller as usize, source_obj_id);
+    }
     Some(dest_zone)
+}
+
+/// **GSZ-flip destination-redirect widen (2026-05-31).** Shuffle
+/// `controller_idx`'s library in place via the external Python
+/// `random.Random` when installed (`state.rng_ref()`), falling back to
+/// the inlined xorshift64 PRNG otherwise. Byte-equal to Python's
+/// `shuffle_library(state, player_id)` (`game.py:810-822`) =
+/// `state.rng.shuffle(p.library)` — the same `random.Random.shuffle`
+/// Fisher-Yates the `Effect::SearchLibraryForGreenCreatureWithMVAtMostX`
+/// search arm + `Effect::SearchLibraryForBasicLandTapped` use. Extracted
+/// so the post-resolve-redirect mover and the search arms share one
+/// shuffle recipe. `source_obj_id` seeds the fallback PRNG for
+/// determinism (identical mix to the search arms).
+fn shuffle_player_library(
+    state: &mut GameState,
+    controller_idx: usize,
+    source_obj_id: u32,
+) {
+    let lib_len = state.players[controller_idx].library.len();
+    if lib_len < 2 {
+        return;
+    }
+    let py_rng_owned: Option<Py<PyAny>> = state
+        .rng_ref()
+        .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+    if let Some(py_rng) = py_rng_owned {
+        let player = &mut state.players[controller_idx];
+        let lib = Arc::make_mut(&mut player.library);
+        let n = lib.len();
+        let _ = Python::with_gil(|py| -> PyResult<()> {
+            let bound = py_rng.bind(py);
+            for i in (1..n).rev() {
+                let j = crate::external_rng::next_below(bound, i + 1)?;
+                lib.swap(i, j);
+            }
+            Ok(())
+        });
+    } else {
+        let mut seed = (state.turn_number as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ ((state.active_player as u64) << 56)
+            ^ ((source_obj_id as u64) << 16)
+            ^ (lib_len as u64);
+        if seed == 0 {
+            seed = 0xdead_beef_dead_beef;
+        }
+        let player = &mut state.players[controller_idx];
+        let lib = Arc::make_mut(&mut player.library);
+        let n = lib.len();
+        let mut x = seed;
+        for i in (1..n).rev() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let n_u64 = (i + 1) as u64;
+            let bound = u64::MAX - (u64::MAX % n_u64);
+            let mut r = x;
+            while r >= bound {
+                r ^= r << 13;
+                r ^= r >> 7;
+                r ^= r << 17;
+                x = r;
+            }
+            let j = (r % n_u64) as usize;
+            lib.swap(i, j);
+        }
+    }
 }
 
 /// **Aura-attachment substrate — Phase 1 STEP 4 (round-78,

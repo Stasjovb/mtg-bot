@@ -12856,19 +12856,36 @@ pub struct StaticAnthem {
 pub struct StaticReplacement {
     /// The CR 614 event whose in-flight payload this replacement
     /// rewrites. One of `"would_create_token"` / `"would_place_counter"`
-    /// / `"triggered_ability_triggers"` (the Phase-5 closed vocab).
-    /// Lockstep with Python's `Event` enum WOULD_X / triggered-ability
-    /// family used by the `dispatch_replacement` call sites.
+    /// / `"triggered_ability_triggers"` (the Phase-5 closed vocab), OR
+    /// `"would_go_to_graveyard"` (the GSZ-flip destination-redirect
+    /// widen, 2026-05-31). Lockstep with Python's `Event` enum WOULD_X /
+    /// triggered-ability family used by the `dispatch_replacement` call
+    /// sites.
     pub event: String,
     /// The `EventTransform` discriminant. `"multiply_count"`
-    /// (Exalted Sunborn / Loading Zone) or `"add_instances"`
-    /// (Starfield Vocalist).
+    /// (Exalted Sunborn / Loading Zone), `"add_instances"`
+    /// (Starfield Vocalist), or `"replace"` (the destination-redirect
+    /// transform — GSZ / Nexus of Fate's shuffle-self
+    /// `would_go_to_graveyard -> library`).
     pub transform_kind: String,
     /// The transform's single int parameter:
     /// `MultiplyCount.factor` (2 for the doublers) for
     /// `"multiply_count"`, `AddInstances.delta` (1 for the extra-
-    /// trigger shape) for `"add_instances"`.
+    /// trigger shape) for `"add_instances"`. UNUSED (zero) for the
+    /// `"replace"` destination-redirect transform — that transform
+    /// carries no int param; its single string param lives in
+    /// `transform_dest` instead.
     pub transform_param: i32,
+    /// **GSZ-flip destination-redirect widen (2026-05-31).** The
+    /// `"replace"` transform's single string parameter — the
+    /// `new_destination` zone name the intercepted event is rerouted
+    /// to (the only live value is `"library"`, modelling GSZ / Nexus
+    /// of Fate's "shuffle this into your library instead of the
+    /// graveyard"). `None` for every count/instances transform (the
+    /// back-compat default — every pre-widen `StaticReplacement`
+    /// leaves this absent). Mirrors Python's
+    /// `Replace.new_destination: str` at `effects/modifiers.py`.
+    pub transform_dest: Option<String>,
 }
 
 /// **Static / layered abilities substrate — Phase 3 (round-81,
@@ -18114,11 +18131,13 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                     if event != "would_create_token"
                         && event != "would_place_counter"
                         && event != "triggered_ability_triggers"
+                        && event != "would_go_to_graveyard"
                     {
                         return Err(PyValueError::new_err(format!(
                             "static_replacements[].event must be \
                              'would_create_token', 'would_place_counter', \
-                             or 'triggered_ability_triggers' (got: {})",
+                             'triggered_ability_triggers', or \
+                             'would_go_to_graveyard' (got: {})",
                             event
                         )));
                     }
@@ -18139,32 +18158,80 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
                         };
                     if transform_kind != "multiply_count"
                         && transform_kind != "add_instances"
+                        && transform_kind != "replace"
                     {
                         return Err(PyValueError::new_err(format!(
                             "static_replacements[].transform_kind must be \
-                             'multiply_count' or 'add_instances' (got: {})",
+                             'multiply_count', 'add_instances', or \
+                             'replace' (got: {})",
                             transform_kind
                         )));
                     }
-                    let transform_param =
-                        match rep_dict.get_item("transform_param")? {
-                            Some(v) => v.extract::<i32>().map_err(|_| {
-                                PyValueError::new_err(
-                                    "static_replacements[].transform_param \
-                                     must be an integer",
-                                )
-                            })?,
-                            None => {
-                                return Err(PyValueError::new_err(
-                                    "static_replacements[] is missing \
-                                     required key 'transform_param'",
-                                ))
+                    // GSZ-flip destination-redirect widen (2026-05-31).
+                    // The `"replace"` transform carries a string
+                    // `transform_dest` (the `new_destination` zone name)
+                    // and NO int `transform_param`; the count/instances
+                    // transforms carry the reverse. Whitelist exactly
+                    // one param shape per transform_kind so a malformed
+                    // bridge dict fails loudly.
+                    let (transform_param, transform_dest) =
+                        if transform_kind == "replace" {
+                            let dest = match rep_dict
+                                .get_item("transform_dest")?
+                            {
+                                Some(v) => v.extract::<String>().map_err(
+                                    |_| {
+                                        PyValueError::new_err(
+                                            "static_replacements[].\
+                                             transform_dest must be a string \
+                                             for the 'replace' transform",
+                                        )
+                                    },
+                                )?,
+                                None => {
+                                    return Err(PyValueError::new_err(
+                                        "static_replacements[] with \
+                                         transform_kind 'replace' is missing \
+                                         required key 'transform_dest'",
+                                    ))
+                                }
+                            };
+                            // Closed destination vocab — only the
+                            // graveyard->library shuffle-self redirect is
+                            // modeled this widen. An unknown destination
+                            // has no Rust reroute hook → fail loudly.
+                            if dest != "library" {
+                                return Err(PyValueError::new_err(format!(
+                                    "static_replacements[].transform_dest \
+                                     must be 'library' (got: {})",
+                                    dest
+                                )));
                             }
+                            (0_i32, Some(dest))
+                        } else {
+                            let p = match rep_dict
+                                .get_item("transform_param")?
+                            {
+                                Some(v) => v.extract::<i32>().map_err(|_| {
+                                    PyValueError::new_err(
+                                        "static_replacements[].\
+                                         transform_param must be an integer",
+                                    )
+                                })?,
+                                None => {
+                                    return Err(PyValueError::new_err(
+                                        "static_replacements[] is missing \
+                                         required key 'transform_param'",
+                                    ))
+                                }
+                            };
+                            (p, None)
                         };
                     out.push(StaticReplacement {
                         event,
                         transform_kind,
                         transform_param,
+                        transform_dest,
                     });
                 }
                 out
