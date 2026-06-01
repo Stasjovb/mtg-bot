@@ -2160,9 +2160,16 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         from mtg_bot.effects.generic.pump import (
             PumpTargetCreatureUntilEOT,
         )
+        # ``power_bonus_from_x`` (Secluded Starforge, 2026-05-31): when
+        # true, both engines read the cost-determined X from the C1
+        # X-cost transient (Rust ``current_resolve_x_value`` / Python
+        # ``state.resolving_x_value``) instead of the static
+        # ``power_bonus``. Defaults False (the round-28 fixed-bonus
+        # shape); rolls forward through parse + to_pydict on both sides.
         return PumpTargetCreatureUntilEOT(
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
+            power_bonus_from_x=bool(eff_dict.get("power_bonus_from_x", False)),
         )
     if kind == "set_base_pt_until_eot":
         # BLOCKED-RUST-EFFECT slice -- layer 7b base-P/T override

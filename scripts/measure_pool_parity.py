@@ -4296,6 +4296,22 @@ PROBE_MODULES: tuple[Path, ...] = (
     # kicker end-to-end; this slice is Rust + bridge + probe only.
     # Net delta: +1 PROBED / -1 BLOCKED-subsystem-gated.
     REPO_ROOT / "tests" / "test_consult_the_star_charts_parity.py",
+    # **secluded-starforge-flip (2026-05-31):** Secluded Starforge
+    # closure (~7,570 17lands decks — the single largest remaining
+    # BLOCKED-SG deck-tail). The dedicated probe module
+    # ``test_secluded_starforge_parity.py`` carries the canonical
+    # ``test_cross_engine_real_eoe_secluded_starforge_pump_by_x_parity``
+    # function which drives AA2's "{2},{T}, Tap X untapped artifacts you
+    # control: Target creature gets +X/+0 UEOT" pump byte-equal on both
+    # engines (X seated, target creature pumped +X/+0). The substrate:
+    # a tap-X-untapped-artifacts ActivationCost atom + _activate_ability
+    # cost-payment (Python) feeding the resolving_x_value channel, a
+    # PumpTargetCreatureUntilEOT.power_bonus_from_x flag (Python +
+    # mirrored Rust Effect field reading current_resolve_x_value + parse
+    # + to_pydict + bridge), and the land_builder claim-ordering fix so
+    # all 3 printed AAs route through the grammar. Net delta:
+    # +1 PROBED / -1 BLOCKED-subsystem-gated.
+    REPO_ROOT / "tests" / "test_secluded_starforge_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
