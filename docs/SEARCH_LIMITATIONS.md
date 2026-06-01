@@ -18200,6 +18200,94 @@ shared `random.Random`).
 
 ---
 
+## Rust port — Tezzeret, Cruel Captain: loyalty-GAIN slice SHIPPED; loyalty-ACTIVATED abilities (0/−3/−7) + −7 emblem DEFERRED (2026-06-01)
+
+**Location.** New `Effect::PutLoyaltyCounterOnSelf { amount: i32 }`
+(`rust/src/cards.rs` — variant + `put_loyalty_counter_on_self` parser
+arm + to_dict arm; resolve in `rust/src/state_ops_resolve.rs`); bridge
+reverse arm `put_loyalty_counter_on_self` in
+`src/mtg_bot/parity/cross_engine.py`. Python `PutLoyaltyCounterOnSelf`
+(`src/mtg_bot/effects/generic/counters.py:234`) pre-existed. Parser
+deferral: `src/mtg_bot/cards/parser/planeswalker_builder.py`
+(`_LOYALTY_ACTIVATION_PREFIX` strips the printed loyalty-activation
+lines).
+
+**What this slice ships (byte-equal on both engines).** Tezzeret, Cruel
+Captain (the LAST non-Duskmourn BLOCKED card) flips
+blocked_subsystem_gated → PROBED on the planeswalker loyalty-GAIN
+substrate: the `is_planeswalker`/`loyalty=4` printing surface, the
+ENTERS → `PutLoyaltyCounterOnSelf(amount=1)` loyalty-gain trigger
+("Whenever an artifact you control enters, put a loyalty counter on
+Tezzeret"), the `loyalty_counters` GameObject slot (snapshot-surfaced
+on both engines), and the walker-at-0 SBA. The cross-engine probe
+drives the loyalty-gain effect through BOTH engines' resolve paths and
+asserts byte-equal loyalty 4 → 5.
+
+**What is DELIBERATELY DEFERRED (the shortcut).** The three printed
+loyalty-ACTIVATED abilities and the emblem are NOT modeled on the
+Python side and so are NOT probed:
+
+- `0: Untap target artifact or creature. If it's an artifact creature,
+  put a +1/+1 counter on it.`
+- `−3: Search your library for an artifact card with mana value 1 or
+  less, ...`
+- `−7: You get an emblem with '...'.`
+
+**Why it's OK / what makes it not-OK.** The PYTHON parser intentionally
+strips loyalty-activation lines — Python has NO loyalty-ability
+activation substrate (no pay/add-loyalty `ActivationCost` atom, no
+sorcery-speed once-per-turn-per-walker activation gate, no emblem
+object). RUST, by contrast, ALREADY carries the full loyalty-COST
+activation substrate (`ActivationCost.loyalty` signed cost + emission
+gate at `state_ops_legal.rs` + `loyalty_activated_this_turn`
+once-per-turn-per-walker ledger per CR 606.3 + the loyalty SBA). The
+asymmetry means a byte-equal cross-engine activation probe is not
+buildable on the Python side today: you would have to build the entire
+Python loyalty-ability-activation subsystem first. The −7 emblem has no
+emblem-object substrate on EITHER engine. Not-OK if/when a strategy
+actually activates Tezzeret's abilities in a real game — the loyalty
+abilities (and the immediate board-affecting untap/search/+1+1 they
+provide) are then invisible to both the engine and the search.
+
+**Failure mode.** In a real game, Tezzeret sits on the battlefield,
+grows loyalty off artifact ETBs (modeled), and can be attacked / dies
+at 0 loyalty (modeled), but never activates an ability — the 0/−3/−7
+lines are no-ops. No crash, no divergence (both engines agree: zero
+loyalty abilities offered, because the printing carries none). The
+loss is strength fidelity for this single planeswalker, not a parity
+break.
+
+**Fix scope estimate.** Large — the full Python planeswalker
+loyalty-ability-activation subsystem: a signed loyalty `ActivationCost`
+atom + `_activate_ability` loyalty pay/add + the sorcery-speed
+once-per-turn-per-walker activation gate (CR 606.3) + parser
+recognition of the `[+−-]?\d+:` activation lines (currently stripped)
++ the three abilities' effects (untap-target+conditional-+1/+1 reusing
+existing untap+put-counter; search-artifact-MV≤1 reusing the
+SearchLibraryForCard family with an artifact+MV≤1 filter; the −7
+emblem needs a NEW emblem-object substrate on both engines). Rust's
+half of the activation machinery already exists; the work is almost
+entirely Python-side. Estimate ~4-6 cycles, emblem its own multi-cycle
+slice.
+
+**Impact estimate.** PROBED 467 → 468 / BLOCKED-SG 8 → 7 (non-DSK
+314/315 → **315/315 = 100%** of the non-DSK pool — the campaign
+milestone). The 7 remaining BLOCKED cards are all Duskmourn off-set
+special-guest cards. +1 card; 0 strength cost on the modeled slice
+(loyalty-gain + SBA are byte-equal); the deferred loyalty-activation /
+emblem strength cost is the fidelity gap above.
+
+**Pinned by:** `tests/test_tezzeret_cruel_captain_parity.py` (6 tests —
+parser SoT incl. the activated-abilities-stripped verify-first check,
+the bridge round-trip byte-equality vs the real parsed printing, Rust
+synthetic-carrier acceptance, and the genuine cross-engine byte-equal
+loyalty-gain probe driving BOTH engines' resolve to loyalty 5) +
+`tests_rust/test_resolve.py` (4 `put_loyalty_counter_on_self` resolve
+pins: increment / amount-two / amount-zero-no-op / off-battlefield
+fizzle, mirroring the sibling `PutPlusOneCounterOnSelf` pins).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
