@@ -215,6 +215,79 @@ class UntapTargetLand(Effect):
 
 
 @dataclass(frozen=True)
+class UntapTargetArtifactOrCreatureConditionalCounter(Effect):
+    """Tezzeret, Cruel Captain's ``0`` loyalty ability — "Untap target
+    artifact or creature. If it's an artifact creature, put a +1/+1
+    counter on it."
+
+    Target filter is artifact-OR-creature (no controller restriction —
+    any artifact or creature on the battlefield is legal). On resolve:
+    untap the target (silent no-op if already untapped), then — if the
+    target is BOTH an artifact and a creature (an "artifact creature") —
+    add one +1/+1 counter via ``add_plus_one_counters`` (which routes
+    through the standard counter-doubling + counters-added trigger
+    plumbing). Re-checks artifact-creature status at resolve time
+    (CR 608.2b) so a type-change between activation and resolution is
+    honored.
+
+    Mirrors Rust's
+    ``Effect::UntapTargetArtifactOrCreatureConditionalCounter``
+    (cards.rs / state_ops_resolve.rs).
+    """
+
+    def requires_target(self) -> bool:
+        return True
+
+    def legal_targets(
+        self, state: "GameState", controller_id: int
+    ) -> list[Target]:
+        return [
+            ("permanent", o.id)
+            for o in state.battlefield
+            if o.printing.is_artifact or o.printing.is_creature
+        ]
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import add_plus_one_counters
+
+        if not targets:
+            return
+        kind, target_id = targets[0]
+        if kind != "permanent":
+            return
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            return
+        # CR 608.2b — re-verify the target still matches the printed
+        # filter (artifact or creature) at resolution.
+        if not (obj.printing.is_artifact or obj.printing.is_creature):
+            return
+        if obj.tapped:
+            obj.tapped = False
+            state.log.append(f"{obj.printing.name} is untapped")
+        # "If it's an artifact creature, put a +1/+1 counter on it."
+        if obj.printing.is_artifact and obj.printing.is_creature:
+            added = add_plus_one_counters(state, obj, 1)
+            if added:
+                state.log.append(
+                    f"{obj.printing.name} gets a +1/+1 counter "
+                    f"(now {obj.plus_one_counters})"
+                )
+
+    def describe(self) -> str:
+        return (
+            "untap target artifact or creature; if it's an artifact "
+            "creature, put a +1/+1 counter on it"
+        )
+
+
+
+@dataclass(frozen=True)
 class TapTargetOpponentPermanentAndStunIt(Effect):
     """Tap target artifact or creature an opponent controls, then put
     a stun counter on it. Matches Mechanozoa's ETB. Both effects apply

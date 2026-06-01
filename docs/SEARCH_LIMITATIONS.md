@@ -18322,7 +18322,105 @@ guard).
 
 ---
 
-## Rust port — Tezzeret, Cruel Captain: loyalty-GAIN slice SHIPPED; loyalty-ACTIVATED abilities (0/−3/−7) + −7 emblem DEFERRED (2026-06-01)
+## Rust port — Tezzeret, Cruel Captain: loyalty-ACTIVATION subsystem + 0/−3 abilities SHIPPED byte-equal; −7 EMBLEM honest-stopped (2026-06-01)
+
+**UPDATE (2026-06-01, feature/tezzeret-loyalty).** The loyalty-ACTIVATION
+subsystem and the 0 / −3 abilities are now SHIPPED byte-equal on both
+engines (the prior deferral in the historical entry below is CLOSED
+except for the −7 emblem):
+
+- **Loyalty-activation subsystem (Python side, mirroring Rust's existing
+  substrate).** Added `ActivationCost.loyalty: int = 0` (signed cost,
+  same sign convention as Rust: a printed `+N` ability stamps
+  `loyalty=-N` ADD, a `−N` ability stamps `loyalty=+N` PAY, `0:` stamps
+  `loyalty=0`) at `effects/base.py`; the emission gate +
+  once-per-turn-per-walker ledger (`state.loyalty_activated_this_turn`,
+  cloned in `GameState.clone` + cleared in `turn.run_cleanup_step`) at
+  `legal.py` / `game.py` / `turn.py`; the apply commit
+  (`obj.loyalty_counters -= cost.loyalty` + ledger insert) at
+  `actions._activate_ability`; the bridge `loyalty` cost key at
+  `parity/cross_engine.py` `_aa_dict_to_python_activation_cost`. The
+  parser (`cards/parser/planeswalker_builder.py`) now recognizes
+  loyalty-activation lines (no longer strips them) and emits
+  `ActivatedAbility(cost=ActivationCost(loyalty=N), sorcery_speed=True,
+  effect=...)`. Rust's half (`ActivationCost.loyalty` + emission gate +
+  `loyalty_activated_this_turn` ledger + loyalty-at-0 SBA) already
+  existed and is unchanged — the Python side now mirrors it byte-equal.
+- **0 ability** — "Untap target artifact or creature. If it's an
+  artifact creature, put a +1/+1 counter on it." New
+  `UntapTargetArtifactOrCreatureConditionalCounter` effect on BOTH
+  engines (Python `effects/generic/tap.py`; Rust
+  `Effect::UntapTargetArtifactOrCreatureConditionalCounter` — enum
+  variant + `parse_effect` arm + `to_dict` arm + resolve arm with a
+  deterministic first-match source-controller-side target pick).
+  Byte-equal observable: untap + conditional +1/+1 on an artifact
+  creature.
+- **−3 ability** — "Search your library for an artifact card with mana
+  value 1 or less, ..." Reuses the `SearchLibraryForCard` family with a
+  new `artifact_small` filter (artifact card type + `mana_value <=
+  max_mv`, with `max_mv=1`) on BOTH engines
+  (`effects/generic/search.py` `_matches`; Rust
+  `state_ops_resolve.rs` filter dispatch). Byte-equal deterministic
+  first-match tutor (library → hand, loyalty 4 → 1).
+- **Pinned by** `tests/test_tezzeret_cruel_captain_parity.py` (the
+  loyalty-activation-cost + once-per-turn cross-engine probe; the 0
+  untap+counter cross-engine probe; the −3 search cross-engine probe;
+  the loyalty-cost bridge round-trip; the parser shape SoT) +
+  `tests_rust/test_resolve.py` (5 new pins: untap-conditional-counter
+  artifact-creature / plain-creature / empty-board-fizzle, artifact_small
+  fetch-MV1 / skip-MV2) + the pre-existing `tests_rust/test_activated.py`
+  CR-606.3 walker-loyalty suite (unchanged, still green).
+
+**STILL DEFERRED (HONEST-STOP): the −7 EMBLEM only.** Tezzeret's −7
+grants an emblem with "At the beginning of combat on your turn, put
+three +1/+1 counters on target artifact you control. If it's not a
+creature, it becomes a 0/0 Robot artifact creature." NO emblem-object
+substrate exists on EITHER engine. The parser's `_LOYALTY_ABILITY_EFFECTS`
+table deliberately omits the emblem effect body, so the −7 ability is
+stripped (the 0 / −3 ARE modeled).
+
+**Emblem-substrate map (what the −7 needs, both engines).** An emblem
+is a distinct game object (CR 114) that exists in the command zone,
+has no characteristics other than its abilities, can't leave the
+command zone, and can't be removed. The minimal substrate:
+
+1. **An emblem "object" + zone.** Neither engine has a command zone or
+   an emblem object today. Python `GameState` would need an
+   `emblems: list[Emblem]` (or a command-zone list), each carrying the
+   owning player + a delayed/static ability payload; Rust `GameState`
+   the same (`Vec<Emblem>` per player, cloned in `clone()`,
+   snapshot-surfaced for parity). This is a NEW zone + object kind —
+   the same shape as adding the stack store was, but smaller (emblems
+   never move, so no zone-transition plumbing).
+2. **A delayed combat-trigger carried by the emblem.** The emblem's
+   ability is "At the beginning of combat on your turn, …" — a
+   beginning-of-combat triggered ability whose SOURCE is the emblem,
+   not a battlefield permanent. Both engines fire triggered abilities
+   only from battlefield/stack sources today; the trigger dispatcher
+   (`turn.py` Python / `state_ops_*` Rust) would need to also scan the
+   emblem zone at the begin-combat step. The effect body itself
+   ("put three +1/+1 counters on target artifact you control; if it's
+   not a creature it becomes a 0/0 Robot artifact creature") is a
+   compound: a counted +1/+1 (existing primitive) + a conditional
+   type-changing / becomes-creature UEOT-or-permanent animate (Robot
+   artifact creature with base 0/0). The "becomes a 0/0 Robot artifact
+   creature" is itself a layer-4/7b type+P/T-set continuous effect —
+   reuses the animate-land substrate shape but on an artifact, and
+   PERMANENTLY (not UEOT) per the printed text.
+3. **The "You get an emblem" effect.** A new effect kind
+   (`get_emblem` / `CreateEmblem`) on both engines whose resolve pushes
+   the emblem object into the emblem zone. This is the −7 ability's
+   effect body; it's gated behind (1).
+
+Scope: a separate multi-cycle substrate (new zone + new object kind +
+emblem-sourced trigger dispatch + the becomes-Robot animate). Not taken
+here per the campaign honest-stop policy (the loyalty-activation
+subsystem + 0/−3 abilities are the bounded, byte-equal win). NO risky
+broad refactor was attempted for the emblem.
+
+---
+
+## (historical) Tezzeret, Cruel Captain: loyalty-GAIN slice SHIPPED; loyalty-ACTIVATED abilities (0/−3/−7) + −7 emblem DEFERRED (2026-06-01)
 
 **Location.** New `Effect::PutLoyaltyCounterOnSelf { amount: i32 }`
 (`rust/src/cards.rs` — variant + `put_loyalty_counter_on_self` parser

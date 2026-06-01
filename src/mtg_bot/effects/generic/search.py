@@ -35,6 +35,8 @@ class SearchLibraryForCard(Effect):
       - ``"legendary_creature"`` — creature with Legendary supertype
       - ``"basic_plains"`` / ``"basic_island"`` / ... — specific basic
       - ``"creature_small"`` — creature with mana value ≤ ``max_mv``
+      - ``"artifact_small"`` — artifact card with mana value ≤ ``max_mv``
+        (Tezzeret, Cruel Captain's ``-3`` tutor: ``max_mv=1``)
 
     If ``may_fail`` is True, the controller may decline to fetch
     (shuffle happens either way). Always shuffles at the end — matches
@@ -67,6 +69,14 @@ class SearchLibraryForCard(Effect):
             )
         if fn == "artifact":
             return printing.is_artifact
+        # Tezzeret, Cruel Captain's -3 ability — "an artifact card with
+        # mana value 1 or less". Artifact filter + an MV cap (reuses the
+        # ``max_mv`` field the ``creature_small`` filter already uses).
+        if fn == "artifact_small":
+            return (
+                printing.is_artifact
+                and printing.mana_cost.total <= self.max_mv
+            )
         if fn == "spacecraft":
             return printing.is_spacecraft
         if fn == "sliver":
