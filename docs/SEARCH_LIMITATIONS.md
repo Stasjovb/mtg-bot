@@ -18288,6 +18288,89 @@ fizzle, mirroring the sibling `PutPlusOneCounterOnSelf` pins).
 
 ---
 
+## DealDamageEqualToSourcePowerAnyTarget — DIES-trigger LKI + counter read (CLOSED, hub todo ddc12150)
+
+**Location**: `rust/src/state_ops_resolve.rs` — the
+`Effect::DealDamageEqualToSourcePowerAnyTarget` resolve arm + the new
+`read_source_power_lki` helper (sibling of `read_famished_source_power`).
+
+**What the shortcut WAS (now FIXED)**: the resolve arm read the
+source's power by searching ONLY `player.battlefield` for the source
+object and computing `base + ueot_power_bonus` (counters OMITTED). Two
+divergences from Python's `DealDamageEqualToSourcePowerAnyTarget.resolve`
+(`effects/generic/damage.py`), which reads
+`effective_power(state, state.resolving_source)`:
+
+1. **DIES-trigger last-known-information (CR 603.10).** Fired from a
+   DIES / leaves-battlefield trigger, the source is in the graveyard at
+   resolve time. The battlefield-only scan found nothing → `amount = 0`
+   → silent no-op. Python's `state.resolving_source` is the
+   `StackItem.source` GameObject reference captured at push time (the
+   dying creature that survived the zone move), so Python deals the
+   creature's last-known power. *Live divergence:* real-EoE Infernal
+   Phantom DIES trigger — Python p1 −2/−3, Rust unchanged.
+
+2. **Counter omission (CR 613 layer 7d).** The old read dropped
+   `obj.counters`. The on-battlefield consumer Rust Harvester
+   (`Sequence(PutPlusOneCounterOnSelf,
+   DealDamageEqualToSourcePowerAnyTarget)`) adds a +1/+1 counter to
+   itself THEN deals damage equal to its power — a 1/1 must deal 2.
+   Pre-fix Rust read printed power 1 and dealt 1; Python read 2.
+
+**The fix**: `read_source_power_lki(state, source_obj_id)` searches the
+battlefield FIRST then falls back to every other zone (graveyard /
+exile / hand / library / stack store), computing
+`base_override.or(printed) + ueot_power_bonus + counters` — mirroring
+`read_famished_source_power` + Python's `effective_power` for the
+no-anthem/no-switch case. On-battlefield sources with no counters stay
+byte-identical (battlefield searched first, same composition; `.max(0)`
+floor preserved per CR 119.5). This works because BOTH engines' death-
+move keep the dying object's `counters` + `ueot_modifiers` on the
+graveyard copy (Rust `state_ops_sba.rs:982-986` clears
+damage/tapped/attached but keeps counters; Python `move_off_battlefield`
+likewise), so the all-zones search reproduces Python's
+`resolving_source` reference read without threading a new payload field
+through the trigger-push pipeline.
+
+**Why no payload field was needed**: unlike the combat-damage
+transients (which are reset after the synchronous observer walk and so
+need a `TriggerPayload` snapshot), the dying GameObject itself persists
+in the graveyard with its power-relevant fields intact until end-of-
+turn cleanup. An id-keyed all-zones search is the lower-blast-radius
+mirror of Python's by-reference read.
+
+**Documented residual (shared with `read_famished_source_power`)**:
+layer-7c static anthems and layer-7e P/T switches are NOT folded here
+(same established combat-side asymmetry). No real-EoE source-power
+consumer (Infernal Phantom DIES, Rust Harvester AA, Ouroboroid
+beginning-of-combat trigger) stages an anthem/switch rider on the
+source, so this is observationally byte-equal on the genuine pool.
+
+**Sibling-pattern audit**: the two non-DSK source-power consumers are
+**Rust Harvester** (`DealDamageEqualToSourcePowerAnyTarget`, on-bf
+activated — had the latent counter bug, now byte-equal) and
+**Ouroboroid** (`PutPlusOneCountersOnEachCreatureYouControlEqualToSource
+Power`, on-bf beginning-of-combat trigger — uses
+`read_famished_source_power`, already counter-correct and not DIES-
+reachable, so unaffected). No other `*EqualToSourcePower*` Rust resolve
+arm has the battlefield-only-search shape that is DIES-reachable.
+
+**Status**: CLOSED. **Failure mode**: none remaining (divergence pin
+flipped to a cross-engine byte-equal parity probe). **Impact**:
+correctness gain; zero strength/perf cost (on-bf no-counter path
+byte-identical).
+
+**Pinned by**:
+`tests/test_divergence_pins_dd.py::test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_lki_parity`
+(flipped from the divergence pin — both engines now deal 3 to p1) +
+`tests/test_rust_harvester_parity.py::test_cross_engine_real_eoe_source_power_lki_with_counter_dies_damage_parity`
+(counter-inclusive LKI cross-engine probe — 2/1 + counter deals 3) +
+the existing `test_rust_harvester_parity.py` Python-side AA resolve
+probe + `tests/test_deal_damage_equal_to_power_resolve.py` (Python
+resolve pins).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

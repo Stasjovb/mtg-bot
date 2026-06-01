@@ -2240,6 +2240,92 @@ fn read_famished_source_power(state: &GameState, obj_id: u32) -> i32 {
     base + obj.ueot_power_bonus() + obj.counters
 }
 
+/// **CR 603.10 last-known-information source-power read.** Returns the
+/// resolving source's effective power, reading the source object
+/// wherever it currently lives — battlefield FIRST, then every other
+/// zone (graveyard / exile / hand / library / stack store) as a
+/// fallback. The composition mirrors `read_famished_source_power`
+/// (and Python's `effective_power` layer-7 walk for the no-anthem /
+/// no-switch case): `base_override.or(printed) + ueot_power_bonus +
+/// counters`. Source not found in ANY zone → 0.
+///
+/// **Why off-battlefield search.** A "deals damage equal to its power"
+/// effect fired from a DIES / leaves-battlefield triggered ability
+/// resolves AFTER the source has changed zones (the dying creature is
+/// in the graveyard by the time the trigger resolves). Python reads
+/// `state.resolving_source` — the `StackItem.source` GameObject
+/// reference captured when the trigger was pushed; the reference
+/// survives the zone move and the graveyard copy retains its
+/// `printing.power` + `counters` + UEOT-static modifiers (Rust's SBA
+/// death path at `state_ops_sba.rs:982-986` clears damage / tapped /
+/// attached_to but deliberately KEEPS `counters` and `ueot_modifiers`,
+/// matching Python's `move_off_battlefield`). Searching all zones by
+/// id reproduces that last-known read without threading a new payload
+/// field through the trigger-push pipeline.
+///
+/// **Why include counters.** The on-battlefield consumer Rust
+/// Harvester (`Sequence(PutPlusOneCounterOnSelf,
+/// DealDamageEqualToSourcePowerAnyTarget)`) puts a +1/+1 counter on
+/// itself, THEN deals damage equal to its power — a 1/1 must deal 2,
+/// not 1. The pre-fix DealDamageEqualToSourcePowerAnyTarget resolve
+/// arm read `base + ueot_power_bonus` and OMITTED `counters`,
+/// diverging from Python's `effective_power` for any counter-bearing
+/// source. This helper folds counters in (CR 613 layer 7d), matching
+/// Python.
+///
+/// **Documented residual (shared with `read_famished_source_power`).**
+/// Layer-7c static anthems and layer-7e P/T switches are NOT folded
+/// here (same established combat-side asymmetry). No real-EoE
+/// source-power consumer (Infernal Phantom DIES, Rust Harvester AA,
+/// Ouroboroid combat trigger) stages an anthem/switch rider on the
+/// source, so this is observationally byte-equal on the genuine pool.
+fn read_source_power_lki(state: &GameState, obj_id: u32) -> i32 {
+    let mut found: Option<&GameObject> = None;
+    // Battlefield FIRST (on-battlefield sources keep their existing
+    // read order; the byte-identical path for ETB / activated /
+    // combat-trigger sources still on the field).
+    'search: for player in state.players.iter() {
+        if let Some(obj) = player.battlefield.iter().find(|o| o.id == obj_id) {
+            found = Some(obj);
+            break 'search;
+        }
+    }
+    // Fallback: every other per-player zone, then the stack store —
+    // the CR 603.10 last-known-information read for a source that has
+    // changed zones (DIES → graveyard being the live case).
+    if found.is_none() {
+        'fallback: for player in state.players.iter() {
+            for zone in [
+                &player.graveyard,
+                &player.exile,
+                &player.hand,
+                &player.library,
+            ] {
+                if let Some(obj) = zone.iter().find(|o| o.id == obj_id) {
+                    found = Some(obj);
+                    break 'fallback;
+                }
+            }
+        }
+    }
+    if found.is_none() {
+        found = state.stack_objects.iter().find(|o| o.id == obj_id);
+    }
+    let Some(obj) = found else {
+        return 0;
+    };
+    let Some(printing) = state.registry.printings.get(obj.printing_id as usize) else {
+        return 0;
+    };
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let base = obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| obj.ueot_becomes_land_creature_pt().map(|(p, _)| p))
+        .unwrap_or(printed_base);
+    base + obj.ueot_power_bonus() + obj.counters
+}
+
 /// Push `amount` damage onto the battlefield creature's per-instance
 /// `damage` marker (saturating add into i16). Routes through
 /// `Arc::make_mut` on the containing battlefield Vec to preserve CoW.
@@ -15937,23 +16023,36 @@ fn apply_effect(
         // Compute source's effective power inline, then route through
         // the same any-target selection as DealDamageAnyTarget.
         Effect::DealDamageEqualToSourcePowerAnyTarget => {
-            // Look up source on either battlefield to get printed power
-            // and UEOT bonus. If source isn't on battlefield, effective
-            // power is 0 → no damage.
-            let mut amount: i32 = 0;
-            for player in &state.players {
-                if let Some(obj) = player.battlefield.iter().find(|o| o.id == source_obj_id)
-                {
-                    if let Some(printing) =
-                        state.registry.printings.get(obj.printing_id as usize)
-                    {
-                        let base = printing.power.unwrap_or(0) as i32;
-                        let bonus = obj.ueot_power_bonus();
-                        amount = (base + bonus).max(0);
-                    }
-                    break;
-                }
-            }
+            // **CR 603.10 last-known-information source-power read
+            // (source-power-dies closure, hub todo ddc12150).** Read
+            // the source's effective power via `read_source_power_lki`,
+            // which searches the battlefield FIRST then falls back to
+            // every other zone (graveyard / exile / hand / library /
+            // stack). This fixes TWO bugs the prior battlefield-only +
+            // counter-omitting read carried:
+            //
+            //   1. **DIES-trigger LKI (Infernal Phantom).** Fired from a
+            //      DIES trigger, the source is already in the graveyard
+            //      at resolve time; the old battlefield-only scan found
+            //      nothing → amount = 0 → silent no-op. Python reads
+            //      `state.resolving_source` (the StackItem.source ref,
+            //      the dying-creature object that survived the zone
+            //      move) and deals its last-known power. The all-zones
+            //      fallback reproduces that read.
+            //
+            //   2. **Counter omission (Rust Harvester).** The old read
+            //      computed `base + ueot_power_bonus` and dropped
+            //      `counters`. Rust Harvester's AA puts a +1/+1 counter
+            //      on itself THEN deals damage equal to its power — a
+            //      1/1 must deal 2. `read_source_power_lki` folds
+            //      counters in (CR 613 layer 7d), matching Python's
+            //      `effective_power`.
+            //
+            // On-battlefield sources with no counters stay byte-
+            // identical (battlefield searched first, same base + UEOT
+            // composition). `.max(0)` preserves the CR 119.5 "0-or-less
+            // = no damage" floor.
+            let amount = read_source_power_lki(state, source_obj_id).max(0);
             if amount == 0 {
                 return Ok(());
             }
