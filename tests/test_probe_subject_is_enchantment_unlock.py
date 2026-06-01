@@ -116,7 +116,7 @@ def parity_smoke():
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_balemurk_leech_eerie_each_opponent_loses_life(
+def test_cross_engine_real_eoe_balemurk_leech_eerie_each_opponent_loses_life_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Balemurk Leech (0 17lands

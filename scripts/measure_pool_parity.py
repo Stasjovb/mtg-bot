@@ -541,12 +541,14 @@ PROBE_MODULES: tuple[Path, ...] = (
     #     -- the only EoE consumer of this effect class per the
     #     bridge-arm docstring at cross_engine.py:4872-4874; the CR
     #     118.4 direct life loss primitive distinct from sibling
-    #     TargetOpponentLosesLife and DamageEachOpponent; the
-    #     non-credited test_probe_subject_is_enchantment_unlock.py
-    #     function predates the _parity naming convention and uses
-    #     full compare_fields requiring the Rust-bridge subject_is_
-    #     enchantment arm, while DDDD lands the credited _parity
-    #     variant under the YYY-idiom).
+    #     TargetOpponentLosesLife and DamageEachOpponent; a SECOND
+    #     real-EoE byte-equal probe lives in
+    #     test_probe_subject_is_enchantment_unlock.py exercising the
+    #     subject_is_enchantment predicate arm — that function was
+    #     renamed to append _parity (2026-06-01 hygiene) so it now also
+    #     credits at the established bar. Both credit the SAME card, so
+    #     the PROBED count is unchanged — no double-count under the set
+    #     union; DDDD remains the canonical slug-keyed probe).
     # Honest-exhaustion drops: Sami, Ship's Engineer (Conditional
     # OnTappedCreatures wrapper substrate), Meltstrider's Resolve
     # (Aura subsystem -- in flight on feature/aura-substrate-step-7),
