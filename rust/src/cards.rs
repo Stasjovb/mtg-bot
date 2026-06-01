@@ -12801,6 +12801,34 @@ pub struct CardPrinting {
     /// divergence vs Python's `actions.py:1099-1101`. Closing that
     /// gap is this slice's whole point.
     pub enters_tapped_unless_any_player_life_at_most: i32,
+    /// **Non-basic land substrate — Echoing Deeps clone (2026-05-31).**
+    /// When `true`, the printing carries the Echoing Deeps ETB
+    /// replacement: "You may have this land enter tapped as a copy of
+    /// any land card in a graveyard, except it's a Cave in addition to
+    /// its other types." At ETB on `play_land`, the controller may
+    /// choose a land card in ANY graveyard; the entering object becomes
+    /// a copy of that land (its `printing_id` rebinds to a fresh
+    /// registry entry derived from the target's printing with "Cave"
+    /// injected into `subtypes`) and enters TAPPED. Declining (or no
+    /// eligible graveyard land) enters the land normally. `false` is the
+    /// disabled sentinel (the back-compat default — every pre-substrate
+    /// registry dict omits the `optional_copy_land_from_graveyard` key,
+    /// which the parser maps to `false`, identical to the
+    /// `restricts_noncreature_spells_to_one_per_turn` Option-or-false
+    /// parse shape). Mirrors Python's
+    /// `CardPrinting.optional_copy_land_from_graveyard: bool = False` at
+    /// `src/mtg_bot/cards/base.py:740`.
+    ///
+    /// **Reader site.** `state_ops_cast::play_land` consults this field
+    /// after the hand-resolve, BEFORE the move to battlefield. The
+    /// pre-copy snapshot anchor rides on the existing
+    /// `GameObject.original_printing_id` slot (the Thespian's Stage
+    /// Phase 3C substrate); the registry-clone-and-push machinery is the
+    /// same `Effect::BecomesCopyOfTargetLand` resolve arm uses. The
+    /// chooser is deterministic (smallest-id eligible graveyard land —
+    /// the HEAD convention) to mirror a controlled cross-engine probe
+    /// where the seeded graveyard holds exactly the eligible land.
+    pub optional_copy_land_from_graveyard: bool,
     /// **cost-reduction substrate Phase 1 — Cycle 1 (substrate-only).**
     /// Spell-local boolean-condition `CostReduction` riders. Empty
     /// Vec = no reduction (back-compat default — every pre-Phase-1
@@ -18809,6 +18837,23 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         })?,
         None => 0,
     };
+    // **Non-basic land substrate — Echoing Deeps clone (2026-05-31).**
+    // Printing-level bool. Missing key maps to `false` — the
+    // back-compat default every pre-substrate registry dict carries
+    // implicitly. Mirrors Python's
+    // `CardPrinting.optional_copy_land_from_graveyard: bool = False`
+    // (`src/mtg_bot/cards/base.py:740`).
+    let optional_copy_land_from_graveyard = match dict
+        .get_item("optional_copy_land_from_graveyard")?
+    {
+        Some(v) => v.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "optional_copy_land_from_graveyard must be a bool \
+                 (the Echoing-Deeps ETB clone-from-graveyard flag)",
+            )
+        })?,
+        None => false,
+    };
     // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only).
     // Optional list of spell-local CostReduction rules. Missing key
     // -> empty Vec (back-compat — every pre-Phase-1 registry dict
@@ -19306,6 +19351,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         dynamic_pt_formula,
         restricts_noncreature_spells_to_one_per_turn,
         enters_tapped_unless_any_player_life_at_most,
+        optional_copy_land_from_graveyard,
         cost_reductions,
         external_cost_reductions,
         station_threshold,
@@ -22562,6 +22608,18 @@ impl Registry {
         id: u32,
     ) -> PyResult<i32> {
         Ok(self.lookup(id)?.enters_tapped_unless_any_player_life_at_most)
+    }
+
+    /// **Non-basic land substrate — Echoing Deeps clone (2026-05-31).**
+    /// Returns whether the printing carries the Echoing Deeps ETB
+    /// clone-from-graveyard replacement. Defaults to `false` for every
+    /// pre-substrate printing. Mirrors Python's
+    /// `CardPrinting.optional_copy_land_from_graveyard`.
+    fn get_printing_optional_copy_land_from_graveyard(
+        &self,
+        id: u32,
+    ) -> PyResult<bool> {
+        Ok(self.lookup(id)?.optional_copy_land_from_graveyard)
     }
 
     /// **Static / layered abilities substrate — Phase 3 (round-81,

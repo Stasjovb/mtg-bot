@@ -17966,6 +17966,110 @@ drifts.
 
 ---
 
+## Echoing Deeps — FLIPPED BLOCKED → PROBED: ETB copy-land-from-graveyard substrate LANDED; deterministic HEAD chooser + loader-DECLINED (probe-driven precedence-1) — 2026-05-31, `feature/echoing-deeps`
+
+**Where**:
+- Rust field + parse + getter: `rust/src/cards.rs`
+  (`CardPrinting.optional_copy_land_from_graveyard: bool`, the
+  `parse_printing` arm, `get_printing_optional_copy_land_from_graveyard`).
+- Rust ETB-copy routing: `rust/src/state_ops_cast.rs::play_land` (the
+  `if optional_copy { ... }` block after the painland-conditional
+  computation, before `move_from_hand_to_battlefield_with_tapped`).
+- 3 synthetic-state literal sites: `rust/src/state.rs`.
+- Bridge field + threading: `src/mtg_bot/parity/cross_engine.py`
+  (`CardDef.optional_copy_land_from_graveyard`,
+  `_spec_card_to_printing_dict` emit arm,
+  `_card_def_to_python_printing` thread).
+- Python ETB model (pre-existing, unchanged):
+  `src/mtg_bot/actions.py::_offer_echoing_deeps_copy` (`actions.py:1153`).
+
+**Raw oracle** (`data/stellar_sights.json`), `type_line = "Land — Cave"`,
+`mana_cost = ""`:
+
+  "You may have this land enter tapped as a copy of any land card in a
+  graveyard, except it's a Cave in addition to its other types.
+  {T}: Add {C}."
+
+The live parser maps line 1 to
+`CardPrinting.optional_copy_land_from_graveyard=True` (the `{T}: Add {C}`
+mana ability is dropped on this profile — `produces=frozenset()`).
+
+**What the shortcut is.** Two deliberate divergences, both narrow:
+
+  1. **Deterministic HEAD chooser (no agent on the Rust ETB path).**
+     Rust's `play_land` ETB-copy arm picks the **smallest-id eligible
+     graveyard land across both players' graveyards** rather than
+     offering a real agent choice. Python's
+     `_offer_echoing_deeps_copy` DOES offer the controller's agent a
+     `choose_target` over `("graveyard_land_card", id)` candidates. The
+     probe seeds the graveyard with EXACTLY ONE eligible land so the
+     choice is forced (HEAD == the only eligible land), making the two
+     engines' choosers agree byte-equal. This mirrors the established
+     deterministic-no-agent convention used by sibling Rust resolve arms
+     (`Effect::SacrificeNLandsYouControl`, the painland substrate, etc.).
+
+  2. **Echoing Deeps stays loader-DECLINED (probe-driven precedence-1).**
+     `_printing_to_card_def` raises for Echoing Deeps and
+     `_filter_deck_to_bridge_supported(["Echoing Deeps"], ...)` returns
+     `[]`. The PROBED flip is driven by a controlled cross-engine
+     `play_land` (the probe), NOT by admitting the card into the
+     production-deck / bench corpus. The clone's downstream behavior over
+     ARBITRARY graveyard contents (multi-land graveyards → real agent
+     choice; the copied land's own activated/triggered abilities; the
+     dropped `{T}: Add {C}` mana ability on the un-copied path) is not
+     fully bridged, so a loader admit would risk silent mistranslation in
+     real multi-turn games. The four bridge predicates
+     (`_printing_is_bridge_nonbasic_mana_land` and the three siblings)
+     keep their documented clone honest-stop guard
+     (`optional_copy_land_from_graveyard` reject) — UNCHANGED.
+
+**Byte-equal observable.** The cross-engine field-view per-object
+signature (`parity_smoke._zone_signature`) keys on `printing.name` +
+`tapped`. On copy, the entering object takes the copied land's NAME on
+both engines (Python `dataclasses.replace(target.printing,
+subtypes=...)` preserves `name`; Rust clones the target's printing and
+mutates only `subtypes`, reusing the same registry `push_printing` +
+`GameObject.original_printing_id` snapshot machinery the Thespian's
+Stage Phase-3C `Effect::BecomesCopyOfTargetLand` resolve arm uses) and
+enters TAPPED on both. The richer copiable characteristics (subtypes
+incl. "Cave", produces) are asserted **Python-side** in the probe — the
+EEEE-idiom (same as the Abandoned Campground / Thespian's Stage probes):
+the cross-engine name+tapped byte-equality is the field-view contract,
+and the Cave-injection + produces flow are established by the Python ETB
+resolve + the shared registry-clone machinery the Rust arm mirrors.
+
+**Why it's OK.** The `name + tapped` field-view axes are byte-equal on
+the seeded controlled state (verified by
+`test_cross_engine_real_eoe_echoing_deeps_copy_land_from_graveyard_parity`
++ the no-copy/empty-graveyard sibling). The HEAD chooser is only a
+divergence when the graveyard holds ≥2 eligible lands — which never
+happens on the controlled probe. The loader-decline keeps the bench
+corpus honest (no silent mistranslation ships).
+
+**Failure mode.** If a future probe/bench path seeds a multi-land
+graveyard and relies on the Rust ETB-copy picking a SPECIFIC land other
+than the smallest-id one, the two engines could diverge on which land is
+copied. The seeded-single-land probe shape prevents this today.
+
+**Fix scope estimate.** A full agent-driven ETB choice on the Rust side
+(real `choose_target` over graveyard lands) + the dropped `{T}: Add {C}`
+mana-ability surfacing on the un-copied path + loader admit would be a
+multi-cycle subsystem (graveyard-target agent plumbing in `play_land`,
+the un-copied mana-ability bridge, the downstream copied-land-ability
+fan-out). Deferred; not needed for the PROBED-tier byte-equality.
+
+**Impact estimate.** PROBED 464 → 465 / BLOCKED-SG 11 → 10 (non-DSK
+311 → 312); **+1 card / +0 cumulative 17lands EoE decks** (Echoing Deeps
+is a Stellar Sights special guest, not an EoE draftable — card-count
+fidelity, not bench-signal yield). 0 strength cost (the Python ETB model
+is unchanged; the Rust arm is new and only fires for the sole carrier).
+
+**Pinned by:** `tests/test_echoing_deeps_parity.py` (7 tests — parser
+SoT, bridge round-trip, Rust synthetic-carrier acceptance, the genuine
+cross-engine copy probe, and the no-copy/empty-graveyard sibling).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

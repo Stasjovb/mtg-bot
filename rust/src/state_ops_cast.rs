@@ -1047,12 +1047,104 @@ impl GameState {
         // Planet lands are bridged as untapped on BOTH engines).
         let conditional_tapped_threshold =
             printing.enters_tapped_unless_any_player_life_at_most;
-        let conditional_tapped: Option<bool> = if conditional_tapped_threshold > 0 {
+        // Capture the Echoing Deeps clone flag from the SAME immutable
+        // `printing` borrow so the borrow ends here — the clone path
+        // below takes `Arc::make_mut(&mut self.registry)` which cannot
+        // coexist with the `printing` borrow.
+        let optional_copy = printing.optional_copy_land_from_graveyard;
+        let mut conditional_tapped: Option<bool> = if conditional_tapped_threshold > 0 {
             let any_low = self.players.iter().any(|p| p.life <= conditional_tapped_threshold);
             Some(!any_low)
         } else {
             None
         };
+        // **Non-basic land substrate — Echoing Deeps clone
+        // (2026-05-31).** "You may have this land enter tapped as a
+        // copy of any land card in a graveyard, except it's a Cave in
+        // addition to its other types." When the printing carries
+        // `optional_copy_land_from_graveyard`, on ETB the controller
+        // MAY have the land enter as a copy of an eligible land card in
+        // ANY graveyard. The chooser is deterministic — the
+        // smallest-id eligible graveyard land (the HEAD convention; a
+        // controlled cross-engine probe seeds exactly the eligible
+        // land so the choice is forced). On copy, the entering object's
+        // `printing_id` rebinds to a fresh registry entry derived from
+        // the target's printing with "Cave" injected into `subtypes`,
+        // the pre-copy snapshot is captured on the existing
+        // `GameObject.original_printing_id` slot, and the land enters
+        // TAPPED. Declining (no eligible graveyard land) enters the
+        // land normally. Mirrors Python's
+        // `actions.py::_offer_echoing_deeps_copy` (`actions.py:1153`).
+        if optional_copy {
+            // Locate the smallest-id eligible graveyard land across
+            // BOTH players' graveyards (CR — "any land card in a
+            // graveyard", either player's). Capture the printing_id.
+            let mut best: Option<(u32, u32)> = None; // (obj_id, printing_id)
+            for player in self.players.iter() {
+                for o in player.graveyard.iter() {
+                    let is_land = self
+                        .registry
+                        .lookup(o.printing_id)
+                        .map(|p| p.card_types.iter().any(|t| t == "Land"))
+                        .unwrap_or(false);
+                    if is_land {
+                        match best {
+                            Some((bid, _)) if bid <= o.id => {}
+                            _ => best = Some((o.id, o.printing_id)),
+                        }
+                    }
+                }
+            }
+            if let Some((_target_obj_id, target_printing_id)) = best {
+                // Build a fresh printing = target's printing with
+                // "Cave" injected into subtypes (CR 706.9c — the
+                // copiable values take on the target's, except the
+                // printed "except it's a Cave" addition). Mirrors
+                // Python's `dataclasses.replace(target.printing,
+                // subtypes=...)` at `actions.py:1197`.
+                let new_printing: crate::cards::CardPrinting = {
+                    let Some(target_printing) =
+                        self.registry.lookup(target_printing_id)
+                    else {
+                        // Registry miss — decline the copy, enter
+                        // normally (defensive; should never happen).
+                        let moved = move_from_hand_to_battlefield_with_tapped(
+                            self,
+                            idx,
+                            obj_id,
+                            conditional_tapped,
+                        )?;
+                        return Ok(moved.is_some());
+                    };
+                    let mut new_p = target_printing.clone();
+                    if !new_p.subtypes.iter().any(|s| s == "Cave") {
+                        new_p.subtypes.push("Cave".to_string());
+                    }
+                    new_p
+                };
+                let new_printing_id: u32 = {
+                    let reg_mut = Arc::make_mut(&mut self.registry);
+                    reg_mut.push_printing(new_printing)
+                };
+                // Rebind the entering (still in-hand) object's
+                // printing_id + snapshot the pre-copy printing on the
+                // existing `original_printing_id` slot, then force
+                // tapped. The painland conditional is irrelevant on
+                // the clone path (Echoing Deeps prints no conditional
+                // threshold), so `conditional_tapped` is overwritten
+                // to `Some(true)` — the clone always enters tapped.
+                let hand = Arc::make_mut(&mut self.players[idx].hand);
+                if let Some(o) =
+                    hand.iter_mut().find(|o| o.id == obj_id)
+                {
+                    if o.original_printing_id.is_none() {
+                        o.original_printing_id = Some(o.printing_id);
+                    }
+                    o.printing_id = new_printing_id;
+                }
+                conditional_tapped = Some(true);
+            }
+        }
         // Commit the move. The hand search re-runs inside
         // `move_from_hand_to_battlefield`; that's fine — the cost is
         // a single second linear scan we already know will hit, and
