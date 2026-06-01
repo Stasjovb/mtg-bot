@@ -1033,6 +1033,30 @@ PROBE_MODULES: tuple[Path, ...] = (
     # byte-equal. Flips Zero Point Ballad COVERED → PROBED (admit set
     # 24 → 25; ~6,041 17lands decks).
     REPO_ROOT / "tests" / "test_zero_point_ballad_parity.py",
+    # **gsz-flip (2026-05-31):** Green Sun's Zenith ({X}{G} Sorcery —
+    # green-creature X-tutor) flips covered_by_construction → PROBED.
+    # The prior substrate landing (merge 5ec15c4d) shipped its search
+    # Effect (``SearchLibraryForGreenCreatureWithMVAtMostX``) + X-mana
+    # (covered+bridged) but honest-stopped on its shuffle-self
+    # ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
+    # ``StaticReplacement`` static — outside the Phase-5 closed vocab.
+    # This lane widens the Rust ``StaticReplacement`` vocab with the
+    # ``would_go_to_graveyard`` event + a ``replace`` destination-redirect
+    # transform (string ``transform_dest``) and adds the post-resolve
+    # ``move_source_post_resolve`` reroute hook (graveyard-bound resolving
+    # spell + active redirect static → library + shuffle, mirroring
+    # Python's ``_send_to_graveyard_or_library``). The dedicated probe
+    # ``test_cross_engine_real_eoe_green_suns_zenith_shuffle_self_parity``
+    # drives the GENUINE parsed printing on an empty library (fetch
+    # surface dormant + both shuffles deterministic no-ops): GSZ ends as
+    # the sole card in the owner's LIBRARY (not graveyard) byte-equal on
+    # both engines, WHOLE field view ``compare_fields == []``. Flips GSZ
+    # covered → PROBED (PROBED +1; covered_by_construction -1; BLOCKED-SG
+    # unchanged). The same redirect substrate is one of two gates for
+    # Nexus of Fate (which ALSO needs the declined extra-turn substrate
+    # for its ``TakeExtraTurnAfterThisOne`` spell_effect; it stays
+    # declined here via the covered-set gate).
+    REPO_ROOT / "tests" / "test_green_suns_zenith_parity.py",
     # **control-change-ueot-cycle-4-p1 (2026-05-22):** Cycle 4 of the
     # control-change-UEOT subsystem — Mutinous Massacre closure
     # (~4,671 17lands decks). The dedicated probe module

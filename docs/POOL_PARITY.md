@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **461 / 475 EoE cards (97.1%) are byte-equal at the Effect+bridge level**; of those, **460 (96.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 1 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **461 / 475 EoE cards (97.1%) are byte-equal at the Effect+bridge level**; of those, **461 (97.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 0 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **14 (2.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 460 | 96.8% |
-| Effect+bridge covered (not individually probed) | 1 | 0.2% |
+| PROBED byte-equal | 461 | 97.1% |
+| Effect+bridge covered (not individually probed) | 0 | 0.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 0 | 0.0% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 0 | 0.0% |
@@ -213,6 +213,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 - Gravblade Heavy
 - Gravkill
 - Gravpack Monoist
+- Green Sun's Zenith
 - Gremlin Tamer
 - Grove of the Burnwillows
 - Haliya, Ascendant Cadet
@@ -549,5 +550,4 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Tezzeret, Cruel Captain
 - Unholy Annex // Ritual Chamber
 - Wildfire Wickerfolk
-
 
