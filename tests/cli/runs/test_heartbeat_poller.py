@@ -386,7 +386,18 @@ def _free_port() -> int:
 def fake_worker_server():
     """Spin up a tiny Flask app on an ephemeral port that mimics
     ``/v2/heartbeat`` so we can test the default urllib-based
-    http_get path end-to-end. Shuts down at the end of the test."""
+    http_get path end-to-end.
+
+    Uses ``werkzeug.serving.make_server`` (which exposes ``.shutdown()``)
+    rather than ``flask.app.run`` (whose ``serve_forever`` loop has no
+    clean stop hook). The server runs in a background thread that we
+    join in teardown, so no werkzeug ``serve_forever`` survives the
+    test. A leaked dev server keeps the xdist worker process from
+    terminating cleanly under ``pytest -n`` (the worker is killed as
+    "not properly terminated" and faulthandler dumps the stuck
+    ``serve_forever`` thread)."""
+    from werkzeug.serving import make_server
+
     app = Flask(__name__)
 
     @app.route("/v2/heartbeat", methods=["GET"])
@@ -394,12 +405,9 @@ def fake_worker_server():
         return jsonify({"state": "SELF_PLAY_RUNNING", "uptime_s": 42})
 
     port = _free_port()
+    server = make_server("127.0.0.1", port, app, threaded=True)
     thread = threading.Thread(
-        target=lambda: app.run(
-            host="127.0.0.1", port=port, debug=False,
-            use_reloader=False,
-        ),
-        daemon=True,
+        target=server.serve_forever, daemon=True,
     )
     thread.start()
     # Wait for the server to bind. Try a few times with backoff.
@@ -410,9 +418,14 @@ def fake_worker_server():
                 break
         except OSError:
             _time.sleep(0.02)
-    yield f"http://127.0.0.1:{port}"
-    # No clean shutdown of the Flask dev server is necessary — it's
-    # a daemon thread; the test process owns it.
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        # Stop the werkzeug serve_forever loop and join the thread so
+        # no server survives the test (clean xdist worker teardown).
+        server.shutdown()
+        thread.join(timeout=5.0)
+        server.server_close()
 
 
 def test_poller_default_http_get_against_real_server(

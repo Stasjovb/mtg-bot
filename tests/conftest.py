@@ -110,6 +110,43 @@ def _isolate_token_printing_registry():
         clear_token_printings()
 
 
+@pytest.fixture(autouse=True)
+def _shutdown_leaked_serve_apps():
+    """Stop background threads started by ``serve.create_app`` in tests.
+
+    ``mtg_bot.cli.serve.create_app`` can start up to three long-lived
+    daemon resources (a ``JanitorThread`` poll loop, a
+    ``HeartbeatPoller`` poll loop, and a report ``ThreadPoolExecutor``)
+    and hangs them on ``app.extensions``. In production they live for
+    the process lifetime; in tests, every ``create_app`` call in a
+    worker process leaks more daemon threads. Under ``pytest -n`` the
+    accumulated threads keep the worker from terminating cleanly, so
+    xdist kills it ("node down: Not properly terminated") and dumps a
+    faulthandler traceback of every leaked thread.
+
+    This autouse fixture wraps ``create_app`` for the duration of each
+    test, records every app it returns, and calls
+    ``serve.shutdown_app`` on all of them in teardown — a generic
+    safety net so individual tests don't each need bespoke cleanup.
+    """
+    from mtg_bot.cli import serve as _serve
+
+    created: list = []
+    real_create_app = _serve.create_app
+
+    def _tracking_create_app(*args, **kwargs):
+        app = real_create_app(*args, **kwargs)
+        created.append(app)
+        return app
+
+    with mock.patch.object(_serve, "create_app", _tracking_create_app):
+        try:
+            yield
+        finally:
+            for app in created:
+                _serve.shutdown_app(app)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _flip_heuristic_defaults_off_for_tests():
     """Wrap ``MtgGameStateAdapter.__init__`` so the ``heuristics``
