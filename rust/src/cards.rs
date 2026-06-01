@@ -2084,6 +2084,25 @@ pub enum Effect {
     /// pool). This arm follows that identical, already-cross-engine-
     /// proven shape; documented in `docs/SEARCH_LIMITATIONS.md`.
     BiosynthicBurstEffect,
+    /// **Nexus of Fate's extra-turn clause (2026-05-31).** "Take an
+    /// extra turn after this one." Field-free unit variant (mirrors the
+    /// `biosynthic_burst_effect` / `diplomatic_relations_effect` idiom).
+    /// Resolve appends the resolving spell's controller to
+    /// `state.extra_turn_queue` (mirrors Python's
+    /// `TakeExtraTurnAfterThisOne.resolve` at
+    /// `effects/generic/stack_control.py:243`,
+    /// `state.extra_turn_queue.append(controller_id)`).
+    ///
+    /// **Parity-not-search (substrate-only).** The QUEUE-state side is
+    /// byte-equal cross-engine (the Nexus of Fate probe asserts the
+    /// queued controller id matches Python's). The Rust turn-advance
+    /// does NOT pop this queue — extra turns explode the AI search tree
+    /// and are deliberately not taken in search. The accepted
+    /// parity-vs-search divergence is documented in
+    /// `docs/SEARCH_LIMITATIONS.md`. 1:1 name -> Python class
+    /// `TakeExtraTurnAfterThisOne` (no override needed; the
+    /// `effect_coverage` identity mapping makes the class covered).
+    TakeExtraTurnAfterThisOne,
     /// **Effect-uncovered Tier-A — Focus Fire.**
     /// Deal `(base + |{objects the source-controller controls that
     /// are Creature OR Spacecraft}|)` damage to the first attacking-
@@ -14109,6 +14128,14 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Python's `BiosynthicBurstEffect()` carries no fields.
             Ok(Effect::BiosynthicBurstEffect)
         }
+        "take_extra_turn_after_this_one" => {
+            // Nexus of Fate's extra-turn clause (2026-05-31). Unit
+            // variant; no fields (mirrors the `biosynthic_burst_effect`
+            // field-free idiom). Python's `TakeExtraTurnAfterThisOne()`
+            // carries no fields — the controller is the resolving
+            // spell's controller, resolved at apply time.
+            Ok(Effect::TakeExtraTurnAfterThisOne)
+        }
         "focus_fire_effect" => {
             // Effect-uncovered Tier-A — Focus Fire. Single `base`
             // field (the printed `2` — "X is 2 plus ..."); the
@@ -20452,6 +20479,14 @@ pub(crate) fn effect_to_pydict<'py>(
             // Unit variant — `kind` only (mirrors
             // `each_opponent_sacrifices_creature`).
             d.set_item("kind", "biosynthic_burst_effect")?;
+        }
+        Effect::TakeExtraTurnAfterThisOne => {
+            // Unit variant — `kind` only (Nexus of Fate's extra-turn
+            // clause). Bidirectional with the
+            // `take_extra_turn_after_this_one` parse arm + the
+            // cross_engine.py bridge arm + the trajectory.py
+            // reverse-serializer leaf.
+            d.set_item("kind", "take_extra_turn_after_this_one")?;
         }
         Effect::FocusFireEffect { base } => {
             // Single `base` int field (the `deal_damage_any_target`

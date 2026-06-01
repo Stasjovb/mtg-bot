@@ -12048,6 +12048,35 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # bench-admit; the guardrail auto-grows, no hardcoded list).
         from mtg_bot.effects.bespoke import BiosynthicBurstEffect
         return BiosynthicBurstEffect()
+    if kind == "take_extra_turn_after_this_one":
+        # **Nexus of Fate's extra-turn clause (2026-05-31).** Rust
+        # substrate ``Effect::TakeExtraTurnAfterThisOne`` (cards.rs
+        # field-free UNIT variant; parser
+        # ``"take_extra_turn_after_this_one"`` — the
+        # ``biosynthic_burst_effect`` unit-variant idiom; resolve in
+        # state_ops_resolve.rs appends the resolving spell's controller
+        # to ``state.extra_turn_queue``).
+        #
+        # **Field shape.** Unit variant — no payload. Python's
+        # ``TakeExtraTurnAfterThisOne()``
+        # (effects/generic/stack_control.py:231) is a field-free
+        # ``@dataclass(frozen=True)``; the bridge round-trips it
+        # directly. ``resolve`` appends ``controller_id`` to
+        # ``state.extra_turn_queue`` on both engines.
+        #
+        # **Parity-not-search (the accepted divergence).** The
+        # extra-turn QUEUE state is byte-equal cross-engine; the AI
+        # search does NOT actually take the queued extra turn (Rust's
+        # turn-advance never pops the queue — extra turns explode the
+        # search tree). Documented in ``docs/SEARCH_LIMITATIONS.md``.
+        # Adding this Rust variant makes ``TakeExtraTurnAfterThisOne``
+        # covered+bridged (1:1 identity mapping) — Nexus of Fate flips
+        # to PROBED (its shuffle-self redirect static was already
+        # bridged by the GSZ flip).
+        from mtg_bot.effects.generic.stack_control import (
+            TakeExtraTurnAfterThisOne,
+        )
+        return TakeExtraTurnAfterThisOne()
     if kind == "focus_fire_effect":
         # **Effect-uncovered Tier-A — Focus Fire.**
         # Rust substrate ``Effect::FocusFireEffect { base: i32 }``

@@ -5672,6 +5672,21 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.search import (
         SearchLibraryForGreenCreatureWithMVAtMostX,
     )
+    # **Nexus of Fate (2026-05-31).** Reverse-serializer leaf for the
+    # new `TakeExtraTurnAfterThisOne` Rust variant (the extra-turn
+    # clause). Shipping this leaf TOGETHER with the Rust
+    # `Effect::TakeExtraTurnAfterThisOne` variant + the
+    # `take_extra_turn_after_this_one` bridge arm makes the class
+    # covered+bridged AND flips Nexus of Fate into the admit set: its
+    # shuffle-self `WOULD_GO_TO_GRAVEYARD -> library` redirect static
+    # was already bridged by the GSZ flip, so the only remaining decline
+    # reason (the uncovered `TakeExtraTurnAfterThisOne` spell_effect) is
+    # now closed. See `docs/SEARCH_LIMITATIONS.md` for the accepted
+    # parity-vs-search divergence (the QUEUE state is byte-equal but the
+    # search never takes the extra turn).
+    from mtg_bot.effects.generic.stack_control import (
+        TakeExtraTurnAfterThisOne,
+    )
     # **Warping Wail Cycle 1a substrate (2026-05-22).** Reverse-
     # serializer leaf for the new
     # ``ExileTargetCreatureWithPowerOrToughnessAtMost`` Rust variant.
@@ -7015,6 +7030,21 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             return {
                 "kind": "search_library_for_green_creature_with_mv_at_most_x"
             }
+        # **Nexus of Fate (2026-05-31).** Per-leaf serializer for
+        # ``TakeExtraTurnAfterThisOne()`` — the extra-turn clause.
+        # Unit-variant round-trip: kind-only dict (the field-free
+        # dataclass at ``effects/generic/stack_control.py:231`` is the
+        # canonical Python parity; the controller rides on the resolving
+        # spell's StackItem, NOT in this dict). Shipping this leaf
+        # TOGETHER with the Rust ``Effect::TakeExtraTurnAfterThisOne``
+        # variant + the ``take_extra_turn_after_this_one`` bridge arm
+        # makes the class covered+bridged AND flips Nexus of Fate into
+        # the admit set (its shuffle-self redirect static was already
+        # bridged by the GSZ flip). The accepted parity-vs-search
+        # divergence (queue byte-equal, search never takes the turn) is
+        # documented in ``docs/SEARCH_LIMITATIONS.md``.
+        if isinstance(eff, TakeExtraTurnAfterThisOne):
+            return {"kind": "take_extra_turn_after_this_one"}
         # **Devastating Onslaught — Cycle 1 (2026-05-22).** Per-leaf
         # serializer for ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()``
         # — second X-cost consumer (Zero Point Ballad shipped at C3 of

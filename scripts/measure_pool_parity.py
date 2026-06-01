@@ -1057,6 +1057,32 @@ PROBE_MODULES: tuple[Path, ...] = (
     # for its ``TakeExtraTurnAfterThisOne`` spell_effect; it stays
     # declined here via the covered-set gate).
     REPO_ROOT / "tests" / "test_green_suns_zenith_parity.py",
+    # **nexus-of-fate (2026-05-31):** Nexus of Fate ``{5}{U}{U}`` Instant
+    # — "Take an extra turn after this one. If Nexus of Fate would be put
+    # into a graveyard from anywhere, instead shuffle it into its owner's
+    # library." BLOCKED -> PROBED via the dedicated probe module
+    # ``test_nexus_of_fate_parity.py``. Both gates now closed: (1) the
+    # shuffle-self ``would_go_to_graveyard -> library`` redirect static
+    # (shared with GSZ — closed by the GSZ flip's
+    # ``move_source_post_resolve`` reroute hook); (2) the
+    # ``TakeExtraTurnAfterThisOne`` spell_effect — this lane adds the Rust
+    # ``Effect::TakeExtraTurnAfterThisOne`` unit variant (+ parse /
+    # to_pydict / resolve appending the controller to a new
+    # ``GameState.extra_turn_queue`` ``Vec<u8>`` field surfaced via the
+    # ``extra_turn_queue()`` getter) + the
+    # ``take_extra_turn_after_this_one`` bridge arm + reverse-serializer
+    # leaf, making the class covered+bridged (1:1 identity). The probe
+    # drives the GENUINE parsed printing on an empty library: Nexus ends
+    # as the sole card in the owner's LIBRARY (not graveyard) byte-equal
+    # on both engines (WHOLE field view ``compare_fields == []``) AND the
+    # extra-turn queue holds ``[0]`` byte-equal on both engines (Python
+    # ``state.extra_turn_queue`` vs Rust ``extra_turn_queue()``). Flips
+    # Nexus BLOCKED -> PROBED (PROBED +1; BLOCKED-SG -1). **Parity-not-
+    # search:** the queue is byte-equal but the Rust turn-advance never
+    # pops it (extra turns explode the AI search tree) — the accepted
+    # parity-vs-search divergence is documented in
+    # ``docs/SEARCH_LIMITATIONS.md``.
+    REPO_ROOT / "tests" / "test_nexus_of_fate_parity.py",
     # **control-change-ueot-cycle-4-p1 (2026-05-22):** Cycle 4 of the
     # control-change-UEOT subsystem — Mutinous Massacre closure
     # (~4,671 17lands decks). The dedicated probe module
