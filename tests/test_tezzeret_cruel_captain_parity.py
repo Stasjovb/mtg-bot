@@ -857,3 +857,243 @@ def test_cross_engine_tezzeret_minus3_search_artifact_parity():
         rust.hand_sizes[0] - rust_hand_before
     ) == 1
     assert w.loyalty_counters == rust.get_loyalty_counters(walker_id) == 1
+
+
+# ---------------------------------------------------------------------------
+# (6) EMBLEM substrate (CR 114) — Tezzeret's −7 emblem. The command-zone
+# emblem object + CreateEmblem effect + the emblem-sourced begin-combat
+# trigger + the 3-counter body are byte-equal cross-engine. The
+# becomes-0/0-Robot permanent animate is HONEST-STOPPED (no permanent
+# layer-4 type-set + layer-7b P/T-set animate substrate — see
+# docs/SEARCH_LIMITATIONS.md + effects/generic/emblem.py).
+# ---------------------------------------------------------------------------
+
+
+def test_tezzeret_emblem_effect_bridge_round_trip():
+    """The bridge arms ``create_emblem`` / ``tezzeret_emblem_begin_combat``
+    translate the Rust effect dicts to the matching Python effects, and
+    the parsed real-EoE −7 ability's emitted Effect is byte-equal to the
+    bridged ``CreateEmblem``."""
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.generic.emblem import (
+        TEZZERET_CRUEL_CAPTAIN_EMBLEM,
+        CreateEmblem,
+        TezzeretEmblemBeginCombat,
+    )
+
+    bridged = _ta_dict_to_python_effect(
+        {"kind": "create_emblem",
+         "emblem_kind": TEZZERET_CRUEL_CAPTAIN_EMBLEM}
+    )
+    assert isinstance(bridged, CreateEmblem)
+    assert bridged.emblem_kind == TEZZERET_CRUEL_CAPTAIN_EMBLEM
+
+    # Unknown emblem kind raises on the bridge (mirrors Rust's contract).
+    with pytest.raises(ValueError, match=r"unknown emblem kind"):
+        _ta_dict_to_python_effect(
+            {"kind": "create_emblem", "emblem_kind": "nonexistent"}
+        )
+
+    # The begin-combat body bridge — amount defaults to 3, negative raises.
+    body = _ta_dict_to_python_effect(
+        {"kind": "tezzeret_emblem_begin_combat"}
+    )
+    assert isinstance(body, TezzeretEmblemBeginCombat)
+    assert body.amount == 3
+    body3 = _ta_dict_to_python_effect(
+        {"kind": "tezzeret_emblem_begin_combat", "amount": 3}
+    )
+    assert body3.amount == 3
+    with pytest.raises(ValueError, match=r"must be non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "tezzeret_emblem_begin_combat", "amount": -1}
+        )
+
+    # The parsed real-EoE −7 ability emits a CreateEmblem byte-equal to
+    # the bridged one.
+    p = _PRINTINGS["Tezzeret, Cruel Captain"]
+    minus7 = next(
+        aa for aa in p.activated_abilities if aa.cost.loyalty == 7
+    )
+    assert minus7.effect == bridged, (
+        "Tezzeret's parsed −7 Effect must be byte-equal to the bridged "
+        "CreateEmblem"
+    )
+
+
+@_rust_skip
+def test_cross_engine_tezzeret_minus7_emblem_begin_combat_parity():
+    """**Cross-engine byte-equal — Tezzeret's −7 emblem end to end.**
+
+    Drives the full emblem flow through BOTH engines and asserts every
+    observable is byte-equal:
+
+      1. **Activate −7** (pay 7 loyalty) → the emblem lands in the
+         command zone (CR 114). Both engines: loyalty 7 → 0, exactly one
+         emblem in the command zone.
+      2. **Begin-combat trigger** fires from the command-zone emblem
+         (NOT a battlefield permanent — the dispatch is extended to scan
+         the emblem zone on both engines). Both engines push exactly one
+         triggered ability.
+      3. **Resolve the body** → three +1/+1 counters land on the target
+         artifact the controller controls. Both engines: artifact net
+         counters 0 → 3.
+
+    **HONEST-STOP (documented, asserted as NOT applied):** the "if it's
+    not a creature, it becomes a 0/0 Robot artifact creature" PERMANENT
+    layer-4 type-set + layer-7b P/T-set animate is NOT modeled on either
+    engine. The artifact stays a non-creature artifact on both engines
+    after the trigger resolves — the counters land, the type/P/T change
+    does not. See docs/SEARCH_LIMITATIONS.md + effects/generic/emblem.py.
+    """
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+    )
+    from mtg_bot.actions import (
+        _activate_ability,
+        dispatch_event,
+        resolve_top_of_stack,
+    )
+    from mtg_bot.cards.base import make_artifact
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.generic.emblem import CreateEmblem
+    from mtg_bot.effects.predicates import Event as _Ev
+    from mtg_bot.game import Zone
+
+    tezz = get_active_source().get_printings()["Tezzeret, Cruel Captain"]
+    minus7_idx = next(
+        i for i, aa in enumerate(tezz.activated_abilities)
+        if aa.cost.loyalty == 7
+    )
+    assert isinstance(
+        tezz.activated_abilities[minus7_idx].effect, CreateEmblem
+    )
+
+    # ---- PYTHON ----
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    # An artifact (non-creature) the controller controls.
+    relic = make_artifact("Doohickey", "{2}")
+    ao = py.new_object(relic, owner_id=0, zone=Zone.BATTLEFIELD)
+    py.battlefield.append(ao)
+    w = py.new_object(tezz, owner_id=0, zone=Zone.BATTLEFIELD)
+    w.loyalty_counters = 7
+    py.battlefield.append(w)
+
+    class _TargetAgent:
+        def choose_target(self, state, pid, pool):
+            return pool[0]
+
+    py.player_by_id(0).agent = _TargetAgent()
+    py.active_player_idx = 0
+
+    # 1. Activate −7 → emblem created, loyalty 7 → 0.
+    _activate_ability(py, 0, w.id, minus7_idx)
+    resolve_top_of_stack(py)
+    assert len(py.emblems) == 1, (
+        f"Python: −7 must create exactly one emblem; got {len(py.emblems)}"
+    )
+    assert py.emblems[0].zone is Zone.COMMAND
+    assert py.emblems[0].controller_id == 0
+    assert w.loyalty_counters == 0, (
+        f"Python: −7 must pay 7 loyalty (7 → 0); got {w.loyalty_counters}"
+    )
+
+    # 2. Begin-combat → emblem trigger fires from the command zone.
+    dispatch_event(
+        py, _Ev.BEGINNING_OF_COMBAT, label="beginning-of-combat",
+        player=py.active_player(),
+    )
+    assert len(py.stack) == 1, (
+        "Python: the emblem's begin-combat trigger must go on the stack"
+    )
+    # 3. Resolve → 3 +1/+1 counters on the artifact.
+    resolve_top_of_stack(py)
+    assert ao.plus_one_counters == 3, (
+        f"Python: emblem must put three +1/+1 counters on the artifact; "
+        f"got {ao.plus_one_counters}"
+    )
+    # HONEST-STOP: the artifact did NOT become a creature.
+    assert ao.printing.is_creature is False, (
+        "Python: becomes-0/0-Robot animate is honest-stopped — the "
+        "artifact must stay a non-creature"
+    )
+
+    # ---- RUST ----
+    rust = build_rust_state(spec)
+    art_id = rust.register_and_inject_object(
+        {
+            "name": "Doohickey",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    walker_id = rust.register_and_inject_object(
+        {
+            "name": "Tezzeret, Cruel Captain",
+            "card_types": ["Planeswalker"],
+            "supertypes": ["Legendary"],
+            "subtypes": ["Tezzeret"],
+            "mana_cost": {"generic": 3},
+            "starting_loyalty": 4,
+            "effects": [],
+            "activated_abilities": [
+                {
+                    "cost": {"loyalty": 7},
+                    "sorcery_speed": True,
+                    "effect": {
+                        "kind": "create_emblem",
+                        "emblem_kind": "tezzeret_cruel_captain",
+                    },
+                },
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust.set_loyalty_counters(walker_id, 7)
+
+    # 1. Activate −7 → emblem created, loyalty 7 → 0.
+    rust.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    rust.resolve_top_of_stack()
+    rust_emblems = rust.emblems_snapshot()
+    assert len(rust_emblems) == 1, (
+        f"Rust: −7 must create exactly one emblem; got {len(rust_emblems)}"
+    )
+    # zone 6 == ZONE_COMMAND.
+    assert rust_emblems[0]["zone"] == 6
+    assert rust_emblems[0]["controller_id"] == 0
+    assert rust.get_loyalty_counters(walker_id) == 0, (
+        f"Rust: −7 must pay 7 loyalty (7 → 0); got "
+        f"{rust.get_loyalty_counters(walker_id)}"
+    )
+
+    # 2. Begin-combat → emblem trigger fires from the command zone.
+    rust.dispatch_beginning_of_combat()
+    assert rust.stack_size() == 1, (
+        "Rust: the emblem's begin-combat trigger must go on the stack"
+    )
+    # 3. Resolve → 3 +1/+1 counters on the artifact.
+    rust.resolve_top_of_stack()
+    assert rust.get_counters(art_id) == 3, (
+        f"Rust: emblem must put three +1/+1 counters on the artifact; "
+        f"got {rust.get_counters(art_id)}"
+    )
+
+    # ---- CROSS-ENGINE byte-equality ----
+    assert len(py.emblems) == len(rust_emblems) == 1
+    assert w.loyalty_counters == rust.get_loyalty_counters(walker_id) == 0
+    assert ao.plus_one_counters == rust.get_counters(art_id) == 3
