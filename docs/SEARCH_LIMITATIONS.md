@@ -17827,6 +17827,120 @@ unit pins).
 
 ---
 
+## Secluded Starforge — HONEST-STOP map: AAs 1+3 already grammar-covered, AA2 (`Tap X untapped artifacts → +X/+0`) blocked on a genuinely-new variable-tap-cost X-channel substrate on BOTH engines (2026-05-31)
+
+**Where**: parser claim path
+`src/mtg_bot/cards/parser/land_builder.py:_try_build_colorless_utility_land`
+(line ~3092; emits an *empty* land via `make_colorless_land`); static
+mirror `src/mtg_bot/cards/lands.py:56`
+(`make_colorless_land("Secluded Starforge")`). Card is currently
+BLOCKED-SG (subsystem-gated) — it is NOT in the `genuinely_missing`
+residue, so a *faithful* full-printing byte-equal probe CAN flip it to
+PROBED once the substrate below lands.
+
+**Raw oracle (real EoE printing — `data/edge_of_eternities.json`)**,
+`type_line = "Land"`, `mana_cost = ""`:
+
+  1. `{T}: Add {C}.`
+  2. `{2}, {T}, Tap X untapped artifacts you control: Target creature
+     gets +X/+0 until end of turn. Activate only as a sorcery.`
+  3. `{5}, {T}: Create a 2/2 colorless Robot artifact creature token.`
+
+**VERIFY-FIRST finding (the load-bearing correction to the prior
+"the parser drops its activated abilities — parsed printing comes out
+EMPTY" framing).** The parser does NOT lack recognizers for AAs 1 and
+3 — both ALREADY parse cleanly through the existing grammar:
+
+  * `_parse_activated_ability_line("{T}: Add {C}.")` →
+    `ActivatedAbility(AddManaToPool(produces=(("C",1),)),
+    is_mana_ability=True)` (and the colorless `{T}: Add {C}` mana line
+    is also directly buildable, as Plaza of Heroes does).
+  * `_parse_activated_ability_line("{5}, {T}: Create a 2/2 colorless
+    Robot artifact creature token.")` → `ActivatedAbility(cost={5}+tap,
+    CreateToken(token_printing=Robot, count=1))` — the `{5}, {T}` cost
+    classifies (mana + tap atoms) and the Robot-token effect body is
+    already recognized by `_parse_effect` (effects.py Robot-token arm).
+
+The reason the live printing is empty is purely the *whole-card*
+recognizer ordering: `_try_build_colorless_utility_land` claims any
+plain `Land` whose first line is `{T}: Add {C}.` and emits a bare
+`make_colorless_land` — it does NOT route the remaining lines through
+the AA grammar. AAs 1+3 are tractable today; **AA2 is the sole real
+blocker.** Both Rust effect kinds needed for 1+3 are in the valid-kinds
+set (`add_mana_to_pool`, `create_token`).
+
+**What AA2 genuinely needs (the new substrate — multi-file, BOTH
+engines).** AA2's `+X/+0` where X = the number of untapped artifacts
+the controller *chooses to tap as part of the cost* is a variable
+cost-payment-determined X. The existing X-channel
+(`state.resolving_x_value`, consumed by `PumpSelfXPowerUEOT`
+pump.py:912 and `PutChargeCountersOnSelf(amount_from_x=True)`
+counters.py:572) is set ONLY from `{X}` **mana** `x_pips`
+(`actions.py:1957-1970` `_choose_and_apply_x`). AA2's X comes from a
+non-mana cost atom, which has no machinery. Concretely the closure
+needs:
+
+  1. **New cost atom / `ActivationCost` field** — e.g.
+     `tap_x_untapped_artifacts_you_control: bool` (Python
+     `effects/base.py:329` `ActivationCost`; Rust mirror in
+     `rust/src/cards.rs` `ActivationCost`). Parser recognizer in
+     `activated.py` (`_classify_cost_piece` / `_build_cost_from_pieces`)
+     for the literal `Tap X untapped artifacts you control`.
+  2. **Legal-actions enumeration of the chosen X** — a NEW
+     cost-payment decision shape: at activation, enumerate "tap N of
+     your untapped artifacts" for N in `0..=count_untapped_artifacts`
+     (X may be 0 — the pump is then +0/+0), and *which* artifacts. This
+     decision must be emitted identically by Python `legal.py` and Rust
+     legal-actions, and the engines must enumerate it in the same order
+     for byte-equal parity. This is the largest piece — no analogous
+     "tap a variable subset of a permanent class as an activation cost"
+     decision exists today (Convoke is a static SPELL-cast modifier
+     `has_convoke: bool`, not a general activation-cost atom).
+  3. **Channel the chosen tap-count into `resolving_x_value`** from the
+     non-mana cost-payment path (Python `actions._activate_ability`;
+     Rust activation pipeline) so the effect reads it.
+  4. **Effect**: reuse `PumpTargetCreatureUntilEOT` with a new
+     `power_bonus_from_x: bool` flag (reads `resolving_x_value`),
+     OR a dedicated `PumpTargetCreatureByXTappedArtifactsUEOT`. Either
+     way: Python effect + Rust `Effect` variant (`pump_target_creature_
+     until_eot` exists but is fixed-amount — needs the X-flag) + parse
+     arm + `to_pydict` + valid-kinds + resolve, plus the cross-engine
+     bridge leaf in `trajectory.py` / `cross_engine.py`.
+
+**Why a partial (AAs 1+3 only) printing was NOT shipped.** Emitting a
+parsed printing carrying AAs 1+3 but dropping AA2 is *unfaithful to the
+printed surface* (the parser CLAUDE.md's "no silent-drop / no-op
+recognizer" rule). A PROBED flip requires the FULL faithful 3-AA
+printing to round-trip byte-equal on both engines; a 2-AA printing
+can't honestly be PROBED. So this pass is an HONEST-STOP at the
+substrate-map level — no live-source change, no unfaithful partial.
+
+**Failure mode**: none introduced — Secluded Starforge stays exactly as
+it was (empty colorless land on both static + parser, BLOCKED-SG). The
+risk if a future worker ships AAs 1+3 only: an unfaithful printing that
+*looks* closed but silently omits the pump AA.
+
+**Fix-scope estimate**: AA2 is a moderate-to-large cross-engine cost-
+payment-decision feature (new cost atom + new legal-actions choice
+shape enumerated identically on both engines + non-mana X-channel +
+pump-X effect/bridge). AAs 1+3, once AA2's substrate exists, are a
+small whole-card recognizer that routes all 3 lines through the AA
+grammar (replacing the empty-land claim) + the bridge admit predicate
++ a byte-equal probe (`tests/test_secluded_starforge_parity.py`).
+
+**Impact estimate**: PROBED 463 → 464 / BLOCKED-SG 12 → 11 once fully
+closed; **+1 card / +7,570 cumulative 17lands EoE decks** (Secluded
+Starforge is the single largest remaining BLOCKED-SG deck-tail). 0
+strength cost on closure (faithful add, not a rules change).
+
+**Pinned by:** `tests/test_secluded_starforge_parity.py` — characterizes
+the VERIFY-FIRST facts (AAs 1+3 parse through the live grammar; the live
+whole-card printing is empty; AA2 is the sole unparsed line) so a future
+worker starts from the verified map, and fails loudly if the grammar
+drifts.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
