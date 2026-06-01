@@ -640,6 +640,23 @@ class CardDef:
     # Peculiar Lighthouse / Raucous Carnival / Razortrap Gorge) all
     # print ``threshold = 13``.
     enters_tapped_unless_any_player_life_at_most: int = 0
+    # Non-basic land substrate — Echoing Deeps clone (2026-05-31).
+    # Carries the Echoing Deeps ETB replacement: "You may have this
+    # land enter tapped as a copy of any land card in a graveyard,
+    # except it's a Cave in addition to its other types." When ``True``,
+    # on ``play_land`` the controller MAY have the land enter as a copy
+    # of an eligible land card in any graveyard (the entering object's
+    # printing rebinds to the target's land + "Cave" injected into
+    # subtypes; the land enters TAPPED). ``False`` is the disabled
+    # sentinel (the back-compat default — every pre-substrate CardDef
+    # omits it; the registry-dict emitter skips the
+    # ``optional_copy_land_from_graveyard`` key and the Rust parser maps
+    # the absence to ``False``). Mirrors Python's
+    # ``CardPrinting.optional_copy_land_from_graveyard: bool = False`` at
+    # ``src/mtg_bot/cards/base.py:740``. The Rust mirror is the
+    # ``optional_copy_land_from_graveyard`` field on ``CardPrinting``
+    # (added 2026-05-31). Echoing Deeps is the sole EoE-pool carrier.
+    optional_copy_land_from_graveyard: bool = False
     # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24) +
     # Phase 3 Cycle 2 (2026-05-25 — the variable-X multiplier widen).
     # Spell-local ``CostReduction`` riders (EoE — Gigastorm Titan
@@ -15296,6 +15313,14 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
         printing_dict["enters_tapped_unless_any_player_life_at_most"] = (
             card.enters_tapped_unless_any_player_life_at_most
         )
+    # Non-basic land substrate — Echoing Deeps clone (2026-05-31). Emit
+    # the clone flag only when True so every pre-substrate CardDef
+    # registry dict is byte-identical to before this slice landed. The
+    # Rust parser maps the absent key to ``False`` (the disabled
+    # sentinel) per the back-compat pattern every other optional bool
+    # flag uses. Echoing Deeps is the sole EoE-pool carrier.
+    if card.optional_copy_land_from_graveyard:
+        printing_dict["optional_copy_land_from_graveyard"] = True
     # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24). Emit
     # the list-of-dicts shape Rust's ``parse_printing`` consumes
     # (the C1 substrate landing). Each CardDef triple
@@ -17859,6 +17884,16 @@ def _card_def_to_python_printing(card: "CardDef"):
         # (`actions.py:1096-1101`) at ETB time.
         enters_tapped_unless_any_player_life_at_most=(
             card.enters_tapped_unless_any_player_life_at_most
+        ),
+        # Non-basic land substrate — Echoing Deeps clone (2026-05-31).
+        # Threads the Echoing-Deeps ETB clone-from-graveyard flag
+        # through to the Python CardPrinting. Default ``False`` keeps
+        # every pre-substrate CardDef bit-identical to before this slice
+        # landed. Read by Python's ``actions._play_land`` (the
+        # ``_offer_echoing_deeps_copy`` ETB-choice arm at
+        # `actions.py:1122`) at ETB time.
+        optional_copy_land_from_graveyard=(
+            card.optional_copy_land_from_graveyard
         ),
         # cost-reduction substrate — Phase 1 Cycle 2 (2026-05-24).
         # Threads the structural ``CostReduction`` rule tuple onto

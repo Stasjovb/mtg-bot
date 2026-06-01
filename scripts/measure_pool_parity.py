@@ -1083,6 +1083,21 @@ PROBE_MODULES: tuple[Path, ...] = (
     # parity-vs-search divergence is documented in
     # ``docs/SEARCH_LIMITATIONS.md``.
     REPO_ROOT / "tests" / "test_nexus_of_fate_parity.py",
+    # **Non-basic land substrate — Echoing Deeps clone (2026-05-31):**
+    # Echoing Deeps BLOCKED → PROBED. The dedicated probe module
+    # ``test_echoing_deeps_parity.py`` carries the canonical
+    # ``test_cross_engine_real_eoe_echoing_deeps_copy_land_from_
+    # graveyard_parity`` function which drives the genuine parsed
+    # Echoing Deeps printing through ``play_land`` on BOTH engines
+    # (a Mountain seeded in the graveyard), asserting the entering
+    # clone's name + tapped state byte-equal cross-engine. The Rust
+    # substrate (``CardPrinting.optional_copy_land_from_graveyard`` +
+    # the ``play_land`` ETB-copy routing reusing the
+    # ``original_printing_id`` + registry ``push_printing`` clone
+    # machinery) + the bridge field round-trip landed in lockstep.
+    # Echoing Deeps stays loader-DECLINED (probe-driven precedence-1,
+    # NOT loader_admits).
+    REPO_ROOT / "tests" / "test_echoing_deeps_parity.py",
     # **control-change-ueot-cycle-4-p1 (2026-05-22):** Cycle 4 of the
     # control-change-UEOT subsystem — Mutinous Massacre closure
     # (~4,671 17lands decks). The dedicated probe module

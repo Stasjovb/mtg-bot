@@ -4641,6 +4641,10 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // Non-basic land substrate - Echoing Deeps clone (2026-05-31):
+        // synthetic-state printings carry no ETB clone-from-graveyard
+        // replacement. Back-compat default maps absence to false.
+        optional_copy_land_from_graveyard: false,
         // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
         // 2026-05-24): synthetic-state printings carry no spell-local
         // cost-reduction rules. Back-compat default (empty Vec mirrors
@@ -4758,6 +4762,10 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // Non-basic land substrate - Echoing Deeps clone (2026-05-31):
+        // synthetic-state printings carry no ETB clone-from-graveyard
+        // replacement. Back-compat default maps absence to false.
+        optional_copy_land_from_graveyard: false,
         // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
         // 2026-05-24): synthetic-state printings carry no spell-local
         // cost-reduction rules. Back-compat default (empty Vec mirrors
@@ -4888,6 +4896,10 @@ pub fn make_synthetic_state(
         // `enters_tapped_unless_any_player_life_at_most` key, parser
         // maps the absence to 0 (the disabled sentinel).
         enters_tapped_unless_any_player_life_at_most: 0,
+        // Non-basic land substrate - Echoing Deeps clone (2026-05-31):
+        // synthetic-state printings carry no ETB clone-from-graveyard
+        // replacement. Back-compat default maps absence to false.
+        optional_copy_land_from_graveyard: false,
         // cost-reduction substrate Phase 1 — Cycle 1 (substrate-only,
         // 2026-05-24): synthetic-state printings carry no spell-local
         // cost-reduction rules. Back-compat default (empty Vec mirrors
