@@ -191,6 +191,40 @@ impl GameState {
         .unwrap_or(false)
     }
 
+    /// **Pinnacle Starcage closure (2026-05-31) — test-only.**
+    /// Force-set the `exiled_with_source` source-link on the object
+    /// with `obj_id` (walks the EXILE zone of both players, since the
+    /// link is an exile-zone concept). Returns `true` if the object
+    /// was found and stamped, `false` otherwise.
+    ///
+    /// Why this exists: a per-card probe for the recall-side effects
+    /// (`MoveEachExiledWithSourceToOwnersGraveyard` +
+    /// `CreateNTokensFromLastExileRecall`) needs to pre-seed exile
+    /// cards already tagged to the source, modeling the post-ETB state
+    /// without driving the full ETB mass-exile first. Mirrors
+    /// `force_set_summoning_sick`'s test-helper convention — real
+    /// `exiled_with_source` stamps flow through the
+    /// `ExileAllMatchingUntilSourceLeaves` /
+    /// `ExileTargetCreatureUntilSourceLeaves` resolve arms.
+    fn force_set_exiled_with_source(
+        &mut self,
+        obj_id: u32,
+        source_id: u32,
+    ) -> bool {
+        for pidx in 0..self.players.len() {
+            let exile_mut = std::sync::Arc::make_mut(
+                &mut self.players[pidx].exile,
+            );
+            for obj in exile_mut.iter_mut() {
+                if obj.id == obj_id {
+                    obj.exiled_with_source = Some(source_id);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// **CE20 follow-up Slice 3 — Spacecraft station-charge.**
     /// Test-only side-channel: force-set the `charge_counters` value
     /// on the battlefield permanent with `obj_id`. Returns `true` if

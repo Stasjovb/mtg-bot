@@ -3764,6 +3764,34 @@ pub struct GameState {
     /// so every pre-Cycle-1 trajectory is byte-equivalent through
     /// the substrate landing.
     pub prevent_all_combat_damage_this_turn: bool,
+    /// **Pinnacle Starcage exile-recall substrate (2026-05-31).**
+    /// Transient scratch slot carrying the count of cards moved out of
+    /// exile by the immediately-prior
+    /// `Effect::MoveEachExiledWithSourceToOwnersGraveyard` resolve, so a
+    /// follow-up `Effect::CreateNTokensFromLastExileRecall` step in the
+    /// SAME `Effect::Sequence` can mint one token per recalled card
+    /// without coupling the two operations into one Effect class.
+    ///
+    /// Mirrors Python's `state.last_exile_recall_count`
+    /// (`src/mtg_bot/game.py`; set to 0 then overwritten with `moved`
+    /// in `MoveEachExiledWithSourceToOwnersGraveyard.resolve` at
+    /// `effects/generic/exile.py:879-892`, read by
+    /// `CreateNTokensFromLastExileRecall.resolve` at
+    /// `effects/generic/exile.py:937`). The producing arm resets it to
+    /// 0 at entry and writes the moved count; the consuming arm reads
+    /// it. Because both arms fire inside one `apply_effect` Sequence
+    /// fan-out, the value is fresh per Sequence resolve and never needs
+    /// a stack-resolver-level bracket (unlike the
+    /// `current_resolve_*` mode/payload transients).
+    ///
+    /// **Not serialized into the fingerprint.** Transient scratch like
+    /// `current_resolve_source_controller` / `next_etb_timestamp` — the
+    /// observable game state (battlefield / exile / graveyard contents,
+    /// token objects minted) is what the fingerprint captures; the
+    /// intermediate count is internal bookkeeping. Defaults to 0 on
+    /// every construction site so pre-substrate snapshots stay
+    /// byte-equal.
+    pub last_exile_recall_count: i32,
 }
 
 impl Clone for GameState {
@@ -3863,6 +3891,10 @@ impl Clone for GameState {
             // shared cleanup-step drain fires.
             prevent_all_combat_damage_this_turn: self
                 .prevent_all_combat_damage_this_turn,
+            // Pinnacle Starcage exile-recall scratch: clone the value
+            // (transient; not in the fingerprint, but a mid-Sequence
+            // clone shouldn't reset it).
+            last_exile_recall_count: self.last_exile_recall_count,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -4994,5 +5026,7 @@ pub fn make_synthetic_state(
         // no fingerprint impact (transient turn-scoped flag, same
         // shape as `permanent_left_battlefield_this_turn`).
         prevent_all_combat_damage_this_turn: false,
+        // Pinnacle Starcage exile-recall scratch: default 0.
+        last_exile_recall_count: 0,
     }
 }

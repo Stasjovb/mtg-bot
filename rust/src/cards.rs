@@ -10246,6 +10246,86 @@ pub enum Effect {
         grant_flying_counter: bool,
         grant_subtype_and_pt: Option<(String, i32, i32)>,
     },
+    /// **Pinnacle Starcage closure (2026-05-31) — ETB mass exile-with-
+    /// source.** Mirrors Python's
+    /// `ExileAllMatchingUntilSourceLeaves(match_artifact, match_creature,
+    /// max_mv)` (`effects/generic/exile.py:767`). Pinnacle Starcage's
+    /// ETB trigger: "exile all artifacts and creatures with mana value
+    /// 2 or less until this artifact leaves the battlefield"
+    /// (`match_artifact=true, match_creature=true, max_mv=2`).
+    ///
+    /// Zero-target mass effect. Sweeps EVERY player's battlefield (not
+    /// just the opponent's, unlike the single-target
+    /// `ExileTargetCreatureUntilSourceLeaves` family) for non-land
+    /// permanents matching the type union + optional MV cap, EXCLUDING
+    /// the source itself, and stamps `exiled_with_source =
+    /// Some(source_id)` on each so the existing
+    /// `return_paired_exiles_for` recall hook returns them when the
+    /// source leaves. Tokens caught in the sweep cease to exist on
+    /// exile (CR 704.5d) via the standard `queue_token_cease` push.
+    ///
+    /// `max_mv = 0` means no MV cap (matches Python's `max_mv=0`
+    /// sentinel). `max_mv > 0` restricts to permanents with mana value
+    /// <= `max_mv`.
+    ExileAllMatchingUntilSourceLeaves {
+        match_artifact: bool,
+        match_creature: bool,
+        max_mv: i32,
+    },
+    /// **Pinnacle Starcage closure (2026-05-31) — recall-to-graveyard
+    /// side.** Mirrors Python's
+    /// `MoveEachExiledWithSourceToOwnersGraveyard()`
+    /// (`effects/generic/exile.py:840`). Pinnacle Starcage's
+    /// `{6}{W}{W}` AA Sequence leaf #1: "Put each card exiled with this
+    /// artifact into its owner's graveyard".
+    ///
+    /// Zero-target. Walks every player's exile for objects tagged
+    /// `exiled_with_source == Some(source_id)`, moves each to its
+    /// OWNER's graveyard (clearing the link per CR 400.7), and records
+    /// the moved count on `state.last_exile_recall_count` so the
+    /// follow-up `CreateNTokensFromLastExileRecall` Sequence leaf can
+    /// mint one token per moved card. The count is reset to 0 at entry
+    /// and overwritten with the moved total (mirrors Python's
+    /// `state.last_exile_recall_count = 0` then `= moved`).
+    MoveEachExiledWithSourceToOwnersGraveyard,
+    /// **Pinnacle Starcage closure (2026-05-31) — token-mint side.**
+    /// Mirrors Python's `CreateNTokensFromLastExileRecall(token_name)`
+    /// (`effects/generic/exile.py:908`). Pinnacle Starcage's
+    /// `{6}{W}{W}` AA Sequence leaf #2: "create a 2/2 colorless Robot
+    /// artifact creature token for each card put into a graveyard this
+    /// way" (`token_name="Robot"`).
+    ///
+    /// Reads `state.last_exile_recall_count` (set by the immediately
+    /// prior `MoveEachExiledWithSourceToOwnersGraveyard` in the same
+    /// Sequence) and creates that many tokens of `token_printing_id`
+    /// under the resolving controller. Count <= 0 → no tokens (same as
+    /// Python's `if count <= 0: return`).
+    ///
+    /// **Token-printing-id convention.** Like every other Rust
+    /// token-minting variant (`CreateToken`,
+    /// `CreateTokenAndAttachSelf`, …), the variant carries a registry
+    /// `token_printing_id: u32` rather than Python's `token_name:
+    /// str`. The bridge resolves the name → a registered token printing
+    /// id via `register_token_printing` / the `_seat_token_printings`
+    /// pass (`cross_engine.py`), so a Python
+    /// `CreateNTokensFromLastExileRecall(token_name="Robot")` maps to
+    /// `CreateNTokensFromLastExileRecall { token_printing_id: <Robot
+    /// pid> }`.
+    CreateNTokensFromLastExileRecall {
+        token_printing_id: u32,
+    },
+    /// **Pinnacle Starcage closure (2026-05-31) — effect-body
+    /// sacrifice-self.** Mirrors Python's `SacrificeSelf()`
+    /// (`effects/generic/exile.py:958`). Pinnacle Starcage's
+    /// `{6}{W}{W}` AA Sequence leaf #3: "Sacrifice this artifact."
+    ///
+    /// Zero-target. Sacrifices the resolving source via the existing
+    /// `sacrifice_source_inline` helper. No-op if the source has
+    /// already left the battlefield (e.g. an earlier Sequence step
+    /// moved it). Distinct from the `ActivationCost.sacrifice_self`
+    /// cost gate (paid at activation, before the ability hits the
+    /// stack) — this is a body primitive resolved off the stack.
+    SacrificeSelf,
 }
 
 /// **BBB downstream complement — 7th Rust slice.**
@@ -15263,6 +15343,88 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 grant_subtype_and_pt,
             })
         }
+        "exile_all_matching_until_source_leaves" => {
+            // **Pinnacle Starcage closure (2026-05-31).** Carries
+            // `match_artifact: bool` + `match_creature: bool` (both
+            // OPTIONAL, default false) + `max_mv: i32` (OPTIONAL,
+            // default 0 = no cap; non-negative). Mirrors Python's
+            // `ExileAllMatchingUntilSourceLeaves(match_artifact,
+            // match_creature, max_mv)` (`effects/generic/exile.py:767`).
+            let match_artifact: bool = match dict.get_item("match_artifact")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "exile_all_matching_until_source_leaves.match_artifact must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            let match_creature: bool = match dict.get_item("match_creature")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "exile_all_matching_until_source_leaves.match_creature must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            let max_mv: i32 = match dict.get_item("max_mv")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "exile_all_matching_until_source_leaves.max_mv must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            if max_mv < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "exile_all_matching_until_source_leaves: max_mv must be non-negative, got {max_mv}"
+                )));
+            }
+            Ok(Effect::ExileAllMatchingUntilSourceLeaves {
+                match_artifact,
+                match_creature,
+                max_mv,
+            })
+        }
+        "move_each_exiled_with_source_to_owners_graveyard" => {
+            // **Pinnacle Starcage closure (2026-05-31).** Unit variant;
+            // no fields. Mirrors Python's
+            // `MoveEachExiledWithSourceToOwnersGraveyard()`
+            // (`effects/generic/exile.py:840`).
+            Ok(Effect::MoveEachExiledWithSourceToOwnersGraveyard)
+        }
+        "create_n_tokens_from_last_exile_recall" => {
+            // **Pinnacle Starcage closure (2026-05-31).** Carries
+            // `token_printing_id: u32` (required) — the registry id the
+            // bridge resolved from Python's `token_name="Robot"` via
+            // `register_token_printing` / `_seat_token_printings`. Same
+            // printing-id convention as `create_token` /
+            // `create_token_and_attach_self`. Mirrors Python's
+            // `CreateNTokensFromLastExileRecall(token_name)`
+            // (`effects/generic/exile.py:908`) at the SEMANTIC level
+            // (mint N tokens of the named token printing); the wire
+            // shape differs (name → id) per the Rust token convention.
+            let token_printing_id: u32 = match dict.get_item("token_printing_id")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "create_n_tokens_from_last_exile_recall.token_printing_id must be a u32 (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "create_n_tokens_from_last_exile_recall: missing required 'token_printing_id' field",
+                    ));
+                }
+            };
+            Ok(Effect::CreateNTokensFromLastExileRecall { token_printing_id })
+        }
+        "sacrifice_self" => {
+            // **Pinnacle Starcage closure (2026-05-31).** Unit variant;
+            // no fields. Mirrors Python's `SacrificeSelf()` effect-body
+            // primitive (`effects/generic/exile.py:958`). Distinct from
+            // the `ActivationCost.sacrifice_self` cost-gate flag (a
+            // dict KEY on `cost`, not an effect kind).
+            Ok(Effect::SacrificeSelf)
+        }
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
@@ -17371,7 +17533,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, create_token_and_attach_self, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, tap_up_to_one_target_creature, phase_out_equipped_creature, saw_attacks_optional_sac_draw_effect, atomic_microsizer_attack_effect, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted, pump_self_x_power_ueot, switch_source_power_toughness_ueot, sacrifice_n_lands_you_control, change_controller_to_combat_damage_source, gain_control_of_target_sliver_permanently, destroy_each_nonland_permanent_with_mv_equal_to_source_charge_counters"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, create_token_and_attach_self, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, grant_life_to_each_opponent, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, return_target_permanent_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, tap_up_to_one_target_creature, phase_out_equipped_creature, saw_attacks_optional_sac_draw_effect, atomic_microsizer_attack_effect, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, draw_cards_equal_to_resolving_counter_amount, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, diplomatic_relations_effect, defending_player_loses_half_life_rounded_up, conditional_if_you_gained_life_at_least, conditional_if_source_power_at_least, dyadrine_attack_effect, put_poison_counters_on_target_player, exile_all_artifacts_with_mana_value_at_most, deal_damage_to_target_tapped_creature, put_charge_counters_on_target_spacecraft_or_planet_you_control, return_up_to_n_small_creatures_from_graveyard_with_counters, zero_point_ballad_effect, create_x_tokens_of_target_permanent_with_haste_end_step_sac, sacrifice_source_delayed, return_up_to_n_nonland_permanent_cards_from_graveyard_to_hand, terminal_velocity_effect, deal_self_mv_damage_to_each_creature, optional_sac_another_for_pump_self_ueot, exile_target_creature, exile_target_creature_with_power_or_toughness_at_most, return_up_to_n_creatures_from_your_graveyard_to_hand, boilerbilges_ripper_etb_effect, each_player_draws, fanatic_of_the_harrowing_etb_effect, discard_hand_then_draw_n, terrapact_intimidator_etb_effect, territorial_bruntar_landfall_effect, schedule_self_sac_at_next_end_step, peek_top_may_battlefield_if_land_else_hand, put_plus_one_counters_on_each_creature_you_control_equal_to_source_power, optional_sac_another_for_effect, singularity_rupture_effect, coordinated_clobbering_effect, put_plus_one_counters_and_grant_keywords_ueot_on_target_creature_you_control, anticausal_vestige_leaves_effect, conditional_if_cast_from_hand, shuffle_zones_into_library, regenerate_target_creature, untap_target_land, optional_sac_land_or_lander_for_basic_land_ramp, reanimate_target_creature_card_from_defenders_graveyard, optional_put_creature_from_hand_onto_battlefield, target_artifact_becomes_creature_ueot, target_opponent_look_hand_may_discard, each_opponent_discards_or_loses_life, create_token_per_multicolored_permanent, draw_card_per_multicolored_permanent, target_opponent_sacrifices_creature_other_than_enchanted, pump_self_x_power_ueot, switch_source_power_toughness_ueot, sacrifice_n_lands_you_control, change_controller_to_combat_damage_source, gain_control_of_target_sliver_permanently, destroy_each_nonland_permanent_with_mv_equal_to_source_charge_counters, exile_all_matching_until_source_leaves, move_each_exiled_with_source_to_owners_graveyard, create_n_tokens_from_last_exile_recall, sacrifice_self"
         ))),
     }
 }
@@ -21968,6 +22130,45 @@ pub(crate) fn effect_to_pydict<'py>(
                     (subtype.as_str(), *p, *t),
                 )?;
             }
+        }
+        // **Pinnacle Starcage closure (2026-05-31).** Emit the ETB
+        // mass exile-with-source dict with empty-omit discipline on the
+        // bool flags + the MV cap (default 0 omitted). Mirrors the
+        // Python forward arm in `cross_engine.py`.
+        Effect::ExileAllMatchingUntilSourceLeaves {
+            match_artifact,
+            match_creature,
+            max_mv,
+        } => {
+            d.set_item("kind", "exile_all_matching_until_source_leaves")?;
+            if *match_artifact {
+                d.set_item("match_artifact", true)?;
+            }
+            if *match_creature {
+                d.set_item("match_creature", true)?;
+            }
+            if *max_mv != 0 {
+                d.set_item("max_mv", *max_mv)?;
+            }
+        }
+        // **Pinnacle Starcage closure (2026-05-31).** Unit variant —
+        // kind only.
+        Effect::MoveEachExiledWithSourceToOwnersGraveyard => {
+            d.set_item(
+                "kind",
+                "move_each_exiled_with_source_to_owners_graveyard",
+            )?;
+        }
+        // **Pinnacle Starcage closure (2026-05-31).** kind +
+        // token_printing_id.
+        Effect::CreateNTokensFromLastExileRecall { token_printing_id } => {
+            d.set_item("kind", "create_n_tokens_from_last_exile_recall")?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        // **Pinnacle Starcage closure (2026-05-31).** Unit variant —
+        // kind only.
+        Effect::SacrificeSelf => {
+            d.set_item("kind", "sacrifice_self")?;
         }
     }
     Ok(d)

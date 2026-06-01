@@ -529,5 +529,7 @@ pub fn make_state(
         // combat-damage prevention. Back-compat default; no
         // fingerprint impact (transient turn-scoped flag).
         prevent_all_combat_damage_this_turn: false,
+        // Pinnacle Starcage exile-recall scratch: default 0.
+        last_exile_recall_count: 0,
     })
 }
