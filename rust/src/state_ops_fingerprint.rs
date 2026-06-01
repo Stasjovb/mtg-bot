@@ -349,6 +349,25 @@ impl GameState {
                     .collect::<Vec<_>>(),
             ),
         ];
+        // Command-zone emblems (CR 114). Appended ONLY when non-empty
+        // so every pre-emblem pinned baseline (empty emblem zone) stays
+        // bit-equal — the same "serialize iff non-empty" shape as the
+        // pending_decisions slot below. Emitted in the SAME position
+        // Python's hash_state appends it (right after the stack slot,
+        // before the Rust-only pending_decisions slot) so the
+        // cross-engine parts arrays match for an emblem-bearing state
+        // with no pending decisions (the probe shape). Each emblem is a
+        // synthetic GameObject; the standard `object_signature`
+        // 8-tuple projection (matching Python's `_zone_signature`)
+        // captures its printing_name + controller + id. Sorted by
+        // etb_timestamp to match Python's command-zone append order.
+        if !self.emblems.is_empty() {
+            let mut refs: Vec<&GameObject> = self.emblems.iter().collect();
+            refs.sort_by_key(|o| o.etb_timestamp);
+            parts_vec.push(Value::Array(
+                refs.iter().map(|o| object_signature(self, o)).collect(),
+            ));
+        }
         // Round-27 G20 closure: pending_decisions slot. Appended
         // ONLY when non-empty so the pre-r27 pinned fingerprint
         // baselines (every state in test_fingerprint.py has empty

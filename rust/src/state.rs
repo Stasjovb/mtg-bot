@@ -3779,6 +3779,28 @@ pub struct GameState {
     /// will surface as a legal_decisions emission shape change at
     /// the priority point that uses the ledger.
     pub loyalty_activated_this_turn: std::collections::HashSet<(u8, u32)>,
+    /// **Command-zone emblems (CR 114) — the emblem substrate.** Each
+    /// entry is a synthetic `GameObject` (zone = command) whose
+    /// `printing_id` points at a synthetic emblem `CardPrinting`
+    /// (minted into the in-state registry by the `CreateEmblem` resolve
+    /// arm via `Arc::make_mut(&mut state.registry).push_printing`, the
+    /// same per-resolve-printing pattern `BecomesCopyOfTargetLand`
+    /// uses) carrying ONLY the emblem's triggered abilities (CR 114.3 —
+    /// no characteristics other than its abilities). The emblem's
+    /// `controller` is the player who "gets" the emblem. Emblems never
+    /// leave the command zone (CR 114.5), so there is no zone-transition
+    /// plumbing — they are created by `CreateEmblem`, cloned, surfaced
+    /// via `emblems_snapshot`, and scanned as an additional trigger
+    /// SOURCE by `dispatch_event` for the begin-combat event.
+    ///
+    /// **Serialization / fingerprint.** Empty by default (almost every
+    /// state has no emblems); rides the canonical Clone path. The
+    /// fingerprint emits the Vec's contents ONLY when non-empty (the
+    /// same "serialize iff non-empty" shape as `pending_decisions` /
+    /// `delayed_triggers`), so every pre-emblem pinned baseline stays
+    /// byte-identical. Mirrors Python's `GameState.emblems: list[
+    /// GameObject]`.
+    pub emblems: Vec<GameObject>,
     /// **DrawCards controller-of-effect fix — transient resolve-time
     /// source controller.** Set by the stack resolver
     /// (`resolve_top_of_stack` / `_pause`) and by the cost-pay path
@@ -4135,6 +4157,11 @@ impl Clone for GameState {
             // clone is O(n) where n is the number of distinct walker
             // activations this turn (typically 0 or 1 in EoE).
             loyalty_activated_this_turn: self.loyalty_activated_this_turn.clone(),
+            // Command-zone emblems: deep-clone each synthetic emblem
+            // GameObject. Cheap (empty for almost every state, at most
+            // one emblem in the EoE pool — Tezzeret's -7). Mirrors
+            // Python's clone() emblem deep-copy.
+            emblems: self.emblems.clone(),
             // DrawCards controller-of-effect fix: transient resolve-
             // time source controller. Cloned as Option<u8> (Copy).
             current_resolve_source_controller: self.current_resolve_source_controller,
@@ -4594,6 +4621,24 @@ impl GameState {
         self.rng = rng.map(|r| r.clone().unbind());
         Ok(())
     }
+}
+
+/// Build a synthetic emblem `GameObject` (CR 114) for the command
+/// zone. Reuses `make_object`'s full default field set, then stamps
+/// `zone = ZONE_COMMAND` (6) and the supplied `etb_timestamp` (the
+/// deterministic ordering position the fingerprint reads). Used by the
+/// `CreateEmblem` resolve arm. Mirrors Python's `state.new_object(...,
+/// zone=Zone.COMMAND)` + `etb_timestamp` stamp.
+pub fn make_emblem_object(
+    id: u32,
+    controller: u8,
+    printing_id: u32,
+    etb_timestamp: u32,
+) -> GameObject {
+    let mut obj = make_object(id, controller, printing_id);
+    obj.zone = crate::state_ops_zones::ZONE_COMMAND;
+    obj.etb_timestamp = etb_timestamp;
+    obj
 }
 
 fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
@@ -5267,6 +5312,9 @@ pub fn make_synthetic_state(
         // once-per-turn-per-walker ledger at construction; reset
         // each turn at cleanup.
         loyalty_activated_this_turn: std::collections::HashSet::new(),
+        // Command-zone emblems: empty at construction. Populated by the
+        // CreateEmblem resolve arm.
+        emblems: Vec::new(),
         // DrawCards controller-of-effect fix: transient slot, None
         // until the resolver swaps in `top.controller` for the
         // duration of an apply_effect call.

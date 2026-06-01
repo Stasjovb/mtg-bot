@@ -504,6 +504,8 @@ pub fn make_state(
         // CE20 Slice 5 (Walker loyalty Slice C): empty
         // once-per-turn-per-walker ledger at construction.
         loyalty_activated_this_turn: std::collections::HashSet::new(),
+        // Command-zone emblems: empty at construction.
+        emblems: Vec::new(),
         // DrawCards controller-of-effect fix: transient slot, None
         // at construction; set by the resolver during apply_effect.
         current_resolve_source_controller: None,
