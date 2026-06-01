@@ -3072,7 +3072,22 @@ pub enum Effect {
     /// just on the chosen target rather than the source. The
     /// modifier auto-expires at the next cleanup step via the r27
     /// CR 514.3 UEOT-clear pass.
-    PumpTargetCreatureUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **`power_bonus_from_x` (Secluded Starforge, 2026-05-31).** When
+    /// true, the power bonus applied is NOT the static `power_bonus`
+    /// field but the cost-payment-determined X read from the C1 X-cost
+    /// transient `state.current_resolve_x_value` (clamped to >= 0) —
+    /// the same channel the `PumpSelfXPowerUEOT` arm and the `{X}`-mana
+    /// spells use. Wires Secluded Starforge's "{2},{T}, Tap X untapped
+    /// artifacts you control: Target creature gets +X/+0 until end of
+    /// turn" pump (X = number of artifacts tapped as cost). Defaults to
+    /// false (the round-28 fixed-bonus shape) and rolls forward through
+    /// parse (`None`/missing -> false) + to_pydict. The `toughness_bonus`
+    /// stays static (Secluded Starforge is +X/+0).
+    PumpTargetCreatureUntilEOT {
+        power_bonus: i32,
+        toughness_bonus: i32,
+        power_bonus_from_x: bool,
+    },
     /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner ETB.**
     /// "When this creature enters, until end of turn, ANOTHER target
     /// creature you control gets +power/+toughness and gains 'When
@@ -14491,7 +14506,21 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 })?,
                 None => 0,
             };
-            Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
+            // Secluded Starforge X-channel flag (defaults false). When
+            // true, resolve reads X from current_resolve_x_value.
+            let power_bonus_from_x: bool = match dict.get_item("power_bonus_from_x")? {
+                Some(b) => b.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_target_creature_until_eot.power_bonus_from_x must be a bool (got: {e})"
+                    ))
+                })?,
+                None => false,
+            };
+            Ok(Effect::PumpTargetCreatureUntilEOT {
+                power_bonus,
+                toughness_bonus,
+                power_bonus_from_x,
+            })
         }
         "pump_target_creature_until_eot_grant_dies_return_tapped" => {
             // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner
@@ -20795,10 +20824,15 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
         }
-        Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
+        Effect::PumpTargetCreatureUntilEOT {
+            power_bonus,
+            toughness_bonus,
+            power_bonus_from_x,
+        } => {
             d.set_item("kind", "pump_target_creature_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+            d.set_item("power_bonus_from_x", *power_bonus_from_x)?;
         }
         Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
             power_bonus,

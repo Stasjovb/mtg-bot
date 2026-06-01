@@ -2043,6 +2043,16 @@ _EXILE_CARD_FROM_GRAVEYARD = re.compile(
 _PUMP_TARGET_CREATURE_UEOT = re.compile(
     r"^target creature gets ([+-]\d+)/([+-]\d+) until end of turn$"
 )
+# "Target creature gets +X/+0 until end of turn" — the variable-X pump
+# where X is a cost-payment-determined value (Secluded Starforge's
+# "{2},{T}, Tap X untapped artifacts you control: Target creature gets
+# +X/+0 until end of turn"). Maps to
+# ``PumpTargetCreatureUntilEOT(power_bonus_from_x=True)`` whose resolve
+# reads ``state.resolving_x_value``. Only the +X/+0 (toughness 0) shape
+# is in the pool today; a +X/+X form would need the regex widened.
+_PUMP_TARGET_CREATURE_X_POWER_UEOT = re.compile(
+    r"^target creature gets \+X/\+0 until end of turn$"
+)
 # "Up to one target creature gets ±N/±M until end of turn" — optional
 # pump/debuff with no fizzle when the battlefield has no creatures.
 # Surfaces on Dubious Delicacy's ETB ("up to one target creature gets
@@ -6142,6 +6152,14 @@ def _parse_effect(phrase: str) -> Effect | None:
         # rather than a fixed constant. Maps to the engine class with
         # no parameters — the surface form is a literal match.
         return DoubleTargetCreaturesPowerUEOT()
+    m = _PUMP_TARGET_CREATURE_X_POWER_UEOT.match(phrase)
+    if m is not None:
+        # +X/+0 where X is the cost-payment-determined value read from
+        # state.resolving_x_value (Secluded Starforge's tap-X-artifacts
+        # pump). Tried before the fixed ±N/±M regex (whose digit groups
+        # never match the literal "x" anyway, but ordering specific
+        # before general is the convention).
+        return PumpTargetCreatureUntilEOT(power_bonus_from_x=True)
     m = _PUMP_TARGET_CREATURE_UEOT.match(phrase)
     if m is not None:
         return PumpTargetCreatureUntilEOT(

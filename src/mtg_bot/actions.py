@@ -1999,6 +1999,49 @@ def _activate_ability(
         from mtg_bot.turn import tap_permanent
         tap_permanent(state, source)
 
+    # "Tap X untapped artifacts you control" cost (Secluded Starforge).
+    # X = how many untapped artifacts the activator chooses to tap. The
+    # chosen count is bounded by the number of untapped artifacts they
+    # control (excluding the source, which isn't an artifact here but is
+    # excluded defensively) and routed through the same choose_x agent
+    # hook {X} mana costs use. The engine taps the lowest-id-first X
+    # artifacts deterministically. The chosen X is stashed into
+    # ability_x_value so it rides the StackItem and the resolving
+    # power_bonus_from_x pump reads it via state.resolving_x_value.
+    if ability.cost.tap_x_untapped_artifacts_you_control:
+        from mtg_bot.turn import tap_permanent
+
+        p = state.player_by_id(player_id)
+        candidates = sorted(
+            (
+                o for o in state.battlefield
+                if o.controller_id == player_id
+                and o.id != source.id
+                and o.printing.is_artifact
+                and not o.tapped
+            ),
+            key=lambda o: o.id,
+        )
+        upper_bound = len(candidates)
+        if p.agent is not None:
+            chosen_n = p.agent.choose_x(
+                state, player_id, source.printing.name, upper_bound
+            )
+        else:  # pragma: no cover - games run with agents set
+            chosen_n = 0
+        if chosen_n < 0:
+            chosen_n = 0
+        if chosen_n > upper_bound:
+            chosen_n = upper_bound
+        for o in candidates[:chosen_n]:
+            tap_permanent(state, o)
+            cost_paid_objects.append(o)
+        ability_x_value = chosen_n
+        state.log.append(
+            f"P{player_id} taps {chosen_n} untapped artifact(s) "
+            f"(cost for {source.printing.name}'s ability)"
+        )
+
     # Target selection for the effect (if it targets). Source is exposed
     # via state.resolving_source during selection so effects with
     # self-exclusion filters (e.g. "another target creature") can read

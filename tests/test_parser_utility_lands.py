@@ -1,11 +1,18 @@
 """Parser support for colorless utility lands.
 
-The first utility-land kind the parser claims is the "tap-for-{C}
-plus dropped activated abilities" shape — Secluded Starforge today.
-The branch matches plain ``Land`` cards (no supertypes, no subtypes)
-whose first oracle line is exactly ``"{T}: Add {C}."`` and reuses the
-static-side ``make_colorless_land`` factory, dropping the trailing
-activated-ability lines the parser doesn't model.
+The colorless-utility-land branch matches plain ``Land`` cards (no
+supertypes, no subtypes) whose first oracle line is exactly
+``"{T}: Add {C}."``.
+
+  * **Single-line** (only ``{T}: Add {C}.``) → the historical
+    ``make_colorless_land`` simplification (no abilities, generic-only).
+  * **Multi-line** (Secluded Starforge — ``{T}: Add {C}.`` plus a
+    ``Tap X untapped artifacts → +X/+0`` pump and a ``{5},{T}: Create a
+    Robot token`` ability) → the FULL faithful printing: every line is
+    routed through the activated-ability grammar and the land is built
+    via ``make_utility_land`` with all parsed AAs. NO trailing-AA drop
+    (was the prior simplification, now superseded by the tap-X-artifacts
+    X-channel substrate — see ``tests/test_secluded_starforge_parity.py``).
 
 Other utility lands (Command Bridge — ETB sac-self trigger + any-color
 mana ability) are out of scope this batch and remain skipped.
@@ -13,7 +20,7 @@ mana ability) are out of scope this batch and remain skipped.
 
 from __future__ import annotations
 
-from mtg_bot.cards.base import make_colorless_land
+from mtg_bot.cards.lands import UTILITY_LANDS
 from mtg_bot.cards.parser.land_builder import _build_land_printing
 from mtg_bot.cards.parser_source import OracleParserCardSource
 
@@ -35,8 +42,13 @@ _STARFORGE_CARD = {
 
 
 def test_build_land_printing_claims_secluded_starforge():
-    """The Scryfall-shaped Starforge record builds a colorless utility
-    land — name, type line, no abilities, no produces (generic-only)."""
+    """The Scryfall-shaped Starforge record builds the FULL faithful
+    3-AA utility land — produces {C}, all three activated abilities
+    routed through the AA grammar (NO trailing-AA drop)."""
+    from mtg_bot.effects import (
+        AddManaToPool, CreateToken, PumpTargetCreatureUntilEOT,
+    )
+
     printing = _build_land_printing(_STARFORGE_CARD)
     assert printing is not None
     assert printing.name == "Secluded Starforge"
@@ -45,20 +57,37 @@ def test_build_land_printing_claims_secluded_starforge():
     assert printing.supertypes == ()
     assert printing.card_types == ("Land",)
     assert printing.subtypes == ()
-    # Colorless utility: no produced colors (taps for generic via the
-    # auto-tap-for-cost fallback), no triggered or activated abilities.
-    assert printing.produces == frozenset()
+    # Faithful full printing: taps for {C}; all three AAs present.
+    assert printing.produces == frozenset({"C"})
     assert printing.triggered_abilities == ()
-    assert printing.activated_abilities == ()
     assert printing.enters_tapped is False
+    aas = printing.activated_abilities
+    assert len(aas) == 3
+    # AA1: {T}: Add {C} (mana ability).
+    assert isinstance(aas[0].effect, AddManaToPool)
+    assert aas[0].is_mana_ability is True
+    assert aas[0].cost.tap_self is True
+    # AA2: {2},{T}, Tap X untapped artifacts: +X/+0 UEOT (sorcery-speed).
+    assert isinstance(aas[1].effect, PumpTargetCreatureUntilEOT)
+    assert aas[1].effect.power_bonus_from_x is True
+    assert aas[1].cost.tap_x_untapped_artifacts_you_control is True
+    assert aas[1].cost.mana.generic == 2
+    assert aas[1].cost.tap_self is True
+    assert aas[1].sorcery_speed is True
+    # AA3: {5},{T}: Create a 2/2 Robot artifact creature token.
+    assert isinstance(aas[2].effect, CreateToken)
+    assert aas[2].effect.count == 1
+    assert aas[2].cost.mana.generic == 5
+    assert aas[2].cost.tap_self is True
 
 
-def test_build_land_printing_matches_static_make_colorless_land():
+def test_build_land_printing_matches_static_registry():
     """The parser-built printing must equal what the static registry
-    produces via ``make_colorless_land`` — required by the parity
-    gate, asserted directly here for fast feedback."""
+    ships for Secluded Starforge — required by the parity gate
+    (parser source and static source must agree), asserted directly
+    here for fast feedback."""
     parsed = _build_land_printing(_STARFORGE_CARD)
-    expected = make_colorless_land("Secluded Starforge")
+    expected = UTILITY_LANDS["Secluded Starforge"]
     assert parsed == expected
 
 

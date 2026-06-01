@@ -330,6 +330,17 @@ class PumpTargetCreatureUntilEOT(Effect):
     # is explicit: only creatures with the Legendary supertype are valid
     # targets. Independent of all other narrowing flags.
     legendary_only: bool = False
+    # "Target creature gets +X/+0 until end of turn" where X is a
+    # cost-payment-determined value read from ``state.resolving_x_value``
+    # (set by the X-cost activation pipeline in ``_activate_ability`` —
+    # the same channel ``{X}`` mana costs and the new "tap X untapped
+    # artifacts you control" cost atom feed). When True, the effective
+    # power bonus at resolve is ``state.resolving_x_value`` (clamped to
+    # >= 0) rather than the static ``power_bonus``. Wires Secluded
+    # Starforge's "{2}, {T}, Tap X untapped artifacts you control:
+    # Target creature gets +X/+0 until end of turn." Mirrors the
+    # ``PumpSelfXPowerUEOT`` X-channel convention on a TARGET creature.
+    power_bonus_from_x: bool = False
 
     def requires_target(self) -> bool:
         return not self.optional
@@ -376,16 +387,23 @@ class PumpTargetCreatureUntilEOT(Effect):
         if obj is None:
             return
         src = state.resolving_source
-        if self.power_bonus or self.toughness_bonus:
+        # When power_bonus_from_x is set, the power bonus is the
+        # cost-determined X (clamped to >= 0), read from the same
+        # resolving_x_value channel {X} mana costs use. The toughness
+        # bonus stays static (Secluded Starforge is +X/+0).
+        effective_power = self.power_bonus
+        if self.power_bonus_from_x:
+            effective_power = max(0, state.resolving_x_value)
+        if effective_power or self.toughness_bonus:
             state.grant_pt_pump_ueot(
                 source_id=src.id if src is not None else obj.id,
                 target_id=obj.id,
-                power=self.power_bonus,
+                power=effective_power,
                 toughness=self.toughness_bonus,
                 description=(
                     f"{src.printing.name if src else obj.printing.name} "
                     f"pumps {obj.printing.name} "
-                    f"+{self.power_bonus}/+{self.toughness_bonus} UEOT"
+                    f"+{effective_power}/+{self.toughness_bonus} UEOT"
                 ),
             )
         granted = self.granted_keywords
@@ -413,7 +431,7 @@ class PumpTargetCreatureUntilEOT(Effect):
             ).resolve(state, controller_id, (("creature", obj.id),))
         state.log.append(
             f"{obj.printing.name} gets "
-            f"+{self.power_bonus}/+{self.toughness_bonus} until end of turn"
+            f"+{effective_power}/+{self.toughness_bonus} until end of turn"
             + (f" and gains {', '.join(sorted(granted))}"
                if granted else "")
             + (" and gains a granted triggered ability"
@@ -436,7 +454,11 @@ class PumpTargetCreatureUntilEOT(Effect):
 
     def describe(self) -> str:
         parts: list[str] = []
-        if self.power_bonus or self.toughness_bonus:
+        if self.power_bonus_from_x:
+            parts.append(
+                f"target creature gets +X/+{self.toughness_bonus}"
+            )
+        elif self.power_bonus or self.toughness_bonus:
             parts.append(
                 f"target creature gets +{self.power_bonus}/+{self.toughness_bonus}"
             )

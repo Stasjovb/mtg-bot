@@ -186,6 +186,17 @@ _REMOVE_PLUS_ONE_COUNTER_PIECE = (
     "Remove a +1/+1 counter from a creature you control"
 )
 
+# "Tap X untapped artifacts you control" — Secluded Starforge's
+# second ability. A variable-count tap cost: X is the number of
+# untapped artifacts the activator chooses to tap, and that same X
+# feeds the +X/+0 pump via the resolving-x-value channel (see
+# ``ActivationCost.tap_x_untapped_artifacts_you_control`` and the
+# ``power_bonus_from_x`` pump). A literal because Scryfall prints this
+# exact wording and the engine has a dedicated boolean field; only
+# card in the pool with this shape (broader "tap X <permanent-class>"
+# grammar deferred until a second example exists).
+_TAP_X_UNTAPPED_ARTIFACTS_PIECE = "Tap X untapped artifacts you control"
+
 
 @dataclass(frozen=True)
 class _CostPiece:
@@ -232,6 +243,8 @@ def _classify_cost_piece(piece: str) -> _CostPiece | None:
         )
     if piece == _REMOVE_PLUS_ONE_COUNTER_PIECE:
         return _CostPiece(kind="remove_plus_one_counter")
+    if piece == _TAP_X_UNTAPPED_ARTIFACTS_PIECE:
+        return _CostPiece(kind="tap_x_untapped_artifacts")
     pay_life_match = _PAY_LIFE_PIECE.match(piece)
     if pay_life_match is not None:
         return _CostPiece(
@@ -276,6 +289,7 @@ def _build_cost_from_pieces(
     named_sac_field: str | None = None
     sacrifice_seen = False
     remove_plus_one_counter = False
+    tap_x_untapped_artifacts = False
     for p in pieces:
         if p.kind == "mana":
             if mana_str is not None:
@@ -316,6 +330,10 @@ def _build_cost_from_pieces(
             if remove_plus_one_counter:
                 return None
             remove_plus_one_counter = True
+        elif p.kind == "tap_x_untapped_artifacts":
+            if tap_x_untapped_artifacts:
+                return None
+            tap_x_untapped_artifacts = True
         else:  # pragma: no cover — defensive; classifier never emits this
             return None
     kwargs: dict = {}
@@ -338,6 +356,8 @@ def _build_cost_from_pieces(
         kwargs[named_sac_field] = True
     if remove_plus_one_counter:
         kwargs["remove_plus_one_counter_from_your_creature"] = True
+    if tap_x_untapped_artifacts:
+        kwargs["tap_x_untapped_artifacts_you_control"] = True
     return ActivationCost(**kwargs)
 
 

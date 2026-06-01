@@ -12682,8 +12682,22 @@ fn apply_effect(
         //
         // `(0, 0)` short-circuits before doing the lookup — pure
         // no-op without touching state.
-        Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
-            if *power_bonus == 0 && *toughness_bonus == 0 {
+        Effect::PumpTargetCreatureUntilEOT {
+            power_bonus,
+            toughness_bonus,
+            power_bonus_from_x,
+        } => {
+            // When power_bonus_from_x is set, the effective power bonus
+            // is the cost-determined X from the C1 transient (clamp >=0),
+            // not the static field — Secluded Starforge's +X/+0 pump.
+            // Mirrors Python's PumpTargetCreatureUntilEOT.resolve
+            // (pump.py): effective_power = max(0, resolving_x_value).
+            let effective_power: i32 = if *power_bonus_from_x {
+                state.current_resolve_x_value.unwrap_or(0).max(0)
+            } else {
+                *power_bonus
+            };
+            if effective_power == 0 && *toughness_bonus == 0 {
                 return Ok(());
             }
             // Locate source controller by scanning every zone.
@@ -12737,7 +12751,7 @@ fn apply_effect(
             for obj in zone.iter_mut() {
                 if obj.id == target_id {
                     obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
-                        power: *power_bonus,
+                        power: effective_power,
                         toughness: *toughness_bonus,
                     });
                     break;
