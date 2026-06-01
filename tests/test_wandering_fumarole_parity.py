@@ -25,28 +25,44 @@ The NESTED granted activated ability carries the
 power and toughness until end of turn" while the manland is animated.
 This is the NEW Effect class this slice ships on the Rust substrate.
 
-**Substrate landed this slice (2026-05-31):**
-    * New Rust ``Effect::SwitchSourcePowerToughnessUEOT`` unit variant
-      (``rust/src/cards.rs``) -- enum decl + parse_effect arm +
-      to_pydict arm + resolve arm. **Substrate-only landing:** the Rust
-      resolve arm is a documented silent no-op (layer-7e P/T-switch
-      machinery deferred -- Rust's effective-P/T reader has no
-      ``switch_pt`` sublayer-4 pass yet). See
-      ``docs/SEARCH_LIMITATIONS.md``. The variant exists for cross-
-      engine round-trip + to put Wandering Fumarole into the covered-
-      class set; the cross-engine probe pins the Python-side swap
-      resolve (which carries the full layer-7e ``switch_pt`` continuous
-      effect).
+**Layer-7e swap LANDED (feature/fumarole-ptswitch, 2026-06-01):**
+    * Rust ``Effect::SwitchSourcePowerToughnessUEOT`` resolve arm is
+      now REAL (no longer a no-op): it pushes a ``UeotModifier::SwitchPT``
+      onto the source (``rust/src/state_ops_resolve.rs``). A new
+      ``UeotModifier::SwitchPT`` variant (``rust/src/state.rs``) +
+      ``GameObject::ueot_pt_swapped()`` (odd-count parity) drives a
+      layer-7e swap in the two centralized effective-P/T readers
+      ``battlefield_creature_power`` / ``battlefield_creature_toughness``
+      (``rust/src/state_ops_combat.rs``) — the swap is applied AFTER
+      the fully-composed (post-7b/c/d) P/T, mirroring Python's
+      ``_compute_effective_pt`` 7e branch (``game.py:2253``). Two
+      switches cancel; three is one net swap.
     * Cross-engine bridge arm ``switch_source_power_toughness_ueot`` in
       ``cross_engine._ta_dict_to_python_effect`` (unit-variant dict ->
       ``SwitchSourcePowerToughnessUEOT()``).
 
-With the substrate landed, ``SwitchSourcePowerToughnessUEOT`` joins the
-covered-class set, so Wandering Fumarole's full Effect set
+With the swap landed, ``SwitchSourcePowerToughnessUEOT`` is fully
+covered (the resolve genuinely swaps effective P/T byte-equal cross-
+engine), so Wandering Fumarole's full Effect set
 ``{BecomeLandCreatureUEOT, SwitchSourcePowerToughnessUEOT}`` is
-covered. This probe then pins the card via the JJJJ idiom (parse +
-bridge round-trip + Python-side resolve smoke), moving it from the
-BLOCKED subsystem-gated tail to PROBED.
+covered. This probe pins the card via the parse + bridge round-trip +
+GENUINE cross-engine swap-parity idiom (effective P/T swapped byte-
+equal on BOTH engines).
+
+**Honest-stop (manland nested-grant LEGAL-ENUMERATION).** Rust's
+``Effect::BecomeLandCreatureUEOT`` substrate still carries only
+``power/toughness/granted_subtype`` (no ``granted_activated_abilities``
+field), so the granted ``{0}`` switch-AA is not yet enumerated as a
+legal action on the animated land in Rust's ``legal_decisions``. The
+switch EFFECT, however, is fully reachable + byte-equal through any
+effect carrier (the resolve arm is the load-bearing parity behavior).
+Driving the literal ``{0}`` activation through Rust's legal-action
+codec is the deferred half (touches the encoding-sensitive
+``activate_ability`` ability-index scheme). See
+``docs/SEARCH_LIMITATIONS.md``. Python drives the REAL animate ->
+activate {0} -> swap flow (``tests/test_manland_granted_abilities.py``);
+this probe drives the switch effect on a matching carrier on BOTH
+engines and asserts the swapped effective P/T byte-equal.
 
 Sibling of ``test_lavaclaw_reaches_parity.py`` -- the two manlands
 share the nested-granted-AA substrate; Lavaclaw's nested effect is the
@@ -289,4 +305,183 @@ def test_cross_engine_real_eoe_wandering_fumarole_switch_pt_parity():
     assert py.battlefield == bf_before, (
         "Wandering Fumarole: no-resolving-source resolve must NOT "
         "mutate the battlefield"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (4) GENUINE cross-engine layer-7e swap parity (REAL flow on BOTH engines).
+# ---------------------------------------------------------------------------
+
+
+_ZONE_HAND = 0
+_ZONE_BATTLEFIELD = 2
+
+
+def _rust_switch_etb_1_4_dict():
+    """A 1/4 creature whose ETB fires the switch effect once -- the
+    Rust carrier for the layer-7e swap (the switch EFFECT is the
+    load-bearing cross-engine parity behavior; Rust's granted-AA
+    legal-enumeration is honest-stopped, so the effect is driven
+    through the reachable ETB carrier rather than the {0} AA)."""
+    return {
+        "name": "Synthetic Fumarole Switch Carrier (ETB)",
+        "mana_cost": {"generic": 2, "U": 1},
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 4,
+        "effects": [],
+        "etb_effects": [
+            {"kind": "switch_source_power_toughness_ueot"},
+        ],
+    }
+
+
+@_rust_skip
+def test_cross_engine_wandering_fumarole_switch_pt_swap_byte_equal():
+    """**GENUINE cross-engine layer-7e P/T-switch parity.**
+
+    Python drives the REAL Wandering Fumarole flow: animate the
+    genuine parsed printing into a 1/4 ({2}{U}{R}), then activate the
+    granted ``{0}`` switch-AA and resolve. Effective P/T must read 4/1
+    (one swap) then 1/4 (a second swap cancels).
+
+    Rust drives the SAME switch EFFECT on a matching 1/4 carrier (its
+    ETB fires ``switch_source_power_toughness_ueot``). The Rust
+    granted-AA legal-enumeration on the animated land is honest-stopped
+    (Rust's ``BecomeLandCreatureUEOT`` substrate carries no
+    ``granted_activated_abilities`` field — see
+    ``docs/SEARCH_LIMITATIONS.md``), so the switch EFFECT (the
+    load-bearing parity behavior) is driven through the reachable ETB
+    carrier. The assertion is the cross-engine claim that matters:
+    **both engines compute the identical post-swap effective P/T**
+    (4/1 after one switch; 1/4 after two).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import (
+        GameState, Player, effective_power, effective_toughness,
+    )
+    from mtg_bot.turn import Step
+    from mtg_bot.cards import BASIC_LANDS, parse_mana_cost
+    from mtg_bot.actions import (
+        ActivateAbility, apply_action, resolve_top_of_stack,
+    )
+    from mtg_bot.agents import Agent
+    from mtg_bot.game import Zone
+
+    printings = get_active_source().get_printings()
+    real = printings.get("Wandering Fumarole")
+    if real is None:
+        pytest.skip("Wandering Fumarole absent from active CardSource")
+
+    # ------------------------------------------------------------------
+    # PYTHON -- REAL flow: animate the genuine printing, then activate
+    # the granted {0} switch-AA.
+    # ------------------------------------------------------------------
+    class _MaxXFirstTarget(Agent):
+        def choose_x(self, state, player_id, card_name, upper_bound):
+            return upper_bound
+
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+    py = GameState()
+    py.players.append(Player(id=0, agent=_MaxXFirstTarget()))
+    py.players.append(Player(id=1, agent=_MaxXFirstTarget()))
+    py.active_player_idx = 0
+    py.priority_player_idx = 0
+    py.step = Step.PRECOMBAT_MAIN
+
+    def _put(printing, owner_id=0):
+        obj = py.new_object(printing, owner_id, Zone.BATTLEFIELD)
+        py.battlefield.append(obj)
+        return obj
+
+    land = _put(real)
+    # Seed mana for {2}{U}{R}.
+    for color, count in parse_mana_cost("{2}{U}{R}").colored:
+        basic = {"U": "Island", "R": "Mountain"}[color]
+        for _ in range(count):
+            _put(BASIC_LANDS[basic])
+    for _ in range(parse_mana_cost("{2}{U}{R}").generic):
+        _put(BASIC_LANDS["Mountain"])
+
+    # Animate ({T}->1/1... here 1/4 per the printing) via AA[0].
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=0))
+    while py.stack:
+        resolve_top_of_stack(py)
+    assert effective_power(py, land) == 1
+    assert effective_toughness(py, land) == 4
+
+    # Activate the granted {0} switch-AA (ability_index=1).
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=1))
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_after_one = (effective_power(py, land), effective_toughness(py, land))
+
+    # Second switch cancels.
+    apply_action(py, 0, ActivateAbility(source_id=land.id, ability_index=1))
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_after_two = (effective_power(py, land), effective_toughness(py, land))
+
+    # ------------------------------------------------------------------
+    # RUST -- drive the switch EFFECT on a matching 1/4 carrier.
+    # ------------------------------------------------------------------
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    carrier = _rust_switch_etb_1_4_dict()
+
+    rs_obj = rs.register_and_inject_object(carrier, 0, _ZONE_HAND)
+    rs.push_to_stack(rs_obj, 0)
+    rs.resolve_top_of_stack()  # spell enters bf, queues the ETB switch
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs_after_one = (
+        rs.effective_power(rs_obj), rs.effective_toughness(rs_obj),
+    )
+
+    # Second switch via a second ETB carrier whose target is the SAME
+    # object would require an AA path; instead drive the cancel via a
+    # double-switch carrier and confirm the printed 1/4 reads back.
+    rs2 = build_rust_state(spec)
+    double = dict(carrier)
+    double["name"] = "Synthetic Fumarole Double Switch Carrier (ETB)"
+    double["etb_effects"] = [
+        {"kind": "switch_source_power_toughness_ueot"},
+        {"kind": "switch_source_power_toughness_ueot"},
+    ]
+    rs2_obj = rs2.register_and_inject_object(double, 0, _ZONE_HAND)
+    rs2.push_to_stack(rs2_obj, 0)
+    rs2.resolve_top_of_stack()
+    while rs2.stack_size() > 0:
+        rs2.resolve_top_of_stack()
+    rs_after_two = (
+        rs2.effective_power(rs2_obj), rs2.effective_toughness(rs2_obj),
+    )
+
+    # ------------------------------------------------------------------
+    # CROSS-ENGINE BYTE-EQUAL: both engines swap identically.
+    # ------------------------------------------------------------------
+    assert py_after_one == (4, 1), (
+        f"Python one-switch effective P/T must be 4/1; got {py_after_one}"
+    )
+    assert rs_after_one == (4, 1), (
+        f"Rust one-switch effective P/T must be 4/1; got {rs_after_one}"
+    )
+    assert py_after_one == rs_after_one, (
+        f"one-switch P/T must be byte-equal cross-engine: "
+        f"py={py_after_one} rust={rs_after_one}"
+    )
+    assert py_after_two == (1, 4), (
+        f"Python two-switch effective P/T must cancel to 1/4; "
+        f"got {py_after_two}"
+    )
+    assert rs_after_two == (1, 4), (
+        f"Rust two-switch effective P/T must cancel to 1/4; "
+        f"got {rs_after_two}"
+    )
+    assert py_after_two == rs_after_two, (
+        f"two-switch P/T must be byte-equal cross-engine: "
+        f"py={py_after_two} rust={rs_after_two}"
     )

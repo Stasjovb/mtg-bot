@@ -1058,7 +1058,36 @@ pub(crate) fn dynamic_base_pt_pub(
     }
 }
 
+/// **CR 613.4 layer 7e — effective power with the P/T swap applied.**
+/// Computes the fully-composed (layer 7b/c/d) power via
+/// `battlefield_creature_power_unswapped`, then applies ONE swap (per
+/// CR 613.4 layer 7e) when the object carries an odd number of
+/// `UeotModifier::SwitchPT` entries — in which case the effective
+/// POWER is the object's composed TOUGHNESS (the two are exchanged).
+/// Mirrors Python's `_compute_effective_pt` 7e branch (game.py:2253-
+/// 2264). The swap fires AFTER all additive/base layers compose, so a
+/// Lignified manland (0/4 base) + counters reads correctly when
+/// switched. When no `SwitchPT` is present this is bit-identical to
+/// the pre-swap reader (the swap branch is unreachable).
 fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
+    let swapped = state
+        .players
+        .iter()
+        .flat_map(|p| p.battlefield.iter())
+        .find(|o| o.id == obj_id)
+        .map(|o| o.ueot_pt_swapped())
+        .unwrap_or(false);
+    if swapped {
+        // Layer-7e: post-7b/c/d effective toughness becomes the
+        // effective power (CR 613.4 layer 7e — exchange the two
+        // characteristics).
+        battlefield_creature_toughness_unswapped(state, obj_id)
+    } else {
+        battlefield_creature_power_unswapped(state, obj_id)
+    }
+}
+
+fn battlefield_creature_power_unswapped(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
     };
@@ -1437,7 +1466,28 @@ pub(crate) fn aura_grants_lose_abilities_to(
 /// it") was empirically demanded by the round-74 bench sweep — see
 /// `battlefield_creature_power` above. New code is right (Python
 /// SoT); Python untouched.
+/// **CR 613.4 layer 7e — effective toughness with the P/T swap
+/// applied.** Sibling of `battlefield_creature_power`: when the object
+/// carries an odd number of `UeotModifier::SwitchPT` entries, the
+/// effective TOUGHNESS is the object's composed POWER. Mirrors
+/// Python's `_compute_effective_pt` 7e branch. Bit-identical to the
+/// pre-swap reader when no `SwitchPT` is present.
 fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
+    let swapped = state
+        .players
+        .iter()
+        .flat_map(|p| p.battlefield.iter())
+        .find(|o| o.id == obj_id)
+        .map(|o| o.ueot_pt_swapped())
+        .unwrap_or(false);
+    if swapped {
+        battlefield_creature_power_unswapped(state, obj_id)
+    } else {
+        battlefield_creature_toughness_unswapped(state, obj_id)
+    }
+}
+
+fn battlefield_creature_toughness_unswapped(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
     };

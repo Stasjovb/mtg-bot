@@ -13018,18 +13018,37 @@ fn apply_effect(
             }
         }
         // Manland nested-granted-AA substrate (2026-05-31 — Wandering
-        // Fumarole). **Substrate-only: layer-7e P/T-switch deferred.**
-        // Rust has no layer-7e P/T-switch continuous-effect machinery
-        // (the effective-P/T reader has no `switch_pt` pass), so this
-        // resolve is a documented silent no-op. The variant exists for
-        // cross-engine round-trip (parse + to_pydict + bridge) and to
-        // put Wandering Fumarole into the covered-class set; the
-        // cross-engine probe pins the Python-side swap resolve. Adding
-        // the Rust swap is follow-up work (interacts with the
-        // `BecomesLandCreature` layer-7b override ordering). See
-        // `docs/SEARCH_LIMITATIONS.md`.
+        // Fumarole). **Layer-7e P/T-switch LANDED (feature/fumarole-
+        // ptswitch).** Pushes one `UeotModifier::SwitchPT` onto the
+        // source — the effective-P/T readers
+        // (`battlefield_creature_power` / `..._toughness`) apply ONE
+        // swap of the fully-composed (post-7b/c/d) P/T per odd net
+        // count of these entries (CR 613.4 layer 7e). Mirrors Python's
+        // `SwitchSourcePowerToughnessUEOT.resolve` (`pump.py:970`):
+        // `add_continuous_effect(layer=7, sublayer=4, kind="switch_pt",
+        // expires_at="cleanup")` — each activation appends one swap, so
+        // two cancel and three is one net swap. Same source-locate +
+        // push idiom as `PumpSelfXPowerUEOT` above; `source is None`
+        // (source absent from any bf) is a silent no-op, matching
+        // Python's `if source is None: return`.
         Effect::SwitchSourcePowerToughnessUEOT => {
-            let _ = source_obj_id; // substrate-only no-op
+            for pidx in 0..state.players.len() {
+                if state.players[pidx]
+                    .battlefield
+                    .iter()
+                    .any(|o| o.id == source_obj_id)
+                {
+                    let zone: &mut Vec<GameObject> =
+                        Arc::make_mut(&mut state.players[pidx].battlefield);
+                    for obj in zone.iter_mut() {
+                        if obj.id == source_obj_id {
+                            obj.ueot_modifiers.push(UeotModifier::SwitchPT);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
         }
         // Round-28 UEOT-coverage extension. Same mechanism as
         // PumpSelfUntilEOT but on a TARGET creature: the first
