@@ -577,26 +577,36 @@ class CardDef:
     #     ``"would_place_counter"`` (Loading Zone), or
     #     ``"triggered_ability_triggers"`` (Starfield Vocalist).
     #   * ``transform_kind`` — the ``EventTransform`` discriminant:
-    #     ``"multiply_count"`` (MultiplyCount) or ``"add_instances"``
-    #     (AddInstances).
+    #     ``"multiply_count"`` (MultiplyCount), ``"add_instances"``
+    #     (AddInstances), or ``"replace"`` (Replace — the
+    #     destination-redirect transform; GSZ-flip widen 2026-05-31).
     #   * ``transform_param`` — the transform's single int parameter:
     #     ``MultiplyCount.factor`` (2 for the doublers) or
-    #     ``AddInstances.delta`` (1 for the extra-trigger shape).
+    #     ``AddInstances.delta`` (1 for the extra-trigger shape). ``0``
+    #     (unused) for the ``"replace"`` transform, which carries no int
+    #     param — its single string param lives in ``transform_dest``.
+    #   * ``transform_dest`` — the ``Replace.new_destination`` zone name
+    #     for the ``"replace"`` transform (the only live value is
+    #     ``"library"`` — Green Sun's Zenith / Nexus of Fate's
+    #     ``would_go_to_graveyard -> library`` shuffle-self redirect).
+    #     ``None`` for every count/instances transform (the back-compat
+    #     default — every pre-widen entry leaves it absent).
     #
     # Empty tuple = no replacement statics — the back-compat default;
     # every pre-Phase-5 CardDef leaves this at its empty-tuple default
     # and the registry-dict emitter skips the ``static_replacements``
     # key, keeping every pre-substrate registry dict byte-identical. The
-    # tuple-of-triples shape (NOT a ``ReplacementEffect`` object) keeps
+    # tuple-of-quads shape (NOT a ``ReplacementEffect`` object) keeps
     # CardDef frozen-hashable and matches the flat-codec field
     # convention (mirroring ``static_anthems`` / ``cost_reductions``).
     # The Rust mirror is ``CardPrinting.static_replacements:
-    # Vec<StaticReplacement>`` (added Phase 5). Round-trips Python ↔ Rust
+    # Vec<StaticReplacement>`` (added Phase 5; ``transform_dest``
+    # widen 2026-05-31). Round-trips Python ↔ Rust
     # through :func:`_spec_card_to_printing_dict` (forward emit) and
     # :func:`_card_def_to_python_printing` (reverse re-materialization to
     # Python's ``StaticAbility(replacement_effect=ReplacementEffect(...))``
     # at ``effects/modifiers.py``).
-    static_replacements: tuple[tuple[str, str, int], ...] = ()
+    static_replacements: tuple[tuple[str, str, int, str | None], ...] = ()
     # Static rule-text substrate — Deafening Silence Cycle 1
     # (2026-05-22). Printing-level bool — when ``True``, any permanent
     # with this flag on the battlefield restricts EACH player to
@@ -15076,14 +15086,28 @@ def _spec_card_to_printing_dict(card: "CardDef") -> dict:
     if card.static_replacements:
         rep_entries: list[dict] = []
         for entry in card.static_replacements:
-            event, transform_kind, transform_param = entry
-            rep_entries.append(
-                {
-                    "event": event,
-                    "transform_kind": transform_kind,
-                    "transform_param": int(transform_param),
-                }
-            )
+            event, transform_kind, transform_param, transform_dest = entry
+            if transform_kind == "replace":
+                # GSZ-flip destination-redirect widen (2026-05-31). The
+                # ``replace`` transform carries a string ``transform_dest``
+                # (the ``new_destination`` zone) and NO int param; the
+                # Rust parser whitelists this shape (event
+                # ``would_go_to_graveyard``, dest ``library``).
+                rep_entries.append(
+                    {
+                        "event": event,
+                        "transform_kind": transform_kind,
+                        "transform_dest": str(transform_dest),
+                    }
+                )
+            else:
+                rep_entries.append(
+                    {
+                        "event": event,
+                        "transform_kind": transform_kind,
+                        "transform_param": int(transform_param),
+                    }
+                )
         printing_dict["static_replacements"] = rep_entries
     # Aura-attachment substrate — Phase 2 S2 extension (Tractor
     # Beam closure, 2026-05-20). Emit ``aura_prevents_host_untap``
@@ -17433,21 +17457,38 @@ def _card_def_to_python_printing(card: "CardDef"):
             AddInstances,
             EventPattern,
             MultiplyCount,
+            Replace,
             ReplacementEffect,
         )
         from mtg_bot.effects.predicates import Event as _Event
 
         rep_list: list[StaticAbility] = []
-        for event, transform_kind, transform_param in card.static_replacements:
+        for (
+            event,
+            transform_kind,
+            transform_param,
+            transform_dest,
+        ) in card.static_replacements:
             if transform_kind == "multiply_count":
                 transform = MultiplyCount(factor=int(transform_param))
             elif transform_kind == "add_instances":
                 transform = AddInstances(delta=int(transform_param))
+            elif transform_kind == "replace":
+                # GSZ-flip destination-redirect widen (2026-05-31). The
+                # ``replace`` transform rehydrates ``Replace(
+                # new_destination=<dest>)`` (the shuffle-self
+                # graveyard->library redirect).
+                if transform_dest is None:
+                    raise ValueError(
+                        "static_replacements 'replace' transform requires "
+                        "a transform_dest (the new_destination zone)"
+                    )
+                transform = Replace(new_destination=str(transform_dest))
             else:
                 raise ValueError(
                     f"static_replacements transform_kind must be "
-                    f"'multiply_count' or 'add_instances' (got: "
-                    f"{transform_kind!r})"
+                    f"'multiply_count', 'add_instances', or 'replace' "
+                    f"(got: {transform_kind!r})"
                 )
             rep_list.append(
                 StaticAbility(

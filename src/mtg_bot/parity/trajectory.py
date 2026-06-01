@@ -7485,18 +7485,25 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     return _leaf(spell_effect)
 
 
-# **Rust StaticReplacement closed vocab (Phase 5, 2026-05-31).** The
-# Rust ``CardPrinting.static_replacements`` mirror only models these
-# CR 614 events with these EventTransform discriminants (each carries
-# a single int param). Any replacement static OUTSIDE this vocab —
-# notably the Green Sun's Zenith / Nexus of Fate
-# ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
-# shuffle-self redirect — has no Rust resolve hook and must positively
-# decline the carrying printing from the spell-card-bridge admit set.
+# **Rust StaticReplacement closed vocab (Phase 5, 2026-05-31; GSZ-flip
+# destination-redirect widen, 2026-05-31).** The Rust
+# ``CardPrinting.static_replacements`` mirror models these CR 614
+# events: the count/instances family (``would_create_token`` /
+# ``would_place_counter`` / ``triggered_ability_triggers``, each with a
+# ``MultiplyCount`` / ``AddInstances`` int-param transform) AND the
+# ``would_go_to_graveyard`` destination-redirect (a ``Replace`` whose
+# ``new_destination`` is ``"library"`` — Green Sun's Zenith / Nexus of
+# Fate's shuffle-self redirect, rerouted by the Rust
+# ``move_source_post_resolve`` hook). Any replacement static OUTSIDE
+# this vocab — e.g. Quantum Riddler's ``would_draw_cards`` ``AddToCount``
+# replacement, or a ``Replace`` to a non-library zone — has no Rust
+# resolve hook and must positively decline the carrying printing from
+# the spell-card-bridge admit set.
 _BRIDGEABLE_REPLACEMENT_EVENTS = frozenset({
     "would_create_token",
     "would_place_counter",
     "triggered_ability_triggers",
+    "would_go_to_graveyard",
 })
 
 
@@ -7504,18 +7511,28 @@ def _printing_has_unbridgeable_replacement_static(printing) -> bool:
     """True iff the printing carries a SELF-scope ``StaticAbility``
     whose ``replacement_effect`` is NOT expressible in the Rust
     ``StaticReplacement`` closed vocab (event ∈
-    :data:`_BRIDGEABLE_REPLACEMENT_EVENTS` with a
-    ``MultiplyCount`` / ``AddInstances`` int-param transform).
+    :data:`_BRIDGEABLE_REPLACEMENT_EVENTS` with a ``MultiplyCount`` /
+    ``AddInstances`` int-param transform, OR a ``would_go_to_graveyard``
+    ``Replace(new_destination="library")`` destination-redirect).
 
-    Today the SOLE consumers are Green Sun's Zenith + Nexus of Fate
-    (both carry the ``WOULD_GO_TO_GRAVEYARD -> library`` destination
-    redirect — outside the closed vocab). The check is conservative:
-    a static with NO ``replacement_effect`` (e.g. a continuous-effect
-    anthem static) is NOT a replacement static and does not trip this
-    guard; the existing target-grammar + covered-set teeth handle
-    those independently. A future StaticReplacement-vocab widen that
-    adds the graveyard->library transform should narrow this guard so
-    the carrying cards flip to genuine cross-engine probes.
+    **GSZ-flip destination-redirect widen (2026-05-31).** The
+    ``would_go_to_graveyard -> library`` shuffle-self redirect is now
+    bridgeable (the Rust ``move_source_post_resolve`` hook reroutes the
+    resolving spell to its owner's library + shuffles). Green Sun's
+    Zenith — whose ONLY static is this redirect AND whose spell_effect
+    is covered+bridged — now passes this guard and flips to a genuine
+    cross-engine probe. **Nexus of Fate stays DECLINED** by the SEPARATE
+    covered-set gate (its ``TakeExtraTurnAfterThisOne`` spell_effect is
+    not covered+bridged — the extra-turn substrate is unbuilt); the
+    redirect static alone is no longer a decline reason for it.
+    **Quantum Riddler stays DECLINED** here — its ``would_draw_cards``
+    ``AddToCount`` replacement is outside the bridgeable event set (and
+    it is a Creature, not a simple spell).
+
+    The check is conservative: a static with NO ``replacement_effect``
+    (e.g. a continuous-effect anthem static) is NOT a replacement static
+    and does not trip this guard; the existing target-grammar +
+    covered-set teeth handle those independently.
     """
     statics = getattr(printing, "static_abilities", ()) or ()
     for s in statics:
@@ -7526,14 +7543,23 @@ def _printing_has_unbridgeable_replacement_static(printing) -> bool:
         event = getattr(event_pattern, "event", None)
         event_name = getattr(event, "value", None)
         transform = getattr(rep, "transform", None)
-        # A replacement static whose event is outside the bridgeable
-        # set, OR whose transform is a destination-string ``Replace``
-        # (the graveyard->library redirect — it carries a
-        # ``new_destination`` str, NOT the int param the Rust vocab
-        # threads), is unbridgeable.
+        # An event outside the bridgeable set is unbridgeable
+        # (Quantum Riddler's ``would_draw_cards``).
         if event_name not in _BRIDGEABLE_REPLACEMENT_EVENTS:
             return True
-        if getattr(transform, "new_destination", None) is not None:
+        # A narrowed gate (subject_filters / scope_filter) is out of
+        # the Phase-5 closed-vocab scope — the Rust mirror carries no
+        # per-subject narrowing.
+        if getattr(event_pattern, "subject_filters", ()):
+            return True
+        if getattr(rep, "scope_filter", None) is not None:
+            return True
+        # A destination-string ``Replace`` transform is bridgeable ONLY
+        # when it reroutes to ``"library"`` (the sole modeled
+        # destination — the shuffle-self redirect); any other
+        # ``new_destination`` has no Rust reroute hook.
+        new_dest = getattr(transform, "new_destination", None)
+        if new_dest is not None and new_dest != "library":
             return True
     return False
 
@@ -13493,27 +13519,47 @@ _REPLACEMENT_EVENT_VOCAB = {
     "would_create_token",
     "would_place_counter",
     "triggered_ability_triggers",
+    # GSZ-flip destination-redirect widen (2026-05-31). The
+    # ``would_go_to_graveyard`` event (paired with a ``replace``
+    # transform whose ``new_destination`` is ``"library"``) is the
+    # Green Sun's Zenith / Nexus of Fate shuffle-self redirect; the Rust
+    # ``move_source_post_resolve`` hook reroutes the resolving spell to
+    # its owner's library + shuffles instead of the graveyard.
+    "would_go_to_graveyard",
 }
 
 
 def _static_replacements_from_printing(printing):
-    """Return the ``static_replacements`` tuple-of-triples for a
+    """Return the ``static_replacements`` tuple-of-quads for a
     printing carrying one or more ``StaticAbility.replacement_effect``
     declarations, or ``None`` if any static carries a shape outside the
     Phase-5 closed vocab.
 
-    Each emitted triple is ``(event, transform_kind, transform_param)``
+    Each emitted quad is
+    ``(event, transform_kind, transform_param, transform_dest)``
     mirroring the CardDef field shape: ``event`` is the underscore-
     lowercase ``Event`` value; ``transform_kind`` is ``"multiply_count"``
-    (``MultiplyCount``) or ``"add_instances"`` (``AddInstances``);
-    ``transform_param`` is the transform's single int parameter
-    (``factor`` / ``delta``). A replacement with a non-empty
-    ``subject_filters`` or a non-None ``scope_filter`` returns ``None``
-    (out of Phase-5 scope — the narrowed-gate shape is honest-stopped).
-    """
-    from mtg_bot.effects.modifiers import AddInstances, MultiplyCount
+    (``MultiplyCount``), ``"add_instances"`` (``AddInstances``), or
+    ``"replace"`` (``Replace`` — the destination-redirect transform);
+    ``transform_param`` is the count/instances transform's single int
+    parameter (``factor`` / ``delta``; ``0`` for ``replace``);
+    ``transform_dest`` is the ``Replace.new_destination`` zone name
+    (``None`` for the count/instances transforms). A replacement with a
+    non-empty ``subject_filters`` or a non-None ``scope_filter`` returns
+    ``None`` (out of Phase-5 scope — the narrowed-gate shape is honest-
+    stopped).
 
-    out: list[tuple[str, str, int]] = []
+    **GSZ-flip destination-redirect widen (2026-05-31).** The
+    ``would_go_to_graveyard -> Replace(new_destination="library")``
+    shuffle-self redirect (Green Sun's Zenith / Nexus of Fate) is now in
+    vocab — the Rust ``move_source_post_resolve`` hook reroutes the
+    resolving spell to its owner's library + shuffles. Only the
+    ``"library"`` destination is bridgeable (the Rust parser declines any
+    other); a ``Replace`` to a non-library zone returns ``None``.
+    """
+    from mtg_bot.effects.modifiers import AddInstances, MultiplyCount, Replace
+
+    out: list[tuple[str, str, int, str | None]] = []
     for sa in printing.static_abilities:
         re = getattr(sa, "replacement_effect", None)
         if re is None:
@@ -13528,9 +13574,16 @@ def _static_replacements_from_printing(printing):
             return None
         transform = re.transform
         if isinstance(transform, MultiplyCount):
-            out.append((event, "multiply_count", int(transform.factor)))
+            out.append((event, "multiply_count", int(transform.factor), None))
         elif isinstance(transform, AddInstances):
-            out.append((event, "add_instances", int(transform.delta)))
+            out.append((event, "add_instances", int(transform.delta), None))
+        elif isinstance(transform, Replace):
+            # Only the graveyard->library shuffle-self redirect is
+            # modeled this widen (the Rust reroute hook + parser both
+            # whitelist exactly ``new_destination == "library"``).
+            if transform.new_destination != "library":
+                return None
+            out.append((event, "replace", 0, transform.new_destination))
         else:
             return None
     if not out:
@@ -14039,6 +14092,21 @@ def _printing_to_card_def(printing) -> CardDef:
             "Instant" if "Instant" in printing.card_types
             else "Sorcery"
         )
+        # **GSZ-flip destination-redirect widen (2026-05-31).** A simple
+        # spell may carry a SELF-scope ``would_go_to_graveyard ->
+        # library`` ``StaticReplacement`` (Green Sun's Zenith's
+        # shuffle-self redirect — it models the oracle's "Exile Green
+        # Sun's Zenith" as a shuffle-into-library on resolve). Thread the
+        # in-vocab replacement quad(s) through to the CardDef so the Rust
+        # ``move_source_post_resolve`` hook reroutes the resolved spell to
+        # the owner's library + shuffles instead of the graveyard. The
+        # admit guard ``_printing_has_unbridgeable_replacement_static``
+        # has already proven every static on this printing IS in-vocab
+        # (the graveyard->library redirect is now bridgeable), so this
+        # extraction cannot return ``None`` here for an admitted card —
+        # but the ``or ()`` keeps a no-static spell's CardDef at the
+        # empty-tuple default, byte-identical to the pre-widen emit.
+        reps = _static_replacements_from_printing(printing) or ()
         return CardDef(
             name=printing.name,
             card_type=spell_type,
@@ -14046,6 +14114,7 @@ def _printing_to_card_def(printing) -> CardDef:
             mana_cost_colored=colored,
             spell_effect=_python_spell_effect_to_dict(
                 printing.spell_effect),
+            static_replacements=reps,
         )
     if _printing_is_bridge_simple_uncounterable_creature(printing):
         # Static / layered abilities substrate — Phase 2 (round-80,
