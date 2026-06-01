@@ -478,6 +478,27 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # ``SacrificeSourceDelayed``. Override-mapping it elsewhere
     # would be wrong.
     "DealSelfMVDamageToEachCreature",
+    # **Mystifying Maze carrier-AA substrate — Phase 3A Cycle 1
+    # (2026-05-25).** Rust ``Effect::ReturnExiledPermanentToOwnerTapped
+    # { exile_card_id }`` is the paired end-step delayed-trigger return
+    # for Mystifying Maze's "exile target attacking creature, return it
+    # tapped at the beginning of the next end step" AA. It is scheduled
+    # onto ``state.delayed_triggers`` by the
+    # ``Effect::ExileTargetAttackingCreatureUntilEndStep`` resolve arm
+    # (cards.rs ~15277) and fired via ``run_delayed_end_step_triggers``.
+    # Python has the exact same-named class at
+    # ``effects/generic/exile.py:86`` (``ReturnExiledPermanentToOwner
+    # Tapped``), but the parsed-pool vocab never observes it directly
+    # because it is NOT a printing's ``triggered_abilities`` member — it
+    # is spawned dynamically at the producer arm's resolve time as a
+    # delayed-trigger entry, NOT by a printing's static trigger
+    # definition. Same invisibility-to-the-static-walker shape as
+    # ``WarpExileSelf`` / ``RemoveChargeCountersFromSourceDelayed`` /
+    # ``SacrificeSourceDelayed`` / ``DealSelfMVDamageToEachCreature``.
+    # Override-mapping it elsewhere would be wrong (the same-named class
+    # exists). Promote to a 1:1 class + remove this entry if the
+    # parser ever surfaces it as a static printing trigger.
+    "ReturnExiledPermanentToOwnerTapped",
 }
 
 

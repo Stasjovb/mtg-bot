@@ -410,15 +410,34 @@ def resolve_residue_entry(
 ) -> ResidueResolution:
     """Resolve one worklist entry: walk its ``aliases`` (plan-name →
     real-variant candidates) against the live Rust ``Effect`` enum;
-    the first alias present wins. ``bridged`` is True iff that
+    the first alias present wins. ``bridged`` is True iff the resolved
     variant's acronym-aware snake_case is a live ``kind ==`` bridge
-    arm. Pure — no engine import, no .pyd."""
+    arm, OR one of the entry's aliases *is* (literally) a live bridge
+    arm ``kind``. Pure — no engine import, no .pyd.
+
+    The alias-as-arm fallback exists because the campaign's bridge-arm
+    ``kind`` strings do NOT always equal ``_camel_to_snake(variant)``:
+    several arms drop the ``Effect`` suffix (``RovingActuatorETBEffect``
+    → arm ``roving_actuator_etb``; ``PainForAllETBEffect`` → arm
+    ``pain_for_all_etb``) or are card-name-tagged rather than
+    variant-tagged (``EachOpponentExilesCardFromHandWithCastPermission``
+    → arm ``each_opponent_exiles_card_from_hand_lightstall``). For
+    exactly these, the worklist entry records the real arm ``kind`` as
+    one of its ``aliases`` so the bridge link is captured; honoring that
+    here makes the ``bridged`` flag reflect the genuinely-wired
+    end-to-end path instead of a strict-snake_case false-negative. A
+    truly dropped bridge arm still flips ``bridged`` to False (the arm
+    would be absent from ``bridge_arms`` either way), so the regression
+    signal stays intact."""
     resolved: str | None = None
     for alias in entry.get("aliases", []):
         if alias in rust_variants:
             resolved = alias
             break
-    bridged = resolved is not None and _camel_to_snake(resolved) in bridge_arms
+    bridged = resolved is not None and (
+        _camel_to_snake(resolved) in bridge_arms
+        or any(a in bridge_arms for a in entry.get("aliases", []))
+    )
     return ResidueResolution(
         entry=entry.get("entry", "?"),
         card=entry.get("card", "?"),
