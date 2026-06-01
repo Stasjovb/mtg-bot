@@ -982,36 +982,23 @@ def test_known_card_subsystem_attribution(scout, attr):
     only remaining ``unclassified`` residual is Leyline of Mutation
     (the parser does not recognise either of its mechanics today)."""
     cards = attr["cards"]
-    # Secluded Starforge: zero-Effect non-basic land — single-gated on
-    # the non-basic-land substrate. Sub-shape D carrier (sub-shape F
-    # Echoing Deeps is the only other surviving single-gate non-basic-
-    # land carrier; D requires its own activated-ability substrate,
-    # F its own graveyard-clone replacement substrate). (Previously
-    # Abandoned Campground was the pin, which moved to PROBED post
-    # non-basic-land Phase-2 (2026-05-23) — the 9 (10) Duskmourn
-    # painlands now ride
-    # ``_printing_is_bridge_nonbasic_painland_conditional`` end-to-
-    # end on both engines. Cathedral of War (the intermediate
-    # re-pin candidate) also moved to PROBED via Cathedral cycle 1
-    # (2026-05-23) — leaving Secluded Starforge as the surviving
-    # single-gate non-basic-land carrier with the cleanest
-    # admit-shape pin.)
-    bp = cards["Secluded Starforge"]
-    assert bp["gates"] == [scout.SUB_NONBASIC_LAND]
-    assert bp["last_mile"] == scout.SUB_NONBASIC_LAND
-    assert bp["multi_gated"] is False
-    # warp_cost-gated card: the 3 Phase-3 single-gated cards (Red
-    # Tiger Mechan, Bygone Colossus, Timeline Culler) moved to the
-    # PROBED tier post-Phase-3 (round-83, 2026-05-20 — see
-    # ``scripts/measure_pool_parity.py:loader_admits`` + the
-    # ``_parity``-named warp probe aliases in
-    # ``tests/test_parity_smoke.py``), so the multi-gated warp tail
-    # is the surviving subsystem-attribution carrier. Starfield
-    # Vocalist is warp + static_abilities — still subsystem-gated
-    # (the static-abilities Phase-3.5 substrate is the remaining
-    # lever to close it; see SUBSYSTEM_BLOCKED_LEVERAGE_INVENTORY.md
-    # §3 lever (1)).
-    assert scout.SUB_WARP in cards["Starfield Vocalist"]["gates"]
+    # Non-basic-land single-gate residue is now CLOSED. Secluded
+    # Starforge was the last surviving single-gate ``SUB_NONBASIC_LAND``
+    # carrier; it FLIPPED to PROBED (2026-05-31,
+    # ``feature/secluded-starforge-flip``) once its tap-X-untapped-
+    # artifacts X-channel substrate + the 3-AA parser claim-ordering fix
+    # landed on both engines (see ``tests/test_secluded_starforge_
+    # parity.py`` + ``docs/SEARCH_LIMITATIONS.md``). Echoing Deeps (the
+    # other former non-basic-land carrier) flipped earlier via its
+    # graveyard-clone replacement substrate. So the BLOCKED-subsystem
+    # attribution map no longer carries ANY ``SUB_NONBASIC_LAND`` gate.
+    assert "Secluded Starforge" not in cards, (
+        "Secluded Starforge is now PROBED post tap-X-artifacts flip; it "
+        "must NOT appear in the BLOCKED-subsystem attribution map"
+    )
+    assert not any(
+        scout.SUB_NONBASIC_LAND in cd["gates"] for cd in cards.values()
+    ), "the single-gate non-basic-land residue is fully closed"
     # Deafening Silence: post Cycle-1 closure (2026-05-22,
     # ``feature/deafening-silence-cycle-1-p1``), the printing-level
     # bool ``restricts_noncreature_spells_to_one_per_turn`` is now

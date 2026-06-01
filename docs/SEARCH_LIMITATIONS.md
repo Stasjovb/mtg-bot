@@ -17852,16 +17852,22 @@ unit pins).
 
 ---
 
-## Secluded Starforge — HONEST-STOP map: AAs 1+3 already grammar-covered, AA2 (`Tap X untapped artifacts → +X/+0`) blocked on a genuinely-new variable-tap-cost X-channel substrate on BOTH engines (2026-05-31)
+## Secluded Starforge — FLIPPED BLOCKED-SG → PROBED: AA2 tap-X-artifacts → +X/+0 X-channel substrate LANDED on both engines + parser claim-ordering fix (2026-05-31, `feature/secluded-starforge-flip`)
 
-**Where**: parser claim path
+**STATUS: FLIPPED to PROBED.** The variable-tap-cost X-channel substrate
+the map below described has LANDED on both engines, and the parser now
+emits the full faithful 3-AA printing. Secluded Starforge is PROBED
+(POOL_PARITY 466→467, BLOCKED-SG 9→8). The body below is preserved as
+the design record; the **FLIP-LANDED** note at the end records what
+actually shipped and the one scope simplification taken.
+
+**Where (the fix)**: parser claim path
 `src/mtg_bot/cards/parser/land_builder.py:_try_build_colorless_utility_land`
-(line ~3092; emits an *empty* land via `make_colorless_land`); static
-mirror `src/mtg_bot/cards/lands.py:56`
-(`make_colorless_land("Secluded Starforge")`). Card is currently
-BLOCKED-SG (subsystem-gated) — it is NOT in the `genuinely_missing`
-residue, so a *faithful* full-printing byte-equal probe CAN flip it to
-PROBED once the substrate below lands.
+now routes ALL lines of a multi-line tap-for-{C} land through
+`_parse_activated_ability_line` (NO trailing-AA drop); the single-line
+case keeps the historical `make_colorless_land`. Static mirror
+`src/mtg_bot/cards/lands.py` carries the full 3-AA `make_utility_land`
+(byte-identical to the parser).
 
 **Raw oracle (real EoE printing — `data/edge_of_eternities.json`)**,
 `type_line = "Land"`, `mana_cost = ""`:
@@ -17958,11 +17964,48 @@ closed; **+1 card / +7,570 cumulative 17lands EoE decks** (Secluded
 Starforge is the single largest remaining BLOCKED-SG deck-tail). 0
 strength cost on closure (faithful add, not a rules change).
 
-**Pinned by:** `tests/test_secluded_starforge_parity.py` — characterizes
-the VERIFY-FIRST facts (AAs 1+3 parse through the live grammar; the live
-whole-card printing is empty; AA2 is the sole unparsed line) so a future
-worker starts from the verified map, and fails loudly if the grammar
-drifts.
+**Pinned by:** `tests/test_secluded_starforge_parity.py` — now the
+PROBED-tier probe (see FLIP-LANDED below), not the old characterization.
+
+**FLIP-LANDED (2026-05-31, `feature/secluded-starforge-flip`).** What
+shipped vs the map above:
+
+- **AA2 cost atom + X mint (Python).**
+  `ActivationCost.tap_x_untapped_artifacts_you_control` +
+  `_activate_ability` payment: bounds X by the controller's untapped
+  artifacts, asks via the **existing `choose_x` agent hook** (the SAME
+  channel `{X}` mana costs use — `_choose_and_apply_x`), taps the
+  lowest-id-first X artifacts deterministically, and stashes X onto
+  `StackItem.x_value` → `state.resolving_x_value`. **Key map
+  correction:** the chosen-X is NOT a new legal-actions fan-out — like
+  `{X}` mana it's an agent-hook choice resolved inside
+  `_activate_ability`, so the "largest piece" the map feared (a
+  byte-equal cross-engine tap-subset decision enumeration) was NOT
+  needed. The probe seats X directly (the established GSZ / Zero Point
+  Ballad X-cost probe shape), so no new decision shape crosses the
+  bridge.
+- **Pump-by-X effect (both engines).**
+  `PumpTargetCreatureUntilEOT.power_bonus_from_x` flag — Python reads
+  `state.resolving_x_value`; the mirrored Rust
+  `Effect::PumpTargetCreatureUntilEOT` field reads
+  `current_resolve_x_value` (the C1 transient), clamped ≥0. parse +
+  to_pydict + dict→Python bridge all round-trip the flag.
+- **Parser + claim-ordering fix.** Cost piece + `Target creature gets
+  +X/+0 until end of turn` recognizer; `_try_build_colorless_utility_
+  land` multi-line path routes all 3 AAs (falls through to None if any
+  line fails to parse — never silently drops). Static `lands.py`
+  upgraded to the byte-identical 3-AA printing.
+
+**Scope simplification (documented divergence).** The PROBED probe and
+the Rust pump-by-X resolve seat X on the StackItem and resolve the pump
+directly; the cost-payment tap-X-artifacts **mint** path is implemented
++ unit-tested **only on Python** (`_activate_ability`). Rust has no
+activated-ability-cost tap-X-subset minting hook today — it consumes a
+pre-seated `current_resolve_x_value` (same as every other Rust X
+consumer). This is byte-equal for the resolve observable (the +X/+0
+pump) which is what the probe asserts; a full Rust cost-payment mint is
+follow-up work and is not load-bearing for the PROBED flip (the campaign
+probes drive resolve, not the Rust activation cost pipeline).
 
 ---
 
