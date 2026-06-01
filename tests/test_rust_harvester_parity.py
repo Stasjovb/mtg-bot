@@ -454,3 +454,167 @@ def test_cross_engine_real_eoe_rust_harvester_aa0_sequence_counter_then_power_da
         "Rust Harvester victim must survive (toughness 3 - 2 damage "
         "= 1 toughness remaining)"
     )
+
+
+# ---------------------------------------------------------------------------
+# (5) GENUINE cross-engine byte-equal probe — DealDamageEqualToSourcePower
+# AnyTarget reads the source's effective power INCLUDING +1/+1 counters
+# (CR 613 layer 7d) and via CR 603.10 last-known-information when the
+# source has left the battlefield.  Locks the source-power-dies fix
+# (hub todo ddc12150) cross-engine: BOTH the off-battlefield (graveyard)
+# read AND the counter inclusion that Rust Harvester's +1/+1-then-damage
+# AA depends on.
+# ---------------------------------------------------------------------------
+
+
+@_rust_skip
+def test_cross_engine_real_eoe_source_power_lki_with_counter_dies_damage_parity():
+    """**GENUINE cross-engine byte-equal probe — source-power-dies fix
+    (hub todo ddc12150).**
+
+    Drives ``DealDamageEqualToSourcePowerAnyTarget`` from a DIES trigger
+    on a source carrying a +1/+1 counter, on BOTH engines, asserting the
+    same damage is dealt.  This locks the two halves of the Rust fix
+    (``read_source_power_lki`` in ``state_ops_resolve.rs``):
+
+      1. **CR 603.10 LKI off-battlefield read.** At resolve time the
+         dying source is in the graveyard; Rust now searches the
+         graveyard (battlefield-first then all-zones fallback) for the
+         source object, matching Python's ``state.resolving_source``
+         reference read.  Pre-fix the battlefield-only scan found
+         nothing → 0 damage.
+
+      2. **CR 613 layer-7d counter inclusion.** The source is a 2/1 with
+         one +1/+1 counter → effective power 3.  Rust now folds
+         ``obj.counters`` into the read (pre-fix it computed
+         ``base + ueot_power_bonus`` and dropped counters → would have
+         read printed 2, not 3).  This is the exact composition Rust
+         Harvester's ``Sequence(PutPlusOneCounterOnSelf,
+         DealDamageEqualToSourcePowerAnyTarget)`` AA needs to be
+         byte-equal — the +1/+1 counter Rust Harvester adds to itself
+         must lift the damage.
+
+    Both engines' death-move keep the dying object's ``counters`` /
+    +1/+1 markers on the graveyard copy (Rust ``state_ops_sba.rs``
+    clears damage/tapped/attached but keeps counters; Python
+    ``move_off_battlefield`` likewise), so the LKI read sees printed 2 +
+    counter 1 = 3.
+
+    Shape (mirrors the Pin 1 Infernal Phantom LKI probe, plus a
+    counter): inject a 2/1 ``"Counter Phantom"`` on p0's bf with a self-
+    DIES ``deal_damage_equal_to_source_power_any_target`` trigger, add a
+    +1/+1 counter, mark lethal (2 >= toughness 1+1 = 2), SBA → DIES
+    trigger fires, drain, assert BOTH engines drop p1 by 3.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.turn import state_based_actions as py_sba
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Python side ----
+    phantom_printing = CardPrinting(
+        name="Counter Phantom",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.DIES,
+                predicate=IsSelf(),
+                effect=DealDamageEqualToSourcePowerAnyTarget(),
+            ),
+        ),
+    )
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+    py_phantom = py_state.new_object(
+        phantom_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_phantom.summoning_sick = False
+    py_phantom.tapped = False
+    py_phantom.damage = 0
+    py_phantom.plus_one_counters = 1  # effective power 2 + 1 = 3
+    py_phantom.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_phantom)
+    py_p1_before = py_state.players[1].life
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_phantom_id = rust_state.register_and_inject_object(
+        {
+            "name": "Counter Phantom",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "B": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "deal_damage_equal_to_source_power_any_target",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.add_counters(rust_phantom_id, 1), (
+        "Rust: failed to add +1/+1 counter to Counter Phantom"
+    )
+    rust_p1_before = rust_state.get_life(1)
+
+    # ---- Mark lethal (effective toughness 1 + 1 counter = 2; 2 dmg) ----
+    py_phantom.damage = 2
+    rust_state.deal_damage(rust_phantom_id, 2)
+
+    # ---- SBA → DIES trigger ----
+    py_sba(py_state)
+    rust_state.apply_sbas()
+
+    assert len(py_state.stack) == 1, (
+        f"Python: DIES trigger should be on stack; got {len(py_state.stack)}"
+    )
+    assert rust_state.stack_size() == 1, (
+        f"Rust: DIES trigger should be on stack; got {rust_state.stack_size()}"
+    )
+
+    # ---- Drain ----
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    # ---- Byte-equal parity: both deal 3 (printed 2 + counter 1) ----
+    assert py_state.players[1].life == py_p1_before - 3, (
+        "Python: source effective power = printed 2 + counter 1 = 3; p1 "
+        f"should drop 3. before={py_p1_before} after={py_state.players[1].life}"
+    )
+    assert rust_state.get_life(1) == rust_p1_before - 3, (
+        "Rust: LKI graveyard read must include the +1/+1 counter "
+        "(printed 2 + counter 1 = 3); p1 should drop 3. "
+        f"before={rust_p1_before} after={rust_state.get_life(1)}"
+    )
+    assert py_state.players[1].life == rust_state.get_life(1), (
+        "Cross-engine parity: Python and Rust must deal the same "
+        "counter-inclusive LKI source-power damage. "
+        f"Python={py_state.players[1].life}, Rust={rust_state.get_life(1)}"
+    )

@@ -113,39 +113,43 @@ def _put_on_bf(state, printing, owner_id):
 # ---------------------------------------------------------------------------
 
 @pytestmark_rust
-def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlefield_search_divergence_pin():
-    """Pin the Rust-vs-Python divergence for
-    ``Effect::DealDamageEqualToSourcePowerAnyTarget`` on a DIES trigger.
+def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_lki_parity():
+    """**Cross-engine byte-equal PARITY probe (formerly a divergence
+    pin) — ``Effect::DealDamageEqualToSourcePowerAnyTarget`` fired from
+    a DIES trigger reads CR 603.10 last-known-information.**
 
-    Bug location:
-      Rust: ``rust/src/state_ops_resolve.rs:9584-9604`` —
-      ``Effect::DealDamageEqualToSourcePowerAnyTarget`` searches
-      ``player.battlefield`` for the source object to read its printed power.
-      On a DIES trigger the source creature is already in the graveyard when
-      the trigger resolves; the battlefield scan finds nothing; ``amount``
-      stays 0; the early-return at 9602 fires with no damage dealt.
+    CLOSED by ``feature/source-power-dies`` (hub todo ddc12150). The
+    Rust resolve arm previously searched ONLY ``player.battlefield`` for
+    the source object to read its power. On a DIES trigger the source
+    creature is in the graveyard by the time the trigger resolves; the
+    battlefield scan found nothing; ``amount`` stayed 0; the early
+    return fired with no damage dealt. Python read
+    ``state.resolving_source`` (the ``StackItem.source`` reference
+    captured at push time — the dying creature that survived the zone
+    move) and dealt its last-known power.
 
-      Python: ``src/mtg_bot/effects/generic/damage.py:238-244`` —
-      ``DealDamageEqualToSourcePowerAnyTarget.resolve`` reads
-      ``state.resolving_source.effective_power``.  ``state.resolving_source``
-      is the ``item.source`` reference captured at push time (the dying
-      creature while still on battlefield); the reference survives the zone
-      move; the graveyard copy retains ``printing.power``.  Python reads
-      power = 3 and deals 3 damage to p1.
+    The fix routes the Rust read through
+    ``read_source_power_lki(state, source_obj_id)`` (``state_ops_
+    resolve.rs``), which searches the battlefield FIRST then falls back
+    to every other zone (graveyard / exile / hand / library / stack).
+    For a DIES-trigger source the graveyard fallback finds the dying
+    creature — Rust now reads its printed power (3) and deals 3 to p1,
+    byte-equal with Python.
 
-    What's right: Python (CR 603.10 last-known-information for the source).
+    CR reference: CR 603.10 (last-known information for a triggered
+    ability whose source changes zones after the trigger condition is
+    met) + CR 603.3c (the object that caused the trigger is the source).
 
-    Verified divergence (source power 3, p1 player target):
+    Verified parity (source power 3, p1 player target):
       * Python: p1 life 20 → 17 (3 damage dealt).
-      * Rust:   p1 life 20 → 20 (amount = 0; early return; no damage).
+      * Rust:   p1 life 20 → 17 (3 damage dealt; graveyard LKI read).
 
     Probe shape:
       1. Build states with a 3/2 creature ("Phantom Striker") on p0's bf
          with a self-DIES trigger: ``deal_damage_equal_to_source_power_any_
          target``.  No target is injected onto p1's bf — Rust's resolve arm
-         falls back to the defender-player when no p1 creature exists, so
-         with amount = 0 the fallback is irrelevant.  Python directs the
-         target to p1 player via the agent seated below.
+         falls back to the defender-player when no p1 creature exists.
+         Python directs the target to p1 player via the agent seated below.
       2. Python only: seat a ``_PickFirstOpponentTargetAgent`` on p0 so the
          trigger's target-selection at push time picks the p1 player.
          (Rust's ``DealDamageEqualToSourcePowerAnyTarget`` picks the target
@@ -155,14 +159,11 @@ def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlef
          move the creature to the graveyard, and fire its DIES trigger.
          Both stacks should hold exactly one trigger item.
       5. Drain both stacks (resolve the trigger).
-      6. Assert per-engine divergence on p1's life total.
+      6. Assert cross-engine byte-equal damage on p1's life total.
 
     Out of scope:
-      * Cross-engine parity — this probe DOCUMENTS a known divergence;
-        no cross-engine equivalence assertion is made.
       * Target choice divergence — Rust's deterministic player-fallback
-        and Python's agent-picked player converge on p1 IF amount > 0;
-        the divergence is on the AMOUNT step, not on target routing.
+        and Python's agent-picked player both converge on p1 player.
       * SBA lethal-damage vs. destroy ordering — both engines apply the
         same indestructible-unaware lethal-damage SBA; the creature is
         a plain 3/2 with no riders.
@@ -344,13 +345,12 @@ def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlef
     while py_state.stack:
         resolve_top_of_stack(py_state)
 
-    # ---- Per-engine divergence assertions ----
+    # ---- Cross-engine byte-equal PARITY assertions ----
     # Python: resolving_source = Phantom Striker (graveyard ref); power = 3;
     # deals 3 damage to p1 player (agent-picked target).
     assert py_state.players[1].life == py_p1_life_before - 3, (
         "Python: DealDamageEqualToSourcePowerAnyTarget DIES trigger should "
         "read resolving_source (graveyard object) and deal 3 damage to p1. "
-        "Bug-fix will make Rust match this value. "
         f"before={py_p1_life_before} "
         f"after={py_state.players[1].life}"
     )
@@ -358,16 +358,16 @@ def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlef
         f"Python: p0 life should be unchanged; got {py_state.players[0].life}"
     )
 
-    # Rust: DealDamageEqualToSourcePowerAnyTarget resolve arm at
-    # state_ops_resolve.rs:9590 searches player.battlefield for the source
-    # object — not found (creature is in graveyard) → amount = 0 → early
-    # return at line 9602 → NO damage dealt → p1 life unchanged.
-    assert rust_state.get_life(1) == rust_p1_life_before, (
-        "Rust: DealDamageEqualToSourcePowerAnyTarget on a DIES trigger should "
-        "deal 0 damage (source not found on battlefield; battlefield-search "
-        "bug at state_ops_resolve.rs:9590). Pinned divergent behavior — will "
-        "flip to FAIL when Rust searches resolving_source_zone (graveyard) "
-        "instead of only battlefield. "
+    # Rust (POST-FIX): the DealDamageEqualToSourcePowerAnyTarget resolve
+    # arm reads `read_source_power_lki(state, source_obj_id)`, which
+    # falls back to the graveyard when the source has left the
+    # battlefield (CR 603.10 last-known-information). The dying Phantom
+    # Striker's printed power 3 is read from its graveyard copy → 3
+    # damage dealt to p1, byte-equal with Python.
+    assert rust_state.get_life(1) == rust_p1_life_before - 3, (
+        "Rust: DealDamageEqualToSourcePowerAnyTarget on a DIES trigger must "
+        "read the source's last-known power from the graveyard (CR 603.10) "
+        "and deal 3 damage to p1, matching Python. "
         f"before={rust_p1_life_before} "
         f"after={rust_state.get_life(1)}"
     )
@@ -375,17 +375,15 @@ def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlef
         f"Rust: p0 life should be unchanged; got {rust_state.get_life(0)}"
     )
 
-    # CROSS-ENGINE NON-PARITY: p1 life values MUST differ between engines.
-    # When Rust fixes the battlefield-search bug (reads graveyard or
-    # resolving_source instead), both engines will deal 3 damage and
-    # py_p1_life == rust_p1_life == 17.  That flip makes this assertion
-    # fail, signaling that the pin should be converted to a parity assert.
-    assert py_state.players[1].life != rust_state.get_life(1), (
-        "Cross-engine non-parity: Python (3 damage) should NOT equal "
-        "Rust (0 damage) until the battlefield-search bug is fixed. "
+    # CROSS-ENGINE BYTE-EQUAL PARITY: both engines deal the same 3 damage
+    # to p1 (the divergence is CLOSED).
+    assert py_state.players[1].life == rust_state.get_life(1), (
+        "Cross-engine parity: Python and Rust must deal the same DIES-trigger "
+        "source-power damage to p1 (3 each). "
         f"Python p1 life={py_state.players[1].life}, "
         f"Rust p1 life={rust_state.get_life(1)}"
     )
+    assert py_state.players[1].life == 17
 
     # Both stacks should be empty after drain.
     assert rust_state.stack_size() == 0, (

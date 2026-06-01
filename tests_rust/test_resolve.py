@@ -17653,3 +17653,115 @@ def test_pinnacle_create_tokens_zero_recall_count_mints_nothing(
         if o["printing_name"] == "Robot"
     ]
     assert robots == []
+
+
+# --- source-power-dies closure pins (hub todo ddc12150) -------------
+#
+# Effect::DealDamageEqualToSourcePowerAnyTarget reads the resolving
+# source's effective power via ``read_source_power_lki`` — battlefield
+# FIRST, then an all-zones fallback (CR 603.10 last-known-information)
+# folding in ``obj.counters`` (CR 613 layer 7d). These Rust-only pins
+# lock both halves of the fix against regression.
+
+
+def _dies_source_power_dict():
+    """A creature whose self-DIES trigger is
+    ``deal_damage_equal_to_source_power_any_target`` (Infernal-Phantom
+    shape). Used to drive the LKI graveyard read."""
+    return {
+        "name": "LKI Phantom",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_equal_to_source_power_any_target",
+                },
+            }
+        ],
+    }
+
+
+def test_source_power_dies_reads_lki_from_graveyard(engine):
+    """A DIES-triggered DealDamageEqualToSourcePowerAnyTarget reads the
+    dying source's last-known power from the graveyard (CR 603.10).
+
+    Pre-fix the resolve arm searched only the battlefield; the dying
+    source is in the graveyard at resolve time → amount 0 → no damage.
+    Post-fix ``read_source_power_lki`` falls back to the graveyard and
+    reads the printed power 2 → 2 damage to the defender (p1)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    src_id = state.register_and_inject_object(
+        _dies_source_power_dict(), 0, ZONE_BATTLEFIELD
+    )
+    life_before = list(state.life_totals)
+    # Mark lethal (toughness 1), SBA → creature dies, DIES trigger fires.
+    state.deal_damage(src_id, 1)
+    state.apply_sbas()
+    assert state.stack_size() == 1, (
+        f"DIES trigger should be on stack; got {state.stack_size()}"
+    )
+    state.resolve_top_of_stack()
+    # Defender p1 takes 2 (printed power read from the graveyard LKI).
+    assert state.life_totals[1] == life_before[1] - 2, (
+        "LKI graveyard read must deal printed power 2 to defender; "
+        f"before={life_before[1]} after={state.life_totals[1]}"
+    )
+    assert state.life_totals[0] == life_before[0]
+
+
+def test_source_power_dies_lki_includes_counters(engine):
+    """The LKI source-power read folds in +1/+1 counters (CR 613 layer
+    7d) — the composition Rust Harvester's +1/+1-then-damage AA needs.
+
+    A 2/1 source with one +1/+1 counter has effective power 3. After it
+    dies (lethal = toughness 1 + counter 1 = 2), the DIES trigger reads
+    printed 2 + counter 1 = 3 from the graveyard copy (Rust's SBA death
+    move keeps ``counters``) and deals 3 to the defender. Pre-fix the
+    arm computed ``base + ueot_power_bonus`` and dropped counters → it
+    would have read 2."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    src_id = state.register_and_inject_object(
+        _dies_source_power_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert state.add_counters(src_id, 1)
+    life_before = list(state.life_totals)
+    # Lethal = effective toughness 1 + counter 1 = 2.
+    state.deal_damage(src_id, 2)
+    state.apply_sbas()
+    assert state.stack_size() == 1
+    state.resolve_top_of_stack()
+    assert state.life_totals[1] == life_before[1] - 3, (
+        "Counter-inclusive LKI read must deal printed 2 + counter 1 = 3; "
+        f"before={life_before[1]} after={state.life_totals[1]}"
+    )
+
+
+def test_source_power_on_battlefield_with_counter_no_regression(engine):
+    """On-battlefield source-power read still folds counters in (the
+    Rust Harvester live case). A 2/1 on bf with a +1/+1 counter whose
+    DIES trigger has NOT fired yet — drive the same read by killing it
+    and resolving; confirms the battlefield-first branch + counter fold
+    agree with the graveyard branch (both read 3)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=0
+    )
+    src_id = state.register_and_inject_object(
+        _dies_source_power_dict(), 0, ZONE_BATTLEFIELD
+    )
+    assert state.add_counters(src_id, 1)
+    # Sanity: while on battlefield the read composition is base+counter.
+    life_before = list(state.life_totals)
+    state.deal_damage(src_id, 2)
+    state.apply_sbas()
+    state.resolve_top_of_stack()
+    assert state.life_totals[1] == life_before[1] - 3
