@@ -4312,6 +4312,21 @@ PROBE_MODULES: tuple[Path, ...] = (
     # all 3 printed AAs route through the grammar. Net delta:
     # +1 PROBED / -1 BLOCKED-subsystem-gated.
     REPO_ROOT / "tests" / "test_secluded_starforge_parity.py",
+    # Tezzeret, Cruel Captain (2026-06-01) — the LAST non-Duskmourn
+    # BLOCKED card. Real-EoE per-card cross-engine byte-equal probe of
+    # the planeswalker loyalty-GAIN substrate:
+    # ``is_planeswalker``/``loyalty=4`` printing surface + the ENTERS →
+    # ``PutLoyaltyCounterOnSelf(amount=1)`` loyalty-gain trigger, driven
+    # through BOTH engines' resolve paths (Python ``resolving_source``
+    # resolve; Rust new ``Effect::PutLoyaltyCounterOnSelf`` +
+    # ``put_loyalty_counter_on_self`` parser/to_dict arm + bridge
+    # reverse arm) asserting byte-equal loyalty 4 -> 5. The three
+    # loyalty-ACTIVATED abilities (0/−3/−7) + the −7 emblem stay
+    # HONEST-STOP-deferred (Python does not model loyalty-ability
+    # activation — parser strips the lines; no emblem substrate exists).
+    # Net delta: +1 PROBED / -1 BLOCKED-subsystem-gated; this hits
+    # non-DSK 314/315 -> 315/315 = 100% of the non-DSK pool.
+    REPO_ROOT / "tests" / "test_tezzeret_cruel_captain_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

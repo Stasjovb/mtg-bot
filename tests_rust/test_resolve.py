@@ -5017,6 +5017,125 @@ def test_resolve_put_plus_one_counter_on_self_finds_source_on_opponent_battlefie
     assert synthetic_state.get_counters(spell_obj_id) == 1
 
 
+# --- Tezzeret slice: PutLoyaltyCounterOnSelf resolve pins -------------------
+#
+# Sibling of the PutPlusOneCounterOnSelf arm above (same "self"
+# recipient via source_obj_id + battlefield-only scan + silent fizzle
+# off-battlefield), with TWO differences:
+#   1. it grows ``loyalty_counters`` (read via get_loyalty_counters),
+#      NOT the +1/+1 ``counters`` field; and
+#   2. it does NOT dispatch CountersAdded (loyalty counters are not
+#      +1/+1 counters).
+# Powers Tezzeret, Cruel Captain's "Whenever an artifact you control
+# enters, put a loyalty counter on Tezzeret." Mirrors Python's
+# ``PutLoyaltyCounterOnSelf.resolve`` (effects/generic/counters.py:234).
+
+
+def _self_loyalty_dict(amount=1):
+    """A carrier printing carrying a PutLoyaltyCounterOnSelf effect.
+    card_types=["Creature"] so the spell-resolution path applies the
+    top-level ``effects`` onto the source after the post-resolve move
+    lands it on the battlefield (mirrors the sibling
+    ``_self_counter_dict`` shape — the loyalty-counter slot exists on
+    EVERY GameObject, so the effect's mechanics are exercised
+    independent of planeswalker-spell-resolution). The real Tezzeret
+    carrier fires this effect via its ENTERS triggered ability on a
+    Planeswalker — that firing path is pinned by the cross-engine probe
+    ``test_tezzeret_cruel_captain_parity.py``."""
+    return {
+        "name": f"Test Self-Loyalty (x{amount})",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "effects": [
+            {
+                "kind": "put_loyalty_counter_on_self",
+                "amount": amount,
+            }
+        ],
+    }
+
+
+def test_resolve_put_loyalty_counter_on_self_increments_source_loyalty(
+    synthetic_state,
+):
+    """A planeswalker resolving with PutLoyaltyCounterOnSelf deposits
+    its amount of LOYALTY counters onto its own GameObject. Default
+    amount=1 case (4 -> 5)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _self_loyalty_dict(amount=1), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_loyalty_counters(obj_id, 4)
+    assert synthetic_state.get_loyalty_counters(obj_id) == 4
+    # +1/+1 ``counters`` axis is untouched (orthogonal field).
+    assert synthetic_state.get_counters(obj_id) == 0
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_loyalty_counters(obj_id) == 5
+    # Loyalty-gain does NOT touch the +1/+1 counters axis.
+    assert synthetic_state.get_counters(obj_id) == 0
+
+
+def test_resolve_put_loyalty_counter_on_self_amount_two(synthetic_state):
+    """amount=2 lands +2 loyalty on the source (4 -> 6)."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _self_loyalty_dict(amount=2), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_loyalty_counters(obj_id, 4)
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.get_loyalty_counters(obj_id) == 6
+
+
+def test_resolve_put_loyalty_counter_on_self_amount_zero_no_op(
+    synthetic_state,
+):
+    """amount=0 is a legal no-op (mirrors the sibling self-counter
+    zero-amount convention). Source loyalty untouched."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _self_loyalty_dict(amount=0), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_loyalty_counters(obj_id, 4)
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_loyalty_counters(obj_id) == 4
+
+
+def test_resolve_put_loyalty_counter_on_self_source_not_on_battlefield_fizzles(
+    synthetic_state,
+):
+    """Source off the battlefield (in hand) at apply time = silent
+    fizzle (mirrors the sibling PutPlusOneCounterOnSelf fizzle: effects
+    run BEFORE the post-resolve mover, so the source-finder sees the
+    source in hand and the loyalty add lands on nothing). After resolve
+    the source lands on the battlefield with loyalty 0 (never seeded,
+    fizzled). Mirrors Python's ``resolving_source is None``
+    short-circuit."""
+    ZONE_HAND = 0
+    obj_id = synthetic_state.register_and_inject_object(
+        _self_loyalty_dict(amount=1), 0, ZONE_HAND
+    )
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_HAND
+
+    synthetic_state.push_to_stack(obj_id, 0)
+    # No raise — silent fizzle.
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Moved to battlefield by the post-resolve mover, loyalty unchanged
+    # at 0 (the fizzle ran before the move).
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.get_loyalty_counters(obj_id) == 0
+
+
 # --- round-23: Surveil dispatch (round-27 G20 closure: decision-callback) ---
 #
 # CR 701.43: Surveil N — the controller looks at the top N cards of

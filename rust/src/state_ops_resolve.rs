@@ -5397,6 +5397,61 @@ fn apply_effect(
                 source_obj_id,
             )?;
         }
+        // Tezzeret, Cruel Captain slice: PutLoyaltyCounterOnSelf. CR
+        // 122.1 / 606.5b — put `amount` LOYALTY counters on the
+        // resolving ability's source planeswalker ("put a loyalty
+        // counter on Tezzeret"). Powers planeswalker "Whenever ..."
+        // triggers that GROW their own loyalty.
+        //
+        // **Mirrors the PutPlusOneCounterOnSelf arm above** (same
+        // "self" recipient via `source_obj_id` + battlefield-only scan
+        // + silent-fizzle when off-battlefield), with TWO differences:
+        //   1. it grows `obj.loyalty_counters` (NOT `obj.counters`),
+        //      the orthogonal i32 loyalty slot read by the walker SBA
+        //      pass + loyalty-cost gate; and
+        //   2. it does NOT dispatch `CountersAdded` — loyalty counters
+        //      are not +1/+1 counters, so `CountersAdded`-keyed
+        //      triggers don't fire (mirrors Python's
+        //      `PutLoyaltyCounterOnSelf.resolve`, which bumps
+        //      `source.loyalty_counters` directly with no
+        //      `fire_counters_added` call).
+        //
+        // **amount<0 raises** (defense-in-depth; parse_effect catches
+        // at register time). **amount=0 is a legal no-op.**
+        Effect::PutLoyaltyCounterOnSelf { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutLoyaltyCounterOnSelf amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            let delta = *amount;
+            // Locate the source on a battlefield zone; off-battlefield
+            // sources fizzle silently per the PutPlusOneCounterOnSelf
+            // precedent (mirrors Python's `source is None` short-circuit).
+            let mut found_player: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    found_player = Some(pidx);
+                    break;
+                }
+            }
+            let pidx = match found_player {
+                Some(p) => p,
+                None => return Ok(()), // fizzle silently
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.loyalty_counters =
+                        obj.loyalty_counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
         // Round-27 G20 closure: Surveil. CR 701.43 — controller looks
         // at the top `count` cards of their library and may put any
         // number of them into their graveyard; the rest stay on top
