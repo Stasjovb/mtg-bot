@@ -17582,7 +17582,18 @@ This slice does NOT flip the card, does NOT widen any shared admit predicate, an
 
 ---
 
-## Blast Zone FLIP — Rust `Effect::DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters` LANDED (BLOCKED-SG → PROBED in one slice); probe drives the wipe via an ENTERS-trigger shim, NOT the real `{X}{X}`+sac+tap activated ability (2026-05-31, `feature/blast-zone`)
+## Blast Zone FLIP — Rust `Effect::DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters` LANDED (BLOCKED-SG → PROBED); **CLOSED 2026-06-01 (`feature/blast-zone-aa-cost`): the probe now drives the wipe via the REAL `{3}`+tap+sacrifice-self activated-ability cost path on BOTH engines, NOT the ENTERS-trigger shim.** (substrate landed 2026-05-31, `feature/blast-zone`)
+
+**CLOSURE UPDATE (2026-06-01, `feature/blast-zone-aa-cost`).** The ETB-trigger shim described below is GONE. Both the cross-engine probe (`tests/test_blast_zone_parity.py`) and new Rust-engine pins (`tests_rust/test_blast_zone_destroy_aa_activation.py`) now activate Blast Zone's PARSED destroy activated ability (cost `{3}` mana + `tap_self` + `sacrifice_self`) end-to-end:
+
+  * **Python** `actions._activate_ability` (`actions.py:1928`): pays `{3}` via `auto_tap_for_cost`, taps the source (`tap_self`), sacrifices the source (`sacrifice_self` → `turn.sacrifice`, moves it to the graveyard with `charge_counters` intact), pushes the AA onto the stack; `resolve_top_of_stack` (`actions.py:2721`) seats `state.resolving_source = item.source` (the now-graveyard'd GameObject) and fires the wipe.
+  * **Rust** `Action::ActivateAbility` (`state_ops_actions.rs:788`): pays the SAME three cost atoms — `mana` via `auto_tap_pay_for_cost` (Phase 4), `tap_self` (Phase 5), `sacrifice_self` (Phase 5b, lines 2135-2184 — which zeros the `+1/+1` `counters` scalar but **NOT** `charge_counters`, so the count survives as last-known-info), then pushes a `new_trigger` StackItem carrying `source_obj_id`; `resolve_top_of_stack` fires the wipe, whose resolve arm (`state_ops_resolve.rs:23234`) scans all five zones (incl. the graveyard) for `source_obj_id` and reads its surviving `charge_counters` as the MV filter — the LKI-survival pattern, mirroring Python.
+
+  **No new Rust cost atom was needed** — the `{3}` + `tap_self` + `sacrifice_self` shape is exactly what the CE20 activated-ability substrate (`parse_activation_cost`, `cards.rs:19633`) + the Lander sacrifice-self cost-commit already support. The closure was a test rewrite (real-AA drive replacing the ETB-shim helpers) + 4 new Rust pins; `rust/src` was NOT touched. Byte-equal on both engines: MV-matching nonland permanents destroyed to their own controllers' graveyards, lands + non-matching permanents survive, the sacrificed Blast Zone source in p0's graveyard. The cost-path gap noted in the "deliberate shortcut" / "failure mode" sections below is now CLOSED for the `{3}`+tap+sac shape (the parser's cross-wired destroy AA — the `{X}{X}` charge-add AA[0] cost-path is a separate, un-probed shape).
+
+---
+
+### Original substrate-landing entry (2026-05-31) — superseded by the closure above for the activation-side gap:
 
 **Where:** New Rust `Effect::DestroyEachNonlandPermanentWithMVEqualToSourceChargeCounters` unit variant — declaration `rust/src/cards.rs` (beside `ExileAllCreaturesAndSpacecraft`), parse arm `rust/src/cards.rs` (`"destroy_each_nonland_permanent_with_mv_equal_to_source_charge_counters"`), `to_pydict` arm `rust/src/cards.rs`, valid-kinds list `rust/src/cards.rs:17267`, resolve arm `rust/src/state_ops_resolve.rs` (beside `ExileAllArtifactsWithManaValueAtMost`). Cross-engine bridge: dict→Python arm `src/mtg_bot/parity/cross_engine.py` (beside `destroy_all_creatures`), Python→dict `_leaf` `src/mtg_bot/parity/trajectory.py` (beside `DestroyAllCreatures`). Probe `tests/test_blast_zone_parity.py`; registered in `scripts/measure_pool_parity.py` `PROBE_MODULES`.
 
