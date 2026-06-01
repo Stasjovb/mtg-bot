@@ -7202,6 +7202,25 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # end-to-end by ``tests/test_baseball_bat_parity.py``.
         from mtg_bot.effects.generic.tap import TapUpToOneTargetCreature
         return TapUpToOneTargetCreature()
+    if kind == "phase_out_equipped_creature":
+        # **Phasing substrate — Robe of Stars (2026-05-31).** Reverse
+        # bridge arm for Rust's ``Effect::PhaseOutEquippedCreature``
+        # (cards.rs unit variant added immediately after
+        # ``TapUpToOneTargetCreature``; parse + to_pydict arms in
+        # cards.rs; resolve arm in state_ops_resolve.rs). Mirrors
+        # Python's ``PhaseOutEquippedCreature``
+        # (effects/generic/tap.py:454 — reads ``state.resolving_source``,
+        # follows ``attached_to`` to the host, stamps
+        # ``host.phased_out = True``).
+        #
+        # **Unit variant.** No constructor args (the source→attached_to→
+        # host walk is structural to the class). Extra dict keys silently
+        # dropped (unit-variant contract; sibling
+        # ``tap_up_to_one_target_creature`` shape). The sole EoE consumer
+        # is **Robe of Stars** ({1}{W} Equipment, Astral Projection AA),
+        # pinned end-to-end by ``tests/test_robe_of_stars_parity.py``.
+        from mtg_bot.effects.generic.tap import PhaseOutEquippedCreature
+        return PhaseOutEquippedCreature()
     if kind == "saw_attacks_optional_sac_draw_effect":
         # **Equipment-AA family — Saw (2026-05-31).** Reverse bridge arm
         # for Rust's ``Effect::SawAttacksOptionalSacDrawEffect`` (cards.rs

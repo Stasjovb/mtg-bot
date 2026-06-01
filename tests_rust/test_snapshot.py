@@ -76,6 +76,12 @@ EXPECTED_KEYS = {
     "token_supertype_override",
     "exiled_with_source",
     "controller_override",
+    # Phasing substrate — Robe of Stars (2026-05-31): per-object
+    # phase-out bool. False on every freshly-allocated object (back-
+    # compat default); True once Effect::PhaseOutEquippedCreature has
+    # stamped the equipped host. Surfaced (unlike regeneration_shield)
+    # so the phase-OUT state change is byte-equal-observable.
+    "phased_out",
 }
 
 _FOREST = {

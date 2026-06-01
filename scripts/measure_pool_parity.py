@@ -4145,6 +4145,13 @@ PROBE_MODULES: tuple[Path, ...] = (
     # tap_up_to_one_target_creature Rust Effect/bridge) amortizes to the
     # three siblings (Atomic Microsizer / Auxiliary Boosters / Saw).
     REPO_ROOT / "tests" / "test_baseball_bat_parity.py",
+    # Robe of Stars (phasing substrate — 2026-05-31). The {1}{W} Astral
+    # Projection AA "Equipped creature phases out". The genuinely-new
+    # Rust Effect::PhaseOutEquippedCreature + GameObject.phased_out bool
+    # (surfaced in the snapshot) + reverse bridge arm. The probe drives
+    # the real AA-activation on Rust + the real-parsed Effect.resolve on
+    # Python and asserts byte-equal host phased_out state.
+    REPO_ROOT / "tests" / "test_robe_of_stars_parity.py",
     # Saw (Equipment-AA family sibling — 2026-05-31). The ATTACKS +
     # IsHost(attacker) "you may sacrifice a permanent other than that
     # creature or this Equipment; if you do, draw a card" rider. Rides

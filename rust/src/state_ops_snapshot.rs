@@ -214,6 +214,16 @@ fn object_to_pydict<'py>(
         Some(states) => d.set_item("door_states", states)?,
         None => d.set_item("door_states", py.None())?,
     }
+    // **Phasing substrate — Robe of Stars (2026-05-31) — `phased_out`
+    // surface.** Unlike `regeneration_shield` (snapshot-elided), the
+    // phasing bit IS surfaced so the phase-OUT state change driven by
+    // `Effect::PhaseOutEquippedCreature` is byte-equal-observable
+    // cross-engine (the per-card Robe probe reads this key on the Rust
+    // side vs Python's `GameObject.phased_out`). Pre-substrate snapshots
+    // observe `false` on every object (back-compat default — unchanged
+    // from the pre-substrate dict), so the new key is additive but the
+    // value is invariant on snapshots that don't exercise Robe's AA.
+    d.set_item("phased_out", obj.phased_out)?;
     Ok(d)
 }
 

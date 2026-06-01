@@ -188,6 +188,36 @@ pub struct GameObject {
     /// at `turn.py:1052` for the once-per-turn aspect (Phase 1
     /// Cycle 1 defers wiring this; the substrate is set-only).
     pub regeneration_shield: bool,
+    /// **Phasing substrate (Robe of Stars, 2026-05-31) — `phased_out`.**
+    /// Set `true` by `Effect::PhaseOutEquippedCreature` resolve when this
+    /// object is the equipped host of the resolving Equipment. Mirrors
+    /// Python's `GameObject.phased_out: bool = False`
+    /// (`src/mtg_bot/game.py:613`).
+    ///
+    /// **SUBSTRATE-ONLY phasing semantics (CR 702.26 NOT fully modeled).**
+    /// The bit is SET by the resolve arm and SURFACED in the snapshot
+    /// dict (unlike `regeneration_shield`, which stays snapshot-elided) so
+    /// the phase-OUT state change is byte-equal-observable cross-engine.
+    /// The Rust side mirrors Python's deliberately-simplified phasing:
+    ///   * Phase-OUT: stamp `phased_out = true` on the host (this arm).
+    ///   * Phase-IN: cleared at the controller's untap step in Python
+    ///     (`turn.py:64-65`). The Rust untap-step clear lands only if a
+    ///     probe exercises it; the per-card Robe probe drives the
+    ///     phase-OUT half (the byte-equal-observable state change), not a
+    ///     full turn rollover — see the SEARCH_LIMITATIONS phasing entry.
+    ///   * Treat-as-nonexistent (combat/SBA/targeting exclusion) is NOT
+    ///     modeled on either engine beyond Python's combat-damage filter
+    ///     (`combat.py:382`). The snapshot surfaces the bit; no game
+    ///     action consumes it on the Rust side. Documented in
+    ///     `docs/SEARCH_LIMITATIONS.md` "Robe of Stars phasing substrate".
+    ///
+    /// **Fingerprint elision (back-compat).** NOT in the per-object
+    /// fingerprint tuple — every pre-substrate pinned baseline stays
+    /// byte-equal. It IS in the snapshot dict (additive key; value is
+    /// `false` on every object that hasn't been phased out, so all
+    /// pre-substrate snapshot baselines stay byte-identical). Defaults to
+    /// `false` for every freshly-allocated GameObject.
+    pub phased_out: bool,
     /// **Aura Phase 3+ Phase B Cycle 1 (2026-05-26) — Cracked Skull
     /// substrate landing — one-way reveal bitfield.** Per-object
     /// per-player visibility bitfield for cards whose CONTENTS have
@@ -4300,6 +4330,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         stun_counters: 0,
         // Carrier-AA Phase 1 Cycle 1: shield defaults false.
         regeneration_shield: false,
+        phased_out: false,
 
         publicly_known_to_caster_bits: 0,
         // CE4 closure: synthetic-state fixtures pre-populate the
