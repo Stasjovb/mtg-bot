@@ -293,3 +293,4 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 241 | `Effect::CreateNTokensFromLastExileRecall` | `CreateNTokensFromLastExileRecall` | 1 |
 | 242 | `Effect::SacrificeSelf` | `SacrificeSelf` | 1 |
 
+
