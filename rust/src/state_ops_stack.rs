@@ -265,6 +265,31 @@ impl GameState {
             .unwrap_or(false)
     }
 
+    /// **Consult the Star Charts kicker-rider substrate
+    /// (2026-05-31).** Getter for the top stack item's `was_kicked`
+    /// flag — whether the resolving spell was cast with its Kicker
+    /// additional cost paid. Returns `false` on an empty stack and for
+    /// every non-kicked push. Mirrors `stack_top_is_copy`.
+    fn stack_top_was_kicked(&self) -> bool {
+        self.stack
+            .last()
+            .map(|item| item.was_kicked)
+            .unwrap_or(false)
+    }
+
+    /// **Consult the Star Charts kicker-rider substrate
+    /// (2026-05-31).** Synthetic-test setter for the top stack item's
+    /// `was_kicked` slot. Used by the cross-engine probe to opt a
+    /// directly-pushed spell into the kicked branch (parallel to
+    /// `set_stack_top_is_copy`). The production `cast_spell_noncreature`
+    /// path does NOT yet mint `was_kicked=true` — the kicker mana-
+    /// payment pipeline stays deferred (see SEARCH_LIMITATIONS.md).
+    fn set_stack_top_was_kicked(&mut self, was_kicked: bool) {
+        if let Some(item) = self.stack.last_mut() {
+            item.was_kicked = was_kicked;
+        }
+    }
+
     /// G7 lander-controller-mismatch closure — synthetic-test stack
     /// push that carries the cast-time-bound target. The production
     /// cast-spell path (`cast_spell_noncreature`) sets target via the

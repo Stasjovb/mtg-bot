@@ -527,6 +527,7 @@ pub fn make_state(
         // Cycle-1 every spell pushed `x_value: None`, so the
         // transient stays None until Cycle 2/3 mints a real X bind).
         current_resolve_x_value: None,
+        current_resolve_was_kicked: false,
         // Darkness-shape combat-damage prevention substrate —
         // Cycle 1 (2026-05-21): fresh games start with no active
         // combat-damage prevention. Back-compat default; no

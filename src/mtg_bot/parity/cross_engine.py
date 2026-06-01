@@ -10547,6 +10547,62 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             FamishedWorldsireETBEffect,
         )
         return FamishedWorldsireETBEffect()
+    if kind == "consult_the_star_charts_effect":
+        # **BLOCKED-RUST-EFFECT slice (2026-05-31) — Consult the Star
+        # Charts bridge arm.** Rust's ``Effect::ConsultTheStarCharts``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-54
+        # ``famished_worldsire_look_top_x_by_power_put_lands_tapped``
+        # arm; to_dict immediately after the matching enum slot;
+        # resolve in ``state_ops_resolve.rs`` immediately after
+        # ``FamishedWorldsireLookTopXByPowerPutLandsTapped``) mirrors
+        # Python's ``ConsultTheStarChartsEffect``
+        # (``effects/bespoke.py:1139``).
+        #
+        # **Unit variant — no fields.** X (= number of lands the
+        # controller controls) and the kicked vs unkicked keep-count
+        # (2 vs 1) are both dynamic resolve-time reads. The keep-count
+        # keys off the resolving spell's ``was_kicked`` flag — Rust via
+        # the ``current_resolve_was_kicked`` transient (swapped from
+        # ``StackItem.was_kicked``); Python via ``state.resolving_kicked``
+        # (swapped from ``StackItem.kicked``). There is no static field
+        # to surface, so the bridge passes through verbatim; extra dict
+        # keys ignored (mirrors the round-54
+        # ``famished_worldsire_look_top_x_by_power_put_lands_tapped``
+        # unit-variant arm shape).
+        #
+        # **Resolve semantics (cross-engine, seated-agent
+        # deterministic-first contract).** Both engines: resolve under
+        # the SOURCE's controller (CR 119.5 / 608.2). X = lands the
+        # controller controls. ``X == 0`` or empty library → silent
+        # no-op. Examine top ``min(X, lib_len)``; ``keep = 2 if kicked
+        # else 1``. The kept cards are the FIRST ``keep`` examined cards
+        # top-to-bottom — Python's no-agent fallback picks
+        # ``remaining[0]`` each iteration (``bespoke.py:1178-1179``),
+        # which IS the topmost survivor; Rust's deterministic-first
+        # takes ``examined[:keep]``. They converge on the same kept set.
+        # Both route kept → hand and the REST → the BOTTOM of the
+        # library in random order (Python ``state.rng.shuffle(
+        # remaining); p.library.extend(remaining)``; Rust the external-
+        # rng Fisher-Yates byte-identical via ``external_rng::next_below``
+        # when a shared ``random.Random`` is installed). Python's per-
+        # card ``reset_public_knowledge`` (``bespoke.py:1193/1201``)
+        # has no Rust fingerprint surface, so the observable post-
+        # resolve zone state is byte-equal without a Rust mirror — see
+        # ``docs/SEARCH_LIMITATIONS.md``.
+        #
+        # **Real EoE consumer:** Consult the Star Charts — the ONLY EoE
+        # card with this shape. The full *card* carries the Kicker
+        # additional-cost mechanic, whose mana-payment pipeline is NOT
+        # yet on the Rust cast path (``cast_spell_noncreature`` ignores
+        # the ``kicked`` flag); the probe drives both cast modes via the
+        # ``set_stack_top_was_kicked`` synthetic setter rather than the
+        # deferred mana-payment path. Documented in
+        # ``docs/SEARCH_LIMITATIONS.md``.
+        from mtg_bot.effects.bespoke import (
+            ConsultTheStarChartsEffect,
+        )
+        return ConsultTheStarChartsEffect()
     if kind == "anticausal_vestige_leaves_effect":
         # **Anticausal Vestige Cycle 1 (2026-05-24, substrate-only) —
         # bridge arm.** Rust's ``Effect::AnticausalVestigeLeavesEffect``

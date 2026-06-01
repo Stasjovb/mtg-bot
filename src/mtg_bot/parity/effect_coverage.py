@@ -197,6 +197,17 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     # exists but has 0 in-pool consumers — the opposite case).
     "FamishedWorldsireLookTopXByPowerPutLandsTapped":
         "FamishedWorldsireETBEffect",
+    # --- Consult the Star Charts override (2026-05-31). Same Famished-
+    # Worldsire-precedent class: the 1:1 identity rule maps the variant
+    # ``ConsultTheStarCharts`` to a same-named Python class that does
+    # NOT exist — the REAL Consult the Star Charts printing parses to
+    # the bespoke ``ConsultTheStarChartsEffect`` (``effects/bespoke.py:
+    # 1139``, in-pool freq 1, the Consult card itself). The bridge arm
+    # (cross_engine.py ``consult_the_star_charts_effect``) genuinely
+    # round-trips this Effect through ``ConsultTheStarChartsEffect``, so
+    # mapping to the real in-pool class is the CORRECT relationship, NOT
+    # a suppression (and NOT a ``RUST_AHEAD_OF_POOL`` allowlist).
+    "ConsultTheStarCharts": "ConsultTheStarChartsEffect",
     # --- Faller's Faithful + Perigee Beckoner override-fold (the same
     # round-56 Famished-Worldsire-precedent class: a 1:1-identity-rule
     # variant whose SAME-named Python class does NOT exist, but whose

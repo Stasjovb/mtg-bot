@@ -4280,6 +4280,22 @@ PROBE_MODULES: tuple[Path, ...] = (
     # +1 PROBED / -1 BLOCKED-subsystem-gated. PROBED 462 -> 463;
     # BLOCKED-SG 13 -> 12.
     REPO_ROOT / "tests" / "test_pinnacle_starcage_parity.py",
+    # **Consult the Star Charts closure (2026-05-31).** New Rust
+    # ``Effect::ConsultTheStarCharts`` (impulse-look-top-X-by-lands,
+    # keep 1 or 2-if-kicked → hand, rest → bottom in random order via
+    # the external-rng Fisher-Yates) + a ``was_kicked`` StackItem flag
+    # (additive, NOT fingerprinted — mirrors ``is_copy``) + the
+    # resolve-time ``current_resolve_was_kicked`` transient (mirroring
+    # Python's ``StackItem.kicked`` → ``state.resolving_kicked`` swap)
+    # flip Consult from blocked_subsystem_gated (Kicker + Effect-
+    # uncovered, double-gated) → PROBED. The
+    # ``test_cross_engine_real_eoe_consult_the_star_charts_*_parity``
+    # probes drive the genuine parsed printing's spell_effect across
+    # BOTH cast modes byte-equal (unkicked keep-1; kicked keep-2; +
+    # a shared-random.Random random-bottom). Python already modeled
+    # kicker end-to-end; this slice is Rust + bridge + probe only.
+    # Net delta: +1 PROBED / -1 BLOCKED-subsystem-gated.
+    REPO_ROOT / "tests" / "test_consult_the_star_charts_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
