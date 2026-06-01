@@ -17299,3 +17299,238 @@ def test_s2_non_creature_permanent_cannot_be_stacked_boundary(
     assert synthetic_state.get_mana_pool(0) == pool_before
     assert synthetic_state.hand_sizes[0] == hand_before
     assert synthetic_state.find_object_zone(ench) == ZONE_HAND
+
+
+# --- Pinnacle Starcage closure (2026-05-31) ------------------------
+# Three new Effect variants riding the existing `exiled_with_source`
+# linked-exile state machinery + the `SacrificeSelf` effect-body leaf.
+
+
+def _pinnacle_etb_carrier(match_artifact=True, match_creature=False, max_mv=2):
+    """A synthetic carrier whose ENTERS trigger lands
+    `ExileAllMatchingUntilSourceLeaves` (the ETB mass exile-with-source).
+    """
+    return {
+        "name": "Pinnacle ETB Carrier",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1, "W": 2},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_all_matching_until_source_leaves",
+                    "match_artifact": match_artifact,
+                    "match_creature": match_creature,
+                    "max_mv": max_mv,
+                },
+            }
+        ],
+    }
+
+
+def test_pinnacle_etb_exile_all_matching_artifacts_until_source_leaves(
+    synthetic_state,
+):
+    """`ExileAllMatchingUntilSourceLeaves(match_artifact=True,
+    match_creature=False, max_mv=2)`: an at-cap (MV1) Artifact on P0's bf
+    is exiled to P0's exile source-linked when the carrier enters; the
+    source itself stays; the recall hook returns it on
+    `return_paired_exiles_for`.
+    """
+    art_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "At-Cap Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    p0_exile_before = len(synthetic_state.exile_snapshot(0))
+
+    source_id = synthetic_state.register_and_inject_object(
+        _pinnacle_etb_carrier(), 0, ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty() is True
+
+    p0_exile = synthetic_state.exile_snapshot(0)
+    assert len(p0_exile) == p0_exile_before + 1
+    exiled_names = [o["printing_name"] for o in p0_exile]
+    assert "At-Cap Artifact" in exiled_names
+    bf_names = [
+        o["printing_name"] for o in synthetic_state.battlefield_snapshot()
+    ]
+    assert "Pinnacle ETB Carrier" in bf_names
+    assert "At-Cap Artifact" not in bf_names
+
+    returned = synthetic_state.return_paired_exiles_for(source_id)
+    assert returned == 1
+    bf_after = [
+        o["printing_name"] for o in synthetic_state.battlefield_snapshot()
+    ]
+    assert "At-Cap Artifact" in bf_after
+
+
+def test_pinnacle_etb_excludes_above_cap_and_self(synthetic_state):
+    """The mass-exile excludes the source itself and above-cap
+    permanents. With `match_artifact=True, max_mv=2`, an above-cap
+    (MV3) Artifact stays; an at-cap (MV2) Artifact leaves.
+    """
+    above_cap = synthetic_state.register_and_inject_object(
+        {
+            "name": "Above-Cap Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 3},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    at_cap = synthetic_state.register_and_inject_object(
+        {
+            "name": "At-Cap2 Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.register_and_inject_object(
+        _pinnacle_etb_carrier(match_artifact=True, match_creature=False,
+                              max_mv=2),
+        0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.resolve_top_of_stack()
+    bf_names = [
+        o["printing_name"] for o in synthetic_state.battlefield_snapshot()
+    ]
+    assert "Above-Cap Artifact" in bf_names
+    assert "Pinnacle ETB Carrier" in bf_names
+    assert "At-Cap2 Artifact" not in bf_names
+
+
+def test_pinnacle_aa_recall_to_graveyard_mints_tokens_and_sacs(
+    synthetic_state,
+):
+    """The AA Sequence: `MoveEachExiledWithSourceToOwnersGraveyard` ->
+    `CreateNTokensFromLastExileRecall(Robot)` -> `SacrificeSelf`. Two
+    cards exiled-with-source move to their owners' graveyards, 2 Robot
+    tokens are minted under the controller, the source is sacrificed.
+    """
+    robot_pid = synthetic_state.registry_size
+    synthetic_state.register_and_inject_object(
+        {
+            "name": "Robot",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+        },
+        1, ZONE_LIBRARY,
+    )
+
+    ex_a = synthetic_state.register_and_inject_object(
+        {"name": "Exiled A", "card_types": ["Creature"], "mana_cost": {},
+         "power": 1, "toughness": 1, "effects": []},
+        0, ZONE_EXILE,
+    )
+    ex_b = synthetic_state.register_and_inject_object(
+        {"name": "Exiled B", "card_types": ["Artifact"],
+         "mana_cost": {"generic": 2}, "effects": []},
+        1, ZONE_EXILE,
+    )
+
+    source_id = synthetic_state.register_and_inject_object(
+        {
+            "name": "Pinnacle AA Carrier",
+            "card_types": ["Artifact"],
+            "mana_cost": {},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "sequence",
+                        "effects": [
+                            {"kind": "move_each_exiled_with_source_to_owners_graveyard"},
+                            {"kind": "create_n_tokens_from_last_exile_recall",
+                             "token_printing_id": robot_pid},
+                            {"kind": "sacrifice_self"},
+                        ],
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.force_set_exiled_with_source(ex_a, source_id)
+    assert synthetic_state.force_set_exiled_with_source(ex_b, source_id)
+
+    assert synthetic_state.stack_size() == 1
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty() is True
+
+    p0_gy = [o["printing_name"] for o in synthetic_state.graveyard_snapshot(0)]
+    p1_gy = [o["printing_name"] for o in synthetic_state.graveyard_snapshot(1)]
+    assert "Exiled A" in p0_gy
+    assert "Pinnacle AA Carrier" in p0_gy  # sacrificed
+    assert "Exiled B" in p1_gy
+
+    assert [o["printing_name"] for o in synthetic_state.exile_snapshot(0)] == []
+    assert [o["printing_name"] for o in synthetic_state.exile_snapshot(1)] == []
+
+    robots = [
+        o for o in synthetic_state.battlefield_snapshot()
+        if o["printing_name"] == "Robot" and int(o["controller_id"]) == 0
+    ]
+    assert len(robots) == 2
+
+    bf_names = [
+        o["printing_name"] for o in synthetic_state.battlefield_snapshot()
+    ]
+    assert "Pinnacle AA Carrier" not in bf_names
+
+
+def test_pinnacle_create_tokens_zero_recall_count_mints_nothing(
+    synthetic_state,
+):
+    """`CreateNTokensFromLastExileRecall` with no prior recall (count 0)
+    mints zero tokens -- same as Python's `if count <= 0: return`.
+    """
+    robot_pid = synthetic_state.registry_size
+    synthetic_state.register_and_inject_object(
+        {"name": "Robot", "card_types": ["Artifact", "Creature"],
+         "mana_cost": {}, "power": 2, "toughness": 2, "effects": []},
+        1, ZONE_LIBRARY,
+    )
+    synthetic_state.register_and_inject_object(
+        {
+            "name": "Lone Create Carrier",
+            "card_types": ["Artifact"],
+            "mana_cost": {},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "create_n_tokens_from_last_exile_recall",
+                               "token_printing_id": robot_pid},
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.resolve_top_of_stack()
+    robots = [
+        o for o in synthetic_state.battlefield_snapshot()
+        if o["printing_name"] == "Robot"
+    ]
+    assert robots == []

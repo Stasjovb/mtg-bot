@@ -4226,6 +4226,19 @@ PROBE_MODULES: tuple[Path, ...] = (
     # blocked_subsystem_gated -> PROBED. Net delta: +1 PROBED / -1
     # BLOCKED-subsystem-gated. PROBED 459 -> 460; BLOCKED-SG 16 -> 15.
     REPO_ROOT / "tests" / "test_blast_zone_parity.py",
+    # **Pinnacle Starcage closure (2026-05-31).** Three new Rust Effect
+    # variants riding the EXISTING ``exiled_with_source`` linked-exile
+    # state machinery (``ExileAllMatchingUntilSourceLeaves`` /
+    # ``MoveEachExiledWithSourceToOwnersGraveyard`` /
+    # ``CreateNTokensFromLastExileRecall``) + the ``SacrificeSelf``
+    # effect-body leaf + a transient ``last_exile_recall_count`` scratch
+    # field flip Pinnacle Starcage from blocked_subsystem_gated ->
+    # PROBED. The ``test_cross_engine_real_eoe_pinnacle_starcage_*_parity``
+    # probes drive the genuine ETB mass-exile + AA Sequence (recall ->
+    # graveyard + Robot-token-per-card + sacrifice-self). Net delta:
+    # +1 PROBED / -1 BLOCKED-subsystem-gated. PROBED 462 -> 463;
+    # BLOCKED-SG 13 -> 12.
+    REPO_ROOT / "tests" / "test_pinnacle_starcage_parity.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).
