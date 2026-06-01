@@ -1125,6 +1125,20 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``CloseEncounterEffect``.
         from mtg_bot.effects.bespoke import ZeroPointBalladEffect
         return ZeroPointBalladEffect()
+    if kind == "search_library_for_green_creature_with_mv_at_most_x":
+        # **Green Sun's Zenith (2026-05-31).** `{X}{G}` green-creature
+        # tutor — unit variant on both sides (no fields). X is read at
+        # resolve time from the C1 `current_resolve_x_value` transient
+        # (Rust) / `state.resolving_x_value` (Python). The
+        # deterministic-first fetch surface lives inside each engine's
+        # resolve method; the cross-engine harness's no-agent decline
+        # vs the Rust deterministic-first pick is the documented
+        # asymmetry (see `docs/SEARCH_LIMITATIONS.md`) — byte-equal
+        # only in the no-match (empty-fetch) configuration.
+        from mtg_bot.effects import (
+            SearchLibraryForGreenCreatureWithMVAtMostX,
+        )
+        return SearchLibraryForGreenCreatureWithMVAtMostX()
     if kind == "create_x_tokens_of_target_permanent_with_haste_end_step_sac":
         # **Devastating Onslaught — Cycle 1 (2026-05-22).** `{X}{X}{R}`
         # Sorcery — second X-cost consumer of the C1

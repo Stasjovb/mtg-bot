@@ -5660,6 +5660,18 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.generic.exile import (
         ExileAllArtifactsWithManaValueAtMost,
     )
+    # **Green Sun's Zenith (2026-05-31).** Reverse-serializer leaf for
+    # the new `SearchLibraryForGreenCreatureWithMVAtMostX` Rust variant
+    # (X-cost green-creature tutor; X read from the C1 transient at
+    # resolve time). Substrate-only — Green Sun's Zenith itself stays
+    # DECLINED at the admit gate this cycle because its shuffle-self
+    # `WOULD_GO_TO_GRAVEYARD -> library` ReplacementEffect static has
+    # no Rust StaticReplacement-vocab support (the destination-string
+    # `replace` transform is outside the Phase-5 closed vocab). See
+    # `docs/SEARCH_LIMITATIONS.md`.
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForGreenCreatureWithMVAtMostX,
+    )
     # **Warping Wail Cycle 1a substrate (2026-05-22).** Reverse-
     # serializer leaf for the new
     # ``ExileTargetCreatureWithPowerOrToughnessAtMost`` Rust variant.
@@ -6980,6 +6992,29 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # no override needed).
         if isinstance(eff, ZeroPointBalladEffect):
             return {"kind": "zero_point_ballad_effect"}
+        # **Green Sun's Zenith (2026-05-31).** Per-leaf serializer for
+        # ``SearchLibraryForGreenCreatureWithMVAtMostX()`` — `{X}{G}`
+        # green-creature tutor. Unit-variant round-trip: kind-only dict
+        # (the field-free dataclass at ``effects/generic/search.py:284``
+        # is the canonical Python parity; X rides on the spell
+        # StackItem's ``x_value`` slot via the C1 bracket, NOT in this
+        # dict). Shipping this leaf TOGETHER with the Rust
+        # ``Effect::SearchLibraryForGreenCreatureWithMVAtMostX`` variant
+        # + the ``search_library_for_green_creature_with_mv_at_most_x``
+        # bridge arm makes the class covered+bridged. It does NOT flip
+        # Green Sun's Zenith into the admit set: the card carries a
+        # shuffle-self ``WOULD_GO_TO_GRAVEYARD -> library``
+        # ReplacementEffect static that the Rust StaticReplacement
+        # closed vocab (``would_create_token`` / ``would_place_counter``
+        # / ``triggered_ability_triggers`` + int-param transforms) does
+        # not model — so a real-printing cross-engine probe would
+        # mistranslate the spell's post-resolve destination. The
+        # substrate is honest-stopped here; see
+        # ``docs/SEARCH_LIMITATIONS.md``.
+        if isinstance(eff, SearchLibraryForGreenCreatureWithMVAtMostX):
+            return {
+                "kind": "search_library_for_green_creature_with_mv_at_most_x"
+            }
         # **Devastating Onslaught — Cycle 1 (2026-05-22).** Per-leaf
         # serializer for ``CreateXTokensOfTargetPermanentWithHasteEndStepSac()``
         # — second X-cost consumer (Zero Point Ballad shipped at C3 of
@@ -7450,6 +7485,59 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     return _leaf(spell_effect)
 
 
+# **Rust StaticReplacement closed vocab (Phase 5, 2026-05-31).** The
+# Rust ``CardPrinting.static_replacements`` mirror only models these
+# CR 614 events with these EventTransform discriminants (each carries
+# a single int param). Any replacement static OUTSIDE this vocab —
+# notably the Green Sun's Zenith / Nexus of Fate
+# ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
+# shuffle-self redirect — has no Rust resolve hook and must positively
+# decline the carrying printing from the spell-card-bridge admit set.
+_BRIDGEABLE_REPLACEMENT_EVENTS = frozenset({
+    "would_create_token",
+    "would_place_counter",
+    "triggered_ability_triggers",
+})
+
+
+def _printing_has_unbridgeable_replacement_static(printing) -> bool:
+    """True iff the printing carries a SELF-scope ``StaticAbility``
+    whose ``replacement_effect`` is NOT expressible in the Rust
+    ``StaticReplacement`` closed vocab (event ∈
+    :data:`_BRIDGEABLE_REPLACEMENT_EVENTS` with a
+    ``MultiplyCount`` / ``AddInstances`` int-param transform).
+
+    Today the SOLE consumers are Green Sun's Zenith + Nexus of Fate
+    (both carry the ``WOULD_GO_TO_GRAVEYARD -> library`` destination
+    redirect — outside the closed vocab). The check is conservative:
+    a static with NO ``replacement_effect`` (e.g. a continuous-effect
+    anthem static) is NOT a replacement static and does not trip this
+    guard; the existing target-grammar + covered-set teeth handle
+    those independently. A future StaticReplacement-vocab widen that
+    adds the graveyard->library transform should narrow this guard so
+    the carrying cards flip to genuine cross-engine probes.
+    """
+    statics = getattr(printing, "static_abilities", ()) or ()
+    for s in statics:
+        rep = getattr(s, "replacement_effect", None)
+        if rep is None:
+            continue
+        event_pattern = getattr(rep, "event_pattern", None)
+        event = getattr(event_pattern, "event", None)
+        event_name = getattr(event, "value", None)
+        transform = getattr(rep, "transform", None)
+        # A replacement static whose event is outside the bridgeable
+        # set, OR whose transform is a destination-string ``Replace``
+        # (the graveyard->library redirect — it carries a
+        # ``new_destination`` str, NOT the int param the Rust vocab
+        # threads), is unbridgeable.
+        if event_name not in _BRIDGEABLE_REPLACEMENT_EVENTS:
+            return True
+        if getattr(transform, "new_destination", None) is not None:
+            return True
+    return False
+
+
 def _printing_is_bridge_simple_spell(printing) -> bool:
     """True iff a CardPrinting is a covered Instant/Sorcery whose
     target grammar the spell-card-bridge lever round-trips byte-equal
@@ -7510,6 +7598,32 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     if printing.kicker_cost or printing.impending_cost:
         return False
     if printing.room_halves:
+        return False
+    # **Shuffle-self / replacement-static guardrail (Green Sun's
+    # Zenith honest-stop, 2026-05-31).** A spell printing may carry a
+    # SELF-scope ``StaticAbility`` with a CR 614 ``ReplacementEffect``
+    # (e.g. Green Sun's Zenith / Nexus of Fate carry
+    # ``WOULD_GO_TO_GRAVEYARD -> Replace(new_destination="library")``
+    # — the "shuffle this into your library instead of the graveyard"
+    # redirect that models their self-exile). The Rust
+    # ``StaticReplacement`` substrate (Phase 5) only models a CLOSED
+    # vocab — events ``would_create_token`` / ``would_place_counter``
+    # / ``triggered_ability_triggers`` with int-param transforms
+    # (``multiply_count`` / ``add_instances``). A replacement static
+    # OUTSIDE that vocab (the graveyard->library destination redirect)
+    # has NO Rust resolve hook in the post-resolve spell-movement
+    # path, so admitting such a printing would silently mistranslate
+    # the spell's post-resolve destination (Python shuffles it into
+    # library; Rust sends it to graveyard). Positively reject any
+    # printing carrying a non-bridgeable replacement static — the
+    # no-fallback-hybrid discipline. The spell_effect of such a card
+    # (Green Sun's Zenith's
+    # ``SearchLibraryForGreenCreatureWithMVAtMostX``) can still be
+    # covered+bridged substrate; the card flips to a genuine
+    # cross-engine probe only once the would-go-to-graveyard
+    # StaticReplacement-vocab widen lands. See
+    # ``docs/SEARCH_LIMITATIONS.md``.
+    if _printing_has_unbridgeable_replacement_static(printing):
         return False
     # **Additional-cost-sacrifice riders (Cycle 1 for the bare
     # ``ExileTargetCreature`` lane, 2026-05-22).** These riders modify
