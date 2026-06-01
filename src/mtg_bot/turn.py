@@ -1118,6 +1118,8 @@ def run_cleanup_step(state: GameState) -> None:
             p.scheduled_agent_override_by = None
     # Reset once-per-turn trigger tracking.
     state.once_per_turn_fired.clear()
+    # Reset per-turn loyalty-ability activation tracking (CR 606.3).
+    state.loyalty_activated_this_turn.clear()
     # Reset per-turn ability-resolution counters.
     state.ability_resolutions_this_turn.clear()
 

@@ -2622,6 +2622,17 @@ class GameState:
     # have already fired this turn under the ``once_per_turn`` restriction.
     # Reset by run_cleanup_step.
     once_per_turn_fired: set[tuple[int, int]] = field(default_factory=set)
+    # Tracks (controller_id, source_id) pairs for planeswalkers that have
+    # had a loyalty ability activated this turn (CR 606.3 — "a player may
+    # activate a loyalty ability of a planeswalker they control only if no
+    # player has activated a loyalty ability of that planeswalker this
+    # turn"). Per-walker, not per-ability: once ANY of a walker's loyalty
+    # abilities fires, ALL of its activated abilities are gated off for the
+    # rest of the turn. Mirrors Rust's ``loyalty_activated_this_turn``
+    # HashSet (state.rs). Reset by run_cleanup_step.
+    loyalty_activated_this_turn: set[tuple[int, int]] = field(
+        default_factory=set
+    )
     # Delayed triggered abilities scheduled for a future end step. Each
     # entry is a dict: {"fire_at_turn": int, "controller_id": int,
     # "action": str, "target_id": int}.
@@ -3338,6 +3349,11 @@ class GameState:
         new_state.spell_warped_this_turn = self.spell_warped_this_turn
         new_state.once_per_turn_fired = (
             set(self.once_per_turn_fired) if self.once_per_turn_fired else set()
+        )
+        new_state.loyalty_activated_this_turn = (
+            set(self.loyalty_activated_this_turn)
+            if self.loyalty_activated_this_turn
+            else set()
         )
         new_state.delayed_triggers = (
             [dict(d) for d in self.delayed_triggers]
