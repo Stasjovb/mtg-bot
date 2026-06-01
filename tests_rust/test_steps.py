@@ -563,24 +563,30 @@ def test_main1_phase_emits_cast_spell_in_legal_decisions(synthetic_state):
 
 
 def test_combat_phases_gate_declare_attackers_emission(synthetic_state):
-    """Cross-feature with legal-decisions: ``DeclareAttackers`` only
-    emits during PHASE_DECLARE_ATTACKERS, even when the synthetic
+    """Cross-feature with legal-decisions: the declare-attackers choice
+    only emits during PHASE_DECLARE_ATTACKERS, even when the synthetic
     seed's 5 Grizzly Bears would otherwise be eligible. Walks every
     phase and asserts the emission is gated correctly — UNTAP / UPKEEP
     / DRAW / MAIN1 / BEGIN_COMBAT / DECLARE_BLOCKERS / ... / CLEANUP
-    must NOT emit a ``declare_attackers`` dict (mirrors Python
-    ``legal.py``'s phase guard)."""
+    must NOT emit it (mirrors Python ``legal.py``'s phase guard).
+
+    REFRESHED: the legal-decisions emitter now uses the per-creature
+    fixed-fan-out model — it emits one ``attacker_decision`` dict per
+    eligible creature (HEAD = smallest-id eligible) rather than a single
+    whole-action ``declare_attackers`` dict. The phase-gating contract
+    is unchanged; only the emitted ``kind`` differs. Probe confirms
+    phase 5 alone emits ``attacker_decision``."""
     for phase in PHASE_SEQUENCE:
         synthetic_state.set_phase(phase)
         kinds = {a["kind"] for a in synthetic_state.legal_decisions(0)}
         if phase == PHASE_DECLARE_ATTACKERS:
-            assert "declare_attackers" in kinds, (
+            assert "attacker_decision" in kinds, (
                 f"phase {phase} (DECLARE_ATTACKERS) should emit "
-                f"declare_attackers; got {sorted(kinds)}"
+                f"attacker_decision; got {sorted(kinds)}"
             )
         else:
-            assert "declare_attackers" not in kinds, (
-                f"phase {phase} should NOT emit declare_attackers; "
+            assert "attacker_decision" not in kinds, (
+                f"phase {phase} should NOT emit attacker_decision; "
                 f"got {sorted(kinds)}"
             )
 
@@ -781,12 +787,15 @@ def test_advance_phase_empties_both_mana_pools_on_every_tick(synthetic_state):
     assert synthetic_state.get_mana_pool(0)["G"] == 3
     assert synthetic_state.get_mana_pool(1)["R"] == 2
     synthetic_state.advance_phase()
-    # Both players' pools emptied — not just the active side.
+    # Both players' pools emptied — not just the active side. The pool
+    # dict carries the "any" wildcard-mana key alongside the 6 colors
+    # (REFRESHED: "any" was added to the mana-pool representation this
+    # campaign; it empties to 0 like the rest).
     assert synthetic_state.get_mana_pool(0) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0,
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0,
     }
     assert synthetic_state.get_mana_pool(1) == {
-        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0,
+        "W": 0, "U": 0, "B": 0, "R": 0, "G": 0, "C": 0, "any": 0,
     }
 
 

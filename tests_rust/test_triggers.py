@@ -202,27 +202,31 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 9 wires ``Event::Enters``, ``Event::Dies``,
-    ``Event::Cast``, ``Event::Attacks``, ``Event::Blocks``, and
-    ``Event::LeavesBattlefield``; the remaining declared event
-    (``deals_damage``) raises at register time so a caller can't
-    stamp a trigger that never fires. Pin one such event here —
-    ``deals_damage``.
+    """An event outside the wired valid-list (e.g. ``landfall``) raises
+    at register time so a caller can't stamp a trigger that never fires.
+
+    REFRESHED: this formerly pinned ``deals_damage``, which is now WIRED
+    (the deals_damage trigger landed this campaign — it's in the
+    valid-event list alongside enters / dies / cast / attacks / blocks /
+    leaves_battlefield / becomes_tapped / etc.). The register-time gate
+    no longer emits a "not yet wired in Slice N" message; an event
+    outside the valid list raises ``unknown triggered_ability.event``.
+    Pin a genuinely-still-unwired event (``landfall``) here.
     """
     d = {
-        "name": "DealsDamage Trigger Card",
+        "name": "Landfall Trigger Card",
         "card_types": ["Creature"],
         "mana_cost": {"generic": 1},
         "power": 1,
         "toughness": 1,
         "triggered_abilities": [
             {
-                "event": "deals_damage",
+                "event": "landfall",
                 "effect": {"kind": "draw_cards", "count": 1},
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 9"):
+    with pytest.raises(ValueError, match="unknown triggered_ability.event"):
         empty_registry.register_printing(d)
 
 
@@ -511,12 +515,21 @@ def _etb_self_draw_creature_dict(name="ETB Self-Draw Bear"):
 def _etb_self_draw_land_dict(name="ETB Self-Draw Plains"):
     """Land variant: enters tapped, triggers a card draw on entry.
     For RS2 (search-and-bf) + RS11 (play_land) coverage. The
-    `card_types=["Land"]` matters for the basic-land search filter
-    in RS2.
+    `card_types=["Land"]` + `supertypes=["Basic"]` matter for the
+    basic-land search filter in RS2.
+
+    REFRESHED: the RS2 basic-land search filter was tightened to the
+    CR-correct `is_basic_land = card_types ∋ "Land" AND supertypes ∋
+    "Basic"` (CR 205.4a; mirrors Python's `is_basic_land` bit-for-bit,
+    rust/src/state_ops_resolve.rs:5040-5053). The pre-migration proxy
+    treated any `card_types=["Land"]` as basic; without the `Basic`
+    supertype this land is no longer found by a basic-land search.
+    Added the supertype so the helper models an actual basic land.
     """
     return {
         "name": name,
         "card_types": ["Land"],
+        "supertypes": ["Basic"],
         "mana_cost": {},
         "effects": [],
         "mana_produced": ["W"],
@@ -1312,8 +1325,15 @@ def test_landfall_observer_fires_on_land_arrival(synthetic_state):
     observer_id = synthetic_state.register_and_inject_object(
         _landfall_observer_dict(), 0, ZONE_BATTLEFIELD
     )
+    # REFRESHED: the RS2 basic-land search filter was tightened to the
+    # CR-correct `is_basic_land = Land AND supertypes ∋ "Basic"`
+    # (CR 205.4a; Python-parity). The vanilla-land helper lacks the
+    # Basic supertype, so a basic-land search no longer finds it — add
+    # the supertype here so the searched-up card is an actual basic land.
+    basic_land = _vanilla_land_dict("Test Plains")
+    basic_land["supertypes"] = ["Basic"]
     land_id = synthetic_state.register_and_inject_object(
-        _vanilla_land_dict("Test Plains"), 0, ZONE_LIBRARY
+        basic_land, 0, ZONE_LIBRARY
     )
     sorcery = {
         "name": "Test Cultivate (Slice 4)",
@@ -1688,11 +1708,18 @@ def test_slice5_dies_event_parses(empty_registry):
     assert pid == 0
 
 
-@pytest.mark.parametrize("event_kind", ["deals_damage"])
+@pytest.mark.parametrize("event_kind", ["landfall"])
 def test_slice5_other_events_still_raise(empty_registry, event_kind):
-    """`deals_damage` still raises at register-time post-Slice-7
-    (Slice 7 wires enters / dies / cast / attacks; only deals_damage
-    is left unwired). Slice 5's name retained for git history.
+    """A genuinely-still-unwired event (`landfall`) raises at
+    register-time so a caller can't stamp a trigger that never fires.
+
+    REFRESHED: this formerly parametrized on `deals_damage`, which is
+    now WIRED (the deals_damage trigger landed this campaign — it's in
+    the valid-event list). The register-time gate no longer emits a
+    "not yet wired in Slice N" message; an event outside the valid list
+    raises `unknown triggered_ability.event` (same gate as a wholly
+    bogus event). `landfall` is confirmed still outside the valid list.
+    Slice 5's name retained for git history.
     """
     d = {
         "name": f"Slice5 Bad Event {event_kind}",
@@ -1707,7 +1734,7 @@ def test_slice5_other_events_still_raise(empty_registry, event_kind):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired"):
+    with pytest.raises(ValueError, match="unknown triggered_ability.event"):
         empty_registry.register_printing(d)
 
 
@@ -2236,10 +2263,12 @@ def test_slice7_attacks_event_parses(empty_registry):
     assert pid == 0
 
 
-@pytest.mark.parametrize("event_kind", ["deals_damage"])
+@pytest.mark.parametrize("event_kind", ["landfall"])
 def test_slice7_other_events_still_raise(empty_registry, event_kind):
-    """`deals_damage` still raises at register-time post-Slice-7
-    (Slice 7 wires enters / dies / cast / attacks only).
+    """A genuinely-still-unwired event (`landfall`) raises at
+    register-time. REFRESHED from `deals_damage` (now WIRED) and from
+    the retired "not yet wired" message to the current
+    `unknown triggered_ability.event` valid-list gate.
     """
     d = {
         "name": f"Slice7 Bad Event {event_kind}",
@@ -2254,7 +2283,7 @@ def test_slice7_other_events_still_raise(empty_registry, event_kind):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired"):
+    with pytest.raises(ValueError, match="unknown triggered_ability.event"):
         empty_registry.register_printing(d)
 
 
@@ -2553,10 +2582,12 @@ def test_slice8_leaves_battlefield_event_parses(empty_registry):
     assert pid == 0
 
 
-@pytest.mark.parametrize("event_kind", ["deals_damage"])
+@pytest.mark.parametrize("event_kind", ["landfall"])
 def test_slice8_other_events_still_raise(empty_registry, event_kind):
-    """`deals_damage` still raises at register-time post-Slice-8
-    (only deals_damage is left unwired).
+    """A genuinely-still-unwired event (`landfall`) raises at
+    register-time. REFRESHED from `deals_damage` (now WIRED) and from
+    the retired "not yet wired" message to the current
+    `unknown triggered_ability.event` valid-list gate.
     """
     d = {
         "name": f"Slice8 Bad Event {event_kind}",
@@ -2571,7 +2602,7 @@ def test_slice8_other_events_still_raise(empty_registry, event_kind):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired"):
+    with pytest.raises(ValueError, match="unknown triggered_ability.event"):
         empty_registry.register_printing(d)
 
 
@@ -2879,11 +2910,12 @@ def test_slice9_blocks_event_parses(empty_registry):
     assert pid == 0
 
 
-@pytest.mark.parametrize("event_kind", ["deals_damage"])
+@pytest.mark.parametrize("event_kind", ["landfall"])
 def test_slice9_other_events_still_raise(empty_registry, event_kind):
-    """`deals_damage` still raises at register-time post-Slice-9
-    (Slice 9 wires enters / dies / cast / attacks / blocks /
-    leaves_battlefield only).
+    """A genuinely-still-unwired event (`landfall`) raises at
+    register-time. REFRESHED from `deals_damage` (now WIRED) and from
+    the retired "not yet wired" message to the current
+    `unknown triggered_ability.event` valid-list gate.
     """
     d = {
         "name": f"Slice9 Bad Event {event_kind}",
@@ -2898,7 +2930,7 @@ def test_slice9_other_events_still_raise(empty_registry, event_kind):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired"):
+    with pytest.raises(ValueError, match="unknown triggered_ability.event"):
         empty_registry.register_printing(d)
 
 

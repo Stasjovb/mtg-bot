@@ -687,10 +687,11 @@ def _mountain_dict():
 
 
 def _hybrid_dual_land_dict():
-    """A synthetic dual land that produces TWO different colors on a
-    single activation. `mana_produced=["G", "U"]` mirrors a (hypothetical)
-    "{T}: Add {G}{U}" land — exercises the bridge's multi-color Sequence
-    wrapping. Cost stays at free + tap_self.
+    """A synthetic dual land offering a CHOICE of two colors.
+    `mana_produced=["G", "U"]` mirrors a "{T}: Add {G} or {U}" land —
+    the bridge synthesizes one ability per color (idx0=Add G, idx1=Add
+    U), so the player picks the color by ability index. Cost stays at
+    free + tap_self.
     """
     return {
         "name": "Sim Dual Land",
@@ -700,10 +701,13 @@ def _hybrid_dual_land_dict():
 
 
 def _double_green_land_dict():
-    """A synthetic land that produces TWO of the same color on a single
-    activation. `mana_produced=["G", "G"]` mirrors a "{T}: Add {G}{G}"
-    land — exercises the bridge's same-color aggregation (one
-    AddManaToPool with amount=2, not two amount=1 entries).
+    """A synthetic land with a duplicate `mana_produced` entry.
+    `mana_produced=["G", "G"]` exercises the bridge's per-ENTRY synthesis
+    (two `{T}: Add G` abilities, one per entry — matching Python's
+    `for color in card.mana_produced` loop), NOT same-color aggregation.
+    No real bridge printing carries a duplicate-color `mana_produced`
+    (built from a frozenset, so entries are distinct); this pins the
+    Python-exact per-entry shape regardless.
     """
     return {
         "name": "Sim Green Geyser",
@@ -797,10 +801,19 @@ def test_bridge_mountain_apply_adds_red(synthetic_state):
     )
 
 
-def test_bridge_double_green_land_aggregates(synthetic_state):
-    """`mana_produced=["G","G"]` synthesizes one AddManaToPool with
-    amount=2 (aggregated by color), not two entries. Observable: a
-    single activation adds 2 G to the pool, taps the source once.
+def test_bridge_double_green_land_per_color_abilities(synthetic_state):
+    """`mana_produced=["G","G"]` synthesizes TWO `{T}: Add G` abilities
+    (one per entry — matching Python's `for color in card.mana_produced`
+    loop), NOT one aggregated `Add G amount=2`. Each ability taps the
+    source as cost, so activating index 0 adds exactly 1 G and taps the
+    land; index 1 is then unavailable (already tapped).
+
+    REFRESHED (round-62 N1): the old aggregate-by-color shape (one
+    ability adding amount=2) was the DIVERGENT Rust behavior — Python's
+    bridge always emitted one ability per `mana_produced` entry. The
+    per-color shape is the CR-correct "{T}: Add G or G" mode-pick and is
+    the contract both engines now share. Single activation = 1 mana, 1
+    tap.
     """
     land_id = synthetic_state.register_and_inject_object(
         _double_green_land_dict(), 0, ZONE_BATTLEFIELD,
@@ -817,15 +830,24 @@ def test_bridge_double_green_land_aggregates(synthetic_state):
 
     assert synthetic_state.is_tapped(land_id) is True
     pool_after = synthetic_state.get_mana_pool(0)
-    assert pool_after["G"] == 2, (
-        f"Double-green land should add 2 G in one activation; got {pool_after}"
+    assert pool_after["G"] == 1, (
+        f"Each per-color ability adds 1 G and taps the land; one "
+        f"activation = 1 G; got {pool_after}"
     )
 
 
-def test_bridge_hybrid_dual_land_sequence(synthetic_state):
-    """`mana_produced=["G","U"]` synthesizes a Sequence with two
-    AddManaToPool entries (one per color). One activation, one tap, two
-    colors landed in the pool.
+def test_bridge_hybrid_dual_land_per_color_abilities(synthetic_state):
+    """`mana_produced=["G","U"]` synthesizes TWO abilities (idx0=Add G,
+    idx1=Add U), one per color — the CR-correct "{T}: Add G or U"
+    mode-pick. The player chooses the color by picking the ability
+    index; a single activation taps once and adds exactly the chosen
+    color (here index 0 = G).
+
+    REFRESHED (round-62 N1): the old shape wrapped both colors in a
+    `Sequence` so one activation added BOTH G and U — that was the
+    DIVERGENT Rust behavior (it minted a spurious extra mana vs Python
+    on the 2-color EoE shocklands, 4 FAIL_DIVERGENCE / 112 games).
+    Python was always per-color-correct; this asserts the shared shape.
     """
     land_id = synthetic_state.register_and_inject_object(
         _hybrid_dual_land_dict(), 0, ZONE_BATTLEFIELD,
@@ -842,8 +864,9 @@ def test_bridge_hybrid_dual_land_sequence(synthetic_state):
 
     assert synthetic_state.is_tapped(land_id) is True
     pool_after = synthetic_state.get_mana_pool(0)
-    assert pool_after["G"] == 1 and pool_after["U"] == 1, (
-        f"Hybrid dual land should add G+U in one activation; got {pool_after}"
+    assert pool_after["G"] == 1 and pool_after["U"] == 0, (
+        f"Index 0 of a G/U dual adds only G (mode-pick), not both; "
+        f"got {pool_after}"
     )
 
 

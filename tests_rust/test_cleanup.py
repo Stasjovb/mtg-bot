@@ -187,14 +187,24 @@ P1_BATTLEFIELD_FIRST = 67
 def test_cleanup_step_no_op_at_initial_state(synthetic_state):
     """Fresh synthetic state has 7 cards in each hand and zero damage on
     every permanent. ``cleanup_step_for_active_player`` is a true no-op:
-    returns ``{"discarded": 0, "damage_cleared": 0, "ueot_cleared": 0}``
-    and leaves hand / graveyard / damage alone. (Round-27 added the
-    third dict key for the new CR 514.3 UEOT-modifier expiration
-    pass — no UEOT effects active at initial state so the count is 0.)
+    returns the all-zero/false summary and leaves hand / graveyard /
+    damage alone. (Round-27 added ``ueot_cleared`` for the CR 514.3
+    UEOT-modifier expiration pass; later rounds added
+    ``controller_overrides_cleared`` (control-changing UEOT expiry),
+    ``prevent_all_combat_damage_drained`` (one-shot prevent-shield
+    drain), and ``regeneration_shields_cleared`` (regen-shield clear) —
+    all no-ops at initial state.)
     """
     assert synthetic_state.hand_sizes[0] == 7
     summary = synthetic_state.cleanup_step_for_active_player()
-    assert summary == {"discarded": 0, "damage_cleared": 0, "ueot_cleared": 0}
+    assert summary == {
+        "discarded": 0,
+        "damage_cleared": 0,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
     assert synthetic_state.hand_sizes[0] == 7
     assert synthetic_state.graveyard_sizes[0] == 0
 
@@ -272,7 +282,14 @@ def test_cleanup_step_returns_summary(synthetic_state):
 
     summary = synthetic_state.cleanup_step_for_active_player()
     assert isinstance(summary, dict)
-    assert summary == {"discarded": 3, "damage_cleared": 2, "ueot_cleared": 0}
+    assert summary == {
+        "discarded": 3,
+        "damage_cleared": 2,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
     assert synthetic_state.hand_sizes[0] == 7
     assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 0
     assert synthetic_state.get_damage(P1_BATTLEFIELD_FIRST) == 0
@@ -294,7 +311,14 @@ def test_clone_then_cleanup_does_not_affect_original(synthetic_state):
     gy_source_before = synthetic_state.graveyard_sizes
 
     summary = cloned.cleanup_step_for_active_player()
-    assert summary == {"discarded": 3, "damage_cleared": 2, "ueot_cleared": 0}
+    assert summary == {
+        "discarded": 3,
+        "damage_cleared": 2,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
 
     # Clone diverged.
     assert cloned.hand_sizes[0] == 7
@@ -684,10 +708,24 @@ def test_cleanup_is_idempotent_when_already_clean(synthetic_state):
     on an already-clean hand."""
     synthetic_state.deal_damage(P0_BATTLEFIELD_FIRST, 3)
     first = synthetic_state.cleanup_step_for_active_player()
-    assert first == {"discarded": 0, "damage_cleared": 1, "ueot_cleared": 0}
+    assert first == {
+        "discarded": 0,
+        "damage_cleared": 1,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
     second = synthetic_state.cleanup_step_for_active_player()
     # Second call sees nothing to clean: no damage, hand still <= 7.
-    assert second == {"discarded": 0, "damage_cleared": 0, "ueot_cleared": 0}
+    assert second == {
+        "discarded": 0,
+        "damage_cleared": 0,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
     # State is identical to first-call post-state.
     assert synthetic_state.get_damage(P0_BATTLEFIELD_FIRST) == 0
     assert synthetic_state.hand_sizes[0] == 7
@@ -770,7 +808,14 @@ def test_cleanup_alone_does_not_move_objects_between_zones(synthetic_state):
     )
 
     summary = synthetic_state.cleanup_step_for_active_player()
-    assert summary == {"discarded": 0, "damage_cleared": 0, "ueot_cleared": 0}
+    assert summary == {
+        "discarded": 0,
+        "damage_cleared": 0,
+        "ueot_cleared": 0,
+        "controller_overrides_cleared": 0,
+        "prevent_all_combat_damage_drained": False,
+        "regeneration_shields_cleared": 0,
+    }
 
     assert synthetic_state.hand_snapshot(0) == hand_before
     assert synthetic_state.library_snapshot(0) == lib_before
