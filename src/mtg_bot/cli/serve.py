@@ -1105,6 +1105,60 @@ def create_app(
     return app
 
 
+def shutdown_app(app: "Flask") -> None:
+    """Stop every background resource ``create_app`` may have started.
+
+    ``create_app`` can spin up to three long-lived resources and hang
+    them on ``app.extensions``:
+
+    - ``runs_janitor`` — a :class:`JanitorThread` daemon poll loop
+      (started whenever ``runs_db_path`` is set),
+    - ``v2_heartbeat_poller`` — a :class:`HeartbeatPoller` daemon poll
+      loop (started when the v2 surface is active and
+      ``enable_heartbeat_poller=True``),
+    - ``v2_report_executor`` — a ``ThreadPoolExecutor`` (built when the
+      v2 surface is active and ``report_executor`` defaulted).
+
+    In production these live for the process lifetime, so ``main`` never
+    needs to tear them down. Tests, however, build many apps in a single
+    worker process; left running, their daemon threads accumulate and
+    keep the interpreter from shutting down cleanly under ``pytest
+    -n`` (xdist kills the worker as "not properly terminated" and dumps
+    every leaked thread). Call this in test teardown to stop them.
+
+    Idempotent and best-effort: missing extensions are skipped, and a
+    failure stopping one resource doesn't prevent stopping the rest.
+    """
+    ext = getattr(app, "extensions", None) or {}
+
+    janitor = ext.pop("runs_janitor", None)
+    if janitor is not None:
+        try:
+            janitor.stop(timeout=2.0)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+    poller = ext.pop("v2_heartbeat_poller", None)
+    if poller is not None:
+        try:
+            poller.stop(timeout=2.0)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+    executor = ext.pop("v2_report_executor", None)
+    if executor is not None:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            # ``cancel_futures`` is 3.9+; fall back if unavailable.
+            try:
+                executor.shutdown(wait=False)
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+
 def main(argv=None) -> None:  # pragma: no cover
     # Argparse + Flask-app boot body. The ``create_app`` factory and
     # the helpers are unit-tested directly via ``tests/scripts/
