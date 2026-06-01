@@ -27593,6 +27593,251 @@ fn apply_effect(
             state.pending_etb_dispatches.extend(entered_ids);
             drain_pending_etb_dispatches(state)?;
         }
+        // **Pinnacle Starcage closure (2026-05-31) — ETB mass exile-
+        // with-source.** Mirrors Python's
+        // `ExileAllMatchingUntilSourceLeaves.resolve`
+        // (`effects/generic/exile.py:792`). Sweeps EVERY player's
+        // battlefield for non-land permanents matching the type union +
+        // optional MV cap, EXCLUDING the source itself, stamps
+        // `exiled_with_source = Some(source_obj_id)`, and moves each to
+        // its OWNER's exile zone with the CR 400.7 reset (preserving
+        // the link). The existing `return_paired_exiles_for` recall hook
+        // returns them when the source leaves. LTB fan-out +
+        // token-cease pushed per victim, same as the single-target
+        // until-leaves arms.
+        Effect::ExileAllMatchingUntilSourceLeaves {
+            match_artifact,
+            match_creature,
+            max_mv,
+        } => {
+            let match_artifact = *match_artifact;
+            let match_creature = *match_creature;
+            let max_mv = *max_mv;
+            // Collect victims as (owner_pidx, obj_id) across both
+            // players' battlefields. The source itself is excluded
+            // (a permanent can't exile itself). Lands are excluded
+            // ("artifacts and creatures" excludes lands by oracle
+            // convention; mirrors Python's `not is_land` guard).
+            let mut victims: Vec<(usize, u32)> = Vec::new();
+            for (pidx, player) in state.players.iter().enumerate() {
+                for obj in player.battlefield.iter() {
+                    if obj.id == source_obj_id {
+                        continue;
+                    }
+                    let Some(printing) = state.registry.lookup(obj.printing_id)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        continue;
+                    }
+                    let is_artifact =
+                        printing.card_types.iter().any(|t| t == "Artifact");
+                    let is_creature =
+                        printing.card_types.iter().any(|t| t == "Creature");
+                    let type_match = (match_artifact && is_artifact)
+                        || (match_creature && is_creature);
+                    if !type_match {
+                        continue;
+                    }
+                    if max_mv > 0 {
+                        let mc = &printing.mana_cost;
+                        let total = mc.generic as i32
+                            + mc.white as i32
+                            + mc.blue as i32
+                            + mc.black as i32
+                            + mc.red as i32
+                            + mc.green as i32;
+                        if total > max_mv {
+                            continue;
+                        }
+                    }
+                    victims.push((pidx, obj.id));
+                }
+            }
+            // Move each victim from its owner's bf to its owner's exile
+            // zone, stamping the source link + CR 400.7 reset. Done
+            // per-owner so the Arc::make_mut borrow stays local.
+            for owner_idx in 0..state.players.len() {
+                let ids_for_owner: Vec<u32> = victims
+                    .iter()
+                    .filter(|(p, _)| *p == owner_idx)
+                    .map(|(_, id)| *id)
+                    .collect();
+                if ids_for_owner.is_empty() {
+                    continue;
+                }
+                for victim_id in ids_for_owner {
+                    let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[owner_idx].battlefield,
+                    );
+                    let Some(pos) =
+                        bf_mut.iter().position(|o| o.id == victim_id)
+                    else {
+                        continue; // raced; defensive
+                    };
+                    let mut obj = bf_mut.remove(pos);
+                    obj.zone = ZONE_EXILE;
+                    obj.tapped = false;
+                    // summoning_sick PRESERVED across bf-exit (CE13
+                    // standardisation — Python's move_off_battlefield
+                    // never touches it).
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.original_printing_id = None;
+                    obj.door_states = None;
+                    obj.exiled_with_source = Some(source_obj_id);
+                    let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+                    Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+                    mark_left_battlefield_if_nonland(state, printing_id);
+                    state.pending_leaves_dispatches.push(leaving_obj_id);
+                    crate::state_ops_zones::queue_token_cease(
+                        state,
+                        leaving_obj_id,
+                    );
+                }
+            }
+        }
+        // **Pinnacle Starcage closure (2026-05-31) — recall-to-graveyard
+        // side.** Mirrors Python's
+        // `MoveEachExiledWithSourceToOwnersGraveyard.resolve`
+        // (`effects/generic/exile.py:873`). Walks every player's exile
+        // for objects tagged `exiled_with_source == Some(source_obj_id)`,
+        // moves each to its OWNER's graveyard (clearing the link), and
+        // records the moved count on `state.last_exile_recall_count` so
+        // the follow-up `CreateNTokensFromLastExileRecall` Sequence leaf
+        // can mint one token per moved card. Reset-to-0-then-overwrite
+        // mirrors Python exactly.
+        Effect::MoveEachExiledWithSourceToOwnersGraveyard => {
+            state.last_exile_recall_count = 0;
+            let mut moved: i32 = 0;
+            for owner_idx in 0..state.players.len() {
+                let tagged: Vec<u32> = state.players[owner_idx]
+                    .exile
+                    .iter()
+                    .filter(|o| o.exiled_with_source == Some(source_obj_id))
+                    .map(|o| o.id)
+                    .collect();
+                if tagged.is_empty() {
+                    continue;
+                }
+                let exile_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[owner_idx].exile);
+                let mut popped: Vec<GameObject> =
+                    Vec::with_capacity(tagged.len());
+                exile_mut.retain(|o| {
+                    if tagged.contains(&o.id) {
+                        let mut obj = o.clone();
+                        obj.zone = ZONE_GRAVEYARD;
+                        obj.exiled_with_source = None;
+                        popped.push(obj);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                moved += popped.len() as i32;
+                Arc::make_mut(&mut state.players[owner_idx].graveyard)
+                    .extend(popped);
+            }
+            state.last_exile_recall_count = moved;
+        }
+        // **Pinnacle Starcage closure (2026-05-31) — token-mint side.**
+        // Mirrors Python's `CreateNTokensFromLastExileRecall.resolve`
+        // (`effects/generic/exile.py:930`). Reads
+        // `state.last_exile_recall_count` (set by the immediately prior
+        // `MoveEachExiledWithSourceToOwnersGraveyard` in the same
+        // Sequence) and mints that many tokens of `token_printing_id`
+        // under the resolving controller. Count <= 0 → no tokens. Token
+        // construction mirrors the `Effect::CreateToken` arm's GameObject
+        // shape (fresh monotonic ids, monotonic etb_timestamps, ETB
+        // dispatch queue).
+        Effect::CreateNTokensFromLastExileRecall { token_printing_id } => {
+            let token_pid = *token_printing_id;
+            let count = state.last_exile_recall_count;
+            if count <= 0 {
+                return Ok(());
+            }
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "create_n_tokens_from_last_exile_recall: token_printing_id {token_pid} not in registry"
+                )));
+            }
+            let n = count as usize;
+            let active = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let token_is_creature = state
+                .registry
+                .lookup(token_pid)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                token_ids.push(crate::state::reserve_object_id(state));
+            }
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp =
+                state.next_etb_timestamp.saturating_add(n as u32);
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[active as usize].battlefield);
+            for (i, &tok_id) in token_ids.iter().enumerate() {
+                bf.push(GameObject {
+                    id: tok_id,
+                    printing_id: token_pid,
+                    controller: active,
+                    zone: ZONE_BATTLEFIELD,
+                    tapped: false,
+                    summoning_sick: token_is_creature,
+                    damage: 0,
+                    counters: 0,
+                    charge_counters: 0,
+                    loyalty_counters: 0,
+                    attached_to: None,
+                    exiled_with_source: None,
+                    stun_counters: 0,
+                    regeneration_shield: false,
+                    phased_out: false,
+                    publicly_known_to_caster_bits: 0,
+                    etb_timestamp: bf_etb_base.saturating_add(i as u32),
+                    ueot_modifiers: Vec::new(),
+                    warp_exile_pending: false,
+                    warped: false,
+                    cast_from_exile_with_lightstall_surcharge: false,
+                    controller_baseline: None,
+                    token_supertype_override: false,
+                    controller_override: None,
+                    original_printing_id: None,
+                    door_states: None,
+                });
+            }
+            state.pending_etb_dispatches.extend(token_ids);
+            if (active as usize) < state.created_tokens_this_turn.len() {
+                state.created_tokens_this_turn[active as usize] = true;
+            }
+        }
+        // **Pinnacle Starcage closure (2026-05-31) — effect-body
+        // sacrifice-self.** Mirrors Python's `SacrificeSelf.resolve`
+        // (`effects/generic/exile.py:975`). Locates the source's
+        // controller (the source is presumed on bf per CR 701.16) and
+        // sacrifices it via `sacrifice_source_inline`. No-op if the
+        // source already left the bf (an earlier Sequence step moved
+        // it) — matches Python's `if source not in state.battlefield:
+        // return`.
+        Effect::SacrificeSelf => {
+            let mut source_controller: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    source_controller = Some(pidx);
+                    break;
+                }
+            }
+            let Some(controller_idx) = source_controller else {
+                return Ok(()); // source already off the bf: no-op
+            };
+            sacrifice_source_inline(state, controller_idx, source_obj_id)?;
+        }
     }
     Ok(())
 }

@@ -17742,6 +17742,91 @@ bridge-round-trip / Rust-register / snapshot-default pins) +
 
 ---
 
+## Pinnacle Starcage — token mint by registry-id (not name) + AA delivered via ETB-trigger in the probe (2026-05-31)
+
+**Location.** `rust/src/cards.rs` (the new `Effect::ExileAllMatching
+UntilSourceLeaves` / `MoveEachExiledWithSourceToOwnersGraveyard` /
+`CreateNTokensFromLastExileRecall { token_printing_id }` /
+`SacrificeSelf` variants), `rust/src/state_ops_resolve.rs` (their
+resolve arms), `rust/src/state.rs` (the transient
+`last_exile_recall_count` field), `src/mtg_bot/parity/cross_engine.py`
+(the four reverse bridge arms), `tests/test_pinnacle_starcage_parity.py`
+(the probe).
+
+**What the shortcut is — TWO documented divergences.**
+
+1. **Token mint by `token_printing_id` (Rust) vs `token_name` (Python).**
+   Python's `CreateNTokensFromLastExileRecall(token_name="Robot")`
+   mints via the static `TOKEN_PRINTINGS["Robot"]` table; the Rust
+   `Effect::CreateNTokensFromLastExileRecall { token_printing_id }`
+   carries a registry pid instead (the project-wide Rust token-minting
+   convention — every Rust token variant carries a pid, not a name).
+   The bridge resolves the name → a registered token printing id via
+   the existing `register_token_printing` / `_seat_token_printings`
+   path. This is NOT a behavioral divergence (both engines mint the
+   same 2/2 Robot under the same controller) — it's a wire-shape
+   asymmetry the bridge reconciles, identical to the precedent set by
+   `create_token` / `create_token_and_attach_self`.
+
+2. **The AA Sequence is delivered via an ETB-trigger vehicle in the
+   cross-engine probe, NOT the full `{6}{W}{W}` activation cost path.**
+   The probe (`test_cross_engine_real_eoe_pinnacle_starcage_aa_recall_
+   tokens_sac_parity`) stages the genuine parsed AA Sequence onto the
+   stack with the source set (Python: `push_triggered_ability`; Rust: a
+   synthetic carrier whose ETB carries the Sequence dict), rather than
+   paying `{6}{W}{W}` and tapping. The byte-equality claim is over the
+   THREE Effect RESOLVES (recall-to-graveyard + token-mint + sac), not
+   over the cost machinery. `resolving_source` is set by the stack
+   resolver on both engines, so `exiled_with_source` stamping +
+   `SacrificeSelf` source-lookup behave identically to a real
+   activation. The production-deck loader path (which would pay the
+   real cost) is NOT exercised by this probe — Pinnacle Starcage stays
+   DECLINED at the bridge admit gate (the AA cost-gate +
+   ETB-trigger-admit widens are a separate, broader surface not needed
+   for the PROBED credit).
+
+**Why it's OK.** (1) The token-id-vs-name asymmetry is purely a wire
+encoding the bridge round-trips losslessly (round-trip pin
+`test_pinnacle_starcage_bridge_reverse_arms_rehydrate`). (2) The
+ETB-vehicle delivery exercises the exact same resolve arms a real
+activation would; the cost path is orthogonal to the 3-effect
+byte-equality being proven (same precedent as the Seam Rip / Grove
+until-leaves probes, which also bypass cast/activation cost via
+inject-and-fire). The exile-with-source state machinery (the
+`exiled_with_source` field + `return_paired_exiles_for` recall hook)
+was REUSED unchanged — no new linked-exile state machine was needed.
+
+**Failure mode.** If a future card mints a DIFFERENT token from a
+last-exile-recall whose pid the bridge doesn't seat, the reverse arm
+falls back to the canonical `"Robot"` name (the only EoE consumer
+today). A non-Robot consumer would need the bridge's
+`_seat_token_printings` pass extended (cheap). The ETB-vehicle probe
+does NOT pin the `{6}{W}{W}` activation legality / cost-payment — a
+real-game divergence in Pinnacle Starcage's activation (mana payment,
+sorcery-speed timing, tap) would not be caught by this probe.
+
+**Fix scope estimate.** Closing the production-loader admit (so a real
+`{6}{W}{W}` activation drives the AA) is the AA cost-gate widen
+(`_aa_is_phase1_sub_shape_a` admitting a generic+colored mana cost) +
+the ETB-trigger admit path + token-printing seating — a moderate
+multi-arm surface, NOT needed for the byte-equal-Effect PROBED credit.
+
+**Impact estimate.** PROBED 462 → 463 (97.5%); BLOCKED-SG 13 → 12.
+Three new Rust Effect variants + one effect-body leaf + one transient
+`i32` GameState scratch field (NOT in the fingerprint — transient like
+`current_resolve_source_controller` / `next_etb_timestamp`). 0 strength
+cost on the closed surface; the scratch field defaults 0 everywhere
+(all pre-substrate snapshot / hash baselines byte-identical) and is
+read only within a single Sequence resolve.
+
+**Pinned by:** `tests/test_pinnacle_starcage_parity.py` (parser-SoT /
+bridge-reverse-arm / Rust-register / two GENUINE real-printing
+byte-equal probes — ETB mass-exile + AA recall/token/sac) +
+`tests_rust/test_resolve.py` (the `test_pinnacle_*` Rust resolve-arm
+unit pins).
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)

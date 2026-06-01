@@ -3894,6 +3894,79 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # exactly on a 2-player harness).
         from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
         return MillTargetPlayer(use_controller_life=True)
+    if kind == "exile_all_matching_until_source_leaves":
+        # **Pinnacle Starcage closure (2026-05-31).** Reverse arm for the
+        # new Rust ``Effect::ExileAllMatchingUntilSourceLeaves
+        # { match_artifact, match_creature, max_mv }`` variant
+        # (cards.rs). Mirrors Python's
+        # ``ExileAllMatchingUntilSourceLeaves(match_artifact,
+        # match_creature, max_mv)`` frozen dataclass at
+        # ``effects/generic/exile.py:767`` — Pinnacle Starcage's ETB
+        # ("Exile all artifacts and creatures with mana value 2 or less
+        # until this artifact leaves the battlefield":
+        # ``match_artifact=True, match_creature=True, max_mv=2``).
+        #
+        # Empty-omit discipline on all three keys (Rust to_pydict omits
+        # the bool flags when False + the MV cap when 0; the reverse arm
+        # defaults to match).
+        from mtg_bot.effects.generic.exile import (
+            ExileAllMatchingUntilSourceLeaves,
+        )
+        return ExileAllMatchingUntilSourceLeaves(
+            match_artifact=bool(eff_dict.get("match_artifact", False)),
+            match_creature=bool(eff_dict.get("match_creature", False)),
+            max_mv=int(eff_dict.get("max_mv", 0)),
+        )
+    if kind == "move_each_exiled_with_source_to_owners_graveyard":
+        # **Pinnacle Starcage closure (2026-05-31).** Reverse arm for the
+        # new Rust ``Effect::MoveEachExiledWithSourceToOwnersGraveyard``
+        # unit variant. Mirrors Python's
+        # ``MoveEachExiledWithSourceToOwnersGraveyard()`` frozen
+        # dataclass at ``effects/generic/exile.py:840`` — Pinnacle
+        # Starcage's ``{6}{W}{W}`` AA Sequence leaf #1 ("Put each card
+        # exiled with this artifact into its owner's graveyard").
+        from mtg_bot.effects.generic.exile import (
+            MoveEachExiledWithSourceToOwnersGraveyard,
+        )
+        return MoveEachExiledWithSourceToOwnersGraveyard()
+    if kind == "create_n_tokens_from_last_exile_recall":
+        # **Pinnacle Starcage closure (2026-05-31).** Reverse arm for the
+        # new Rust ``Effect::CreateNTokensFromLastExileRecall
+        # { token_printing_id }`` variant. Mirrors Python's
+        # ``CreateNTokensFromLastExileRecall(token_name)`` frozen
+        # dataclass at ``effects/generic/exile.py:908`` — Pinnacle
+        # Starcage's ``{6}{W}{W}`` AA Sequence leaf #2 ("create a 2/2
+        # colorless Robot artifact creature token for each card put into
+        # a graveyard this way": ``token_name="Robot"``).
+        #
+        # **Name↔id wire-shape asymmetry.** The Rust variant carries a
+        # registry ``token_printing_id`` (the project-wide Rust token
+        # convention) while the Python class carries ``token_name``. The
+        # reverse arm resolves the id back to a name via the
+        # probe-time token-printing registry (the same
+        # ``register_token_printing`` map the ``create_token`` reverse
+        # arm consults). When the id isn't in the map (e.g. a unit pin
+        # that only exercises the Rust round-trip), the arm falls back to
+        # the canonical ``"Robot"`` name — Pinnacle Starcage's only
+        # token. The Python-side resolve uses ``TOKEN_PRINTINGS[name]``.
+        token_pid = eff_dict.get("token_printing_id")
+        token_name = "Robot"
+        if token_pid is not None and token_pid in _TOKEN_PRINTING_BY_PID:
+            token_name = _TOKEN_PRINTING_BY_PID[token_pid].name
+        from mtg_bot.effects.generic.exile import (
+            CreateNTokensFromLastExileRecall,
+        )
+        return CreateNTokensFromLastExileRecall(token_name=token_name)
+    if kind == "sacrifice_self":
+        # **Pinnacle Starcage closure (2026-05-31).** Reverse arm for the
+        # new Rust ``Effect::SacrificeSelf`` unit variant. Mirrors
+        # Python's ``SacrificeSelf()`` effect-body primitive at
+        # ``effects/generic/exile.py:958`` — Pinnacle Starcage's
+        # ``{6}{W}{W}`` AA Sequence leaf #3 ("Sacrifice this artifact.").
+        # Distinct from the ``ActivationCost.sacrifice_self`` cost-gate
+        # flag (a dict KEY on ``cost``, not an effect ``kind``).
+        from mtg_bot.effects.generic.exile import SacrificeSelf
+        return SacrificeSelf()
     if kind == "exile_target_creature_until_source_leaves":
         # "Exile any target creature until SOURCE leaves the
         # battlefield." Rust's
