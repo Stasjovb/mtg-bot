@@ -5863,6 +5863,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect contract at cards.rs:3296-3300)"
             )
         return PutPlusOneCounterOnSelf(amount=amount)
+    if kind == "put_loyalty_counter_on_self":
+        # **Tezzeret, Cruel Captain slice -- "put a loyalty counter on
+        # ~" (PutLoyaltyCounterOnSelf family).** Rust substrate
+        # ``Effect::PutLoyaltyCounterOnSelf { amount: i32 }``
+        # (cards.rs, parser ``put_loyalty_counter_on_self`` arm,
+        # resolve in state_ops_resolve.rs) mirrors the sibling
+        # ``put_plus_one_counter_on_self`` arm but grows the orthogonal
+        # ``loyalty_counters`` slot (NOT the +1/+1 ``counters`` slot)
+        # and does NOT dispatch ``CountersAdded`` (loyalty counters are
+        # not +1/+1 counters). Powers planeswalker "Whenever ..."
+        # triggers that grow their own loyalty -- Tezzeret, Cruel
+        # Captain's "Whenever an artifact you control enters, put a
+        # loyalty counter on Tezzeret."
+        #
+        # **Field shape (default-handling).** Python's
+        # ``PutLoyaltyCounterOnSelf(amount: int = 1)``
+        # (effects/generic/counters.py:234) and Rust's variant carry
+        # the SAME ``amount`` field with the SAME default (1). Bridge
+        # mirrors Rust's parse_effect default-handling: ``amount`` is
+        # OPTIONAL, defaulting to 1 when omitted. Negative ``amount``
+        # raises on both engines.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines look up
+        # the ability's source (Rust: walks battlefield by
+        # ``source_obj_id``; Python: reads ``state.resolving_source``)
+        # and add ``amount`` loyalty counters to that object. Source not
+        # on a battlefield zone -> silent no-op on both engines.
+        #
+        # **Real EoE consumer** unblocked: Tezzeret, Cruel Captain. The
+        # bridge dict shape is ``{"kind": "put_loyalty_counter_on_self"}``
+        # (amount omitted -> defaults to 1) or with an explicit
+        # ``"amount": 1``. The predicate-gated artifact-ETB firing path
+        # is its own trajectory surface (deferred per the
+        # synthetic-only-when-event-firing-cascades precedent --
+        # Sunstar Lightsmith's IS_CAST firing parallel).
+        from mtg_bot.effects.generic.counters import (
+            PutLoyaltyCounterOnSelf,
+        )
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 1
+        if amount < 0:
+            raise ValueError(
+                "put_loyalty_counter_on_self bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract)"
+            )
+        return PutLoyaltyCounterOnSelf(amount=amount)
     if kind == "counter_target_spell":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "counter target spell"
         # (CounterTargetSpell family).** Rust substrate
