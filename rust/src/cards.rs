@@ -4738,6 +4738,59 @@ pub enum Effect {
         max_mv: i32,
         may_fail: bool,
     },
+    /// **Green Sun's Zenith — X-cost green-creature tutor
+    /// (2026-05-31).** `{X}{G}` Sorcery: "Search your library for a
+    /// green creature card with mana value X or less, put it onto the
+    /// battlefield, then shuffle." Mirrors Python's
+    /// `effects.generic.search.SearchLibraryForGreenCreatureWithMVAtMostX`
+    /// (a parameterless frozen dataclass; X read at resolve time from
+    /// `state.resolving_x_value`).
+    ///
+    /// **Unit variant.** No data fields — X is read at resolve time
+    /// from `state.current_resolve_x_value` (the C1 transient,
+    /// populated by C1's save→set→restore bracket from the StackItem's
+    /// `x_value` slot, in turn minted at cast time by C2.5's
+    /// `cast_spell_noncreature` X-cost detector). This is the same
+    /// X-read idiom `Effect::ZeroPointBalladEffect` uses.
+    ///
+    /// **Resolve semantics (mirrors Python `search.py:295-334`).**
+    /// 1. Resolve controller (I83 controller-of-effect: prefer
+    ///    `current_resolve_source_controller`, fall back to
+    ///    `active_player`).
+    /// 2. Read X (`current_resolve_x_value.unwrap_or(0)`, clamp >= 0).
+    /// 3. Scan the controller's library top-to-bottom (forward iter;
+    ///    post-CE3 lib[0] = top) for the FIRST card that is a Creature
+    ///    AND green (`mana_cost.green > 0`) AND
+    ///    `mana_cost.total() <= X`. The "green" predicate mirrors
+    ///    Python's `"G" in printing.mana_cost.colors`; the Rust
+    ///    `ManaCost` has a dedicated `green` pip count, so a positive
+    ///    `green` is the bit-equal proxy for a green color identity.
+    /// 4. **Deterministic-first pick.** Real MTG lets the controller
+    ///    choose any matching card; the Rust engine has no
+    ///    `choose_card_from_library` agent surface, so it takes the
+    ///    topmost match (the established convention across every other
+    ///    Rust library-search arm). **This is the cross-engine
+    ///    asymmetry vs Python's no-agent decline** — see
+    ///    `docs/SEARCH_LIMITATIONS.md`. The synthetic Rust unit pins
+    ///    drive this deterministic-first fetch at seated X; the
+    ///    no-match (empty-fetch) configuration is the only one that is
+    ///    byte-equal to Python's no-agent harness.
+    /// 5. Put the chosen card onto the controller's battlefield
+    ///    (untapped; creature → summoning-sick per CR 302.1; fresh
+    ///    ETB timestamp; per-object state reset per CR 400.7) and
+    ///    queue its ENTERS dispatch (mirrors
+    ///    `Effect::SearchLibraryForBasicLandTapped`'s put-then-shuffle
+    ///    + `pending_etb_dispatches` pattern, minus the `tapped` flag).
+    /// 6. **Always shuffle** (CR 701.19 / 701.22), whether or not a
+    ///    card was found — route through `rng_ref()` (external Python
+    ///    `random.Random` when installed; byte-identical Fisher-Yates
+    ///    per the `set_external_rng` G19/G16 closure) with an
+    ///    xorshift64 fallback, exactly as
+    ///    `SearchLibraryForBasicLandTapped` does.
+    ///
+    /// **No at-cast targets.** Phase-3 `(0, 0)`-shape (untargeted
+    /// search); the library scan happens at resolve time.
+    SearchLibraryForGreenCreatureWithMVAtMostX,
     /// **Round 28 coverage extension.** Every creature on the
     /// source's controller's OPPONENTS' battlefields gets
     /// `+power/+toughness` until end of turn. Mirror of
@@ -17117,6 +17170,15 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "zero_point_ballad_effect" => {
             Ok(Effect::ZeroPointBalladEffect)
         }
+        // **Green Sun's Zenith (2026-05-31).** `{X}{G}` green-creature
+        // tutor — unit-variant parse arm (no data fields; X read from
+        // `current_resolve_x_value` at resolve time per the C1+C2.5
+        // substrate). Mirrors the `zero_point_ballad_effect` idiom:
+        // extra dict fields silently ignored for round-trip
+        // dict-shape consistency.
+        "search_library_for_green_creature_with_mv_at_most_x" => {
+            Ok(Effect::SearchLibraryForGreenCreatureWithMVAtMostX)
+        }
         // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
         // parse arm — no data fields (X via C1 transient, target via
         // payload-target slot). Mirrors the `zero_point_ballad_effect`
@@ -21385,6 +21447,15 @@ pub(crate) fn effect_to_pydict<'py>(
         // `close_encounter_effect` unit-variant to_pydict idiom.
         Effect::ZeroPointBalladEffect => {
             d.set_item("kind", "zero_point_ballad_effect")?;
+        }
+        // **Green Sun's Zenith (2026-05-31).** Unit-variant round-trip
+        // dict-shape — emits only `kind`. X / search-result ride on
+        // resolve transients + the at-resolve library scan.
+        Effect::SearchLibraryForGreenCreatureWithMVAtMostX => {
+            d.set_item(
+                "kind",
+                "search_library_for_green_creature_with_mv_at_most_x",
+            )?;
         }
         // **Devastating Onslaught — Cycle 1 (2026-05-22).** Unit-variant
         // round-trip dict-shape. No data fields — X / target ride on

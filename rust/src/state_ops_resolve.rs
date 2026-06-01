@@ -22874,6 +22874,157 @@ fn apply_effect(
         // engine probe at X=0 verifies parse + admit + resolve byte-
         // equal without exercising the X-dependent surface (documented
         // as a harness limitation in `docs/SEARCH_LIMITATIONS.md`).
+        // **Green Sun's Zenith — green-creature tutor (2026-05-31).**
+        // `{X}{G}` Sorcery: "Search your library for a green creature
+        // card with mana value X or less, put it onto the battlefield,
+        // then shuffle." Mirrors Python's
+        // `SearchLibraryForGreenCreatureWithMVAtMostX.resolve`
+        // (`search.py:295-334`). X is read from the C1 transient.
+        //
+        // **Deterministic-first pick + cross-engine asymmetry.** The
+        // Rust engine has no `choose_card_from_library` agent surface,
+        // so it fetches the TOPMOST matching card; Python's no-agent
+        // harness path DECLINES (fetches nothing) instead. Only the
+        // no-match (empty-fetch) configuration is byte-equal to the
+        // no-agent harness. The synthetic Rust unit pins exercise the
+        // deterministic-first fetch at seated X. Documented in
+        // `docs/SEARCH_LIMITATIONS.md`.
+        Effect::SearchLibraryForGreenCreatureWithMVAtMostX => {
+            // Controller of effect (I83): prefer the resolver-set
+            // transient, fall back to active_player (matches the
+            // SearchLibraryForBasicLandTapped / ZeroPointBallad
+            // controller-resolution convention).
+            let controller_idx = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let controller_u8 = controller_idx as u8;
+            // Read X (C1 bracket), clamp >= 0.
+            let x: i32 = state.current_resolve_x_value.unwrap_or(0).max(0);
+            // Locate the topmost green creature with MV <= X (forward
+            // iter = top-to-bottom post-CE3, lib[0] = top). Mirrors
+            // Python's `is_creature and "G" in mana_cost.colors and
+            // mana_cost.total <= x`. The Rust `ManaCost` carries a
+            // dedicated `green` pip count; `green > 0` is the bit-equal
+            // proxy for "G" being in the color identity.
+            let pos: Option<usize> = {
+                let lib = &state.players[controller_idx].library;
+                let registry = &state.registry;
+                let mut found: Option<usize> = None;
+                for (i, obj) in lib.iter().enumerate() {
+                    let printing = match registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        continue;
+                    }
+                    let mc = &printing.mana_cost;
+                    if mc.green == 0 {
+                        continue; // not green
+                    }
+                    let total = mc.generic as i32
+                        + mc.white as i32
+                        + mc.blue as i32
+                        + mc.black as i32
+                        + mc.red as i32
+                        + mc.green as i32;
+                    if total <= x {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                found
+            };
+            // Put the chosen card onto the battlefield (untapped,
+            // creature summoning-sick per CR 302.1, fresh ETB
+            // timestamp). Queue its ENTERS dispatch AFTER the
+            // post-search shuffle drops the registry/zone borrows.
+            let mut entered_id: Option<u32> = None;
+            if let Some(p) = pos {
+                let etb_ts = crate::state::reserve_etb_timestamp(state);
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut obj = lib.remove(p);
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = false;
+                // Creature entering via a put-onto-battlefield effect
+                // has summoning sickness (CR 302.1) — it was not
+                // controlled continuously since the controller's most
+                // recent turn began.
+                obj.summoning_sick = true;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.original_printing_id = None;
+                obj.door_states = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                entered_id = Some(obj.id);
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            // CR 701.19 / 701.22 — always shuffle the library after a
+            // search, whether or not a card was found. Route through
+            // `rng_ref()` (external Python `random.Random`) when set,
+            // fall back to inlined xorshift64. Identical shuffle block
+            // to `Effect::SearchLibraryForBasicLandTapped`'s G19/G16
+            // closure.
+            let lib_len = state.players[controller_idx].library.len();
+            if lib_len >= 2 {
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            lib.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (lib_len as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
+                    }
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    let mut x = seed;
+                    for i in (1..n).rev() {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        lib.swap(i, j);
+                    }
+                }
+            }
+            // Queue the ENTERS dispatch for the searched-up creature
+            // (after the shuffle dropped its borrows), mirroring the
+            // basic-land-tapped arm's deferred ETB fan-out.
+            if let Some(id) = entered_id {
+                state.pending_etb_dispatches.push(id);
+            }
+        }
         Effect::ZeroPointBalladEffect => {
             let _ = source_obj_id;
             // Resolve X: read transient (C1 bracket), default 0.
