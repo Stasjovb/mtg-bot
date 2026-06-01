@@ -312,6 +312,13 @@ def test_make_state_hand_snapshot_returns_correct_dicts(engine):
     hand = state.hand_snapshot(0)
     assert len(hand) == 2
     # Per-object dict shape — same keys as the parity-smoke signature.
+    # The per-object snapshot grew several fields this campaign as new
+    # engine state landed (phasing, control-change, exile-source
+    # tracking, token supertype overrides, door states, the
+    # caster-visibility bitmask, original-printing tracking for
+    # copies/clones, the Lightstall surcharge flag). All are backed by
+    # real GameObject fields in the Rust engine; refresh the expected
+    # key set to the current full shape.
     expected_keys = {
         "id",
         "printing_id",
@@ -325,6 +332,15 @@ def test_make_state_hand_snapshot_returns_correct_dicts(engine):
         # Round-28 attach foundation: snapshot dicts include
         # ``attached_to`` (None default; target id when attached).
         "attached_to",
+        # Later-campaign per-object state additions:
+        "phased_out",
+        "controller_override",
+        "exiled_with_source",
+        "token_supertype_override",
+        "door_states",
+        "publicly_known_to_caster_bits",
+        "original_printing_id",
+        "cast_from_exile_with_lightstall_surcharge",
     }
     for d in hand:
         assert set(d.keys()) == expected_keys
