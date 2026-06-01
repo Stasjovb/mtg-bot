@@ -220,6 +220,18 @@ def hash_state(state) -> str:
     # controller_id so per-player ownership is captured in _zone_signature.
     parts.append(_zone_signature(getattr(state, "battlefield", [])))
     parts.append(_zone_signature(getattr(state, "stack", [])))
+    # Command-zone emblems (CR 114). Appended ONLY when non-empty so
+    # every pre-emblem pinned baseline (which has an empty emblem zone)
+    # stays byte-identical — the same "serialize iff non-empty" shape
+    # the Rust fingerprint's pending_decisions slot uses. An emblem is a
+    # synthetic GameObject carrying the emblem's controller_id + id, so
+    # the standard _zone_signature 8-tuple projection captures the
+    # gameplay-relevant emblem identity (its printing_name + controller
+    # + id). Mirrors the Rust fingerprint's emblem slot (emitted iff
+    # non-empty).
+    emblems = getattr(state, "emblems", [])
+    if emblems:
+        parts.append(_zone_signature(emblems))
     return _hash_parts(parts)
 
 

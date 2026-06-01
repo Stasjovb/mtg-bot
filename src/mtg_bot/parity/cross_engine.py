@@ -5912,6 +5912,58 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect contract)"
             )
         return PutLoyaltyCounterOnSelf(amount=amount)
+    if kind == "create_emblem":
+        # **Tezzeret, Cruel Captain -7 emblem (CR 114).** Rust substrate
+        # ``Effect::CreateEmblem { emblem_kind: String }`` (cards.rs
+        # parse_effect ``create_emblem`` arm + resolve in
+        # state_ops_resolve.rs) mirrors Python's ``CreateEmblem``. The
+        # ``emblem_kind`` string discriminant names the known emblem
+        # (today only ``"tezzeret_cruel_captain"``); the bridge keeps it
+        # a single string so the nested emblem-ability tree doesn't cross
+        # the FFI boundary. Both engines' resolve push a synthetic emblem
+        # object into the command zone whose begin-combat trigger puts 3
+        # +1/+1 counters on a target artifact you control (byte-equal);
+        # the becomes-0/0-Robot permanent animate is honest-stopped on
+        # both sides. Bridge dict: ``{"kind": "create_emblem",
+        # "emblem_kind": "tezzeret_cruel_captain"}``.
+        from mtg_bot.effects.generic.emblem import (
+            TEZZERET_CRUEL_CAPTAIN_EMBLEM,
+            CreateEmblem,
+        )
+        emblem_kind = eff_dict.get(
+            "emblem_kind", TEZZERET_CRUEL_CAPTAIN_EMBLEM
+        )
+        if emblem_kind != TEZZERET_CRUEL_CAPTAIN_EMBLEM:
+            raise ValueError(
+                "create_emblem bridge arm: unknown emblem kind "
+                f"{emblem_kind!r} (only "
+                f"{TEZZERET_CRUEL_CAPTAIN_EMBLEM!r} is modeled; mirrors "
+                "Rust parse_effect contract)"
+            )
+        return CreateEmblem(emblem_kind=emblem_kind)
+    if kind == "tezzeret_emblem_begin_combat":
+        # **The Tezzeret emblem's begin-combat trigger body.** Rust
+        # substrate ``Effect::TezzeretEmblemBeginCombat { amount: i32 }``
+        # mirrors Python's ``TezzeretEmblemBeginCombat``. ``amount``
+        # defaults to 3 (the printed "three +1/+1 counters"). Both
+        # engines pick the first artifact you control and add ``amount``
+        # +1/+1 counters; the becomes-Robot animate half is honest-
+        # stopped. Bridge dict: ``{"kind": "tezzeret_emblem_begin_combat",
+        # "amount": 3}`` (amount omitted -> defaults to 3).
+        from mtg_bot.effects.generic.emblem import (
+            TezzeretEmblemBeginCombat,
+        )
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 3
+        if amount < 0:
+            raise ValueError(
+                "tezzeret_emblem_begin_combat bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract)"
+            )
+        return TezzeretEmblemBeginCombat(amount=amount)
     if kind == "counter_target_spell":
         # **Round-22 BLOCKED-BRIDGE-ARM slice -- "counter target spell"
         # (CounterTargetSpell family).** Rust substrate

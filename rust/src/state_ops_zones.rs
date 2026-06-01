@@ -50,6 +50,10 @@ pub const ZONE_GRAVEYARD: u8 = 3;
 pub const ZONE_STACK: u8 = 4;
 #[allow(dead_code)]
 pub const ZONE_EXILE: u8 = 5;
+/// The command zone (CR 408). Emblems (CR 114) live here, held in
+/// `GameState.emblems`. Mirrors Python's `Zone.COMMAND`.
+#[allow(dead_code)]
+pub const ZONE_COMMAND: u8 = 6;
 
 /// Find an object in `zone` by id; if present, remove it (preserving
 /// order) and return the owned `GameObject`. CoW-safe: takes

@@ -22,6 +22,13 @@ class Zone(Enum):
     GRAVEYARD = "graveyard"
     EXILE = "exile"
     STACK = "stack"
+    # CR 408 — the command zone. Emblems (CR 114) live here. The only
+    # command-zone object kind the engine models today is the emblem;
+    # an emblem is a synthetic ``GameObject`` carrying a synthetic
+    # ``CardPrinting`` whose sole content is the emblem's ability set,
+    # held in ``GameState.emblems`` (see the ``CreateEmblem`` effect +
+    # the emblem-sourced begin-combat trigger dispatch).
+    COMMAND = "command"
 
 
 class _CowList(list):
@@ -2633,6 +2640,23 @@ class GameState:
     loyalty_activated_this_turn: set[tuple[int, int]] = field(
         default_factory=set
     )
+    # Command zone (CR 408) — emblem objects (CR 114). Each entry is a
+    # synthetic ``GameObject`` (``zone == Zone.COMMAND``) whose
+    # ``printing`` is a synthetic ``CardPrinting`` carrying ONLY the
+    # emblem's ability set (no characteristics other than its abilities,
+    # CR 114.3) and whose ``controller_id`` / ``owner_id`` is the player
+    # who "gets" the emblem. Emblems never leave the command zone and
+    # can't be removed (CR 114.5), so there is no zone-transition
+    # plumbing — they are created by the ``CreateEmblem`` effect, cloned
+    # in ``clone()``, surfaced via ``emblems_snapshot``, and scanned as
+    # an additional trigger SOURCE by ``dispatch_event`` for the
+    # begin-combat (and any future emblem-sourced) event. Empty by
+    # default — almost every state has no emblems, so the field
+    # contributes to the parity fingerprint ONLY when non-empty
+    # (``hash_state`` appends an emblems slot iff the list is non-empty),
+    # keeping every pre-emblem pinned baseline byte-identical. Mirrors
+    # Rust's ``GameState.emblems: Vec<Emblem>``.
+    emblems: list[GameObject] = field(default_factory=list)
     # Delayed triggered abilities scheduled for a future end step. Each
     # entry is a dict: {"fire_at_turn": int, "controller_id": int,
     # "action": str, "target_id": int}.
@@ -3354,6 +3378,14 @@ class GameState:
             set(self.loyalty_activated_this_turn)
             if self.loyalty_activated_this_turn
             else set()
+        )
+        # Command-zone emblems: deep-clone each synthetic emblem
+        # GameObject (same slot-cloner the battlefield walk uses) so the
+        # clone owns independent emblem objects. Empty-list short-circuit
+        # keeps the common (no-emblem) clone path allocation-free.
+        new_state.emblems = (
+            [_clone_game_object(e) for e in self.emblems]
+            if self.emblems else []
         )
         new_state.delayed_triggers = (
             [dict(d) for d in self.delayed_triggers]

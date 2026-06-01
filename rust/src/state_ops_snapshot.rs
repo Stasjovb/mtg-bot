@@ -348,6 +348,26 @@ impl GameState {
         Ok(out)
     }
 
+    /// Snapshot of the command-zone emblems (CR 114) as per-object
+    /// dicts — the same `object_to_pydict` projection the battlefield
+    /// snapshot uses, sorted by `etb_timestamp` (the emblem-creation
+    /// order). Empty for almost every state. Mirrors Python's
+    /// `state.emblems` list; the parity hash reads it through
+    /// `emblems_snapshot` the same way it reads `battlefield_snapshot`.
+    fn emblems_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let mut refs: Vec<&crate::state::GameObject> =
+            self.emblems.iter().collect();
+        refs.sort_by_key(|obj| obj.etb_timestamp);
+        let mut out: Vec<Bound<'py, PyDict>> = Vec::with_capacity(refs.len());
+        for obj in refs {
+            out.push(object_to_pydict(py, self, obj)?);
+        }
+        Ok(out)
+    }
+
     /// Snapshot of `player_id`'s mana pool as a 7-key dict
     /// `{"W", "U", "B", "R", "G", "C", "any"}` mapping each color to
     /// its current count. Always returns all seven keys, mirroring the

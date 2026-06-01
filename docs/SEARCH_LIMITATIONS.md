@@ -18392,7 +18392,7 @@ guard).
 
 ---
 
-## Rust port — Tezzeret, Cruel Captain: loyalty-ACTIVATION subsystem + 0/−3 abilities SHIPPED byte-equal; −7 EMBLEM honest-stopped (2026-06-01)
+## Rust port — Tezzeret, Cruel Captain: loyalty-ACTIVATION subsystem + 0/−3/−7 abilities SHIPPED byte-equal; ONLY the −7 emblem's becomes-0/0-Robot animate honest-stopped (2026-06-01)
 
 **UPDATE (2026-06-01, feature/tezzeret-loyalty).** The loyalty-ACTIVATION
 subsystem and the 0 / −3 abilities are now SHIPPED byte-equal on both
@@ -18441,52 +18441,96 @@ except for the −7 emblem):
   fetch-MV1 / skip-MV2) + the pre-existing `tests_rust/test_activated.py`
   CR-606.3 walker-loyalty suite (unchanged, still green).
 
-**STILL DEFERRED (HONEST-STOP): the −7 EMBLEM only.** Tezzeret's −7
+**UPDATE (2026-06-01, feature/tezzeret-emblem): the −7 EMBLEM
+substrate LANDED byte-equal; ONLY the becomes-0/0-Robot animate
+honest-stopped.** The emblem-object substrate (which did not exist on
+EITHER engine) is now built and the −7 is modeled. Tezzeret's −7
 grants an emblem with "At the beginning of combat on your turn, put
 three +1/+1 counters on target artifact you control. If it's not a
-creature, it becomes a 0/0 Robot artifact creature." NO emblem-object
-substrate exists on EITHER engine. The parser's `_LOYALTY_ABILITY_EFFECTS`
-table deliberately omits the emblem effect body, so the −7 ability is
-stripped (the 0 / −3 ARE modeled).
+creature, it becomes a 0/0 Robot artifact creature."
 
-**Emblem-substrate map (what the −7 needs, both engines).** An emblem
-is a distinct game object (CR 114) that exists in the command zone,
-has no characteristics other than its abilities, can't leave the
-command zone, and can't be removed. The minimal substrate:
+What LANDED (byte-equal cross-engine):
 
-1. **An emblem "object" + zone.** Neither engine has a command zone or
-   an emblem object today. Python `GameState` would need an
-   `emblems: list[Emblem]` (or a command-zone list), each carrying the
-   owning player + a delayed/static ability payload; Rust `GameState`
-   the same (`Vec<Emblem>` per player, cloned in `clone()`,
-   snapshot-surfaced for parity). This is a NEW zone + object kind —
-   the same shape as adding the stack store was, but smaller (emblems
-   never move, so no zone-transition plumbing).
-2. **A delayed combat-trigger carried by the emblem.** The emblem's
-   ability is "At the beginning of combat on your turn, …" — a
-   beginning-of-combat triggered ability whose SOURCE is the emblem,
-   not a battlefield permanent. Both engines fire triggered abilities
-   only from battlefield/stack sources today; the trigger dispatcher
-   (`turn.py` Python / `state_ops_*` Rust) would need to also scan the
-   emblem zone at the begin-combat step. The effect body itself
-   ("put three +1/+1 counters on target artifact you control; if it's
-   not a creature it becomes a 0/0 Robot artifact creature") is a
-   compound: a counted +1/+1 (existing primitive) + a conditional
-   type-changing / becomes-creature UEOT-or-permanent animate (Robot
-   artifact creature with base 0/0). The "becomes a 0/0 Robot artifact
-   creature" is itself a layer-4/7b type+P/T-set continuous effect —
-   reuses the animate-land substrate shape but on an artifact, and
-   PERMANENTLY (not UEOT) per the printed text.
-3. **The "You get an emblem" effect.** A new effect kind
-   (`get_emblem` / `CreateEmblem`) on both engines whose resolve pushes
-   the emblem object into the emblem zone. This is the −7 ability's
-   effect body; it's gated behind (1).
+1. **Emblem object + command zone (CR 114).** `GameState.emblems:
+   list[GameObject]` (Python, `game.py`) / `GameState.emblems:
+   Vec<GameObject>` (Rust, `state.rs`). Each emblem is a synthetic
+   `GameObject` (`Zone.COMMAND` / `ZONE_COMMAND=6`) whose `printing` is
+   a synthetic `CardPrinting` (`make_emblem` Python / a source-printing
+   clone stripped to CR-114.3 bare-abilities shape Rust) carrying ONLY
+   the emblem's begin-combat trigger. Cloned in both `clone()`s;
+   surfaced via Rust `emblems_snapshot`; fingerprinted via an emblems
+   slot appended ONLY when non-empty (Python `parity_smoke.hash_state`
+   + Rust `fingerprint()`), so every pre-emblem baseline stays
+   byte-identical. Empty by default — no zone-transition plumbing
+   (emblems never move, CR 114.5).
+2. **`CreateEmblem` effect.** "You get an emblem with '...'." New
+   effect on both engines (`effects/generic/emblem.py` Python;
+   `Effect::CreateEmblem { emblem_kind }` Rust — parse + reverse
+   `effect_to_pydict` + resolve via the `BecomesCopyOfTargetLand`
+   per-resolve-printing `Arc::make_mut().push_printing` pattern). The
+   parser (`planeswalker_builder.py`) now un-strips the −7 line and
+   emits `CreateEmblem`. Bridge: `create_emblem` arm
+   (`parity/cross_engine.py`) with a string `emblem_kind` discriminant.
+3. **Emblem-sourced begin-combat trigger.** Both engines' trigger
+   dispatchers (`dispatch_event` Python `actions.py` / Rust
+   `state_ops_resolve.rs`) extended to scan `state.emblems` as an
+   additional trigger SOURCE (Rust also extends `find_object_controller`
+   so `ControlledByYou` resolves the emblem's controller). The emblem's
+   "At the beginning of combat on your turn, …" ability fires from the
+   command zone onto the stack.
+4. **The 3-counter body.** `TezzeretEmblemBeginCombat` (Python) /
+   `Effect::TezzeretEmblemBeginCombat { amount=3 }` (Rust): picks the
+   first artifact the controller controls (deterministic, mirroring the
+   sibling 0-ability target convention) and adds three +1/+1 counters
+   (counter-doubling replacement honored; CountersAdded observer
+   dispatched). Byte-equal: artifact net counters 0 → 3.
 
-Scope: a separate multi-cycle substrate (new zone + new object kind +
-emblem-sourced trigger dispatch + the becomes-Robot animate). Not taken
-here per the campaign honest-stop policy (the loyalty-activation
-subsystem + 0/−3 abilities are the bounded, byte-equal win). NO risky
-broad refactor was attempted for the emblem.
+**HONEST-STOP (the becomes-0/0-Robot animate ONLY).** "If it's not a
+creature, it becomes a 0/0 Robot artifact creature" is NOT applied —
+the counters land, the type/P/T change does not. This is a PERMANENT
+(not UEOT) layer-4 type-adding set (the artifact GAINS the Creature
+card type + the Robot creature subtype) PLUS a layer-7b base-P/T set
+(0/0). Why deferred:
+
+- **No permanent type+P/T-set animate substrate exists on either
+  engine.** The closest precedents are all UEOT and shaped for OTHER
+  permanent types: `BecomeLandCreatureUEOT` (manland animation — a
+  LAND, UEOT, with a fixed granted P/T) and the Spacecraft "becomes a
+  creature" UEOT arm. There is NO arm that (a) targets an ARTIFACT, (b)
+  ADDS the creature type while keeping the artifact type, (c) sets base
+  P/T to 0/0, and (d) does so PERMANENTLY (lives forever, not cleared
+  at cleanup). Building it touches the layer-4 type-layer reader and
+  the layer-7b base-P/T reader on BOTH engines plus a new permanent
+  (non-UEOT) continuous-effect lifetime, and must keep the 0/0 + any
+  +1/+1 counters interacting correctly through the SBA (a 0/0 with 3
+  +1/+1 counters is a 3/3 that survives; a 0/0 with 0 counters dies to
+  CR 704.5f) — a multi-file layer-system slice.
+- **Fix scope.** Both engines: a new `becomes_permanent_type_and_pt`
+  continuous-effect kind (layer-4 add-type + layer-7b set-base-PT,
+  PERMANENT lifetime) + the layer readers consulting it for artifacts +
+  the SBA interplay with the simultaneously-added +1/+1 counters.
+  Estimate ~3-5 cycles. NOT taken here per the campaign honest-stop
+  policy — the 3-counter half is the bounded, byte-equal win, and NO
+  risky broad layer-system refactor was attempted.
+- **Failure mode.** In a real game, after the emblem's begin-combat
+  trigger resolves on a NON-creature artifact, both engines agree it
+  has 3 +1/+1 counters but DISAGREE-with-the-rules on its type: it
+  stays a non-creature artifact (so it can't attack / block and the
+  3 counters are inert on a non-creature). Both engines agree WITH EACH
+  OTHER (byte-equal) — the divergence is from CR, not cross-engine. On
+  an artifact that is ALREADY a creature, the emblem is fully correct
+  (the "if it's not a creature" clause doesn't fire). Impact: 0
+  cross-engine strength cost; a fidelity gap only on the
+  not-yet-a-creature target case.
+
+**Pinned by:** `tests/test_tezzeret_cruel_captain_parity.py` (+2 —
+the emblem-effect bridge round-trip and the full cross-engine
+byte-equal −7 emblem flow asserting the becomes-Robot animate is NOT
+applied on both engines; the parser-SoT test now expects 3 modeled
+abilities) + `tests_rust/test_tezzeret_emblem.py` (8 Rust pins:
+parse/reverse round-trip, unknown-kind + negative-amount rejection,
+CreateEmblem resolve → command zone, begin-combat 3-counter body,
+no-artifact fizzle, fingerprint emblems slot, clone independence).
 
 ---
 

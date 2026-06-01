@@ -1586,6 +1586,44 @@ def make_planeswalker(
     )
 
 
+def make_emblem(
+    name: str,
+    triggered_abilities: tuple[TriggeredAbility, ...] = (),
+    static_abilities: tuple[StaticAbility, ...] = (),
+) -> CardPrinting:
+    """Build the synthetic ``CardPrinting`` backing an emblem (CR 114).
+
+    An emblem "has no characteristics other than the abilities defined
+    by the effect that created it" (CR 114.3): no mana cost, no card
+    types, no power/toughness, no color. We model it as a synthetic
+    ``CardPrinting`` whose only meaningful content is the
+    ``triggered_abilities`` / ``static_abilities`` the creating effect
+    stamps on it — the same ability shapes a permanent carries, so the
+    existing trigger-dispatch + resolve machinery works unchanged once
+    the emblem object is scanned as a trigger source. The ``name`` is a
+    short descriptor (e.g. ``"Tezzeret, Cruel Captain emblem"``) used in
+    log lines and snapshots.
+
+    Mirrors Rust's emblem-printing construction (the ``CreateEmblem``
+    effect registers an analogous synthetic printing). Card-type set is
+    empty: ``is_creature`` / ``is_artifact`` / ``is_planeswalker`` all
+    read False, the SBA walks skip it (it's never on the battlefield),
+    and it never reads as a permanent.
+    """
+    supertypes, card_types, subtypes = _parse_type_line("")
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=parse_mana_cost(""),
+        type_line="",
+        supertypes=supertypes,
+        card_types=card_types,
+        subtypes=subtypes,
+        triggered_abilities=tuple(triggered_abilities),
+        static_abilities=tuple(static_abilities),
+    )
+
+
 def make_enchantment(
     name: str,
     cost: str,

@@ -1183,6 +1183,21 @@ pub(crate) fn dispatch_event(
             .iter()
             .map(|o| (o.id, o.controller, o.printing_id))
             .collect();
+        // Command-zone emblems (CR 114) are an additional trigger
+        // SOURCE: their abilities (e.g. Tezzeret's emblem "at the
+        // beginning of combat on your turn, …") fire from the command
+        // zone, not the battlefield. Append them to the observer list
+        // so their predicate-style triggered abilities observe the
+        // event. Empty for almost every state (no emblems), so this is
+        // a cheap no-op on the common path. Mirrors Python's
+        // dispatch_event emblem-source extension.
+        for emblem in &state.emblems {
+            observer_entries.push((
+                emblem.id,
+                emblem.controller,
+                emblem.printing_id,
+            ));
+        }
         if event == Event::Dies
             || event == Event::Cast
             || event == Event::LeavesBattlefield
@@ -3711,6 +3726,162 @@ fn apply_effect(
                     target_id,
                 )?;
             }
+        }
+        // **Emblem substrate (CR 114) — "You get an emblem with
+        // '...'."** Mints a synthetic emblem CardPrinting into the
+        // in-state registry (the same per-resolve-printing pattern
+        // `BecomesCopyOfTargetLand` uses — `Arc::make_mut(&mut
+        // state.registry).push_printing`) carrying the emblem's begin-
+        // combat trigger, then pushes a synthetic emblem GameObject
+        // (controlled by the resolving source's controller) into
+        // `state.emblems`. The emblem's abilities fire through the
+        // normal trigger-dispatch + resolve machinery (`dispatch_event`
+        // scans `state.emblems` as a trigger source). Mirrors Python's
+        // `CreateEmblem.resolve`.
+        Effect::CreateEmblem { emblem_kind } => {
+            // Only the Tezzeret emblem is modeled; parse rejects other
+            // kinds, but re-guard defensively (loud-fail per
+            // feedback_silent_noop_pipelines).
+            if emblem_kind != "tezzeret_cruel_captain" {
+                return Err(PyValueError::new_err(format!(
+                    "CreateEmblem: unknown emblem kind {emblem_kind:?}"
+                )));
+            }
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            // Build the synthetic emblem printing. `CardPrinting` has no
+            // `Default`, so clone the resolving SOURCE's printing (the
+            // Tezzeret walker — guaranteed registry-present) and strip
+            // it to a bare emblem: CR 114.3 "an emblem has no
+            // characteristics other than the abilities defined by the
+            // effect that created it". Override the identity + remove
+            // every characteristic (card types / subtypes / supertypes /
+            // P/T / mana cost / starting loyalty / own effects +
+            // abilities), then stamp ONLY the begin-combat trigger.
+            let src_printing_id: u32 = state
+                .players
+                .iter()
+                .flat_map(|p| p.battlefield.iter())
+                .find(|o| o.id == source_obj_id)
+                .map(|o| o.printing_id)
+                .unwrap_or(0);
+            let emblem_printing: crate::cards::CardPrinting = {
+                let base = match state.registry.lookup(src_printing_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Err(PyValueError::new_err(
+                            "CreateEmblem: source printing not found",
+                        ))
+                    }
+                };
+                let mut p = base;
+                p.name = std::sync::Arc::from(
+                    "Tezzeret, Cruel Captain emblem",
+                );
+                p.mana_cost = crate::cards::ManaCost::default();
+                p.effects = Vec::new();
+                p.power = None;
+                p.toughness = None;
+                p.mana_produced = None;
+                p.card_types = Vec::new();
+                p.subtypes = Vec::new();
+                p.supertypes = Vec::new();
+                p.keywords = Vec::new();
+                p.etb_effects = Vec::new();
+                p.activated_abilities = Vec::new();
+                p.starting_loyalty = 0;
+                p.triggered_abilities = vec![crate::cards::TriggeredAbility {
+                    event: crate::cards::Event::BeginningOfCombat,
+                    predicate: crate::cards::Predicate::ControlledByYou {
+                        slot: None,
+                    },
+                    effect: Effect::TezzeretEmblemBeginCombat { amount: 3 },
+                    once_per_turn: false,
+                    tier_threshold: 0,
+                }];
+                p
+            };
+            // Mint the printing into the in-state registry (Arc::make_mut
+            // copy-on-writes when other GameStates share the Arc).
+            let emblem_printing_id: u32 = {
+                let reg_mut = Arc::make_mut(&mut state.registry);
+                reg_mut.push_printing(emblem_printing)
+            };
+            // Allocate a fresh object id + a deterministic etb_timestamp
+            // (ordering position for the fingerprint), then push the
+            // synthetic emblem GameObject into the command zone.
+            let emblem_id = crate::state::reserve_object_id(state);
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            let emblem_obj = crate::state::make_emblem_object(
+                emblem_id,
+                controller,
+                emblem_printing_id,
+                etb_ts,
+            );
+            state.emblems.push(emblem_obj);
+        }
+        // **Tezzeret, Cruel Captain emblem's begin-combat trigger
+        // body.** "Put three +1/+1 counters on target artifact you
+        // control." Deterministic first-match target (lowest bf-index
+        // artifact on the source-controller's battlefield), mirroring
+        // the sibling `UntapTargetArtifactOrCreatureConditionalCounter`
+        // arm's no-agent first-target convention. The "becomes a 0/0
+        // Robot artifact creature" half is HONEST-STOPPED (no permanent
+        // type+P/T-set animate substrate). See
+        // docs/SEARCH_LIMITATIONS.md.
+        Effect::TezzeretEmblemBeginCombat { amount } => {
+            let amount = *amount;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            // Find the first artifact on the controller's bf.
+            let target_id: Option<u32> = {
+                let bf = &state.players[controller].battlefield;
+                let registry = &state.registry;
+                let mut found: Option<u32> = None;
+                for obj in bf.iter() {
+                    if let Some(printing) = registry.lookup(obj.printing_id) {
+                        let is_artifact =
+                            printing.card_types.iter().any(|t| t == "Artifact");
+                        if is_artifact {
+                            found = Some(obj.id);
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            let target_id = match target_id {
+                Some(id) => id,
+                None => return Ok(()), // fizzle silently (no legal target)
+            };
+            // Add `amount` +1/+1 counters, honoring the counter-doubling
+            // replacement (mirrors Python's add_plus_one_counters fold).
+            let delta = doubled_plus_one_counter_delta(state, target_id, amount);
+            if delta > 0 {
+                {
+                    let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[controller].battlefield,
+                    );
+                    for obj in bf_mut.iter_mut() {
+                        if obj.id == target_id {
+                            obj.counters = obj.counters.saturating_add(delta);
+                            break;
+                        }
+                    }
+                }
+                dispatch_event(
+                    state,
+                    crate::cards::Event::CountersAdded,
+                    target_id,
+                )?;
+            }
+            // HONEST-STOP: the "if it's not a creature, it becomes a 0/0
+            // Robot artifact creature" permanent animate is NOT applied
+            // (no permanent layer-4 type-set + layer-7b P/T-set animate
+            // substrate). See docs/SEARCH_LIMITATIONS.md.
         }
         // Round-14: Sacrifice. CR 701.16 — a sacrificed permanent is
         // put into its owner's graveyard.

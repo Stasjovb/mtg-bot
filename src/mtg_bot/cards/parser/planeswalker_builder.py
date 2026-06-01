@@ -24,15 +24,16 @@ recognized loyalty line is converted to an
 The effect body of each loyalty line is matched against a literal-line
 table (``_LOYALTY_ABILITY_EFFECTS``) keyed on the printed effect text.
 A loyalty line whose effect body is NOT in that table is STRIPPED (the
-ability is dropped) rather than failing the whole card — see the
-emblem-deferral note below.
+ability is dropped) rather than failing the whole card.
 
-**Deferred (HONEST-STOP): the ``-7`` emblem.** Tezzeret, Cruel
-Captain's ``-7`` grants an emblem, which has no emblem-object substrate
-on EITHER engine. That single line's effect body is intentionally
-absent from ``_LOYALTY_ABILITY_EFFECTS``, so the ``-7`` ability is
-stripped (not modeled). The ``0`` and ``-3`` abilities ARE modeled.
-See docs/SEARCH_LIMITATIONS.md for the emblem-substrate map.
+All three of Tezzeret, Cruel Captain's loyalty abilities (``0`` / ``-3``
+/ ``-7``) are now modeled. The ``-7`` emits a ``CreateEmblem`` effect
+(the emblem substrate — ``effects/generic/emblem.py``); the emblem's
+begin-combat trigger puts three +1/+1 counters on a target artifact you
+control (byte-equal cross-engine). Only the ``-7`` emblem's "if it's not
+a creature, it becomes a 0/0 Robot artifact creature" PERMANENT animate
+half is honest-stopped (no permanent type+P/T-set animate substrate on
+either engine). See docs/SEARCH_LIMITATIONS.md + emblem.py.
 
 Any NON-loyalty line outside the supported triggered-ability grammar
 still causes the whole card to fall through (returns ``None``) so the
@@ -53,6 +54,10 @@ from mtg_bot.cards.base import (
 from mtg_bot.cards.parser.text import _strip_reminder_text
 from mtg_bot.cards.parser.triggers import _parse_triggered_ability_line
 from mtg_bot.cards.parser.type_line import _parse_type_line
+from mtg_bot.effects.generic.emblem import (
+    TEZZERET_CRUEL_CAPTAIN_EMBLEM,
+    CreateEmblem,
+)
 from mtg_bot.effects.generic.search import SearchLibraryForCard
 from mtg_bot.effects.generic.tap import (
     UntapTargetArtifactOrCreatureConditionalCounter,
@@ -87,10 +92,11 @@ def _printed_loyalty_to_signed_cost(printed: str) -> int:
 # Literal-line table of loyalty-ability effect bodies → engine Effect.
 # Keyed on the printed effect text (the part AFTER the ``N:`` cost
 # prefix, reminder-text stripped). A loyalty line whose effect body is
-# NOT in this table is stripped (the ability dropped) — the deferral
-# hook for the -7 emblem, whose effect body is deliberately absent (no
-# emblem-object substrate on either engine; see module docstring +
-# docs/SEARCH_LIMITATIONS.md).
+# NOT in this table is stripped (the ability dropped) rather than
+# failing the whole card. All three of Tezzeret's loyalty lines (0 / -3
+# / -7) are now in the table; the -7 maps to CreateEmblem (the emblem
+# substrate — see module docstring + emblem.py + docs/SEARCH_LIMITATIONS.md;
+# only the emblem's becomes-0/0-Robot permanent animate is honest-stopped).
 #
 # Today the only planeswalker in the EoE pool is Tezzeret, Cruel
 # Captain, so this is a literal-line table (one card's three lines).
@@ -110,6 +116,17 @@ _LOYALTY_ABILITY_EFFECTS: dict[str, object] = {
         SearchLibraryForCard(
             filter_name="artifact_small", max_mv=1, may_fail=True,
         ),
+    # Tezzeret, Cruel Captain's -7 ability — "You get an emblem with
+    # '...'." The emblem's begin-combat trigger puts three +1/+1
+    # counters on a target artifact you control (byte-equal cross-
+    # engine); the "if it's not a creature it becomes a 0/0 Robot
+    # artifact creature" permanent-animate half is HONEST-STOPPED (no
+    # permanent layer type+P/T-set animate substrate — see
+    # docs/SEARCH_LIMITATIONS.md + emblem.py).
+    'You get an emblem with "At the beginning of combat on your turn, '
+    "put three +1/+1 counters on target artifact you control. If it's "
+    'not a creature, it becomes a 0/0 Robot artifact creature."':
+        CreateEmblem(emblem_kind=TEZZERET_CRUEL_CAPTAIN_EMBLEM),
 }
 
 

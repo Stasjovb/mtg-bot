@@ -220,6 +220,46 @@ pub enum Effect {
     /// target key — the deterministic picker derives it, mirroring the
     /// unit-shape convention of the other deterministic-target arms).
     UntapTargetArtifactOrCreatureConditionalCounter,
+    /// **Emblem substrate (CR 114) — "You get an emblem with '...'."**
+    /// Tezzeret, Cruel Captain's `-7` effect body. On resolve, mints a
+    /// synthetic emblem `CardPrinting` (carrying the emblem's begin-
+    /// combat triggered ability) into the in-state registry via
+    /// `Arc::make_mut(&mut state.registry).push_printing` — the same
+    /// per-resolve-printing pattern `BecomesCopyOfTargetLand` uses —
+    /// then pushes a synthetic emblem `GameObject` (controlled by the
+    /// resolving source's controller) into `state.emblems`. The
+    /// emblem's abilities then fire through the normal trigger-dispatch
+    /// + resolve machinery (`dispatch_event` scans `state.emblems` as a
+    /// trigger source).
+    ///
+    /// `emblem_kind` is a string discriminant naming the known emblem
+    /// (today only `"tezzeret_cruel_captain"`); the resolve arm maps it
+    /// to the emblem's synthetic printing. Mirrors Python's
+    /// `CreateEmblem(emblem_kind: str)` at `effects/generic/emblem.py`.
+    /// Unit-keyed dict: `{"kind": "create_emblem", "emblem_kind":
+    /// "tezzeret_cruel_captain"}`.
+    CreateEmblem { emblem_kind: String },
+    /// **Tezzeret, Cruel Captain emblem's begin-combat trigger body.**
+    /// "At the beginning of combat on your turn, put three +1/+1
+    /// counters on target artifact you control. If it's not a creature,
+    /// it becomes a 0/0 Robot artifact creature."
+    ///
+    /// **What this resolves (byte-equal cross-engine).** Picks the FIRST
+    /// (lowest battlefield-index) artifact the source-controller
+    /// controls and adds `amount` (=3) +1/+1 counters (honoring the
+    /// counter-doubling replacement via `doubled_plus_one_counter_delta`
+    /// + the COUNTERS_ADDED observer dispatch), mirroring the
+    /// deterministic-first-target convention of the sibling
+    /// `UntapTargetArtifactOrCreatureConditionalCounter` arm.
+    ///
+    /// **HONEST-STOPPED.** The "becomes a 0/0 Robot artifact creature"
+    /// half is a PERMANENT layer-4 type-set + layer-7b P/T-set animate
+    /// and is NOT applied (no permanent type+P/T animate substrate on
+    /// either engine). See docs/SEARCH_LIMITATIONS.md + Python's
+    /// `TezzeretEmblemBeginCombat`. Unit dict: `{"kind":
+    /// "tezzeret_emblem_begin_combat", "amount": 3}` (amount defaults
+    /// to 3).
+    TezzeretEmblemBeginCombat { amount: i32 },
     /// Sacrifice target permanent (CR 701.16). First-slice: target
     /// is the active player's first creature on their own
     /// battlefield (you sacrifice your own permanents). AnyPlayer
@@ -11625,6 +11665,16 @@ fn find_object_controller(
             return Some(obj.controller);
         }
     }
+    // Command-zone emblems (CR 114): a begin-combat trigger's SOURCE is
+    // the emblem object, which lives in `state.emblems`, not in any
+    // player zone. Scan it so `ControlledByYou` on an emblem-sourced
+    // trigger resolves the emblem's controller (otherwise the predicate
+    // reads None → the emblem trigger silently never fires).
+    for emblem in state.emblems.iter() {
+        if emblem.id == obj_id {
+            return Some(emblem.controller);
+        }
+    }
     None
 }
 
@@ -13482,6 +13532,48 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Tezzeret, Cruel Captain's 0 ability. Unit shape (no
             // target key — deterministic first-match picker).
             Ok(Effect::UntapTargetArtifactOrCreatureConditionalCounter)
+        }
+        "create_emblem" => {
+            // Emblem substrate (CR 114) — "You get an emblem with
+            // '...'." `emblem_kind` is a required string discriminant
+            // naming the known emblem. Mirrors Python's
+            // `CreateEmblem(emblem_kind: str)`.
+            let emblem_kind: String = require(dict, "emblem_kind")?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "create_emblem.emblem_kind must be a string (got: {e})"
+                    ))
+                })?;
+            if emblem_kind != "tezzeret_cruel_captain" {
+                return Err(PyValueError::new_err(format!(
+                    "create_emblem: unknown emblem kind {emblem_kind:?} \
+                     (only \"tezzeret_cruel_captain\" is modeled)"
+                )));
+            }
+            Ok(Effect::CreateEmblem { emblem_kind })
+        }
+        "tezzeret_emblem_begin_combat" => {
+            // Tezzeret emblem's begin-combat trigger body. `amount`
+            // defaults to 3 (the printed "three +1/+1 counters"),
+            // mirroring Python's `TezzeretEmblemBeginCombat(amount: int
+            // = 3)`.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "tezzeret_emblem_begin_combat.amount must be an \
+                         integer (got: {e})"
+                    ))
+                })?,
+                None => 3,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "tezzeret_emblem_begin_combat: amount must be \
+                     non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::TezzeretEmblemBeginCombat { amount })
         }
         "sacrifice" => {
             let target_any = require(dict, "target")?;
@@ -20521,6 +20613,17 @@ pub(crate) fn effect_to_pydict<'py>(
                 "kind",
                 "untap_target_artifact_or_creature_conditional_counter",
             )?;
+        }
+        Effect::CreateEmblem { emblem_kind } => {
+            // Emblem substrate (CR 114) — "You get an emblem with
+            // '...'." Round-trips the emblem_kind string discriminant.
+            d.set_item("kind", "create_emblem")?;
+            d.set_item("emblem_kind", emblem_kind.clone())?;
+        }
+        Effect::TezzeretEmblemBeginCombat { amount } => {
+            // Tezzeret emblem's begin-combat trigger body.
+            d.set_item("kind", "tezzeret_emblem_begin_combat")?;
+            d.set_item("amount", *amount)?;
         }
         Effect::Sacrifice { target } => {
             d.set_item("kind", "sacrifice")?;
