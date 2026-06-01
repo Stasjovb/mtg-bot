@@ -27,6 +27,7 @@ commits' perf numbers in context.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -47,11 +48,47 @@ def _git(*args: str) -> str:
     ).strip()
 
 
+def _hook_env() -> dict[str, str]:
+    """Process env with ``src`` prepended to ``PYTHONPATH``.
+
+    The hook-invoked scripts import ``mtg_bot``. Run from a worktree
+    (or a fresh clone before ``pip install -e``), the shared venv's
+    editable install resolves ``mtg_bot`` to the MAIN checkout — or not
+    at all — so the staleness / pool-parity steps die with
+    ``ModuleNotFoundError: No module named 'mtg_bot'``. Prepending the
+    REPO's own ``src`` to ``PYTHONPATH`` makes every step import THIS
+    checkout's source (the same ``PYTHONPATH=src`` contract CLAUDE.md
+    mandates for every worktree python invocation), and is harmless in
+    the main checkout (``src`` is already importable there)."""
+    env = dict(os.environ)
+    src = str(REPO_ROOT / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        src + os.pathsep + existing if existing else src
+    )
+    return env
+
+
 def _find_venv_python() -> str | None:
-    for candidate in (".venv/Scripts/python.exe", ".venv/bin/python"):
-        path = REPO_ROOT / candidate
-        if path.exists():
-            return str(path)
+    """Locate a usable python. Prefers a worktree-local venv, then the
+    sibling MAIN checkout's venvs (worktrees share the main checkout's
+    ``.venv`` / ``.venv-py313`` per CLAUDE.md — a worktree has no venv
+    of its own), trying the 3.13 venv first (the recommended test/tool
+    interpreter)."""
+    rel_candidates = (
+        ".venv-py313/Scripts/python.exe",
+        ".venv-py313/bin/python",
+        ".venv/Scripts/python.exe",
+        ".venv/bin/python",
+    )
+    # REPO_ROOT first (main checkout), then the sibling main checkout
+    # one level up from the worktrees dir (../../mtg-bot/...).
+    roots = [REPO_ROOT, REPO_ROOT.parent.parent / "mtg-bot"]
+    for root in roots:
+        for candidate in rel_candidates:
+            path = root / candidate
+            if path.exists():
+                return str(path)
     return None
 
 
@@ -71,7 +108,7 @@ def _run_perf_step(python: str | None) -> None:
 
     proc = subprocess.run(
         [python, str(BENCH_SCRIPT)],
-        capture_output=True, text=True, cwd=REPO_ROOT,
+        capture_output=True, text=True, cwd=REPO_ROOT, env=_hook_env(),
     )
     if proc.returncode != 0:
         print(f"[perf hook] bench failed:\n{proc.stderr}", file=sys.stderr)
@@ -138,6 +175,7 @@ def _run_staleness_step(python: str | None) -> None:
         proc = subprocess.run(
             [python, str(STALENESS_SCRIPT)],
             capture_output=True, text=True, cwd=REPO_ROOT,
+            env=_hook_env(),
         )
         # Echo the report (stdout) + any error (stderr) to the
         # committer's stderr. rc != 0 means drift; we report it but
@@ -183,6 +221,7 @@ def _run_pool_parity_headline_step(python: str | None) -> None:
         proc = subprocess.run(
             [python, str(POOL_PARITY_SCRIPT), "--headline"],
             capture_output=True, text=True, cwd=REPO_ROOT,
+            env=_hook_env(),
         )
         out = (proc.stdout or "").strip()
         err = (proc.stderr or "").strip()
