@@ -17632,6 +17632,116 @@ This slice does NOT flip the card, does NOT widen any shared admit predicate, an
 
 ---
 
+## Robe of Stars phasing substrate (CR 702.26 partially modeled) — 2026-05-31, `feature/robe-of-stars`
+
+**Status: PROBED flip landed.** Robe of Stars (`{1}{W}` Artifact —
+Equipment, "Astral Projection — `{1}{W}`: Equipped creature phases
+out") was `blocked_subsystem_gated` on exactly one uncovered Effect
+class, `PhaseOutEquippedCreature` (the `EquipToTargetCreatureYouControl`
+equip ability was already covered). This lane landed the genuinely-new
+Rust Effect + a minimal phasing-status substrate and flipped the card
+to PROBED.
+
+**Where.**
+- Rust `GameObject.phased_out: bool` field (`rust/src/state.rs`;
+  mirrors Python `game.py:613`) — defaulted `false` at all 15
+  construction sites; SURFACED in the snapshot dict
+  (`rust/src/state_ops_snapshot.rs::object_to_pydict`, additive key —
+  unlike the snapshot-elided `regeneration_shield`) so the phase-OUT
+  state change is byte-equal-observable.
+- Rust `Effect::PhaseOutEquippedCreature` unit variant — enum decl +
+  parse arm + to_pydict arm + valid-kinds string (`rust/src/cards.rs`);
+  resolve arm (`rust/src/state_ops_resolve.rs::apply_effect`, beside
+  `RegenerateTargetCreature`) reading the resolving Equipment source's
+  `attached_to`, stamping `phased_out = true` on the host, and clearing
+  the host from `state.attackers` / `state.blockers`.
+- Cross-engine reverse bridge arm `phase_out_equipped_creature`
+  (`src/mtg_bot/parity/cross_engine.py::_ta_dict_to_python_effect`).
+- Probe `tests/test_robe_of_stars_parity.py` (registered in
+  `scripts/measure_pool_parity.py` PROBE_MODULES); Rust unit pins
+  `tests_rust/test_phase_out_equipped_creature.py`; snapshot key pin
+  `tests_rust/test_snapshot.py::EXPECTED_KEYS`.
+
+**What the probe asserts (the byte-equal-observable surface).** The
+phase-OUT state change ONLY: the equipped host's `phased_out` flips
+`true` byte-equal on both engines, the Robe itself + unrelated
+creatures stay `phased_out=false` byte-equal, and an unequipped Robe's
+AA is a byte-equal silent no-op. The Rust side drives the FULL real
+`{1}{W}` AA-activation (`apply_action` activate_ability → mana pay →
+stack push → resolve); the Python side drives the real-parsed Effect's
+`.resolve(state, controller_id, ())` with `resolving_source` set (the
+established Ancient-Tomb-substrate cross-engine drive idiom — Python's
+auto-tap cost machinery holds coin objects, not symbols, so driving it
+would exercise the cost path, not the phasing effect; the resolve
+boundary is where byte-equality is asserted).
+
+**The deliberate shortcut (CR 702.26 NOT fully modeled — same
+simplification both engines).**
+- **Phase-IN (CR 702.26e — phased-out permanents phase in during their
+  controller's untap step).** Python clears `phased_out` at untap
+  (`turn.py:64-65`). The Rust untap-step clear is NOT wired (no probe
+  drives a full turn rollover). The per-card probe exercises only the
+  phase-OUT half.
+- **Treat-as-nonexistent (CR 702.26c — a phased-out permanent is
+  treated as though it does not exist for every game action).** NEITHER
+  engine fully models this. Python applies the bit ONLY to combat-damage
+  resolution (`combat.py:382`) + the combat-state clear at phase-out;
+  triggers, anthems, SBA, and targeting still see phased objects. Rust
+  surfaces the bit + clears the host's combat participation but no game
+  action consumes `phased_out` beyond that.
+
+**Why it's OK (for the PROBE).** The PROBED tier is a controlled-state
+byte-equality probe, not a full-game-trajectory guarantee. The probe's
+observable (host `phased_out` flips, snapshot byte-equal) is exactly
+modeled byte-equal on both engines. The unmodeled phasing semantics are
+NOT exercised by the probe and are simplified IDENTICALLY on both
+engines, so they cannot introduce a cross-engine divergence on the
+phase-OUT surface.
+
+**Failure mode.** A full-game trajectory that (a) phases a creature out
+and then runs the phased creature's controller's untap step (Rust would
+NOT phase it back in — `phased_out` stays stuck `true`), or (b) relies
+on treat-as-nonexistent for triggers/SBA/targeting/anthems while the
+creature is phased. These are out of the probe's scope; the bench
+trajectory tier does not admit Robe (Equipment-AA carrier not in the
+loader-admit set), so no full-game path exercises the unmodeled half
+today.
+
+**Fix scope (remaining phasing-mechanic work, if a future card needs
+it).** Full CR 702.26: (1) Rust untap-step phase-IN clear (~0.5 cycle —
+mirror Python's `turn.py:64-65` in the Rust untap step + a turn-rollover
+probe); (2) treat-as-nonexistent across the action / SBA / combat /
+targeting / static-ability pipeline (multi-cycle, broad blast radius —
+every legal-action enumeration, SBA pass, trigger dispatch, and
+continuous-effect application would need a `phased_out` exclusion
+filter on BOTH engines, plus Python's own model widened past the
+combat-damage-only filter). The phase-OUT substrate landed here is the
+reusable foundation; phase-IN is a cheap follow-on, treat-as-nonexistent
+is the genuine mechanic build.
+
+**Impact estimate.** PROBED 461 → 462 (97.3%); BLOCKED-SG 14 → 13;
+covered_by_construction unchanged (0). One new Rust Effect + one new
+GameObject bool field (snapshot-surfaced). 0 strength cost on the
+closed surface — the new field defaults `false` everywhere (all
+pre-substrate snapshot / hash baselines byte-identical) and no game
+action consumes it beyond the combat-state clear at phase-out.
+
+**Other BLOCKED/future cards needing phasing.** NONE in the current EoE
+pool — Robe of Stars is the sole phasing card. A future "phases out" or
+"phase out target permanent" card would reuse this `phased_out` field +
+snapshot surface but would need the treat-as-nonexistent build if its
+probe observes any action-exclusion semantics.
+
+**Pinned by:** `tests/test_robe_of_stars_parity.py`
+(`test_cross_engine_real_eoe_robe_of_stars_parity` — the GENUINE
+real-printing byte-equal PROBED credit, plus parser-SoT / coverage /
+bridge-round-trip / Rust-register / snapshot-default pins) +
+`tests_rust/test_phase_out_equipped_creature.py` (Rust parse / snapshot
+/ resolve unit pins). The existing `tests/test_robe_of_stars.py`
+(Python-side unit tests) is unchanged.
+
+---
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
