@@ -1787,15 +1787,22 @@ def test_double_strike_attacker_strikes_twice_unblocked(synthetic_state):
 def test_double_strike_attacker_kills_blocker_in_first_strike_step(synthetic_state):
     """A 2/2 double-strike attacker vs a 2/2 vanilla blocker. The
     first-strike substep deals 2 to the blocker (lethal mark). The
-    regular substep: the attacker's only blocker is dead post-FS;
-    per **invariant I45 (CE18 closure)** the regular-substep damage
-    spills to the defending player (Python-parity behavior,
-    CR-divergent — CR 702.4 + 510.1h says the damage is wasted, but
-    Phase 5 convention is "converge Rust toward Python regardless of
-    CR-correctness"). The blocker did NOT first-strike, so in the
-    regular substep the dead blocker contributes no back-damage (its
-    damage>=toughness gates it out). Net: blocker has 2 damage,
-    attacker has 0, p1 life dropped 20 → 18."""
+    regular substep: the attacker's only blocker is dead post-FS. With
+    NO trample, the regular-substep damage is WASTED — it does NOT spill
+    to the defending player (CR 510.1c / 702.4: a blocked creature whose
+    blockers are all gone deals no combat damage unless it has trample).
+    The blocker did NOT first-strike, so in the regular substep the dead
+    blocker contributes no back-damage (its damage>=toughness gates it
+    out). Net: blocker has 2 damage, attacker has 0, p1 life UNCHANGED
+    at 20.
+
+    REFRESHED (CE18 closure converged both engines): this test formerly
+    asserted the pre-closure I45 "spill to defender (20→18)" convention.
+    The CE18 closure converged BOTH engines to the CR-correct no-spill
+    behavior — the cross_engine CE18 probe documents the shared end
+    state as "p1 life = 20 (no trample, no spillover)" and Python's
+    combat.py (lines 431-458) only spills the remainder under trample.
+    Current Rust matches Python; verified, NOT a regression."""
     attacker_id = synthetic_state.register_and_inject_object(
         _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
     )
@@ -1806,12 +1813,13 @@ def test_double_strike_attacker_kills_blocker_in_first_strike_step(synthetic_sta
     assert synthetic_state.declare_attacker(attacker_id) is True
     assert synthetic_state.declare_blocker(blocker_id, attacker_id) is True
     synthetic_state.deal_combat_damage()
-    # Blocker took 2 in step 1 (lethal), no second hit on the blocker
-    # (it's dead — the regular-pass entry was redirected to defender).
+    # Blocker took 2 in step 1 (lethal); no second hit piled onto the
+    # corpse — the regular-pass damage lands on the dead blocker (a
+    # no-op) since there's no trample to spill it.
     assert synthetic_state.get_damage(blocker_id) == 2, (
         "double-strike vs vanilla 2/2: blocker takes lethal in first-strike "
-        "step; second-strike damage redirects to defender (I45), not piled "
-        "onto the dead blocker"
+        "step; second-strike damage is wasted (no trample), not piled onto "
+        "the dead blocker"
     )
     # Attacker took 0 — blocker died before the regular substep, so
     # its non-first-strike back-damage doesn't fire.
@@ -1819,12 +1827,12 @@ def test_double_strike_attacker_kills_blocker_in_first_strike_step(synthetic_sta
         "double-strike vs vanilla 2/2: blocker died in step 1, can't "
         "back-damage the attacker in step 2"
     )
-    # I45 spillover: regular-substep damage redirects from the dead
-    # blocker to the defending player.
-    assert synthetic_state.get_life(1) == 18, (
-        "I45 (CE18 closure): when a DS attacker's sole blocker died in the "
-        "FS substep, the regular-substep damage must spill to the defending "
-        "player (Python-parity). p1 life: 20 - 2 = 18."
+    # No trample = no spillover: regular-substep damage is wasted on the
+    # dead blocker, defender life is UNCHANGED (CR 510.1c; matches Python).
+    assert synthetic_state.get_life(1) == 20, (
+        "CE18 closure (both engines converged): a DS attacker whose sole "
+        "blocker died in the FS substep does NOT spill its regular-substep "
+        "damage to the defender without trample. p1 life stays 20."
     )
 
 
@@ -1929,39 +1937,39 @@ def test_clone_then_double_strike_combat_does_not_affect_original(synthetic_stat
     )
 
 
-# ----- CE18 closure: double-strike regular-damage spillover to defender ----
+# ----- CE18 closure: double-strike regular-damage, dead sole blocker ----
 #
-# Invariant **I45** (`docs/RUST_PARITY_GAPS.md`). With a double-strike
-# attacker whose creature target dies in the first-strike substep, the
-# regular-substep damage entry is REDIRECTED to the defending player IF
-# the attacker has no remaining alive blockers. If at least one blocker
-# is still alive, the entry is dropped (no spillover — the surviving
-# blocker(s) have their own assignments).
+# **CE18 closure converged BOTH engines to the CR-correct no-spill
+# behavior.** With a double-strike attacker whose sole blocker dies in
+# the first-strike substep, the regular-substep damage WITHOUT trample
+# is WASTED — it lands on the dead blocker (a no-op) and does NOT spill
+# to the defending player (CR 510.1c / 702.4). Only an attacker with
+# trample spills the unabsorbed remainder.
 #
-# This mirrors Python's `combat.py:_resolve_damage_step` which rebuilds
-# the per-attacker blockers list per-substep, finds it empty
-# post-SBA-between-substeps, and routes to the defender at line 413
-# (`if not blockers:`). CR 702.4 + CR 510.1h say a creature stays
-# blocked even if all blockers leave (Python is CR-divergent;
-# Phase 5 convention is "converge Rust toward Python").
-#
-# Tests B and C below (`test_double_strike_larger_blocker_*`,
-# `test_double_strike_unblocked_*`) are regression-only — they were
-# already parity-clean pre-CE18 — but pinning them here keeps the
-# I45 surface coverage complete.
+# This matches Python's `combat.py` (lines 431-458): the regular substep
+# walks the LIVE blockers list (empty post-SBA-between-substeps), assigns
+# nothing, and only appends a player-damage event `if has_trample and
+# remaining > 0`. The cross_engine CE18 probe documents the converged
+# shared end state as "p1 life = 20 (no trample, no spillover)". The
+# earlier pre-closure I45 "spill to defender (20→18)" convention was
+# REVERTED by the closure — these tests were refreshed to the converged
+# no-spill behavior.
 
 
 def test_double_strike_regular_damage_spills_to_defender_when_sole_blocker_dies_fs(
     synthetic_state,
 ):
-    """**I45 / CE18 closure** — Test A from the brief. A 2/2 DS
-    attacker vs a single 2/2 vanilla blocker. FS substep: blocker
-    takes 2 (lethal). Regular substep: the attacker's only blocker
-    is dead, so the regular-pass entry redirects to the defender.
-    p1 life drops 20 → 18.
+    """**CE18 closure** — Test A. A 2/2 DS attacker vs a single 2/2
+    vanilla blocker. FS substep: blocker takes 2 (lethal). Regular
+    substep: the attacker's only blocker is dead and the attacker has
+    NO trample, so the regular-pass damage is WASTED — it does NOT
+    spill to the defender. p1 life stays at 20.
 
-    Companion to the cross-engine probe pins (CE18) — same shape,
-    direct Rust-side state setup."""
+    REFRESHED (CE18 closure converged both engines to no-spill): the
+    cross_engine CE18 probe documents the shared end state as
+    "p1 life = 20 (no trample, no spillover)"; Python's combat.py only
+    spills the remainder under trample. Current Rust matches Python —
+    verified, NOT a regression."""
     attacker_id = synthetic_state.register_and_inject_object(
         _keyword_creature_dict(2, 2, ["double_strike"]), 0, ZONE_BATTLEFIELD
     )
@@ -1974,16 +1982,17 @@ def test_double_strike_regular_damage_spills_to_defender_when_sole_blocker_dies_
     synthetic_state.deal_combat_damage()
     # Blocker took lethal in FS; no second hit piled onto the corpse.
     assert synthetic_state.get_damage(blocker_id) == 2, (
-        "DS + sole blocker died in FS: regular-pass damage redirects to "
-        "defender (I45), not piled onto the dead blocker"
+        "DS + sole blocker died in FS: regular-pass damage is wasted on the "
+        "dead blocker (no trample), not piled onto the corpse"
     )
     # Attacker untouched — blocker is vanilla (no FS, no back-damage in
     # the regular substep from a dead source).
     assert synthetic_state.get_damage(attacker_id) == 0
-    # I45 spillover: regular-substep damage redirects to defender.
-    assert synthetic_state.get_life(1) == 18, (
-        "I45: DS + sole blocker died in FS substep — regular-substep "
-        "damage spills to defender. p1 life: 20 - 2 = 18."
+    # No trample = no spillover: defender life UNCHANGED (matches Python).
+    assert synthetic_state.get_life(1) == 20, (
+        "CE18 closure: DS + sole blocker died in FS substep — without "
+        "trample the regular-substep damage is wasted, NOT spilled to the "
+        "defender. p1 life stays 20."
     )
 
 
