@@ -435,3 +435,22 @@ Methodology requirements (learned the hard way):
   help-text multipliers (§7).
 - Full fix of `bench per-game-wall` for structured weights (§3) — or
   retire it in favor of the `ab_device.py` methodology.
+
+
+## 6. Rust engine vs Python engine — cross-engine throughput (2026-06-01)
+
+First fair head-to-head now that the **non-DSK EoE pool is 100% byte-equal cross-engine** (every card driven byte-identically through both engines). Box = `desktop-j05412i` (Win11, py3.13, `.venv-py313`).
+
+**Method.** Both engines implement the SAME 8-method `search.protocol.GameState` (`MtgGameStateAdapter` = Python `mtg_bot.game`, `RustGameStateAdapter` = the `mtg_bot_engine` pyd), built from one `cross_engine.build_matched_states(spec)` via `engine_adapter_factory`. Workload = full **random-playout games** (seeded policy: pick `legal_decisions()[rng.randrange(len)]` until terminal), 30 seeds, median per-game wall, 4-game warmup. Primitive `clone` = best-of-5 over 20k/2k iters with warmup.
+
+**Results.**
+
+| Workload | Rust | Python | Speedup |
+|---|---|---|---|
+| `clone()` primitive | 0.35 us | 11.9 us | **~34x** |
+| full game — `slightly_bigger_deckspec` (~201 steps) | 1.25 ms | 2.33 ms | **1.9x** |
+| full game — `multi_blocker_deckspec`, combat-heavy (~354 steps) | 2.44 ms | 6.79 ms | **2.8x** |
+
+**Headline finding (the honest, load-bearing one).** Raw engine primitives are **10-40x** faster in Rust (clone ~34x — it's an `Arc` refcount bump vs a deep Python copy), but **full-game throughput is only ~1.9-2.8x**. Reason: BOTH search-protocol adapters reimplement the priority/search loop in **Python** — only the engine *primitive calls* (`apply_action`/`legal_decisions`/`resolve_top_of_stack`/`apply_sbas`) cross into Rust. So per-step cost is dominated by the **Python orchestration layer** (priority loop, decision codec, cross-engine bridge), not the engine. The Rust engine is NOT the full-game bottleneck under the current architecture. Combat-heavy decks show more (2.8x) because combat is more engine-work-per-step relative to orchestration. To realize more of the 34x, the orchestration/search loop itself must move to Rust (the direction the B3 `RustGameStateAdapter` was partially building — `rust_engine_adapter.py` docstring §3.1).
+
+**Caveats (don't over-cite).** (1) SYNTHETIC deckspecs, not the real EoE 17lands pool (`data/17lands/eoe_decks.json.gz` is gitignored + absent locally) — real decks are larger/richer and could shift the ratio. (2) Random-playout policy, NOT NN/PIMC-guided. In **production self-play the NN-eval dominates wall-time** (see §2A/§4), so the engine's *share* of per-game cost is even smaller there — i.e. swapping to the Rust engine buys LESS than 1.9-2.8x end-to-end in NN-guided self-play, not more. (3) The search-protocol adapters are B3-S1 PARTIAL (not full byte-parity at the search layer — hence the slight 201-vs-203 step-count drift); the proven 100% parity is at the `trajectory.py` field-view level. (4) Single box, exploratory median/best-of-5 — not a pinned CI bench. A committed `scripts/bench_rust_vs_python.py` was not added; reproduce inline via `build_matched_states` + the two `engine_adapter_factory` builders.
