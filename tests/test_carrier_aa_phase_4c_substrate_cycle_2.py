@@ -133,9 +133,17 @@ def test_phase_4c_c2_effect_class_widen_adds_two_entries():
             f"Phase 4C C2 no-regression: {cls.__name__} dropped from "
             "the Effect-class admit set"
         )
-    # Closed-set invariant (no silent auto-grow beyond the documented
-    # +2 widens).
-    assert len(admitted) == 11
+    # Closed-set invariant. At Phase 4C C2 this set was exactly 11 (the
+    # 9 priors + this cycle's +2 Ghost Vacuum widens). It has since grown
+    # through later documented substrate cycles (Phase 4D Keys to the
+    # House, Phase 4B Mirrorpool, Phase 4E All-Fates Scroll, the
+    # Meteor Crater / Reflecting Pool / Ancient Tomb / Sliver Overlord
+    # mana-carrier slices, etc. — each entry in
+    # _carrier_aa_phase_1_effect_classes carries a per-cycle docstring /
+    # inline comment), to a live count of 23. This pins the live total so
+    # an UNDOCUMENTED auto-grow (a new entry with no cycle comment) still
+    # trips the invariant; bump it in lockstep with each documented widen.
+    assert len(admitted) == 23
 
 
 # ---------------------------------------------------------------------------
@@ -512,14 +520,27 @@ def test_mirrorpool_still_declines_post_4c_c2(all_printings):
 
 
 def test_keys_to_the_house_still_declines_post_4c_c2(all_printings):
-    """**No-silent-auto-grow pin (Keys to the House -- 4D target).**
-    Keys to the House carries AA[1] sorcery_speed=True (now admitted
-    via the Phase-4C-C2 widen) but its Effect classes
-    (SearchLibraryForCard's forward arm + LockOrUnlockDoor...) are
-    not in the 11-entry admit set -- Phase 4D ships the Effect-class
-    widen + the SearchLibraryForCard forward arm. Confirms that
-    widening sorcery_speed alone does NOT silently flip Keys to the
-    House (the Effect-class teeth still bite).
+    """**INVERTED at Phase 4D C2 (2026-05-26).** At Phase-4C-C2 this
+    pinned Keys to the House as STILL DECLINED: its AA[1]
+    sorcery_speed=True was admitted via the C2 widen, but its Effect
+    classes (SearchLibraryForCard + LockOrUnlockDoor...) were not yet
+    in the admit set, so the Effect-class teeth kept it declined
+    (no-silent-auto-grow guard).
+
+    Phase 4D C2 then shipped exactly those documented widens — the
+    SearchLibraryForCard + LockOrUnlockDoorOfTargetRoomYouControl
+    Effect-class admit-set entries + the SearchLibraryForCard forward
+    arm + the Room-target fan-out Rust slice — and Keys to the House
+    FLIPS DECLINED → ADMITTED as the INTENDED 4D target. This is a
+    properly-probed flip, NOT a silent auto-grow: the dedicated
+    per-card probe file ``tests/test_keys_to_the_house_parity.py``
+    pins it byte-equal across both AAs (3 cross-engine ``_parity``
+    probes: no-room fizzle, unlock-door-zero, toggle-xor) and asserts
+    the admit-gate flip
+    (``test_keys_to_the_house_admits_at_artifact_admit_predicate_post_4d_c2``).
+    This pin is inverted in place to confirm the 4D FLIP holds — same
+    in-file pattern as the Mirrorpool / All-Fates Scroll inversions
+    above.
     """
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_simple_carrier_aa_any,
@@ -527,12 +548,14 @@ def test_keys_to_the_house_still_declines_post_4c_c2(all_printings):
     )
 
     p = all_printings["Keys to the House"]
-    assert _printing_is_bridge_simple_carrier_aa_artifact(p) is False, (
-        "Keys to the House must STAY DECLINED post-Phase-4C-C2 -- "
-        "Phase 4D ships the Effect-class + SearchLibraryForCard "
-        "forward arm widens"
+    assert _printing_is_bridge_simple_carrier_aa_artifact(p) is True, (
+        "Keys to the House FLIPs ADMITTED post-Phase-4D-C2 (the "
+        "Effect-class + SearchLibraryForCard forward-arm widens "
+        "shipped; both AAs admit under the multi-AA all-or-nothing "
+        "gate). Probed byte-equal in tests/test_keys_to_the_house_"
+        "parity.py."
     )
-    assert _printing_is_bridge_simple_carrier_aa_any(p) is False
+    assert _printing_is_bridge_simple_carrier_aa_any(p) is True
 
 
 def test_all_fates_scroll_still_declines_at_builder_post_4c_c2(all_printings):
