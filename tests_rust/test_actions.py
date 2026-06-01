@@ -1688,49 +1688,54 @@ def test_apply_action_unknown_kind_message_mentions_unlock_room_half(
 # (enforced by the future ``legal_decisions`` enumerator, not by this
 # dispatch arm).
 #
-# **Dispatch is stubbed.** Rust has no Spacecraft charge-counter state
-# today, and there's no crew-tap-resolution primitive that ties the
-# tap-as-cost to the counter-add-as-effect. The variant + bridge round-
-# trip ship now, so callers building Action dicts can already use the
-# ``activate_station`` shape and hit a clear "not implemented yet"
-# error path rather than the generic ``unknown action kind`` rejection.
-# A future slice adds the per-object Spacecraft charge state + the
-# activate-station primitive then flips the dispatch arm to a real
-# ``call_method1("activate_station", ...)`` call. Until then, happy-
-# path dispatch raises ``ValueError`` — these tests assert on the
-# stubbed error path, NOT on a successful station outcome. Mirrors the
-# round-23 ActivateAbility and round-24 TurnFaceUp / UnlockRoomHalf
-# "scaffold the variant, defer the dispatch semantics" pattern.
+# **Dispatch is LIVE (C2, 2026-05-25).** The dispatch arm now invokes
+# the real ``apply_activate_station`` resolver
+# (``rust/src/state_ops_actions.rs``): it taps the crew creature as
+# cost and adds charge counters equal to the crew's effective power to
+# the Spacecraft. The resolver silently no-ops (returns early, no
+# raise) when the referenced ids are absent from the battlefield, are
+# not controlled by the active player, the spacecraft isn't a
+# Spacecraft, or the crew isn't an eligible untapped non-sick creature
+# — mirroring Python's ``_activate_station`` validate-then-mutate
+# shape. Parse-time gates (missing required keys) still raise BEFORE
+# dispatch. The positive resolver outcome (tap + charge-counter add)
+# is exercised by the Spacecraft charge-counter tests in
+# ``test_activated.py`` / ``test_counters.py``; the tests below pin the
+# refreshed "well-formed dict no longer raises" contract (formerly a
+# stub ValueError) plus the surviving parse-time gates.
 
 
-def test_apply_action_activate_station_stub_raises_value_error(synthetic_state):
-    """Happy-path stub: a well-formed ActivateStation dict parses
-    cleanly but the dispatch arm raises ``ValueError`` because no Rust
-    Spacecraft charge-counter state / activate-station primitive
-    exists yet. The error message names the variant + flags it as
-    future work so a follow-up slice grepping for the string finds
-    the dispatch site to flip."""
-    with pytest.raises(
-        ValueError, match=r"ActivateStation dispatch not implemented yet"
-    ):
-        synthetic_state.apply_action(
-            {"kind": "activate_station", "spacecraft_id": 42, "crew_id": 5}
-        )
-
-
-def test_apply_action_activate_station_stub_error_mentions_spacecraft(
+def test_apply_action_activate_station_well_formed_dict_does_not_raise(
     synthetic_state,
 ):
-    """The stub message names the missing Rust state (Spacecraft
-    charge-counter + crew-tap resolution) so a future slice grepping
-    for "Spacecraft" finds the dispatch site to flip. Pin the substring
-    so the message stays informative — a future slice that flips the
-    dispatch to a real call must also delete this test (it documents
-    the stub-state, not the eventual real behavior)."""
-    with pytest.raises(ValueError, match=r"Spacecraft"):
-        synthetic_state.apply_action(
-            {"kind": "activate_station", "spacecraft_id": 7, "crew_id": 8}
-        )
+    """A well-formed ActivateStation dict referencing ids that are not
+    on the battlefield parses cleanly and dispatches to the real
+    ``apply_activate_station`` resolver, which silently no-ops for
+    absent ids (no ValueError). REFRESHED from the former stub-raise
+    expectation: the C2 slice flipped the dispatch arm from a
+    "not implemented yet" ValueError stub to the live resolver, so the
+    happy-path dict no longer raises. The positive tap+charge outcome
+    lives in the Spacecraft tests under test_activated/test_counters."""
+    # Must not raise — the dispatch arm is live and no-ops for ids that
+    # aren't present on any battlefield.
+    synthetic_state.apply_action(
+        {"kind": "activate_station", "spacecraft_id": 42, "crew_id": 5}
+    )
+
+
+def test_apply_action_activate_station_same_id_is_silent_noop(
+    synthetic_state,
+):
+    """``spacecraft_id == crew_id`` is a silent no-op in the resolver
+    (a crew can't be the spacecraft itself) — no raise. REFRESHED from
+    the former stub-message ``Spacecraft`` substring assertion, which
+    documented a dispatch stub that no longer exists (C2 flipped it to
+    the live resolver)."""
+    # Must not raise — same-id is an early silent return in the
+    # resolver.
+    synthetic_state.apply_action(
+        {"kind": "activate_station", "spacecraft_id": 7, "crew_id": 7}
+    )
 
 
 def test_apply_action_activate_station_missing_spacecraft_id_raises_key_error(
