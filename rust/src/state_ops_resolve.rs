@@ -10162,6 +10162,57 @@ fn apply_effect(
                 // early on empty legal_targets / non-creature).
             }
         }
+        // TakeExtraTurnAfterThisOne (Nexus of Fate's extra-turn
+        // clause). Mirrors Python's `TakeExtraTurnAfterThisOne.resolve`
+        // (`effects/generic/stack_control.py:239-246`):
+        // `state.extra_turn_queue.append(controller_id)`. The
+        // controller is the resolving spell's controller — located via
+        // the established 5-zone walk + stack scan (the
+        // `BiosynthicBurstEffect` / `FocusFireEffect` sister shape).
+        //
+        // **Parity-not-search (substrate-only).** The append makes the
+        // QUEUE state byte-equal cross-engine (the Nexus of Fate probe
+        // asserts the queued controller id matches Python's). The Rust
+        // turn-advance does NOT pop this queue — extra turns explode the
+        // AI search tree and are deliberately not taken in search.
+        // Documented in `docs/SEARCH_LIMITATIONS.md`.
+        Effect::TakeExtraTurnAfterThisOne => {
+            let mut src_controller: Option<u8> = None;
+            'et_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'et_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            if let Some(controller) = src_controller {
+                // Byte-equal to Python's
+                // `state.extra_turn_queue.append(controller_id)`.
+                state.extra_turn_queue.push(controller);
+            }
+            // No controller located → silent no-op (the source object
+            // has already left every locatable zone; the queue is
+            // unchanged, byte-equal to a Python resolve where
+            // `controller_id` would be unavailable).
+        }
         // FocusFireEffect (Effect-uncovered Tier-A — Focus Fire). The
         // FIRST effect-resolve arm to READ combat-declaration state.
         // Mirrors Python's `FocusFireEffect.resolve` /

@@ -437,6 +437,9 @@ pub fn make_state(
         // 2026-05-20): per-player created-tokens-this-turn flags
         // start cleared at game start, same shape as the void flags.
         created_tokens_this_turn: [false; 2],
+        // Nexus of Fate substrate (2026-05-31): empty extra-turn queue
+        // at game start (mirrors Python's `extra_turn_queue` default).
+        extra_turn_queue: Vec::new(),
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         // R76-1: seed the monotonic object-id counter past every

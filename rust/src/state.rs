@@ -3035,6 +3035,30 @@ pub struct GameState {
     /// `permanent_left_battlefield_this_turn` / `spell_warped_this_
     /// turn` pattern).
     pub created_tokens_this_turn: [bool; 2],
+    /// **Extra-turn queue — Nexus of Fate substrate (2026-05-31).**
+    /// Ordered list of controller ids each scheduled to take one extra
+    /// turn after the current one. Mirrors Python's
+    /// `GameState.extra_turn_queue` (`game.py:2738`) — a `list[int]`
+    /// of player ids appended in resolution order. The
+    /// `Effect::TakeExtraTurnAfterThisOne` arm appends the resolving
+    /// spell's controller (mirrors Python's
+    /// `state.extra_turn_queue.append(controller_id)` at
+    /// `effects/generic/stack_control.py:243`).
+    ///
+    /// **Substrate-only this slice (parity-not-search).** The sim
+    /// loop's consume-the-queue-between-turns side (Python's
+    /// `simulate._advance_to_next_active_player`) is NOT wired on the
+    /// Rust side — extra turns explode the AI search tree and the Rust
+    /// engine's turn advancement does not pop this queue. The field
+    /// exists so the cast→resolve extra-turn-QUEUE state is byte-equal
+    /// observable cross-engine (the Nexus of Fate parity probe asserts
+    /// the queued controller id matches Python's). Surfaced via the
+    /// `extra_turn_queue()` getter; stays OUT of the fingerprint
+    /// (transient turn-scoped scheduling state, same exclusion as the
+    /// `spell_warped_this_turn` / `created_tokens_this_turn` flags).
+    /// The accepted parity-vs-search divergence is documented in
+    /// `docs/SEARCH_LIMITATIONS.md`.
+    pub extra_turn_queue: Vec<u8>,
     /// Decisions the engine is waiting on. Round-27 G20 closure —
     /// effects whose resolution needs a controller-provided choice
     /// (Surveil, future London bottom-N, future scry-on-keep,
@@ -3838,6 +3862,12 @@ impl Clone for GameState {
             // `players_who_created_tokens_this_turn = set(self...)`
             // copy at `game.py:3370-3372`).
             created_tokens_this_turn: self.created_tokens_this_turn,
+            // Nexus of Fate substrate (2026-05-31): the extra-turn
+            // queue is gameplay-relevant turn-scoped scheduling state —
+            // every clone carries it forward (mirrors Python's
+            // `extra_turn_queue = list(self.extra_turn_queue)` copy at
+            // `game.py:3381-3382`).
+            extra_turn_queue: self.extra_turn_queue.clone(),
             pending_decisions: self.pending_decisions.clone(),
             next_etb_timestamp: self.next_etb_timestamp,
             // R76-1: CR 111.7 is a game-lifetime invariant — a
@@ -4304,6 +4334,21 @@ impl GameState {
         } else {
             false
         }
+    }
+
+    /// **Extra-turn queue — Nexus of Fate substrate (2026-05-31).**
+    /// Read-only getter returning the ordered list of controller ids
+    /// each scheduled to take one extra turn after the current one
+    /// (`Vec<u8>` -> Python `list[int]`). Mirrors Python's
+    /// `state.extra_turn_queue` (`game.py:2738`) read pattern: the
+    /// Nexus of Fate parity probe reads this and asserts the queued
+    /// controller id is byte-equal to Python's `extra_turn_queue`
+    /// after both engines cast + resolve Nexus. Appended by the
+    /// `Effect::TakeExtraTurnAfterThisOne` resolve arm; never popped on
+    /// the Rust side (substrate-only — extra turns are a parity-not-
+    /// search divergence documented in `docs/SEARCH_LIMITATIONS.md`).
+    fn extra_turn_queue(&self) -> Vec<u8> {
+        self.extra_turn_queue.clone()
     }
 
     /// **Effect-rng-threading closure (G19 follow-up) — install a
@@ -4914,6 +4959,10 @@ pub fn make_synthetic_state(
         // false; CreateToken flips the controller's slot on a
         // non-zero-count batch, turn-cleanup resets both.
         created_tokens_this_turn: [false; 2],
+        // Nexus of Fate substrate (2026-05-31): no extra turns queued
+        // at construction (mirrors Python's `extra_turn_queue` default
+        // empty list).
+        extra_turn_queue: Vec::new(),
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
         // R76-1: seed the monotonic id counter past every object

@@ -180,13 +180,20 @@ def test_gsz_admits_at_bridge_gate_after_redirect_widen():
     ), f"GSZ redirect must round-trip as the replace quad; got {reps}"
 
 
-def test_gsz_redirect_widen_keeps_nexus_and_quantum_riddler_declined():
-    """The redirect widen must NOT over-grow the admit set. Nexus of
-    Fate (shares the identical shuffle-self redirect static, but its
-    ``TakeExtraTurnAfterThisOne`` spell_effect is NOT covered — the
-    extra-turn substrate is unbuilt) and Quantum Riddler (a Creature
-    carrying a ``would_draw_cards`` ``AddToCount`` replacement outside
-    the bridgeable event vocab) BOTH stay declined."""
+def test_gsz_redirect_widen_keeps_quantum_riddler_declined():
+    """The redirect widen must NOT over-grow the admit set. Quantum
+    Riddler (a Creature carrying a ``would_draw_cards`` ``AddToCount``
+    replacement outside the bridgeable event vocab) stays declined.
+
+    **Nexus of Fate UPDATE (2026-05-31, `feature/nexus-of-fate`).** At
+    the GSZ-flip landing, Nexus stayed declined because its
+    ``TakeExtraTurnAfterThisOne`` spell_effect was NOT covered (the
+    extra-turn substrate was unbuilt). That substrate has since LANDED
+    (Rust ``Effect::TakeExtraTurnAfterThisOne`` + bridge + serializer),
+    so Nexus now ADMITS and flipped to PROBED — see
+    ``test_nexus_of_fate_parity.py``. Nexus is therefore no longer the
+    "stays declined" guard here; Quantum Riddler remains the genuine
+    no-over-grow guard (its replacement event is still un-bridgeable)."""
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
 
@@ -194,16 +201,16 @@ def test_gsz_redirect_widen_keeps_nexus_and_quantum_riddler_declined():
 
     nexus = src.get("Nexus of Fate")
     if nexus is not None:
-        # Its redirect static is now bridgeable (shared with GSZ)...
+        # Its redirect static is bridgeable (shared with GSZ)...
         assert (
             trajectory._printing_has_unbridgeable_replacement_static(nexus)
             is False
         )
-        # ...but it STAYS declined via the covered-set gate (its
-        # spell_effect is not covered+bridged).
+        # ...AND with the extra-turn substrate now built, Nexus ADMITS
+        # (the flip — pinned in test_nexus_of_fate_parity.py).
         assert (
-            trajectory._printing_is_bridge_simple_spell(nexus) is False
-        ), "Nexus of Fate must stay declined (extra-turn substrate unbuilt)"
+            trajectory._printing_is_bridge_simple_spell(nexus) is True
+        ), "Nexus of Fate now ADMITS (extra-turn substrate landed)"
 
     qr = src.get("Quantum Riddler")
     if qr is not None:
