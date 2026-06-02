@@ -454,3 +454,18 @@ First fair head-to-head now that the **non-DSK EoE pool is 100% byte-equal cross
 **Headline finding (the honest, load-bearing one).** Raw engine primitives are **10-40x** faster in Rust (clone ~34x — it's an `Arc` refcount bump vs a deep Python copy), but **full-game throughput is only ~1.9-2.8x**. Reason: BOTH search-protocol adapters reimplement the priority/search loop in **Python** — only the engine *primitive calls* (`apply_action`/`legal_decisions`/`resolve_top_of_stack`/`apply_sbas`) cross into Rust. So per-step cost is dominated by the **Python orchestration layer** (priority loop, decision codec, cross-engine bridge), not the engine. The Rust engine is NOT the full-game bottleneck under the current architecture. Combat-heavy decks show more (2.8x) because combat is more engine-work-per-step relative to orchestration. To realize more of the 34x, the orchestration/search loop itself must move to Rust (the direction the B3 `RustGameStateAdapter` was partially building — `rust_engine_adapter.py` docstring §3.1).
 
 **Caveats (don't over-cite).** (1) SYNTHETIC deckspecs, not the real EoE 17lands pool (`data/17lands/eoe_decks.json.gz` is gitignored + absent locally) — real decks are larger/richer and could shift the ratio. (2) Random-playout policy, NOT NN/PIMC-guided. In **production self-play the NN-eval dominates wall-time** (see §2A/§4), so the engine's *share* of per-game cost is even smaller there — i.e. swapping to the Rust engine buys LESS than 1.9-2.8x end-to-end in NN-guided self-play, not more. (3) The search-protocol adapters are B3-S1 PARTIAL (not full byte-parity at the search layer — hence the slight 201-vs-203 step-count drift); the proven 100% parity is at the `trajectory.py` field-view level. (4) Single box, exploratory median/best-of-5 — not a pinned CI bench. A committed `scripts/bench_rust_vs_python.py` was not added; reproduce inline via `build_matched_states` + the two `engine_adapter_factory` builders.
+
+### 6a. The decisive split — NN-eval dominates, so a Rust search-port is NOT worth it (2026-06-01)
+
+Follow-up to §6's "the orchestration is the bottleneck" finding: **that was a RANDOM playout (zero NN-evals)**. Under the real production config it's the NN, not the engine, that dominates.
+
+**Method.** Loaded the production **structured v5** net (`emb_dim 128 / n_layers 2 / hidden 256`, `canonical_v2`, via `NNEvaluator.from_metadata`), wrapped `evaluate_with_policy`/`batch_evaluate_with_policy` to accumulate NN wall-time, played 4 NN-guided games (synthetic decks, 40 searched-decisions each, single-legal-action moves taken without search per the production fast-path), PUCT `nodes=200` `batch_size=1` on CPU. 27,591 NN-evals total.
+
+| Component | Wall | Share |
+|---|---:|---:|
+| **NN-eval** (state tokenize + transformer forward) | 98.2 s | **85.0%** |
+| Engine + search orchestration (clone/apply/legal/tree/codec) | 17.3 s | **15.0%** |
+
+Per-NN-eval ≈ **3.6 ms** (structured transformer, CPU, b=1).
+
+**Verdict — do NOT port search to Rust for production self-play.** With NN-eval at 85%, a PERFECT Rust port of the *entire* engine+search+orchestration (the other 15%) caps end-to-end speedup at **~1.18x** — months of work (mcts/pimc/priority-loop + the NN-FFI boundary, §6 Tiers 1-2) for ~18%. The §6 random-playout 1.9-2.8x was on the non-NN portion, which is a SMALL slice of real per-game wall. **The entire leverage is the NN path**: GPU (§4: validated ~2x/eval — would shift NN to ~73%, raising the search-port ceiling only to ~1.36x, still not worth it), batched-PUCT (`batch_size>1`), a smaller/faster net, or fewer nodes. Caveats: CPU (the worker-daemon default per CLAUDE.md), synthetic decks, b=1, single box.
