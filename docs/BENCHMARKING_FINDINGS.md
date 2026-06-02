@@ -469,3 +469,31 @@ Follow-up to §6's "the orchestration is the bottleneck" finding: **that was a R
 Per-NN-eval ≈ **3.6 ms** (structured transformer, CPU, b=1).
 
 **Verdict — do NOT port search to Rust for production self-play.** With NN-eval at 85%, a PERFECT Rust port of the *entire* engine+search+orchestration (the other 15%) caps end-to-end speedup at **~1.18x** — months of work (mcts/pimc/priority-loop + the NN-FFI boundary, §6 Tiers 1-2) for ~18%. The §6 random-playout 1.9-2.8x was on the non-NN portion, which is a SMALL slice of real per-game wall. **The entire leverage is the NN path**: GPU (§4: validated ~2x/eval — would shift NN to ~73%, raising the search-port ceiling only to ~1.36x, still not worth it), batched-PUCT (`batch_size>1`), a smaller/faster net, or fewer nodes. Caveats: CPU (the worker-daemon default per CLAUDE.md), synthetic decks, b=1, single box.
+
+### 6b. Sizing the NN levers — batched-PUCT wins, GPU does NOT (2026-06-01, RTX 5090)
+
+Sizing the two §6a levers concretely. Structured v5, `nodes=200`, single box (RTX 5090 + Win11 CPU).
+
+**Per-eval microbench** (`batch_evaluate_with_policy`, us/eval = call/batch):
+
+| batch | CPU us | CUDA us |
+|---:|---:|---:|
+| 1 | 2173 | **5246** (slower — kernel-launch overhead on a tiny net) |
+| 8 | 888 | 803 |
+| 32 | 625 | 261 |
+| 64 | 579 | **169** |
+
+CUDA amortizes 20x (b1->b32) vs CPU 3.5x; at a TRUE batch of 64, CUDA is ~13x faster per eval than the CPU b=1 baseline.
+
+**End-to-end self-play (one game, the number that matters):**
+
+| config | game | NN% | vs cpu-b1 |
+|---|---:|---:|---:|
+| cpu b=1 (baseline) | 30.5 s | 86% | 1.00x |
+| **cpu b=32** | **12.4 s** | 68% | **2.45x** |
+| cuda b=1 | 47.9 s | 91% | **0.64x (SLOWER)** |
+| cuda b=32 | 12.5 s | 69% | 2.43x (only TIES cpu b=32) |
+
+**The load-bearing finding: GPU does not help this net/search; batched-PUCT does.** GPU b=1 is a net LOSS (kernel overhead). GPU b=32 only ties CPU b=32 — because PUCT at `nodes=200` can't produce a batch of 32 independent leaves per forward (effective batch ~4-8, exactly where CUDA == CPU in the microbench). The GPU's 13x per-eval edge requires batches the tree can't supply. Matches the §5 SHM-server finding (cross-worker batching was 2x SLOWER at this net scale).
+
+**Recommendation.** (1) **Ship batched-PUCT (`batch_size~32`): free ~2.45x, CPU-only, a config change.** (2) **Do NOT use GPU** at this net/search scale (worker-daemon CPU-by-default is correct). (3) After batching, NN is still ~68%, so the Rust engine+search-port ceiling rises only to ~1.47x — still not worth months. (4) GPU becomes worth revisiting ONLY with a search that yields LARGE batches (root/leaf-parallel across many concurrent games) — the unexplored lever; the prior cross-worker SHM attempt (§5) failed. Caveats: 1 game/config, synthetic decks, single box.
