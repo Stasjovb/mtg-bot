@@ -30,7 +30,9 @@ from mtg_bot.training.data_gen import (
     _pad_and_stack_structured_rows,
 )
 from mtg_bot.training.state_tokenizer import tokenize_state
-from mtg_bot.training.structured_model import N_EMB_FIELDS, N_SCALAR_FIELDS
+from mtg_bot.training.structured_model import (
+    N_EMB_FIELDS, N_SCALAR_FIELDS, N_SCALAR_FIELDS_V2,
+)
 
 from tests._test_decks import simple_test_deck_pool
 
@@ -50,7 +52,9 @@ def test_pad_and_stack_with_empty_input_returns_empty_arrays() -> None:
     out = _pad_and_stack_structured_rows([])
     assert out["structured_token_type"].shape == (0, 0)
     assert out["structured_token_emb_ids"].shape == (0, 0, N_EMB_FIELDS)
-    assert out["structured_token_scalars"].shape == (0, 0, N_SCALAR_FIELDS)
+    assert out["structured_token_scalars"].shape == (
+        0, 0, N_SCALAR_FIELDS_V2,
+    )
     assert out["structured_attention_mask"].shape == (0, 0)
 
 
@@ -96,7 +100,7 @@ def test_empty_structured_row_returns_well_shaped_dict() -> None:
     row = _empty_structured_row()
     assert row["token_type"].shape == (0,)
     assert row["token_emb_ids"].shape == (0, N_EMB_FIELDS)
-    assert row["token_scalars"].shape == (0, N_SCALAR_FIELDS)
+    assert row["token_scalars"].shape == (0, N_SCALAR_FIELDS_V2)
     assert row["attention_mask"].shape == (0,)
 
 
@@ -248,7 +252,8 @@ def test_generate_with_structured_tokens_returns_eight_tuple() -> None:
     assert struct_mask.shape[1] == max_len
     # Field widths match the model contract.
     assert struct_emb_ids.shape[2] == N_EMB_FIELDS
-    assert struct_scalars.shape[2] == N_SCALAR_FIELDS
+    # data_gen tokenizes under the default (v2) scalar schema.
+    assert struct_scalars.shape[2] == N_SCALAR_FIELDS_V2
     # dtypes match what the model expects.
     assert struct_token_type.dtype == np.int64
     assert struct_emb_ids.dtype == np.int64

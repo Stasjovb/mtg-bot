@@ -19,7 +19,7 @@ import torch
 from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
 from mtg_bot.training.structured_dataset import StructuredDataset
 from mtg_bot.training.structured_model import (
-    DEFAULT_N_PRINTINGS, N_EMB_FIELDS, N_SCALAR_FIELDS, StructuredModelConfig,
+    DEFAULT_N_PRINTINGS, N_EMB_FIELDS, N_SCALAR_FIELDS_V2, StructuredModelConfig,
 )
 from mtg_bot.training.trainer import (
     TrainingHistory, train_structured_model,
@@ -49,7 +49,7 @@ def _make_dataset(
         (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (n_rows, seq_len, N_SCALAR_FIELDS),
+        (n_rows, seq_len, N_SCALAR_FIELDS_V2),
     ).astype(np.float32)
     attention_mask = np.ones((n_rows, seq_len), dtype=np.bool_)
     outcomes = rng.choice(
@@ -123,7 +123,7 @@ def test_train_structured_model_loss_reduces(tmp_path: Path) -> None:
     token_type = np.zeros((n, seq_len), dtype=np.int64)
     token_emb_ids = np.zeros((n, seq_len, N_EMB_FIELDS), dtype=np.int64)
     token_scalars = np.zeros(
-        (n, seq_len, N_SCALAR_FIELDS), dtype=np.float32,
+        (n, seq_len, N_SCALAR_FIELDS_V2), dtype=np.float32,
     )
     attention_mask = np.ones((n, seq_len), dtype=np.bool_)
     # Pin the first token-type to {1,2}; map 1->+1, 2->-1.
@@ -236,7 +236,7 @@ def test_train_structured_model_rejects_empty_dataset(tmp_path: Path) -> None:
         token_type=np.zeros((0, 0), dtype=np.int64),
         token_emb_ids=np.zeros((0, 0, N_EMB_FIELDS), dtype=np.int64),
         token_scalars=np.zeros(
-            (0, 0, N_SCALAR_FIELDS), dtype=np.float32,
+            (0, 0, N_SCALAR_FIELDS_V2), dtype=np.float32,
         ),
         attention_mask=np.zeros((0, 0), dtype=np.bool_),
         outcomes=np.zeros((0,), dtype=np.float32),
@@ -396,3 +396,66 @@ def test_train_structured_model_default_device_auto(
         batch_size=4,
     )
     assert len(history.train_losses) == 1
+
+
+# ---------------------------------------------------------------------
+# Scalar schema: the trainer refuses a dataset / config width mismatch
+# ---------------------------------------------------------------------
+
+
+def test_dataset_exposes_scalar_width() -> None:
+    ds = _make_dataset(n_rows=4, seq_len=3)
+    assert ds.scalar_width == N_SCALAR_FIELDS_V2
+
+
+def test_train_structured_model_rejects_scalar_width_mismatch(
+    tmp_path: Path,
+) -> None:
+    """A v2-wide dataset trained under a schema-1 config (or vice
+    versa) must fail loudly before any batch is touched, naming both
+    widths and the fix."""
+    import pytest
+    ds = _make_dataset(n_rows=8, seq_len=4)  # v2-wide rows
+    cfg_v1 = StructuredModelConfig(
+        emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        n_printings=DEFAULT_N_PRINTINGS, scalar_schema_version=1,
+    )
+    with pytest.raises(ValueError, match="scalar schema mismatch") as exc:
+        train_structured_model(
+            ds, weights_out_path=tmp_path / "w.pt", config=cfg_v1,
+            epochs=1, batch_size=4, device="cpu", compile_model=False,
+        )
+    msg = str(exc.value)
+    assert str(N_SCALAR_FIELDS_V2) in msg and "3" in msg
+    assert "--scalar-schema-version" in msg
+    assert not (tmp_path / "w.pt").exists()
+
+
+def test_train_structured_model_accepts_matching_v1_width(
+    tmp_path: Path,
+) -> None:
+    """Schema-1 data + schema-1 config trains (old-layout data is
+    still trainable when the config opts into schema 1)."""
+    rng = np.random.default_rng(0)
+    n, seq_len = 8, 4
+    ds = StructuredDataset(
+        token_type=rng.integers(0, 5, size=(n, seq_len)).astype(np.int64),
+        token_emb_ids=np.zeros((n, seq_len, N_EMB_FIELDS), dtype=np.int64),
+        token_scalars=rng.standard_normal((n, seq_len, 3)).astype(np.float32),
+        attention_mask=np.ones((n, seq_len), dtype=np.bool_),
+        outcomes=np.zeros(n, dtype=np.float32),
+        policy_targets=np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.float32),
+        action_masks=np.zeros((n, ACTION_VOCAB_SIZE), dtype=np.bool_),
+    )
+    assert ds.scalar_width == 3
+    cfg_v1 = StructuredModelConfig(
+        emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        n_printings=DEFAULT_N_PRINTINGS, scalar_schema_version=1,
+    )
+    history = train_structured_model(
+        ds, weights_out_path=tmp_path / "w1.pt", config=cfg_v1,
+        epochs=1, batch_size=4, device="cpu", compile_model=False,
+        val_split=0.0,
+    )
+    assert len(history.train_losses) == 1
+    assert (tmp_path / "w1.pt").exists()

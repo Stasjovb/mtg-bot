@@ -68,6 +68,13 @@ def progress_dir(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture(autouse=True)
+def _dummy_tailscale_authkey(monkeypatch):
+    """FleetManager.launch reads the worker Tailscale auth key from
+    the launcher host's environment (never the TOML / repo)."""
+    monkeypatch.setenv("MTG_BOT_TAILSCALE_AUTHKEY", "tskey-auth-dummy")
+
+
 @pytest.fixture
 def runs_db_env(progress_dir: Path, monkeypatch):
     monkeypatch.setenv(

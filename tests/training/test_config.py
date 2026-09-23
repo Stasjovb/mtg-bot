@@ -228,6 +228,9 @@ def test_nn_pimc_config_build_picks_up_structured_meta(
             "version": "v_test",
             "architecture": "structured",
             "action_encoding_version": "canonical_v2",
+            # Absent -> schema 1 (3-slot); the saved model is on the
+            # config default, so record it.
+            "scalar_schema_version": cfg.scalar_schema_version,
             "training": {
                 "structured_emb_dim": 64,
                 "structured_n_heads": 4,
@@ -697,3 +700,43 @@ def test_nn_server_pimc_config_build_with_puct_and_policy(
         )
         strategy = cfg.build(seed=0)
         assert isinstance(strategy, PIMC)
+
+
+def test_nn_pimc_config_build_reads_scalar_schema_from_sidecar(
+    tmp_path: Path,
+) -> None:
+    """A sidecar WITHOUT ``scalar_schema_version`` is a pre-v2
+    checkpoint: the build path must size ``scalar_proj`` for schema 1
+    so legacy structured weights load on every worker."""
+    import json as _json
+
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    torch.manual_seed(0)
+    cfg = StructuredModelConfig(
+        emb_dim=32, n_heads=2, n_layers=1, hidden_dim=64,
+        action_history_n=4, scalar_schema_version=1,
+    )
+    weights = tmp_path / "v_legacy" / "weights.pt"
+    weights.parent.mkdir(parents=True)
+    torch.save(StructuredModel(cfg).state_dict(), weights)
+    with (weights.parent / "metadata.json").open("w", encoding="utf-8") as f:
+        _json.dump({
+            "version": "v_legacy",
+            "architecture": "structured",
+            "training": {
+                "structured_config": {
+                    "emb_dim": 32, "n_heads": 2, "n_layers": 1,
+                    "hidden_dim": 64, "action_history_n": 4,
+                },
+            },
+        }, f)
+    pimc_cfg = NNPimcConfig(
+        weights_path=str(weights),
+        samples=1, inner_nodes=2, batch_size=1, with_policy=True,
+        architecture="structured",
+    )
+    strategy = pimc_cfg.build(seed=0)
+    assert isinstance(strategy, PIMC)

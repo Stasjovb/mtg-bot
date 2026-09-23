@@ -55,6 +55,7 @@ from mtg_bot.training.structured_model import (
     EMB_FIELD_VARIANT,
     N_EMB_FIELDS,
     N_SCALAR_FIELDS,
+    N_SCALAR_FIELDS_V2,
     SCALAR_FIELD_PUBLIC_MASK,
     SCALAR_FIELD_TURN_OFFSET,
     TOKEN_TYPE_ACTION_EVENT,
@@ -145,7 +146,8 @@ def test_output_shapes_match_model_input_contract() -> None:
     seq_len = out["token_type"].shape[0]
     assert out["token_type"].shape == (seq_len,)
     assert out["token_emb_ids"].shape == (seq_len, N_EMB_FIELDS)
-    assert out["token_scalars"].shape == (seq_len, N_SCALAR_FIELDS)
+    # Default tokenizer schema is v2 (board / life state slots).
+    assert out["token_scalars"].shape == (seq_len, N_SCALAR_FIELDS_V2)
     assert out["attention_mask"].shape == (seq_len,)
 
 
@@ -1174,3 +1176,324 @@ def test_tokenize_real_engine_state_after_a_few_moves() -> None:
     # Same seq_len from both perspectives (zone cardinality is symmetric
     # at this depth — hand visibility flips but total slot count holds).
     assert out0["token_type"].shape[0] == out1["token_type"].shape[0]
+
+
+# ---------------------------------------------------------------------
+# Scalar schema v2 (board / life state) vs v1 (legacy 3-slot row)
+# ---------------------------------------------------------------------
+
+
+def _creature_printing():
+    """Pick a plain creature printing with printed P/T from the active
+    source (deterministic: sorted by name)."""
+    printings = get_active_source().get_printings()
+    for name in sorted(printings):
+        pr = printings[name]
+        if (
+            pr.is_creature
+            and pr.power is not None
+            and pr.toughness is not None
+        ):
+            return pr
+    raise AssertionError("no creature printing in the active source")
+
+
+def _board_state() -> tuple[GameState, "object"]:
+    """A hand-built two-player state with: viewer at 14 life / 2
+    poison, opp at 20 life; viewer controls a tapped, damaged creature
+    with one +1/+1 counter that is not summoning sick, plus one
+    untapped and one tapped Forest; opp controls one untapped Forest;
+    viewer has 3 cards in hand + 30 in library, opp 5 in hand + 25 in
+    library; one spell on the stack; turn 7, viewer active + priority.
+    """
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_PUBLIC_MASK as _PM,  # noqa: F401 (readability)
+    )
+    printings = get_active_source().get_printings()
+    forest = printings["Forest"]
+    creature = _creature_printing()
+
+    def _cards(base_id, printing, owner, n, zone):
+        return [
+            GameObject(
+                id=base_id + i, printing=printing, owner_id=owner,
+                controller_id=owner, zone=zone,
+            )
+            for i in range(n)
+        ]
+
+    p0 = Player(
+        id=0, life=14, poison_counters=2,
+        hand=_cards(10_000, forest, 0, 3, Zone.HAND),
+        library=_cards(11_000, forest, 0, 30, Zone.LIBRARY),
+    )
+    p1 = Player(
+        id=1, life=20,
+        hand=_cards(20_000, forest, 1, 5, Zone.HAND),
+        library=_cards(21_000, forest, 1, 25, Zone.LIBRARY),
+    )
+    crit = GameObject(
+        id=1, printing=creature, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True, damage=2,
+        summoning_sick=False, plus_one_counters=1,
+    )
+    land_untapped = GameObject(
+        id=2, printing=forest, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=False,
+    )
+    land_tapped = GameObject(
+        id=3, printing=forest, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD, tapped=True,
+    )
+    opp_land = GameObject(
+        id=4, printing=forest, owner_id=1, controller_id=1,
+        zone=Zone.BATTLEFIELD, tapped=False,
+    )
+    spell_obj = GameObject(
+        id=99, printing=creature, owner_id=1, controller_id=1,
+        zone=Zone.STACK,
+    )
+    state = GameState(
+        players=[p0, p1],
+        battlefield=[crit, land_untapped, land_tapped, opp_land],
+        stack=[StackItem(source=spell_obj, controller_id=1, targets=())],
+        active_player_idx=0,
+        priority_player_idx=0,
+        turn_number=7,
+        step=Step.PRECOMBAT_MAIN,
+    )
+    return state, creature
+
+
+def test_v2_width_matches_constant_and_v1_width_is_three() -> None:
+    state, _ = _board_state()
+    out2 = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    out1 = tokenize_state(state, viewer_id=0, scalar_schema_version=1)
+    assert out2["token_scalars"].shape[1] == N_SCALAR_FIELDS_V2
+    assert out1["token_scalars"].shape[1] == N_SCALAR_FIELDS == 3
+    # Same token sequence either way; only the scalar width differs.
+    assert (out1["token_type"] == out2["token_type"]).all()
+    assert (out1["token_emb_ids"] == out2["token_emb_ids"]).all()
+
+
+def test_v1_row_is_exactly_the_v2_prefix() -> None:
+    """The v1 slots keep their indices and values under v2, so the
+    schema-1 output is the schema-2 output's first three columns."""
+    state, _ = _board_state()
+    out2 = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    out1 = tokenize_state(state, viewer_id=0, scalar_schema_version=1)
+    np.testing.assert_array_equal(
+        out1["token_scalars"], out2["token_scalars"][:, :N_SCALAR_FIELDS],
+    )
+
+
+def test_v1_output_is_bit_identical_to_pre_schema_tokenizer() -> None:
+    """Pin the exact schema-1 rows for a hand-built state. These are
+    the values the pre-schema tokenizer emitted: global token
+    ``[0, 0, 1]``, every permanent ``[0, 0, 1]``, viewer hand
+    ``[0, 0, 1]``, opp hand ``[0, 0, 0]``, stack item
+    ``[0, cost/10, 1]``."""
+    state, creature = _board_state()
+    out = tokenize_state(state, viewer_id=0, scalar_schema_version=1)
+    sc = out["token_scalars"]
+    tt = out["token_type"]
+    # Global + 4 permanents + 3 viewer hand + 5 opp hand + 1 stack.
+    assert sc.shape == (14, 3)
+    assert sc[0].tolist() == [0.0, 0.0, 1.0]
+    for i in range(1, 5):
+        assert tt[i] in (TOKEN_TYPE_PERMANENT_VIEWER, TOKEN_TYPE_PERMANENT_OPPONENT)
+        assert sc[i].tolist() == [0.0, 0.0, 1.0]
+    for i in range(5, 8):
+        assert tt[i] == TOKEN_TYPE_HAND_VIEWER
+        assert sc[i].tolist() == [0.0, 0.0, 1.0]
+    for i in range(8, 13):
+        assert tt[i] == TOKEN_TYPE_HAND_OPPONENT
+        assert sc[i].tolist() == [0.0, 0.0, 0.0]
+    assert tt[13] == TOKEN_TYPE_STACK_ITEM
+    assert sc[13, 0] == 0.0
+    assert sc[13, 1] == np.float32(creature.mana_cost.total / 10.0)
+    assert sc[13, 2] == 1.0
+
+
+def test_v2_permanent_slots_reflect_board_state() -> None:
+    from mtg_bot.game import effective_power, effective_toughness
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_ATTACKING,
+        SCALAR_FIELD_BLOCKING,
+        SCALAR_FIELD_DAMAGE,
+        SCALAR_FIELD_IS_CREATURE,
+        SCALAR_FIELD_OTHER_COUNTERS,
+        SCALAR_FIELD_POWER,
+        SCALAR_FIELD_PT_COUNTERS,
+        SCALAR_FIELD_SUMMONING_SICK,
+        SCALAR_FIELD_TAPPED,
+        SCALAR_FIELD_TOUGHNESS,
+    )
+    state, creature = _board_state()
+    out = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    sc = out["token_scalars"]
+    # Permanents are emitted sorted by id: creature(1), untapped
+    # Forest(2), tapped Forest(3), opp Forest(4) at rows 1..4.
+    crit = sc[1]
+    obj = state.battlefield[0]
+    assert crit[SCALAR_FIELD_TAPPED] == 1.0
+    assert crit[SCALAR_FIELD_IS_CREATURE] == 1.0
+    # P/T go through the engine's layer-7 helpers (the +1/+1 counter
+    # is included), scaled by /8.
+    assert crit[SCALAR_FIELD_POWER] == np.float32(
+        effective_power(state, obj) / 8.0
+    )
+    assert crit[SCALAR_FIELD_TOUGHNESS] == np.float32(
+        effective_toughness(state, obj) / 8.0
+    )
+    assert effective_power(state, obj) == creature.power + 1
+    assert crit[SCALAR_FIELD_DAMAGE] == np.float32(2 / 8.0)
+    assert crit[SCALAR_FIELD_PT_COUNTERS] == np.float32(1 / 4.0)
+    assert crit[SCALAR_FIELD_OTHER_COUNTERS] == 0.0
+    assert crit[SCALAR_FIELD_SUMMONING_SICK] == 0.0
+    assert crit[SCALAR_FIELD_ATTACKING] == 0.0
+    assert crit[SCALAR_FIELD_BLOCKING] == 0.0
+    assert crit[SCALAR_FIELD_PUBLIC_MASK] == 1.0
+    # Lands: not creatures, no P/T, tapped flag only.
+    untapped_land, tapped_land = sc[2], sc[3]
+    assert untapped_land[SCALAR_FIELD_TAPPED] == 0.0
+    assert tapped_land[SCALAR_FIELD_TAPPED] == 1.0
+    for row in (untapped_land, tapped_land):
+        assert row[SCALAR_FIELD_IS_CREATURE] == 0.0
+        assert row[SCALAR_FIELD_POWER] == 0.0
+        assert row[SCALAR_FIELD_TOUGHNESS] == 0.0
+        assert row[SCALAR_FIELD_SUMMONING_SICK] == 0.0
+
+
+def test_v2_permanent_combat_and_summoning_sick_flags() -> None:
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_ATTACKING,
+        SCALAR_FIELD_BLOCKING,
+        SCALAR_FIELD_OTHER_COUNTERS,
+        SCALAR_FIELD_SUMMONING_SICK,
+    )
+    state, _ = _board_state()
+    obj = state.battlefield[0]
+    obj.summoning_sick = True
+    obj.attacking = True
+    obj.blocking = 4
+    obj.charge_counters = 2
+    out = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    crit = out["token_scalars"][1]
+    assert crit[SCALAR_FIELD_SUMMONING_SICK] == 1.0
+    assert crit[SCALAR_FIELD_ATTACKING] == 1.0
+    assert crit[SCALAR_FIELD_BLOCKING] == 1.0
+    assert crit[SCALAR_FIELD_OTHER_COUNTERS] == np.float32(2 / 4.0)
+
+
+def test_v2_global_slots_reflect_life_and_zone_state() -> None:
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_IS_VIEWER_TURN,
+        SCALAR_FIELD_OPP_HAND,
+        SCALAR_FIELD_OPP_LANDS,
+        SCALAR_FIELD_OPP_LIBRARY,
+        SCALAR_FIELD_OPP_LIFE,
+        SCALAR_FIELD_OPP_POISON,
+        SCALAR_FIELD_OPP_UNTAPPED_LANDS,
+        SCALAR_FIELD_STACK_SIZE,
+        SCALAR_FIELD_TURN_NUMBER,
+        SCALAR_FIELD_VIEWER_HAND,
+        SCALAR_FIELD_VIEWER_HAS_PRIORITY,
+        SCALAR_FIELD_VIEWER_LANDS,
+        SCALAR_FIELD_VIEWER_LIBRARY,
+        SCALAR_FIELD_VIEWER_LIFE,
+        SCALAR_FIELD_VIEWER_POISON,
+        SCALAR_FIELD_VIEWER_UNTAPPED_LANDS,
+    )
+    state, _ = _board_state()
+    out = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    g = out["token_scalars"][0]
+    assert out["token_type"][0] == TOKEN_TYPE_GLOBAL
+    f32 = np.float32
+    assert g[SCALAR_FIELD_VIEWER_LIFE] == f32(14 / 20.0)
+    assert g[SCALAR_FIELD_OPP_LIFE] == f32(20 / 20.0)
+    assert g[SCALAR_FIELD_VIEWER_POISON] == f32(2 / 10.0)
+    assert g[SCALAR_FIELD_OPP_POISON] == 0.0
+    assert g[SCALAR_FIELD_VIEWER_LIBRARY] == f32(30 / 40.0)
+    assert g[SCALAR_FIELD_OPP_LIBRARY] == f32(25 / 40.0)
+    assert g[SCALAR_FIELD_VIEWER_HAND] == f32(3 / 7.0)
+    assert g[SCALAR_FIELD_OPP_HAND] == f32(5 / 7.0)
+    assert g[SCALAR_FIELD_TURN_NUMBER] == f32(7 / 20.0)
+    assert g[SCALAR_FIELD_VIEWER_UNTAPPED_LANDS] == f32(1 / 8.0)
+    assert g[SCALAR_FIELD_VIEWER_LANDS] == f32(2 / 8.0)
+    assert g[SCALAR_FIELD_OPP_UNTAPPED_LANDS] == f32(1 / 8.0)
+    assert g[SCALAR_FIELD_OPP_LANDS] == f32(1 / 8.0)
+    assert g[SCALAR_FIELD_STACK_SIZE] == f32(1 / 4.0)
+    assert g[SCALAR_FIELD_IS_VIEWER_TURN] == 1.0
+    assert g[SCALAR_FIELD_VIEWER_HAS_PRIORITY] == 1.0
+    assert g[SCALAR_FIELD_PUBLIC_MASK] == 1.0
+    # Flip the viewer: the sides swap and the turn / priority flags
+    # drop to 0.
+    out1 = tokenize_state(state, viewer_id=1, scalar_schema_version=2)
+    g1 = out1["token_scalars"][0]
+    assert g1[SCALAR_FIELD_VIEWER_LIFE] == f32(20 / 20.0)
+    assert g1[SCALAR_FIELD_OPP_LIFE] == f32(14 / 20.0)
+    assert g1[SCALAR_FIELD_OPP_POISON] == f32(2 / 10.0)
+    assert g1[SCALAR_FIELD_VIEWER_LANDS] == f32(1 / 8.0)
+    assert g1[SCALAR_FIELD_OPP_LANDS] == f32(2 / 8.0)
+    assert g1[SCALAR_FIELD_IS_VIEWER_TURN] == 0.0
+    assert g1[SCALAR_FIELD_VIEWER_HAS_PRIORITY] == 0.0
+
+
+def test_v2_global_slots_are_clamped() -> None:
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_TURN_NUMBER,
+        SCALAR_FIELD_VIEWER_LIFE,
+        SCALAR_FIELD_VIEWER_POISON,
+    )
+    state, _ = _board_state()
+    state.players[0].life = 200
+    state.players[0].poison_counters = 15
+    state.turn_number = 99
+    g = tokenize_state(state, viewer_id=0, scalar_schema_version=2)[
+        "token_scalars"
+    ][0]
+    assert g[SCALAR_FIELD_VIEWER_LIFE] == 3.0
+    assert g[SCALAR_FIELD_VIEWER_POISON] == 1.0
+    assert g[SCALAR_FIELD_TURN_NUMBER] == 1.0
+
+
+def test_v2_non_permanent_tokens_have_zero_board_slots() -> None:
+    """Hand / graveyard / exile / stack / action tokens keep their v1
+    scalars and every appended v2 slot stays zero."""
+    state, _ = _board_state()
+    ev = _land_action_event(state, turn=7)
+    out = tokenize_state(
+        state, viewer_id=0, recent_actions=[ev], scalar_schema_version=2,
+    )
+    sc = out["token_scalars"]
+    tt = out["token_type"]
+    non_board = [
+        i for i, t in enumerate(tt.tolist())
+        if t not in (
+            TOKEN_TYPE_GLOBAL, TOKEN_TYPE_PERMANENT_VIEWER,
+            TOKEN_TYPE_PERMANENT_OPPONENT,
+        )
+    ]
+    assert non_board  # hand / opp-hand / stack / action rows exist
+    assert TOKEN_TYPE_ACTION_EVENT in tt.tolist()
+    assert (sc[non_board, N_SCALAR_FIELDS:] == 0.0).all()
+
+
+def test_default_schema_is_v2() -> None:
+    state, _ = _board_state()
+    out = tokenize_state(state, viewer_id=0)
+    assert out["token_scalars"].shape[1] == N_SCALAR_FIELDS_V2
+
+
+def test_unknown_scalar_schema_version_raises() -> None:
+    import pytest
+    state, _ = _board_state()
+    with pytest.raises(ValueError, match="scalar_schema_version"):
+        tokenize_state(state, viewer_id=0, scalar_schema_version=99)
+
+
+def test_empty_state_v2_width_and_global_only() -> None:
+    state = _empty_state()
+    out = tokenize_state(state, viewer_id=0, scalar_schema_version=2)
+    assert out["token_scalars"].shape == (1, N_SCALAR_FIELDS_V2)

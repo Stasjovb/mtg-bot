@@ -324,7 +324,8 @@ def test_make_dummy_batch_shapes() -> None:
     assert batch["token_type"].dtype == torch.long
     assert batch["token_emb_ids"].shape == (3, 5, N_EMB_FIELDS)
     assert batch["token_emb_ids"].dtype == torch.long
-    assert batch["token_scalars"].shape == (3, 5, N_SCALAR_FIELDS)
+    # Width follows the config's scalar schema (v2 by default).
+    assert batch["token_scalars"].shape == (3, 5, SMALL_CONFIG.scalar_width)
     assert batch["token_scalars"].dtype == torch.float32
     assert batch["attention_mask"].shape == (3, 5)
     assert batch["attention_mask"].dtype == torch.bool
@@ -403,3 +404,97 @@ def test_printing_padding_idx_yields_zero_embedding() -> None:
     model = StructuredModel(SMALL_CONFIG)
     e = model.printing_embed(torch.tensor([0]))
     assert torch.all(e == 0)
+
+
+# ---------------------------------------------------------------------
+# Scalar schema versions: projection width + forward on both widths
+# ---------------------------------------------------------------------
+
+
+def _cfg_for_schema(version: int) -> StructuredModelConfig:
+    return StructuredModelConfig(
+        emb_dim=SMALL_CONFIG.emb_dim, n_heads=SMALL_CONFIG.n_heads,
+        n_layers=SMALL_CONFIG.n_layers, hidden_dim=SMALL_CONFIG.hidden_dim,
+        n_printings=SMALL_CONFIG.n_printings,
+        scalar_schema_version=version,
+    )
+
+
+def test_scalar_width_for_schema_constants() -> None:
+    from mtg_bot.training.structured_model import (
+        DEFAULT_SCALAR_SCHEMA_VERSION, N_SCALAR_FIELDS_V2,
+        SUPPORTED_SCALAR_SCHEMA_VERSIONS, scalar_width_for_schema,
+    )
+    assert scalar_width_for_schema(1) == N_SCALAR_FIELDS == 3
+    assert scalar_width_for_schema(2) == N_SCALAR_FIELDS_V2
+    assert N_SCALAR_FIELDS_V2 > N_SCALAR_FIELDS
+    assert DEFAULT_SCALAR_SCHEMA_VERSION == 2
+    assert SUPPORTED_SCALAR_SCHEMA_VERSIONS == (1, 2)
+    with pytest.raises(ValueError, match="scalar_schema_version"):
+        scalar_width_for_schema(3)
+
+
+def test_v2_slot_indices_are_unique_and_cover_the_row() -> None:
+    """Every SCALAR_FIELD_* constant claims a distinct slot and the
+    v2 width is exactly the number of slots (no gaps, no overlap)."""
+    import mtg_bot.training.structured_model as sm
+    slots = {
+        name: getattr(sm, name)
+        for name in dir(sm) if name.startswith("SCALAR_FIELD_")
+    }
+    values = sorted(slots.values())
+    assert values == list(range(sm.N_SCALAR_FIELDS_V2)), slots
+    # v1 slots are the first three.
+    assert sm.SCALAR_FIELD_TURN_OFFSET == 0
+    assert sm.SCALAR_FIELD_MANA_COST_PAID == 1
+    assert sm.SCALAR_FIELD_PUBLIC_MASK == 2
+
+
+def test_config_default_schema_is_v2_and_width_property() -> None:
+    from mtg_bot.training.structured_model import N_SCALAR_FIELDS_V2
+    cfg = StructuredModelConfig()
+    assert cfg.scalar_schema_version == 2
+    assert cfg.scalar_width == N_SCALAR_FIELDS_V2
+    assert _cfg_for_schema(1).scalar_width == 3
+    with pytest.raises(ValueError, match="scalar_schema_version"):
+        StructuredModelConfig(scalar_schema_version=7)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_scalar_proj_width_follows_schema(version: int) -> None:
+    from mtg_bot.training.structured_model import scalar_width_for_schema
+    model = StructuredModel(_cfg_for_schema(version))
+    assert model.scalar_proj.in_features == scalar_width_for_schema(version)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_forward_works_for_each_schema_width(version: int) -> None:
+    cfg = _cfg_for_schema(version)
+    model = StructuredModel(cfg)
+    model.eval()
+    batch = make_dummy_batch(batch_size=2, seq_len=6, config=cfg, seed=1)
+    assert batch["token_scalars"].shape[-1] == cfg.scalar_width
+    with torch.no_grad():
+        out = model(batch)
+    assert out["value"].shape == (2,)
+    assert out["policy_logits"].shape == (2, cfg.action_vocab_size)
+    assert torch.isfinite(out["value"]).all()
+
+
+def test_forward_rejects_mismatched_scalar_width() -> None:
+    cfg_v2 = _cfg_for_schema(2)
+    model = StructuredModel(cfg_v2)
+    batch_v1 = make_dummy_batch(
+        batch_size=2, seq_len=4, config=_cfg_for_schema(1), seed=0,
+    )
+    with pytest.raises(ValueError, match="scalar schema"):
+        model(batch_v1)
+
+
+def test_v1_and_v2_models_have_different_state_dict_shapes() -> None:
+    """A v2 checkpoint can't be silently loaded into a v1 model (and
+    vice versa) — the projection weight shapes differ."""
+    m1 = StructuredModel(_cfg_for_schema(1))
+    m2 = StructuredModel(_cfg_for_schema(2))
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        m1.load_state_dict(m2.state_dict())

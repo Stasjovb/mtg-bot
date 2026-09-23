@@ -404,6 +404,7 @@ def test_capture_config_build_recorder_threads_metadata_for_nondefault_structure
         hidden_sizes=[],  # unused on the structured branch
         with_policy=True,
         architecture="structured",
+        scalar_schema_version=nondefault_cfg.scalar_schema_version,
         training={
             "structured_config": {
                 "emb_dim": nondefault_cfg.emb_dim,
@@ -480,6 +481,7 @@ def test_nn_eval_annotator_loads_nondefault_structured_via_metadata_path(
         hidden_sizes=[],
         with_policy=True,
         architecture="structured",
+        scalar_schema_version=nondefault_cfg.scalar_schema_version,
         training={
             "structured_config": {
                 "emb_dim": nondefault_cfg.emb_dim,

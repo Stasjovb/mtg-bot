@@ -24,7 +24,7 @@ from mtg_bot.features import FEATURE_DIM
 from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
 from mtg_bot.training.data_gen import save_dataset
 from mtg_bot.training.structured_model import (
-    N_EMB_FIELDS, N_SCALAR_FIELDS,
+    N_EMB_FIELDS, N_SCALAR_FIELDS, N_SCALAR_FIELDS_V2,
 )
 
 
@@ -35,6 +35,7 @@ def _write_structured_npz(
     seq_len: int = 4,
     with_policy: bool = True,
     seed: int = 0,
+    scalar_width: int = N_SCALAR_FIELDS_V2,
 ) -> Path:
     rng = np.random.default_rng(seed)
     features = rng.standard_normal((n_rows, FEATURE_DIM)).astype(np.float32)
@@ -46,7 +47,7 @@ def _write_structured_npz(
         (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (n_rows, seq_len, N_SCALAR_FIELDS),
+        (n_rows, seq_len, scalar_width),
     ).astype(np.float32)
     attention_mask = np.ones((n_rows, seq_len), dtype=np.bool_)
     if with_policy:
@@ -515,3 +516,88 @@ def test_train_structured_cli_runs_db_records_run(
         a for a in artifacts if a["artifact_type"] == "weights"
     ]
     assert len(weights_artifacts) == 1
+
+
+# ---------------------------------------------------------------------
+# --scalar-schema-version
+# ---------------------------------------------------------------------
+
+
+def _run_train_cli(tmp_path: Path, monkeypatch, argv_extra: list[str]):
+    """Run ``mtg_bot train --architecture structured`` on the npz files
+    in ``tmp_path/data`` into ``tmp_path/registry``; returns the
+    registry."""
+    from mtg_bot.training.registry import Registry
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    registry_root = tmp_path / "registry"
+    cli_train.main([
+        "--architecture", "structured",
+        "--data-dir", str(tmp_path / "data"),
+        "--registry-root", str(registry_root),
+        "--epochs", "1", "--batch-size", "4", "--val-split", "0.25",
+        "--device", "cpu",
+        "--emb-dim", "16", "--n-heads", "2", "--n-layers", "1",
+        "--hidden-dim", "32", "--action-history-n", "4",
+        "--progress-path", str(tmp_path / "progress" / "train.json"),
+        *argv_extra,
+    ])
+    return Registry(registry_root)
+
+
+def test_train_cli_default_writes_scalar_schema_v2(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    (tmp_path / "data").mkdir()
+    _write_structured_npz(tmp_path / "data" / "d.npz", n_rows=8)
+    registry = _run_train_cli(tmp_path, monkeypatch, [])
+    meta = registry.load_metadata("v1")
+    assert meta.scalar_schema_version == 2
+    assert meta.training["structured_config"]["scalar_schema_version"] == 2
+    assert meta.training["structured_scalar_schema_version"] == 2
+    # The saved weights have the v2-wide projection.
+    import torch
+    sd = torch.load(registry.weights_path("v1"), weights_only=True)
+    assert sd["scalar_proj.weight"].shape[1] == N_SCALAR_FIELDS_V2
+
+
+def test_train_cli_schema_v1_flag_trains_on_legacy_width(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    (tmp_path / "data").mkdir()
+    _write_structured_npz(
+        tmp_path / "data" / "d.npz", n_rows=8, scalar_width=N_SCALAR_FIELDS,
+    )
+    registry = _run_train_cli(
+        tmp_path, monkeypatch, ["--scalar-schema-version", "1"],
+    )
+    meta = registry.load_metadata("v1")
+    assert meta.scalar_schema_version == 1
+    import torch
+    sd = torch.load(registry.weights_path("v1"), weights_only=True)
+    assert sd["scalar_proj.weight"].shape[1] == N_SCALAR_FIELDS
+
+
+def test_train_cli_refuses_scalar_width_mismatch(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """v2-wide data + ``--scalar-schema-version 1`` exits via
+    parser.error with a message naming both widths."""
+    (tmp_path / "data").mkdir()
+    _write_structured_npz(tmp_path / "data" / "d.npz", n_rows=8)
+    with pytest.raises(SystemExit) as exc:
+        _run_train_cli(tmp_path, monkeypatch, ["--scalar-schema-version", "1"])
+    assert exc.value.code != 0
+    err = capsys.readouterr().err
+    assert "scalar schema mismatch" in err
+    assert str(N_SCALAR_FIELDS_V2) in err
+
+
+def test_train_cli_rejects_unknown_scalar_schema(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    (tmp_path / "data").mkdir()
+    _write_structured_npz(tmp_path / "data" / "d.npz", n_rows=8)
+    with pytest.raises(SystemExit):
+        _run_train_cli(tmp_path, monkeypatch, ["--scalar-schema-version", "9"])
+    assert "scalar_schema_version" in capsys.readouterr().err

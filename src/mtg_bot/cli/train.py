@@ -415,6 +415,17 @@ def main(argv=None) -> None:
             "Default None defers to StructuredModelConfig (32)."
         ),
     )
+    parser.add_argument(
+        "--scalar-schema-version", type=int, default=None,
+        help=(
+            "Structured-trunk: token_scalars row layout the model "
+            "consumes (1 = legacy 3-slot row; 2 = adds board / life "
+            "state). Default None defers to StructuredModelConfig "
+            "(currently 2). Must match the schema the npz files were "
+            "generated under — training refuses a width mismatch. "
+            "Recorded in metadata.json as scalar_schema_version."
+        ),
+    )
     args = parser.parse_args(argv)
     # Structured architecture has a different data pipeline + model
     # + loss shape from the flat-feature MLP trainers; dispatch
@@ -970,7 +981,30 @@ def _main_structured(args, parser) -> None:
         structured_overrides["hidden_dim"] = args.hidden_dim
     if args.action_history_n is not None:
         structured_overrides["action_history_n"] = args.action_history_n
-    structured_config = StructuredModelConfig(**structured_overrides)
+    if args.scalar_schema_version is not None:
+        structured_overrides["scalar_schema_version"] = (
+            args.scalar_schema_version
+        )
+    try:
+        structured_config = StructuredModelConfig(**structured_overrides)
+    except ValueError as exc:
+        parser.error(str(exc))
+    # Refuse a scalar-schema width mismatch up front with a CLI-shaped
+    # message; ``train_structured_model`` re-checks as the backstop.
+    dataset_scalar_width = getattr(dataset, "scalar_width", None)
+    if (
+        dataset_scalar_width is not None
+        and dataset_scalar_width != structured_config.scalar_width
+    ):
+        parser.error(
+            f"scalar schema mismatch: npz files in {args.data_dir} carry "
+            f"token_scalars rows of width {dataset_scalar_width}, but "
+            f"--scalar-schema-version "
+            f"{structured_config.scalar_schema_version} expects width "
+            f"{structured_config.scalar_width}. Regenerate the data "
+            f"under the model's schema or pass a matching "
+            f"--scalar-schema-version."
+        )
 
     train_config = {
         "kind": "training",
@@ -999,6 +1033,9 @@ def _main_structured(args, parser) -> None:
             "hidden_dim": structured_config.hidden_dim,
             "action_history_n": structured_config.action_history_n,
             "n_printings": structured_config.n_printings,
+            "scalar_schema_version": (
+                structured_config.scalar_schema_version
+            ),
         },
     }
     parent_run_id = _parent_run_id_from_notes(args.notes)
@@ -1103,6 +1140,9 @@ def _main_structured(args, parser) -> None:
             with_policy=True,
             architecture=ARCHITECTURE_STRUCTURED,
             action_encoding_version=args.action_encoding_version,
+            # Canonical scalar-schema record; loaders size
+            # ``scalar_proj`` + the tokenizer's row width from it.
+            scalar_schema_version=structured_config.scalar_schema_version,
             training={
                 "data_dir": str(args.data_dir),
                 "data_files": data_files,
@@ -1135,6 +1175,9 @@ def _main_structured(args, parser) -> None:
                     structured_config.action_history_n
                 ),
                 "structured_n_printings": structured_config.n_printings,
+                "structured_scalar_schema_version": (
+                    structured_config.scalar_schema_version
+                ),
             },
             training_history={
                 "train_losses": history.train_losses,

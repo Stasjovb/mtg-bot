@@ -333,3 +333,24 @@ def test_next_version_id_skips_past_partial_directories(tmp_path: Path):
     (tmp_path / "v3" / "weights.pt").touch()
     # No metadata.json — incomplete.
     assert reg.next_version_id() == "v4"
+
+
+# ---------- scalar_schema_version -------------------------------------------
+
+
+def test_metadata_scalar_schema_version_defaults_to_1_when_absent():
+    """Pre-v2 metadata.json files (no key) load as the legacy 3-slot
+    scalar layout so old structured weights keep their input width."""
+    raw = _make_metadata("v3").to_dict()
+    raw.pop("scalar_schema_version")
+    m = ModelMetadata.from_dict(raw)
+    assert m.scalar_schema_version == 1
+    assert "scalar_schema_version" not in m.extra
+
+
+def test_metadata_scalar_schema_version_round_trips():
+    m = _make_metadata("v4")
+    m.scalar_schema_version = 2
+    restored = ModelMetadata.from_dict(m.to_dict())
+    assert restored.scalar_schema_version == 2
+    assert restored == m

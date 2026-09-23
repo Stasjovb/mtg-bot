@@ -65,7 +65,9 @@ from mtg_bot.training.structured_model import (
     EMB_FIELD_TARGET_PRINTING,
     EMB_FIELD_VARIANT,
     N_EMB_FIELDS,
-    N_SCALAR_FIELDS,
+    DEFAULT_SCALAR_SCHEMA_VERSION,
+    N_SCALAR_FIELDS_V2,
+    scalar_width_for_schema,
     N_TOKEN_TYPES,
     STEP_VOCAB_SIZE,
     TARGET_KIND_VOCAB_SIZE,
@@ -91,6 +93,7 @@ def _make_token_dict(
     seq_len: int,
     seed: int = 0,
     n_printings_cap: int = 32,
+    scalar_width: int = N_SCALAR_FIELDS_V2,
 ) -> dict[str, np.ndarray]:
     """Build a random-but-valid token dict matching the tokenizer's
     output schema. Used both as the seed for the fake tokenizer and
@@ -123,7 +126,7 @@ def _make_token_dict(
         0, STEP_VOCAB_SIZE, size=seq_len, dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (seq_len, N_SCALAR_FIELDS),
+        (seq_len, scalar_width),
     ).astype(np.float32)
     attention_mask = np.ones(seq_len, dtype=bool)
     return {
@@ -148,12 +151,14 @@ def _fake_tokenizer_module(*, seq_len_map: dict[int, int] | None = None):
     seq_map = seq_len_map or {}
 
     def tokenize_state(state, viewer_id, recent_actions, n=32, *,
-                       n_printings_cap=320):
+                       n_printings_cap=320,
+                       scalar_schema_version=DEFAULT_SCALAR_SCHEMA_VERSION):
         seq_len = seq_map.get(id(state), default_seq_len)
         # Seed-on-id so each state has a stable dict across calls.
         seed = abs(hash((id(state), viewer_id))) % (2**32)
         return _make_token_dict(
             seq_len=seq_len, seed=seed, n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width_for_schema(scalar_schema_version),
         )
 
     mod.tokenize_state = tokenize_state
@@ -265,7 +270,7 @@ def test_structured_handle_carries_structured_tensors(tmp_path: Path):
     assert handle.token_emb_ids is not None
     assert handle.token_emb_ids.shape == (8, 64, N_EMB_FIELDS)
     assert handle.token_scalars is not None
-    assert handle.token_scalars.shape == (8, 64, N_SCALAR_FIELDS)
+    assert handle.token_scalars.shape == (8, 64, N_SCALAR_FIELDS_V2)
     assert handle.attention_mask is not None
     assert handle.attention_mask.shape == (8, 64)
     # Each input tensor is on shared memory so workers can attach.
@@ -813,8 +818,12 @@ def test_structured_dispatcher_failure_wakes_workers(
     mod = types.ModuleType("mtg_bot.training.state_tokenizer")
 
     def tokenize_state(state, viewer_id, recent_actions, n=32, *,
-                       n_printings_cap=320):
-        d = _make_token_dict(seq_len=4, seed=42, n_printings_cap=32)
+                       n_printings_cap=320,
+                       scalar_schema_version=DEFAULT_SCALAR_SCHEMA_VERSION):
+        d = _make_token_dict(
+            seq_len=4, seed=42, n_printings_cap=32,
+            scalar_width=scalar_width_for_schema(scalar_schema_version),
+        )
         # Inject an out-of-range printing id.
         d["token_emb_ids"][0, EMB_FIELD_PRINTING] = 9999
         return d
@@ -931,7 +940,7 @@ def test_structured_client_passes_state_recent_actions_to_tokenizer(
     mod = types.ModuleType("mtg_bot.training.state_tokenizer")
 
     def tokenize_state(state, viewer_id, recent_actions, n=32, *,
-                       n_printings_cap=320):
+                       n_printings_cap=320, **_kwargs):
         seen.append((recent_actions, n))
         return _make_token_dict(seq_len=4, seed=7, n_printings_cap=32)
 

@@ -225,7 +225,11 @@ class StructuredDataset(Dataset):
         if tt_parts:
             tt_flat = np.concatenate(tt_parts)
             emb_flat = np.concatenate(emb_parts)
-            sca_flat = np.concatenate(sca_parts)
+            sca_flat = np.concatenate(
+                _normalize_scalar_parts(
+                    sca_parts, [f"file index {fi}" for fi in range(n_files)],
+                )
+            )
             row_lens_all = np.concatenate(row_len_parts).astype(np.int64)
             outcomes = np.concatenate(outcomes_per_file).astype(np.float32)
             policy_targets = np.concatenate(
@@ -472,6 +476,15 @@ class StructuredDataset(Dataset):
     def __len__(self) -> int:
         return self._n_total
 
+    @property
+    def scalar_width(self) -> int:
+        """Width of every ``token_scalars`` row in this dataset —
+        ``N_SCALAR_FIELDS`` (3) for scalar-schema-v1 data,
+        ``N_SCALAR_FIELDS_V2`` for v2. ``train_structured_model``
+        compares this against ``StructuredModelConfig.scalar_width``
+        and refuses to train on a mismatch."""
+        return int(self._token_scalars_flat.shape[1])
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if idx < 0 or idx >= self._n_total:
             raise IndexError(
@@ -515,6 +528,49 @@ class StructuredDataset(Dataset):
             "action_mask": action_mask,
             "has_policy": has_policy,
         }
+
+
+def _normalize_scalar_parts(
+    sca_parts: list[np.ndarray],
+    labels: list[str],
+) -> list[np.ndarray]:
+    """Make a list of flat ``(n_i, width_i)`` scalar arrays safe to
+    ``np.concatenate``.
+
+    All parts that carry real tokens must share one ``token_scalars``
+    width (= one scalar schema). Mixing widths means the npz files
+    were produced under different ``scalar_schema_version``s — that
+    is a data-provenance bug, so raise a loud, specific error naming
+    the offending file rather than letting ``np.concatenate`` fail
+    with "input array dimensions ... must match exactly".
+
+    Zero-token parts (crash / timeout npzs, which ``data_gen`` writes
+    with a placeholder width) can't be distinguished by content, so
+    they are reshaped to the width the real parts use.
+    """
+    width: Optional[int] = None
+    first_label = ""
+    for part, label in zip(sca_parts, labels):
+        if part.shape[0] == 0:
+            continue
+        if width is None:
+            width = int(part.shape[1])
+            first_label = label
+        elif int(part.shape[1]) != width:
+            raise ValueError(
+                f"scalar schema mismatch across structured-token files: "
+                f"{label} has token_scalars width {part.shape[1]} but "
+                f"{first_label} has {width}. All files in one training "
+                f"run must be generated under the same "
+                f"scalar_schema_version — regenerate or quarantine the "
+                f"odd files."
+            )
+    if width is None:
+        return sca_parts
+    return [
+        part if part.shape[0] else np.zeros((0, width), dtype=part.dtype)
+        for part in sca_parts
+    ]
 
 
 def _flatten_one_file(
@@ -739,7 +795,9 @@ def load_structured_dataset(
         am_parts.append(action_masks)
     tt_flat = np.concatenate(tt_parts)
     emb_flat = np.concatenate(emb_parts)
-    sca_flat = np.concatenate(sca_parts)
+    sca_flat = np.concatenate(
+        _normalize_scalar_parts(sca_parts, [str(p) for p in paths]),
+    )
     row_lengths_all = np.concatenate(row_len_parts).astype(np.int64)
     row_offsets = np.concatenate(
         ([0], np.cumsum(row_lengths_all)),

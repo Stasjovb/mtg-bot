@@ -7,9 +7,17 @@ a per-token feature dict matching the input shape pinned in
     {
         "token_type":     int64 ndarray(seq_len,)
         "token_emb_ids":  int64 ndarray(seq_len, N_EMB_FIELDS)
-        "token_scalars":  float32 ndarray(seq_len, N_SCALAR_FIELDS)
+        "token_scalars":  float32 ndarray(seq_len, scalar_width)
         "attention_mask": bool ndarray(seq_len,)
     }
+
+``scalar_width`` follows the ``scalar_schema_version`` argument
+(``structured_model.scalar_width_for_schema``): schema 1 is the
+original 3-slot row, schema 2 (default) appends per-permanent board
+state (tapped / P/T / damage / counters / combat) and per-game
+numeric state on the ``[GLOBAL]`` token (life / poison / zone sizes /
+lands / turn / stack / priority). The schema-1 output is bit-identical
+to the pre-schema tokenizer.
 
 The tokenizer emits one token per public game object visible to the
 ``viewer`` (battlefield permanents on both sides, viewer's own
@@ -66,7 +74,14 @@ from mtg_bot.actions import (
 )
 from mtg_bot.cards.base import CardPrinting
 from mtg_bot.cards.source import get_active_source
-from mtg_bot.game import GameObject, GameState, StackItem
+from mtg_bot.game import (
+    GameObject,
+    GameState,
+    StackItem,
+    effective_power,
+    effective_toughness,
+    is_creature_now,
+)
 from mtg_bot.search.action_history import (  # noqa: F401 - re-exported
     DEFAULT_ACTION_HISTORY_N,
     ActionEvent,
@@ -92,6 +107,7 @@ from mtg_bot.training.structured_model import (
     ACTION_KIND_VOCAB_SIZE,
     CONTROLLER_VOCAB_SIZE,
     DEFAULT_N_PRINTINGS,
+    DEFAULT_SCALAR_SCHEMA_VERSION,
     EMB_FIELD_ACTION_KIND,
     EMB_FIELD_CONTROLLER,
     EMB_FIELD_PRINTING,
@@ -101,11 +117,40 @@ from mtg_bot.training.structured_model import (
     EMB_FIELD_VARIANT,
     N_EMB_FIELDS,
     N_SCALAR_FIELDS,
+    N_SCALAR_FIELDS_V2,
     N_TOKEN_TYPES,
+    SCALAR_FIELD_ATTACKING,
+    SCALAR_FIELD_BLOCKING,
+    SCALAR_FIELD_DAMAGE,
+    SCALAR_FIELD_IS_CREATURE,
+    SCALAR_FIELD_IS_VIEWER_TURN,
     SCALAR_FIELD_MANA_COST_PAID,
+    SCALAR_FIELD_OPP_HAND,
+    SCALAR_FIELD_OPP_LANDS,
+    SCALAR_FIELD_OPP_LIBRARY,
+    SCALAR_FIELD_OPP_LIFE,
+    SCALAR_FIELD_OPP_POISON,
+    SCALAR_FIELD_OPP_UNTAPPED_LANDS,
+    SCALAR_FIELD_OTHER_COUNTERS,
+    SCALAR_FIELD_POWER,
+    SCALAR_FIELD_PT_COUNTERS,
     SCALAR_FIELD_PUBLIC_MASK,
+    SCALAR_FIELD_STACK_SIZE,
+    SCALAR_FIELD_SUMMONING_SICK,
+    SCALAR_FIELD_TAPPED,
+    SCALAR_FIELD_TOUGHNESS,
+    SCALAR_FIELD_TURN_NUMBER,
     SCALAR_FIELD_TURN_OFFSET,
+    SCALAR_FIELD_VIEWER_HAND,
+    SCALAR_FIELD_VIEWER_HAS_PRIORITY,
+    SCALAR_FIELD_VIEWER_LANDS,
+    SCALAR_FIELD_VIEWER_LIBRARY,
+    SCALAR_FIELD_VIEWER_LIFE,
+    SCALAR_FIELD_VIEWER_POISON,
+    SCALAR_FIELD_VIEWER_UNTAPPED_LANDS,
+    SCALAR_SCHEMA_V2,
     STEP_VOCAB_SIZE,
+    scalar_width_for_schema,
     TARGET_KIND_VOCAB_SIZE,
     TOKEN_TYPE_ACTION_EVENT,
     TOKEN_TYPE_EXILE_OPPONENT,
@@ -317,8 +362,13 @@ def _empty_emb_row(*, n_printings_cap: int = DEFAULT_N_PRINTINGS) -> list[int]:
     return row
 
 
-def _empty_scalar_row() -> list[float]:
-    return [0.0] * N_SCALAR_FIELDS
+def _empty_scalar_row(scalar_width: int = N_SCALAR_FIELDS) -> list[float]:
+    """Fresh all-zero scalar row of the requested schema width."""
+    return [0.0] * scalar_width
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return lo if value < lo else hi if value > hi else value
 
 
 def _make_zone_card_token(
@@ -329,9 +379,11 @@ def _make_zone_card_token(
     state_step,
     public_mask: float,
     n_printings_cap: int,
+    scalar_width: int = N_SCALAR_FIELDS,
 ) -> tuple[int, list[int], list[float]]:
     """Build (token_type, emb_ids, scalars) for a single hand /
-    graveyard / exile zone card.
+    graveyard / exile zone card. Schema-v2 slots stay zero here —
+    only permanents and the global token carry board state.
     """
     emb = _empty_emb_row()
     emb[EMB_FIELD_PRINTING] = printing_id(
@@ -339,9 +391,55 @@ def _make_zone_card_token(
     )
     emb[EMB_FIELD_CONTROLLER] = controller_vocab_id
     emb[EMB_FIELD_STEP] = _step_id(state_step)
-    scalars = _empty_scalar_row()
+    scalars = _empty_scalar_row(scalar_width)
     scalars[SCALAR_FIELD_PUBLIC_MASK] = public_mask
     return token_type, emb, scalars
+
+
+def _fill_permanent_v2_scalars(
+    scalars: list[float], state: GameState, obj: GameObject,
+) -> None:
+    """Populate the schema-v2 permanent slots in place.
+
+    Uses the same engine helpers ``mtg_bot.features`` relies on
+    (``is_creature_now`` / ``effective_power`` /
+    ``effective_toughness``) so P/T semantics match the engine's
+    layer system (anthems, counters, animation) rather than the
+    printed values.
+    """
+    scalars[SCALAR_FIELD_TAPPED] = 1.0 if obj.tapped else 0.0
+    creature = is_creature_now(obj)
+    scalars[SCALAR_FIELD_IS_CREATURE] = 1.0 if creature else 0.0
+    if creature:
+        scalars[SCALAR_FIELD_POWER] = _clamp(
+            effective_power(state, obj) / 8.0, -2.0, 2.0,
+        )
+        scalars[SCALAR_FIELD_TOUGHNESS] = _clamp(
+            effective_toughness(state, obj) / 8.0, -2.0, 2.0,
+        )
+        scalars[SCALAR_FIELD_SUMMONING_SICK] = (
+            1.0 if obj.summoning_sick else 0.0
+        )
+    scalars[SCALAR_FIELD_DAMAGE] = _clamp(obj.damage / 8.0, 0.0, 2.0)
+    scalars[SCALAR_FIELD_PT_COUNTERS] = _clamp(
+        (obj.plus_one_counters - obj.minus_one_counters) / 4.0,
+        -2.0, 2.0,
+    )
+    other_counters = (
+        getattr(obj, "charge_counters", 0)
+        + getattr(obj, "time_counters", 0)
+        + getattr(obj, "stun_counters", 0)
+        + getattr(obj, "loyalty_counters", 0)
+        + getattr(obj, "lore_counters", 0)
+        + getattr(obj, "flying_counters", 0)
+    )
+    scalars[SCALAR_FIELD_OTHER_COUNTERS] = _clamp(
+        other_counters / 4.0, 0.0, 2.0,
+    )
+    scalars[SCALAR_FIELD_ATTACKING] = 1.0 if obj.attacking else 0.0
+    scalars[SCALAR_FIELD_BLOCKING] = (
+        1.0 if obj.blocking is not None else 0.0
+    )
 
 
 def _make_permanent_token(
@@ -351,9 +449,16 @@ def _make_permanent_token(
     controller_vocab_id: int,
     state_step,
     n_printings_cap: int,
+    state: Optional[GameState] = None,
+    scalar_width: int = N_SCALAR_FIELDS,
 ) -> tuple[int, list[int], list[float]]:
     """Build (token_type, emb_ids, scalars) for a battlefield
     permanent. Permanents are fully public — ``public_mask=1``.
+
+    Under scalar schema v2 (``scalar_width >= N_SCALAR_FIELDS_V2``)
+    the tapped / creature / P/T / damage / counter / combat slots are
+    filled from ``state``; schema v1 emits exactly the historical
+    3-slot row.
     """
     emb = _empty_emb_row()
     emb[EMB_FIELD_PRINTING] = printing_id(
@@ -361,8 +466,10 @@ def _make_permanent_token(
     )
     emb[EMB_FIELD_CONTROLLER] = controller_vocab_id
     emb[EMB_FIELD_STEP] = _step_id(state_step)
-    scalars = _empty_scalar_row()
+    scalars = _empty_scalar_row(scalar_width)
     scalars[SCALAR_FIELD_PUBLIC_MASK] = 1.0
+    if scalar_width >= N_SCALAR_FIELDS_V2 and state is not None:
+        _fill_permanent_v2_scalars(scalars, state, obj)
     return token_type, emb, scalars
 
 
@@ -372,6 +479,7 @@ def _make_stack_token(
     state_step,
     viewer_id: int,
     n_printings_cap: int,
+    scalar_width: int = N_SCALAR_FIELDS,
 ) -> tuple[int, list[int], list[float]]:
     """Build a token for a stack item (spell or triggered ability).
 
@@ -392,7 +500,7 @@ def _make_stack_token(
     if item.targets:
         kind, tid = item.targets[0]
         emb[EMB_FIELD_TARGET_KIND] = _target_kind_id(kind)
-    scalars = _empty_scalar_row()
+    scalars = _empty_scalar_row(scalar_width)
     scalars[SCALAR_FIELD_PUBLIC_MASK] = 1.0
     if item.source.printing is not None:
         scalars[SCALAR_FIELD_MANA_COST_PAID] = (
@@ -413,12 +521,94 @@ def _target_kind_id(kind: str) -> int:
     }.get(kind, TARGET_KIND_NA)
 
 
+def _count_lands(state: GameState) -> dict[int, tuple[int, int]]:
+    """Per-controller ``(lands, untapped_lands)`` over the battlefield.
+    Mirrors ``features._fill_per_side_block``'s land accounting."""
+    counts: dict[int, tuple[int, int]] = {}
+    for o in state.battlefield:
+        if not o.printing.is_land:
+            continue
+        lands, untapped = counts.get(o.controller_id, (0, 0))
+        counts[o.controller_id] = (
+            lands + 1, untapped + (0 if o.tapped else 1),
+        )
+    return counts
+
+
+def _fill_global_v2_scalars(
+    scalars: list[float],
+    state: GameState,
+    viewer_id: int,
+    viewer,
+    opponent,
+) -> None:
+    """Populate the schema-v2 global slots in place (life / poison /
+    zone sizes / lands / turn / stack / whose turn / priority), all
+    viewer-relative. ``opponent`` may be ``None`` for a degenerate
+    single-player state; its slots then stay zero."""
+    land_counts = _count_lands(state)
+
+    def _side(player, life_slot, poison_slot, lib_slot, hand_slot,
+              untapped_slot, lands_slot) -> None:
+        if player is None:
+            return
+        scalars[life_slot] = _clamp(player.life / 20.0, -1.0, 3.0)
+        scalars[poison_slot] = _clamp(
+            player.poison_counters / 10.0, 0.0, 1.0,
+        )
+        scalars[lib_slot] = _clamp(len(player.library) / 40.0, 0.0, 2.0)
+        scalars[hand_slot] = _clamp(len(player.hand) / 7.0, 0.0, 2.0)
+        lands, untapped = land_counts.get(player.id, (0, 0))
+        scalars[untapped_slot] = _clamp(untapped / 8.0, 0.0, 2.0)
+        scalars[lands_slot] = _clamp(lands / 8.0, 0.0, 2.0)
+
+    _side(
+        viewer,
+        SCALAR_FIELD_VIEWER_LIFE, SCALAR_FIELD_VIEWER_POISON,
+        SCALAR_FIELD_VIEWER_LIBRARY, SCALAR_FIELD_VIEWER_HAND,
+        SCALAR_FIELD_VIEWER_UNTAPPED_LANDS, SCALAR_FIELD_VIEWER_LANDS,
+    )
+    _side(
+        opponent,
+        SCALAR_FIELD_OPP_LIFE, SCALAR_FIELD_OPP_POISON,
+        SCALAR_FIELD_OPP_LIBRARY, SCALAR_FIELD_OPP_HAND,
+        SCALAR_FIELD_OPP_UNTAPPED_LANDS, SCALAR_FIELD_OPP_LANDS,
+    )
+    scalars[SCALAR_FIELD_TURN_NUMBER] = _clamp(
+        state.turn_number / 20.0, 0.0, 1.0,
+    )
+    scalars[SCALAR_FIELD_STACK_SIZE] = _clamp(
+        len(state.stack) / 4.0, 0.0, 2.0,
+    )
+    n_players = len(state.players)
+    if n_players and 0 <= state.active_player_idx < n_players:
+        ap_id = state.players[state.active_player_idx].id
+        scalars[SCALAR_FIELD_IS_VIEWER_TURN] = (
+            1.0 if ap_id == viewer_id else 0.0
+        )
+    if n_players and 0 <= state.priority_player_idx < n_players:
+        pp_id = state.players[state.priority_player_idx].id
+        scalars[SCALAR_FIELD_VIEWER_HAS_PRIORITY] = (
+            1.0 if pp_id == viewer_id else 0.0
+        )
+
+
 def _make_global_token(
     state: GameState,
     viewer_id: int,
+    *,
+    scalar_width: int = N_SCALAR_FIELDS,
+    viewer=None,
+    opponent=None,
 ) -> tuple[int, list[int], list[float]]:
     """Build the single global summary token (turn / step / active
     player). The model's CLS does cross-state pooling on top.
+
+    Under scalar schema v2 the token additionally carries both
+    players' life / poison / library / hand / land counts plus turn
+    number, stack size and whose-turn / has-priority flags (see
+    ``_fill_global_v2_scalars``). Schema v1 emits the historical
+    3-slot row.
     """
     emb = _empty_emb_row()
     emb[EMB_FIELD_STEP] = _step_id(state.step)
@@ -426,8 +616,16 @@ def _make_global_token(
     if state.players and 0 <= state.active_player_idx < len(state.players):
         ap_id = state.players[state.active_player_idx].id
         emb[EMB_FIELD_CONTROLLER] = _controller_id(ap_id, viewer_id)
-    scalars = _empty_scalar_row()
+    scalars = _empty_scalar_row(scalar_width)
     scalars[SCALAR_FIELD_PUBLIC_MASK] = 1.0
+    if scalar_width >= N_SCALAR_FIELDS_V2:
+        if viewer is None:
+            for p in state.players:
+                if p.id == viewer_id:
+                    viewer = p
+                elif opponent is None:
+                    opponent = p
+        _fill_global_v2_scalars(scalars, state, viewer_id, viewer, opponent)
     return TOKEN_TYPE_GLOBAL, emb, scalars
 
 
@@ -494,6 +692,7 @@ def _make_action_token(
     actor_player_id: int,
     state_step,
     n_printings_cap: int,
+    scalar_width: int = N_SCALAR_FIELDS,
 ) -> tuple[int, list[int], list[float]]:
     """Build the per-action token row.
 
@@ -503,13 +702,16 @@ def _make_action_token(
       target_kind, variant, step (embeddings)
     - turn_offset, mana_cost_paid, public_mask (scalars)
 
+    Schema-v2 scalar slots stay zero for action tokens; the row is
+    just padded to ``scalar_width``.
+
     The viewer-relative redaction in §2 is applied here for the two
     private-info events (scry/surveil and CardFromLibrary): when
     ``actor_player_id != viewer_id`` we mask the variant or target
     printing to NA and set ``public_mask=0``.
     """
     emb = _empty_emb_row()
-    scalars = _empty_scalar_row()
+    scalars = _empty_scalar_row(scalar_width)
 
     kind_name = _action_kind_name(action)
     emb[EMB_FIELD_ACTION_KIND] = ACTION_KIND_VOCAB.get(kind_name, 0)
@@ -774,6 +976,7 @@ def tokenize_state(
     n: int = DEFAULT_ACTION_HISTORY_N,
     *,
     n_printings_cap: int = DEFAULT_N_PRINTINGS,
+    scalar_schema_version: int = DEFAULT_SCALAR_SCHEMA_VERSION,
 ) -> dict[str, np.ndarray]:
     """Tokenize a single game state from ``viewer_id``'s perspective.
 
@@ -803,6 +1006,15 @@ def tokenize_state(
         Maximum printing-id allowed before modulo-bucketing. Set to
         the model's ``StructuredModelConfig.n_printings`` so the
         tokenizer's outputs never index out of range.
+    scalar_schema_version
+        Which ``token_scalars`` row layout to emit. ``1`` is the
+        historical 3-slot row (turn_offset / mana_cost_paid /
+        public_mask) and is bit-identical to the pre-schema
+        tokenizer; ``2`` (default) appends the board / life state
+        slots (see ``structured_model.SCALAR_FIELD_*``). MUST match
+        the consuming model's ``StructuredModelConfig
+        .scalar_schema_version`` — the model checks the width in
+        ``forward`` and raises on a mismatch.
 
     Returns
     -------
@@ -813,14 +1025,16 @@ def tokenize_state(
       token is NOT emitted here; the model prepends its own.
     - ``token_emb_ids``:  int64 ``(seq_len, N_EMB_FIELDS=7)`` —
       per-field categorical embedding ids.
-    - ``token_scalars``:  float32 ``(seq_len, N_SCALAR_FIELDS=3)``
-      — turn_offset, mana_cost_paid, public_mask.
+    - ``token_scalars``:  float32 ``(seq_len, scalar_width)`` where
+      ``scalar_width`` is ``N_SCALAR_FIELDS`` (3) for schema 1 and
+      ``N_SCALAR_FIELDS_V2`` for schema 2.
     - ``attention_mask``: bool ``(seq_len,)`` — True for every
       emitted row (the tokenizer doesn't pad; the dataset writer
       pads to the batch's max_len).
     """
     if state is None:
         raise ValueError("state must not be None")
+    scalar_width = scalar_width_for_schema(scalar_schema_version)
     # Identify viewer + opponent players. The viewer slot may have
     # already lost; we still tokenize their zones for shape stability.
     viewer: Optional["object"] = None
@@ -841,7 +1055,10 @@ def tokenize_state(
     scalar_rows: list[list[float]] = []
 
     # --- Global summary token ----------------------------------------
-    t, e, s = _make_global_token(state, viewer_id)
+    t, e, s = _make_global_token(
+        state, viewer_id, scalar_width=scalar_width,
+        viewer=viewer, opponent=opponent,
+    )
     token_types.append(t)
     emb_rows.append(e)
     scalar_rows.append(s)
@@ -859,6 +1076,7 @@ def tokenize_state(
         t, e, s = _make_permanent_token(
             obj=obj, token_type=tt, controller_vocab_id=ctrl,
             state_step=state.step, n_printings_cap=n_printings_cap,
+            state=state, scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -871,6 +1089,7 @@ def tokenize_state(
             controller_vocab_id=CONTROLLER_VIEWER,
             state_step=state.step, public_mask=1.0,
             n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -883,7 +1102,7 @@ def tokenize_state(
             emb[EMB_FIELD_CONTROLLER] = CONTROLLER_OPPONENT
             emb[EMB_FIELD_STEP] = _step_id(state.step)
             # Printing field stays NA — opponent's hand is hidden.
-            scalars = _empty_scalar_row()
+            scalars = _empty_scalar_row(scalar_width)
             scalars[SCALAR_FIELD_PUBLIC_MASK] = 0.0
             token_types.append(TOKEN_TYPE_HAND_OPPONENT)
             emb_rows.append(emb)
@@ -896,6 +1115,7 @@ def tokenize_state(
             controller_vocab_id=CONTROLLER_VIEWER,
             state_step=state.step, public_mask=1.0,
             n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -906,6 +1126,7 @@ def tokenize_state(
             controller_vocab_id=CONTROLLER_VIEWER,
             state_step=state.step, public_mask=1.0,
             n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -919,6 +1140,7 @@ def tokenize_state(
                 controller_vocab_id=CONTROLLER_OPPONENT,
                 state_step=state.step, public_mask=1.0,
                 n_printings_cap=n_printings_cap,
+                scalar_width=scalar_width,
             )
             token_types.append(t)
             emb_rows.append(e)
@@ -929,6 +1151,7 @@ def tokenize_state(
                 controller_vocab_id=CONTROLLER_OPPONENT,
                 state_step=state.step, public_mask=1.0,
                 n_printings_cap=n_printings_cap,
+                scalar_width=scalar_width,
             )
             token_types.append(t)
             emb_rows.append(e)
@@ -939,6 +1162,7 @@ def tokenize_state(
         t, e, s = _make_stack_token(
             item=item, state_step=state.step,
             viewer_id=viewer_id, n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -971,6 +1195,7 @@ def tokenize_state(
                     actor_player_id=ev.actor_player_id,
                     state_step=ev.step,
                     n_printings_cap=n_printings_cap,
+                    scalar_width=scalar_width,
                 )
                 token_types.append(t)
                 emb_rows.append(e)
@@ -990,6 +1215,7 @@ def tokenize_state(
                     actor_player_id=ev.actor_player_id,
                     state_step=ev.step,
                     n_printings_cap=n_printings_cap,
+                    scalar_width=scalar_width,
                 )
                 token_types.append(t)
                 emb_rows.append(e)
@@ -1005,6 +1231,7 @@ def tokenize_state(
             actor_player_id=ev.actor_player_id,
             state_step=ev.step,
             n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width,
         )
         token_types.append(t)
         emb_rows.append(e)
@@ -1015,7 +1242,7 @@ def tokenize_state(
     token_type_arr = np.asarray(token_types, dtype=np.int64).reshape(seq_len)
     if seq_len == 0:
         emb_arr = np.zeros((0, N_EMB_FIELDS), dtype=np.int64)
-        scalar_arr = np.zeros((0, N_SCALAR_FIELDS), dtype=np.float32)
+        scalar_arr = np.zeros((0, scalar_width), dtype=np.float32)
     else:
         emb_arr = np.asarray(emb_rows, dtype=np.int64)
         scalar_arr = np.asarray(scalar_rows, dtype=np.float32)
@@ -1043,8 +1270,10 @@ __all__ = [
     "CONTROLLER_VIEWER",
     "CONTROLLER_VOCAB_SIZE",
     "DEFAULT_ACTION_HISTORY_N",
+    "DEFAULT_SCALAR_SCHEMA_VERSION",
     "N_EMB_FIELDS",
     "N_SCALAR_FIELDS",
+    "N_SCALAR_FIELDS_V2",
     "N_TOKEN_TYPES",
     "PRINTING_NA",
     "STEP_NA",
@@ -1068,5 +1297,6 @@ __all__ = [
     "VARIANT_VOCAB_SIZE",
     "VARIANT_WARP",
     "printing_id",
+    "scalar_width_for_schema",
     "tokenize_state",
 ]
