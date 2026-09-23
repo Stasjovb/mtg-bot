@@ -497,6 +497,14 @@ class ShadowCheckedRustAdapter:
     # ---- bake-in introspection ---------------------------------------
 
     @property
+    def recent_actions(self) -> tuple:
+        """Structured-NN action history: under rust_shadow the Python
+        checker adapter applies every decision in lockstep, so its
+        recorded history is the real one (see
+        ``mtg_bot.search.action_history``)."""
+        return self._py.recent_actions
+
+    @property
     def engine_state(self):
         """Codec hook: under rust_shadow Python IS present, so the
         codec reads the Python engine zones (the SoT checker side).

@@ -1105,9 +1105,7 @@ def _play_one_game_recording(
         # Local import — state_tokenizer pulls in the entire model
         # constant surface and ndarray construction helpers; only worth
         # it when the structured-token flag is enabled.
-        from mtg_bot.training.state_tokenizer import (
-            ActionEvent, tokenize_state,
-        )
+        from mtg_bot.training.state_tokenizer import tokenize_state
 
     samples: list[
         tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]
@@ -1117,12 +1115,11 @@ def _play_one_game_recording(
     # to ``samples``). Empty when structured_tokens=False — the caller
     # checks the flag rather than the list's content.
     struct_rows: list[dict[str, np.ndarray]] = []
-    # Cumulative action history (only populated when
-    # structured_tokens=True). Each appended entry captures the
-    # pre-apply engine snapshot, the action that was about to apply,
-    # the turn, the step, and the actor — the tokenizer will use this
-    # to render the recent-action token sequence at sample points.
-    action_history: list["ActionEvent"] = []
+    # Action history for the structured tokens is NOT tracked here: the
+    # adapter records it in ``apply`` (``adapter.recent_actions``, see
+    # ``mtg_bot.search.action_history``) and the NN evaluator reads
+    # the same attribute at search time, so training rows and
+    # inference tokenize from one source of truth by construction.
     zero_policy = np.zeros(ACTION_VOCAB_SIZE, dtype=_DTYPE_POLICY)
     zero_mask = np.zeros(ACTION_VOCAB_SIZE, dtype=np.bool_)
     # Skip the per-decision adapter clone for observe_action wiring
@@ -1300,16 +1297,17 @@ def _play_one_game_recording(
                             (feats, viewer, zero_policy, zero_mask)
                         )
                     if structured_tokens:
-                        # Tokenize per-viewer with the filtered history;
-                        # the tokenizer applies the §3 filter + truncation
-                        # internally. Snapshot is the current engine
+                        # Tokenize per-viewer with the adapter-carried
+                        # history (already §3-filtered and bounded —
+                        # the tokenizer's own filter + truncation is a
+                        # no-op on it). Snapshot is the current engine
                         # state (sample is taken pre-apply, so the
                         # caller's view is "state right now, with this
                         # decision about to be made").
                         struct_rows.append(
                             tokenize_state(
                                 engine, viewer_id=viewer,
-                                recent_actions=action_history,
+                                recent_actions=adapter.recent_actions,
                             )
                         )
             else:
@@ -1323,33 +1321,10 @@ def _play_one_game_recording(
             pre_apply_state = adapter.clone()
         else:
             pre_apply_state = None
-        # Capture the pre-apply state for structured-token history.
-        # We need a snapshot (the engine state mutates in-place during
-        # ``apply``), but cloning every decision is expensive — reuse
-        # the observe_action clone if it was already made, otherwise
-        # take an explicit clone only when structured-tokens are on.
-        action_pre_state = None
-        action_turn_capture = None
-        action_step_capture = None
-        if structured_tokens and active != CHANCE_PLAYER:
-            engine_now = adapter.engine_state
-            if pre_apply_state is not None:
-                action_pre_state = pre_apply_state.engine_state
-            else:
-                action_pre_state = adapter.clone().engine_state
-            action_turn_capture = engine_now.turn_number
-            action_step_capture = engine_now.step
+        # ``apply`` also records the decision into
+        # ``adapter.recent_actions`` (pre-apply snapshot + turn / step
+        # / actor) for the structured-token history.
         adapter.apply(decision)
-        if (
-            structured_tokens and action_pre_state is not None
-        ):
-            action_history.append(ActionEvent(
-                action=decision,
-                state_snapshot=action_pre_state,
-                turn=action_turn_capture,
-                step=action_step_capture,
-                actor_player_id=active,
-            ))
         if pre_apply_state is not None:
             for seat in (0, 1):
                 strategy = strategies.get(seat)

@@ -917,3 +917,43 @@ def test_flat_path_still_works_when_structured_module_imported(tmp_path: Path):
             structured_server.handle().architecture
             == ARCHITECTURE_STRUCTURED
         )
+
+
+def test_structured_client_passes_state_recent_actions_to_tokenizer(
+    tmp_path: Path, monkeypatch, patched_legal_mask,
+):
+    """The client-side ``_tokenize_state`` must hand the state's
+    adapter-carried ``recent_actions`` to the tokenizer (bit-
+    equivalence with the direct ``NNEvaluator`` structured path and
+    with ``data_gen``'s training rows), falling back to ``()`` for
+    states without the attribute."""
+    seen: list[tuple[Any, int]] = []
+    mod = types.ModuleType("mtg_bot.training.state_tokenizer")
+
+    def tokenize_state(state, viewer_id, recent_actions, n=32, *,
+                       n_printings_cap=320):
+        seen.append((recent_actions, n))
+        return _make_token_dict(seq_len=4, seed=7, n_printings_cap=32)
+
+    mod.tokenize_state = tokenize_state
+    monkeypatch.setitem(
+        sys.modules, "mtg_bot.training.state_tokenizer", mod,
+    )
+    monkeypatch.setattr(
+        nn_evaluator_mod, "_STATE_TOKENIZER_MODULE", None,
+    )
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        with_history = _FakeAdapter()
+        history = (object(), object())
+        with_history.recent_actions = history
+        client.evaluate(with_history, player_id=0)
+        assert seen[-1][0] is history
+        # The handle's action-history window (4 in this fixture) is
+        # threaded as the tokenizer's ``n``.
+        assert seen[-1][1] == server.handle().structured_action_history_n
+        client.evaluate(_FakeAdapter(), player_id=1)
+        assert seen[-1][0] == ()

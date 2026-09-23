@@ -1486,6 +1486,18 @@ class RustGameStateAdapter:
         return self._rust
 
     @property
+    def recent_actions(self) -> tuple:
+        """Structured-NN action history (see
+        ``mtg_bot.search.action_history``). The Rust provider does not
+        record it: the ``ActionEvent`` snapshot is a Python
+        ``GameState`` clone the tokenizer resolves printings against,
+        and there is no Python engine state here. Always empty —
+        ``NNEvaluator`` then tokenizes with no action tokens, which is
+        a known train/inference gap for Rust-sourced structured
+        search (the Python adapter carries the real history)."""
+        return ()
+
+    @property
     def engine_state(self):
         """B3-S2: the codec slot-source switch. The action-encoding
         codec reaches the engine zones via ``_engine_state(state) ->

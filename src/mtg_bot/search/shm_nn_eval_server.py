@@ -1708,11 +1708,13 @@ class SharedTensorNNEvalClient(Evaluator):
         viewer_id: "PlayerID",
     ) -> dict[str, np.ndarray]:
         """Run ``state_tokenizer.tokenize_state`` against the engine
-        state behind ``state``. The recent-action history defaults to
-        empty (same first-pass-acceptable choice the direct
-        ``NNEvaluator(architecture='structured')`` path makes — see
-        the docstring there). Action-history threading is a separate
-        followup once the engine grows a public action log.
+        state behind ``state``. The recent-action history is the
+        state's adapter-carried ``recent_actions`` (recorded by
+        ``MtgGameStateAdapter.apply``, shared across clones — see
+        ``mtg_bot.search.action_history``), exactly as the direct
+        ``NNEvaluator(architecture='structured')`` path and the
+        training writer (``data_gen``) tokenize it. States without
+        the attribute fall back to an empty history.
 
         ``n_printings_cap`` is threaded from the handle's
         ``structured_n_printings_cap`` (resolved from the loaded
@@ -1727,6 +1729,7 @@ class SharedTensorNNEvalClient(Evaluator):
             "mtg_bot.training.state_tokenizer",
         )
         engine = _engine_state(state)
+        recent_actions = getattr(state, "recent_actions", ())
         n_cap = self._h.structured_n_printings_cap
         action_n = self._h.structured_action_history_n
         kwargs: dict[str, Any] = {}
@@ -1734,10 +1737,10 @@ class SharedTensorNNEvalClient(Evaluator):
             kwargs["n_printings_cap"] = n_cap
         if action_n > 0:
             return tokenizer.tokenize_state(
-                engine, int(viewer_id), (), action_n, **kwargs,
+                engine, int(viewer_id), recent_actions, action_n, **kwargs,
             )
         return tokenizer.tokenize_state(
-            engine, int(viewer_id), (), **kwargs,
+            engine, int(viewer_id), recent_actions, **kwargs,
         )
 
     def _validate_seq_len(self, token_dict: dict[str, np.ndarray]) -> None:

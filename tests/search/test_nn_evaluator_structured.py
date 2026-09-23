@@ -960,3 +960,45 @@ def test_structured_with_policy_kwarg_is_forced_true(
     state = _FakeAdapter()
     val, pol = ev.evaluate_with_policy(state, player_id=0)
     assert pol.shape == (ACTION_VOCAB_SIZE,)
+
+
+# ---------------------------------------------------------------------
+# Action history: the structured path tokenizes with the state's
+# adapter-carried ``recent_actions`` (train/inference parity)
+# ---------------------------------------------------------------------
+
+
+def test_structured_forward_passes_state_recent_actions_to_tokenizer(
+    fake_tokenizer, patched_legal_mask,
+):
+    """``_structured_forward`` must hand each state's
+    ``recent_actions`` (the tuple ``MtgGameStateAdapter.apply``
+    records and ``data_gen`` tokenizes from) to ``tokenize_state`` —
+    NOT a hard-coded empty history. States without the attribute
+    (raw engine states, duck-typed fakes) fall back to ``()``."""
+    seen: list[tuple[Any, int]] = []
+    orig = fake_tokenizer.tokenize_state
+
+    def spy(state, viewer_id, recent_actions, n=32, *, n_printings_cap=320):
+        seen.append((recent_actions, n))
+        return orig(state, viewer_id, recent_actions, n=n,
+                    n_printings_cap=n_printings_cap)
+
+    fake_tokenizer.tokenize_state = spy
+    ev = NNEvaluator(**SMALL_KWARGS)
+
+    with_history = _FakeAdapter()
+    history = (object(), object(), object())
+    with_history.recent_actions = history
+    without = _FakeAdapter()
+
+    ev.evaluate(with_history, player_id=0)
+    assert seen[-1][0] is history
+    assert seen[-1][1] == ev.model.config.action_history_n
+
+    ev.evaluate(without, player_id=1)
+    assert seen[-1][0] == ()
+
+    seen.clear()
+    ev.batch_evaluate_with_policy([with_history, without], player_id=0)
+    assert [r for r, _ in seen] == [history, ()]

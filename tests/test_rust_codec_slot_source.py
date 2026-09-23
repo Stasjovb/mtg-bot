@@ -239,3 +239,26 @@ def test_g2_mask_survives_clone():
     assert not any(
         isinstance(d, PlayLand) for d in clone.legal_decisions()
     ), "clone lost the G2 land-played bookkeeping"
+
+
+# ---------------------------------------------------------------------------
+# Structured-NN action history surface on the Rust providers
+# ---------------------------------------------------------------------------
+
+
+def test_rust_provider_recent_actions_is_empty_and_shadow_delegates_to_python():
+    """``NNEvaluator`` reads ``state.recent_actions`` for the structured
+    action-history tokens. The Rust provider has no Python engine
+    state to snapshot, so it exposes an (always) empty history; the
+    shadow-checked adapter delegates to its Python checker, whose
+    ``apply`` records the real history in lockstep."""
+    from mtg_bot.search.engine_adapter_factory import (
+        build_shadow_checked_adapter,
+    )
+
+    spec, py_adapter, rust_adapter = _matched()
+    assert rust_adapter.recent_actions == ()
+    assert rust_adapter.clone().recent_actions == ()
+    shadow = build_shadow_checked_adapter(spec)
+    assert shadow.recent_actions is shadow.py_adapter.recent_actions
+    assert shadow.recent_actions == ()

@@ -67,6 +67,13 @@ from mtg_bot.actions import (
 from mtg_bot.cards.base import CardPrinting
 from mtg_bot.cards.source import get_active_source
 from mtg_bot.game import GameObject, GameState, StackItem
+from mtg_bot.search.action_history import (  # noqa: F401 - re-exported
+    DEFAULT_ACTION_HISTORY_N,
+    ActionEvent,
+    _is_mana_ability,
+    _is_strategically_relevant,
+    record_action_event,
+)
 from mtg_bot.search.combat_decisions import AttackerDecision, BlockerDecision
 from mtg_bot.search.resolution_decisions import (
     ResolutionCardFromLibraryDecision,
@@ -209,9 +216,10 @@ PRINTING_NA = 0
 STEP_NA = 0
 
 
-# Action-history window — roadmap §3 default. Configurable per
-# tokenize_state call but the default lives here.
-DEFAULT_ACTION_HISTORY_N = 32
+# Action-history window (``DEFAULT_ACTION_HISTORY_N``), ``ActionEvent``
+# and the §3 relevance filter live in ``mtg_bot.search.action_history``
+# (the adapter records history at apply time and must import them
+# without pulling in torch); they are re-exported from this module.
 
 
 # ---------------------------------------------------------------------
@@ -428,54 +436,10 @@ def _make_global_token(
 # ---------------------------------------------------------------------
 
 
-_MANA_ABILITY_HEURISTIC_NOTE = (
-    "Mana-ability ActivateAbility filter: per roadmap §3, drop activations "
-    "whose source is a land (the resulting tap is already visible in the "
-    "next state's permanent token). Non-land activated abilities (Spacecraft "
-    "stations, planeswalker loyalty, equipment, etc.) stay in the history."
-)
-
-
-def _is_mana_ability(action: Action, state: GameState) -> bool:
-    """Heuristic test for "this ActivateAbility represents a mana
-    ability." We approximate by checking whether the source object is
-    a land — the EoE pool is dominated by land mana abilities, and
-    non-land mana sources (Spacecraft station, planeswalkers, etc.)
-    are infrequent enough that classifying them as non-mana is safe
-    for filtering purposes. See ``_MANA_ABILITY_HEURISTIC_NOTE``.
-
-    Used only by the action-history filter; mis-classification just
-    changes whether a token enters the model's history window.
-    """
-    if not isinstance(action, ActivateAbility):
-        return False
-    obj = next(
-        (o for o in state.battlefield if o.id == action.source_id), None,
-    )
-    if obj is None:
-        return False
-    return bool(obj.printing.is_land)
-
-
 def _action_kind_name(action: Action) -> str:
     """Return the ACTION_KIND_VOCAB key for an action / decision
     instance."""
     return type(action).__name__
-
-
-def _is_strategically_relevant(action: Action, state: GameState) -> bool:
-    """Filter rule from roadmap §3.
-
-    - Drop ``PassPriority`` events.
-    - Drop mana-ability ``ActivateAbility`` events (see helper).
-    - Keep everything else (cast / play land / unlock / activate /
-      station / face-up / declare / resolution-decisions).
-    """
-    if isinstance(action, PassPriority):
-        return False
-    if _is_mana_ability(action, state):
-        return False
-    return True
 
 
 def _cast_variant(action: CastSpell) -> int:
@@ -799,48 +763,6 @@ def _make_action_token(
 
 
 # ---------------------------------------------------------------------
-# ActionEvent: a recorded historical action with metadata
-# ---------------------------------------------------------------------
-
-
-class ActionEvent:
-    """Bookkeeping struct for an action that has been applied.
-
-    ``data_gen`` accumulates these per game so the tokenizer can read
-    the temporal sequence at sample time. The struct is intentionally
-    minimal — turn / step / actor are captured at the moment the
-    action was applied (the pre-apply state); the tokenizer's
-    redaction logic does the rest.
-
-    Not a frozen dataclass because we may append to lists referenced
-    by it (DeclareAttackers expansion). Plain attributes for cheap
-    construction.
-    """
-
-    __slots__ = (
-        "action",
-        "state_snapshot",
-        "turn",
-        "step",
-        "actor_player_id",
-    )
-
-    def __init__(
-        self,
-        action: Action,
-        state_snapshot: GameState,
-        turn: int,
-        step,
-        actor_player_id: int,
-    ) -> None:
-        self.action = action
-        self.state_snapshot = state_snapshot
-        self.turn = turn
-        self.step = step
-        self.actor_player_id = actor_player_id
-
-
-# ---------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------
 
@@ -869,7 +791,12 @@ def tokenize_state(
         game leading up to ``state``. Oldest first. The tokenizer
         applies the §3 strategically-relevant filter (drop
         PassPriority + mana-abilities), then truncates to the last
-        ``n`` events.
+        ``n`` events. Both training (``data_gen``) and inference
+        (``NNEvaluator``) pass ``MtgGameStateAdapter.recent_actions``
+        here — the adapter records events via
+        ``mtg_bot.search.action_history.record_action_event`` and
+        already holds the last ``DEFAULT_ACTION_HISTORY_N`` relevant
+        events, so the filter/truncation is a no-op for them.
     n
         Action-history window. Default 32 (roadmap §3).
     n_printings_cap
@@ -1128,6 +1055,7 @@ __all__ = [
     "TARGET_KIND_PERMANENT",
     "TARGET_KIND_PLAYER",
     "TARGET_KIND_STACK_ITEM",
+    "record_action_event",
     "TARGET_KIND_VOCAB_SIZE",
     "VARIANT_CAST_FOR_FREE",
     "VARIANT_IMPENDING",
