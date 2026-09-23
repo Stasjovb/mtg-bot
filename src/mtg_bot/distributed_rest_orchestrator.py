@@ -189,6 +189,14 @@ class StageResult:
     wins_new: Optional[int] = None
     wins_old: Optional[int] = None
     draws: int = 0
+    # Results rows the coordinator marked ``outcome='upload_failed'``:
+    # the game finished and counts in ``n_games_done``/``n_samples``,
+    # but its artifact never reached the coord. Non-zero means the
+    # stage's training data is incomplete -- iterate treats it as a
+    # hard error. Defaults to 0 so a pre-upgrade coordinator (whose
+    # stage view lacks the field) behaves exactly as before.
+    upload_failed: int = 0
+    n_samples: int = 0
 
 
 class StartWorkerError(RuntimeError):
@@ -376,6 +384,8 @@ def poll_stage(
             int(last["wins_old"]) if last.get("wins_old") is not None else None
         ),
         draws=int(last.get("draws", 0) or 0),
+        upload_failed=int(last.get("upload_failed", 0) or 0),
+        n_samples=int(last.get("n_samples", 0) or 0),
     )
 
 
@@ -642,6 +652,7 @@ def make_runs_db_progress_writer(
             extra={
                 "n_samples": n_samples,
                 "n_workers": n_workers,
+                "upload_failed": int(status.get("upload_failed", 0) or 0),
             },
         )
 
@@ -682,6 +693,7 @@ def make_runs_db_progress_writer(
                 extra={
                     "n_samples": int(m.get("n_samples", 0) or 0),
                     "n_in_flight": m_inflight,
+                    "upload_failed": int(m.get("upload_failed", 0) or 0),
                     # n_workers on a per-shard row is what the UI's
                     # per-machine sub-card displays — the per-machine
                     # parallel concurrency. Hardcoding 1 was a relic
