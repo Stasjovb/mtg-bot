@@ -70,7 +70,7 @@ for i in $(seq 1 30); do
 done
 
 mark tailscale-up
-tailscale up --authkey='tskey-auth-ktPWfpxPu511CNTRL-PHx8tg2mpBdmimcVh9i6CdGaXDGjSDq9J' \
+tailscale up --authkey="${MTG_BOT_TAILSCALE_AUTHKEY:?launcher did not inject MTG_BOT_TAILSCALE_AUTHKEY; export it in the launcher host's environment (never commit it)}" \
   --hostname="${HOSTNAME_TAG}-${IID}" --accept-dns=true --ssh
 TS_UP_RC=$?
 echo "tailscale up exit=$TS_UP_RC"

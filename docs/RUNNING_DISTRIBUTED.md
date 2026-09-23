@@ -109,7 +109,14 @@ optional fields take defaults from `mtg_bot.launcher.config`:
   `/v2/heartbeat` returns IDLE).
 - **`[aws]`** — parsed-but-ignored today; Phase B's fleet manager
   consumes it. Fields: `count`, `instance_type`, `az_fallback`,
-  `storage_uri`.
+  `storage_uri`. The Tailscale auth key the workers join with is
+  NOT a TOML field: export `MTG_BOT_TAILSCALE_AUTHKEY=tskey-auth-...`
+  in the launcher host's environment before launching with
+  `count > 0`; the launcher injects it into the worker user-data
+  and refuses to launch without it. (A literal key used to be
+  committed in `scripts/aws/user-data.worker.warm.sh`; it was
+  removed 2026-09-22 and must be revoked/rotated in the Tailscale
+  admin console.)
 - **`[ui]`** — `auto_start_training_ui` (best-effort: probe
   `base_url`; if not up, ask the hub on port 9000 to start
   `mtg_bot_train_ui_windows`); `base_url` (defaults to

@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import shlex
 import time
 import urllib.error
@@ -270,8 +271,22 @@ def _default_tailnet_resolver(instance_id: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _build_env_injection(storage_uri: Optional[str]) -> str:
+_TAILSCALE_AUTHKEY_ENV = "MTG_BOT_TAILSCALE_AUTHKEY"
+
+
+def _build_env_injection(
+    storage_uri: Optional[str],
+    tailscale_authkey: Optional[str] = None,
+) -> str:
     """Render the ``export`` lines the launcher injects into user-data.
+
+    ``tailscale_authkey`` is the Tailscale auth key the worker uses
+    for ``tailscale up``. The caller reads it from the launcher
+    host's ``MTG_BOT_TAILSCALE_AUTHKEY`` environment variable; it is
+    NEVER stored in the launch TOML or the repo (a literal key used
+    to live in ``user-data.worker.warm.sh``; rotated out 2026-09-22).
+    The worker-side ``${VAR:?...}`` reference fails loud if the
+    export is absent.
 
     The user-data script declares a ``{{LAUNCHER_ENV_INJECTION}}``
     placeholder that this output replaces. The daemon then reads the
@@ -293,7 +308,17 @@ def _build_env_injection(storage_uri: Optional[str]) -> str:
     # The shell-side ${VAR:?...} reference in user-data.worker.warm.sh
     # will fail loud if this export is absent, so a missing storage_uri
     # never silently downgrades to the daemon's argparse default.
-    return f"export MTG_BOT_ARTIFACT_STORAGE_URI={shlex.quote(storage_uri)}"
+    if not tailscale_authkey:
+        raise FleetConfigError(
+            f"{_TAILSCALE_AUTHKEY_ENV} must be exported in the launcher "
+            "host's environment when aws.count > 0 (a Tailscale auth "
+            "key from the admin console; keep it out of the TOML and "
+            "the repo).",
+        )
+    return (
+        f"export MTG_BOT_ARTIFACT_STORAGE_URI={shlex.quote(storage_uri)}\n"
+        f"export {_TAILSCALE_AUTHKEY_ENV}={shlex.quote(tailscale_authkey)}"
+    )
 
 
 _USER_DATA_ENV_PLACEHOLDER = "# {{LAUNCHER_ENV_INJECTION}}"
@@ -565,7 +590,10 @@ class FleetManager:
         # Build the env-injection block ONCE -- same for every AZ
         # attempt. Fails loud here (before any AWS call) if
         # aws.storage_uri is missing.
-        env_injection = _build_env_injection(self.config.storage_uri)
+        env_injection = _build_env_injection(
+            self.config.storage_uri,
+            os.environ.get(_TAILSCALE_AUTHKEY_ENV),
+        )
 
         attempts: list[tuple[str, str]] = []
         for az in self.config.az_fallback:

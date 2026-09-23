@@ -43,6 +43,14 @@ from mtg_bot.launcher.config import AwsSection
 from mtg_bot.launcher.state import LaunchPaths
 
 
+@pytest.fixture(autouse=True)
+def _dummy_tailscale_authkey(monkeypatch):
+    """FleetManager.launch reads the Tailscale auth key from the
+    launcher host's environment (never the TOML / repo). Give every
+    test in this module a dummy so launch paths render user-data."""
+    monkeypatch.setenv("MTG_BOT_TAILSCALE_AUTHKEY", "tskey-auth-dummy")
+
+
 def _stub_tailnet_resolver(instance_id: str) -> str:
     """Test-only resolver stub: maps each EC2 instance_id to a
     deterministic 100.x.x.x IP. The production default at
@@ -250,19 +258,25 @@ def test_render_runspec_invalid_json_after_subst_raises(tmp_path: Path):
 
 
 def test_build_env_injection_emits_export_for_s3_uri():
-    line = _build_env_injection("s3://mtg-bot-artifacts-630589799985/launcher/")
+    block = _build_env_injection(
+        "s3://mtg-bot-artifacts-630589799985/launcher/", "tskey-auth-dummy",
+    )
+    lines = block.splitlines()
     # shlex.quote keeps URIs without special chars unquoted, but s3://
     # has no shell metachars so the URI appears verbatim.
-    assert line == (
+    assert lines[0] == (
         "export MTG_BOT_ARTIFACT_STORAGE_URI="
         "s3://mtg-bot-artifacts-630589799985/launcher/"
     )
+    assert lines[1] == "export MTG_BOT_TAILSCALE_AUTHKEY=tskey-auth-dummy"
 
 
 def test_build_env_injection_quotes_shell_metachars():
     """Defensive: storage_uri values with spaces / dollar signs / etc
     must survive intact through shell parsing on the worker."""
-    line = _build_env_injection("file:///tmp/with spaces/$weird")
+    line = _build_env_injection(
+        "file:///tmp/with spaces/$weird", "tskey-auth-dummy",
+    ).splitlines()[0]
     # shlex.quote wraps in single quotes for any non-trivial input.
     assert "MTG_BOT_ARTIFACT_STORAGE_URI=" in line
     # Round-trip via shlex to confirm the worker would see the
@@ -276,7 +290,7 @@ def test_build_env_injection_quotes_shell_metachars():
 def test_build_env_injection_null_uri_is_accepted():
     """``null://`` is a valid storage_uri for dev / local-only AWS
     runs that exercise the launcher path without burning S3 puts."""
-    line = _build_env_injection("null://")
+    line = _build_env_injection("null://", "tskey-auth-dummy").splitlines()[0]
     assert line == "export MTG_BOT_ARTIFACT_STORAGE_URI=null://"
 
 
@@ -286,9 +300,29 @@ def test_build_env_injection_empty_raises():
     enforced wiring, so a TOML missing storage_uri shouldn't get
     far enough to spin spot capacity."""
     with pytest.raises(FleetConfigError, match="aws.storage_uri must be set"):
-        _build_env_injection(None)
+        _build_env_injection(None, "tskey-auth-dummy")
     with pytest.raises(FleetConfigError, match="aws.storage_uri must be set"):
-        _build_env_injection("")
+        _build_env_injection("", "tskey-auth-dummy")
+
+
+def test_build_env_injection_missing_tailscale_key_raises():
+    """The Tailscale auth key comes from the launcher host's
+    environment, never the TOML or the repo. Missing key fails at
+    config-time so no spot capacity is spun up for workers that could
+    never join the tailnet."""
+    with pytest.raises(FleetConfigError, match="MTG_BOT_TAILSCALE_AUTHKEY"):
+        _build_env_injection("null://", None)
+    with pytest.raises(FleetConfigError, match="MTG_BOT_TAILSCALE_AUTHKEY"):
+        _build_env_injection("null://", "")
+
+
+def test_user_data_script_has_no_literal_tailscale_key(user_data_path: Path):
+    """Regression guard: a literal ``tskey-auth-...`` was committed in
+    the bootstrap script (commit 11861b8a); it must only ever reference
+    the injected ``MTG_BOT_TAILSCALE_AUTHKEY`` env var."""
+    text = user_data_path.read_text(encoding="utf-8")
+    assert "tskey-auth-" not in text
+    assert "${MTG_BOT_TAILSCALE_AUTHKEY:?" in text
 
 
 def test_render_runspec_injects_env_into_user_data(
