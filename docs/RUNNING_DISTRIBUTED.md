@@ -110,6 +110,89 @@ Run these once when you sit down at the desktop:
    cards turn green once the coordinator's heartbeat poller has
    ticked at least once (10s after coordinator start).
 
+## Artifact storage (every production worker MUST set this)
+
+A worker does not POST its `.npz` back to the coordinator any more --
+it *drops the blob off* somewhere the coordinator can read, then POSTs
+the URI. Where it drops off is decided by the worker's own
+`--artifact-storage-uri` flag, baked into its service file.
+
+**The default is `null://`, which throws the artifact away.** It is
+test-only. A `null://` worker plays its games, reports them, and the
+coordinator's stage view happily counts them (`n_games_done`,
+`n_samples`) -- but the report job can't fetch `null://...`, so it
+writes an `outcome='upload_failed'` row and no `.npz` ever lands in
+`iterate_data*/`. That is exactly what happened on 2026-09-23: 500
+games across both daemons, stage view reporting 500 done / ~1M
+samples, zero files on disk, `mtg_bot iterate` dying on
+`ZeroDivisionError`.
+
+| Machine | `--artifact-storage-uri` | Why |
+|---|---|---|
+| Desktop worker (same box as the coordinator) | `file:///C:/Users/Gregg Keithley/mtg_bot_artifacts_s2` | Coordinator reads the path directly; no network hop. |
+| Mac worker | `http://100.115.252.110:5099` | No shared filesystem. POSTs the bytes to the coordinator's `/v2/artifact/upload`, which writes them locally and hands back a coordinator-local `file://` URI. |
+| AWS workers | `s3://<bucket>/<prefix>` | Requires the `[s3]` extra. |
+| Tests / throughput smokes only | `null://` | Blobs dropped on the floor. **The launcher now refuses it.** |
+
+Worker launch, desktop:
+
+```bash
+.venv-py313/Scripts/python.exe -m mtg_bot.worker_daemon \
+    --n-workers 16 --nn-device cuda \
+    --weights-cache-root "$HOME/.mtg_bot_worker_weights" \
+    --artifact-storage-uri "file:///C:/Users/Gregg Keithley/mtg_bot_artifacts_s2"
+```
+
+Worker launch, Mac:
+
+```bash
+.venv-py313/bin/python -m mtg_bot.worker_daemon \
+    --n-workers 6 --host 0.0.0.0 \
+    --artifact-storage-uri http://100.115.252.110:5099
+```
+
+Coordinator (the `http://` scheme needs a landing dir; the default is
+`<repo-root>/artifact_uploads`):
+
+```bash
+.venv-py313/Scripts/python.exe -m mtg_bot.cli serve \
+    --iterate-data-dir iterate_data_s2 \
+    --artifact-upload-dir "C:\Users\Gregg Keithley\mtg_bot_artifact_uploads"
+```
+
+The upload dir is the raw drop-off zone keyed by claim; the report job
+rehydrates from there into `--iterate-data-dir` under the training
+filenames. **`--iterate-data-dir` on the coordinator must equal
+`--data-dir` on `mtg_bot iterate`** -- if they differ, the npzs land
+somewhere iterate never globs, which looks identical to the `null://`
+failure from iterate's side.
+
+Guardrails added 2026-09-23 (all of them fail the run, none of them
+paper over it):
+
+* `/v2/heartbeat` reports `artifact_storage_uri`, and
+  `mtg_bot iterate-distributed` refuses to dispatch to a worker
+  advertising `null://`. Override with
+  `MTG_BOT_ALLOW_NULL_ARTIFACTS=1` only for a throughput smoke whose
+  output you intend to discard.
+* `GET /v2/stage/<id>` reports `upload_failed` (total and per
+  machine). `mtg_bot iterate` treats `upload_failed > 0` -- or a
+  self-play stage that yielded 0 samples -- as a hard error and exits
+  non-zero with a message naming `--data-dir`, the stage id, and both
+  usual causes.
+* `mtg_bot <subcommand>` propagates the subcommand's non-zero return
+  as its own exit code, so a wrapper script can't read a failed cycle
+  as success and relaunch it.
+
+Quick check before a cycle:
+
+```bash
+curl -s http://100.115.252.110:5198/v2/heartbeat | jq .artifact_storage_uri
+curl -s http://100.95.248.116:5198/v2/heartbeat  | jq .artifact_storage_uri
+```
+
+Neither should print `"null://"`.
+
 ## Running an iteration
 
 The unified `mtg_bot iterate-distributed` launcher is the canonical

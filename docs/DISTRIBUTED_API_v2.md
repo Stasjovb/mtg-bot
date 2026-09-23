@@ -206,6 +206,7 @@ headline numbers.
   "draws": 0,
   "crashed": 1,
   "timed_out": 4,
+  "upload_failed": 0,       // results the coord could NOT fetch
   "started_at": "2026-05-15T18:30:00Z",
   "drained_at": null,
   "complete_at": null
@@ -223,6 +224,55 @@ still exists for early-stop scenarios where the orchestrator wants
 to abandon residual queued work.) A stage created with
 `games: []` (zero work) is auto-closed at creation time and reads
 `complete` on the very first GET.
+
+`upload_failed` counts results rows the coordinator wrote with
+`outcome='upload_failed'` — the worker finished the game and reported
+it, but the coordinator could not fetch the artifact from the URI the
+worker gave it. **Those games still count in `n_games_done` and
+`n_samples`**, which is why a stage can read "500/500 done, 1M
+samples" with nothing on disk. The same count also appears on each
+entry of the `machines[]` array, so you can see which worker is
+dropping data. `mtg_bot iterate` treats a non-zero total as a hard
+error. (Absent on pre-2026-09-23 coordinators; consumers default it
+to 0.)
+
+### `POST /v2/artifact/upload`
+
+Drop-off endpoint for workers running
+`--artifact-storage-uri http://<coordinator>:5099` — i.e. workers
+that share neither a filesystem nor an S3 bucket with the
+coordinator (the Mac, over Tailscale).
+
+Body is the **raw artifact bytes** (`application/octet-stream`). The
+key fields travel as query params (or `X-Artifact-*` headers):
+
+| Param | Values |
+|---|---|
+| `kind` | `npz` \| `replay` |
+| `stage_id` | `[A-Za-z0-9_.\-:]+` |
+| `shard_label` | `[A-Za-z0-9_.\-:]+` (defaults to `unknown`) |
+| `claim_id` | `[A-Za-z0-9_.\-:]+` |
+
+The coordinator writes the bytes to
+`<--artifact-upload-dir>/<build_artifact_key(...)>` (write-then-rename,
+so a retried POST is an atomic overwrite) and responds:
+
+```json
+// 200
+{ "uri": "file:///C:/.../artifact_uploads/<stage>/<shard>/<claim>.npz",
+  "key": "<stage>/<shard>/<claim>.npz",
+  "bytes": 283914 }
+```
+
+The returned `uri` is **coordinator-local**: the worker echoes it
+verbatim in its `/v2/report_result` body and the coordinator's
+existing `LocalArtifactFetcher` rehydrates it. No new fetcher scheme.
+
+Errors: `400` bad/missing key fields or a key that escapes the upload
+dir, `413` body over the 64 MB cap, `503` when the coordinator was
+started without an artifact-upload dir. The worker-side
+`HttpArtifactUploader` retries `429`/`5xx` and connection errors on a
+1s/3s/10s schedule and fails loudly on any other 4xx.
 
 ### `POST /v2/stage/<stage_id>/close`
 
@@ -436,6 +486,7 @@ reads it for the per-machine sub-card display.
   "uptime_s": 31415,
   "git_commit": "abc1234",
   "last_update": null,
+  "artifact_storage_uri": "http://100.115.252.110:5099",
   "host": {
     "pool_size": 8,
     "active_workers": 7,
@@ -466,6 +517,13 @@ The orchestrator uses this to confirm a `/v2/self_update` landed.
 error?, at}`) or `null` on a fresh process that has not run one.
 `phase` ∈ `fetching | resetting | building | reexec | up_to_date |
 error`.
+
+`artifact_storage_uri` — the worker's `--artifact-storage-uri`
+verbatim (`file://` / `http://` / `https://` / `s3://` / `null://`).
+The launcher's pre-flight **refuses** to dispatch a cycle to a worker
+advertising `null://`: its games would complete and count toward the
+stage totals while every `.npz` was dropped on the floor. Absent on
+pre-2026-09-23 daemons, which pass the check unchanged.
 
 `host` field semantics:
 - `pool_size` — configured `n_workers` for the daemon's
@@ -583,6 +641,15 @@ background executor and writes the bytes to `iterate_data/` /
 every downstream consumer of those paths) keeps working unchanged.
 
 ## Coord storage-backend selection
+
+Worker-side schemes (`--artifact-storage-uri`):
+
+| Scheme | Uploader | Use when |
+|---|---|---|
+| `file:///abs/dir` | `LocalFileUploader` | Worker and coordinator share a filesystem (same box, or an SMB/NFS mount). |
+| `http://host:port` / `https://...` | `HttpArtifactUploader` | No shared FS, no bucket. POSTs to the coordinator's `/v2/artifact/upload`; the reply is a coordinator-local `file://` URI. |
+| `s3://bucket/prefix` | `S3ArtifactUploader` | AWS burst workers (needs the `[s3]` extra). |
+| `null://` | `NullUploader` | **Tests only.** Drops the blob; the launcher refuses it. |
 
 Both ends share a URI scheme; the coord chooses **which fetcher
 backends to wire up** at boot via the env var
