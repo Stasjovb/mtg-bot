@@ -225,10 +225,25 @@ class MCTS(SearchStrategy):
         expansion_policy: Optional[ExpansionPolicy] = None,
         batch_size: int = 1,
         puct: bool = False,
+        root_dirichlet_alpha: Optional[float] = None,
+        root_dirichlet_eps: float = 0.25,
     ) -> None:
         """
         ``evaluator`` scores leaves from ``player_id``'s perspective
         (in ``[-1, 1]``; terminals short-circuit to ±1/0).
+
+        ``root_dirichlet_alpha`` / ``root_dirichlet_eps`` add
+        AlphaZero-style exploration noise to the ROOT priors under
+        PUCT: once every root child has been expanded and its prior
+        stamped, each child's prior becomes ``(1 - eps) * prior +
+        eps * noise_i`` with ``noise ~ Dirichlet(alpha)`` over the
+        root's children. ``alpha=None`` (default) disables the noise
+        entirely and leaves the search bit-identical to before (no
+        RNG draws are made). The noise is drawn from ``self.rng`` via
+        ``gammavariate`` so a seeded search stays deterministic.
+        Ignored unless ``puct=True`` (UCB1 has no priors). Only the
+        root, only once per ``choose_*`` call — see
+        ``_apply_root_dirichlet_noise`` for the timing rationale.
 
         ``budget_factory`` is a zero-arg callable that returns a new
         ``Budget`` — one per ``choose`` call.
@@ -346,6 +361,22 @@ class MCTS(SearchStrategy):
         )
         self.batch_size = batch_size
         self.puct = puct
+        if root_dirichlet_alpha is not None and root_dirichlet_alpha <= 0:
+            raise ValueError(
+                "root_dirichlet_alpha must be > 0 (or None to disable); "
+                f"got {root_dirichlet_alpha!r}"
+            )
+        if not (0.0 <= root_dirichlet_eps <= 1.0):
+            raise ValueError(
+                "root_dirichlet_eps must be in [0, 1]; "
+                f"got {root_dirichlet_eps!r}"
+            )
+        self.root_dirichlet_alpha: Optional[float] = root_dirichlet_alpha
+        self.root_dirichlet_eps: float = root_dirichlet_eps
+        # Per-search latch: True once the root's priors have been
+        # noised for the in-flight ``choose_*`` call. Reset by
+        # ``_make_root``.
+        self._root_noise_applied: bool = False
         # Pull the action-encoding version off the evaluator if it
         # advertises one (NNEvaluator does), else default to v1.
         # Threaded into the single ``ae.encode`` call in
@@ -422,12 +453,7 @@ class MCTS(SearchStrategy):
         # ``_cache_key``. Cleared in the ``finally``.
         self._cache_root_player = player_id
         try:
-            root = _Node(
-                state=state.clone(),
-                pending_decisions=self.expansion_policy.make_decision_iterator(
-                    state
-                ),
-            )
+            root = self._make_root(state)
 
             budget = self.budget_factory()
             budget.start()
@@ -514,12 +540,7 @@ class MCTS(SearchStrategy):
                 ],
             )
 
-        root = _Node(
-            state=state.clone(),
-            pending_decisions=self.expansion_policy.make_decision_iterator(
-                state
-            ),
-        )
+        root = self._make_root(state)
 
         budget = self.budget_factory()
         budget.start()
@@ -618,12 +639,7 @@ class MCTS(SearchStrategy):
         # ``_cache_key``. Cleared in the ``finally``.
         self._cache_root_player = player_id
         try:
-            root = _Node(
-                state=state.clone(),
-                pending_decisions=self.expansion_policy.make_decision_iterator(
-                    state
-                ),
-            )
+            root = self._make_root(state)
 
             budget = self.budget_factory()
             budget.start()
@@ -638,6 +654,65 @@ class MCTS(SearchStrategy):
         finally:
             self._eval_cache = {}
             self._cache_root_player = None
+
+    def _make_root(self, state: GameState) -> _Node:
+        """Build the root node for a fresh search and reset the
+        per-search root-noise latch. All three ``choose_*`` entry
+        points go through here so root construction (and the
+        Dirichlet bookkeeping) has exactly one definition."""
+        self._root_noise_applied = False
+        return _Node(
+            state=state.clone(),
+            pending_decisions=self.expansion_policy.make_decision_iterator(
+                state
+            ),
+        )
+
+    def _apply_root_dirichlet_noise(self, root: _Node) -> None:
+        """Mix Dirichlet(alpha) noise into the root children's priors.
+
+        ``prior_i <- (1 - eps) * prior_i + eps * noise_i`` where
+        ``noise`` is one Dirichlet(alpha) draw over the root's
+        expanded children, sampled as normalised
+        ``rng.gammavariate(alpha, 1.0)`` variates (no numpy in the
+        search hot path; deterministic under a seeded ``self.rng``).
+
+        Timing — applied LAZILY, not by pre-expanding the root:
+        under ``FullEnumeration`` (the production expansion policy)
+        ``_select_and_expand`` expands one new root child per
+        iteration until ``pending_decisions`` is exhausted, and the
+        priors are never consulted during that phase (an unexpanded
+        child can't be PUCT-selected). So the first iteration at
+        which ``_try_expand(root)`` returns ``None`` is exactly the
+        first iteration whose selection reads root priors — noising
+        them there is observationally identical to having noised
+        them up front, without perturbing the expansion order or
+        the batched-search leaf schedule. Pre-expanding the root
+        instead would skip the per-child leaf evaluation + backprop
+        that the normal expansion path performs (the children would
+        be created without ever being scored as leaves), changing
+        the search itself, which is why that route was rejected.
+
+        Caveat: under a ``ProgressiveWidening`` root the latch fires
+        the first time the policy declines to widen, so children
+        added later get un-noised priors. Root noise is designed for
+        (and only wired from) the full-enumeration self-play path.
+        """
+        self._root_noise_applied = True
+        children = root.children
+        if not children:
+            return
+        alpha = self.root_dirichlet_alpha
+        eps = self.root_dirichlet_eps
+        assert alpha is not None
+        gammas = [self.rng.gammavariate(alpha, 1.0) for _ in children]
+        total = sum(gammas)
+        if total > 0.0:
+            noise = [g / total for g in gammas]
+        else:  # pragma: no cover - astronomically unlikely underflow
+            noise = [1.0 / len(children)] * len(children)
+        for child, n_i in zip(children, noise):
+            child.prior = (1.0 - eps) * child.prior + eps * n_i
 
     def _search_serial(
         self, root: _Node, player_id: PlayerID, budget,
@@ -861,6 +936,18 @@ class MCTS(SearchStrategy):
             expanded = self._try_expand(node, root_player)
             if expanded is not None:
                 return expanded
+
+            # Root fully expanded (per the expansion policy) and
+            # about to be PUCT-selected for the first time: this is
+            # where the Dirichlet root noise goes. See
+            # ``_apply_root_dirichlet_noise`` for why it's lazy.
+            if (
+                node is root
+                and self.puct
+                and self.root_dirichlet_alpha is not None
+                and not self._root_noise_applied
+            ):
+                self._apply_root_dirichlet_noise(root)
 
             if not node.children:
                 # No children to descend into and policy refused to
