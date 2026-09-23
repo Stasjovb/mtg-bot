@@ -109,3 +109,6 @@ _wt_wheels/
 # JSON report goes to training_progress/ (already gitignored).
 models/
 
+
+# mtg_bot ladder output (results.json + ladder.md per run)
+ladder_runs/

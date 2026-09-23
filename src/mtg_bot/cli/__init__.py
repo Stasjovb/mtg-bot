@@ -28,6 +28,7 @@ _SUBCOMMANDS = {
     "eval": "mtg_bot.cli.eval",
     "bench": "mtg_bot.cli.bench",
     "db": "mtg_bot.cli.db",
+    "ladder": "mtg_bot.cli.ladder",
 }
 
 _DESCRIPTIONS = {
@@ -39,6 +40,7 @@ _DESCRIPTIONS = {
     "eval": "Run a head-to-head eval between two registered NN versions.",
     "bench": "Run one of the perf benchmarks (clone, per-game wall, NN-eval-server, ...).",
     "db": "Run database admin tooling (backup, dump, query).",
+    "ladder": "Local fixed-reference strength ladder (random / heuristic / NN versions) with Elo.",
 }
 
 
