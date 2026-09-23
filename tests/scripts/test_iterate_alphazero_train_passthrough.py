@@ -50,7 +50,16 @@ def _captured_subprocess_call(**kwargs):
     captured: dict = {}
 
     def fake_run(cmd, check=False, **_kwargs):
-        captured["cmd"] = list(cmd)
+        # ``_train_next`` shells out more than once: after the trainer
+        # exits it builds a ``Registry``, whose ``__init__`` runs the
+        # Windows ACL-inheritance preflight
+        # (``ensure_inheritance_enabled`` -> ``subprocess.run([icacls,
+        # ...])``). That is real product behavior, so capture only the
+        # train_nn.py spawn these tests actually assert on rather than
+        # blindly overwriting with whatever ran last.
+        cmd = list(cmd)
+        if any(str(arg).endswith("train_nn.py") for arg in cmd):
+            captured["cmd"] = cmd
         result = MagicMock()
         result.returncode = 0
         return result

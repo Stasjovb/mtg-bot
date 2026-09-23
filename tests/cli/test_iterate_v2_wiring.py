@@ -147,6 +147,22 @@ class _CmdRecorder:
 
         return _Result()
 
+    @property
+    def train_calls(self) -> list[list[str]]:
+        """Only the ``train_nn.py`` invocations.
+
+        ``_train_next`` shells out more than once: after the trainer
+        exits it constructs a ``Registry``, whose ``__init__`` calls
+        ``ensure_inheritance_enabled`` -> ``subprocess.run([icacls,
+        ...])`` (the Windows ACL-inheritance preflight). That call is
+        real product behavior, not something to stub away, so this
+        test filters to the training spawn it actually asserts on.
+        """
+        return [
+            c for c in self.calls
+            if any(str(a).endswith("train_nn.py") for a in c)
+        ]
+
 
 def test_train_next_passes_action_encoding_flag_v2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -181,8 +197,8 @@ def test_train_next_passes_action_encoding_flag_v2(
     )
     assert out == "v1"  # registry lookup returned the staged version
 
-    assert len(rec.calls) == 1
-    cmd = rec.calls[0]
+    assert len(rec.train_calls) == 1
+    cmd = rec.train_calls[0]
     # --action-encoding-version must appear immediately followed by the
     # opt-in value. argparse on the receiving side treats them as a
     # flag-value pair.
@@ -220,7 +236,7 @@ def test_train_next_passes_action_encoding_flag_v1_default(
         # action_encoding_version omitted → falls through to the
         # default "positional_v1"
     )
-    cmd = rec.calls[0]
+    cmd = rec.train_calls[0]
     idx = cmd.index("--action-encoding-version")
     assert cmd[idx + 1] == "positional_v1"
 
