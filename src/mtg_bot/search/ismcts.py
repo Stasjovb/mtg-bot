@@ -54,6 +54,7 @@ from typing import Callable, Optional, Sequence
 
 import numpy as np
 
+from mtg_bot.cancellation import raise_if_cancelled
 from mtg_bot.search._lethal_detect import detect_lethal_attack
 from mtg_bot.search.budget import Budget
 from mtg_bot.search.combat_decisions import AttackerDecision
@@ -683,6 +684,9 @@ class ISMCTS(SearchStrategy):
         budget: Budget,
     ) -> None:
         while not budget.exhausted():
+            # Cooperative stop for an abandoned (timed-out) game — see
+            # mtg_bot.cancellation.
+            raise_if_cancelled()
             sub = self._fresh_determinization(source, viewer)
             leaf, path = self._select_and_expand(
                 sub, root, tree, viewer,
@@ -760,6 +764,9 @@ class ISMCTS(SearchStrategy):
         for the next batch.
         """
         while not budget.exhausted():
+            # Cooperative stop for an abandoned (timed-out) game — see
+            # mtg_bot.cancellation.
+            raise_if_cancelled()
             pending: list[tuple[_Node, list[_Node], MtgGameStateAdapter]] = []
             terminal_results: list[tuple[list[_Node], float]] = []
             for _ in range(batch_size):

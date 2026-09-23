@@ -127,20 +127,71 @@ def test_runtime_parser_yields_defaults():
     assert args.progress_dir == _common.DEFAULT_PROGRESS_DIR
     # per_game_timeout_sec defaults to None at parse time; callers
     # invoke ``resolve_per_game_timeout(args)`` post-parse to fill
-    # in ``3 * args.nodes`` (see eval.py / capture.py).
+    # it from --nodes * --samples (see eval.py / capture.py).
     assert args.per_game_timeout_sec is None
 
 
-def test_resolve_per_game_timeout_uses_3x_nodes():
+def test_resolve_per_game_timeout_uses_nodes_times_samples():
     """When unset at parse, ``resolve_per_game_timeout`` fills the
-    timeout with ``3 * args.nodes``."""
+    timeout from the search work per decision (nodes * samples)."""
     parent = argparse.ArgumentParser(add_help=False)
-    parent.add_argument("--nodes", type=int, default=400)
+    parent.add_argument("--nodes", type=int, default=100)
+    parent.add_argument("--samples", type=int, default=2)
     p = argparse.ArgumentParser(parents=[_common.runtime_parser(), parent])
     args = p.parse_args([])
     assert args.per_game_timeout_sec is None
     _common.resolve_per_game_timeout(args)
-    assert args.per_game_timeout_sec == 1200.0
+    assert args.per_game_timeout_sec == 900.0
+
+
+def test_resolve_per_game_timeout_falls_back_when_no_samples_flag():
+    """A caller that wires runtime_parser without depth_parser still
+    resolves, using the shipped DEFAULT_SAMPLES."""
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument("--nodes", type=int, default=100)
+    p = argparse.ArgumentParser(parents=[_common.runtime_parser(), parent])
+    args = p.parse_args([])
+    _common.resolve_per_game_timeout(args)
+    assert args.per_game_timeout_sec == (
+        _common.default_per_game_timeout_sec(100, _common.DEFAULT_SAMPLES)
+    )
+
+
+def test_default_per_game_timeout_scales_with_search_work():
+    """Linear in nodes * samples inside the clamp band."""
+    base = _common.default_per_game_timeout_sec(100, 2)
+    assert _common.default_per_game_timeout_sec(200, 2) == 2 * base
+    assert _common.default_per_game_timeout_sec(100, 4) == 2 * base
+
+
+def test_default_per_game_timeout_is_clamped_at_both_ends():
+    assert (
+        _common.default_per_game_timeout_sec(1, 1)
+        == _common.MIN_DEFAULT_PER_GAME_TIMEOUT_SEC
+    )
+    assert (
+        _common.default_per_game_timeout_sec(100_000, 100)
+        == _common.MAX_DEFAULT_PER_GAME_TIMEOUT_SEC
+    )
+
+
+def test_default_per_game_timeout_treats_nonpositive_as_one():
+    """Degenerate --nodes 0 / --samples 0 must not produce a zero (=
+    "no timeout") budget by accident."""
+    assert _common.default_per_game_timeout_sec(0, 0) > 0
+    assert _common.default_per_game_timeout_sec(-5, -5) > 0
+
+
+def test_default_per_game_timeout_never_below_the_old_formula():
+    """Regression guard on the direction of the change: for every
+    samples >= 1 the new default is at least the old ``3 * nodes``,
+    so no existing configuration gets a TIGHTER budget than before."""
+    for nodes in (50, 100, 200, 400, 800):
+        for samples in (1, 2, 4, 8):
+            new = _common.default_per_game_timeout_sec(nodes, samples)
+            old = 3.0 * nodes
+            if old <= _common.MAX_DEFAULT_PER_GAME_TIMEOUT_SEC:
+                assert new >= old, (nodes, samples, new, old)
 
 
 def test_resolve_per_game_timeout_respects_explicit_value():

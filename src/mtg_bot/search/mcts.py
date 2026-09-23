@@ -36,6 +36,7 @@ from typing import Any, Iterator, Optional
 
 import numpy as np
 
+from mtg_bot.cancellation import raise_if_cancelled
 from mtg_bot.search.budget import Budget
 from mtg_bot.search.canonical_state import canonical_state_key
 from mtg_bot.search.evaluator import Evaluator
@@ -751,6 +752,10 @@ class MCTS(SearchStrategy):
         so the policy head sees the search from the same viewer
         perspective at every node."""
         while not budget.exhausted():
+            # Cooperative stop for an abandoned (timed-out) game — see
+            # mtg_bot.cancellation. No-op (~100ns) unless this thread
+            # is running a game that run_with_timeout gave up on.
+            raise_if_cancelled()
             leaf = self._select_and_expand(root, player_id)
             value = self._evaluate_leaf(leaf, player_id)
             self._backprop(leaf, value, player_id)
@@ -793,6 +798,9 @@ class MCTS(SearchStrategy):
         breadth at the current frontier.
         """
         while not budget.exhausted():
+            # Cooperative stop for an abandoned (timed-out) game — see
+            # mtg_bot.cancellation.
+            raise_if_cancelled()
             pending: list[_Node] = []
             pending_set: set[int] = set()
             terminal_results: list[tuple[_Node, float]] = []

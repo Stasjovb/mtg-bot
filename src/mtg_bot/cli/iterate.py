@@ -1457,13 +1457,14 @@ def main(argv=None) -> None:  # pragma: no cover
         default=None,
         help=(
             "Wall-clock cap per individual self-play game. Default "
-            "is ``3 * --nodes`` seconds (resolved after arg parse), "
-            "which matches the rule of thumb that per-game wall "
-            "scales linearly with MCTS budget and 3x leaves "
-            "comfortable headroom over the p99 completed-game wall "
-            "(measured 178.8s for 592 decisions at nodes=200; 3x = "
-            "600s). Self-play is uncontended (one worker per shard) "
-            "so this is generally not the binding constraint. Pass "
+            "is ``_common.default_per_game_timeout_sec(--nodes, "
+            "--samples)`` (resolved after arg parse): the budget "
+            "tracks the search WORK per decision, which is "
+            "nodes*samples under PIMC, not nodes alone. The previous "
+            "``3 * --nodes`` rule ignored --samples and landed below "
+            "the measured mean game wall at nodes=100/samples=2 -- "
+            "see the calibration data on "
+            "``_common.PER_GAME_TIMEOUT_SEC_PER_SEARCH_UNIT``. Pass "
             "an explicit positive value to override; pass 0 or "
             "negative to disable."
         ),
@@ -1473,14 +1474,14 @@ def main(argv=None) -> None:  # pragma: no cover
         default=None,
         help=(
             "Wall-clock cap per individual eval-match game. Default "
-            "is ``3 * --nodes`` seconds (resolved after arg parse). "
-            "Eval is 14-worker contended — shared GPU/CPU inflates "
-            "per-decision wall ~2x relative to self-play — so the "
-            "3x-nodes formula gives genuine headroom over the "
-            "completed-game median. Eval-pool resilience converts "
-            "timeouts to draws (no game lost from the run); the "
-            "downside of a too-tight cap is artificially inflated "
-            "draw count masking the real win-rate signal. Pass an "
+            "is ``_common.default_per_game_timeout_sec(--nodes, "
+            "--samples)`` (resolved after arg parse) -- same "
+            "work-relative formula as self-play. Eval is contended, "
+            "which inflates per-decision wall further. Timed-out "
+            "eval games are DROPPED (excluded from MatchStats, "
+            "counted under ``timed_out``), and the games that time "
+            "out are systematically the long ones, so a too-tight "
+            "cap biases the measured win rate. Pass an "
             "explicit positive value to override; pass 0 or "
             "negative to disable."
         ),
@@ -1737,16 +1738,21 @@ def main(argv=None) -> None:  # pragma: no cover
         args.per_game_timeout_self_play_sec = args.per_game_timeout_sec
         args.per_game_timeout_eval_sec = args.per_game_timeout_sec
 
-    # Resolve per-phase timeout defaults: ``3 * --nodes`` seconds.
+    # Resolve per-phase timeout defaults from the search work per
+    # decision (``nodes * samples``) — see
+    # ``_common.PER_GAME_TIMEOUT_SEC_PER_SEARCH_UNIT`` for the
+    # measured calibration and why the previous ``3 * --nodes``
+    # formula landed below the median game at nodes=100/samples=2.
     # Done here (post-parse) rather than via argparse default= so the
-    # formula picks up the user's actual --nodes value instead of
-    # baking in a fixed default at module import. Per-game wall
-    # scales ~linearly with MCTS budget so node-relative timeouts
-    # auto-track when --nodes changes.
+    # formula picks up the user's actual --nodes / --samples values
+    # instead of baking in a fixed default at module import.
+    _default_timeout = _common.default_per_game_timeout_sec(
+        args.nodes, args.samples,
+    )
     if args.per_game_timeout_self_play_sec is None:
-        args.per_game_timeout_self_play_sec = 3.0 * args.nodes
+        args.per_game_timeout_self_play_sec = _default_timeout
     if args.per_game_timeout_eval_sec is None:
-        args.per_game_timeout_eval_sec = 3.0 * args.nodes
+        args.per_game_timeout_eval_sec = _default_timeout
 
     if args.use_belief_weighted and not args.use_ismcts:
         parser.error(

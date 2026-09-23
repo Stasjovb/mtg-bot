@@ -42,6 +42,7 @@ from __future__ import annotations
 import random
 from typing import Any, Callable, Optional, Protocol
 
+from mtg_bot.cancellation import raise_if_cancelled
 from mtg_bot.search.determinize import determinize as _default_determinize
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.protocol import Decision, GameState, PlayerID
@@ -129,6 +130,9 @@ class PIMC(SearchStrategy):
 
         visit_totals: dict[Decision, int] = {}
         for _ in range(self.samples):
+            # Cooperative stop for an abandoned (timed-out) game —
+            # see mtg_bot.cancellation.
+            raise_if_cancelled()
             # Independent rng per sub-search so each sub-tree is
             # reproducible from the outer seed alone.
             sub_seed = self.rng.randrange(1 << 62)
@@ -200,6 +204,9 @@ class PIMC(SearchStrategy):
         agg_leaf_num: dict[Decision, float] = {}
         agg_leaf_den: dict[Decision, int] = {}
         for _ in range(self.samples):
+            # Cooperative stop for an abandoned (timed-out) game —
+            # see mtg_bot.cancellation.
+            raise_if_cancelled()
             sub_seed = self.rng.randrange(1 << 62)
             adapter = self._build_sub_adapter(state, player_id, sub_seed)
             inner = self.inner_factory()
@@ -318,6 +325,9 @@ class PIMC(SearchStrategy):
 
         per_sub_candidates: list[list[dict]] = []
         for _ in range(self.samples):
+            # Cooperative stop for an abandoned (timed-out) game —
+            # see mtg_bot.cancellation.
+            raise_if_cancelled()
             sub_seed = self.rng.randrange(1 << 62)
             adapter = self._build_sub_adapter(state, player_id, sub_seed)
             inner = self.inner_factory()
