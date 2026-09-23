@@ -459,6 +459,26 @@ Total per-token raw shape: 7 embedding ids + 3 scalars = a
 Padded entries get a boolean attention mask (Step 1's input is
 variable-length).
 
+**Scalar schema v2 (landed 2026-09-22).** The 3-scalar row above is
+*scalar schema 1*. It gave the trunk no life totals and no board
+state (a permanent token was printing + controller + step only).
+Schema 2 keeps those three slots at indices 0..2 and appends 26
+slots (`N_SCALAR_FIELDS_V2 = 29`; constants in
+`structured_model.py`): per-permanent `tapped`, `is_creature`,
+`power/8`, `toughness/8` (engine `effective_*`, layer-aware),
+`damage/8`, net `+1/+1` counters/4, other counters/4,
+`summoning_sick`, `attacking`, `blocking`; and on the `[GLOBAL]`
+token viewer/opp `life/20`, `poison/10`, `library/40`, `hand/7`,
+`turn/20`, untapped lands/8, lands/8, `stack/4`, `is_viewer_turn`,
+`viewer_has_priority`. Hand / graveyard / exile / stack / action
+tokens leave the new slots at zero. The version is recorded per
+checkpoint (`ModelMetadata.scalar_schema_version`; absent = 1) and
+sizes `scalar_proj`, so v1..v14 / v13s keep loading with their
+3-wide projection; `StructuredModelConfig` and `tokenize_state`
+default to 2 for new training (`mtg_bot train
+--scalar-schema-version`). The trainer refuses a dataset / model
+width mismatch. Switching schema is a v-chain break (fresh init).
+
 **Value-estimate-at-time-of-action: NOT included in v1.** Capturing
 the bot's MCTS posterior value at every priority moment would plumb
 through `data_gen.py` and bloat per-game logs. The skeleton reserves
