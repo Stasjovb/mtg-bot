@@ -53,10 +53,22 @@ class _CachedEval:
     Holds the value (always populated) and the policy logits
     (populated in PUCT mode; ``None`` under UCB1). Lifetime is one
     ``choose_with_visits`` call — see ``MCTS._eval_cache``.
+
+    ``viewer`` records whose perspective ``value`` (and the policy
+    mask) were computed from. Leaf evaluations are always from the
+    root player's perspective (that's the value the backup needs);
+    prior stamping evaluates from the *mover's* perspective at the
+    parent, which differs from the root player at opponent-to-move
+    nodes. The cache key already embeds the viewer so the two kinds
+    of entry never collide; the field lets every consumer assert it
+    is reading a value in the perspective it expects instead of
+    silently relying on the zero-sum sign flip. ``None`` means
+    "unspecified" (legacy constructor calls in tests).
     """
 
     value: float
     policy_logits: Optional[np.ndarray] = None
+    viewer: Optional[PlayerID] = None
 
 
 class _Node:
@@ -129,12 +141,16 @@ class _Node:
         # counts (better than crashing mid-search).
         self.prior: float = 0.0
         # Cached policy distribution from
-        # ``evaluator.evaluate_with_policy(state, root_player)``. Stays
-        # ``None`` under UCB1; populated lazily in PUCT mode the first
-        # time the node either gets expanded or evaluated as a leaf
-        # (whichever happens first). Reused across all subsequent child
-        # expansions from this node so the network sees one forward pass
-        # per node, not one per child.
+        # ``evaluator.evaluate_with_policy(state, mover)`` where
+        # ``mover == state.active_player()`` — i.e. ALWAYS the
+        # perspective of the player who acts at this node, never the
+        # root player's. Stays ``None`` under UCB1; populated lazily
+        # in PUCT mode the first time the node either gets expanded
+        # or evaluated as a leaf (a leaf eval only stashes it when
+        # the leaf's mover IS the root player, since the leaf eval is
+        # root-perspective). Reused across all subsequent child
+        # expansions from this node so the network sees one forward
+        # pass per node per viewer, not one per child.
         self._policy_cache: Optional[np.ndarray] = None
         # Raw NN value at *this state* the first time it was evaluated
         # as a leaf. Stays ``None`` until the first leaf evaluation
@@ -307,6 +323,15 @@ class MCTS(SearchStrategy):
         # search call; ``_cache_key`` defensively returns ``None`` in
         # that case rather than risk a wrong-slot cache hit.
         self._cache_root_player: Optional[PlayerID] = None
+        # Debug counter: number of child expansions whose decision
+        # could not be encoded into the action vocab (``prior`` left
+        # at 0.0). Cumulative across searches on this object (never
+        # auto-reset) so tests / benches can assert it stays ~0 in
+        # ordinary states. Before the mover-perspective prior fix
+        # this fired on essentially every opponent CastSpell /
+        # PlayLand / Activate child because the decision was looked
+        # up in the ROOT player's zones.
+        self.prior_overflow_count: int = 0
         if puct:
             # Construction-time validation: PUCT needs a policy head.
             # ``NNEvaluator(with_policy=True)`` is the canonical
@@ -701,6 +726,16 @@ class MCTS(SearchStrategy):
             # Treated like terminals: backpropped before the batch
             # call, no virtual loss applied.
             cached_results: list[tuple[_Node, float]] = []
+            # PUCT only: non-terminal leaves whose MOVER is not the
+            # root player (opponent-to-move) need a second,
+            # mover-perspective forward pass to populate
+            # ``_policy_cache`` — the root-perspective leaf eval's
+            # policy is masked to the root player's (degenerate,
+            # pass-only) legal set and is useless as a prior over the
+            # opponent's options. Grouped by mover so each group is
+            # one extra batched call rather than N synchronous
+            # single-state calls from ``_stamp_prior`` later.
+            policy_pending: dict[PlayerID, list[_Node]] = {}
             # Collect a batch worth of leaves. Each non-terminal
             # non-cached leaf gets virtual loss applied so the next
             # selection in this batch sees a degraded UCB1 score on the
@@ -747,19 +782,25 @@ class MCTS(SearchStrategy):
                     if cache_key is not None else None
                 )
                 if cached is not None:
-                    if (
-                        self.puct
-                        and leaf._policy_cache is None
-                        and cached.policy_logits is not None
-                    ):
-                        leaf._policy_cache = cached.policy_logits
+                    self._check_cached_viewer(cached, player_id)
+                    self._maybe_stash_policy(
+                        leaf, cached.policy_logits, player_id,
+                    )
                     if leaf.leaf_nn_value is None:
                         leaf.leaf_nn_value = float(cached.value)
                     cached_results.append((leaf, cached.value))
+                    if self._queue_mover_policy(
+                        leaf, player_id, policy_pending,
+                    ):
+                        # The leaf still needs its mover-perspective
+                        # policy; block descents through it until the
+                        # side batch below has populated it.
+                        pending_set.add(id(leaf))
                     continue
                 self._apply_virtual_loss(leaf)
                 pending.append(leaf)
                 pending_set.add(id(leaf))
+                self._queue_mover_policy(leaf, player_id, policy_pending)
 
             # Backprop terminal + cache-hit leaves first — they have
             # real values immediately and don't depend on the in-flight
@@ -787,8 +828,11 @@ class MCTS(SearchStrategy):
                         states, player_id,
                     )
                     for leaf, (value, policy) in zip(pending, pairs):
-                        if leaf._policy_cache is None:
-                            leaf._policy_cache = policy
+                        # Root-perspective policy is only a valid
+                        # prior source when the leaf's mover IS the
+                        # root player; opponent-mover leaves get
+                        # theirs from the side batch below.
+                        self._maybe_stash_policy(leaf, policy, player_id)
                         if leaf.leaf_nn_value is None:
                             leaf.leaf_nn_value = float(value)
                         # Store in the per-search cache so a later
@@ -801,6 +845,7 @@ class MCTS(SearchStrategy):
                         if cache_key is not None:
                             self._eval_cache[cache_key] = _CachedEval(
                                 value=float(value), policy_logits=policy,
+                                viewer=player_id,
                             )
                         self._revert_virtual_loss(leaf)
                         self._backprop(leaf, value, player_id)
@@ -815,9 +860,20 @@ class MCTS(SearchStrategy):
                         if cache_key is not None:
                             self._eval_cache[cache_key] = _CachedEval(
                                 value=float(value), policy_logits=None,
+                                viewer=player_id,
                             )
                         self._revert_virtual_loss(leaf)
                         self._backprop(leaf, value, player_id)
+
+            # PUCT side batch: mover-perspective policies for the
+            # opponent-to-move leaves collected this round (both the
+            # NN-evaluated and the cache-hit ones). One batched call
+            # per distinct mover (exactly one in a 2-player game).
+            # The value that comes back is the MOVER's, not the root
+            # player's — it is stored under the mover-keyed cache
+            # entry only and never backpropped.
+            for mover, leaves in policy_pending.items():
+                self._flush_mover_policies(mover, leaves)
 
     # ------------------------------------------------------------------
     # Internals
@@ -838,11 +894,17 @@ class MCTS(SearchStrategy):
           (or PUCT-best when ``self.puct``).
         - At terminals, return as-is.
 
-        ``root_player`` flows through to ``_make_child`` so PUCT
-        priors are computed from the root viewer's perspective
-        regardless of whose turn it is at the descent node — the
-        policy head's "what does it think *I* should do" is more
-        useful than per-active-player priors that flip every node.
+        ``root_player`` flows through to ``_make_child`` /
+        ``_stamp_prior`` as the search viewer. Note the two
+        perspectives in play: *values* are always from
+        ``root_player``'s perspective (``_backprop`` negates at
+        opponent-mover parents), while PUCT *priors* are computed
+        from the perspective of the player who actually acts at the
+        parent (``parent.state.active_player()``). Evaluating the
+        policy head from the root player's view at an opponent node
+        would mask it to the root player's legal set — ``[Pass]``
+        when they don't hold priority — and model the opponent as
+        "always passes".
 
         ``pending_blockers`` (PUCT-only) is the id-set of leaves
         currently in the in-flight batch. If a descent would land
@@ -965,48 +1027,192 @@ class MCTS(SearchStrategy):
         """Set ``child.prior`` from ``parent._policy_cache[encode(d)]``,
         populating the cache on first call.
 
+        **Perspective.** The prior is computed from the perspective
+        of the *mover* at ``parent`` — ``parent.state.active_player()``
+        — not from ``root_player``'s. The adapter's ``active_player``
+        already resolves the actor for factored-combat pauses (the
+        active player for ``AttackerDecision``, the defender for
+        ``BlockerDecision``) and mid-resolution pauses (the player
+        the engine callback asked), so it is the actor of every
+        decision ``parent.legal_decisions()`` yields. Both the
+        network's legal-action mask (built inside
+        ``evaluate_with_policy`` for the given player) and the
+        ``encode`` zone lookup are keyed on that mover, so opponent
+        casts / land plays / activations resolve to real slots
+        instead of overflowing. ``root_player`` is kept in the
+        signature as the search viewer; it only matters here to
+        decide whether the mover-perspective policy is the same one
+        the leaf evaluation already produced.
+
+        Chance parents (``CHANCE_PLAYER``) have no mover; their
+        children keep ``prior=0.0`` and no network call is made.
+
+        Forced-move shortcut: when the mover is an opponent and the
+        parent has exactly one legal decision (the common
+        "opponent auto-passes" case), the prior is set to ``1.0``
+        without a forward pass — a single child needs no prior for
+        selection, and the masked softmax over one legal slot would
+        return ``1.0`` anyway.
+
         Per-search NN-eval cache integration: before triggering a
         synchronous single-state forward pass to populate
         ``parent._policy_cache``, we check ``self._eval_cache`` keyed
-        on the parent state's canonical key. On cache hit we reuse
-        the stored policy without a network call. On miss we run the
-        forward pass and store the result so subsequent leaves at
-        the same canonical state share it.
+        on (canonical state, mover, mover slot fingerprint). On
+        cache hit we reuse the stored policy without a network
+        call. On miss we run the forward pass and store the result
+        (value AND policy from the mover's perspective, tagged with
+        ``viewer=mover``) so subsequent expansions at the same
+        canonical state share it. The root-perspective entry for
+        the same state lives under a different key.
 
         Lazy-imported codec because ``mtg_bot.training`` pulls in
         ``mtg_bot.search`` at package init — importing at module load
         would create a cycle. By the time any search runs the cycle
         has resolved.
         """
+        mover = parent.state.active_player()
+        if mover == CHANCE_PLAYER:
+            return
         if parent._policy_cache is None:
-            cache_key = self._cache_key_for_node(parent)
+            if (
+                mover != root_player
+                and self._has_single_legal_decision(parent.state)
+            ):
+                child.prior = 1.0
+                return
+            cache_key = self._policy_cache_key_for_node(parent, mover)
             cached = (
                 self._eval_cache.get(cache_key)
                 if cache_key is not None else None
             )
-            if cached is not None and cached.policy_logits is not None:
+            if (
+                cached is not None
+                and cached.policy_logits is not None
+                and cached.viewer == mover
+            ):
                 parent._policy_cache = cached.policy_logits
             else:
                 value, policy = self.evaluator.evaluate_with_policy(
-                    parent.state, root_player,
+                    parent.state, mover,
                 )
                 parent._policy_cache = policy
                 if cache_key is not None:
                     self._eval_cache[cache_key] = _CachedEval(
                         value=float(value), policy_logits=policy,
+                        viewer=mover,
                     )
         from mtg_bot.training import action_encoding as ae
         eng = getattr(parent.state, "engine_state", parent.state)
         try:
             slot = ae.encode(
-                decision, eng, root_player,
+                decision, eng, mover,
                 version=self._action_encoding_version,
             )
         except ae.EncodingOverflowError:
             # Decision didn't fit in the fixed vocab. Leave prior 0;
             # PUCT will explore by visit-count alone for this child.
+            self.prior_overflow_count += 1
             return
         child.prior = float(parent._policy_cache[slot])
+
+    @staticmethod
+    def _has_single_legal_decision(state: GameState) -> bool:
+        """True iff ``state`` has exactly one legal decision. On the
+        MTG adapter this re-reads the per-decision-moment legal
+        cache that ``_make_child``'s iterator construction already
+        populated, so it is cheap."""
+        legal = state.legal_decisions()
+        try:
+            return len(legal) == 1
+        except TypeError:
+            return len(list(legal)) == 1
+
+    def _maybe_stash_policy(
+        self, node: _Node, policy: Optional[np.ndarray],
+        viewer: PlayerID,
+    ) -> None:
+        """Stash ``policy`` on ``node._policy_cache`` iff it is the
+        policy the node's MOVER would use — i.e. ``viewer`` is the
+        player to act at ``node``. A root-perspective policy at an
+        opponent-mover node is masked to the root player's legal set
+        (``[Pass]``) and must NOT be used as that node's prior
+        source; ``_stamp_prior`` will compute the mover's instead."""
+        if (
+            self.puct
+            and policy is not None
+            and node._policy_cache is None
+            and node.state.active_player() == viewer
+        ):
+            node._policy_cache = policy
+
+    @staticmethod
+    def _check_cached_viewer(
+        cached: _CachedEval, expected: PlayerID,
+    ) -> None:
+        """Assert a cache entry's value is in the perspective the
+        consumer expects. The key already embeds the viewer, so a
+        mismatch means a keying bug — fail loudly rather than
+        backprop a sign-flipped value."""
+        if cached.viewer is not None and cached.viewer != expected:
+            raise RuntimeError(
+                f"_eval_cache entry viewer={cached.viewer} read as "
+                f"viewer={expected}; cache keying is broken"
+            )
+
+    def _queue_mover_policy(
+        self, leaf: _Node, root_player: PlayerID,
+        policy_pending: dict[PlayerID, list[_Node]],
+    ) -> bool:
+        """Batched-PUCT helper. If ``leaf`` is an opponent-to-move
+        node that will need a mover-perspective policy when expanded,
+        either satisfy it from the mover-keyed cache entry now or
+        queue it for the side batch. Returns True iff the leaf was
+        queued (caller adds it to the in-flight blocker set)."""
+        if not self.puct or leaf._policy_cache is not None:
+            return False
+        mover = leaf.state.active_player()
+        if mover == root_player or mover == CHANCE_PLAYER:
+            return False
+        if self._has_single_legal_decision(leaf.state):
+            # ``_stamp_prior`` short-circuits to prior=1.0 here; no
+            # forward pass needed.
+            return False
+        cache_key = self._policy_cache_key_for_node(leaf, mover)
+        cached = (
+            self._eval_cache.get(cache_key)
+            if cache_key is not None else None
+        )
+        if (
+            cached is not None
+            and cached.policy_logits is not None
+            and cached.viewer == mover
+        ):
+            leaf._policy_cache = cached.policy_logits
+            return False
+        policy_pending.setdefault(mover, []).append(leaf)
+        return True
+
+    def _flush_mover_policies(
+        self, mover: PlayerID, leaves: list[_Node],
+    ) -> None:
+        """Batched-PUCT helper: one ``batch_evaluate_with_policy``
+        call from ``mover``'s perspective over ``leaves``, stashing
+        each policy on its leaf and in the mover-keyed cache. The
+        returned values are the mover's and are never backpropped."""
+        if not leaves:
+            return
+        pairs = self.evaluator.batch_evaluate_with_policy(
+            [leaf.state for leaf in leaves], mover,
+        )
+        for leaf, (value, policy) in zip(leaves, pairs):
+            if leaf._policy_cache is None:
+                leaf._policy_cache = policy
+            cache_key = self._policy_cache_key_for_node(leaf, mover)
+            if cache_key is not None and cache_key not in self._eval_cache:
+                self._eval_cache[cache_key] = _CachedEval(
+                    value=float(value), policy_logits=policy,
+                    viewer=mover,
+                )
 
     def _descend_chance(
         self, node: _Node, root_player: PlayerID,
@@ -1092,14 +1298,51 @@ class MCTS(SearchStrategy):
         # wrong-slot hit.
         if viewer is None:
             return None
+        return (
+            canonical_state_key(state),
+            self._slot_fingerprint(eng, viewer),
+        )
+
+    @staticmethod
+    def _slot_fingerprint(eng: Any, viewer: PlayerID) -> tuple:
+        """Viewer-tagged positional fingerprint of ``viewer``'s hand /
+        graveyard / exile / library-top raw ``card.id`` ordering.
+        Leading with ``viewer`` itself means the root-perspective and
+        mover-perspective entries for one canonical state occupy
+        distinct cache keys."""
         p = eng.player_by_id(viewer)
-        slot_fp = (
+        return (
+            viewer,
             tuple(c.id for c in p.hand),
             tuple(c.id for c in p.graveyard),
             tuple(c.id for c in p.exile),
             p.library[0].id if p.library else -1,
         )
-        return (canonical_state_key(state), slot_fp)
+
+    def _policy_cache_key_for_node(
+        self, node: _Node, viewer: PlayerID,
+    ) -> Optional[Any]:
+        """Cache key for a ``viewer``-perspective policy at ``node``.
+
+        Same shape as :meth:`_cache_key` — ``(canonical hash, slot
+        fingerprint)`` — but the fingerprint is taken over
+        ``viewer``'s zones so the positional policy logits line up
+        with ``encode(decision, eng, viewer)``. For the root viewer
+        this IS the memoized root key; for any other viewer we reuse
+        the memoized canonical hash and swap the fingerprint.
+        Returns ``None`` whenever the root key is ``None`` (toy state,
+        or a test/bench that monkey-patched ``_cache_key`` to disable
+        the cache) so the override is honored for every viewer.
+        """
+        root_key = self._cache_key_for_node(node)
+        if root_key is None:
+            return None
+        if viewer == self._cache_root_player:
+            return root_key
+        eng = getattr(node.state, "engine_state", None)
+        if eng is None:
+            return None
+        return (root_key[0], self._slot_fingerprint(eng, viewer))
 
     def _cache_key_for_node(self, node: _Node) -> Optional[bytes]:
         """Like :meth:`_cache_key` but memoized on ``node``.
@@ -1168,14 +1411,14 @@ class MCTS(SearchStrategy):
             if cached is not None:
                 # Cache HIT — skip the NN. Mirror the bookkeeping the
                 # cacheless paths do: stash the policy on the leaf
-                # for future child-expansions, set ``leaf_nn_value``
+                # for future child-expansions (only when the leaf's
+                # mover is the root player — see
+                # ``_maybe_stash_policy``), set ``leaf_nn_value``
                 # for the annotation hook.
-                if (
-                    self.puct
-                    and leaf._policy_cache is None
-                    and cached.policy_logits is not None
-                ):
-                    leaf._policy_cache = cached.policy_logits
+                self._check_cached_viewer(cached, root_player)
+                self._maybe_stash_policy(
+                    leaf, cached.policy_logits, root_player,
+                )
                 if leaf.leaf_nn_value is None:
                     leaf.leaf_nn_value = float(cached.value)
                 return cached.value
@@ -1185,13 +1428,13 @@ class MCTS(SearchStrategy):
             value, policy = self.evaluator.evaluate_with_policy(
                 leaf.state, root_player,
             )
-            if leaf._policy_cache is None:
-                leaf._policy_cache = policy
+            self._maybe_stash_policy(leaf, policy, root_player)
             if leaf.leaf_nn_value is None:
                 leaf.leaf_nn_value = float(value)
             if cache_key is not None:
                 self._eval_cache[cache_key] = _CachedEval(
                     value=float(value), policy_logits=policy,
+                    viewer=root_player,
                 )
             return value
         value = self.evaluator.evaluate(leaf.state, root_player)
@@ -1200,6 +1443,7 @@ class MCTS(SearchStrategy):
         if cache_key is not None:
             self._eval_cache[cache_key] = _CachedEval(
                 value=float(value), policy_logits=None,
+                viewer=root_player,
             )
         return value
 

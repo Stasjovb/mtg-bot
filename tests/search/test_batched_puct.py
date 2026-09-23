@@ -85,9 +85,13 @@ class _BatchCountingPolicyEvaluator:
         self.single_calls: int = 0
         self.batch_calls: int = 0
         self.last_batch_size: int = 0
-        # Per-state call counts; used to assert the once-per-node
-        # invariant the policy cache exists to enforce.
-        self.calls_by_state: dict[int, int] = {}
+        # Per-(state, viewer) call counts; used to assert the
+        # once-per-node-per-perspective invariant the policy cache
+        # exists to enforce. Keyed on the viewer too because an
+        # opponent-to-move leaf is legitimately queried twice: once
+        # from the root player's perspective (value for backup) and
+        # once from the mover's (policy for priors).
+        self.calls_by_state: dict[tuple[int, int], int] = {}
 
     def evaluate(self, state, player_id):
         if state.is_terminal():
@@ -102,9 +106,8 @@ class _BatchCountingPolicyEvaluator:
 
     def evaluate_with_policy(self, state, player_id):
         self.single_calls += 1
-        self.calls_by_state[id(state)] = (
-            self.calls_by_state.get(id(state), 0) + 1
-        )
+        key = (id(state), player_id)
+        self.calls_by_state[key] = self.calls_by_state.get(key, 0) + 1
         if state.is_terminal():
             return 0.0, np.zeros(
                 ae.ACTION_VOCAB_SIZE, dtype=np.float32,
@@ -124,9 +127,8 @@ class _BatchCountingPolicyEvaluator:
         self.last_batch_size = len(states)
         results = []
         for s in states:
-            self.calls_by_state[id(s)] = (
-                self.calls_by_state.get(id(s), 0) + 1
-            )
+            key = (id(s), player_id)
+            self.calls_by_state[key] = self.calls_by_state.get(key, 0) + 1
             if s.is_terminal():
                 results.append((
                     0.0,
@@ -250,11 +252,18 @@ def test_batched_puct_uses_batched_evaluator():
 
 
 def test_batched_puct_does_not_double_evaluate_any_node():
-    """The cache invariant: every distinct state object gets its
-    policy queried at most once across both the single and batched
-    APIs. Catches a bug where the batched path forgets to populate
-    ``_policy_cache``, causing ``_stamp_prior`` to fire a second
-    forward pass when the leaf later becomes an interior node."""
+    """The cache invariant: every distinct (state object, viewer)
+    pair gets its policy queried at most once across both the single
+    and batched APIs. Catches a bug where the batched path forgets to
+    populate ``_policy_cache``, causing ``_stamp_prior`` to fire a
+    second forward pass when the leaf later becomes an interior node.
+
+    Opponent-to-move leaves are queried from two perspectives (root
+    value + mover policy) — that is by design and is why the key
+    carries the viewer — but the mover-perspective pass must come
+    through the batched side-batch, not a synchronous single-state
+    call. The only single-state call allowed is the root's own
+    first-touch prior stamp."""
     adapter = _adapter_at_precombat_main()
     eval_ = _BatchCountingPolicyEvaluator()
     mcts = MCTS(
@@ -269,10 +278,16 @@ def test_batched_puct_does_not_double_evaluate_any_node():
         sid: n for sid, n in eval_.calls_by_state.items() if n > 1
     }
     assert not duplicates, (
-        f"some state objects were evaluated more than once: "
+        f"some (state, viewer) pairs were evaluated more than once: "
         f"{duplicates}"
     )
     assert eval_.batch_calls >= 1
+    assert eval_.single_calls <= 1, (
+        f"expected at most the root's first-touch single-state eval, "
+        f"got {eval_.single_calls} synchronous evaluate_with_policy "
+        f"calls (opponent-node priors must ride the batched side batch)"
+    )
+    assert mcts.prior_overflow_count == 0
 
 
 # ---------- bit-exactness with the serial PUCT path -------------------------
