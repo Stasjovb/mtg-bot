@@ -1265,6 +1265,32 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
+        "--weights-root", type=Path, default=None,
+        help=(
+            "Model registry the coordinator serves to workers via "
+            "/v2/weights/<version>. Default: <repo-root>/trained_weights. "
+            "A second lineage (e.g. trained_weights_s2/) MUST point "
+            "this at its own registry -- version labels (v1, v2, ...) "
+            "are reused across lineages, so the default would silently "
+            "hand workers the wrong model."
+        ),
+    )
+    parser.add_argument(
+        "--iterate-data-dir", type=Path, default=None,
+        help=(
+            "Where reported self-play .npz artifacts are rehydrated. "
+            "Default: <repo-root>/iterate_data. Must match the "
+            "orchestrator's ``mtg_bot iterate --data-dir``."
+        ),
+    )
+    parser.add_argument(
+        "--replays-root", type=Path, default=None,
+        help=(
+            "Where reported replay artifacts are rehydrated. Default: "
+            "<repo-root>/replays."
+        ),
+    )
+    parser.add_argument(
         "--no-heartbeat-poller", action="store_true",
         help=(
             "Disable the v2 heartbeat poller. The queue.db endpoints "
@@ -1307,6 +1333,9 @@ def main(argv=None) -> None:  # pragma: no cover
         janitor_stale_after_hours=args.janitor_stale_after_hours,
         queue_db_path=args.queue_db_path,
         shards_config_path=args.shards_config,
+        weights_root=args.weights_root,
+        iterate_data_dir=args.iterate_data_dir,
+        replays_root=args.replays_root,
         enable_heartbeat_poller=not args.no_heartbeat_poller,
     )
     print(
