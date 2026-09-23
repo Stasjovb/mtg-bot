@@ -93,6 +93,22 @@ class _CmdRecorder:
 
         return _Result()
 
+    @property
+    def train_calls(self) -> list[list[str]]:
+        """Only the ``train_nn.py`` invocations.
+
+        ``_train_next`` shells out more than once: after the trainer
+        exits it constructs a ``Registry``, whose ``__init__`` calls
+        ``ensure_inheritance_enabled`` -> ``subprocess.run([icacls,
+        ...])`` (the Windows ACL-inheritance preflight). That call is
+        real product behavior, not something to stub away, so these
+        tests filter to the training spawn they actually assert on.
+        """
+        return [
+            c for c in self.calls
+            if any(str(a).endswith("train_nn.py") for a in c)
+        ]
+
 
 def test_train_next_emits_structured_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -127,8 +143,8 @@ def test_train_next_emits_structured_flags(
         structured_action_history_n=32,
     )
 
-    assert len(rec.calls) == 1
-    cmd = rec.calls[0]
+    assert len(rec.train_calls) == 1
+    cmd = rec.train_calls[0]
     assert "--architecture" in cmd
     assert cmd[cmd.index("--architecture") + 1] == "structured"
     # Each structured hyperparam flag must follow with the value
@@ -180,7 +196,7 @@ def test_train_next_shared_does_not_emit_structured_flags(
         structured_action_history_n=32,
     )
 
-    cmd = rec.calls[0]
+    cmd = rec.train_calls[0]
     assert "--architecture" in cmd
     assert cmd[cmd.index("--architecture") + 1] == "shared"
     for flag in (
@@ -218,7 +234,7 @@ def test_train_next_separate_does_not_emit_structured_flags(
         structured_n_heads=4,
     )
 
-    cmd = rec.calls[0]
+    cmd = rec.train_calls[0]
     assert "--architecture" in cmd
     assert cmd[cmd.index("--architecture") + 1] == "separate"
     for flag in (

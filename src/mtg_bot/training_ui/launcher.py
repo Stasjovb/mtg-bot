@@ -378,6 +378,45 @@ def build_iterate_schema(
                     "help": "MCTS max_nodes per sub-search.",
                 },
                 {
+                    "name": "root-dirichlet-alpha", "type": "float",
+                    "default": 0.5,
+                    "help": (
+                        "Dirichlet alpha for AlphaZero root exploration "
+                        "noise in the SELF-PLAY PUCT sub-searches. "
+                        "Values <= 0 disable the noise. Eval-gate "
+                        "matches never use it."
+                    ),
+                },
+                {
+                    "name": "root-dirichlet-eps", "type": "float",
+                    "default": 0.25,
+                    "help": (
+                        "Mixing weight for the root Dirichlet noise: "
+                        "prior = (1-eps)*prior + eps*noise."
+                    ),
+                },
+                {
+                    "name": "move-temperature", "type": "float",
+                    "default": 1.0,
+                    "help": (
+                        "Self-play move temperature T: the played move "
+                        "is sampled proportional to visits**(1/T) for "
+                        "the first --temperature-cutoff non-forced "
+                        "decisions of each game (<= 0 = always argmax). "
+                        "Policy targets stay the raw visit "
+                        "distribution; eval matches stay argmax."
+                    ),
+                },
+                {
+                    "name": "temperature-cutoff", "type": "int",
+                    "default": 30,
+                    "help": (
+                        "Number of NON-forced decisions (>1 legal "
+                        "option) per self-play game after which move "
+                        "selection reverts to argmax."
+                    ),
+                },
+                {
                     "name": "use-ismcts", "type": "bool", "default": False,
                     "help": (
                         "Use Information Set MCTS instead of PIMC. "
@@ -458,6 +497,19 @@ def build_iterate_schema(
                         "Leave blank to train on full dir."
                     ),
                 },
+                {
+                    "name": "train-num-workers", "type": "int",
+                    "default": 4,
+                    "help": (
+                        "Train-phase DataLoader worker process count. "
+                        "Single-process loading (0) starves the GPU at "
+                        "production scale because every batch's "
+                        "__getitem__ + collate runs on the main thread "
+                        "between forward/backward calls. Set to 0 for "
+                        "smoke tests where multiprocessing fork is "
+                        "finicky."
+                    ),
+                },
             ],
         },
         {
@@ -531,6 +583,18 @@ def build_iterate_schema(
                     "help": (
                         "Structured-trunk only: last-N action-history "
                         "window the state tokenizer emits per row."
+                    ),
+                },
+                {
+                    "name": "scalar-schema-version", "type": "int",
+                    "default": None,
+                    "help": (
+                        "Structured-trunk only: token_scalars row "
+                        "layout (1 = legacy 3-slot row; 2 = adds "
+                        "board / life state) used BOTH by self-play "
+                        "data-gen and by the train phase. Leave blank "
+                        "for the tokenizer / StructuredModelConfig "
+                        "default (currently 2)."
                     ),
                 },
                 {
