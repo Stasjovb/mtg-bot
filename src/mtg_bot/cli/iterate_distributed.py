@@ -298,7 +298,13 @@ def _cycle_url(cfg: LaunchConfig) -> str:
     so a base_url with or without trailing slash works identically.
     """
     base = cfg.ui.base_url.rstrip("/") + "/"
-    return urljoin(base, f"run/{cfg.cycle_id}")
+    # The training UI is a single page that renders one card per run
+    # (DOM id ``card-<run_id>``); it has no ``/run/<id>`` route, so a
+    # path-style deep link 404s. Link the page root with the card's
+    # fragment -- harmless if the browser can't scroll to a card that
+    # is rendered after the first fetch, and the cycle id is still in
+    # the URL for the operator to search for.
+    return urljoin(base, f"#card-{cfg.cycle_id}")
 
 
 # ---------------------------------------------------------------------------

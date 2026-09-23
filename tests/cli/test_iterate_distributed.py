@@ -351,7 +351,7 @@ def test_launch_prints_clickable_tailnet_url(
     ])
     err = capsys.readouterr().err
     assert (
-        "Track in UI: http://desktop-j05412i:5103/run/iter_021_cycle"
+        "Track in UI: http://desktop-j05412i:5103/#card-iter_021_cycle"
         in err
     )
 
