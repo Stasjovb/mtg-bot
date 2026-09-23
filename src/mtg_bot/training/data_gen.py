@@ -83,6 +83,7 @@ from typing import Any, Callable, Iterable, Optional
 import numpy as np
 
 from mtg_bot.agents import RandomAgent
+from mtg_bot.cancellation import raise_if_cancelled
 from mtg_bot.decks import Deck
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.replay import save_replay
@@ -1334,6 +1335,9 @@ def _play_one_game_recording(
     temperature_live = move_temperature > 0 and temperature_cutoff > 0
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
+        # Cooperative stop for an abandoned (timed-out) game — see
+        # mtg_bot.cancellation.
+        raise_if_cancelled()
         active = adapter.active_player()
         # Search-tree annotation captured this iteration; threaded into
         # the recorder right after the snapshot is appended. Stays None

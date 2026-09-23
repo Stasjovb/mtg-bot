@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from mtg_bot.agents import RandomAgent
+from mtg_bot.cancellation import raise_if_cancelled
 from mtg_bot.decks import Deck
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
@@ -735,6 +736,11 @@ def _play_capped_game(
         hasattr(s, "observe_action") for s in strategies.values()
     )
     while not adapter.is_terminal() and decisions < decision_cap:
+        # Cooperative stop for an abandoned (timed-out) game — see
+        # mtg_bot.cancellation. Checked here as well as inside the
+        # search so a game whose per-decision work is cheap still
+        # stops promptly.
+        raise_if_cancelled()
         active = adapter.active_player()
         # Search-tree annotation captured this iteration; threaded into
         # the recorder right after the snapshot is appended. Stays None
