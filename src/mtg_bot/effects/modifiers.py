@@ -610,11 +610,17 @@ def active_static_abilities(source: "GameObject") -> "tuple":
     statics = printing.static_abilities
     if not printing.room_halves:
         return statics
+    # Explicit loop rather than ``tuple(<genexp>)``: a genexp reading
+    # ``unlocked`` would make it a cell variable of this function. See
+    # the "closure-free hot path" note on ``mtg_bot.game
+    # ._static_bonuses`` — this helper is called from the same hot
+    # layered-read frames.
     unlocked = source.unlocked_halves
-    return tuple(
-        a for a in statics
-        if a.room_half is None or a.room_half in unlocked
-    )
+    active = []
+    for ability in statics:
+        if ability.room_half is None or ability.room_half in unlocked:
+            active.append(ability)
+    return tuple(active)
 
 
 def walk_continuous_modifiers(

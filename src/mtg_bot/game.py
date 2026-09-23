@@ -894,12 +894,20 @@ def _source_layer6_wiped(
     cached = cache.get(sid)
     if cached is not None and cached[0] == cv:
         return cached[1]
-    wiped = any(
-        ce.layer == 6
-        and ce.kind == "lose_all_abilities"
-        and ce.target_id == sid
-        for ce in state.continuous_effects
-    )
+    # Explicit loop, not ``any(<genexp>)``: a genexp that reads ``sid``
+    # makes ``sid`` a CELL variable of this function, and cells share
+    # the frame's ``localsplus`` array with the fast locals. See the
+    # ``_static_bonuses`` "closure-free hot path" note for why that
+    # matters on CPython 3.13.
+    wiped = False
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 6
+            and ce.kind == "lose_all_abilities"
+            and ce.target_id == sid
+        ):
+            wiped = True
+            break
     cache[sid] = (cv, wiped)
     return wiped
 
@@ -943,6 +951,40 @@ def _static_bonuses(
     so this walk is a no-op contributor; the wiring is here so PR-D
     anthem migrations can drop ``power_bonus``/``toughness_bonus``
     fields and produce ``ContinuousModifier`` declarations instead.
+
+    Closure-free hot path (CPython 3.13 mitigation)
+    -----------------------------------------------
+    This function, ``_source_layer6_wiped`` and ``_compute_effective_pt``
+    deliberately use explicit loops instead of generator expressions /
+    comprehensions that read an enclosing local. A genexp that reads an
+    enclosing local turns that local into a CELL variable, and cells
+    live in the same ``localsplus`` array as the frame's fast locals
+    (immediately after ``co_nlocals`` entries). This is one of the
+    hottest functions in the engine (~850k calls per self-play game),
+    so it is a prime target for the specializing interpreter.
+
+    Two production self-play crashes point at exactly that array:
+
+    - ``AttributeError: 'cell' object has no attribute 'attached_to'``
+      raised at the ``source.attached_to`` read in the Equipment walk
+      below — i.e. the loop variable ``source`` came back holding this
+      frame's closure cell. No engine code can put a ``cell`` into
+      ``state.battlefield``.
+    - ``TypeError: 'ContinuousModifier' object is not iterable`` raised
+      from ``walk_continuous_modifiers``' read of
+      ``source.printing.static_abilities`` — while the FIRST walk below
+      (``_active_static_abilities``), which reads the same slot off the
+      same list in the same frame, had just succeeded. A genuinely
+      malformed printing raises at the first walk; verified by
+      construction.
+
+    ``search/mcts.py`` documents the same class of defect (intermittent
+    ``NameError`` / ``AttributeError`` from CPython 3.13's specializing
+    interpreter against a dataclass-mutation hot loop) and works around
+    it the same way — by removing the pattern rather than the symptom.
+    This is a MITIGATION, not a proven fix: it removes the buggy fast
+    path's precondition from these frames. Keep new code in this call
+    tree closure-free.
     """
     from mtg_bot.effects.modifiers import (
         PowerToughnessBonus, walk_continuous_modifiers,
@@ -980,9 +1022,11 @@ def _static_bonuses(
     for src_id, mod in walk_continuous_modifiers(state, obj):
         if mod.layer != 7 or not isinstance(mod.payload, PowerToughnessBonus):
             continue
-        source = next(
-            (o for o in state.battlefield if o.id == src_id), None,
-        )
+        source = None
+        for candidate in state.battlefield:
+            if candidate.id == src_id:
+                source = candidate
+                break
         if source is None or _source_layer6_wiped(state, source):
             continue
         power_bonus += mod.payload.power_bonus
@@ -2186,17 +2230,20 @@ def _compute_effective_pt(
         t = base_t + toughness_bonus
         p += obj.plus_one_counters - obj.minus_one_counters
         t += obj.plus_one_counters - obj.minus_one_counters
-        # Layer 7e switches.
-        layer7e = sorted(
-            (
-                ce for ce in state.continuous_effects
-                if ce.layer == 7 and ce.sublayer == 4
+        # Layer 7e switches. Each entry contributes a single swap, so
+        # only the COUNT matters (the old ``sorted(...)`` by timestamp
+        # was ordering a sequence whose order it then discarded).
+        # Counted with an explicit loop — see the "closure-free hot
+        # path" note on ``_static_bonuses``.
+        n_switch = 0
+        for ce in state.continuous_effects:
+            if (
+                ce.layer == 7 and ce.sublayer == 4
                 and ce.kind == "switch_pt"
                 and ce.target_id == obj.id
-            ),
-            key=lambda ce: ce.timestamp,
-        )
-        for _ in layer7e:
+            ):
+                n_switch += 1
+        if n_switch % 2:
             p, t = t, p
         return p, t
     # 7b: base P/T.
@@ -2244,17 +2291,19 @@ def _compute_effective_pt(
     # we still apply both signs.
     p += obj.plus_one_counters - obj.minus_one_counters
     t += obj.plus_one_counters - obj.minus_one_counters
-    # 7e: switches. Each entry contributes a single swap.
-    layer7e = sorted(
-        (
-            ce for ce in state.continuous_effects
-            if ce.layer == 7 and ce.sublayer == 4
+    # 7e: switches. Each entry contributes a single swap, so an even
+    # count cancels out and only the parity matters. Counted with an
+    # explicit loop — see the "closure-free hot path" note on
+    # ``_static_bonuses``.
+    n_switch = 0
+    for ce in state.continuous_effects:
+        if (
+            ce.layer == 7 and ce.sublayer == 4
             and ce.kind == "switch_pt"
             and ce.target_id == obj.id
-        ),
-        key=lambda ce: ce.timestamp,
-    )
-    for _ in layer7e:
+        ):
+            n_switch += 1
+    if n_switch % 2:
         p, t = t, p
     return p, t
 
