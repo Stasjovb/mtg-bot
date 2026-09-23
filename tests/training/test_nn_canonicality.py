@@ -60,6 +60,7 @@ fresh clone before any training has run).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -82,28 +83,72 @@ from mtg_bot.turn import Step
 
 _THIS = Path(__file__).resolve()
 # tests/training/test_nn_canonicality.py
-#   parents[0] = .../tests/training
-#   parents[1] = .../tests
-#   parents[2] = .../nn-encoder-canonicality (worktree root)
-#   parents[3] = .../mtg-bot-worktrees
-#   parents[4] = .../Projects (sibling of mtg-bot)
-_MAIN_CHECKOUT_TRAINED_WEIGHTS = (
-    _THIS.parents[4] / "mtg-bot" / "trained_weights"
-)
+#   parents[0] = <root>/tests/training
+#   parents[1] = <root>/tests
+#   parents[2] = <root>  (main checkout OR worktree root)
+_REPO_ROOT = _THIS.parents[2]
+
+
+def _flat_v13_registry_root() -> Path | None:
+    """Locate a registry root holding the LEGACY flat-featurizer v13.
+
+    Two independent things used to break this:
+
+    1. ``trained_weights/`` is gitignored, so it exists only in a
+       checkout that has actually trained. The old resolver counted
+       fixed ``parents[4]`` hops, which only pointed at a real
+       directory when the checkout sat exactly two levels under
+       ``Projects/``. From the main checkout — or a worktree nested
+       anywhere else — it resolved to a nonexistent path and every
+       v13 test skipped silently. Resolve from the repo root instead.
+
+    2. The v-chain was RESTARTED at the structured-trunk cutover, so
+       today's ``trained_weights/v13`` is a *structured* model, while
+       the flat 1024-1024-512 v13 these tests were written against
+       moved to ``trained_weights/archived_pre_structured/v13``.
+       Loading the structured one raises a state-dict size mismatch.
+       These tests feed the model 51-dim ``extract_features`` vectors,
+       which only the flat architecture consumes — so check the
+       candidate's recorded architecture and take the first flat one.
+    """
+    roots = (
+        _REPO_ROOT / "trained_weights" / "archived_pre_structured",
+        _REPO_ROOT / "trained_weights",
+        _REPO_ROOT.parent.parent / "mtg-bot" / "trained_weights"
+        / "archived_pre_structured",
+        _REPO_ROOT.parent.parent / "mtg-bot" / "trained_weights",
+    )
+    for root in roots:
+        meta_path = root / "v13" / "metadata.json"
+        if not (root / "v13" / "weights.pt").is_file():
+            continue
+        if not meta_path.is_file():
+            continue
+        try:
+            arch = json.loads(
+                meta_path.read_text(encoding="utf-8"),
+            ).get("architecture", "shared")
+        except (OSError, ValueError):
+            continue
+        if arch != "structured":
+            return root
+    return None
 
 
 def _v13_evaluator() -> NNEvaluator:
-    """Load v13 from the main checkout's trained_weights, mirroring the
-    recipe in ``scripts/capture_annotated_replays.py``. Returns a
-    dual-head ``NNEvaluator`` (with_policy=True).
+    """Load the legacy flat v13, mirroring the recipe in
+    ``scripts/capture_annotated_replays.py``. Returns a dual-head
+    ``NNEvaluator`` (with_policy=True).
     """
-    if not _MAIN_CHECKOUT_TRAINED_WEIGHTS.is_dir():
+    weights_root = _flat_v13_registry_root()
+    if weights_root is None:
         pytest.skip(
-            f"trained_weights/ not found at {_MAIN_CHECKOUT_TRAINED_WEIGHTS}"
+            "legacy flat-featurizer v13 weights not found (looked in "
+            "this checkout's trained_weights/ + "
+            "trained_weights/archived_pre_structured/ and in a "
+            "sibling mtg-bot main checkout)"
         )
-    registry = Registry(_MAIN_CHECKOUT_TRAINED_WEIGHTS)
-    if "v13" not in registry.list_versions():
-        pytest.skip("v13 not registered in trained_weights/")
+    registry = Registry(weights_root)
     weights_path = registry.weights_path("v13")
     meta = registry.load_metadata("v13")
     hidden_sizes = (
