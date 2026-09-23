@@ -18713,3 +18713,23 @@ incomplete CR conformance), add a section here with:
 - Failure mode
 - Fix scope estimate
 - Impact estimate (perf gain or strength cost)
+
+---
+
+## Structured-NN action history — inference now sees the SAME history as training (CLOSED); the Rust provider still tokenizes with an EMPTY history (open, bounded) — 2026-09-22, `feature/lf-history`
+
+**Where:** `src/mtg_bot/search/action_history.py` (new: `ActionEvent`, `DEFAULT_ACTION_HISTORY_N`, the §3 relevance filter, `record_action_event`); `src/mtg_bot/search/engine_adapter.py` (`MtgGameStateAdapter.apply` records into `recent_actions`; `clone()` shares the tuple); `src/mtg_bot/search/nn_evaluator.py::_structured_forward` and `src/mtg_bot/search/shm_nn_eval_server.py::_tokenize_state` (read `getattr(state, "recent_actions", ())`); `src/mtg_bot/training/data_gen.py::_play_one_game_recording` (tokenizes from `adapter.recent_actions`; the hand-kept `action_history` list is gone); `src/mtg_bot/search/rust_engine_adapter.py::recent_actions` (always `()`); `src/mtg_bot/search/rust_shadow.py::recent_actions` (delegates to the Python checker).
+
+**What was wrong (CLOSED).** The structured input carries up to 32 action-history tokens (roadmap §3). Training rows were built with the real per-game history, but every inference site passed `()` — the trunk was trained on a signal it never received while searching. The adapter now records each strategically-relevant decision (pre-apply engine clone + turn / step / actor) into an immutable tuple bounded to the last 32 relevant events; clones (MCTS children, PIMC / ISMCTS determinized worlds) inherit it by reference; data_gen and both inference sites tokenize from that one attribute. Pinned by `tests/search/test_engine_adapter_history.py` (byte-equal tokens vs the legacy data_gen construction at every sample point, both viewers) plus the NNEvaluator / SHM pass-through tests.
+
+**The remaining deliberate shortcut.** `RustGameStateAdapter.recent_actions` is always empty. The tokenizer resolves each event's card printings against a Python `GameState` snapshot; the Rust provider has no Python engine state to clone, so a Rust-sourced structured search still evaluates leaves with zero action tokens.
+
+**Why it's OK (today).** Production self-play / eval construct the Python adapter (`make_game_state_adapter` raises for `decision_source="rust"` at the Python-engine sites — B3-S5 is not flipped), so no live NN search runs through the Rust provider. `rust_shadow` (the bake-in) delegates to its Python checker, which applies every decision in lockstep, so it carries the real history.
+
+**Failure mode.** If B3-S5 flips a structured-NN search onto the bare Rust provider, that search regresses to the pre-fix train/inference mismatch (history tokens present in training, absent at search) — a silent strength loss, not a crash. `NNEvaluator` does not warn; the property is simply `()`.
+
+**Fix scope estimate.** ~1 cycle: either (a) have the Rust adapter build `ActionEvent`s whose snapshot is a `RustZoneView`-style read-only view exposing `battlefield` / `stack` / `players[].hand|graveyard|library` with `(id, printing)` pairs captured at apply time (the tokenizer only reads those), or (b) teach the tokenizer a resolve-at-capture path (store the resolved source / target printings on the event; no snapshot at all) and use it on both providers. (b) is also the cheaper memory shape for the Python adapter.
+
+**Impact estimate.** Python path: 0 strength cost (parity by construction); per-apply cost +~33us on the ~10% of applies that survive the §3 filter (one `GameState.clone()`), +0 on PassPriority / mana abilities, adapter `clone()` unchanged (~23us) — see the feature commit message for the dated numbers. Rust path: unchanged from before (still empty history); bounded to a flip that has not happened.
+
+**Pinned by:** `tests/test_rust_codec_slot_source.py::test_rust_provider_recent_actions_is_empty_and_shadow_delegates_to_python`.

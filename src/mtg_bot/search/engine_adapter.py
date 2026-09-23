@@ -60,6 +60,9 @@ from mtg_bot.combat import (
 from mtg_bot.effects.generic.become_type import BecomeLandCreatureUEOT
 from mtg_bot.game import GameState as EngineGameState, is_creature_now
 from mtg_bot.legal import legal_actions
+from mtg_bot.search.action_history import (
+    ActionEvent, _is_strategically_relevant, record_action_event,
+)
 from mtg_bot.search._opp_capabilities import (
     opp_can_act, opp_capability_hash,
 )
@@ -246,6 +249,15 @@ class MtgGameStateAdapter:
         self._resolution_options: tuple = ()
         self._pre_action_clone: Optional[EngineGameState] = None
         self._pending_replay_decision: Optional[Decision] = None
+        # Structured-NN action history: the last
+        # ``DEFAULT_ACTION_HISTORY_N`` strategically-relevant decisions
+        # applied through this adapter (and its ancestors — ``clone()``
+        # shares the tuple). Recorded by ``apply`` via
+        # ``mtg_bot.search.action_history.record_action_event``; read
+        # by ``data_gen`` (training rows) and ``NNEvaluator`` (search)
+        # so the two see identical history. Immutable tuple: clones
+        # share the reference, extension allocates a new tuple.
+        self._recent_actions: tuple[ActionEvent, ...] = ()
         # Per-decision-moment cache of ``legal.legal_actions`` results.
         # ISMCTS calls ``legal_decisions`` AND ``legal_action_mask`` AND
         # ``_grow_union_mask`` (downstream of mask) all on the SAME
@@ -726,6 +738,9 @@ class MtgGameStateAdapter:
             if self._pre_action_clone is not None else None
         )
         c._pending_replay_decision = self._pending_replay_decision
+        # Immutable tuple — shared by reference (no per-clone cost).
+        # ``apply`` on either side rebinds its own attribute.
+        c._recent_actions = self._recent_actions
         # Cache lifetime is per-adapter-per-priority-moment: the clone
         # starts with an empty cache. Sharing the source's cached list
         # with the clone would be tempting (the engine_state at clone
@@ -897,7 +912,31 @@ class MtgGameStateAdapter:
     def apply(self, decision: Decision) -> None:
         if self._state.is_over():
             raise ValueError("apply() called on terminal state")
+        # Record the decision for the structured-NN action history
+        # BEFORE applying (turn / step / actor and the snapshot are
+        # the pre-apply moment), but only commit it AFTER the apply
+        # succeeds so a raising apply leaves the history untouched.
+        # PassPriority / mana abilities (~90% of applied decisions)
+        # never enter the history, so gate on the §3 filter first and
+        # only pay for ``active_player()`` + the snapshot clone on the
+        # relevant ~10%.
+        if _is_strategically_relevant(decision, self._state):
+            history = record_action_event(
+                self._recent_actions,
+                action=decision,
+                pre_apply_state=self._state,
+                actor_player_id=self.active_player(),
+            )
+        else:
+            history = self._recent_actions
+        self._apply_decision(decision)
+        self._recent_actions = history
 
+    def _apply_decision(self, decision: Decision) -> None:
+        """The dispatch body of ``apply`` (resolution-pause answers,
+        factored-combat sub-decisions, priority actions). Split out so
+        ``apply`` can wrap it with the action-history bookkeeping
+        without touching the branchy early-return structure."""
         # Cache invariant: any ``apply()`` will mutate ``self._state``
         # (or replace it via resolution-pause rollback). Dropping the
         # cached legal_actions here guarantees the next
@@ -1363,6 +1402,15 @@ class MtgGameStateAdapter:
     # ---------------------------------------------------------------
     # Debug / test helpers
     # ---------------------------------------------------------------
+
+    @property
+    def recent_actions(self) -> tuple[ActionEvent, ...]:
+        """The last ``DEFAULT_ACTION_HISTORY_N`` strategically-relevant
+        decisions applied on this adapter's line (oldest first), as
+        ``ActionEvent``s ready for ``tokenize_state``. Inherited by
+        ``clone()`` (and so by every MCTS child and PIMC / ISMCTS
+        determinized world). See ``mtg_bot.search.action_history``."""
+        return self._recent_actions
 
     @property
     def engine_state(self) -> EngineGameState:

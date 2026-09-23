@@ -1098,16 +1098,17 @@ class NNEvaluator(Evaluator):
 
         Action-history strategy
         -----------------------
-        First-pass acceptable per Slice E's open design question:
-        ``recent_actions=()`` for every state. The tokenizer accepts
-        an empty sequence as valid input (the action-token slice
-        contributes zero rows to the per-token batch). Documented
-        limitation: the trunk sees only the current state, not the
-        opp-passed-priority-with-counter-mana-open signal Step 1's
-        action-token plan eventually unlocks. Threading a real
-        per-state action history into MCTS / PIMC is a separate
-        slice that lands once the engine grows a public action log
-        on ``GameState`` (today there is no such field).
+        Each state's ``recent_actions`` (the bounded tuple of
+        ``ActionEvent``s ``MtgGameStateAdapter.apply`` records and
+        ``clone()`` shares with every search-tree child / determinized
+        world — see ``mtg_bot.search.action_history``) is passed to
+        the tokenizer. This is the SAME attribute ``data_gen`` reads
+        when it writes training rows, so the trunk sees at search
+        time exactly the history signal it was trained on. States
+        without the attribute (raw engine states, the Rust provider,
+        duck-typed test fakes) fall back to an empty history — the
+        tokenizer accepts an empty sequence (the action-token slice
+        then contributes zero rows).
         """
         tokenizer = _state_tokenizer()
         token_dicts: list[dict[str, np.ndarray]] = []
@@ -1117,7 +1118,7 @@ class NNEvaluator(Evaluator):
                 tokenizer.tokenize_state(
                     engine,
                     int(viewer_id),
-                    (),  # empty action history — see docstring above
+                    getattr(s, "recent_actions", ()),
                     n=self._structured_action_history_n,
                     n_printings_cap=self._structured_n_printings_cap,
                 ),
