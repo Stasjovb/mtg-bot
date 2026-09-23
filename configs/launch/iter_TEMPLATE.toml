@@ -20,9 +20,22 @@
 # [iter] -- what training cycle to run
 # ----------------------------------------------------------------------
 [iter]
-# REQUIRED. Must be > 0. The launcher derives cycle_id = "iter_NNN_cycle"
-# from this for the runs.db row + the per-cycle ephemeral dir.
+# REQUIRED. Must be > 0. The launcher derives cycle_id =
+# "<label_prefix>iter_NNN_cycle" from this for the runs.db row + the
+# per-cycle ephemeral dir.
 target_iter = 21
+
+# Lineage namespace for every generated run label / run_id. Default
+# "" = the original lineage's historical ids (iter_021_cycle,
+# iter_021_self_play_v5, ...). Set this ONLY when running a SECOND
+# training lineage -- its own registry root (e.g. trained_weights_s2/)
+# with iterate_state.json restarting at iterations_completed = 0 --
+# against the same coordinator runs.db. Without a prefix the second
+# lineage's first cycle would be "iter_001_cycle", which the first
+# lineage already owns, and /run/start_or_restart returns HTTP 409.
+# Forwarded to `mtg_bot iterate --run-label-prefix`.
+#
+# label_prefix = "s2_"   # -> s2_iter_001_cycle, s2_iter_001_train_v2
 
 # REQUIRED in practice. The version `mtg_bot iterate` starts from.
 # Drop if you're bootstrapping a brand-new v-chain.

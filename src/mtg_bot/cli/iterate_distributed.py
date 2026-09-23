@@ -273,6 +273,12 @@ def _build_iterate_argv(
         "--shards-config", str(shards_config_path),
         "--queue-url", queue_url,
     ]
+    if cfg.iter.label_prefix:
+        # Forward the lineage namespace so iterate generates the SAME
+        # cycle_id the launcher just pre-registered. Omitted when
+        # empty so the historical argv stays byte-identical for the
+        # original lineage.
+        argv += ["--run-label-prefix", cfg.iter.label_prefix]
     if cfg.iter.bootstrap_version:
         argv += ["--bootstrap-version", cfg.iter.bootstrap_version]
     if deck_pool is not None:
@@ -646,6 +652,7 @@ def _launch(
     config_dict = {
         "kind": "cycle",
         "iter_idx": cfg.iter.target_iter,
+        "label_prefix": cfg.iter.label_prefix,
         "bootstrap_version": cfg.iter.bootstrap_version,
         "best_version_at_start": cfg.iter.bootstrap_version,
         "games_per_iteration": cfg.iter.games_per_iteration,
@@ -664,6 +671,7 @@ def _launch(
                 "epochs": cfg.iter.epochs,
                 "architecture": cfg.iter.architecture,
                 "bootstrap_version": cfg.iter.bootstrap_version,
+                "label_prefix": cfg.iter.label_prefix,
             },
             "cluster": {
                 "local_only": cfg.cluster.local_only,

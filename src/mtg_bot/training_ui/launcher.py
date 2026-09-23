@@ -36,6 +36,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from mtg_bot import run_labels as _run_labels
+
 
 # ---------------------------------------------------------------------
 # Argument types accepted in the schema.
@@ -711,6 +713,21 @@ def build_iterate_schema(
                     ),
                 },
                 {
+                    "name": "run-label-prefix", "type": "string",
+                    "default": "",
+                    "help": (
+                        "Lineage namespace for every generated run "
+                        "label (cycle id, self-play / train / eval "
+                        "stage ids, progress-JSON names, replay "
+                        "dirs). Blank = the historical iter_NNN_* "
+                        "ids. Set e.g. 's2_' when running a SECOND "
+                        "training lineage (its own registry root + "
+                        "iterate_state.json restarting at iteration "
+                        "1) against the same runs.db, so its rows "
+                        "don't collide with the first lineage's."
+                    ),
+                },
+                {
                     "name": "reconcile-state", "type": "bool",
                     "default": False,
                     "help": (
@@ -950,11 +967,37 @@ def spawn_iterate(
         )
     except (TypeError, ValueError):
         n_iterations = 5
-    collision_cleanup = clear_iter_collision_residue(
-        progress_dir,
-        registry_root=registry_root,
-        n_iterations=n_iterations,
-    )
+    # The lineage prefix is load-bearing here: without it, launching
+    # the ``s2_`` lineage at its iteration 1 would sweep the ORIGINAL
+    # lineage's ``iter_001_*`` rows + sentinels out from under it.
+    try:
+        residue_prefix = _run_labels.normalize_label_prefix(
+            submitted.get("run-label-prefix"),
+        )
+    except _run_labels.InvalidLabelPrefix:
+        # build_iterate_command above already accepted the value; a
+        # malformed prefix still shouldn't nuke the un-prefixed
+        # lineage's residue, so bail out of the sweep entirely and
+        # let iterate's own argparse reject the flag.
+        residue_prefix = None
+    if residue_prefix is None:
+        # Same shape the helper returns on its own no-op paths, so the
+        # frontend's ``collision_cleanup.cleared_rows`` reads don't
+        # hit undefined.
+        collision_cleanup: dict[str, Any] = {
+            "cleared_rows": 0,
+            "cleared_run_ids": [],
+            "cleared_sentinels": [],
+            "next_iter_n": None,
+            "range_end": None,
+        }
+    else:
+        collision_cleanup = clear_iter_collision_residue(
+            progress_dir,
+            registry_root=registry_root,
+            n_iterations=n_iterations,
+            label_prefix=residue_prefix,
+        )
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = progress_dir / f"launched_{stamp}_iterate.console.log"
@@ -1111,6 +1154,7 @@ def clear_iter_collision_residue(
     *,
     registry_root: Optional[Path],
     n_iterations: int,
+    label_prefix: str = "",
 ) -> dict[str, Any]:
     """Clear runs.db rows + STOP sentinels that would collide with
     the iters iterate is about to start.
@@ -1139,10 +1183,19 @@ def clear_iter_collision_residue(
     ``{cleared_rows, cleared_run_ids, cleared_sentinels,
        next_iter_n, range_end}``.
 
+    ``label_prefix`` scopes the sweep to ONE training lineage. This
+    is load-bearing once a second lineage exists: both lineages
+    number their iterations from 1, so an un-scoped
+    ``iter_001_%`` sweep launched for the ``s2_`` lineage would
+    delete the ORIGINAL lineage's completed iter_001 rows (and its
+    STOP sentinels) from the shared runs.db. The patterns come from
+    :mod:`mtg_bot.run_labels` so they can't drift from the ids
+    iterate actually writes.
+
     Defensive: missing state.json / runs.db / progress_dir cleanly
     returns empties rather than raising. iterate is the source of
-    truth for the cycle-id format; if the format ever changes, this
-    helper's LIKE pattern needs an update.
+    truth for the cycle-id format; if the format ever changes,
+    ``mtg_bot.run_labels`` needs an update and this helper follows.
     """
     out: dict[str, Any] = {
         "cleared_rows": 0,
@@ -1179,9 +1232,8 @@ def clear_iter_collision_residue(
                         # (iterate.py's current convention) AND any
                         # accidental non-padded form, in case of
                         # historic drift.
-                        for pat in (
-                            f"iter_{iter_n:03d}_%",
-                            f"iter_{iter_n}_%",
+                        for pat in _run_labels.sql_like_prefixes(
+                            iter_n, label_prefix,
                         ):
                             rows = conn.execute(
                                 "SELECT run_id FROM runs "
@@ -1228,9 +1280,8 @@ def clear_iter_collision_residue(
     if progress_dir.is_dir():
         for i in range(max(1, n_iterations)):
             iter_n = next_n + i
-            patterns = (
-                f".STOP_iter_{iter_n:03d}_*",
-                f".STOP_iter_{iter_n}_*",
+            patterns = _run_labels.sentinel_glob_prefix(
+                iter_n, label_prefix,
             )
             for pat in patterns:
                 for path in progress_dir.glob(pat):

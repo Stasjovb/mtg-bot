@@ -58,7 +58,17 @@ from mtg_bot.training.registry import ModelMetadata, Registry
 # iterate`` invokes train via subprocess it threads the cycle_id
 # into ``--notes`` so the resulting training run can be linked back
 # to its parent iterate cycle row.
-_ITER_CYCLE_RE = re.compile(r"\b(iter_\d+_cycle)\b")
+#
+# Lineage-prefix tolerant: ``mtg_bot iterate --run-label-prefix s2_``
+# emits ``s2_iter_001_cycle``. A leading ``\b`` would NOT match there
+# (``_`` is a word character, so there is no word boundary between
+# ``s2_`` and ``iter``) and the parent link would silently drop. The
+# optional ``<token>_`` groups absorb the prefix; the lookbehind keeps
+# the match anchored at a token start so ``xiter_001_cycle`` still
+# doesn't match.
+_ITER_CYCLE_RE = re.compile(
+    r"(?<![\w.-])((?:[A-Za-z0-9][A-Za-z0-9-]*_)*iter_\d+_cycle)\b"
+)
 
 
 def _now_stamp() -> str:

@@ -16,7 +16,18 @@ Usage::
 Then::
 
     mtg_bot iterate --bootstrap-version v1 --registry-root trained_weights_s2 \
+        --data-dir iterate_data_s2 --progress-dir training_progress_s2 \
+        --run-label-prefix s2_ \
         --architecture structured --scalar-schema-version 2 ...
+
+``--run-label-prefix s2_`` is REQUIRED when this lineage writes to the
+shared coordinator runs.db. Its ``iterate_state.json`` restarts at
+``iterations_completed = 0``, so without the prefix its first cycle
+would claim ``iter_001_cycle`` -- a row the old lineage already owns,
+and ``/run/start_or_restart`` answers HTTP 409. With the prefix the
+ids become ``s2_iter_001_cycle`` / ``s2_iter_001_self_play_v1`` / ...
+Through the unified launcher the equivalent is ``[iter].label_prefix
+= "s2_"`` (or ``--iter.label-prefix s2_``).
 """
 from __future__ import annotations
 

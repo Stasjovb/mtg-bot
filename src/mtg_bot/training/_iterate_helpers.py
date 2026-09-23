@@ -12,23 +12,35 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mtg_bot.run_labels import npz_name_prefix
 
-def find_foreign_npzs(data_dir: Path) -> list[str]:
+
+def find_foreign_npzs(data_dir: Path, label_prefix: str = "") -> list[str]:
     """Return ``.npz`` filenames under ``data_dir`` that don't match
-    the ``iter_*.npz`` pattern. iterate writes its self-play files
-    as ``iter_NNN_<bootstrap>_<utc>.npz``, and ``train_nn.py`` globs
-    every ``.npz`` in the dir it's pointed at. Anything else is a
-    landmine: foreign npzs may have been written by older code paths
-    where the policy/action-mask invariants didn't hold, and even a
-    few hundred mask-mismatched rows are enough to blow CE through
-    the roof and corrupt the next-iteration model.
+    the ``<prefix>iter_*.npz`` pattern. iterate writes its self-play
+    files as ``<prefix>iter_NNN_<bootstrap>_<utc>.npz``, and
+    ``train_nn.py`` globs every ``.npz`` in the dir it's pointed at.
+    Anything else is a landmine: foreign npzs may have been written
+    by older code paths where the policy/action-mask invariants
+    didn't hold, and even a few hundred mask-mismatched rows are
+    enough to blow CE through the roof and corrupt the
+    next-iteration model.
+
+    ``label_prefix`` is the lineage namespace (see
+    :mod:`mtg_bot.run_labels`); with ``"s2_"`` the loop's own files
+    are named ``s2_iter_NNN_*.npz`` and a bare ``iter_*.npz`` from
+    the OTHER lineage is correctly reported as foreign -- mixing two
+    lineages' self-play data in one ``--data-dir`` is exactly the
+    kind of silent cross-contamination this guard exists to catch.
+    The default ``""`` reproduces the historical check exactly.
 
     Returns sorted basenames; empty list when the dir is clean. The
     caller decides whether to fail (recommended) or just warn.
     """
     if not data_dir.is_dir():
         return []
+    wanted = npz_name_prefix(label_prefix)
     return sorted(
         p.name for p in data_dir.glob("*.npz")
-        if not p.name.startswith("iter_")
+        if not p.name.startswith(wanted)
     )

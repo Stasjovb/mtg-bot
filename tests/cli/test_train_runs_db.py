@@ -929,3 +929,17 @@ def test_parent_run_id_from_notes_helper():
     )
     # No match if just the prefix without _cycle.
     assert cli_train._parent_run_id_from_notes("iter_001") is None
+    # Lineage-prefixed cycle ids (``iterate --run-label-prefix s2_``)
+    # must still resolve — a leading \b would not match there because
+    # ``_`` is a word character.
+    assert (
+        cli_train._parent_run_id_from_notes("s2_iter_001_cycle: train")
+        == "s2_iter_001_cycle"
+    )
+    assert (
+        cli_train._parent_run_id_from_notes("foo s2_iter_042_cycle bar")
+        == "s2_iter_042_cycle"
+    )
+    # Still anchored at a token start — a run-together word doesn't
+    # spuriously match.
+    assert cli_train._parent_run_id_from_notes("xiter_001_cycle") is None
