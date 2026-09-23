@@ -276,10 +276,15 @@ def test_self_play_writes_structured_tokens_when_opted_in(
     def _spy_data_gen(*args: Any, **kwargs: Any):
         captured.update(kwargs)
         # Honor the opt-in: emit the 8-tuple shape data_gen returns
-        # when ``structured_tokens=True``.
+        # when ``structured_tokens=True`` (+ the trailing game_ids
+        # array when ``with_game_ids=True``, which _self_play sets).
         if kwargs.get("structured_tokens"):
-            return _empty_structured_result()
-        return _empty_flat_result()
+            out = _empty_structured_result()
+        else:
+            out = _empty_flat_result()
+        if kwargs.get("with_game_ids"):
+            out = out + (np.zeros((0,), dtype=np.int32),)
+        return out
 
     monkeypatch.setattr(
         iz, "generate_training_data_parallel", _spy_data_gen,
@@ -309,7 +314,10 @@ def test_self_play_default_does_not_request_structured_tokens(
 
     def _spy_data_gen(*args: Any, **kwargs: Any):
         captured.update(kwargs)
-        return _empty_flat_result()
+        out = _empty_flat_result()
+        if kwargs.get("with_game_ids"):
+            out = out + (np.zeros((0,), dtype=np.int32),)
+        return out
 
     monkeypatch.setattr(
         iz, "generate_training_data_parallel", _spy_data_gen,

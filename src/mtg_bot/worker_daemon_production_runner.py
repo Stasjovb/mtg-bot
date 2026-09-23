@@ -181,6 +181,33 @@ def _build_nn_pimc_config(
     )
 
 
+def _self_play_exploration_knobs(claim: dict[str, Any]) -> dict[str, Any]:
+    """Pull the self-play exploration knobs off a coordinator claim.
+
+    Keys: ``root_dirichlet_alpha`` (``None`` = off), ``root_dirichlet_eps``,
+    ``move_temperature``, ``temperature_cutoff``. Claims from an older
+    coordinator that never set them fall back to data_gen's defaults
+    (no root noise; T=1.0 for the first 30 non-forced decisions).
+    Only the SELF-PLAY handlers read these; eval claims are ignored
+    so the promotion gate stays deterministic-argmax.
+    """
+    alpha = claim.get("root_dirichlet_alpha")
+    alpha = float(alpha) if alpha is not None else None
+    if alpha is not None and alpha <= 0:
+        alpha = None
+    eps = claim.get("root_dirichlet_eps")
+    temperature = claim.get("move_temperature")
+    cutoff = claim.get("temperature_cutoff")
+    return {
+        "root_dirichlet_alpha": alpha,
+        "root_dirichlet_eps": float(eps) if eps is not None else 0.25,
+        "move_temperature": (
+            float(temperature) if temperature is not None else 1.0
+        ),
+        "temperature_cutoff": int(cutoff) if cutoff is not None else 30,
+    }
+
+
 def _encode_npz_bytes(
     chunk: tuple, write_structured_tokens: bool = False
 ) -> bytes:
@@ -265,6 +292,8 @@ def _play_self_play_game(
     capture_every: int,
     action_encoding_version: Optional[str],
     write_structured_tokens: bool,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[tuple, str, Optional[int], int]:
     """Run one self-play game synchronously in this thread.
 
@@ -308,6 +337,8 @@ def _play_self_play_game(
                 action_encoding_version or "positional_v1"
             ),
             structured_tokens=write_structured_tokens,
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
     except TimeoutError:
         f, o, p, m = _empty_arrays()
@@ -483,6 +514,7 @@ def _subprocess_play_self_play(
     seed = int(claim.get("seed") or 0)
     game_idx = int(claim.get("game_idx") or 0)
     deck_indices = list(claim.get("deck_indices") or [0, 0])
+    knobs = _self_play_exploration_knobs(claim)
 
     from mtg_bot.training import NNPimcConfig
     per_game_cfg = NNPimcConfig(
@@ -497,6 +529,8 @@ def _subprocess_play_self_play(
         puct=cfg.puct,
         batch_size=cfg.batch_size,
         device=cfg.device,
+        root_dirichlet_alpha=knobs["root_dirichlet_alpha"],
+        root_dirichlet_eps=knobs["root_dirichlet_eps"],
     )
     factory = per_game_cfg.build
 
@@ -523,6 +557,8 @@ def _subprocess_play_self_play(
         capture_every=capture_every,
         action_encoding_version=cfg.action_encoding_version,
         write_structured_tokens=effective_structured,
+        move_temperature=knobs["move_temperature"],
+        temperature_cutoff=knobs["temperature_cutoff"],
     )
     npz_bytes = _encode_npz_bytes(
         chunk, write_structured_tokens=effective_structured,
@@ -877,6 +913,7 @@ def build_self_play_runner(
         seed = int(claim.get("seed") or 0)
         game_idx = int(claim.get("game_idx") or 0)
         deck_indices = list(claim.get("deck_indices") or [0, 0])
+        knobs = _self_play_exploration_knobs(claim)
 
         # Per-claim re-build with overridden samples/inner_nodes; the
         # underlying NNEvaluator is rebuilt fresh each time which costs
@@ -896,6 +933,8 @@ def build_self_play_runner(
             puct=cfg.puct,
             batch_size=cfg.batch_size,
             device=cfg.device,
+            root_dirichlet_alpha=knobs["root_dirichlet_alpha"],
+            root_dirichlet_eps=knobs["root_dirichlet_eps"],
         )
         factory = per_game_cfg.build
 
@@ -923,6 +962,8 @@ def build_self_play_runner(
             capture_every=capture_every,
             action_encoding_version=cfg.action_encoding_version,
             write_structured_tokens=effective_structured,
+            move_temperature=knobs["move_temperature"],
+            temperature_cutoff=knobs["temperature_cutoff"],
         )
 
         npz_bytes = _encode_npz_bytes(

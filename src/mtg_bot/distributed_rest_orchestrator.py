@@ -148,6 +148,16 @@ class StageSpec:
     capture_every: int
     claim_ttl_seconds: int
     games: list[dict[str, Any]]
+    # Self-play exploration knobs (feature/lf-training). The
+    # coordinator copies them verbatim into every claim so workers
+    # build their per-game NNPimcConfig / data_gen call with them.
+    # Eval stages pin them OFF (``make_eval_stage_spec``) so the
+    # promotion gate stays deterministic-argmax; the worker's eval
+    # handler never reads them anyway.
+    root_dirichlet_alpha: Optional[float] = None
+    root_dirichlet_eps: float = 0.25
+    move_temperature: float = 1.0
+    temperature_cutoff: int = 30
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -160,6 +170,10 @@ class StageSpec:
             "capture_every": self.capture_every,
             "claim_ttl_seconds": self.claim_ttl_seconds,
             "games": self.games,
+            "root_dirichlet_alpha": self.root_dirichlet_alpha,
+            "root_dirichlet_eps": self.root_dirichlet_eps,
+            "move_temperature": self.move_temperature,
+            "temperature_cutoff": self.temperature_cutoff,
         }
 
 
@@ -483,9 +497,15 @@ def make_self_play_stage_spec(
     per_game_timeout_sec: float,
     capture_every: int = 0,
     claim_ttl_seconds: int = 1200,
+    root_dirichlet_alpha: Optional[float] = None,
+    root_dirichlet_eps: float = 0.25,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> StageSpec:
     """Build a self-play :class:`StageSpec`. ``weights_version`` is the
-    string label both seats share (e.g. ``"v6"``)."""
+    string label both seats share (e.g. ``"v6"``). The four
+    exploration knobs travel to every worker claim (see
+    :class:`StageSpec`)."""
     games = build_self_play_games(
         n_games=n_games, base_seed=base_seed,
         deck_pool_size=deck_pool_size,
@@ -500,6 +520,10 @@ def make_self_play_stage_spec(
         capture_every=capture_every,
         claim_ttl_seconds=claim_ttl_seconds,
         games=games,
+        root_dirichlet_alpha=root_dirichlet_alpha,
+        root_dirichlet_eps=root_dirichlet_eps,
+        move_temperature=move_temperature,
+        temperature_cutoff=temperature_cutoff,
     )
 
 
@@ -532,6 +556,10 @@ def make_eval_stage_spec(
         capture_every=capture_every,
         claim_ttl_seconds=claim_ttl_seconds,
         games=games,
+        # Eval is deterministic-argmax: no root noise, no temperature.
+        root_dirichlet_alpha=None,
+        move_temperature=0.0,
+        temperature_cutoff=0,
     )
 
 

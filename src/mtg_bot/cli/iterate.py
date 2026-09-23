@@ -226,7 +226,21 @@ def _self_play_config_dict(
         "seed": cycle_seed,
         "deck_pool": str(args.deck_pool),
         "distributed": distributed,
+        "root_dirichlet_alpha": _dirichlet_alpha_or_none(
+            getattr(args, "root_dirichlet_alpha", None)
+        ),
+        "root_dirichlet_eps": getattr(args, "root_dirichlet_eps", 0.25),
+        "move_temperature": getattr(args, "move_temperature", 1.0),
+        "temperature_cutoff": getattr(args, "temperature_cutoff", 30),
     }
+
+
+def _dirichlet_alpha_or_none(value: "float | None") -> "float | None":
+    """CLI convention: ``--root-dirichlet-alpha <= 0`` (or unset)
+    disables root noise; ``MCTS`` wants ``None`` for "off"."""
+    if value is None:
+        return None
+    return float(value) if float(value) > 0 else None
 
 
 def _train_config_dict(
@@ -534,10 +548,23 @@ def _self_play(  # pragma: no cover
     stop_check: "callable | None" = None,
     action_encoding_version: str = "positional_v1",
     write_structured_tokens: bool = False,
+    root_dirichlet_alpha: float | None = None,
+    root_dirichlet_eps: float = 0.25,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
     NN-driven PUCT config — that's what makes it self-play.
+
+    Exploration knobs (self-play ONLY — ``_eval_match`` never sets
+    them, so the promotion gate stays deterministic-argmax):
+    ``root_dirichlet_alpha`` / ``root_dirichlet_eps`` add Dirichlet
+    noise to every PIMC sub-search root (``None`` = off);
+    ``move_temperature`` / ``temperature_cutoff`` sample the played
+    move from the visit distribution for the first N non-forced
+    decisions of each game. The saved npz also carries ``game_ids``
+    so training splits train/val by game.
 
     ``hidden_sizes`` must match the saved weights' trunk shape,
     or every worker crashes at NNEvaluator load with state_dict
@@ -571,6 +598,8 @@ def _self_play(  # pragma: no cover
         architecture=architecture,
         policy_hidden_sizes=policy_hidden_sizes,
         action_encoding_version=action_encoding_version,
+        root_dirichlet_alpha=root_dirichlet_alpha,
+        root_dirichlet_eps=root_dirichlet_eps,
     )
     progress: DataGenProgress | None = None
     if progress_path is not None:
@@ -610,6 +639,9 @@ def _self_play(  # pragma: no cover
             stop_check=stop_check,
             action_encoding_version=action_encoding_version,
             structured_tokens=write_structured_tokens,
+            with_game_ids=True,
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
     except BaseException:
         if progress is not None:
@@ -624,11 +656,13 @@ def _self_play(  # pragma: no cover
         progress.finalize(status="completed")
     elapsed = time.perf_counter() - started
     if write_structured_tokens:
-        # data_gen returns an 8-tuple when structured_tokens is on.
+        # data_gen returns a 9-tuple when structured_tokens is on
+        # (8 arrays + the trailing game_ids from with_game_ids=True).
         (
             features, outcomes, policy_targets, action_masks,
             structured_token_type, structured_token_emb_ids,
             structured_token_scalars, structured_attention_mask,
+            game_ids,
         ) = gen_result
         save_dataset(
             features, outcomes, output,
@@ -637,12 +671,16 @@ def _self_play(  # pragma: no cover
             structured_token_emb_ids=structured_token_emb_ids,
             structured_token_scalars=structured_token_scalars,
             structured_attention_mask=structured_attention_mask,
+            game_ids=game_ids,
         )
     else:
-        features, outcomes, policy_targets, action_masks = gen_result
+        (
+            features, outcomes, policy_targets, action_masks, game_ids,
+        ) = gen_result
         save_dataset(
             features, outcomes, output,
             policy_targets=policy_targets, action_masks=action_masks,
+            game_ids=game_ids,
         )
     n_samples = features.shape[0]
     n_policy = int((policy_targets.sum(axis=-1) > 0.5).sum())
@@ -698,6 +736,10 @@ def _self_play_distributed(  # pragma: no cover
     poll_interval_s: float = _rest_orch.DEFAULT_POLL_INTERVAL_S,
     stop_check: Optional[Callable[[], bool]] = None,
     claim_ttl_seconds: int = 1200,
+    root_dirichlet_alpha: float | None = None,
+    root_dirichlet_eps: float = 0.25,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[int, int, float]:
     """Distributed self-play via the v2 REST contract.
 
@@ -731,6 +773,10 @@ def _self_play_distributed(  # pragma: no cover
         per_game_timeout_sec=per_game_timeout_sec or 600.0,
         capture_every=capture_every,
         claim_ttl_seconds=claim_ttl_seconds,
+        root_dirichlet_alpha=root_dirichlet_alpha,
+        root_dirichlet_eps=root_dirichlet_eps,
+        move_temperature=move_temperature,
+        temperature_cutoff=temperature_cutoff,
     )
     # Stream stage progress into runs.db so the training UI's per-
     # machine cards + "Samples" / "Workers" / "Games/hr" / "ETA" stats
@@ -1119,6 +1165,39 @@ def main(argv=None) -> None:  # pragma: no cover
     parser.add_argument(
         "--nodes", type=int, default=200,
         help="MCTS max_nodes per sub-search (default 200).",
+    )
+    parser.add_argument(
+        "--root-dirichlet-alpha", type=float, default=0.5,
+        help=(
+            "Dirichlet alpha for AlphaZero root exploration noise in "
+            "the SELF-PLAY PUCT sub-searches (default 0.5). Values "
+            "<= 0 disable the noise. Eval-gate matches never use it."
+        ),
+    )
+    parser.add_argument(
+        "--root-dirichlet-eps", type=float, default=0.25,
+        help=(
+            "Mixing weight for the root Dirichlet noise: prior = "
+            "(1-eps)*prior + eps*noise (default 0.25)."
+        ),
+    )
+    parser.add_argument(
+        "--move-temperature", type=float, default=1.0,
+        help=(
+            "Self-play move temperature T: the played move is sampled "
+            "proportional to visits**(1/T) for the first "
+            "--temperature-cutoff non-forced decisions of each game "
+            "(default 1.0; <= 0 = always argmax). Policy targets stay "
+            "the raw visit distribution. Eval matches stay argmax."
+        ),
+    )
+    parser.add_argument(
+        "--temperature-cutoff", type=int, default=30,
+        help=(
+            "Number of NON-forced decisions (>1 legal option) per "
+            "self-play game after which move selection reverts to "
+            "argmax (default 30)."
+        ),
     )
     parser.add_argument(
         "--epochs", type=int, default=50,
@@ -2195,6 +2274,12 @@ def main(argv=None) -> None:  # pragma: no cover
                     stop_check=_cycle_stop_check,
                     action_encoding_version=iter_action_encoding_version,
                     write_structured_tokens=iter_write_structured_tokens,
+                    root_dirichlet_alpha=_dirichlet_alpha_or_none(
+                        args.root_dirichlet_alpha
+                    ),
+                    root_dirichlet_eps=args.root_dirichlet_eps,
+                    move_temperature=args.move_temperature,
+                    temperature_cutoff=args.temperature_cutoff,
                 )
             else:
                 # v2 distributed: the coordinator's /v2/report_result
@@ -2216,6 +2301,12 @@ def main(argv=None) -> None:  # pragma: no cover
                     run_id_prefix=f"{iter_label}_self_play_{best_version}",
                     iterate_data_dir=args.data_dir,
                     stop_check=_cycle_stop_check,
+                    root_dirichlet_alpha=_dirichlet_alpha_or_none(
+                        args.root_dirichlet_alpha
+                    ),
+                    root_dirichlet_eps=args.root_dirichlet_eps,
+                    move_temperature=args.move_temperature,
+                    temperature_cutoff=args.temperature_cutoff,
                 )
         # Self-play stage finished — register the produced npz as an
         # artifact on the self_play stage run and emit a stage_completed

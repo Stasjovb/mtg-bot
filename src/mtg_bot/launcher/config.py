@@ -70,6 +70,15 @@ class IterSection:
     epochs: int = 4
     architecture: str = "structured"
     bootstrap_version: Optional[str] = None
+    # Self-play exploration knobs, passed straight through to
+    # ``mtg_bot iterate --root-dirichlet-alpha/--root-dirichlet-eps/
+    # --move-temperature/--temperature-cutoff``. Self-play only; the
+    # eval gate stays deterministic-argmax. ``root_dirichlet_alpha
+    # <= 0`` disables the root noise.
+    root_dirichlet_alpha: float = 0.5
+    root_dirichlet_eps: float = 0.25
+    move_temperature: float = 1.0
+    temperature_cutoff: int = 30
 
 
 @dataclass
@@ -252,6 +261,23 @@ def _coerce_value(
                 ) from exc
         raise LaunchConfigError(
             f"{section}.{key}: expected int, got {type(value).__name__}",
+        )
+    if target_type is float:
+        if isinstance(value, bool):
+            raise LaunchConfigError(
+                f"{section}.{key}: expected float, got bool",
+            )
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError as exc:
+                raise LaunchConfigError(
+                    f"{section}.{key}: invalid float {value!r}",
+                ) from exc
+        raise LaunchConfigError(
+            f"{section}.{key}: expected float, got {type(value).__name__}",
         )
     if target_type is str:
         if isinstance(value, str):

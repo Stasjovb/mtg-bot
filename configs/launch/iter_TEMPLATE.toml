@@ -47,6 +47,27 @@ epochs = 4
 # fresh v-chain.
 architecture = "structured"
 
+# --- Self-play exploration (self-play ONLY; the eval gate is always
+# deterministic argmax with no noise). ---
+
+# Dirichlet alpha for AlphaZero root exploration noise in every PIMC
+# sub-search of the self-play stage. Default 0.5. Set <= 0 to disable.
+root_dirichlet_alpha = 0.5
+
+# Mixing weight for that noise: prior = (1-eps)*prior + eps*noise.
+# Default 0.25.
+root_dirichlet_eps = 0.25
+
+# Self-play move temperature T: the played move is sampled
+# proportional to visits**(1/T) for the first `temperature_cutoff`
+# non-forced decisions of each game, then argmax. Policy targets are
+# always the raw visit distribution. Default 1.0 (<= 0 = always argmax).
+move_temperature = 1.0
+
+# Number of NON-forced decisions (>1 legal option) per game after which
+# self-play move selection reverts to argmax. Default 30.
+temperature_cutoff = 30
+
 
 # ----------------------------------------------------------------------
 # [cluster] -- which workers + local-vs-distributed

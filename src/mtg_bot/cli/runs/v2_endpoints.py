@@ -472,6 +472,13 @@ def build_v2_blueprint(
                     "samples": spec.get("samples"),
                     "per_game_timeout_sec": spec.get("per_game_timeout_sec"),
                     "capture_every": spec.get("capture_every"),
+                    # Self-play exploration knobs (absent on stages
+                    # created by an older orchestrator -> the worker
+                    # falls back to data_gen's defaults).
+                    "root_dirichlet_alpha": spec.get("root_dirichlet_alpha"),
+                    "root_dirichlet_eps": spec.get("root_dirichlet_eps"),
+                    "move_temperature": spec.get("move_temperature"),
+                    "temperature_cutoff": spec.get("temperature_cutoff"),
                     "expires_at": result["expires_at"],
                 }
                 # Track in the heartbeat poller so a DEAD worker's
