@@ -81,7 +81,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     import importlib
     mod = importlib.import_module(_SUBCOMMANDS[args.subcommand])
-    mod.main(args.rest)
+    rc = mod.main(args.rest)
+    # Propagate the subcommand's exit code. Dropping it made
+    # ``mtg_bot iterate-distributed`` exit 0 even when its ``_launch``
+    # returned the iterate child's non-zero rc -- so on 2026-09-23 the
+    # wrapper script relaunched the failing cycle four more times
+    # (2026-09-23 postmortem). Subcommands that return None (most of
+    # them) are unaffected.
+    if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
+        sys.exit(rc)
 
 
 if __name__ == "__main__":

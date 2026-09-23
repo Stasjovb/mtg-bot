@@ -82,6 +82,51 @@ def test_dispatch_routes_each_subcommand():
         )
 
 
+# ---------------------------------------------------------------------------
+# Exit-code propagation
+#
+# The dispatcher used to call ``mod.main(args.rest)`` and drop the
+# return value, so ``mtg_bot iterate-distributed`` exited 0 even when
+# ``_launch`` returned the iterate child's non-zero rc. On 2026-09-23
+# that made the wrapper script relaunch a failing cycle four more
+# times.
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_with_rc(rc):
+    fake_module = type("M", (), {"main": staticmethod(lambda argv: rc)})
+    with patch.dict(sys.modules, {"mtg_bot.cli.iterate": fake_module}):
+        return cli_pkg.main(["iterate"])
+
+
+def test_nonzero_subcommand_rc_propagates_as_systemexit():
+    with pytest.raises(SystemExit) as exc:
+        _dispatch_with_rc(3)
+    assert exc.value.code == 3
+
+
+def test_zero_subcommand_rc_does_not_exit():
+    assert _dispatch_with_rc(0) is None
+
+
+def test_none_return_does_not_exit():
+    """Most subcommands return None; they must keep exiting 0."""
+    assert _dispatch_with_rc(None) is None
+
+
+def test_non_int_return_is_ignored():
+    """A subcommand that returns some object (not an rc) must not be
+    reinterpreted as a failure."""
+    assert _dispatch_with_rc(object()) is None
+
+
+def test_bool_return_is_not_treated_as_an_exit_code():
+    """``True`` is an int in Python; a subcommand returning True means
+    'ok', not 'exit 1'."""
+    assert _dispatch_with_rc(True) is None
+    assert _dispatch_with_rc(False) is None
+
+
 def test_unknown_subcommand_raises_systemexit():
     """argparse's ``choices=`` enforcement should fire on an unknown
     subcommand — argparse exits via SystemExit(2)."""
