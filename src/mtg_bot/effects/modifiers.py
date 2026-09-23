@@ -672,5 +672,6 @@ __all__ = [
     "ContinuousModifier",
     "ReplacementEffect",
     "dispatch_replacement",
+    "active_static_abilities",
     "walk_continuous_modifiers",
 ]

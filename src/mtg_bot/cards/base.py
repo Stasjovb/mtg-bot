@@ -532,7 +532,9 @@ class RoomHalf:
     activated_abilities: tuple["ActivatedAbility", ...] = ()
 
     def __post_init__(self) -> None:
-        _validate_static_abilities(f"RoomHalf {self.name}", self.static_abilities)
+        _validate_static_abilities(
+            f"RoomHalf {self.name}", self.static_abilities,
+        )
 
 
 @dataclass(frozen=True)
