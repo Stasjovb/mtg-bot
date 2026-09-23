@@ -187,6 +187,61 @@ def test_timeout_returns_empty_timed_out_chunk(monkeypatch, capfd):
     assert "game 2" in err
 
 
+def test_timeout_without_decision_count_falls_back_to_zero(
+    monkeypatch, capfd,
+):
+    """A TimeoutError raised before ``_generate_one_game_data``
+    attaches ``decisions_completed`` still reports, at zero."""
+    import mtg_bot.training.data_gen as dg
+
+    def _boom_timeout(**kwargs):
+        raise TimeoutError("simulated per-game wedge")
+
+    monkeypatch.setattr(dg, "_generate_one_game_data", _boom_timeout)
+
+    args = (
+        3,
+        random_choice_factory,
+        random_choice_factory,
+        0, 40, 1, None,
+        simple_test_deck_pool(),
+        300.0, None, None,
+    )
+    _game_idx, chunk = _play_one_parallel_game(args)
+    assert chunk[5] == "timed_out"
+    assert "at decisions=0" in capfd.readouterr().err
+
+
+def test_timeout_reports_the_partial_decision_count(monkeypatch, capfd):
+    """The triage bit: a timeout line must say how far the game got.
+
+    "wedged at decision 3" and "ground through 900 decisions and blew
+    the wall budget" need completely different responses, and the
+    self-play phase's stderr previously said neither — only
+    ``self_play``'s eval path carried the count.
+    """
+    import mtg_bot.training.data_gen as dg
+
+    def _boom_timeout(**kwargs):
+        exc = TimeoutError("simulated slow game")
+        exc.decisions_completed = 917
+        raise exc
+
+    monkeypatch.setattr(dg, "_generate_one_game_data", _boom_timeout)
+
+    args = (
+        4,
+        random_choice_factory,
+        random_choice_factory,
+        0, 40, 1, None,
+        simple_test_deck_pool(),
+        300.0, None, None,
+    )
+    _game_idx, chunk = _play_one_parallel_game(args)
+    assert chunk[5] == "timed_out"
+    assert "at decisions=917" in capfd.readouterr().err
+
+
 # ---------------------------------------------------------------------
 # _winner_to_p0_outcome + _empty_arrays helpers
 # ---------------------------------------------------------------------

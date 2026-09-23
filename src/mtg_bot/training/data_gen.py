@@ -929,9 +929,17 @@ def _play_one_parallel_game(
         )
     except TimeoutError as exc:
         import sys
+        # ``decisions_completed`` is attached by
+        # ``_generate_one_game_data``'s timeout handler; the 0 fallback
+        # keeps this working for a TimeoutError raised before the
+        # attach step (e.g. a shutdown race).
+        partial_decisions = int(
+            getattr(exc, "decisions_completed", 0) or 0,
+        )
         print(
             f"[worker] game {game_idx} timed out "
-            f"({exc}); dropping this game, pool continues.",
+            f"({exc}) at decisions={partial_decisions}; "
+            f"dropping this game, pool continues.",
             file=sys.stderr,
         )
         f, o, p, m = _empty_arrays()
@@ -1115,6 +1123,15 @@ def _generate_one_game_data(
                         "progress": progress.snapshot(),
                     },
                 )
+            # Attach the partial decisions count so the worker-level
+            # handler can report "wedged at decision 3" vs "ground
+            # through 900 decisions and blew the wall budget" — the
+            # single most useful bit for triaging a timeout, and the
+            # one self_play._play_one_match_game has carried since
+            # the hang-dump work. Without it the self-play phase's
+            # stderr line is just "timed out", which is exactly the
+            # ambiguity ``_hang_progress`` exists to resolve.
+            exc.decisions_completed = progress.decisions_completed  # type: ignore[attr-defined]
             raise
     else:
         winner, samples, struct_rows = _play_one_game_recording(
