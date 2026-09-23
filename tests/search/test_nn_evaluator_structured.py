@@ -64,7 +64,8 @@ from mtg_bot.training.structured_model import (
     EMB_FIELD_TARGET_PRINTING,
     EMB_FIELD_VARIANT,
     N_EMB_FIELDS,
-    N_SCALAR_FIELDS,
+    DEFAULT_SCALAR_SCHEMA_VERSION,
+    scalar_width_for_schema,
     N_TOKEN_TYPES,
     STEP_VOCAB_SIZE,
     StructuredModel,
@@ -104,7 +105,9 @@ def _fake_tokenizer_module(*, seq_len: int = 5):
     mod = types.ModuleType("mtg_bot.training.state_tokenizer")
 
     def tokenize_state(state, viewer_id, recent_actions, n=32, *,
-                       n_printings_cap=320):
+                       n_printings_cap=320,
+                       scalar_schema_version=DEFAULT_SCALAR_SCHEMA_VERSION):
+        scalar_width = scalar_width_for_schema(scalar_schema_version)
         # Seed-on-id(state) keeps each state's tokens consistent
         # across calls within a test, while still letting different
         # states produce different inputs.
@@ -139,7 +142,7 @@ def _fake_tokenizer_module(*, seq_len: int = 5):
             0, STEP_VOCAB_SIZE, size=seq_len, dtype=np.int64,
         )
         token_scalars = rng.standard_normal(
-            (seq_len, N_SCALAR_FIELDS),
+            (seq_len, scalar_width),
         ).astype(np.float32)
         attention_mask = np.ones(seq_len, dtype=bool)
         return {
@@ -960,3 +963,148 @@ def test_structured_with_policy_kwarg_is_forced_true(
     state = _FakeAdapter()
     val, pol = ev.evaluate_with_policy(state, player_id=0)
     assert pol.shape == (ACTION_VOCAB_SIZE,)
+
+
+# ---------------------------------------------------------------------
+# Scalar schema: loader picks the projection width from metadata
+# ---------------------------------------------------------------------
+
+
+def _small_kwargs_with_schema(version: int) -> dict[str, Any]:
+    kw = dict(SMALL_KWARGS)
+    kw["structured_scalar_schema_version"] = version
+    return kw
+
+
+def _small_model_metadata(version_field, *, include_field: bool):
+    """Real ``ModelMetadata`` for SMALL_KWARGS; ``include_field=False``
+    mimics a pre-v2 metadata.json (no ``scalar_schema_version`` key ->
+    ``from_dict`` defaults it to 1)."""
+    from mtg_bot.training.registry import ModelMetadata
+    d = {
+        "version": "v_test",
+        "created_at": "2026-01-01T00:00:00Z",
+        "feature_dim": 0,
+        "hidden_sizes": [],
+        "with_policy": True,
+        "architecture": ARCHITECTURE_STRUCTURED,
+        "action_encoding_version": "positional_v1",
+        "training": {
+            "structured_emb_dim": SMALL_KWARGS["structured_emb_dim"],
+            "structured_n_heads": SMALL_KWARGS["structured_n_heads"],
+            "structured_n_layers": SMALL_KWARGS["structured_n_layers"],
+            "structured_hidden_dim": SMALL_KWARGS["structured_hidden_dim"],
+            "structured_action_history_n": (
+                SMALL_KWARGS["structured_action_history_n"]
+            ),
+            "structured_n_printings": SMALL_KWARGS["structured_n_printings"],
+        },
+    }
+    if include_field:
+        d["scalar_schema_version"] = version_field
+    return ModelMetadata.from_dict(d)
+
+
+def test_nn_evaluator_default_schema_is_v2_and_tokenizer_gets_it(
+    fake_tokenizer,
+):
+    from mtg_bot.training.structured_model import N_SCALAR_FIELDS_V2
+    ev = NNEvaluator(**SMALL_KWARGS)
+    assert ev.model.config.scalar_schema_version == 2
+    assert ev.model.scalar_proj.in_features == N_SCALAR_FIELDS_V2
+    assert ev._structured_scalar_schema_version == 2
+
+
+def test_nn_evaluator_explicit_schema_v1_builds_three_wide_projection(
+    fake_tokenizer,
+):
+    ev = NNEvaluator(**_small_kwargs_with_schema(1))
+    assert ev.model.scalar_proj.in_features == 3
+    assert ev._structured_scalar_schema_version == 1
+    # Inference goes through the stub tokenizer which honours the
+    # requested schema width — the forward must succeed on 3-wide rows.
+    v = ev.evaluate(_FakeAdapter(), player_id=0)
+    assert -1.0 <= v <= 1.0
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_from_metadata_picks_scalar_width_from_metadata(
+    tmp_path: Path, version: int,
+):
+    from mtg_bot.training.structured_model import scalar_width_for_schema
+    ev = NNEvaluator(**_small_kwargs_with_schema(version))
+    weights_path = tmp_path / f"structured_v{version}.pt"
+    ev.save(weights_path)
+    meta = _small_model_metadata(version, include_field=True)
+    assert meta.scalar_schema_version == version
+    loaded = NNEvaluator.from_metadata(weights_path, meta)
+    assert loaded.model.config.scalar_schema_version == version
+    assert (
+        loaded.model.scalar_proj.in_features
+        == scalar_width_for_schema(version)
+    )
+    assert loaded._structured_scalar_schema_version == version
+
+
+def test_from_metadata_without_field_loads_legacy_v1_weights(
+    tmp_path: Path,
+):
+    """A metadata.json that predates ``scalar_schema_version`` (every
+    v1..v14 / v13s checkpoint) must load as schema 1 with a 3-wide
+    ``scalar_proj`` — identical to pre-feature behaviour."""
+    ev = NNEvaluator(**_small_kwargs_with_schema(1))
+    weights_path = tmp_path / "legacy.pt"
+    ev.save(weights_path)
+    meta = _small_model_metadata(None, include_field=False)
+    assert meta.scalar_schema_version == 1
+    loaded = NNEvaluator.from_metadata(weights_path, meta)
+    assert loaded.model.config.scalar_schema_version == 1
+    assert loaded.model.scalar_proj.in_features == 3
+
+
+def test_from_metadata_field_mismatch_fails_loudly(tmp_path: Path):
+    """Metadata claiming schema 1 for weights trained on schema 2
+    surfaces as the usual load_state_dict size-mismatch error."""
+    ev = NNEvaluator(**_small_kwargs_with_schema(2))
+    weights_path = tmp_path / "v2_weights.pt"
+    ev.save(weights_path)
+    meta = _small_model_metadata(1, include_field=True)
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        NNEvaluator.from_metadata(weights_path, meta)
+
+
+def test_from_metadata_stand_in_reads_schema_from_training_dict(
+    tmp_path: Path,
+):
+    """Duck-typed metadata without the top-level attribute falls back
+    to ``training.structured_config.scalar_schema_version``."""
+    ev = NNEvaluator(**_small_kwargs_with_schema(1))
+    weights_path = tmp_path / "nested_schema.pt"
+    ev.save(weights_path)
+    meta = _nested_meta_stub(
+        weights_path,
+        nested={
+            "emb_dim": SMALL_KWARGS["structured_emb_dim"],
+            "n_heads": SMALL_KWARGS["structured_n_heads"],
+            "n_layers": SMALL_KWARGS["structured_n_layers"],
+            "hidden_dim": SMALL_KWARGS["structured_hidden_dim"],
+            "action_history_n": SMALL_KWARGS["structured_action_history_n"],
+            "n_printings": SMALL_KWARGS["structured_n_printings"],
+            "scalar_schema_version": 1,
+        },
+    )
+    loaded = NNEvaluator.from_metadata(weights_path, meta)
+    assert loaded.model.scalar_proj.in_features == 3
+
+
+def test_collate_structured_token_dicts_rejects_mixed_widths():
+    d3 = {
+        "token_type": np.array([1], dtype=np.int64),
+        "token_emb_ids": np.zeros((1, 7), dtype=np.int64),
+        "token_scalars": np.zeros((1, 3), dtype=np.float32),
+        "attention_mask": np.array([True]),
+    }
+    d29 = dict(d3)
+    d29["token_scalars"] = np.zeros((1, 29), dtype=np.float32)
+    with pytest.raises(ValueError, match="scalar_schema_version"):
+        _collate_structured_token_dicts([d3, d29], device=torch.device("cpu"))

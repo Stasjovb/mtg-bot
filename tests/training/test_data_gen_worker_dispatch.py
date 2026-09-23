@@ -203,3 +203,30 @@ def test_empty_arrays_shapes():
     assert f.shape == (0, FEATURE_DIM)
     assert o.shape == (0,)
     assert f.dtype == np.float32 or f.dtype == np.float64
+
+
+def test_14_arg_tuple_threads_scalar_schema_version():
+    """The 14th element carries ``structured_scalar_schema_version``;
+    the structured rows come out at the requested (v1 = 3) width."""
+    args = (
+        7,
+        random_choice_factory,
+        random_choice_factory,
+        0,
+        40,
+        1,
+        None,
+        simple_test_deck_pool(),
+        None,
+        None,
+        None,
+        "positional_v1",
+        True,                       # structured_tokens
+        1,                          # structured_scalar_schema_version
+    )
+    game_idx, chunk = _play_one_parallel_game(args)
+    assert game_idx == 7
+    assert chunk[-2] == "completed"
+    rows = chunk[6]
+    assert rows, "structured rows expected when structured_tokens=True"
+    assert all(r["token_scalars"].shape[1] == 3 for r in rows)

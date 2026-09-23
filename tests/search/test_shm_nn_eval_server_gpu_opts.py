@@ -54,7 +54,9 @@ from mtg_bot.training.structured_model import (
     EMB_FIELD_TARGET_PRINTING,
     EMB_FIELD_VARIANT,
     N_EMB_FIELDS,
-    N_SCALAR_FIELDS,
+    DEFAULT_SCALAR_SCHEMA_VERSION,
+    N_SCALAR_FIELDS_V2,
+    scalar_width_for_schema,
     N_TOKEN_TYPES,
     STEP_VOCAB_SIZE,
     TARGET_KIND_VOCAB_SIZE,
@@ -80,6 +82,7 @@ def _make_token_dict(
     seq_len: int,
     seed: int = 0,
     n_printings_cap: int = 32,
+    scalar_width: int = N_SCALAR_FIELDS_V2,
 ) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     token_type = rng.integers(
@@ -108,7 +111,7 @@ def _make_token_dict(
         0, STEP_VOCAB_SIZE, size=seq_len, dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (seq_len, N_SCALAR_FIELDS),
+        (seq_len, scalar_width),
     ).astype(np.float32)
     attention_mask = np.ones(seq_len, dtype=bool)
     return {
@@ -124,11 +127,13 @@ def _fake_tokenizer_module():
     default_seq_len = 5
 
     def tokenize_state(state, viewer_id, recent_actions, n=32, *,
-                       n_printings_cap=320):
+                       n_printings_cap=320,
+                       scalar_schema_version=DEFAULT_SCALAR_SCHEMA_VERSION):
         seed = abs(hash((id(state), viewer_id))) % (2**32)
         return _make_token_dict(
             seq_len=default_seq_len, seed=seed,
             n_printings_cap=n_printings_cap,
+            scalar_width=scalar_width_for_schema(scalar_schema_version),
         )
 
     mod.tokenize_state = tokenize_state
@@ -626,7 +631,7 @@ def test_train_structured_model_runs_under_autocast(tmp_path: Path):
         (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (n_rows, seq_len, N_SCALAR_FIELDS),
+        (n_rows, seq_len, N_SCALAR_FIELDS_V2),
     ).astype(np.float32)
     attention_mask = np.ones((n_rows, seq_len), dtype=np.bool_)
     outcomes = rng.choice(
@@ -695,7 +700,7 @@ def test_train_structured_model_under_cpu_bf16_autocast(tmp_path: Path):
         (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
     )
     token_scalars = rng.standard_normal(
-        (n_rows, seq_len, N_SCALAR_FIELDS),
+        (n_rows, seq_len, N_SCALAR_FIELDS_V2),
     ).astype(np.float32)
     attention_mask = np.ones((n_rows, seq_len), dtype=np.bool_)
     outcomes = np.zeros(n_rows, dtype=np.float32)

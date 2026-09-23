@@ -498,3 +498,82 @@ def test_load_structured_dataset_files_with_different_max_lens(
     assert ds[0]["token_type"].shape == (2,)
     assert ds[3]["token_type"].shape == (5,)
     assert ds[4]["token_type"].shape == (7,)
+
+
+# ---------------------------------------------------------------------
+# Scalar schema widths across files
+# ---------------------------------------------------------------------
+
+
+def test_scalar_width_property_reports_row_width() -> None:
+    s = _make_struct_arrays(n_rows=3, max_len=4, seed=0)
+    ds = StructuredDataset(
+        token_type=s["structured_token_type"],
+        token_emb_ids=s["structured_token_emb_ids"],
+        token_scalars=s["structured_token_scalars"],
+        attention_mask=s["structured_attention_mask"],
+        outcomes=np.zeros(3, dtype=np.float32),
+        policy_targets=np.zeros((3, ACTION_VOCAB_SIZE), dtype=np.float32),
+        action_masks=np.zeros((3, ACTION_VOCAB_SIZE), dtype=np.bool_),
+    )
+    assert ds.scalar_width == N_SCALAR_FIELDS
+
+
+def test_load_structured_dataset_rejects_mixed_scalar_widths(
+    tmp_path: Path,
+) -> None:
+    """Two npz files generated under different scalar schemas must
+    fail loudly (naming the file) instead of a bare numpy concat
+    error."""
+    from mtg_bot.training.structured_model import N_SCALAR_FIELDS_V2
+    s3 = _make_struct_arrays(n_rows=2, max_len=3, seed=1)
+    s29 = _make_struct_arrays(n_rows=2, max_len=3, seed=2)
+    s29["structured_token_scalars"] = np.zeros(
+        (2, 3, N_SCALAR_FIELDS_V2), dtype=np.float32,
+    )
+    for name, s in (("a_v1.npz", s3), ("b_v2.npz", s29)):
+        save_dataset(
+            np.zeros((2, FEATURE_DIM), dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+            tmp_path / name,
+            structured_token_type=s["structured_token_type"],
+            structured_token_emb_ids=s["structured_token_emb_ids"],
+            structured_token_scalars=s["structured_token_scalars"],
+            structured_attention_mask=s["structured_attention_mask"],
+        )
+    with pytest.raises(ValueError, match="scalar schema mismatch") as exc:
+        load_structured_dataset(tmp_path)
+    assert "b_v2.npz" in str(exc.value)
+
+
+def test_load_structured_dataset_tolerates_zero_row_file_of_other_width(
+    tmp_path: Path,
+) -> None:
+    """Crash / timeout npzs carry zero rows with a placeholder scalar
+    width; they must not poison a load of real v2 files."""
+    from mtg_bot.training.structured_model import N_SCALAR_FIELDS_V2
+    real = _make_struct_arrays(n_rows=2, max_len=3, seed=3)
+    real["structured_token_scalars"] = np.ones(
+        (2, 3, N_SCALAR_FIELDS_V2), dtype=np.float32,
+    )
+    save_dataset(
+        np.zeros((2, FEATURE_DIM), dtype=np.float32),
+        np.zeros(2, dtype=np.float32),
+        tmp_path / "real.npz",
+        structured_token_type=real["structured_token_type"],
+        structured_token_emb_ids=real["structured_token_emb_ids"],
+        structured_token_scalars=real["structured_token_scalars"],
+        structured_attention_mask=real["structured_attention_mask"],
+    )
+    save_dataset(
+        np.zeros((0, FEATURE_DIM), dtype=np.float32),
+        np.zeros(0, dtype=np.float32),
+        tmp_path / "empty.npz",
+        structured_token_type=np.zeros((0, 0), dtype=np.int64),
+        structured_token_emb_ids=np.zeros((0, 0, N_EMB_FIELDS), dtype=np.int64),
+        structured_token_scalars=np.zeros((0, 0, 3), dtype=np.float32),
+        structured_attention_mask=np.zeros((0, 0), dtype=np.bool_),
+    )
+    ds = load_structured_dataset(tmp_path)
+    assert len(ds) == 2
+    assert ds.scalar_width == N_SCALAR_FIELDS_V2
