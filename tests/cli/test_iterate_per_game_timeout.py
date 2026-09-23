@@ -69,8 +69,9 @@ _BASE_ARGS = [
 
 def test_default_self_play_timeout_is_none_pre_resolve():
     """No flag passed → self-play default is ``None`` at parse time.
-    ``main()`` then resolves to ``3 * args.nodes`` after parse so
-    the formula picks up the user's actual ``--nodes`` value. A
+    ``main()`` then resolves it from ``--nodes`` * ``--samples``
+    after parse so the formula picks up the user's actual search
+    config. A
     real argparse default value would bake in a fixed number that
     couldn't track ``--nodes``."""
     parser = _iterate_parser()
@@ -80,7 +81,7 @@ def test_default_self_play_timeout_is_none_pre_resolve():
 
 def test_default_eval_timeout_is_none_pre_resolve():
     """Same contract as self-play: None at parse, resolved by main()
-    to ``3 * args.nodes``."""
+    from ``--nodes`` * ``--samples``."""
     parser = _iterate_parser()
     ns = parser.parse_args(_BASE_ARGS)
     assert ns.per_game_timeout_eval_sec is None
@@ -132,7 +133,7 @@ def test_explicit_overrides_accept_both_flags():
 def test_eval_default_is_at_least_self_play_default():
     """Sanity invariant: contention only inflates per-game wall, so the
     eval default budget must never be smaller than the self-play one.
-    Both phases now use the same ``3 * --nodes`` formula so the
+    Both phases now use the same work-relative formula so the
     invariant holds trivially with equality."""
     assert (
         _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
@@ -140,21 +141,45 @@ def test_eval_default_is_at_least_self_play_default():
     )
 
 
-def test_post_resolve_default_is_three_times_nodes(monkeypatch, tmp_path):
-    """After main() runs the post-parse resolve step, an unset
-    timeout becomes exactly ``3 * args.nodes``. Verifies the
-    formula end-to-end through the argparse + resolve pipeline."""
-    import argparse
+def test_post_resolve_default_tracks_nodes_and_samples():
+    """After main()'s post-parse resolve step, an unset timeout
+    becomes ``default_per_game_timeout_sec(nodes, samples)``.
+
+    The pre-2026-09-23 formula was ``3 * nodes`` and ignored
+    ``--samples`` entirely, which put the default BELOW the measured
+    mean game wall at nodes=100/samples=2 (see the calibration
+    comment on ``_common.PER_GAME_TIMEOUT_SEC_PER_SEARCH_UNIT``).
+    """
     parser = _iterate_parser()
-    # nodes=400 should resolve to 1200s on both phases.
-    ns = parser.parse_args([*_BASE_ARGS, "--nodes", "400"])
+    ns = parser.parse_args(
+        [*_BASE_ARGS, "--nodes", "100", "--samples", "2"],
+    )
     assert ns.per_game_timeout_self_play_sec is None
     assert ns.per_game_timeout_eval_sec is None
-    # Apply the resolve step main() does (copied here as the
-    # single-line transform under test).
+    # Apply the resolve step main() does.
+    expected = _common.default_per_game_timeout_sec(ns.nodes, ns.samples)
     if ns.per_game_timeout_self_play_sec is None:
-        ns.per_game_timeout_self_play_sec = 3.0 * ns.nodes
+        ns.per_game_timeout_self_play_sec = expected
     if ns.per_game_timeout_eval_sec is None:
-        ns.per_game_timeout_eval_sec = 3.0 * ns.nodes
-    assert ns.per_game_timeout_self_play_sec == 1200.0
-    assert ns.per_game_timeout_eval_sec == 1200.0
+        ns.per_game_timeout_eval_sec = expected
+    assert ns.per_game_timeout_self_play_sec == 900.0
+    assert ns.per_game_timeout_eval_sec == 900.0
+
+
+def test_post_resolve_default_reacts_to_samples_alone():
+    """Doubling --samples doubles the search work per decision, so
+    it must double the budget. The old formula moved it not at all."""
+    parser = _iterate_parser()
+    low = parser.parse_args(
+        [*_BASE_ARGS, "--nodes", "100", "--samples", "2"],
+    )
+    high = parser.parse_args(
+        [*_BASE_ARGS, "--nodes", "100", "--samples", "4"],
+    )
+    budget_low = _common.default_per_game_timeout_sec(
+        low.nodes, low.samples,
+    )
+    budget_high = _common.default_per_game_timeout_sec(
+        high.nodes, high.samples,
+    )
+    assert budget_high == 2 * budget_low
