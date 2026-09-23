@@ -101,7 +101,9 @@ optional fields take defaults from `mtg_bot.launcher.config`:
   without a sensible default), `bootstrap_version`, `nodes`,
   `samples`, `games_per_iteration`, `epochs`, `architecture`. The
   launcher hand-merges these into the corresponding `mtg_bot
-  iterate` flags.
+  iterate` flags. `label_prefix` (default `""`) namespaces every
+  generated run label for a SECOND training lineage — see
+  "Running a second lineage" below.
 - **`[cluster]`** — which workers: `local_only` (true short-circuits
   the AWS fleet; today this MUST be true — Phase B fills the AWS
   path), `master_url` / `mac_url` / `win10_url` (heartbeat targets;
@@ -160,6 +162,44 @@ message rather than silently dropping into a no-op.
   already exists" guard when the existing row is in a non-restartable
   state. Reserved for future strict-mode behaviour; today the
   runs.client swallows conflicts as warnings.
+
+### Running a second lineage (`label_prefix`)
+
+The coordinator's `runs.db` is global and `run_id` is its primary
+key: `/run/start_or_restart` answers HTTP 409 when a row with the
+same id already exists in `running` / `completed`. A second training
+lineage — its own registry root (e.g. `trained_weights_s2/`) with
+`iterate_state.json` restarting at `iterations_completed = 0` —
+would therefore try to claim `iter_001_cycle`, which the original
+lineage already owns.
+
+Set `[iter].label_prefix` (or `--iter.label-prefix s2_`) to move the
+whole lineage into its own namespace. Every generated name picks it
+up — cycle id, self-play / train / eval stage ids, the progress-JSON
+filenames, the self-play `.npz` basenames and the replay
+sub-directories:
+
+```
+s2_iter_001_cycle
+s2_iter_001_self_play_v1
+s2_iter_001_train_v2
+s2_iter_001_eval_v2_vs_v1
+```
+
+The launcher forwards it to the child as `mtg_bot iterate
+--run-label-prefix s2_`. Both sides compute the id through
+`mtg_bot.run_labels`, so the row the launcher pre-registers is the
+row iterate writes to. A trailing `_` is added if you leave it off.
+The default `""` reproduces the original lineage's ids exactly.
+
+Give the second lineage its **own** `--registry-root` and
+`--data-dir`. A shared `--data-dir` is rejected at startup: the
+foreign-npz guard is lineage-scoped, so the other lineage's
+`iter_*.npz` files count as foreign and iterate exits rather than
+silently training on mixed data. A shared `--progress-dir` works for
+naming (all files are prefixed) but the stale-STOP-sentinel sweep at
+the top of each cycle is not lineage-scoped — prefer a separate
+progress dir when two lineages run concurrently.
 
 ### What happens under the hood
 

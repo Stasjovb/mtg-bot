@@ -38,6 +38,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from mtg_bot import run_labels as _run_labels
+
 
 class LaunchConfigError(ValueError):
     """Raised when a TOML / CLI-override is malformed.
@@ -79,6 +81,16 @@ class IterSection:
     root_dirichlet_eps: float = 0.25
     move_temperature: float = 1.0
     temperature_cutoff: int = 30
+    # Lineage namespace for every generated run label / run_id. ""
+    # (default) reproduces the historical ``iter_NNN_*`` ids. A
+    # second lineage (own registry root + own iterate_state.json
+    # restarting at iteration 1) sets e.g. ``s2_`` so its cycle rows
+    # don't collide with the first lineage's rows in the shared
+    # coordinator runs.db. Forwarded to ``mtg_bot iterate
+    # --run-label-prefix`` AND used for the cycle_id the launcher
+    # pre-registers -- both derive from ``mtg_bot.run_labels`` so
+    # the two are coherent by construction.
+    label_prefix: str = ""
 
 
 @dataclass
@@ -165,20 +177,31 @@ class LaunchConfig:
 
     @property
     def iter_label(self) -> str:
-        """``iter_NNN`` -- matches :mod:`mtg_bot.cli.iterate`'s
-        internal ``iter_label`` format (see iterate.py L2019).
-        Used as the prefix for the cycle_id and the per-cycle paths.
+        """``<prefix>iter_NNN`` -- the SAME string
+        :mod:`mtg_bot.cli.iterate` computes for its
+        ``iterations_completed + 1``-th cycle. Both sides call
+        :func:`mtg_bot.run_labels.iter_label`, so the formula can
+        only change in one place.
         """
-        return f"iter_{self.iter.target_iter:03d}"
+        return _run_labels.iter_label(
+            self.iter.target_iter, self.iter.label_prefix,
+        )
 
     @property
     def cycle_id(self) -> str:
-        """``iter_NNN_cycle`` -- matches iterate.py L2034.
+        """``<prefix>iter_NNN_cycle`` -- the runs.db row id the
+        launcher pre-registers (and the UI's force-kill button maps
+        a click to).
 
-        This is the runs.db row id the launcher pre-registers, and
-        the UI's force-kill button maps a click to.
+        Coherence invariant: this MUST equal the cycle_id iterate
+        generates for the same iteration, or the launcher registers
+        one row while iterate writes another and the UI card sticks
+        at ``running`` forever. Guaranteed by both sides calling
+        :func:`mtg_bot.run_labels.cycle_id`.
         """
-        return f"{self.iter_label}_cycle"
+        return _run_labels.cycle_id(
+            self.iter.target_iter, self.iter.label_prefix,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +500,16 @@ def _validate(cfg: LaunchConfig) -> None:
             f"iter.target_iter must be positive; got "
             f"{cfg.iter.target_iter}",
         )
+    # Normalise the lineage prefix in place so every downstream
+    # reader (cycle_id, the forwarded --run-label-prefix flag) sees
+    # the canonical ``<token>_`` form. Fails loudly on a prefix that
+    # would break a filename / glob / SQL LIKE pattern.
+    try:
+        cfg.iter.label_prefix = _run_labels.normalize_label_prefix(
+            cfg.iter.label_prefix,
+        )
+    except _run_labels.InvalidLabelPrefix as exc:
+        raise LaunchConfigError(f"iter.label_prefix: {exc}") from exc
     if not cfg.cluster.local_only:
         # Phase B AWS path: validate the AWS section is actionable.
         if cfg.aws.count < 1:
