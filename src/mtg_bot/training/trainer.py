@@ -30,6 +30,7 @@ params).
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from dataclasses import dataclass, field
@@ -52,6 +53,70 @@ from mtg_bot.search.nn_evaluator import (
     _ValueMLP,
 )
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
+
+_log = logging.getLogger(__name__)
+
+
+def grouped_train_val_split(
+    group_ids: np.ndarray,
+    val_split: float,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split row indices into ``(train_idx, val_idx)`` by GROUP.
+
+    ``group_ids`` is a ``(N,)`` int array; rows sharing a value came
+    from the same self-play game. Groups (not rows) are shuffled and
+    ``~val_split`` of them are assigned to val, so no group ever
+    straddles the split. Splitting by row instead leaks near-
+    duplicate consecutive game states into val, and val loss stops
+    measuring generalisation and starts measuring memorisation.
+
+    Rules:
+
+    - ``val_split <= 0`` → everything is train (val empty).
+    - ``n_val_groups = int(n_groups * val_split)``; when that rounds
+      to 0 but there are at least 2 groups, one group still goes to
+      val so early-stopping keeps a signal (e.g. a handful of legacy
+      one-group-per-file NPZs at ``val_split=0.1``). A single group
+      can't be split — val is empty and a warning is logged.
+    - Row order within each side is shuffled with ``rng`` so the
+      caller can slice mini-batches directly. Deterministic in
+      ``rng``.
+    """
+    group_ids = np.asarray(group_ids)
+    n = int(group_ids.shape[0])
+    if group_ids.ndim != 1:
+        raise ValueError(
+            f"group_ids must be 1-D; got shape {group_ids.shape}"
+        )
+    if val_split <= 0.0 or n == 0:
+        return rng.permutation(n), np.zeros((0,), dtype=np.int64)
+    uniq = np.unique(group_ids)
+    n_groups = int(uniq.shape[0])
+    n_val_groups = int(n_groups * val_split)
+    if n_val_groups == 0 and n_groups > 1:
+        n_val_groups = 1
+    if n_groups == 1:
+        _log.warning(
+            "grouped_train_val_split: only ONE group in %d rows; "
+            "cannot hold out a game-level validation set (val empty). "
+            "Provide game_ids (newer NPZ files) or more files.",
+            n,
+        )
+    shuffled_groups = uniq[rng.permutation(n_groups)]
+    val_groups = shuffled_groups[:n_val_groups]
+    is_val = np.isin(group_ids, val_groups)
+    val_idx = np.flatnonzero(is_val)
+    train_idx = np.flatnonzero(~is_val)
+    val_idx = val_idx[rng.permutation(val_idx.shape[0])]
+    train_idx = train_idx[rng.permutation(train_idx.shape[0])]
+    _log.info(
+        "train/val split by group: %d groups -> %d train groups / "
+        "%d val groups; %d train rows / %d val rows",
+        n_groups, n_groups - n_val_groups, n_val_groups,
+        int(train_idx.shape[0]), int(val_idx.shape[0]),
+    )
+    return train_idx.astype(np.int64), val_idx.astype(np.int64)
 
 
 @dataclass
@@ -151,10 +216,19 @@ def train_value_network(
     policy_hidden_sizes: Optional[tuple[int, ...]] = None,
     early_stop_patience: Optional[int] = None,
     epoch_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+    group_ids: Optional[np.ndarray] = None,
 ) -> TrainingHistory:
     """Fit a value (or value+policy) network to the supplied
     training data and write the final state_dict to
     ``weights_out_path``.
+
+    ``group_ids`` (``(N,)`` int, optional) are per-row game group ids
+    (``load_all_datasets(..., include_group_ids=True)``). The
+    train/val split is done by GROUP via
+    :func:`grouped_train_val_split` so no game straddles the split.
+    ``None`` falls back to one group per row — i.e. a plain row
+    split — and logs a warning; only appropriate for synthetic data
+    with no game structure.
 
     ``features``: ``(N, FEATURE_DIM)`` float32. ``outcomes``: ``(N,)``
     float32 in ``{-1, 0, +1}``.
@@ -301,13 +375,26 @@ def train_value_network(
     device_obj = torch.device(device)
     torch.manual_seed(rng_seed)
 
-    # Train/val split. Shuffle indices once, slice deterministically.
+    # Train/val split BY GAME GROUP (deterministic in ``rng_seed``).
     n = features.shape[0]
     rng = np.random.default_rng(rng_seed)
-    perm = rng.permutation(n)
-    n_val = int(n * val_split)
-    val_idx = perm[:n_val]
-    train_idx = perm[n_val:]
+    if group_ids is None:
+        _log.warning(
+            "train_value_network: no group_ids supplied; falling back "
+            "to a per-row train/val split (rows from one game may land "
+            "on both sides). Pass group_ids from "
+            "load_all_datasets(include_group_ids=True)."
+        )
+        group_ids = np.arange(n, dtype=np.int64)
+    elif np.asarray(group_ids).shape[0] != n:
+        raise ValueError(
+            f"group_ids rows {np.asarray(group_ids).shape[0]} != "
+            f"features rows {n}"
+        )
+    train_idx, val_idx = grouped_train_val_split(
+        group_ids, val_split, rng,
+    )
+    n_val = int(val_idx.shape[0])
 
     # Move every tensor to ``device_obj`` ONCE here, before the epoch
     # loop. The previous ``DataLoader(TensorDataset(...))`` shape did
@@ -825,16 +912,26 @@ def train_structured_model(
     device_obj = torch.device(device)
     torch.manual_seed(rng_seed)
 
-    # Deterministic shuffle + split. Picking indices on CPU and
-    # passing them to ``Subset`` is plenty for the sizes the
-    # structured trainer sees during smoke runs; production-scale
-    # shuffling can graduate to a Sampler later if needed.
+    # Deterministic split BY GAME GROUP. ``StructuredDataset.group_ids``
+    # carries one id per row (``load_structured_dataset`` derives it
+    # from each file's ``game_ids``, or the whole file for legacy
+    # NPZs); a dataset without the attribute falls back to per-row
+    # groups (= plain row split) with a warning.
     n = len(dataset)
     rng = np.random.default_rng(rng_seed)
-    perm = rng.permutation(n)
-    n_val = int(n * val_split)
-    val_idx = perm[:n_val].tolist()
-    train_idx = perm[n_val:].tolist()
+    group_ids = getattr(dataset, "group_ids", None)
+    if group_ids is None:
+        _log.warning(
+            "train_structured_model: dataset exposes no group_ids; "
+            "falling back to a per-row train/val split."
+        )
+        group_ids = np.arange(n, dtype=np.int64)
+    train_idx_arr, val_idx_arr = grouped_train_val_split(
+        np.asarray(group_ids), val_split, rng,
+    )
+    n_val = int(val_idx_arr.shape[0])
+    val_idx = val_idx_arr.tolist()
+    train_idx = train_idx_arr.tolist()
     train_subset = Subset(dataset, train_idx) if train_idx else dataset
     # ``num_workers=0`` keeps DataLoader on the main thread — fine for
     # smoke tests + tiny datasets but starves the GPU on real iter

@@ -266,6 +266,10 @@ def _build_iterate_argv(
         "--games-per-iteration", str(cfg.iter.games_per_iteration),
         "--epochs", str(cfg.iter.epochs),
         "--architecture", cfg.iter.architecture,
+        "--root-dirichlet-alpha", str(cfg.iter.root_dirichlet_alpha),
+        "--root-dirichlet-eps", str(cfg.iter.root_dirichlet_eps),
+        "--move-temperature", str(cfg.iter.move_temperature),
+        "--temperature-cutoff", str(cfg.iter.temperature_cutoff),
         "--shards-config", str(shards_config_path),
         "--queue-url", queue_url,
     ]

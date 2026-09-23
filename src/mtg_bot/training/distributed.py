@@ -86,6 +86,14 @@ class SelfPlayJobSpec:
     # Opt into the Step 1 structured-token data-gen writer (see
     # ``docs/NN_REPRESENTATION_ROADMAP.md``).
     write_structured_tokens: bool = False
+    # Self-play exploration knobs (feature/lf-training): root
+    # Dirichlet noise on every PIMC sub-search (``None`` = off) and
+    # visit-count move temperature for the first
+    # ``temperature_cutoff`` non-forced decisions per game.
+    root_dirichlet_alpha: Optional[float] = None
+    root_dirichlet_eps: float = 0.25
+    move_temperature: float = 1.0
+    temperature_cutoff: int = 30
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Forward-slash normalizes path fields
@@ -122,6 +130,10 @@ class SelfPlayJobSpec:
             "action_encoding_version": self.action_encoding_version,
             "use_shm_server": self.use_shm_server,
             "write_structured_tokens": self.write_structured_tokens,
+            "root_dirichlet_alpha": self.root_dirichlet_alpha,
+            "root_dirichlet_eps": self.root_dirichlet_eps,
+            "move_temperature": self.move_temperature,
+            "temperature_cutoff": self.temperature_cutoff,
         }
 
     @classmethod
@@ -160,6 +172,13 @@ class SelfPlayJobSpec:
             write_structured_tokens=bool(
                 d.get("write_structured_tokens", False)
             ),
+            root_dirichlet_alpha=(
+                float(d["root_dirichlet_alpha"])
+                if d.get("root_dirichlet_alpha") is not None else None
+            ),
+            root_dirichlet_eps=float(d.get("root_dirichlet_eps", 0.25)),
+            move_temperature=float(d.get("move_temperature", 1.0)),
+            temperature_cutoff=int(d.get("temperature_cutoff", 30)),
         )
 
 

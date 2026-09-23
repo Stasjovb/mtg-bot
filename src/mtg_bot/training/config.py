@@ -217,6 +217,17 @@ class NNPimcConfig:
     # has at least this many opponent (non-viewer) priority moments.
     # Default 3. Set to 0 to disable.
     belief_min_opponent_moments: int = 3
+    # AlphaZero root exploration noise for the PUCT sub-searches.
+    # ``root_dirichlet_alpha=None`` (default) = off, bit-identical to
+    # the pre-noise search. When set, every PIMC sub-search root
+    # mixes ``(1-eps) * prior + eps * Dirichlet(alpha)`` into its
+    # children's priors once they are all expanded (see
+    # ``MCTS._apply_root_dirichlet_noise``). Self-play data-gen sets
+    # this (iterate default 0.5 / 0.25); eval configs leave it None so
+    # the gate stays deterministic-argmax. Not applied on the ISMCTS
+    # path (``use_ismcts=True``), which has no root-prior hook.
+    root_dirichlet_alpha: Optional[float] = None
+    root_dirichlet_eps: float = 0.25
     # Torch device for the underlying ``NNEvaluator``. ``None`` means
     # "use NNEvaluator's default" (currently CPU) — preserves the
     # production data_gen / self-play default of CPU-only workers
@@ -390,6 +401,8 @@ class NNPimcConfig:
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
         puct = self.puct
+        root_dirichlet_alpha = self.root_dirichlet_alpha
+        root_dirichlet_eps = self.root_dirichlet_eps
         rng_seed_inner = seed + 100
         rng_seed_outer = seed + 200
 
@@ -400,6 +413,8 @@ class NNPimcConfig:
                 rng=random.Random(rng_seed_inner),
                 batch_size=batch_size,
                 puct=puct,
+                root_dirichlet_alpha=root_dirichlet_alpha,
+                root_dirichlet_eps=root_dirichlet_eps,
             )
 
         return PIMC(
@@ -433,6 +448,8 @@ class NNPimcConfig:
             ),
             "device": self.device,
             "action_encoding_version": self.action_encoding_version,
+            "root_dirichlet_alpha": self.root_dirichlet_alpha,
+            "root_dirichlet_eps": self.root_dirichlet_eps,
         }
 
     @classmethod
@@ -462,6 +479,8 @@ class NNPimcConfig:
             ),
             device=d.get("device"),
             action_encoding_version=d.get("action_encoding_version"),
+            root_dirichlet_alpha=d.get("root_dirichlet_alpha"),
+            root_dirichlet_eps=d.get("root_dirichlet_eps", 0.25),
         )
 
 

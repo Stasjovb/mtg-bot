@@ -279,7 +279,11 @@ def test_self_play_threads_v2_into_nnpimc_and_datagen(
 
     def _spy_data_gen(*args: Any, **kwargs: Any):
         captured_kwargs.update(kwargs)
-        return _empty_data_gen_result()
+        out = _empty_data_gen_result()
+        if kwargs.get("with_game_ids"):
+            # _self_play asks for the trailing game_ids array.
+            out = out + (np.zeros((0,), dtype=np.int32),)
+        return out
 
     monkeypatch.setattr(
         iz, "generate_training_data_parallel", _spy_data_gen,
@@ -322,7 +326,11 @@ def test_self_play_defaults_to_v1_when_not_passed(
 
     def _spy_data_gen(*args: Any, **kwargs: Any):
         captured_kwargs.update(kwargs)
-        return _empty_data_gen_result()
+        out = _empty_data_gen_result()
+        if kwargs.get("with_game_ids"):
+            # _self_play asks for the trailing game_ids array.
+            out = out + (np.zeros((0,), dtype=np.int32),)
+        return out
 
     monkeypatch.setattr(
         iz, "generate_training_data_parallel", _spy_data_gen,

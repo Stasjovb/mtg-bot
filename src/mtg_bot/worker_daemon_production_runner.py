@@ -181,6 +181,33 @@ def _build_nn_pimc_config(
     )
 
 
+def _self_play_exploration_knobs(claim: dict[str, Any]) -> dict[str, Any]:
+    """Pull the self-play exploration knobs off a coordinator claim.
+
+    Keys: ``root_dirichlet_alpha`` (``None`` = off), ``root_dirichlet_eps``,
+    ``move_temperature``, ``temperature_cutoff``. Claims from an older
+    coordinator that never set them fall back to data_gen's defaults
+    (no root noise; T=1.0 for the first 30 non-forced decisions).
+    Only the SELF-PLAY handlers read these; eval claims are ignored
+    so the promotion gate stays deterministic-argmax.
+    """
+    alpha = claim.get("root_dirichlet_alpha")
+    alpha = float(alpha) if alpha is not None else None
+    if alpha is not None and alpha <= 0:
+        alpha = None
+    eps = claim.get("root_dirichlet_eps")
+    temperature = claim.get("move_temperature")
+    cutoff = claim.get("temperature_cutoff")
+    return {
+        "root_dirichlet_alpha": alpha,
+        "root_dirichlet_eps": float(eps) if eps is not None else 0.25,
+        "move_temperature": (
+            float(temperature) if temperature is not None else 1.0
+        ),
+        "temperature_cutoff": int(cutoff) if cutoff is not None else 30,
+    }
+
+
 def _encode_npz_bytes(
     chunk: tuple, write_structured_tokens: bool = False
 ) -> bytes:
@@ -188,20 +215,26 @@ def _encode_npz_bytes(
     SSH shard's ``_flush`` writer, but to a BytesIO instead of an
     output_dir path.
 
-    ``chunk`` is the 7-tuple returned by
+    ``chunk`` is the 8-tuple returned by
     ``_play_one_parallel_game``'s success path:
     ``(features, outcomes, policy_targets, action_masks, winner,
-       outcome_kind, struct_rows)``. Empty arrays for crashed / timed-
-    out games encode cleanly (zero-row npz).
+       outcome_kind, struct_rows, game_ids)``. Empty arrays for crashed /
+    timed-out games encode cleanly (zero-row npz). ``game_ids`` (one
+    value per row = the claim's ``game_idx``) is written under the
+    ``game_ids`` key so the trainer's game-level train/val split sees
+    the same schema as the local data_gen path; a legacy 7-tuple
+    chunk gets ``-1`` per row.
     """
     import numpy as np
 
     from mtg_bot.training import save_dataset
+    from mtg_bot.training.data_gen import _chunk_game_ids
 
     features = chunk[0]
     outcomes = chunk[1]
     policy_targets = chunk[2]
     action_masks = chunk[3]
+    game_ids = _chunk_game_ids(chunk)
     # Write to a temp file under a BytesIO since np.savez_compressed
     # wants a file-like or path. BytesIO works because savez_compressed
     # internally uses the zipfile module which only needs seek/write.
@@ -230,6 +263,7 @@ def _encode_npz_bytes(
             "structured_token_emb_ids": struct["structured_token_emb_ids"],
             "structured_token_scalars": struct["structured_token_scalars"],
             "structured_attention_mask": struct["structured_attention_mask"],
+            "game_ids": game_ids,
         }
     else:
         arrays = {
@@ -237,6 +271,7 @@ def _encode_npz_bytes(
             "outcomes": outcomes,
             "policy_targets": policy_targets,
             "action_masks": action_masks,
+            "game_ids": game_ids,
         }
     # Drop empty rows (crashed / timed-out games): save_dataset would
     # raise on FEATURE_DIM mismatch when features is a (0, FEATURE_DIM)
@@ -258,6 +293,8 @@ def _play_self_play_game(
     action_encoding_version: Optional[str],
     write_structured_tokens: bool,
     structured_scalar_schema_version: Optional[int] = None,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[tuple, str, Optional[int], int]:
     """Run one self-play game synchronously in this thread.
 
@@ -277,6 +314,7 @@ def _play_self_play_game(
     """
     from mtg_bot.training.data_gen import (
         _empty_arrays,
+        _empty_game_ids,
         _generate_one_game_data,
     )
 
@@ -310,19 +348,21 @@ def _play_self_play_game(
             structured_scalar_schema_version=(
                 structured_scalar_schema_version
             ),
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
     except TimeoutError:
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "timed_out", [])
+        chunk = (f, o, p, m, None, "timed_out", [], _empty_game_ids())
     except Exception:  # noqa: BLE001 - intentional broad catch
         log.exception(
             "[self_play_runner] game %d crashed; dropping", game_idx
         )
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "crashed", [])
+        chunk = (f, o, p, m, None, "crashed", [], _empty_game_ids())
 
-    # ``chunk`` is now a 7-tuple ``(features, outcomes, policy_targets,
-    # action_masks, winner, outcome_kind, struct_rows)``.
+    # ``chunk`` is now an 8-tuple ``(features, outcomes, policy_targets,
+    # action_masks, winner, outcome_kind, struct_rows, game_ids)``.
     winner = chunk[4]
     outcome_kind = chunk[5] if len(chunk) > 5 else (
         "crashed" if winner is None and not bool(getattr(chunk[0], "size", 0))
@@ -485,6 +525,7 @@ def _subprocess_play_self_play(
     seed = int(claim.get("seed") or 0)
     game_idx = int(claim.get("game_idx") or 0)
     deck_indices = list(claim.get("deck_indices") or [0, 0])
+    knobs = _self_play_exploration_knobs(claim)
 
     from mtg_bot.training import NNPimcConfig
     per_game_cfg = NNPimcConfig(
@@ -499,6 +540,8 @@ def _subprocess_play_self_play(
         puct=cfg.puct,
         batch_size=cfg.batch_size,
         device=cfg.device,
+        root_dirichlet_alpha=knobs["root_dirichlet_alpha"],
+        root_dirichlet_eps=knobs["root_dirichlet_eps"],
     )
     factory = per_game_cfg.build
 
@@ -525,6 +568,8 @@ def _subprocess_play_self_play(
         capture_every=capture_every,
         action_encoding_version=cfg.action_encoding_version,
         write_structured_tokens=effective_structured,
+        move_temperature=knobs["move_temperature"],
+        temperature_cutoff=knobs["temperature_cutoff"],
     )
     npz_bytes = _encode_npz_bytes(
         chunk, write_structured_tokens=effective_structured,
@@ -879,6 +924,7 @@ def build_self_play_runner(
         seed = int(claim.get("seed") or 0)
         game_idx = int(claim.get("game_idx") or 0)
         deck_indices = list(claim.get("deck_indices") or [0, 0])
+        knobs = _self_play_exploration_knobs(claim)
 
         # Per-claim re-build with overridden samples/inner_nodes; the
         # underlying NNEvaluator is rebuilt fresh each time which costs
@@ -898,6 +944,8 @@ def build_self_play_runner(
             puct=cfg.puct,
             batch_size=cfg.batch_size,
             device=cfg.device,
+            root_dirichlet_alpha=knobs["root_dirichlet_alpha"],
+            root_dirichlet_eps=knobs["root_dirichlet_eps"],
         )
         factory = per_game_cfg.build
 
@@ -925,6 +973,8 @@ def build_self_play_runner(
             capture_every=capture_every,
             action_encoding_version=cfg.action_encoding_version,
             write_structured_tokens=effective_structured,
+            move_temperature=knobs["move_temperature"],
+            temperature_cutoff=knobs["temperature_cutoff"],
         )
 
         npz_bytes = _encode_npz_bytes(

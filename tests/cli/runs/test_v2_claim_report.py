@@ -556,3 +556,39 @@ def test_stage_counters_surfaces_in_flight_worker_before_first_report(tmp_path):
     assert machines["wB"]["n_games_done"] == 0
     assert machines["wB"]["n_in_flight"] == 1
     assert body["n_workers"] == 2
+
+
+def test_claim_carries_self_play_exploration_knobs(tmp_path):
+    """The four self-play exploration knobs on the stage spec are
+    copied verbatim into every claim so workers can build their
+    per-game search config from them."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    spec = _spec()
+    spec.update({
+        "root_dirichlet_alpha": 0.5,
+        "root_dirichlet_eps": 0.2,
+        "move_temperature": 0.8,
+        "temperature_cutoff": 12,
+    })
+    _create_stage(client, spec)
+    body = _claim_one(client)
+    assert body["root_dirichlet_alpha"] == 0.5
+    assert body["root_dirichlet_eps"] == 0.2
+    assert body["move_temperature"] == 0.8
+    assert body["temperature_cutoff"] == 12
+
+
+def test_claim_knobs_default_to_none_for_legacy_stage_spec(tmp_path):
+    """A stage created without the knobs (older orchestrator) yields
+    ``None`` for each so the worker falls back to data_gen defaults."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec())
+    body = _claim_one(client)
+    for key in (
+        "root_dirichlet_alpha", "root_dirichlet_eps",
+        "move_temperature", "temperature_cutoff",
+    ):
+        assert key in body
+        assert body[key] is None

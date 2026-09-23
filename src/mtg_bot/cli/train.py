@@ -100,8 +100,13 @@ def _downsample_one_legal_rows(
     *,
     keep_frac: float,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]:
+    group_ids: Optional[np.ndarray] = None,
+) -> tuple:
     """Drop a fraction of one-legal-action supervised rows.
+
+    ``group_ids`` (optional, per-row game group ids) is subset with
+    the same keep-mask and returned as a SEVENTH element when
+    supplied; without it the classic 6-tuple is returned unchanged.
 
     Why: when ~84% of supervised rows have exactly one legal action,
     their CE loss is trivially 0 and they dominate the policy-head
@@ -129,7 +134,7 @@ def _downsample_one_legal_rows(
     n_one_legal_total = int(one_legal_supervised.sum())
 
     if keep_frac >= 1.0 or n_one_legal_total == 0:
-        return (
+        out = (
             features,
             outcomes,
             policy_targets,
@@ -137,6 +142,7 @@ def _downsample_one_legal_rows(
             n_one_legal_total,
             n_one_legal_total,
         )
+        return out + (group_ids,) if group_ids is not None else out
 
     rng = np.random.default_rng(seed)
     # Build keep-mask: every non-one-legal-supervised row stays;
@@ -150,7 +156,7 @@ def _downsample_one_legal_rows(
         drop = shuffled[n_keep:]
         keep_mask[drop] = False
 
-    return (
+    out = (
         features[keep_mask],
         outcomes[keep_mask],
         policy_targets[keep_mask],
@@ -158,6 +164,9 @@ def _downsample_one_legal_rows(
         n_one_legal_total,
         n_keep,
     )
+    if group_ids is not None:
+        out = out + (np.asarray(group_ids)[keep_mask],)
+    return out
 
 
 def _git_commit() -> str | None:
@@ -490,11 +499,15 @@ def main(argv=None) -> None:
     # Always pull policy supervision arrays. ``include_policy=True``
     # zero-pads value-only files so the concatenated arrays align —
     # mixed dirs (some pre-A2.3 .npz, some post-A2.3) load cleanly.
-    features, outcomes, policy_targets, action_masks = (
+    # ``include_group_ids=True`` also returns per-row game group ids
+    # (from each file's ``game_ids``, or whole-file groups for legacy
+    # NPZs) so the trainer can split train/val by game, not by row.
+    features, outcomes, policy_targets, action_masks, group_ids = (
         load_all_datasets(
             args.data_dir,
             include_policy=True,
             max_files=args.window_recent,
+            include_group_ids=True,
         )
     )
     if features.shape[0] == 0:
@@ -523,10 +536,12 @@ def main(argv=None) -> None:
             action_masks,
             n_one_legal_total,
             n_one_legal_kept,
+            group_ids,
         ) = _downsample_one_legal_rows(
             features, outcomes, policy_targets, action_masks,
             keep_frac=args.one_legal_keep_frac,
             seed=args.seed,
+            group_ids=group_ids,
         )
         print(
             f"[train_nn] downsampled one-legal rows: kept "
@@ -731,6 +746,7 @@ def main(argv=None) -> None:
             "hidden_sizes": hidden_sizes,
             "early_stop_patience": args.early_stop_patience,
             "epoch_callback": _on_epoch,
+            "group_ids": group_ids,
         }
         if has_any_policy:
             train_kwargs["policy_targets"] = policy_targets
