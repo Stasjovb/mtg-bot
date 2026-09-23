@@ -459,6 +459,49 @@ class HandAbilityGrant:
     granted_warp_cost_str: str = ""
 
 
+def _validate_static_abilities(owner: str, statics: object) -> None:
+    """Enforce the declared ``tuple[StaticAbility, ...]`` shape.
+
+    Every consumer of a printing's ``static_abilities`` iterates it and
+    then reads ``StaticAbility`` members off each entry
+    (``applies_to`` / ``granted_keywords`` / ``continuous_effect`` /
+    ``replacement_effect``). Nothing used to enforce the shape, so a
+    builder that handed the slot a BARE ability-shaped object — a lone
+    ``ContinuousModifier`` (the payload that normally rides *inside* a
+    ``StaticAbility``), a lone ``StaticAbility``, or a list — produced a
+    printing that looked fine until some unrelated layered read walked
+    the battlefield. The failure then surfaced as
+
+        TypeError: 'ContinuousModifier' object is not iterable
+
+    raised from :func:`mtg_bot.effects.modifiers.
+    walk_continuous_modifiers` / :func:`mtg_bot.game._static_bonuses`
+    — an opaque crash, arbitrarily far (in time and in stack) from the
+    construction site that caused it, and one that drops a whole
+    self-play game.
+
+    Validating at construction turns that into a loud, located failure
+    naming the card and the offending type. No coercion
+    (``feedback_no_fallback_hybrids``): a bad shape is a bug in the
+    builder, not something to silently wrap in a 1-tuple.
+    """
+    if not isinstance(statics, tuple):
+        raise TypeError(
+            f"{owner!r}: static_abilities must be a tuple of "
+            f"StaticAbility, got {type(statics).__name__} "
+            f"({statics!r}). A bare ContinuousModifier belongs in "
+            f"StaticAbility(continuous_effect=...), not in the "
+            f"static_abilities slot."
+        )
+    for index, ability in enumerate(statics):
+        if not isinstance(ability, StaticAbility):
+            raise TypeError(
+                f"{owner!r}: static_abilities[{index}] must be a "
+                f"StaticAbility, got {type(ability).__name__} "
+                f"({ability!r})."
+            )
+
+
 @dataclass(frozen=True)
 class RoomHalf:
     """One door/half of a Duskmourn Room card (CR 207.2g + 715).
@@ -487,6 +530,11 @@ class RoomHalf:
     triggered_abilities: tuple["TriggeredAbility", ...] = ()
     static_abilities: tuple["StaticAbility", ...] = ()
     activated_abilities: tuple["ActivatedAbility", ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_static_abilities(
+            f"RoomHalf {self.name}", self.static_abilities,
+        )
 
 
 @dataclass(frozen=True)
@@ -1014,6 +1062,13 @@ class CardPrinting:
     # set to the half-name, so the existing iterators (filtered through
     # ``effective_*_abilities``) gate them by ``unlocked_halves``.
     room_halves: tuple[RoomHalf, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Runs for every construction path, including
+        # ``dataclasses.replace`` (the runtime copy/token printing
+        # rewrites in ``actions``/``effects.generic``), so a malformed
+        # ``static_abilities`` can never reach the battlefield.
+        _validate_static_abilities(self.name, self.static_abilities)
 
     @property
     def is_land(self) -> bool:

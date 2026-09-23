@@ -499,3 +499,39 @@ CUDA amortizes 20x (b1->b32) vs CPU 3.5x; at a TRUE batch of 64, CUDA is ~13x fa
 **Recommendation.** (1) **Ship batched-PUCT (`batch_size~32`): free ~2.45x, CPU-only, a config change.** (2) **Do NOT use GPU** at this net/search scale (worker-daemon CPU-by-default is correct). (3) After batching, NN is still ~68%, so the Rust engine+search-port ceiling rises only to ~1.47x — still not worth months. (4) GPU becomes worth revisiting ONLY with a search that yields LARGE batches (root/leaf-parallel across many concurrent games) — the unexplored lever; the prior cross-worker SHM attempt (§5) failed. Caveats: 1 game/config, synthetic decks, single box.
 
 **CORRECTION (verified 2026-06-01, same session): batched-PUCT b=32 is ALREADY the production default — nothing to "ship".** `NNPimcConfig.batch_size` defaults to 32, `NNPimcConfig.build()` threads it (+`puct=True`) into `MCTS`, and every NN site sets it explicitly: `cli/iterate.py` self-play (`:567`) + both eval seats (`:1019`/`:1032`), `cli/capture.py` (`:85`), `cli/bench_kinds/per_game_wall.py` (`:89`), `worker_daemon_production_runner.py` (`:169`). The only `batch_size=1` is the heuristic eval seat (no NN forward to batch — correct). Landed with `feature/batched-puct` + the Phase-2c production runner. **So the `cuda/cpu b=32` rows above ARE current production; the `b=1` baseline is counterfactual.** Implication: production already realizes the ~2.45x; the live NN share is ~68% (the b=32 row), so the Rust engine+search-port ceiling in *actual* production is ~1.47x (not the 1.18x computed from the counterfactual b=1). b=32 is also near the CPU plateau (b=64 is only 579 vs 625 us/eval), so bumping it buys ~nothing. Net: no code change available here — the one free lever was already pulled; remaining throughput requires the large-batch search re-architecture (§6b item 4).
+
+## 7. `effective_power` / layered-read hot path — closure removal (2026-09-23)
+
+**Method.** Synthetic 12-permanent battlefield (3 of them carrying a
+layer-6 `ContinuousModifier` anthem), 30,000 `effective_power(state,
+target)` calls, `.venv-py313` (CPython 3.13.14) on desktop-j05412i
+while the 20-worker `iterate_s2` self-play run was live — so both rows
+are same-box, same-load.
+
+| build | us / `effective_power` call |
+|---|---:|
+| before (generator expressions in `_compute_effective_pt` / `_static_bonuses` / `_source_layer6_wiped`) | 11.3 – 12.2 |
+| after (explicit loops, no cell variables) | **6.1** |
+
+**Why it got faster.** The dominant cost was the two layer-7e
+`sorted((ce for ce in state.continuous_effects if ...), key=...)`
+walks in `_compute_effective_pt`: each call built a generator frame,
+materialized a list and sorted it — then discarded the order and used
+only the element COUNT (each `switch_pt` entry contributes one swap, so
+only the parity matters). Counting with an explicit loop removes the
+generator frame, the list and the sort. `_static_bonuses` and
+`_source_layer6_wiped` lost their genexps too.
+
+**The change was made for correctness, not speed** — see the
+"closure-free hot path" note on `mtg_bot.game._static_bonuses`. A genexp
+that reads an enclosing local turns that local into a CELL variable
+sharing the frame's `localsplus` array with the fast locals, and two
+production self-play crashes (a `cell` object arriving as the `source`
+loop variable; a `ContinuousModifier` arriving in place of a
+`static_abilities` tuple) point at exactly that array under CPython
+3.13's specializing interpreter. The ~2x is a side effect.
+
+**Caveat.** Micro-benchmark on a synthetic board. `effective_power` is
+~850k calls per self-play game per the 2026-05-02 profile, but the
+end-to-end share was NOT re-measured — do not quote a game-level
+speed-up from this row.
