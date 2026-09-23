@@ -112,12 +112,109 @@ EMB_FIELD_STEP = 6
 
 N_EMB_FIELDS = 7
 
-# Field slots in ``token_scalars[seq_len, N_SCALAR_FIELDS]``.
+# Field slots in ``token_scalars[seq_len, scalar_width]``.
+#
+# The scalar row is VERSIONED ("scalar schema"). Schema v1 is the
+# original 3-slot row every pre-v2 checkpoint (v1..v14, v13r/v13s,
+# ...) was trained against; schema v2 appends the numeric board /
+# life state the v1 row could not see (tapped, P/T, damage,
+# counters, life totals, zone sizes, land counts, ...). The v1 slots
+# come FIRST and keep their indices, so a v2 row's ``[:3]`` prefix is
+# exactly the v1 row. Old weights stay loadable because the model's
+# ``scalar_proj`` width is picked from
+# ``StructuredModelConfig.scalar_schema_version`` (which loaders read
+# from ``ModelMetadata.scalar_schema_version``; missing = 1).
+#
+# --- schema v1 slots (all token kinds) ---------------------------
 SCALAR_FIELD_TURN_OFFSET = 0
 SCALAR_FIELD_MANA_COST_PAID = 1
 SCALAR_FIELD_PUBLIC_MASK = 2
 
 N_SCALAR_FIELDS = 3
+"""Width of the schema-v1 scalar row (kept for back-compat)."""
+
+# --- schema v2 slots: battlefield permanents (both sides) --------
+# Zero for every non-permanent token kind. Normalizers are fixed
+# constants (not data statistics) so the on-disk contract is stable:
+# P/T and damage are /8, counters are /4, flags are 0/1. Values are
+# clamped so a freak board (a 40/40) can't blow up the projection.
+SCALAR_FIELD_TAPPED = 3
+SCALAR_FIELD_IS_CREATURE = 4
+SCALAR_FIELD_POWER = 5
+"""``effective_power / 8`` (layer-7 aware), clamp [-2, 2]; creatures only."""
+SCALAR_FIELD_TOUGHNESS = 6
+"""``effective_toughness / 8``, clamp [-2, 2]; creatures only."""
+SCALAR_FIELD_DAMAGE = 7
+"""``damage marked / 8``, clamp [0, 2]."""
+SCALAR_FIELD_PT_COUNTERS = 8
+"""Net ``(+1/+1 counters - -1/-1 counters) / 4``, clamp [-2, 2]."""
+SCALAR_FIELD_OTHER_COUNTERS = 9
+"""Sum of non-P/T counters (charge / time / stun / loyalty / lore /
+flying) ``/ 4``, clamp [0, 2]."""
+SCALAR_FIELD_SUMMONING_SICK = 10
+"""1 if a creature that is summoning sick, else 0."""
+SCALAR_FIELD_ATTACKING = 11
+SCALAR_FIELD_BLOCKING = 12
+
+# --- schema v2 slots: the [GLOBAL] token -------------------------
+# Zero for every other token kind. Viewer-relative (viewer / opp).
+SCALAR_FIELD_VIEWER_LIFE = 13
+"""``life / 20``, clamp [-1, 3]."""
+SCALAR_FIELD_OPP_LIFE = 14
+SCALAR_FIELD_VIEWER_POISON = 15
+"""``poison / 10``, clamp [0, 1]."""
+SCALAR_FIELD_OPP_POISON = 16
+SCALAR_FIELD_VIEWER_LIBRARY = 17
+"""``library size / 40``, clamp [0, 2]."""
+SCALAR_FIELD_OPP_LIBRARY = 18
+SCALAR_FIELD_VIEWER_HAND = 19
+"""``hand size / 7``, clamp [0, 2]."""
+SCALAR_FIELD_OPP_HAND = 20
+SCALAR_FIELD_TURN_NUMBER = 21
+"""``turn_number / 20``, clamp [0, 1]."""
+SCALAR_FIELD_VIEWER_UNTAPPED_LANDS = 22
+"""``untapped lands / 8``, clamp [0, 2]."""
+SCALAR_FIELD_OPP_UNTAPPED_LANDS = 23
+SCALAR_FIELD_VIEWER_LANDS = 24
+"""``lands / 8``, clamp [0, 2]."""
+SCALAR_FIELD_OPP_LANDS = 25
+SCALAR_FIELD_STACK_SIZE = 26
+"""``len(stack) / 4``, clamp [0, 2]."""
+SCALAR_FIELD_IS_VIEWER_TURN = 27
+SCALAR_FIELD_VIEWER_HAS_PRIORITY = 28
+
+N_SCALAR_FIELDS_V2 = 29
+"""Width of the schema-v2 scalar row (v1 slots first, then the 26
+appended board / global slots)."""
+
+SCALAR_SCHEMA_V1 = 1
+SCALAR_SCHEMA_V2 = 2
+SUPPORTED_SCALAR_SCHEMA_VERSIONS: tuple[int, ...] = (
+    SCALAR_SCHEMA_V1, SCALAR_SCHEMA_V2,
+)
+DEFAULT_SCALAR_SCHEMA_VERSION = SCALAR_SCHEMA_V2
+"""Schema newly-constructed models / tokenizer calls use when the
+caller doesn't say otherwise. Loaders NEVER rely on this default --
+they read the version off the checkpoint's metadata."""
+
+_SCALAR_WIDTH_BY_SCHEMA: dict[int, int] = {
+    SCALAR_SCHEMA_V1: N_SCALAR_FIELDS,
+    SCALAR_SCHEMA_V2: N_SCALAR_FIELDS_V2,
+}
+
+
+def scalar_width_for_schema(version: int) -> int:
+    """Return the ``token_scalars`` row width for a scalar schema
+    version. Raises ``ValueError`` on an unknown version so a typo
+    in metadata / CLI flags fails at construction time rather than
+    as a cryptic shape mismatch deep in ``load_state_dict``."""
+    try:
+        return _SCALAR_WIDTH_BY_SCHEMA[int(version)]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(
+            f"unknown scalar_schema_version {version!r}; expected one "
+            f"of {SUPPORTED_SCALAR_SCHEMA_VERSIONS}"
+        ) from None
 
 
 # ---------------------------------------------------------------------
@@ -183,6 +280,24 @@ class StructuredModelConfig:
     """Step 4 lights this up. Skeleton has the trainable submodules
     in place but ``forward`` only returns hand-belief logits when
     this is True."""
+    scalar_schema_version: int = DEFAULT_SCALAR_SCHEMA_VERSION
+    """Which ``token_scalars`` row layout the model consumes (see the
+    ``SCALAR_FIELD_*`` block). Sets ``scalar_proj``'s input width via
+    :attr:`scalar_width`. Pre-v2 checkpoints are schema 1 (3 slots);
+    loaders read the version off ``ModelMetadata`` so old weights
+    keep loading. The tokenizer must be called with the SAME version
+    (``tokenize_state(..., scalar_schema_version=...)``) or the batch
+    width won't match ``scalar_proj``."""
+
+    def __post_init__(self) -> None:
+        # Validate eagerly so a bad version surfaces at config time.
+        scalar_width_for_schema(self.scalar_schema_version)
+
+    @property
+    def scalar_width(self) -> int:
+        """``token_scalars`` row width implied by
+        ``scalar_schema_version``."""
+        return scalar_width_for_schema(self.scalar_schema_version)
 
 
 class StructuredModel(nn.Module):
@@ -252,7 +367,9 @@ class StructuredModel(nn.Module):
         # alongside the categorical embeddings. Keeping the per-field
         # contribution additive (rather than concatenating) means
         # missing-scalar slots can be zeroed without a shape change.
-        self.scalar_proj = nn.Linear(N_SCALAR_FIELDS, cfg.emb_dim)
+        # Input width follows the config's scalar schema (3 for v1
+        # checkpoints, N_SCALAR_FIELDS_V2 for v2).
+        self.scalar_proj = nn.Linear(cfg.scalar_width, cfg.emb_dim)
         # Learned [CLS] token prepended to every input sequence.
         self.cls_token = nn.Parameter(torch.zeros(1, 1, cfg.emb_dim))
         nn.init.normal_(self.cls_token, std=0.02)
@@ -419,6 +536,17 @@ class StructuredModel(nn.Module):
         token_emb_ids = batch["token_emb_ids"]
         token_scalars = batch["token_scalars"]
         attention_mask = batch["attention_mask"]
+        expected_width = self.config.scalar_width
+        if token_scalars.shape[-1] != expected_width:
+            raise ValueError(
+                f"token_scalars width {token_scalars.shape[-1]} does not "
+                f"match this model's scalar schema v"
+                f"{self.config.scalar_schema_version} (expects "
+                f"{expected_width} slots). The tokenizer / dataset was "
+                f"produced under a different scalar_schema_version; "
+                f"re-tokenize with the model's version or load a model "
+                f"trained on this width."
+            )
 
         token_emb = self._embed_tokens(
             token_type, token_emb_ids, token_scalars,
@@ -537,7 +665,7 @@ def make_dummy_batch(
         dim=-1,
     )
     token_scalars = torch.randn(
-        (batch_size, seq_len, N_SCALAR_FIELDS), generator=gen,
+        (batch_size, seq_len, cfg.scalar_width), generator=gen,
     )
 
     if pad_lengths is None:
@@ -590,11 +718,43 @@ __all__ = [
     "EMB_FIELD_TARGET_PRINTING",
     "EMB_FIELD_VARIANT",
     "N_EMB_FIELDS",
+    "DEFAULT_SCALAR_SCHEMA_VERSION",
     "N_SCALAR_FIELDS",
+    "N_SCALAR_FIELDS_V2",
     "N_TOKEN_TYPES",
+    "SCALAR_FIELD_ATTACKING",
+    "SCALAR_FIELD_BLOCKING",
+    "SCALAR_FIELD_DAMAGE",
+    "SCALAR_FIELD_IS_CREATURE",
+    "SCALAR_FIELD_IS_VIEWER_TURN",
     "SCALAR_FIELD_MANA_COST_PAID",
+    "SCALAR_FIELD_OPP_HAND",
+    "SCALAR_FIELD_OPP_LANDS",
+    "SCALAR_FIELD_OPP_LIBRARY",
+    "SCALAR_FIELD_OPP_LIFE",
+    "SCALAR_FIELD_OPP_POISON",
+    "SCALAR_FIELD_OPP_UNTAPPED_LANDS",
+    "SCALAR_FIELD_OTHER_COUNTERS",
+    "SCALAR_FIELD_POWER",
+    "SCALAR_FIELD_PT_COUNTERS",
     "SCALAR_FIELD_PUBLIC_MASK",
+    "SCALAR_FIELD_STACK_SIZE",
+    "SCALAR_FIELD_SUMMONING_SICK",
+    "SCALAR_FIELD_TAPPED",
+    "SCALAR_FIELD_TOUGHNESS",
+    "SCALAR_FIELD_TURN_NUMBER",
     "SCALAR_FIELD_TURN_OFFSET",
+    "SCALAR_FIELD_VIEWER_HAND",
+    "SCALAR_FIELD_VIEWER_HAS_PRIORITY",
+    "SCALAR_FIELD_VIEWER_LANDS",
+    "SCALAR_FIELD_VIEWER_LIBRARY",
+    "SCALAR_FIELD_VIEWER_LIFE",
+    "SCALAR_FIELD_VIEWER_POISON",
+    "SCALAR_FIELD_VIEWER_UNTAPPED_LANDS",
+    "SCALAR_SCHEMA_V1",
+    "SCALAR_SCHEMA_V2",
+    "SUPPORTED_SCALAR_SCHEMA_VERSIONS",
+    "scalar_width_for_schema",
     "STEP_VOCAB_SIZE",
     "StructuredModel",
     "StructuredModelConfig",

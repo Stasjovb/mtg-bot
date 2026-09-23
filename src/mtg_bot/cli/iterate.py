@@ -534,6 +534,7 @@ def _self_play(  # pragma: no cover
     stop_check: "callable | None" = None,
     action_encoding_version: str = "positional_v1",
     write_structured_tokens: bool = False,
+    structured_scalar_schema_version: int | None = None,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -610,6 +611,9 @@ def _self_play(  # pragma: no cover
             stop_check=stop_check,
             action_encoding_version=action_encoding_version,
             structured_tokens=write_structured_tokens,
+            structured_scalar_schema_version=(
+                structured_scalar_schema_version
+            ),
         )
     except BaseException:
         if progress is not None:
@@ -842,6 +846,7 @@ def _train_next(
     structured_n_layers: int | None = None,
     structured_hidden_dim: int | None = None,
     structured_action_history_n: int | None = None,
+    structured_scalar_schema_version: int | None = None,
     num_workers: int = 0,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
@@ -933,6 +938,11 @@ def _train_next(
         if structured_action_history_n is not None:
             cmd.extend([
                 "--action-history-n", str(structured_action_history_n),
+            ])
+        if structured_scalar_schema_version is not None:
+            cmd.extend([
+                "--scalar-schema-version",
+                str(structured_scalar_schema_version),
             ])
     if progress_path is not None:
         # Override train_nn.py's default ``training_progress/<peeked
@@ -1211,6 +1221,20 @@ def main(argv=None) -> None:  # pragma: no cover
             "state tokenizer emits per row. Default 32 matches "
             "StructuredModelConfig.action_history_n and the §3 "
             "default in the NN-representation roadmap."
+        ),
+    )
+    parser.add_argument(
+        "--scalar-schema-version", type=int, default=None,
+        help=(
+            "Structured-trunk only: token_scalars row layout (1 = "
+            "legacy 3-slot row; 2 = adds board / life state) used "
+            "BOTH by self-play data-gen (structured-token columns) "
+            "and by the train phase's --scalar-schema-version. "
+            "Default None = the tokenizer / StructuredModelConfig "
+            "default (currently 2). Independent of the bootstrap's "
+            "schema: the bootstrap is only used for self-play "
+            "inference (its own metadata sizes its input), while the "
+            "next version trains from scratch on this schema."
         ),
     )
     parser.add_argument(
@@ -2195,6 +2219,9 @@ def main(argv=None) -> None:  # pragma: no cover
                     stop_check=_cycle_stop_check,
                     action_encoding_version=iter_action_encoding_version,
                     write_structured_tokens=iter_write_structured_tokens,
+                    structured_scalar_schema_version=(
+                        args.scalar_schema_version
+                    ),
                 )
             else:
                 # v2 distributed: the coordinator's /v2/report_result
@@ -2326,6 +2353,9 @@ def main(argv=None) -> None:  # pragma: no cover
                 structured_n_layers=args.n_layers,
                 structured_hidden_dim=args.hidden_dim,
                 structured_action_history_n=args.action_history_n,
+                structured_scalar_schema_version=(
+                    args.scalar_schema_version
+                ),
                 num_workers=args.train_num_workers,
             )
         new_weights = registry.weights_path(new_version)

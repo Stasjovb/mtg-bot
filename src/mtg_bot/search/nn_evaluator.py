@@ -383,6 +383,7 @@ def _build_structured_model(
     action_vocab_size: Optional[int] = None,
     enable_hand_belief_head: Optional[bool] = None,
     dropout: Optional[float] = None,
+    scalar_schema_version: Optional[int] = None,
 ) -> nn.Module:
     """Instantiate a ``StructuredModel`` with optional config overrides.
 
@@ -410,6 +411,7 @@ def _build_structured_model(
         ("action_vocab_size", action_vocab_size),
         ("enable_hand_belief_head", enable_hand_belief_head),
         ("dropout", dropout),
+        ("scalar_schema_version", scalar_schema_version),
     ):
         if value is not None:
             cfg_kwargs[key] = value
@@ -498,6 +500,15 @@ class NNEvaluator(Evaluator):
         structured_action_vocab_size: Optional[int] = None,
         structured_enable_hand_belief_head: Optional[bool] = None,
         structured_dropout: Optional[float] = None,
+        # Which ``token_scalars`` row layout the structured trunk was
+        # trained against (``ModelMetadata.scalar_schema_version``).
+        # ``None`` defers to ``StructuredModelConfig``'s default (the
+        # current schema) — fresh random-init evaluators get the new
+        # layout; loaders ALWAYS pass the metadata value so pre-v2
+        # checkpoints (schema 1, 3-wide ``scalar_proj``) keep loading.
+        # Threaded into every ``tokenize_state`` call so the input
+        # width matches the projection.
+        structured_scalar_schema_version: Optional[int] = None,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -582,6 +593,14 @@ class NNEvaluator(Evaluator):
                     structured_enable_hand_belief_head
                 ),
                 dropout=structured_dropout,
+                scalar_schema_version=structured_scalar_schema_version,
+            )
+            # Scalar schema the tokenizer must emit — read back off
+            # the built model's config so a ``None`` override and an
+            # explicit value both land on the width ``scalar_proj``
+            # actually has.
+            self._structured_scalar_schema_version = (
+                self.model.config.scalar_schema_version
             )
             # The action-history window the tokenizer should use.
             # Mirrors the model config so the input shape's
@@ -1120,6 +1139,9 @@ class NNEvaluator(Evaluator):
                     (),  # empty action history — see docstring above
                     n=self._structured_action_history_n,
                     n_printings_cap=self._structured_n_printings_cap,
+                    scalar_schema_version=(
+                        self._structured_scalar_schema_version
+                    ),
                 ),
             )
         batch = _collate_structured_token_dicts(
@@ -1189,11 +1211,29 @@ class NNEvaluator(Evaluator):
         if architecture == ARCHITECTURE_STRUCTURED:
             training = getattr(metadata, "training", {}) or {}
             _resolve = _resolve_structured_dim
+            # Scalar schema: a real ``ModelMetadata`` always carries
+            # ``scalar_schema_version`` (``from_dict`` defaults a
+            # missing key to 1 — the pre-v2 3-slot layout). Duck-typed
+            # stand-ins without the attribute fall back to the
+            # ``training`` dict (flat ``structured_scalar_schema_version``
+            # or nested ``structured_config.scalar_schema_version``,
+            # both written by ``mtg_bot train``) and finally to
+            # ``StructuredModelConfig``'s default.
+            scalar_schema_version = getattr(
+                metadata, "scalar_schema_version", None,
+            )
+            if scalar_schema_version is None:
+                scalar_schema_version = _resolve(
+                    training,
+                    "structured_scalar_schema_version",
+                    "scalar_schema_version",
+                )
             return cls(
                 weights_path=weights_path,
                 device=device,
                 architecture=architecture,
                 action_encoding_version=action_encoding_version,
+                structured_scalar_schema_version=scalar_schema_version,
                 structured_emb_dim=_resolve(
                     training, "structured_emb_dim", "emb_dim",
                 ),
@@ -1301,6 +1341,18 @@ def _collate_structured_token_dicts(
         raise ValueError("token_dicts must be non-empty")
     n_emb_fields = token_dicts[0]["token_emb_ids"].shape[1]
     n_scalar_fields = token_dicts[0]["token_scalars"].shape[1]
+    # Width is schema-dependent (3 for scalar schema v1, more for v2)
+    # and inferred from the first dict; every row in one batch must
+    # come from the same tokenizer schema.
+    for i, d in enumerate(token_dicts):
+        w = d["token_scalars"].shape[1]
+        if w != n_scalar_fields:
+            raise ValueError(
+                f"token_dicts[{i}] has token_scalars width {w} but "
+                f"token_dicts[0] has {n_scalar_fields}; all states in a "
+                f"batch must be tokenized under the same "
+                f"scalar_schema_version"
+            )
     max_len = max(d["token_type"].shape[0] for d in token_dicts)
     batch_size = len(token_dicts)
 

@@ -798,6 +798,25 @@ def train_structured_model(
         )
     if config is None:
         config = StructuredModelConfig()
+    # Scalar-schema width gate. The dataset's ``token_scalars`` row
+    # width is fixed at data-gen time (``tokenize_state(...,
+    # scalar_schema_version=...)``); the model's ``scalar_proj`` width
+    # is fixed by ``config.scalar_schema_version``. A mismatch would
+    # surface as a cryptic matmul shape error on the first batch (or,
+    # worse, silently train on the wrong slot semantics if a future
+    # schema kept the width) — refuse loudly up front instead.
+    dataset_width = getattr(dataset, "scalar_width", None)
+    if dataset_width is not None and dataset_width != config.scalar_width:
+        raise ValueError(
+            f"scalar schema mismatch: the dataset's token_scalars rows "
+            f"are {dataset_width} wide but StructuredModelConfig"
+            f"(scalar_schema_version={config.scalar_schema_version}) "
+            f"expects {config.scalar_width}. Either regenerate the "
+            f"training data with data_gen's "
+            f"structured_scalar_schema_version={config.scalar_schema_version}"
+            f", or train with a config whose scalar_schema_version "
+            f"matches the data (``mtg_bot train --scalar-schema-version N``)."
+        )
 
     if device is None:
         device = auto_device()

@@ -52,7 +52,9 @@ packed into the npz under four additional keys:
 
 - ``structured_token_type``     int64   ``(N, max_seq_len)``
 - ``structured_token_emb_ids``  int64   ``(N, max_seq_len, N_EMB_FIELDS=7)``
-- ``structured_token_scalars``  float32 ``(N, max_seq_len, N_SCALAR_FIELDS=3)``
+- ``structured_token_scalars``  float32 ``(N, max_seq_len, scalar_width)``
+  where ``scalar_width`` follows ``structured_scalar_schema_version``
+  (3 for schema 1, ``N_SCALAR_FIELDS_V2`` for schema 2)
 - ``structured_attention_mask`` bool    ``(N, max_seq_len)``
 
 ``max_seq_len`` is computed per-file as the longest row's emitted
@@ -141,6 +143,8 @@ _STRUCT_NPZ_KEYS = (
 
 def _pad_and_stack_structured_rows(
     rows: list[dict[str, np.ndarray]],
+    *,
+    scalar_schema_version: Optional[int] = None,
 ) -> dict[str, np.ndarray]:
     """Right-pad variable-length per-row token dicts to the longest
     row and stack into ``(N, max_seq_len, ...)`` arrays.
@@ -161,7 +165,16 @@ def _pad_and_stack_structured_rows(
         # shape (0,0,0) into shape (0,0,N_EMB_FIELDS)" — the iter_004
         # workaround was to quarantine the empties before training.
         from mtg_bot.training.structured_model import (
-            N_EMB_FIELDS, N_SCALAR_FIELDS,
+            DEFAULT_SCALAR_SCHEMA_VERSION, N_EMB_FIELDS,
+            scalar_width_for_schema,
+        )
+        # Scalar width follows the schema the rows WOULD have used
+        # (the structured trainer normalizes zero-row files to the
+        # real files' width, but keeping the placeholder honest is
+        # cheap).
+        empty_scalar_width = scalar_width_for_schema(
+            DEFAULT_SCALAR_SCHEMA_VERSION
+            if scalar_schema_version is None else scalar_schema_version
         )
         return {
             "structured_token_type": np.zeros(
@@ -171,7 +184,7 @@ def _pad_and_stack_structured_rows(
                 (0, 0, N_EMB_FIELDS), dtype=_DTYPE_STRUCT_EMB_IDS,
             ),
             "structured_token_scalars": np.zeros(
-                (0, 0, N_SCALAR_FIELDS), dtype=_DTYPE_STRUCT_SCALARS,
+                (0, 0, empty_scalar_width), dtype=_DTYPE_STRUCT_SCALARS,
             ),
             "structured_attention_mask": np.zeros(
                 (0, 0), dtype=_DTYPE_STRUCT_MASK,
@@ -186,10 +199,14 @@ def _pad_and_stack_structured_rows(
     # to the standard widths if every row is empty (rare — would
     # mean every state had zero tokens).
     from mtg_bot.training.structured_model import (
-        N_EMB_FIELDS, N_SCALAR_FIELDS,
+        DEFAULT_SCALAR_SCHEMA_VERSION, N_EMB_FIELDS,
+        scalar_width_for_schema,
     )
     emb_width = N_EMB_FIELDS
-    scalar_width = N_SCALAR_FIELDS
+    scalar_width = scalar_width_for_schema(
+        DEFAULT_SCALAR_SCHEMA_VERSION
+        if scalar_schema_version is None else scalar_schema_version
+    )
     for r in rows:
         if r["token_emb_ids"].size:
             emb_width = int(r["token_emb_ids"].shape[1])
@@ -223,13 +240,21 @@ def _pad_and_stack_structured_rows(
     }
 
 
-def _empty_structured_row() -> dict[str, np.ndarray]:
+def _empty_structured_row(
+    scalar_schema_version: Optional[int] = None,
+) -> dict[str, np.ndarray]:
     """Per-row sentinel for "no structured token captured at this
     sample point." Used so the parallel rows-array has stable length
     when structured_tokens is disabled but a downstream consumer
-    asks for the arrays anyway."""
+    asks for the arrays anyway. ``scalar_schema_version`` picks the
+    (zero-row) scalar width; ``None`` = the tokenizer default."""
     from mtg_bot.training.structured_model import (
-        N_EMB_FIELDS, N_SCALAR_FIELDS,
+        DEFAULT_SCALAR_SCHEMA_VERSION, N_EMB_FIELDS,
+        scalar_width_for_schema,
+    )
+    scalar_width = scalar_width_for_schema(
+        DEFAULT_SCALAR_SCHEMA_VERSION
+        if scalar_schema_version is None else scalar_schema_version
     )
     return {
         "token_type": np.zeros((0,), dtype=_DTYPE_STRUCT_TOKEN_TYPE),
@@ -237,7 +262,7 @@ def _empty_structured_row() -> dict[str, np.ndarray]:
             (0, N_EMB_FIELDS), dtype=_DTYPE_STRUCT_EMB_IDS,
         ),
         "token_scalars": np.zeros(
-            (0, N_SCALAR_FIELDS), dtype=_DTYPE_STRUCT_SCALARS,
+            (0, scalar_width), dtype=_DTYPE_STRUCT_SCALARS,
         ),
         "attention_mask": np.zeros((0,), dtype=_DTYPE_STRUCT_MASK),
     }
@@ -391,8 +416,16 @@ def generate_training_data(
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
     structured_tokens: bool = False,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
+
+    ``structured_scalar_schema_version`` picks the ``token_scalars``
+    row layout the structured tokens are emitted under (see
+    ``structured_model.SCALAR_FIELD_*``); ``None`` = the tokenizer's
+    current default. Must match the ``scalar_schema_version`` the
+    downstream ``mtg_bot train --architecture structured`` run uses
+    (the trainer refuses mismatched widths).
 
     For each non-chance decision (every Nth, ``sample_every``),
     captures ``extract_features(state, viewer)`` for both viewers
@@ -446,6 +479,9 @@ def generate_training_data(
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
             structured_tokens=structured_tokens,
+            structured_scalar_schema_version=(
+                structured_scalar_schema_version
+            ),
         )
         chunks.append(chunk[:6])
         struct_rows_chunks.append(chunk[6] if len(chunk) > 6 else [])
@@ -459,7 +495,10 @@ def generate_training_data(
         flat_rows: list[dict[str, np.ndarray]] = []
         for rows in struct_rows_chunks:
             flat_rows.extend(rows)
-        struct_arrays = _pad_and_stack_structured_rows(flat_rows)
+        struct_arrays = _pad_and_stack_structured_rows(
+            flat_rows,
+            scalar_schema_version=structured_scalar_schema_version,
+        )
         return (
             f, o, p, m,
             struct_arrays["structured_token_type"],
@@ -493,6 +532,7 @@ def generate_training_data_parallel(
     pool_initargs: tuple = (),
     pool_mp_context: Optional["mp.context.BaseContext"] = None,
     structured_tokens: bool = False,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -551,7 +591,9 @@ def generate_training_data_parallel(
     if n_games == 0:
         f, o, p, m = _empty_arrays()
         if structured_tokens:
-            empty_struct = _pad_and_stack_structured_rows([])
+            empty_struct = _pad_and_stack_structured_rows(
+                [], scalar_schema_version=structured_scalar_schema_version,
+            )
             return (
                 f, o, p, m,
                 empty_struct["structured_token_type"],
@@ -567,6 +609,7 @@ def generate_training_data_parallel(
             decision_cap, sample_every, replay_config, deck_pool,
             per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version, structured_tokens,
+            structured_scalar_schema_version,
         )
         for i in range(n_games)
     ]
@@ -706,7 +749,10 @@ def generate_training_data_parallel(
         for c in chunks:
             if len(c) > 6:
                 flat_rows.extend(c[6])
-        struct_arrays = _pad_and_stack_structured_rows(flat_rows)
+        struct_arrays = _pad_and_stack_structured_rows(
+            flat_rows,
+            scalar_schema_version=structured_scalar_schema_version,
+        )
         return (
             f, o, p, m,
             struct_arrays["structured_token_type"],
@@ -757,7 +803,19 @@ def _play_one_parallel_game(
     # ``enable_mulligans`` field was removed by
     # feature/always-on-mulligans — mulligans are always on now and the
     # tuple shape lost an element.
-    if len(args) == 13:
+    # ``structured_scalar_schema_version`` (the token_scalars row
+    # layout) was appended last as the 14th element; older tuple
+    # shapes default it to ``None`` (= tokenizer default schema).
+    structured_scalar_schema_version: Optional[int] = None
+    if len(args) == 14:
+        (
+            game_idx, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config, deck_pool,
+            per_game_timeout_sec, hang_dump_dir,
+            heuristics, action_encoding_version, structured_tokens,
+            structured_scalar_schema_version,
+        ) = args
+    elif len(args) == 13:
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
@@ -794,6 +852,9 @@ def _play_one_parallel_game(
             heuristics=heuristics,
             action_encoding_version=action_encoding_version,
             structured_tokens=structured_tokens,
+            structured_scalar_schema_version=(
+                structured_scalar_schema_version
+            ),
         )
     except TimeoutError as exc:
         import sys
@@ -844,6 +905,7 @@ def _generate_one_game_data(
     heuristics: Optional[HeuristicsConfig] = None,
     action_encoding_version: str = "positional_v1",
     structured_tokens: bool = False,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> tuple:
     """Play one game and return its 4-tuple training arrays.
 
@@ -947,7 +1009,8 @@ def _generate_one_game_data(
                 _play_one_game_recording,
                 (adapter, strategies, rng, decision_cap, sample_every,
                  recorder, progress, tree_depth, tree_top_k,
-                 action_encoding_version, structured_tokens),
+                 action_encoding_version, structured_tokens,
+                 structured_scalar_schema_version),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -982,6 +1045,9 @@ def _generate_one_game_data(
             tree_depth=tree_depth, tree_top_k=tree_top_k,
             action_encoding_version=action_encoding_version,
             structured_tokens=structured_tokens,
+            structured_scalar_schema_version=(
+                structured_scalar_schema_version
+            ),
         )
 
     if recorder is not None and replay_config is not None:
@@ -1064,6 +1130,7 @@ def _play_one_game_recording(
     tree_top_k: Optional[int] = None,
     action_encoding_version: str = "positional_v1",
     structured_tokens: bool = False,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
@@ -1108,6 +1175,16 @@ def _play_one_game_recording(
         from mtg_bot.training.state_tokenizer import (
             ActionEvent, tokenize_state,
         )
+        from mtg_bot.training.structured_model import (
+            DEFAULT_SCALAR_SCHEMA_VERSION,
+        )
+        tokenize_kwargs: dict = {
+            "scalar_schema_version": (
+                DEFAULT_SCALAR_SCHEMA_VERSION
+                if structured_scalar_schema_version is None
+                else int(structured_scalar_schema_version)
+            ),
+        }
 
     samples: list[
         tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]
@@ -1310,6 +1387,7 @@ def _play_one_game_recording(
                             tokenize_state(
                                 engine, viewer_id=viewer,
                                 recent_actions=action_history,
+                                **tokenize_kwargs,
                             )
                         )
             else:

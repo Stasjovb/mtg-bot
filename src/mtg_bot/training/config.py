@@ -318,6 +318,24 @@ class NNPimcConfig:
                         # flat ``training.structured_<field>`` keys.
                         # Read the nested dict first; fall back to flat.
                         _sc = _training.get("structured_config") or {}
+                        # Scalar schema (token_scalars row layout).
+                        # Top-level ``scalar_schema_version`` is the
+                        # canonical ``ModelMetadata`` field; the
+                        # trainer also mirrors it into the nested /
+                        # flat ``training`` layouts. A metadata.json
+                        # with NONE of them is a pre-v2 checkpoint ->
+                        # schema 1 (the 3-slot layout), matching
+                        # ``ModelMetadata.from_dict``'s default.
+                        _ssv = _meta.get("scalar_schema_version")
+                        if _ssv is None:
+                            _ssv = _sc.get("scalar_schema_version")
+                        if _ssv is None:
+                            _ssv = _training.get(
+                                "structured_scalar_schema_version"
+                            )
+                        eval_kwargs["structured_scalar_schema_version"] = (
+                            int(_ssv) if _ssv is not None else 1
+                        )
                         for _nest_key, _flat_key, _dst in (
                             ("emb_dim", "structured_emb_dim",
                              "structured_emb_dim"),

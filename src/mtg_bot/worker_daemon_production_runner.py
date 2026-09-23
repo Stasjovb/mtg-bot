@@ -257,8 +257,16 @@ def _play_self_play_game(
     capture_every: int,
     action_encoding_version: Optional[str],
     write_structured_tokens: bool,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> tuple[tuple, str, Optional[int], int]:
     """Run one self-play game synchronously in this thread.
+
+    ``structured_scalar_schema_version`` picks the ``token_scalars``
+    row layout for the structured-token columns; ``None`` = the
+    tokenizer's current default schema (what a fresh ``mtg_bot train
+    --architecture structured`` expects). The v2 stage spec does not
+    carry this field yet, so production workers always emit the
+    default.
 
     Returns ``(chunk, outcome_kind, winner, n_samples)``.
 
@@ -299,6 +307,9 @@ def _play_self_play_game(
                 action_encoding_version or "positional_v1"
             ),
             structured_tokens=write_structured_tokens,
+            structured_scalar_schema_version=(
+                structured_scalar_schema_version
+            ),
         )
     except TimeoutError:
         f, o, p, m = _empty_arrays()

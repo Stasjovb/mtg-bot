@@ -101,6 +101,25 @@ class ModelMetadata:
     # ``legal_action_mask`` calls so v13/v15/v16 keep their trained
     # slot semantics.
     action_encoding_version: str = "positional_v1"
+    # ``scalar_schema_version`` records which ``token_scalars`` row
+    # layout a STRUCTURED network was trained against (see
+    # ``structured_model.SCALAR_FIELD_*``):
+    # - ``1``: the original 3-slot row (turn_offset / mana_cost_paid /
+    #   public_mask). Every checkpoint registered before the field
+    #   existed (v1..v14, v13r, v13s, ...) is schema 1, so the default
+    #   is 1 and ``from_dict`` fills 1 when the key is absent — those
+    #   metadata.json files load with a 3-wide ``scalar_proj`` exactly
+    #   as before.
+    # - ``2``: appends per-permanent board state (tapped / P/T /
+    #   damage / counters / combat flags) and per-game numeric state
+    #   on the global token (life / poison / zone sizes / lands / turn
+    #   / stack / priority). ``mtg_bot train --architecture structured``
+    #   writes 2 by default.
+    # Loaders thread this into ``StructuredModelConfig
+    # .scalar_schema_version`` (model width) AND into every
+    # ``tokenize_state`` call (input width). Ignored for the
+    # flat-feature MLP architectures.
+    scalar_schema_version: int = 1
     # Training inputs and hyperparameters.
     training: dict[str, Any] = field(default_factory=dict)
     # Per-epoch loss series + summary, from TrainingHistory.
@@ -124,6 +143,7 @@ class ModelMetadata:
         known = {
             "version", "created_at", "feature_dim", "hidden_sizes",
             "with_policy", "architecture", "action_encoding_version",
+            "scalar_schema_version",
             "training", "training_history", "evaluation", "git_commit",
             "notes", "extra",
         }
@@ -152,6 +172,10 @@ class ModelMetadata:
             action_encoding_version=str(
                 d.get("action_encoding_version", "positional_v1"),
             ),
+            # Default 1 so old metadata.json (no scalar_schema_version
+            # key) loads as the 3-slot scalar layout every pre-v2
+            # structured checkpoint was trained against.
+            scalar_schema_version=int(d.get("scalar_schema_version", 1)),
             training=dict(d.get("training", {})),
             training_history=dict(d.get("training_history", {})),
             evaluation=dict(d.get("evaluation", {})),

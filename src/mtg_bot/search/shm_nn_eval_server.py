@@ -321,6 +321,11 @@ class SharedTensorServerHandle:
     # always present.
     structured_n_printings_cap: int = 0
     structured_action_history_n: int = 0
+    # Scalar schema (``token_scalars`` row layout) the loaded model's
+    # ``scalar_proj`` expects; the client threads it into
+    # ``tokenize_state`` so the emitted width matches the slot
+    # tensor. 0 for non-structured handles.
+    structured_scalar_schema_version: int = 0
 
 
 class SharedTensorNNEvalServer:
@@ -404,6 +409,7 @@ class SharedTensorNNEvalServer:
         structured_action_vocab_size: Optional[int] = None,
         structured_enable_hand_belief_head: Optional[bool] = None,
         structured_dropout: Optional[float] = None,
+        structured_scalar_schema_version: Optional[int] = None,
     ) -> None:
         # Deferred CUDA resolution: same pattern as PR #36's fix to
         # NNEvalServer. Don't call torch.cuda.is_available() in any
@@ -511,6 +517,7 @@ class SharedTensorNNEvalServer:
                     structured_enable_hand_belief_head
                 ),
                 dropout=structured_dropout,
+                scalar_schema_version=structured_scalar_schema_version,
             )
         elif with_policy:
             self._model = _build_dual_head_model(
@@ -605,6 +612,14 @@ class SharedTensorNNEvalServer:
                 N_EMB_FIELDS,
                 N_SCALAR_FIELDS,
             )
+            # Scalar-slot width follows the loaded model's scalar
+            # schema (3 for v1 checkpoints, wider for v2). A
+            # ``model_factory`` model without a ``config`` falls
+            # back to the v1 width.
+            _cfg = getattr(self._model, "config", None)
+            scalar_width = int(
+                getattr(_cfg, "scalar_width", N_SCALAR_FIELDS)
+            )
             # Zero-element ``features`` keeps the handle's contract
             # (always-present tensor) without burning shared memory.
             self._features = torch.zeros(
@@ -618,7 +633,7 @@ class SharedTensorNNEvalServer:
                 dtype=torch.int64,
             ).share_memory_()
             self._token_scalars = torch.zeros(
-                self._n_slots, self._max_seq_len, N_SCALAR_FIELDS,
+                self._n_slots, self._max_seq_len, scalar_width,
                 dtype=torch.float32,
             ).share_memory_()
             self._attention_mask = torch.zeros(
@@ -903,7 +918,10 @@ class SharedTensorNNEvalServer:
                     ),
                     "token_emb_ids": token_emb_ids,
                     "token_scalars": torch.randn(
-                        (batch_size, seq_len, N_SCALAR_FIELDS),
+                        (
+                            batch_size, seq_len,
+                            getattr(cfg, "scalar_width", N_SCALAR_FIELDS),
+                        ),
                         dtype=torch.float32, device=device,
                     ),
                     "attention_mask": torch.ones(
@@ -974,9 +992,13 @@ class SharedTensorNNEvalServer:
             cfg = self._model.config
             n_printings_cap = int(cfg.n_printings)
             action_history_n = int(cfg.action_history_n)
+            scalar_schema_version = int(
+                getattr(cfg, "scalar_schema_version", 1)
+            )
         else:
             n_printings_cap = 0
             action_history_n = 0
+            scalar_schema_version = 0
         return SharedTensorServerHandle(
             free_slots=self._free_slots,
             request_queue=self._request_queue,
@@ -999,6 +1021,7 @@ class SharedTensorNNEvalServer:
             attention_mask=self._attention_mask,
             structured_n_printings_cap=n_printings_cap,
             structured_action_history_n=action_history_n,
+            structured_scalar_schema_version=scalar_schema_version,
         )
 
     # ---- dispatcher --------------------------------------------------------
@@ -1729,9 +1752,14 @@ class SharedTensorNNEvalClient(Evaluator):
         engine = _engine_state(state)
         n_cap = self._h.structured_n_printings_cap
         action_n = self._h.structured_action_history_n
+        schema = getattr(self._h, "structured_scalar_schema_version", 0)
         kwargs: dict[str, Any] = {}
         if n_cap > 0:
             kwargs["n_printings_cap"] = n_cap
+        if schema > 0:
+            # Emit the scalar row width the server's slot tensor /
+            # model ``scalar_proj`` were sized for.
+            kwargs["scalar_schema_version"] = schema
         if action_n > 0:
             return tokenizer.tokenize_state(
                 engine, int(viewer_id), (), action_n, **kwargs,
