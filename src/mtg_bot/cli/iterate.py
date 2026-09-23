@@ -108,6 +108,7 @@ from mtg_bot.cli import _common
 from mtg_bot.cli.runs import client as _runs_client
 from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.decks import Deck, decks_from_json
+from mtg_bot import run_labels as _run_labels
 from mtg_bot.training import (
     DataGenProgress,
     EvalProgress,
@@ -192,6 +193,10 @@ def _cycle_config_dict(
     return {
         "kind": "cycle",
         "iter_idx": iter_idx_one_based,
+        # Which training lineage this cycle belongs to. "" is the
+        # original (un-prefixed) lineage. ``getattr`` keeps older
+        # callers that build a bare Namespace working.
+        "label_prefix": getattr(args, "run_label_prefix", ""),
         "bootstrap_version": args.bootstrap_version,
         "best_version_at_start": best_version,
         "games_per_iteration": args.games_per_iteration,
@@ -354,15 +359,25 @@ def _highest_known_version(state: dict, bootstrap_version: str) -> int:
 
 
 def _find_eval_progress(
-    progress_dir: Path, iter_idx_one_based: int, new_version: str,
+    progress_dir: Path,
+    iter_idx_one_based: int,
+    new_version: str,
+    label_prefix: str = "",
 ) -> Path | None:
     """Locate the per-iter eval card written by ``EvalProgress``.
-    Filename pattern from main(): ``iter_NNN_eval_<new>_vs_<old>.json``.
+    Filename pattern from main():
+    ``<prefix>iter_NNN_eval_<new>_vs_<old>.json``.
     Returns the first match (iter+new uniquely identify the file)
-    or None if none exists."""
+    or None if none exists.
+
+    ``label_prefix`` namespaces the lineage (see
+    :mod:`mtg_bot.run_labels`); the default ``""`` reproduces the
+    historical un-prefixed glob exactly."""
     if not progress_dir.is_dir():
         return None
-    label = f"iter_{iter_idx_one_based:03d}_eval_{new_version}_vs_"
+    label = _run_labels.eval_run_id_prefix(
+        iter_idx_one_based, new_version, label_prefix,
+    )
     for p in progress_dir.glob(f"{label}*.json"):
         return p
     return None
@@ -374,6 +389,7 @@ def _reconcile_iterate_state(
     progress_dir: Path,
     bootstrap_version: str,
     acceptance_threshold: float,
+    label_prefix: str = "",
 ) -> dict:
     """Reconcile ``iterate_state.json`` with what's actually on disk.
 
@@ -447,13 +463,16 @@ def _reconcile_iterate_state(
     orphan_iter_idx = iterations_completed + 1
 
     eval_path = _find_eval_progress(
-        progress_dir, orphan_iter_idx, orphan_version,
+        progress_dir, orphan_iter_idx, orphan_version, label_prefix,
     )
     if eval_path is None:
+        eval_glob = _run_labels.eval_run_id_prefix(
+            orphan_iter_idx, orphan_version, label_prefix,
+        )
         raise ReconcileError(
             f"orphan {orphan_version} for iter {orphan_iter_idx} but no "
             f"eval progress card found under {progress_dir} matching "
-            f"iter_{orphan_iter_idx:03d}_eval_{orphan_version}_vs_*.json. "
+            f"{eval_glob}*.json. "
             f"The crash likely fired before / during eval; "
             f"can't infer promote/keep without a win-rate. Reconcile "
             f"iterate_state.json by hand."
@@ -1683,7 +1702,30 @@ def main(argv=None) -> None:  # pragma: no cover
             "eval card."
         ),
     )
+    parser.add_argument(
+        "--run-label-prefix", default="",
+        help=_run_labels.LABEL_PREFIX_HELP,
+    )
     args = parser.parse_args(argv)
+
+    # Normalise the lineage prefix once, up-front: every label the
+    # loop generates flows through ``mtg_bot.run_labels`` with this
+    # value. ``""`` (the default) reproduces the historical
+    # ``iter_NNN_*`` ids byte-for-byte. A malformed prefix fails here
+    # -- before any runs.db row / npz / replay dir is written.
+    try:
+        args.run_label_prefix = _run_labels.normalize_label_prefix(
+            args.run_label_prefix,
+        )
+    except _run_labels.InvalidLabelPrefix as exc:
+        parser.error(str(exc))
+    label_prefix = args.run_label_prefix
+    if label_prefix:
+        print(
+            f"[iterate] run-label prefix: {label_prefix!r} "
+            f"(cycle ids look like "
+            f"{_run_labels.cycle_id(1, label_prefix)})"
+        )
 
     # Back-compat: --per-game-timeout-sec, if explicitly passed,
     # overrides BOTH phase-specific timeouts. Existing scripts that
@@ -1730,11 +1772,15 @@ def main(argv=None) -> None:  # pragma: no cover
     args.registry_root.mkdir(parents=True, exist_ok=True)
 
     # Defense-in-depth: scan the data dir for foreign npzs that don't
-    # match the iter_*.npz pattern. train_nn.py globs everything in
-    # the dir, so a stale debug npz here will get mixed into training
+    # match the <prefix>iter_*.npz pattern. train_nn.py globs
+    # everything in the dir, so a stale debug npz here will get mixed
+    # into training
     # — that's how today's policy-CE explosion happened (gen0_smoke.npz
     # in training_data/ leaked 603 mask-mismatched rows into v7).
-    foreign_npzs = find_foreign_npzs(args.data_dir)
+    # With a lineage prefix the guard ALSO catches the other
+    # lineage's npzs, so two lineages can't silently share one
+    # --data-dir.
+    foreign_npzs = find_foreign_npzs(args.data_dir, label_prefix)
     if foreign_npzs:
         sys.exit(
             f"[iterate] {args.data_dir} contains {len(foreign_npzs)} "
@@ -2039,6 +2085,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     args.progress_dir,
                     args.bootstrap_version,
                     args.acceptance_threshold,
+                    label_prefix,
                 )
             except ReconcileError as e:
                 sys.exit(f"[reconcile] FAILED: {e}")
@@ -2119,22 +2166,30 @@ def main(argv=None) -> None:  # pragma: no cover
         print(f"[iterate] Self-playing with {best_version}...")
 
         # 1. Self-play data gen
-        iter_label = f"iter_{n_done + 1:03d}"
+        #
+        # Every id below is derived through ``mtg_bot.run_labels`` so
+        # the unified launcher (which pre-registers the cycle row in
+        # runs.db from ``[iter].target_iter``) and this loop agree
+        # byte-for-byte. ``label_prefix`` namespaces the lineage; ""
+        # reproduces the historical ``iter_NNN_*`` ids exactly.
+        iter_label = _run_labels.iter_label(n_done + 1, label_prefix)
         progress_dir = args.progress_dir
         data_path = (
             args.data_dir
             / f"{iter_label}_{best_version}_{_now_stamp()}.npz"
         )
-        self_play_progress_path = (
-            progress_dir / f"{iter_label}_self_play_{best_version}.json"
+        self_play_run_id = _run_labels.self_play_run_id(
+            n_done + 1, best_version, label_prefix,
         )
-        self_play_run_id = f"{iter_label}_self_play_{best_version}"
+        self_play_progress_path = (
+            progress_dir / f"{self_play_run_id}.json"
+        )
 
         # Cycle-level progress JSON: a parent card the user can target
         # with a single Stop click to abort the whole iter (self-play
         # + train + eval). Children carry a back-pointer so the UI
         # stop endpoint resolves their click to this cycle_id.
-        cycle_id = f"{iter_label}_cycle"
+        cycle_id = _run_labels.cycle_id(n_done + 1, label_prefix)
         cycle_started_iso = datetime.now(timezone.utc).isoformat(
             timespec="seconds",
         )
@@ -2325,7 +2380,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     capture_every=args.capture_every_self_play,
                     total_games=args.games_per_iteration,
                     deck_pool_size=len(deck_pool),
-                    run_id_prefix=f"{iter_label}_self_play_{best_version}",
+                    run_id_prefix=self_play_run_id,
                     iterate_data_dir=args.data_dir,
                     stop_check=_cycle_stop_check,
                     root_dirichlet_alpha=_dirichlet_alpha_or_none(
@@ -2390,14 +2445,14 @@ def main(argv=None) -> None:  # pragma: no cover
 
         # 2. Train next version
         peeked_train_version = registry.next_version_id()
-        train_progress_path = (
-            progress_dir / f"{iter_label}_train_{peeked_train_version}.json"
-        )
         # Phase 1 dual-write: wrap the train subprocess call in a
         # ``training`` stage run row. ``_train_next`` raises
         # RuntimeError on a non-zero exit, which the lifecycle CM
         # maps to status=failed.
-        train_run_id = f"{iter_label}_train_{peeked_train_version}"
+        train_run_id = _run_labels.train_run_id(
+            n_done + 1, peeked_train_version, label_prefix,
+        )
+        train_progress_path = progress_dir / f"{train_run_id}.json"
         _runs_client.push_event(
             cycle_id, "stage_started",
             payload={"stage": "train", "run_id": train_run_id},
@@ -2506,11 +2561,10 @@ def main(argv=None) -> None:  # pragma: no cover
                 f"[iterate]   eval-gate: {new_version} vs "
                 f"{best_version}, {args.eval_games} games..."
             )
-            eval_progress_path = (
-                progress_dir
-                / f"{iter_label}_eval_{new_version}_vs_{best_version}.json"
+            eval_run_id = _run_labels.eval_run_id(
+                n_done + 1, new_version, best_version, label_prefix,
             )
-            eval_run_id = eval_progress_path.stem
+            eval_progress_path = progress_dir / f"{eval_run_id}.json"
             eval_replay_config: ReplayCaptureConfig | None = None
             if args.capture_every_eval > 0:
                 ev_replays_dir = args.replays_dir / eval_run_id

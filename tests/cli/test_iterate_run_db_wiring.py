@@ -220,7 +220,7 @@ def _setup_mocks_for_iterate(
     )
     # find_foreign_npzs: empty (no foreign npzs to abort on).
     monkeypatch.setattr(
-        cli_iterate, "find_foreign_npzs", lambda d: [],
+        cli_iterate, "find_foreign_npzs", lambda *a, **kw: [],
     )
 
 

@@ -186,7 +186,7 @@ def _stub_heavy_iterate_paths(
     # find_foreign_npzs: empty (no foreign npzs to abort on). Same
     # stub as test_iterate_run_db_wiring.py.
     monkeypatch.setattr(
-        iterate, "find_foreign_npzs", lambda d: [],
+        iterate, "find_foreign_npzs", lambda *a, **kw: [],
     )
     # Orphan sweep no-ops — would otherwise touch the live system.
     monkeypatch.setattr(
