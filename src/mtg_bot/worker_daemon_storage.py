@@ -18,18 +18,26 @@ in. The matching coord-side fetcher lives at
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Literal, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 
 log = logging.getLogger(__name__)
 
 
 ArtifactKind = Literal["npz", "replay"]
+
+# Path of the coordinator's artifact drop-off endpoint. Shared with
+# ``mtg_bot.cli.runs.v2_endpoints`` (which registers the route) so
+# the two sides can never drift.
+ARTIFACT_UPLOAD_PATH = "/v2/artifact/upload"
 
 
 # Retry/backoff for S3 uploads on transient ClientError (throttling /
@@ -54,6 +62,22 @@ _TRANSIENT_S3_ERROR_CODES: frozenset[str] = frozenset({
     "ServiceUnavailable",
     "InternalServerError",
 })
+
+# Retry/backoff for the HTTP uploader. Same 1s/3s/10s schedule as the
+# S3 path so a flaky coordinator behaves like a flaky bucket from the
+# worker's POV.
+HTTP_RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0, 10.0)
+
+# HTTP statuses we consider transient. 4xx (other than 429) means the
+# request itself is wrong -- a bad key, an oversize body, the endpoint
+# not enabled on the coord -- and retrying just delays the diagnostic.
+_TRANSIENT_HTTP_STATUS: frozenset[int] = frozenset({
+    408, 425, 429, 500, 502, 503, 504,
+})
+
+# Connect/read timeout for a single upload attempt. A 5 MB npz over
+# Tailscale is sub-second; 120s is the "the coord is wedged" ceiling.
+HTTP_UPLOAD_TIMEOUT_S: float = 120.0
 
 
 def build_artifact_key(
@@ -164,6 +188,126 @@ class LocalFileUploader(ArtifactUploader):
         return "file:///" + target.resolve().as_posix().lstrip("/")
 
 
+class HttpArtifactUploader(ArtifactUploader):
+    """POSTs artifacts to the coordinator's ``/v2/artifact/upload``.
+
+    This is the scheme for workers that do NOT share a filesystem
+    with the coordinator and don't have an S3 bucket -- e.g. the Mac
+    over Tailscale. The worker POSTs the raw bytes; the coordinator
+    writes them under its own ``--artifact-upload-dir`` and replies
+    with a coordinator-LOCAL ``file://`` URI. The worker hands that
+    URI straight back on ``/v2/report_result`` and the coord's
+    existing ``LocalArtifactFetcher`` rehydrates it unchanged -- no
+    new fetcher scheme needed on the coord side.
+
+    Idempotency: the artifact key is ``build_artifact_key(...)``,
+    identical to every other uploader, and the coordinator overwrites
+    the same path on a repeat POST. A retried upload therefore lands
+    the same bytes at the same path and returns the same URI.
+
+    Retry policy: transient HTTP statuses (429/5xx) and connection
+    errors retry on ``HTTP_RETRY_BACKOFF_S`` (1s / 3s / 10s). Any
+    other 4xx -- 400 bad key, 413 too large, 404 endpoint not
+    enabled -- fails LOUDLY on the first attempt; those are operator
+    bugs, not weather.
+
+    ``urlopen`` is injectable for tests (the real one is
+    ``urllib.request.urlopen``); no third-party HTTP dep.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        urlopen: Optional[Any] = None,
+        timeout: float = HTTP_UPLOAD_TIMEOUT_S,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._urlopen = urlopen or urllib.request.urlopen
+
+    def _endpoint(
+        self,
+        *,
+        kind: ArtifactKind,
+        stage_id: str,
+        shard_label: str,
+        claim_id: str,
+    ) -> str:
+        query = urlencode({
+            "kind": kind,
+            "stage_id": stage_id,
+            "shard_label": shard_label or "unknown",
+            "claim_id": claim_id,
+        })
+        return f"{self.base_url}{ARTIFACT_UPLOAD_PATH}?{query}"
+
+    def _attempt(self, url: str, payload: bytes) -> str:
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(payload)),
+            },
+        )
+        with self._urlopen(req, timeout=self.timeout) as resp:
+            raw = resp.read()
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"artifact upload to {url!r} returned non-JSON body "
+                f"({raw[:200]!r})",
+            ) from exc
+        uri = body.get("uri") if isinstance(body, dict) else None
+        if not uri:
+            raise ValueError(
+                f"artifact upload to {url!r} returned no 'uri' field: "
+                f"{body!r}",
+            )
+        return str(uri)
+
+    def upload(
+        self, payload, *, kind, stage_id, shard_label, claim_id,
+    ) -> str:
+        url = self._endpoint(
+            kind=kind, stage_id=stage_id,
+            shard_label=shard_label, claim_id=claim_id,
+        )
+        last_err: Optional[BaseException] = None
+        for attempt, delay in enumerate((0.0,) + tuple(HTTP_RETRY_BACKOFF_S)):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                return self._attempt(url, payload)
+            except urllib.error.HTTPError as e:
+                if e.code not in _TRANSIENT_HTTP_STATUS:
+                    # Operator-config / request-shape bug. Fail loud
+                    # with the server's own diagnostic attached.
+                    detail = ""
+                    try:
+                        detail = e.read().decode("utf-8", "replace")[:500]
+                    except Exception:  # noqa: BLE001 - best effort
+                        pass
+                    raise RuntimeError(
+                        f"artifact upload to {url!r} failed with "
+                        f"HTTP {e.code}: {detail or e.reason}",
+                    ) from e
+                last_err = e
+                log.warning(
+                    "[http_uploader] transient HTTP %s POSTing %s "
+                    "attempt %d: %s", e.code, url, attempt, e,
+                )
+            except (urllib.error.URLError, OSError) as e:
+                last_err = e
+                log.warning(
+                    "[http_uploader] transient connection error POSTing "
+                    "%s attempt %d: %s", url, attempt, e,
+                )
+        assert last_err is not None
+        raise last_err
+
+
 class S3ArtifactUploader(ArtifactUploader):
     """Uploads artifacts to an S3 bucket via boto3.
 
@@ -268,6 +412,10 @@ def uploader_from_uri(uri: str) -> ArtifactUploader:
     - ``file:///abs/dir`` -> ``LocalFileUploader`` rooted at that
       directory (created on first ``upload`` call if missing).
     - ``s3://bucket/prefix`` -> ``S3ArtifactUploader`` (Phase 2).
+    - ``http://host:port`` / ``https://...`` ->
+      ``HttpArtifactUploader`` POSTing to the coordinator's
+      ``/v2/artifact/upload``. Use this for workers that share
+      neither a filesystem nor a bucket with the coordinator.
     - ``null://`` -> ``NullUploader`` (test/dev only).
 
     Raises ``ValueError`` for unrecognized schemes.
@@ -279,9 +427,11 @@ def uploader_from_uri(uri: str) -> ArtifactUploader:
     if scheme == "s3":
         prefix = parsed.path.lstrip("/")
         return S3ArtifactUploader(bucket=parsed.netloc, prefix=prefix)
+    if scheme in ("http", "https"):
+        return HttpArtifactUploader(uri)
     if scheme == "null":
         return NullUploader()
     raise ValueError(
         f"unsupported artifact storage URI scheme: {scheme!r} "
-        f"(supported: file://, s3://, null://)"
+        f"(supported: file://, s3://, http://, https://, null://)"
     )
