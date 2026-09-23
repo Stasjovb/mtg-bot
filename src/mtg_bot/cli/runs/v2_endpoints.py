@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from concurrent.futures import Executor
@@ -47,6 +48,15 @@ from mtg_bot.cli.runs.coordinator_artifact_fetcher import (
     ArtifactFetcher,
     LocalArtifactFetcher,
     MultiSchemeFetcher,
+)
+# ``build_artifact_key`` is a pure, stdlib-only helper -- importing it
+# here (rather than re-deriving the key layout) guarantees the
+# coordinator's ``/v2/artifact/upload`` writes to exactly the path the
+# worker-side ``HttpArtifactUploader`` asked for. The two sides can
+# never drift.
+from mtg_bot.worker_daemon_storage import (
+    ARTIFACT_UPLOAD_PATH,
+    build_artifact_key,
 )
 
 
@@ -64,6 +74,12 @@ _REPORT_JOB_BACKOFF_SECONDS = (1.0, 3.0, 10.0)
 # on-disk filenames.
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-:]+$")
 _SAFE_VERSION_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+# Max accepted body for ``POST /v2/artifact/upload``. Real self-play
+# npzs are ~250 KB - 5 MB and replay ``.json.gz`` blobs a few MB; 64 MB
+# is a generous ceiling that still stops a runaway worker (or a
+# mis-pointed client) from filling the coordinator's disk in one POST.
+MAX_ARTIFACT_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 def _is_safe_id(s: str) -> bool:
@@ -111,6 +127,33 @@ def _safe_claim_basename(claim_id: str) -> str:
     """Strip ``:`` and ``/`` from a claim_id so it slots into a
     flat-file basename without smuggling extra directory levels."""
     return claim_id.replace(":", "_").replace("/", "_")
+
+
+def _safe_upload_target(root: Path, key: str) -> Optional[Path]:
+    """Resolve ``<root>/<key>``, or ``None`` if the key escapes
+    ``root``.
+
+    ``build_artifact_key`` already strips ``/`` and ``:`` out of the
+    claim_id and shard_label, but the stage_id passes through and the
+    ``_SAFE_ID_RE`` allowlist permits dots -- so a stage_id of ``..``
+    would otherwise climb a level. Defence in depth: reject any
+    ``..``/absolute component up front AND verify the resolved path
+    still sits under the resolved root.
+    """
+    parts = Path(key).parts
+    if not parts or ".." in parts or Path(key).is_absolute():
+        return None
+    if any(("\\" in p or "/" in p) for p in parts):
+        return None
+    target = root / key
+    try:
+        resolved = target.resolve()
+        root_resolved = root.resolve()
+    except OSError:  # pragma: no cover - resolve() is total on 3.6+
+        return None
+    if resolved == root_resolved or root_resolved not in resolved.parents:
+        return None
+    return target
 
 
 def _process_report_job(
@@ -301,6 +344,8 @@ def build_v2_blueprint(
     heartbeat_poller_provider: Optional[callable] = None,
     artifact_fetcher: Optional[ArtifactFetcher] = None,
     report_executor: Optional[Executor] = None,
+    artifact_upload_dir: Optional[Path] = None,
+    max_artifact_upload_bytes: int = MAX_ARTIFACT_UPLOAD_BYTES,
 ) -> Blueprint:
     """Construct the v2 Flask blueprint.
 
@@ -317,8 +362,20 @@ def build_v2_blueprint(
     job per ``/v2/report_result`` POST. Both are injected so tests
     can substitute a synchronous in-process executor and a stub
     fetcher pointed at ``tmp_path``.
+
+    ``artifact_upload_dir`` is the landing zone for
+    ``POST /v2/artifact/upload`` -- the drop-off endpoint workers
+    configured with ``--artifact-storage-uri http://<coord>:5099``
+    POST their ``.npz`` / replay blobs to. The response hands back a
+    coordinator-local ``file://`` URI which the worker echoes on
+    ``/v2/report_result``, so the existing ``LocalArtifactFetcher``
+    rehydrates it with no new scheme. ``None`` leaves the endpoint
+    registered but 503-ing (explicitly disabled).
     """
     bp = Blueprint("v2_coordinator", __name__)
+    upload_dir = (
+        Path(artifact_upload_dir) if artifact_upload_dir is not None else None
+    )
 
     fetcher = artifact_fetcher or MultiSchemeFetcher(
         local=LocalArtifactFetcher(),
@@ -575,6 +632,99 @@ def build_v2_blueprint(
             "queued": True,
             "claim_id": claim_id,
         }), 202
+
+    # ---- POST /v2/artifact/upload -------------------------------------
+
+    @bp.route(ARTIFACT_UPLOAD_PATH, methods=["POST"])
+    def artifact_upload():
+        """Drop-off endpoint for workers with no shared filesystem
+        and no S3 bucket (``--artifact-storage-uri http://...``).
+
+        Body is the raw artifact bytes; the key fields travel as
+        query params (or ``X-Artifact-*`` headers). Response is
+        ``{"uri": "file:///..."}`` -- a coordinator-LOCAL path the
+        worker echoes back on ``/v2/report_result``.
+        """
+        if upload_dir is None:
+            return jsonify({
+                "error": (
+                    "artifact upload endpoint disabled on this "
+                    "coordinator (no --artifact-upload-dir)"
+                ),
+            }), 503
+
+        def _field(name: str) -> str:
+            return (
+                request.args.get(name)
+                or request.headers.get(f"X-Artifact-{name.replace('_', '-')}")
+                or ""
+            ).strip()
+
+        kind = _field("kind")
+        stage_id = _field("stage_id")
+        shard_label = _field("shard_label") or "unknown"
+        claim_id = _field("claim_id")
+        if kind not in ("npz", "replay"):
+            return jsonify({
+                "error": "kind must be 'npz' or 'replay'",
+            }), 400
+        if not _is_safe_id(stage_id):
+            return jsonify({
+                "error": "stage_id required and must match [A-Za-z0-9_.\\-:]+",
+            }), 400
+        if not _is_safe_id(shard_label):
+            return jsonify({"error": "invalid shard_label"}), 400
+        if not _is_safe_id(claim_id):
+            return jsonify({"error": "invalid claim_id"}), 400
+
+        key = build_artifact_key(
+            kind=kind, stage_id=stage_id,
+            shard_label=shard_label, claim_id=claim_id,
+        )
+        target = _safe_upload_target(upload_dir, key)
+        if target is None:
+            return jsonify({
+                "error": f"artifact key escapes the upload dir: {key!r}",
+            }), 400
+
+        declared = request.content_length
+        if declared is not None and declared > max_artifact_upload_bytes:
+            return jsonify({
+                "error": (
+                    f"artifact too large: {declared} bytes > "
+                    f"{max_artifact_upload_bytes} byte cap"
+                ),
+            }), 413
+        # Read one byte past the cap so a chunked / unlabelled body
+        # can't sneak past the Content-Length check above.
+        blob = request.stream.read(max_artifact_upload_bytes + 1)
+        if len(blob) > max_artifact_upload_bytes:
+            return jsonify({
+                "error": (
+                    f"artifact too large: exceeds the "
+                    f"{max_artifact_upload_bytes} byte cap"
+                ),
+            }), 413
+        if not blob:
+            return jsonify({"error": "empty artifact body"}), 400
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Write-then-rename so a concurrent fetch never sees a
+        # half-written file; ``os.replace`` makes the repeat-POST
+        # (retry) case an idempotent overwrite.
+        tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
+        tmp.write_bytes(blob)
+        os.replace(tmp, target)
+        uri = "file:///" + target.resolve().as_posix().lstrip("/")
+        logger.info(
+            "artifact_upload: wrote %d bytes to %s (claim_id=%s)",
+            len(blob), target, claim_id,
+        )
+        return jsonify({
+            "uri": uri,
+            "key": key,
+            "bytes": len(blob),
+        }), 200
 
     # ---- GET /v2/weights/<version> ------------------------------------
 

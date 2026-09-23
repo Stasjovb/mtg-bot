@@ -113,6 +113,15 @@ models/
 # mtg_bot ladder output (results.json + ladder.md per run)
 ladder_runs/
 
+# pytest scratch registry — several CLI tests write a throwaway
+# registry + per-claim .npz artifacts here. Never a source artifact.
+trained_weights_test/
+
+# Coordinator artifact drop-off zone for workers running
+# --artifact-storage-uri http://<coord>:5099 (default
+# --artifact-upload-dir).
+artifact_uploads/
+
 # Scalar-schema-v2 lineage (corrected loop, 2026-09): registry, data, progress
 trained_weights_s2/
 iterate_data_s2/

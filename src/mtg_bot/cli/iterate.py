@@ -742,6 +742,78 @@ def _aggregate_self_play_npzs(
     return n_samples, n_policy
 
 
+def self_play_yield_error(
+    *,
+    stage_id: str,
+    data_dir: Path,
+    n_samples: int,
+    upload_failed: int = 0,
+    n_games_done: Optional[int] = None,
+) -> Optional[str]:
+    """Return an actionable error message if a self-play stage did
+    not actually produce usable training data, else ``None``.
+
+    Two failure modes, both of which used to be SILENT:
+
+    1. ``n_samples == 0`` -- no ``.npz`` reached ``--data-dir``. The
+       old code went straight into ``n_policy / n_samples`` and died
+       with a bare ``ZeroDivisionError`` several hundred games of
+       compute too late (2026-09-23).
+    2. ``upload_failed > 0`` -- the coordinator recorded games whose
+       artifact it could not fetch. Those games STILL count toward
+       the stage's ``n_games_done`` and ``n_samples`` aggregate, so
+       nothing upstream noticed the data loss.
+
+    Pure: takes counters, returns a string. The callers do the
+    exiting so this is trivially unit-testable.
+    """
+    if n_samples > 0 and upload_failed <= 0:
+        return None
+    lines: list[str] = []
+    if n_samples <= 0:
+        lines.append(
+            f"[iterate] FATAL: self-play stage {stage_id!r} produced 0 "
+            f"training samples."
+        )
+        lines.append(
+            f"  No files matching {stage_id}_*.npz were found in "
+            f"--data-dir {data_dir}."
+        )
+    else:
+        lines.append(
+            f"[iterate] FATAL: self-play stage {stage_id!r} recorded "
+            f"{upload_failed} upload_failed result(s) -- those games' "
+            f"artifacts never reached the coordinator."
+        )
+        lines.append(
+            f"  Only {n_samples} samples landed in --data-dir "
+            f"{data_dir}; the training set is incomplete."
+        )
+    if n_games_done is not None:
+        lines.append(
+            f"  Coordinator stage view: n_games_done={n_games_done}, "
+            f"upload_failed={upload_failed}."
+        )
+    lines.extend([
+        "  The two usual causes:",
+        "    1. A worker is running --artifact-storage-uri null:// "
+        "(the worker-daemon default).",
+        "       Its games complete and count toward the stage "
+        "totals, but every .npz is",
+        "       dropped on the floor. Restart that worker with "
+        "--artifact-storage-uri",
+        "       file:///<shared-dir> (coordinator-local) or "
+        "http://<coordinator>:5099.",
+        "    2. The coordinator's --iterate-data-dir points somewhere "
+        "other than this",
+        f"       --data-dir ({data_dir}), so the artifacts were "
+        "rehydrated where iterate",
+        "       is not looking. The two MUST match.",
+        "  Refusing to train on missing self-play data.",
+    ])
+    return "\n".join(lines)
+
+
 def _self_play_distributed(  # pragma: no cover
     *,
     worker_urls: list[str],
@@ -808,7 +880,7 @@ def _self_play_distributed(  # pragma: no cover
     progress_writer = _rest_orch.make_runs_db_progress_writer(
         run_id_prefix, started_perf=started,
     )
-    _rest_orch.run_stage(
+    stage_result = _rest_orch.run_stage(
         coordinator_url=coordinator_url,
         worker_urls=worker_urls,
         spec=spec,
@@ -821,6 +893,20 @@ def _self_play_distributed(  # pragma: no cover
         stage_id=run_id_prefix,
         iterate_data_dir=iterate_data_dir,
     )
+    # Stage completion is NOT success: a stage can report every game
+    # done while every artifact was dropped (worker on null://) or
+    # unfetchable (upload_failed rows). Fail here rather than a few
+    # lines later on ZeroDivisionError -- or, worse, silently train
+    # on a partial dataset.
+    problem = self_play_yield_error(
+        stage_id=run_id_prefix,
+        data_dir=iterate_data_dir,
+        n_samples=n_samples,
+        upload_failed=stage_result.upload_failed,
+        n_games_done=stage_result.n_games_done,
+    )
+    if problem is not None:
+        sys.exit(problem)
     return n_samples, n_policy, elapsed
 
 
@@ -2429,6 +2515,18 @@ def main(argv=None) -> None:  # pragma: no cover
                 "elapsed_seconds": float(gen_elapsed),
             },
         )
+        # Guard the division below: a zero-sample stage is a data-loss
+        # bug, not a divide-by-zero bug. Distributed runs also check
+        # ``upload_failed`` inside ``_self_play_distributed``; this
+        # site covers the local path and any distributed path that
+        # came back empty.
+        yield_problem = self_play_yield_error(
+            stage_id=self_play_run_id,
+            data_dir=args.data_dir,
+            n_samples=n_samples,
+        )
+        if yield_problem is not None:
+            sys.exit(yield_problem)
         print(
             f"[iterate]   gen done in {gen_elapsed/60:.1f}m: "
             f"{n_samples} samples, {n_policy} with policy "

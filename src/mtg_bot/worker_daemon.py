@@ -966,6 +966,13 @@ def create_app(
             # self-update phase dict (``None`` on a fresh process).
             "git_commit": app.config.get("GIT_COMMIT"),
             "last_update": snap["last_update"],
+            # Where this worker drops per-game artifacts. Exposed so
+            # the launcher can refuse to dispatch a cycle to a worker
+            # running the test-only ``null://`` default -- its games
+            # would complete, count toward the stage aggregate, and
+            # produce zero .npz files on the coordinator (the
+            # 2026-09-23 silent-data-loss cycle).
+            "artifact_storage_uri": app.config.get("ARTIFACT_STORAGE_URI"),
             "host": host,
         }
         return jsonify(payload), 200
@@ -1109,9 +1116,18 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
         help=(
             "Drop-off URI for per-game artifacts (.npz, replay.json.gz). "
             "WORKER-OWNED config — bake into the native service file's "
-            "ExecStart per machine. Schemes: 'null://' (default; test/dev "
-            "only — blobs dropped on the floor), 'file:///abs/dir' "
-            "(shared FS / single-host smoke), 's3://bucket/prefix' "
+            "ExecStart per machine. EVERY production worker must set "
+            "this: the 'null://' default drops blobs on the floor while "
+            "the coordinator still counts the games, which is silent "
+            "data loss (see docs/RUNNING_DISTRIBUTED.md, 2026-09-23) — "
+            "the iterate-distributed launcher now refuses a worker "
+            "advertising it. Schemes: 'null://' (default; test/dev "
+            "only), 'file:///abs/dir' "
+            "(shared FS / single-host smoke), "
+            "'http://<coordinator>:5099' (POSTs the bytes to the "
+            "coord's /v2/artifact/upload — use when there is no shared "
+            "filesystem and no bucket, e.g. the Mac over Tailscale), "
+            "'s3://bucket/prefix' "
             "(production AWS path; requires the [s3] extra). The "
             "worker uploads here and POSTs the URI back to the coord's "
             "/v2/report_result as a small JSON ping (no more multipart "

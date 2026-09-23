@@ -724,6 +724,8 @@ def stage_counters(
         "       SUM(crashed)                  AS crashed, "
         "       SUM(timed_out)                AS timed_out, "
         "       SUM(COALESCE(n_samples, 0))   AS n_samples, "
+        "       SUM(CASE WHEN outcome = 'upload_failed' THEN 1 ELSE 0 END) "
+        "                                     AS upload_failed, "
         "       SUM(COALESCE(duration_s, 0))  AS total_duration_s "
         "FROM results WHERE stage_id = ?",
         (stage_id,),
@@ -752,6 +754,8 @@ def stage_counters(
         "       SUM(COALESCE(draws, 0))             AS draws,             "
         "       SUM(crashed)                        AS crashed,           "
         "       SUM(timed_out)                      AS timed_out,         "
+        "       SUM(CASE WHEN outcome = 'upload_failed' THEN 1 ELSE 0 END) "
+        "                                           AS upload_failed,     "
         "       SUM(COALESCE(duration_s, 0))        AS total_duration_s   "
         "FROM results WHERE stage_id = ? AND shard_label IS NOT NULL      "
         "GROUP BY shard_label",
@@ -777,6 +781,12 @@ def stage_counters(
             "draws": int(r["draws"] or 0),
             "crashed": int(r["crashed"] or 0),
             "timed_out": int(r["timed_out"] or 0),
+            # Games this machine finished whose artifact the coord
+            # could NOT fetch. They still count in n_games_done /
+            # n_samples (the game really was played) but produced no
+            # npz on disk -- so a non-zero value here means the
+            # stage's training data is incomplete.
+            "upload_failed": int(r["upload_failed"] or 0),
             "total_duration_s": float(r["total_duration_s"] or 0.0),
         }
     for r in per_shard_inflight:
@@ -792,6 +802,7 @@ def stage_counters(
                 "draws": 0,
                 "crashed": 0,
                 "timed_out": 0,
+                "upload_failed": 0,
                 "total_duration_s": 0.0,
             }
         machines[label]["n_in_flight"] = int(r["n_in_flight"] or 0)
@@ -814,6 +825,11 @@ def stage_counters(
         "draws": int(agg["draws"] or 0),
         "crashed": int(agg["crashed"] or 0),
         "timed_out": int(agg["timed_out"] or 0),
+        # Total results rows the coord marked ``upload_failed`` -- the
+        # game finished but its artifact never landed. Silent before
+        # 2026-09-23: nothing upstream read this, so a stage could
+        # report 500/500 done with zero npz files written.
+        "upload_failed": int(agg["upload_failed"] or 0),
         "started_at": stage["started_at"],
         "drained_at": stage["drained_at"],
         "complete_at": stage["complete_at"],

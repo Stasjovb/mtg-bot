@@ -223,6 +223,7 @@ def create_app(
     weights_root: Optional[Path] = None,
     iterate_data_dir: Optional[Path] = None,
     replays_root: Optional[Path] = None,
+    artifact_upload_dir: Optional[Path] = None,
     shards_config_path: Optional[Path] = None,
     enable_heartbeat_poller: bool = True,
     heartbeat_poll_interval_s: float = 10.0,
@@ -1022,6 +1023,16 @@ def create_app(
         _replays_root = replays_root or (
             _REPO_ROOT_FROM_HERE / "replays"
         )
+        # Landing zone for POST /v2/artifact/upload (workers running
+        # ``--artifact-storage-uri http://<coord>:5099``). Separate
+        # from ``iterate_data`` on purpose: the upload dir holds the
+        # raw drop-off objects keyed by claim, and the report job
+        # rehydrates from there into iterate_data under the training
+        # filenames. Same-machine so the returned file:// URI is
+        # readable by the coordinator's LocalArtifactFetcher.
+        _artifact_upload_dir = artifact_upload_dir or (
+            _REPO_ROOT_FROM_HERE / "artifact_uploads"
+        )
         _shards_config = shards_config_path or (
             _REPO_ROOT_FROM_HERE / "shards_config.json"
         )
@@ -1098,8 +1109,10 @@ def create_app(
             heartbeat_poller_provider=lambda: poller_holder["poller"],
             artifact_fetcher=artifact_fetcher,
             report_executor=report_executor,
+            artifact_upload_dir=_artifact_upload_dir,
         )
         app.register_blueprint(bp)
+        app.extensions["v2_artifact_upload_dir"] = _artifact_upload_dir
         app.extensions["v2_queue_db_path"] = queue_db_path
 
     return app
@@ -1291,6 +1304,18 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
+        "--artifact-upload-dir", type=Path, default=None,
+        help=(
+            "Landing zone for POST /v2/artifact/upload -- where "
+            "workers configured with ``--artifact-storage-uri "
+            "http://<coordinator>:5099`` drop their raw .npz / replay "
+            "blobs. Default: <repo-root>/artifact_uploads. Must be on "
+            "the coordinator's own filesystem: the endpoint replies "
+            "with a file:// URI that the coordinator then fetches "
+            "locally."
+        ),
+    )
+    parser.add_argument(
         "--no-heartbeat-poller", action="store_true",
         help=(
             "Disable the v2 heartbeat poller. The queue.db endpoints "
@@ -1336,6 +1361,7 @@ def main(argv=None) -> None:  # pragma: no cover
         weights_root=args.weights_root,
         iterate_data_dir=args.iterate_data_dir,
         replays_root=args.replays_root,
+        artifact_upload_dir=args.artifact_upload_dir,
         enable_heartbeat_poller=not args.no_heartbeat_poller,
     )
     print(

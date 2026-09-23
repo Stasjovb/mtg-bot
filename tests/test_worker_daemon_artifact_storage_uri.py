@@ -193,3 +193,41 @@ def test_create_app_default_threads_null_uploader_into_claim_loop_config():
     )
     assert resp.status_code == 202
     assert isinstance(captured[0].artifact_uploader, NullUploader)
+
+
+# ---------------------------------------------------------------------------
+# Layer 4: /v2/heartbeat advertises the configured storage URI so the
+# launcher can pre-flight it. Without this the 2026-09-23 cycle had no
+# way to notice both daemons were on the null:// default until after
+# 500 games had been played and thrown away.
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_exposes_default_null_artifact_storage_uri():
+    app = worker_daemon.create_app(start_delay_s=0.01)
+    app.testing = True
+    body = app.test_client().get("/v2/heartbeat").get_json()
+    assert body["artifact_storage_uri"] == "null://"
+
+
+def test_heartbeat_exposes_configured_artifact_storage_uri(tmp_path):
+    uri = "file:///" + tmp_path.as_posix().lstrip("/")
+    app = worker_daemon.create_app(
+        start_delay_s=0.01, artifact_storage_uri=uri,
+    )
+    app.testing = True
+    body = app.test_client().get("/v2/heartbeat").get_json()
+    assert body["artifact_storage_uri"] == uri
+
+
+def test_heartbeat_artifact_storage_uri_matches_app_config():
+    """The heartbeat must report the SAME value ``create_app`` built
+    the uploader from -- not a separately-parsed copy that could
+    drift."""
+    app = worker_daemon.create_app(
+        start_delay_s=0.01,
+        artifact_storage_uri="http://desktop-j05412i:5099",
+    )
+    app.testing = True
+    body = app.test_client().get("/v2/heartbeat").get_json()
+    assert body["artifact_storage_uri"] == app.config["ARTIFACT_STORAGE_URI"]
