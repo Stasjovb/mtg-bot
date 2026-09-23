@@ -131,6 +131,14 @@ on PATH. Subcommands:
 - `capture`  — capture annotated NN-driven self-play replays for the UI
 - `bench <kind>` — perf benchmarks: `clone`, `clone-zones`, `nn-eval-server`,
   `per-game-wall`
+- `ladder`   — **local** fixed-reference strength ladder with Elo: plays
+  `random` / `heuristic` / any registered version round-robin on a
+  `multiprocessing.Pool` (no coordinator, no runs.db), fits Bradley-Terry
+  Elo anchored at `random` = 0 with bootstrap CIs, writes
+  `ladder_runs/<ts>/{results.json,ladder.md}` and supports `--resume`.
+  This is the project's only absolute-strength measure; results are
+  collected in `docs/STRENGTH_LADDER.md`. E.g.
+  `mtg_bot ladder --agents random heuristic v13s --games 500`
 
 The shared search-depth + queue-URL + deck-pool defaults live in
 `mtg_bot.cli._common` so eval/capture/bench all pick up the current
