@@ -109,7 +109,34 @@ the config with every table below.
 
 Paste each run's `ladder.md` Elo table + config here, newest first.
 
-_(no production-depth runs recorded yet)_
+### 2026-09-23 -- first absolute-strength table (nodes 100 / samples 2)
+
+Commit `5c1bc306`, `ladder_runs/prod_n100s2/` (full report snapshot:
+`docs/STRENGTH_LADDER_2026-09-23_n100s2.md`). 200 games/pair, seat
+alternated, 20 workers, 900 s per-game timeout, seed 0. Depth is HALF
+the production self-play budget (nodes 200 / samples 4 was attempted
+first as `prod_2026-09-23/` but ~1 in 10 v13s games hit the 600 s
+timeout, biasing the sample, so it was killed after the
+random-vs-heuristic pair: 29-467).
+
+| rank | agent | Elo | 95% CI | games | score |
+|---:|---|---:|---|---:|---:|
+| 1 | heuristic | +407 | [+342, +469] | 399 | 90.7% |
+| 2 | v13s | +30 | [-12, +74] | 398 | 32.2% |
+| 3 | random | +0 | [+0, +0] | 399 | 27.1% |
+
+Pairwise (row's W-L): random vs heuristic 18-182; random vs v13s
+90-109 (t1); heuristic vs v13s 19-180 (c1).
+
+**Reading:** the production champion `v13s` (end of the
+schema-1 lineage, ~7M training rows, ~4 months of training) is
+statistically indistinguishable from random (CI includes 0) and loses
+90% of games to the hand-written heuristic evaluator at equal search
+budget. The whole pre-2026-09 lineage carried no measurable learning
+signal; see the 2026-09-22 worklog entry for the root causes that
+`feature/learning-fixes` addressed. Every future snapshot goes on this
+ladder against the same three references.
+
 
 Tool validation only (NOT a result): 2026-09-23, commit 779a87b4,
 `--agents random heuristic v13s --games 4 --nodes 8 --samples 1

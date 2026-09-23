@@ -27,6 +27,50 @@ queue.db, runs.db). Workers are stateless: a worker crash + restart
 takes <90s for the coordinator to re-queue its in-flight claims and
 re-deliver them to surviving workers.
 
+## Cluster state as of 2026-09-23 (read this first)
+
+| Role | Where | How it is started | URL the launcher should use |
+|---|---|---|---|
+| Coordinator | desktop (Windows-native) | `Start-ScheduledTask MTGBotCoordinator` (or hub entry `mtg_bot_serve`) | `http://100.115.252.110:5099` |
+| Worker (desktop) | desktop, 16 workers, CUDA | `Start-ScheduledTask MTGBotWorkerLocal` (or hub entry `mtg_bot_worker_windows`) | `http://100.115.252.110:5198` |
+| Worker (Mac) | `greggs-macbook-pro` (100.95.248.116), launchd `com.mtg-bot.worker`, 6 workers, bind `0.0.0.0` | always on; restart with `launchctl kickstart -k gui/$(id -u)/com.mtg-bot.worker` | `http://100.95.248.116:5198` (see Mac reachability below) |
+
+* The WSL2 coordinator / training-UI path is on hold (offline since
+  2026-05-13). The hub entries `mtg_bot_serve` (5099) and
+  `mtg_bot_worker_windows` (5198) now point at the Windows-native
+  commands; `mtg_bot_train_ui_windows` (5103) is the UI to use.
+* **Do not start `MTGBotWorker`** (the original task): its
+  `--weights-cache-root` points at the live `trained_weights/`
+  registry, which crash-loops and corrupts version dirs on Windows.
+  `MTGBotWorkerLocal` is the corrected replacement (separate cache
+  `~/.mtg_bot_worker_weights`, run-level Limited so it can be edited
+  without elevation).
+* The coordinator task needs `mtg_bot` importable from
+  `.venv-py313` (it does not set `PYTHONPATH`). If it exits with
+  result 1 immediately, run
+  `.venv-py313/Scripts/python.exe -m pip install --no-deps -e .`.
+* **Mac reachability (resolved 2026-09-23):** the Mac had TWO tailscaled
+  instances -- Homebrew `tailscaled` (node `greggs-macbook-pro-1`,
+  100.77.31.125, ran Tailscale SSH) and Tailscale.app (node
+  `greggs-macbook-pro`, 100.95.248.116). With both running, inbound
+  TCP to either tailnet IP timed out from the desktop (replies left via
+  the other daemon's utun). The Homebrew one was removed
+  (`sudo brew services stop tailscale; brew uninstall tailscale`), so
+  the Mac is now ONLY `greggs-macbook-pro` / **100.95.248.116**; the
+  `-1` node and 100.77.31.125 are dead. The worker daemon binds
+  `0.0.0.0`, so the LAN IP 192.168.0.111 also works as a fallback.
+* Mac checkout: `~/projects/mtg-bot` on `main`; update with
+  `git pull --ff-only origin main && .venv-py313/bin/python -m pip
+  install -q -e .` then restart the launchd job. (Its stale May
+  shard output was moved to `iterate_data.stale_2026-05/`.)
+* Scalar-schema-v2 lineage (`trained_weights_s2/`): launch via
+  `scripts/s2/run_distributed.sh [n]` (config
+  `configs/launch/s2.toml`; `DRY_RUN=1` prints the argv). It cannot
+  share the coordinator's runs.db with the old lineage until the
+  run-label-prefix change lands (old `iter_001_cycle`... rows return
+  409 from `/run/start_or_restart`); the wrapper will pass
+  `--run-label-prefix s2_` once it does.
+
 ## Daily-ops checklist (master)
 
 Run these once when you sit down at the desktop:
