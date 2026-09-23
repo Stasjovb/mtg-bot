@@ -110,3 +110,10 @@ the config with every table below.
 Paste each run's `ladder.md` Elo table + config here, newest first.
 
 _(no production-depth runs recorded yet)_
+
+Tool validation only (NOT a result): 2026-09-23, commit 779a87b4,
+`--agents random heuristic v13s --games 4 --nodes 8 --samples 1
+--workers 2` loaded all three participants (v13s = structured /
+canonical_v2 via the registry) and played 12 games in ~20s with 0
+timeouts / 0 crashes. At that depth the ordering is noise; a 16-game
+`random` vs `heuristic` check at `--nodes 32` gave heuristic 12-4.
