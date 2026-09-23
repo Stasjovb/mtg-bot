@@ -31,6 +31,7 @@ from mtg_bot import worker_daemon_claim_loop as cl
 from mtg_bot import worker_daemon_production_runner as prr
 from mtg_bot.cli import serve as serve_mod
 from mtg_bot.search.nn_evaluator import _ValuePolicyMLP
+from mtg_bot.worker_daemon_storage import LocalFileUploader
 
 
 # ---------------------------------------------------------------------------
@@ -1095,6 +1096,14 @@ def test_production_self_play_runner_plays_one_real_game(tmp_path):
         replays_root=tmp_path / "replays",
         shards_config_path=tmp_path / "shards.json",
         enable_heartbeat_poller=False,
+        # Synchronous report dispatch. With the default
+        # ThreadPoolExecutor, /v2/report_result returns 202 "queued"
+        # and the fetch+write+upsert lands later on a background
+        # thread, so the stage-status assertions below would race it
+        # (they only passed when this test ran first and the pool
+        # happened to win). Same knob tests/test_worker_daemon_
+        # integration.py uses.
+        report_executor=None,
     )
 
     # Seed the coordinator with a weights blob it can serve via
@@ -1149,6 +1158,15 @@ def test_production_self_play_runner_plays_one_real_game(tmp_path):
         retry_backoff_s=(0.0, 0.0, 0.0),
         http_get=http_get,
         http_post_json=http_post_json,
+        # The worker uploads the npz to its artifact store and POSTs
+        # only the URI; the coordinator then fetches it by scheme.
+        # ClaimLoopConfig's default is NullUploader, which drops the
+        # blob and returns a ``null:///...`` URI the coord's
+        # MultiSchemeFetcher rejects (fail-loud, by design) -- so the
+        # report would be retried 4x, abandoned, and the stage would
+        # sit at n_games_done=0. Use the shared-filesystem uploader,
+        # same as tests/test_worker_daemon_integration.py.
+        artifact_uploader=LocalFileUploader(tmp_path / "artifacts"),
     )
     state = worker_daemon.WorkerState(start_delay_s=0.01)
     cbs = cl.StateCallbacks(
