@@ -32,15 +32,24 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.search import (
     Budget, MCTS, MtgGameStateAdapter, NNEvaluator,
 )
+from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.simulate import _default_deck_for_color as _default_deck, setup_game
 from mtg_bot.turn import Step
 
 
 def _adapter(seed: int = 42) -> MtgGameStateAdapter:
     state = setup_game(
-        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed), _default_deck("R", seed)], seed=seed,
+        [RandomAgent(), RandomAgent()], decks=[_default_deck("G", seed=seed), _default_deck("R", seed=seed)],
+        seed=seed,
     )
-    return MtgGameStateAdapter(state)
+    # Disable the production priority short-circuits so the root
+    # actually branches (with them on, a fresh game's first main
+    # phase is skip-dead-main1-pruned to a forced PassPriority and
+    # the bench measures nothing). Same fixture shape as
+    # ``tests/search/test_batched_puct.py``.
+    return MtgGameStateAdapter(
+        state, heuristics=HeuristicsConfig.disabled(),
+    )
 
 
 def _adapter_at_precombat_main(
