@@ -980,15 +980,24 @@ def spawn_iterate(
         # lineage's residue, so bail out of the sweep entirely and
         # let iterate's own argparse reject the flag.
         residue_prefix = None
-    collision_cleanup = (
-        {} if residue_prefix is None
-        else clear_iter_collision_residue(
+    if residue_prefix is None:
+        # Same shape the helper returns on its own no-op paths, so the
+        # frontend's ``collision_cleanup.cleared_rows`` reads don't
+        # hit undefined.
+        collision_cleanup: dict[str, Any] = {
+            "cleared_rows": 0,
+            "cleared_run_ids": [],
+            "cleared_sentinels": [],
+            "next_iter_n": None,
+            "range_end": None,
+        }
+    else:
+        collision_cleanup = clear_iter_collision_residue(
             progress_dir,
             registry_root=registry_root,
             n_iterations=n_iterations,
             label_prefix=residue_prefix,
         )
-    )
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = progress_dir / f"launched_{stamp}_iterate.console.log"
