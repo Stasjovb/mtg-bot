@@ -112,3 +112,9 @@ models/
 
 # mtg_bot ladder output (results.json + ladder.md per run)
 ladder_runs/
+
+# Scalar-schema-v2 lineage (corrected loop, 2026-09): registry, data, progress
+trained_weights_s2/
+iterate_data_s2/
+training_progress_s2/
+iterate_s2/
