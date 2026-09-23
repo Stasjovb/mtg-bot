@@ -13,6 +13,7 @@ set -euo pipefail
 cd "/c/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot"
 export PYTHONIOENCODING=utf-8 PYTHONPATH=src
 N="${1:-1}"
+CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
 # Preflight: the coordinator on :5099 must be the s2 one (started with
 # --weights-root trained_weights_s2 ...), otherwise workers would fetch the
 # OLD lineage's v1/v2 -- version labels repeat across lineages.
@@ -26,7 +27,7 @@ for _ in $(seq 1 "$N"); do
   target=$((done_n + 1))
   echo "[s2-dist] $(date -u +%FT%TZ) launching iteration $target"
   .venv-py313/Scripts/python.exe -m mtg_bot.cli iterate-distributed \
-    --config configs/launch/s2.toml --iter.target_iter "$target" \
+    --config "$CONFIG" --iter.target_iter "$target" \
     --registry-root trained_weights_s2 --progress-dir training_progress_s2 \
     --deck-pool data/17lands/eoe_decks.json.gz \
     --queue-url http://100.115.252.110:5099 \
