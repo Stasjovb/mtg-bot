@@ -502,10 +502,8 @@ def _collect_replacement_effects(
         # live in subject_filters / scope_filter for cards that
         # narrow the gate further (none today).
         if obj.controller_id == affected_player_id:
-            for static in getattr(
-                obj.printing, "static_abilities", (),
-            ) or ():
-                re = getattr(static, "replacement_effect", None)
+            for static in active_static_abilities(obj):
+                re = static.replacement_effect
                 if re is None:
                     continue
                 if re.event_pattern.event != event:
@@ -542,15 +540,13 @@ def _collect_replacement_effects(
     if card is not None and getattr(
         card, "owner_id", None,
     ) == affected_player_id:
-        for static in getattr(
-            getattr(card, "printing", None), "static_abilities", (),
-        ) or ():
-            re = getattr(static, "replacement_effect", None)
+        for static in active_static_abilities(card):
+            re = static.replacement_effect
             if re is None:
                 continue
             if re.event_pattern.event != event:
                 continue
-            cond = getattr(static, "condition", None)
+            cond = static.condition
             if cond is not None and not cond.matches(
                 state, card.owner_id,
             ):
@@ -589,6 +585,38 @@ def _subject_filters_match(
     return True
 
 
+def active_static_abilities(source: "GameObject") -> "tuple":
+    """Return the static abilities on ``source`` that are active now.
+
+    THE single accessor for a permanent's (or a moving card's) static
+    abilities. Every walk of the static surface — the layer-6 grant
+    walk, the layer-7c anthem walk, the CR 613 continuous-modifier
+    dispatcher, and the CR 614 replacement-effect dispatcher — routes
+    through here so they all see the same set and all fail the same way
+    on a malformed printing.
+
+    DSK Room half-locking: a static tagged with a ``room_half`` is inert
+    while that half is locked (not in ``source.unlocked_halves``).
+    Non-Room statics (``room_half is None``) pass through unchanged.
+
+    Returns the underlying ``static_abilities`` tuple directly for
+    non-Room sources (the common case) — no per-call allocation.
+    Callers iterate; none mutate. Reads ``printing.room_halves``
+    directly rather than going through the ``is_room`` property to skip
+    the property-dispatch overhead on this hot path (called ~1.1M times
+    per self-play game per the 2026-05-02 perf profile).
+    """
+    printing = source.printing
+    statics = printing.static_abilities
+    if not printing.room_halves:
+        return statics
+    unlocked = source.unlocked_halves
+    return tuple(
+        a for a in statics
+        if a.room_half is None or a.room_half in unlocked
+    )
+
+
 def walk_continuous_modifiers(
     state: "GameState",
     target: "GameObject",
@@ -612,8 +640,8 @@ def walk_continuous_modifiers(
     """
     out: list[tuple[int, ContinuousModifier]] = []
     for source in state.battlefield:
-        for static in getattr(source.printing, "static_abilities", ()) or ():
-            cm = getattr(static, "continuous_effect", None)
+        for static in active_static_abilities(source):
+            cm = static.continuous_effect
             if cm is None:
                 continue
             if not static.applies_to(source, target, state):

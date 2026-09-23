@@ -8,6 +8,9 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from mtg_bot.cards import CardPrinting
+from mtg_bot.effects.modifiers import (
+    active_static_abilities as _active_static_abilities_impl,
+)
 
 if TYPE_CHECKING:
     from mtg_bot.agents import Agent
@@ -737,32 +740,16 @@ def is_void_active(state: GameState) -> bool:
     )
 
 
-def _active_static_abilities(source: GameObject):
-    """Return ``source.printing.static_abilities`` filtered for DSK
-    Room half-locking: a static tagged with a ``room_half`` is inert
-    while that half is locked (not in ``source.unlocked_halves``).
-    Non-Room statics (``room_half is None``) pass through unchanged.
-
-    Engine call sites that walk static abilities (anthem layer 7c
-    pump, layer-6 keyword grants) route through this helper so a
-    locked-half anthem (Lecture Hall's "Other permanents you control
-    have hexproof") doesn't apply while its half is locked.
-
-    Returns the underlying ``static_abilities`` tuple directly for
-    non-Room sources (the common case) — no per-call list allocation.
-    Callers iterate; none mutate. Reads ``printing.room_halves``
-    directly rather than going through the ``is_room`` property to
-    skip the property-dispatch overhead on this hot path (called
-    ~1.1M times per self-play game per the 2026-05-02 perf profile).
-    """
-    statics = source.printing.static_abilities
-    if not source.printing.room_halves:
-        return statics
-    unlocked = source.unlocked_halves
-    return tuple(
-        a for a in statics
-        if a.room_half is None or a.room_half in unlocked
-    )
+# The static-ability surface has exactly ONE accessor, which lives in
+# ``effects.modifiers`` next to the CR 613 / CR 614 dispatchers that
+# also consume it (``walk_continuous_modifiers`` /
+# ``_collect_replacement_effects``). Before this was unified, the
+# dispatchers read ``printing.static_abilities`` raw while the layer-6 /
+# layer-7c walks here read it through the Room-gated helper: two readers
+# of one slot that disagreed both about Room half-locking and about how
+# a malformed printing surfaces. ``_active_static_abilities`` stays
+# bound here as the in-module name every existing call site uses.
+_active_static_abilities = _active_static_abilities_impl
 
 
 def reveal_to(obj: GameObject, *player_ids: int) -> None:
