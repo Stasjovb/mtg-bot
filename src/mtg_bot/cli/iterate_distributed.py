@@ -95,6 +95,27 @@ class WorkerNotIdleError(RuntimeError):
     """
 
 
+class WorkerDropsArtifactsError(WorkerNotIdleError):
+    """A worker is IDLE but configured to throw artifacts away.
+
+    ``--artifact-storage-uri null://`` is the daemon's default and is
+    test-only: the uploader returns a ``null:///<key>`` URI the
+    coordinator can't fetch, so every game's ``.npz`` is dropped while
+    the stage aggregate still counts the game and its ``n_samples``.
+    That combination is exactly the 2026-09-23 silent-data-loss cycle
+    (500 games "done", ~1M samples reported, zero npz files, iterate
+    dying on ZeroDivisionError). Refusing at launch is the cheap fix.
+
+    Subclasses ``WorkerNotIdleError`` so existing callers that catch
+    the launcher's pre-flight failure keep working unchanged.
+    """
+
+
+# Escape hatch for deliberately-artifact-less smoke runs (e.g. a
+# throughput test where nobody intends to train on the output).
+ALLOW_NULL_ARTIFACTS_ENV = "MTG_BOT_ALLOW_NULL_ARTIFACTS"
+
+
 def _http_get_json(
     url: str, *, timeout: float = 5.0,
 ) -> tuple[int, dict[str, Any]]:
@@ -184,6 +205,11 @@ def verify_worker_idle(worker_url: str) -> None:
     the worker isn't reachable or isn't IDLE. The launcher refuses
     to dispatch a fresh cycle to a busy worker -- a half-drained
     eval from the previous cycle would race the new self-play.
+
+    Also refuses a worker whose heartbeat advertises
+    ``artifact_storage_uri=null://`` (see
+    :class:`WorkerDropsArtifactsError`). Heartbeats without the key
+    -- pre-2026-09-23 daemons, test stubs -- pass unchanged.
     """
     hb_url = worker_url.rstrip("/") + "/v2/heartbeat"
     try:
@@ -205,6 +231,40 @@ def verify_worker_idle(worker_url: str) -> None:
             f"A previous cycle may still be draining; check the "
             f"worker's UI before launching.",
         )
+    _verify_worker_artifact_storage(worker_url, body)
+
+
+def _verify_worker_artifact_storage(
+    worker_url: str, heartbeat: dict[str, Any],
+) -> None:
+    """Refuse a worker that would drop every artifact on the floor.
+
+    Pure function of (url, heartbeat body) so it's unit-testable
+    without a socket. ``None``/absent ``artifact_storage_uri`` is the
+    old-daemon case and passes -- we only fail on a positively
+    advertised ``null://``.
+    """
+    uri = heartbeat.get("artifact_storage_uri")
+    if not isinstance(uri, str) or not uri.startswith("null://"):
+        return
+    if os.environ.get(ALLOW_NULL_ARTIFACTS_ENV) == "1":
+        print(
+            f"[launcher] WARNING: worker {worker_url} drops artifacts "
+            f"(artifact_storage_uri={uri}); allowed by "
+            f"{ALLOW_NULL_ARTIFACTS_ENV}=1. Self-play output from this "
+            f"worker will NOT reach the coordinator.",
+            file=sys.stderr, flush=True,
+        )
+        return
+    raise WorkerDropsArtifactsError(
+        f"worker {worker_url} drops artifacts "
+        f"(artifact_storage_uri={uri}); its self-play results would "
+        f"never reach the coordinator -- restart it with "
+        f"--artifact-storage-uri file://... or "
+        f"http://<coordinator>:5099. "
+        f"(Set {ALLOW_NULL_ARTIFACTS_ENV}=1 to override for a "
+        f"throughput smoke that intentionally discards data.)",
+    )
 
 
 def collect_worker_urls(
@@ -756,6 +816,8 @@ def _launch(
 
 
 __all__ = [
+    "ALLOW_NULL_ARTIFACTS_ENV",
+    "WorkerDropsArtifactsError",
     "WorkerNotIdleError",
     "build_parser",
     "collect_worker_urls",

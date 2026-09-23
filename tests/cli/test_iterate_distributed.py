@@ -399,6 +399,97 @@ def test_verify_worker_idle_raises_on_network_error(monkeypatch):
         id_mod.verify_worker_idle("http://h:5198")
 
 
+# ---------------------------------------------------------------------------
+# null:// artifact storage pre-flight
+#
+# 2026-09-23: both production daemons ran on the ``--artifact-storage-uri
+# null://`` default. 500 games completed, the coordinator's stage view
+# reported n_games_done=500 / ~1M samples, and zero .npz files existed.
+# The launcher now refuses to dispatch to a worker that advertises the
+# null:// default.
+# ---------------------------------------------------------------------------
+
+
+def test_verify_worker_idle_rejects_null_artifact_storage(monkeypatch):
+    monkeypatch.delenv(id_mod.ALLOW_NULL_ARTIFACTS_ENV, raising=False)
+    monkeypatch.setattr(
+        id_mod, "_http_get_json",
+        lambda url, timeout=5.0: (
+            200, {"state": "IDLE", "artifact_storage_uri": "null://"},
+        ),
+    )
+    with pytest.raises(id_mod.WorkerDropsArtifactsError) as exc:
+        id_mod.verify_worker_idle("http://h:5198")
+    msg = str(exc.value)
+    assert "drops artifacts" in msg
+    assert "artifact_storage_uri=null://" in msg
+    assert "--artifact-storage-uri file://" in msg
+    assert "http://<coordinator>:5099" in msg
+
+
+def test_worker_drops_artifacts_error_is_a_worker_not_idle_error():
+    """Callers that already catch the launcher's pre-flight failure
+    keep working without a new except clause."""
+    assert issubclass(
+        id_mod.WorkerDropsArtifactsError, id_mod.WorkerNotIdleError,
+    )
+
+
+def test_verify_worker_idle_allows_null_artifacts_with_env_override(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv(id_mod.ALLOW_NULL_ARTIFACTS_ENV, "1")
+    monkeypatch.setattr(
+        id_mod, "_http_get_json",
+        lambda url, timeout=5.0: (
+            200, {"state": "IDLE", "artifact_storage_uri": "null://"},
+        ),
+    )
+    id_mod.verify_worker_idle("http://h:5198")
+    assert "WARNING" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "file:///C:/Users/Gregg Keithley/mtg_bot_artifacts_s2",
+        "http://100.115.252.110:5099",
+        "https://coord.example",
+        "s3://prod-bucket/artifacts",
+    ],
+)
+def test_verify_worker_idle_accepts_real_storage_schemes(uri, monkeypatch):
+    monkeypatch.delenv(id_mod.ALLOW_NULL_ARTIFACTS_ENV, raising=False)
+    monkeypatch.setattr(
+        id_mod, "_http_get_json",
+        lambda url, timeout=5.0: (
+            200, {"state": "IDLE", "artifact_storage_uri": uri},
+        ),
+    )
+    id_mod.verify_worker_idle("http://h:5198")
+
+
+def test_verify_worker_idle_passes_heartbeat_without_the_key(monkeypatch):
+    """Old daemons (and every existing test stub) don't send
+    ``artifact_storage_uri``. They must keep passing -- we only fail
+    on a positively advertised null://."""
+    monkeypatch.delenv(id_mod.ALLOW_NULL_ARTIFACTS_ENV, raising=False)
+    monkeypatch.setattr(
+        id_mod, "_http_get_json",
+        lambda url, timeout=5.0: (200, {"state": "IDLE"}),
+    )
+    id_mod.verify_worker_idle("http://h:5198")
+
+
+@pytest.mark.parametrize("value", [None, 123, ""])
+def test_verify_artifact_storage_ignores_non_string_values(value):
+    """Defensive: a malformed heartbeat field must not crash the
+    pre-flight with a TypeError."""
+    id_mod._verify_worker_artifact_storage(
+        "http://h:5198", {"artifact_storage_uri": value},
+    )
+
+
 def test_skip_worker_verify_does_not_call_heartbeat(
     minimal_toml: Path, progress_dir: Path, runs_db_env: Path, monkeypatch,
 ):

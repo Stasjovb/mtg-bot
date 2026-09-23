@@ -966,6 +966,13 @@ def create_app(
             # self-update phase dict (``None`` on a fresh process).
             "git_commit": app.config.get("GIT_COMMIT"),
             "last_update": snap["last_update"],
+            # Where this worker drops per-game artifacts. Exposed so
+            # the launcher can refuse to dispatch a cycle to a worker
+            # running the test-only ``null://`` default -- its games
+            # would complete, count toward the stage aggregate, and
+            # produce zero .npz files on the coordinator (the
+            # 2026-09-23 silent-data-loss cycle).
+            "artifact_storage_uri": app.config.get("ARTIFACT_STORAGE_URI"),
             "host": host,
         }
         return jsonify(payload), 200
