@@ -69,6 +69,8 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import itertools
+import logging
 import random
 import time
 from dataclasses import dataclass, field
@@ -85,7 +87,7 @@ from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
 from mtg_bot.search.engine_adapter_factory import make_game_state_adapter
 from mtg_bot.search.heuristics_config import HeuristicsConfig
-from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
+from mtg_bot.search.protocol import CHANCE_PLAYER, Decision, PlayerID
 from mtg_bot.simulate import setup_game
 from mtg_bot.training._win32_job import JobObjectGuard
 from mtg_bot.training._worker_threads import pin_worker_torch_threads
@@ -113,6 +115,8 @@ _GameChunk = tuple[
     Optional[PlayerID], str,
 ]
 
+_log = logging.getLogger(__name__)
+
 _DTYPE_FEATURES = np.float32
 _DTYPE_OUTCOMES = np.float32
 # Policy targets: per-slot probabilities. float32 keeps storage
@@ -125,6 +129,12 @@ _DTYPE_POLICY = np.float32
 # forward path expects (LongTensor for ids / FloatTensor for scalars
 # / BoolTensor for the mask). Stored at the dataset level so the
 # pad/stack helper and the npz reader agree.
+# Per-row game group id (``game_idx`` within the generating run).
+# Lets the trainer split train/val by GAME rather than by row so
+# rows from one game never straddle the split (row-level splits
+# leak near-duplicate states into val and turn val loss into a
+# memorization score).
+_DTYPE_GAME_IDS = np.int32
 _DTYPE_STRUCT_TOKEN_TYPE = np.int64
 _DTYPE_STRUCT_EMB_IDS = np.int64
 _DTYPE_STRUCT_SCALARS = np.float32
@@ -391,6 +401,9 @@ def generate_training_data(
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
     structured_tokens: bool = False,
+    with_game_ids: bool = False,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[np.ndarray, ...]:
     """Play ``n_games`` and return training arrays.
 
@@ -427,6 +440,20 @@ def generate_training_data(
     ``with_policy=True`` is implied (callers asking for structured
     tokens always want policy supervision too — the Step 1 trainer
     is masked-CE + value-MSE + aux on the same row).
+
+    ``with_game_ids=True`` appends one more array, ``game_ids``
+    ``(N,)`` int32 — the ``game_idx`` each row came from — as the
+    LAST element of whichever tuple shape the other flags selected.
+    Save it via ``save_dataset(..., game_ids=...)`` so the trainer
+    can split train/val by game.
+
+    ``move_temperature`` / ``temperature_cutoff`` control self-play
+    move sampling (see ``_play_one_game_recording``): for the first
+    ``temperature_cutoff`` NON-forced decisions of each game the
+    played move is sampled proportional to ``visits ** (1/T)``;
+    afterwards (or when ``T <= 0``) the search argmax is played.
+    The recorded policy TARGET is always the untempered visit
+    distribution.
     """
     if heuristics is None:
         heuristics = HeuristicsConfig()
@@ -446,30 +473,36 @@ def generate_training_data(
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
             structured_tokens=structured_tokens,
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
-        chunks.append(chunk[:6])
+        chunks.append(chunk)
         struct_rows_chunks.append(chunk[6] if len(chunk) > 6 else [])
         if progress is not None:
             progress.record_game(
                 n_samples=int(chunk[0].shape[0]),
                 outcome_p0=_winner_to_p0_outcome(chunk[4]),
             )
-    f, o, p, m = _concat_chunks([c[:4] for c in chunks])
+    f, o, p, m, g = _concat_chunks(chunks)
     if structured_tokens:
         flat_rows: list[dict[str, np.ndarray]] = []
         for rows in struct_rows_chunks:
             flat_rows.extend(rows)
         struct_arrays = _pad_and_stack_structured_rows(flat_rows)
-        return (
+        out: tuple[np.ndarray, ...] = (
             f, o, p, m,
             struct_arrays["structured_token_type"],
             struct_arrays["structured_token_emb_ids"],
             struct_arrays["structured_token_scalars"],
             struct_arrays["structured_attention_mask"],
         )
-    if with_policy:
-        return f, o, p, m
-    return f, o
+    elif with_policy:
+        out = (f, o, p, m)
+    else:
+        out = (f, o)
+    if with_game_ids:
+        out = out + (g,)
+    return out
 
 
 def generate_training_data_parallel(
@@ -493,6 +526,9 @@ def generate_training_data_parallel(
     pool_initargs: tuple = (),
     pool_mp_context: Optional["mp.context.BaseContext"] = None,
     structured_tokens: bool = False,
+    with_game_ids: bool = False,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[np.ndarray, ...]:
     """Same contract as ``generate_training_data`` but distributes
     games across a ``multiprocessing.Pool``. Same ``with_policy``
@@ -552,14 +588,18 @@ def generate_training_data_parallel(
         f, o, p, m = _empty_arrays()
         if structured_tokens:
             empty_struct = _pad_and_stack_structured_rows([])
-            return (
+            out: tuple[np.ndarray, ...] = (
                 f, o, p, m,
                 empty_struct["structured_token_type"],
                 empty_struct["structured_token_emb_ids"],
                 empty_struct["structured_token_scalars"],
                 empty_struct["structured_attention_mask"],
             )
-        return (f, o, p, m) if with_policy else (f, o)
+        else:
+            out = (f, o, p, m) if with_policy else (f, o)
+        if with_game_ids:
+            out = out + (_empty_game_ids(),)
+        return out
 
     args_list = [
         (
@@ -567,6 +607,7 @@ def generate_training_data_parallel(
             decision_cap, sample_every, replay_config, deck_pool,
             per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version, structured_tokens,
+            move_temperature, temperature_cutoff,
         )
         for i in range(n_games)
     ]
@@ -690,7 +731,7 @@ def generate_training_data_parallel(
         )
     indexed.sort(key=lambda t: t[0])
     chunks = [c for _, c in indexed]
-    f, o, p, m = _concat_chunks([c[:4] for c in chunks])
+    f, o, p, m, g = _concat_chunks(chunks)
     if stopped_early and progress is not None:
         # Caller will see the early return; finalize the tracker so
         # the UI labels the run as user-aborted rather than leaving
@@ -707,16 +748,20 @@ def generate_training_data_parallel(
             if len(c) > 6:
                 flat_rows.extend(c[6])
         struct_arrays = _pad_and_stack_structured_rows(flat_rows)
-        return (
+        out = (
             f, o, p, m,
             struct_arrays["structured_token_type"],
             struct_arrays["structured_token_emb_ids"],
             struct_arrays["structured_token_scalars"],
             struct_arrays["structured_attention_mask"],
         )
-    if with_policy:
-        return f, o, p, m
-    return f, o
+    elif with_policy:
+        out = (f, o, p, m)
+    else:
+        out = (f, o)
+    if with_game_ids:
+        out = out + (g,)
+    return out
 
 
 def _play_one_parallel_game(
@@ -757,7 +802,19 @@ def _play_one_parallel_game(
     # ``enable_mulligans`` field was removed by
     # feature/always-on-mulligans — mulligans are always on now and the
     # tuple shape lost an element.
-    if len(args) == 13:
+    # ``move_temperature`` / ``temperature_cutoff`` were appended
+    # next (feature/lf-training): self-play move sampling knobs.
+    move_temperature = 1.0
+    temperature_cutoff = 30
+    if len(args) == 15:
+        (
+            game_idx, p0_factory, p1_factory, base_seed,
+            decision_cap, sample_every, replay_config, deck_pool,
+            per_game_timeout_sec, hang_dump_dir,
+            heuristics, action_encoding_version, structured_tokens,
+            move_temperature, temperature_cutoff,
+        ) = args
+    elif len(args) == 13:
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
@@ -794,6 +851,8 @@ def _play_one_parallel_game(
             heuristics=heuristics,
             action_encoding_version=action_encoding_version,
             structured_tokens=structured_tokens,
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
     except TimeoutError as exc:
         import sys
@@ -803,7 +862,7 @@ def _play_one_parallel_game(
             file=sys.stderr,
         )
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "timed_out", [])
+        chunk = (f, o, p, m, None, "timed_out", [], _empty_game_ids())
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         import sys
         import traceback
@@ -815,7 +874,7 @@ def _play_one_parallel_game(
         )
         traceback.print_exc(file=sys.stderr)
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "crashed", [])
+        chunk = (f, o, p, m, None, "crashed", [], _empty_game_ids())
     return game_idx, chunk
 
 
@@ -844,8 +903,14 @@ def _generate_one_game_data(
     heuristics: Optional[HeuristicsConfig] = None,
     action_encoding_version: str = "positional_v1",
     structured_tokens: bool = False,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple:
-    """Play one game and return its 4-tuple training arrays.
+    """Play one game and return its per-game chunk tuple
+    ``(features, outcomes, policy_targets, action_masks, winner,
+    outcome_kind, struct_rows, game_ids)``. ``game_ids`` is an
+    ``(N,)`` int32 array filled with ``game_idx`` — the per-row
+    group id the trainer uses for game-level train/val splitting.
 
     The single source of truth for per-game data extraction; both
     sequential and parallel drivers call this so they produce
@@ -947,7 +1012,8 @@ def _generate_one_game_data(
                 _play_one_game_recording,
                 (adapter, strategies, rng, decision_cap, sample_every,
                  recorder, progress, tree_depth, tree_top_k,
-                 action_encoding_version, structured_tokens),
+                 action_encoding_version, structured_tokens,
+                 move_temperature, temperature_cutoff),
                 per_game_timeout_sec,
             )
         except TimeoutError as exc:
@@ -982,6 +1048,8 @@ def _generate_one_game_data(
             tree_depth=tree_depth, tree_top_k=tree_top_k,
             action_encoding_version=action_encoding_version,
             structured_tokens=structured_tokens,
+            move_temperature=move_temperature,
+            temperature_cutoff=temperature_cutoff,
         )
 
     if recorder is not None and replay_config is not None:
@@ -998,7 +1066,7 @@ def _generate_one_game_data(
 
     if not samples:
         f, o, p, m = _empty_arrays()
-        return f, o, p, m, winner, "completed", []
+        return f, o, p, m, winner, "completed", [], _empty_game_ids()
     outcome_label = _outcome_label(winner)
     features = np.stack(
         [f for f, _, _, _ in samples], axis=0,
@@ -1013,20 +1081,41 @@ def _generate_one_game_data(
     action_masks = np.stack(
         [m for _, _, _, m in samples], axis=0,
     ).astype(np.bool_)
+    game_ids = np.full(
+        features.shape[0], game_idx, dtype=_DTYPE_GAME_IDS,
+    )
     return (
         features, outcomes, policy_targets, action_masks, winner,
-        "completed", struct_rows,
+        "completed", struct_rows, game_ids,
     )
 
 
+def _empty_game_ids() -> np.ndarray:
+    """Zero-length ``game_ids`` array (empty / crashed / timed-out
+    game chunks)."""
+    return np.zeros((0,), dtype=_DTYPE_GAME_IDS)
+
+
+def _chunk_game_ids(chunk: tuple) -> np.ndarray:
+    """Per-row game ids for one chunk. Chunks produced by
+    ``_generate_one_game_data`` carry them at index 7; legacy /
+    hand-built chunks without that element get ``-1`` per row so a
+    downstream consumer can still tell "unknown game" apart from a
+    real ``game_idx``."""
+    if len(chunk) > 7 and chunk[7] is not None:
+        return np.asarray(chunk[7], dtype=_DTYPE_GAME_IDS)
+    return np.full(chunk[0].shape[0], -1, dtype=_DTYPE_GAME_IDS)
+
+
 def _concat_chunks(
-    chunks: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Concat per-game 4-tuple chunks into the final arrays. Skips
-    empty chunks (zero-decision games hit the cap)."""
+    chunks: list[tuple],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Concat per-game chunks into the final arrays
+    ``(features, outcomes, policy_targets, action_masks, game_ids)``.
+    Skips empty chunks (zero-decision games hit the cap)."""
     nonempty = [c for c in chunks if c[0].size > 0]
     if not nonempty:
-        return _empty_arrays()
+        return _empty_arrays() + (_empty_game_ids(),)
     features = np.concatenate(
         [c[0] for c in nonempty], axis=0,
     ).astype(_DTYPE_FEATURES)
@@ -1039,7 +1128,10 @@ def _concat_chunks(
     action_masks = np.concatenate(
         [c[3] for c in nonempty], axis=0,
     ).astype(np.bool_)
-    return features, outcomes, policy_targets, action_masks
+    game_ids = np.concatenate(
+        [_chunk_game_ids(c) for c in nonempty], axis=0,
+    ).astype(_DTYPE_GAME_IDS)
+    return features, outcomes, policy_targets, action_masks, game_ids
 
 
 def _outcome_label(
@@ -1064,6 +1156,8 @@ def _play_one_game_recording(
     tree_top_k: Optional[int] = None,
     action_encoding_version: str = "positional_v1",
     structured_tokens: bool = False,
+    move_temperature: float = 1.0,
+    temperature_cutoff: int = 30,
 ) -> tuple[
     PlayerID | None,
     list[tuple[np.ndarray, PlayerID, np.ndarray, np.ndarray]],
@@ -1071,6 +1165,20 @@ def _play_one_game_recording(
 ]:
     """Play one game with the decision cap, recording features at
     every Nth non-chance decision from both player perspectives.
+
+    Self-play move temperature (AlphaZero-style): for the first
+    ``temperature_cutoff`` NON-forced decisions of the game (a
+    decision counts as non-forced when the actor has more than one
+    legal option, whether or not it is a sample point), the PLAYED
+    move at a sample point is sampled from the search's root visit
+    counts with probability proportional to ``visits ** (1 /
+    move_temperature)`` using the game ``rng`` (so it stays
+    deterministic per seed). After the cutoff — or whenever
+    ``move_temperature <= 0`` — the search's argmax is played, as
+    before. The recorded policy TARGET is never tempered: it is
+    always the normalized raw visit distribution. Only decisions
+    legal at the actual root are eligible for sampling (PIMC visits
+    can include world-specific decisions the root can't apply).
 
     When ``replay_recorder`` is set, also captures a snapshot of
     the engine state after each ``adapter.apply(decision)`` — both
@@ -1133,6 +1241,12 @@ def _play_one_game_recording(
     observe_action_active = any(
         hasattr(s, "observe_action") for s in strategies.values()
     )
+    # Number of non-forced (>1 legal option) player decisions seen
+    # so far. Drives the temperature cutoff. Only maintained while
+    # temperature sampling is still live — once past the cutoff (or
+    # with T<=0) we stop paying for the legal-count probe.
+    n_nonforced = 0
+    temperature_live = move_temperature > 0 and temperature_cutoff > 0
     decision_idx = 0
     while not adapter.is_terminal() and decision_idx < decision_cap:
         active = adapter.active_player()
@@ -1208,6 +1322,19 @@ def _play_one_game_recording(
                         )[0]
                     else:
                         decision = list(adapter.legal_decisions())[0]
+                # Root-legal decision set. Needed by the policy
+                # encoder below whenever ``visits`` is non-empty, and
+                # by the temperature sampler; computed at most once.
+                legal_now: Optional[set] = None
+                if temperature_live and n_nonforced < temperature_cutoff:
+                    legal_now = set(adapter.legal_decisions())
+                    if len(legal_now) > 1:
+                        n_nonforced += 1
+                        if visits:
+                            decision = _sample_move_with_temperature(
+                                visits, legal_now, move_temperature,
+                                rng, fallback=decision,
+                            )
                 if replay_recorder is not None and candidates:
                     elapsed_ms = (
                         int((time.perf_counter() - _t0) * 1000)
@@ -1249,7 +1376,8 @@ def _play_one_game_recording(
                     # cap also get dropped here; if everything's gone,
                     # fall through to no-policy-supervision for this
                     # row.
-                    legal_now = set(adapter.legal_decisions())
+                    if legal_now is None:
+                        legal_now = set(adapter.legal_decisions())
                     counted = 0.0
                     for d, count in visits.items():
                         if d not in legal_now:
@@ -1313,6 +1441,12 @@ def _play_one_game_recording(
                             )
                         )
             else:
+                if (
+                    temperature_live
+                    and n_nonforced < temperature_cutoff
+                    and _has_multiple_legal(adapter)
+                ):
+                    n_nonforced += 1
                 decision = strategies[active].choose(adapter, active)
         # Snapshot the pre-apply state so observe_action can be fed
         # the priority-moment state, not the post-apply state. Skip
@@ -1409,6 +1543,46 @@ def _play_one_game_recording(
     return winner, samples, struct_rows
 
 
+def _has_multiple_legal(adapter: MtgGameStateAdapter) -> bool:
+    """True when the actor has more than one legal decision. Pulls
+    at most two items from the legal-decision iterator so the probe
+    stays cheap on the non-sample-point path."""
+    return len(list(itertools.islice(adapter.legal_decisions(), 2))) > 1
+
+
+def _sample_move_with_temperature(
+    visits: dict[Decision, int],
+    legal: set[Decision],
+    temperature: float,
+    rng: random.Random,
+    fallback: Decision,
+) -> Decision:
+    """Sample a decision from ``visits`` with probability
+    proportional to ``visits ** (1 / temperature)``, restricted to
+    decisions in ``legal`` with a positive count.
+
+    - ``temperature <= 0`` returns the argmax (first-max in
+      ``visits`` insertion order, matching the search's own
+      ``max(...)`` tie-break).
+    - No eligible candidates (every visited decision is illegal at
+      the root, or all counts are zero) returns ``fallback``.
+    - Weights are computed as ``(v / v_max) ** (1/T)`` so very
+      small temperatures don't overflow; as ``T -> 0`` the sample
+      converges on the argmax.
+
+    Uses ``rng.choices`` so results are deterministic per game seed.
+    """
+    cands = [(d, v) for d, v in visits.items() if d in legal and v > 0]
+    if not cands:
+        return fallback
+    if temperature <= 0 or len(cands) == 1:
+        return max(cands, key=lambda kv: kv[1])[0]
+    v_max = max(v for _, v in cands)
+    inv_t = 1.0 / temperature
+    weights = [(v / v_max) ** inv_t for _, v in cands]
+    return rng.choices([d for d, _ in cands], weights=weights, k=1)[0]
+
+
 def save_dataset(
     features: np.ndarray,
     outcomes: np.ndarray,
@@ -1420,12 +1594,21 @@ def save_dataset(
     structured_token_emb_ids: Optional[np.ndarray] = None,
     structured_token_scalars: Optional[np.ndarray] = None,
     structured_attention_mask: Optional[np.ndarray] = None,
+    game_ids: Optional[np.ndarray] = None,
 ) -> None:
     """Save ``(features, outcomes)`` plus optional policy
-    supervision and structured-token arrays to a single ``.npz``
-    file.
+    supervision, structured-token, and game-id arrays to a single
+    ``.npz`` file.
 
-    Schema (the policy + structured keys exist only when supplied):
+    Schema (the policy / structured / game_ids keys exist only when
+    supplied):
+
+    - ``game_ids``       : ``(N,)`` int32 — the ``game_idx`` each
+      row was generated from (unique per game WITHIN this file).
+      The trainer groups rows by ``(file, game_id)`` so a game never
+      straddles the train/val split. Files written before this key
+      existed load fine; the loader falls back to treating the whole
+      file as one group.
 
     - ``features``       : ``(N, FEATURE_DIM)`` float32
     - ``outcomes``       : ``(N,)`` float32 in ``{-1, 0, +1}``
@@ -1499,6 +1682,13 @@ def save_dataset(
                     f"{name} rows {arr.shape[0]} != features rows {n}"
                 )
             arrays[name] = arr
+    if game_ids is not None:
+        game_ids = np.asarray(game_ids)
+        if game_ids.ndim != 1 or game_ids.shape[0] != n:
+            raise ValueError(
+                f"game_ids must be shape ({n},); got {game_ids.shape}"
+            )
+        arrays["game_ids"] = game_ids.astype(_DTYPE_GAME_IDS)
     np.savez_compressed(path, **arrays)
 
 
@@ -1507,8 +1697,13 @@ def load_dataset(
     *,
     with_policy: bool = False,
     with_structured: bool = False,
+    with_game_ids: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Load a single ``.npz`` saved by ``save_dataset``.
+
+    ``with_game_ids=True`` appends one more element — the file's
+    ``game_ids`` array, or ``None`` for files written before that
+    key existed — to whichever tuple shape the other flags select.
 
     Default returns ``(features, outcomes)`` for backward compat
     with pre-A2.3 callers. Pass ``with_policy=True`` to also pull
@@ -1531,8 +1726,12 @@ def load_dataset(
     with np.load(path) as data:
         features = data["features"]
         outcomes = data["outcomes"]
+        game_ids: Optional[np.ndarray] = (
+            data["game_ids"] if "game_ids" in data.files else None
+        )
+        gid_tail: tuple = (game_ids,) if with_game_ids else ()
         if not with_policy and not with_structured:
-            return features, outcomes
+            return (features, outcomes) + gid_tail
         policy_targets: Optional[np.ndarray] = (
             data["policy_targets"]
             if "policy_targets" in data.files else None
@@ -1542,7 +1741,9 @@ def load_dataset(
             if "action_masks" in data.files else None
         )
         if not with_structured:
-            return features, outcomes, policy_targets, action_masks
+            return (
+                features, outcomes, policy_targets, action_masks,
+            ) + gid_tail
         struct_arrays: list[Optional[np.ndarray]] = []
         for key in _STRUCT_NPZ_KEYS:
             struct_arrays.append(
@@ -1552,7 +1753,59 @@ def load_dataset(
             features, outcomes, policy_targets, action_masks,
             struct_arrays[0], struct_arrays[1],
             struct_arrays[2], struct_arrays[3],
+        ) + gid_tail
+
+
+# Stride between per-file group-id blocks. A file's rows get group
+# id ``file_index * _GROUP_ID_FILE_STRIDE + game_id`` (or just
+# ``file_index * _GROUP_ID_FILE_STRIDE`` when the file predates the
+# ``game_ids`` key and is treated as one group). ``game_idx`` within
+# a file is always far below 1e6 (self-play runs are O(1e4) games).
+_GROUP_ID_FILE_STRIDE = 1_000_000
+
+
+def file_group_ids(
+    game_ids: Optional[np.ndarray],
+    n_rows: int,
+    file_index: int,
+    *,
+    path: Optional[Path] = None,
+) -> np.ndarray:
+    """Per-row group ids for one loaded file, unique across files.
+
+    ``game_ids`` present → ``file_index * 1_000_000 + game_id`` per
+    row (one group per game). ``None`` (file written before the key
+    existed) → ``file_index * 1_000_000`` for every row: the whole
+    file is a single group, which is the only leak-free choice when
+    game boundaries are unknown. Logs at INFO which mode was used
+    and how many groups the file contributed.
+    """
+    base = int(file_index) * _GROUP_ID_FILE_STRIDE
+    label = str(path) if path is not None else f"file#{file_index}"
+    if game_ids is None:
+        _log.info(
+            "group ids for %s: no game_ids key (legacy file); "
+            "treating all %d rows as ONE group",
+            label, n_rows,
         )
+        return np.full(n_rows, base, dtype=np.int64)
+    game_ids = np.asarray(game_ids)
+    if game_ids.shape[0] != n_rows:
+        raise ValueError(
+            f"{label}: game_ids rows {game_ids.shape[0]} != "
+            f"features rows {n_rows}"
+        )
+    if game_ids.size and int(game_ids.max()) >= _GROUP_ID_FILE_STRIDE:
+        raise ValueError(
+            f"{label}: game_id {int(game_ids.max())} exceeds the "
+            f"per-file stride {_GROUP_ID_FILE_STRIDE}"
+        )
+    out = base + game_ids.astype(np.int64)
+    _log.info(
+        "group ids for %s: game_ids present; %d rows in %d game groups",
+        label, n_rows, int(np.unique(out).shape[0]) if n_rows else 0,
+    )
+    return out
 
 
 def load_all_datasets(
@@ -1560,8 +1813,15 @@ def load_all_datasets(
     *,
     include_policy: bool = False,
     max_files: int | None = None,
+    include_group_ids: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Load and concatenate every ``*.npz`` in ``directory``.
+
+    ``include_group_ids=True`` appends a ``(N,)`` int64 ``group_ids``
+    array as the LAST tuple element: per-row game group ids unique
+    across the loaded files (see :func:`file_group_ids`). Files
+    without a ``game_ids`` key contribute one group each. Pass it to
+    ``train_value_network(group_ids=...)`` for a game-level split.
 
     By default returns ``(features, outcomes)`` to preserve the
     pre-A2.3 value-only callers' contract — files that contain
@@ -1619,25 +1879,29 @@ def load_all_datasets(
         paths = sorted(kept)
     else:
         paths = sorted(all_paths)
+    empty_gid_tail: tuple = (
+        (np.zeros((0,), dtype=np.int64),) if include_group_ids else ()
+    )
     if not paths:
         empty_features = np.zeros((0, FEATURE_DIM), dtype=_DTYPE_FEATURES)
         empty_outcomes = np.zeros((0,), dtype=_DTYPE_OUTCOMES)
         if not include_policy:
-            return empty_features, empty_outcomes
+            return (empty_features, empty_outcomes) + empty_gid_tail
         return (
             empty_features,
             empty_outcomes,
             np.zeros((0, ACTION_VOCAB_SIZE), dtype=_DTYPE_POLICY),
             np.zeros((0, ACTION_VOCAB_SIZE), dtype=np.bool_),
-        )
+        ) + empty_gid_tail
     feature_chunks: list[np.ndarray] = []
     outcome_chunks: list[np.ndarray] = []
     policy_chunks: list[np.ndarray] = []
     mask_chunks: list[np.ndarray] = []
-    for path in paths:
+    group_chunks: list[np.ndarray] = []
+    for file_index, path in enumerate(paths):
         if include_policy:
-            feats, outs, pols, masks = load_dataset(
-                path, with_policy=True,
+            feats, outs, pols, masks, gids = load_dataset(
+                path, with_policy=True, with_game_ids=True,
             )
             n_rows = feats.shape[0]
             if pols is None:
@@ -1652,16 +1916,26 @@ def load_all_datasets(
             policy_chunks.append(pols)
             mask_chunks.append(masks)
         else:
-            feats, outs = load_dataset(path)
+            feats, outs, gids = load_dataset(path, with_game_ids=True)
         feature_chunks.append(feats)
         outcome_chunks.append(outs)
+        if include_group_ids:
+            group_chunks.append(
+                file_group_ids(
+                    gids, int(feats.shape[0]), file_index, path=path,
+                )
+            )
     features_all = np.concatenate(feature_chunks, axis=0)
     outcomes_all = np.concatenate(outcome_chunks, axis=0)
+    gid_tail: tuple = (
+        (np.concatenate(group_chunks, axis=0).astype(np.int64),)
+        if include_group_ids else ()
+    )
     if not include_policy:
-        return features_all, outcomes_all
+        return (features_all, outcomes_all) + gid_tail
     return (
         features_all,
         outcomes_all,
         np.concatenate(policy_chunks, axis=0),
         np.concatenate(mask_chunks, axis=0),
-    )
+    ) + gid_tail

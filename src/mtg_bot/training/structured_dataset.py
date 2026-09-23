@@ -56,6 +56,7 @@ function (in ``trainer.py``) wires this loader to the new model.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -65,7 +66,9 @@ import torch
 from torch.utils.data import Dataset
 
 from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
-from mtg_bot.training.data_gen import load_dataset
+from mtg_bot.training.data_gen import file_group_ids, load_dataset
+
+_log = logging.getLogger(__name__)
 
 
 _STRUCT_NPZ_KEYS = (
@@ -117,6 +120,7 @@ class StructuredDataset(Dataset):
         outcomes: np.ndarray,
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
+        group_ids: Optional[np.ndarray] = None,
     ) -> None:
         n = token_type.shape[0]
         if (
@@ -147,6 +151,7 @@ class StructuredDataset(Dataset):
             outcomes=np.asarray(outcomes, dtype=np.float32),
             policy_targets=np.asarray(policy_targets, dtype=np.float32),
             action_masks=np.asarray(action_masks, dtype=np.bool_),
+            group_ids=group_ids,
         )
 
     @classmethod
@@ -160,6 +165,7 @@ class StructuredDataset(Dataset):
         outcomes_per_file: list[np.ndarray],
         policy_targets_per_file: list[np.ndarray],
         action_masks_per_file: list[np.ndarray],
+        group_ids_per_file: Optional[list[np.ndarray]] = None,
     ) -> "StructuredDataset":
         """Build from a list of per-file padded arrays. Each list
         entry holds one source npz's arrays at the file's native
@@ -250,6 +256,17 @@ class StructuredDataset(Dataset):
         row_offsets = np.concatenate(
             ([0], np.cumsum(row_lens_all)),
         ).astype(np.int64)
+        group_ids: Optional[np.ndarray] = None
+        if group_ids_per_file is not None:
+            if len(group_ids_per_file) != n_files:
+                raise ValueError(
+                    f"group_ids_per_file length {len(group_ids_per_file)} "
+                    f"!= number of files {n_files}"
+                )
+            group_ids = (
+                np.concatenate(group_ids_per_file).astype(np.int64)
+                if group_ids_per_file else np.zeros((0,), dtype=np.int64)
+            )
         obj = cls.__new__(cls)
         obj._init_flat(
             token_type_flat=tt_flat,
@@ -259,6 +276,7 @@ class StructuredDataset(Dataset):
             outcomes=outcomes,
             policy_targets=policy_targets,
             action_masks=action_masks,
+            group_ids=group_ids,
         )
         return obj
 
@@ -273,11 +291,17 @@ class StructuredDataset(Dataset):
         outcomes: np.ndarray,
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
+        group_ids: Optional[np.ndarray] = None,
     ) -> "StructuredDataset":
         """Build directly from pre-flattened arrays. The caller is
         responsible for ensuring ``row_offsets`` is monotone
         non-decreasing, starts at 0, and ends at
-        ``token_type_flat.shape[0]``."""
+        ``token_type_flat.shape[0]``.
+
+        ``group_ids`` (optional, ``(n_rows,)`` int) is the per-row
+        game group id the trainer uses for a game-level train/val
+        split. ``None`` = every row is its own group (no game
+        structure known — only appropriate for synthetic data)."""
         n_total = int(row_offsets.shape[0]) - 1
         if n_total < 0:
             raise ValueError("row_offsets must have length >= 1")
@@ -310,6 +334,11 @@ class StructuredDataset(Dataset):
                 f"{outcomes.shape[0]} / {policy_targets.shape[0]} / "
                 f"{action_masks.shape[0]}"
             )
+        if group_ids is not None and np.asarray(group_ids).shape[0] != n_total:
+            raise ValueError(
+                f"group_ids rows {np.asarray(group_ids).shape[0]} != "
+                f"row count {n_total}"
+            )
         obj = cls.__new__(cls)
         obj._init_flat(
             token_type_flat=token_type_flat,
@@ -319,6 +348,7 @@ class StructuredDataset(Dataset):
             outcomes=outcomes,
             policy_targets=policy_targets,
             action_masks=action_masks,
+            group_ids=group_ids,
         )
         return obj
 
@@ -332,6 +362,7 @@ class StructuredDataset(Dataset):
         outcomes: np.ndarray,
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
+        group_ids: Optional[np.ndarray] = None,
     ) -> None:
         # **Memmap-backed storage.** Write each flat array to a
         # ``.npy`` file in a temp directory, then ``mmap_mode='r'``
@@ -409,8 +440,29 @@ class StructuredDataset(Dataset):
             memmap_dir / "has_policy.npy",
             has_policy,
         )
+        # Per-row game group id for the trainer's game-level split.
+        # Default (no game structure known) = one group per row.
+        n_rows_total = int(row_offsets.shape[0]) - 1
+        if group_ids is None:
+            group_ids_arr = np.arange(n_rows_total, dtype=np.int64)
+        else:
+            group_ids_arr = np.ascontiguousarray(group_ids, dtype=np.int64)
+            if group_ids_arr.shape[0] != n_rows_total:
+                raise ValueError(
+                    f"group_ids rows {group_ids_arr.shape[0]} != "
+                    f"row count {n_rows_total}"
+                )
+        np.save(memmap_dir / "group_ids.npy", group_ids_arr)
         self._memmap_dir = str(memmap_dir)
         self._open_memmaps()
+
+    @property
+    def group_ids(self) -> np.ndarray:
+        """``(len(self),)`` int64 per-row game group ids. Rows that
+        share a value came from the same self-play game and must land
+        on the same side of the train/val split (see
+        ``trainer.grouped_train_val_split``)."""
+        return np.asarray(self._group_ids)
 
     def _open_memmaps(self) -> None:
         """Open the on-disk ``.npy`` files as read-only memmaps.
@@ -444,6 +496,9 @@ class StructuredDataset(Dataset):
         )
         self._has_policy = np.load(
             d / "has_policy.npy", mmap_mode="r",
+        )
+        self._group_ids = np.load(
+            d / "group_ids.npy", mmap_mode="r",
         )
         self._n_total = int(self._row_offsets.shape[0]) - 1
 
@@ -700,11 +755,15 @@ def load_structured_dataset(
     outcomes_parts: list[np.ndarray] = []
     policy_parts: list[np.ndarray] = []
     am_parts: list[np.ndarray] = []
-    for path in paths:
+    group_parts: list[np.ndarray] = []
+    for file_index, path in enumerate(paths):
         (
             features, outcomes, policy_targets, action_masks,
-            tt, emb_ids, scalars, mask,
-        ) = load_dataset(path, with_policy=True, with_structured=True)
+            tt, emb_ids, scalars, mask, game_ids,
+        ) = load_dataset(
+            path, with_policy=True, with_structured=True,
+            with_game_ids=True,
+        )
         if (
             tt is None or emb_ids is None
             or scalars is None or mask is None
@@ -737,6 +796,12 @@ def load_structured_dataset(
         outcomes_parts.append(outcomes)
         policy_parts.append(policy_targets)
         am_parts.append(action_masks)
+        # Game-level group ids: ``file_index * 1e6 + game_id`` when
+        # the file carries ``game_ids``; whole file as one group for
+        # legacy files (logged at INFO inside ``file_group_ids``).
+        group_parts.append(
+            file_group_ids(game_ids, n_rows, file_index, path=path)
+        )
     tt_flat = np.concatenate(tt_parts)
     emb_flat = np.concatenate(emb_parts)
     sca_flat = np.concatenate(sca_parts)
@@ -747,6 +812,12 @@ def load_structured_dataset(
     outcomes_all = np.concatenate(outcomes_parts).astype(np.float32)
     policy_all = np.concatenate(policy_parts).astype(np.float32)
     am_all = np.concatenate(am_parts).astype(np.bool_)
+    group_all = np.concatenate(group_parts).astype(np.int64)
+    _log.info(
+        "structured dataset: %d rows across %d files in %d game groups",
+        int(group_all.shape[0]), len(paths),
+        int(np.unique(group_all).shape[0]),
+    )
     return StructuredDataset.from_flat_arrays(
         token_type_flat=tt_flat,
         token_emb_ids_flat=emb_flat,
@@ -755,6 +826,7 @@ def load_structured_dataset(
         outcomes=outcomes_all,
         policy_targets=policy_all,
         action_masks=am_all,
+        group_ids=group_all,
     )
 
 

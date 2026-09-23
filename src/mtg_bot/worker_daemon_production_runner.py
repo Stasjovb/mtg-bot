@@ -188,20 +188,26 @@ def _encode_npz_bytes(
     SSH shard's ``_flush`` writer, but to a BytesIO instead of an
     output_dir path.
 
-    ``chunk`` is the 7-tuple returned by
+    ``chunk`` is the 8-tuple returned by
     ``_play_one_parallel_game``'s success path:
     ``(features, outcomes, policy_targets, action_masks, winner,
-       outcome_kind, struct_rows)``. Empty arrays for crashed / timed-
-    out games encode cleanly (zero-row npz).
+       outcome_kind, struct_rows, game_ids)``. Empty arrays for crashed /
+    timed-out games encode cleanly (zero-row npz). ``game_ids`` (one
+    value per row = the claim's ``game_idx``) is written under the
+    ``game_ids`` key so the trainer's game-level train/val split sees
+    the same schema as the local data_gen path; a legacy 7-tuple
+    chunk gets ``-1`` per row.
     """
     import numpy as np
 
     from mtg_bot.training import save_dataset
+    from mtg_bot.training.data_gen import _chunk_game_ids
 
     features = chunk[0]
     outcomes = chunk[1]
     policy_targets = chunk[2]
     action_masks = chunk[3]
+    game_ids = _chunk_game_ids(chunk)
     # Write to a temp file under a BytesIO since np.savez_compressed
     # wants a file-like or path. BytesIO works because savez_compressed
     # internally uses the zipfile module which only needs seek/write.
@@ -230,6 +236,7 @@ def _encode_npz_bytes(
             "structured_token_emb_ids": struct["structured_token_emb_ids"],
             "structured_token_scalars": struct["structured_token_scalars"],
             "structured_attention_mask": struct["structured_attention_mask"],
+            "game_ids": game_ids,
         }
     else:
         arrays = {
@@ -237,6 +244,7 @@ def _encode_npz_bytes(
             "outcomes": outcomes,
             "policy_targets": policy_targets,
             "action_masks": action_masks,
+            "game_ids": game_ids,
         }
     # Drop empty rows (crashed / timed-out games): save_dataset would
     # raise on FEATURE_DIM mismatch when features is a (0, FEATURE_DIM)
@@ -269,6 +277,7 @@ def _play_self_play_game(
     """
     from mtg_bot.training.data_gen import (
         _empty_arrays,
+        _empty_game_ids,
         _generate_one_game_data,
     )
 
@@ -302,16 +311,16 @@ def _play_self_play_game(
         )
     except TimeoutError:
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "timed_out", [])
+        chunk = (f, o, p, m, None, "timed_out", [], _empty_game_ids())
     except Exception:  # noqa: BLE001 - intentional broad catch
         log.exception(
             "[self_play_runner] game %d crashed; dropping", game_idx
         )
         f, o, p, m = _empty_arrays()
-        chunk = (f, o, p, m, None, "crashed", [])
+        chunk = (f, o, p, m, None, "crashed", [], _empty_game_ids())
 
-    # ``chunk`` is now a 7-tuple ``(features, outcomes, policy_targets,
-    # action_masks, winner, outcome_kind, struct_rows)``.
+    # ``chunk`` is now an 8-tuple ``(features, outcomes, policy_targets,
+    # action_masks, winner, outcome_kind, struct_rows, game_ids)``.
     winner = chunk[4]
     outcome_kind = chunk[5] if len(chunk) > 5 else (
         "crashed" if winner is None and not bool(getattr(chunk[0], "size", 0))

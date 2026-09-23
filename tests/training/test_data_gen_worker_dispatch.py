@@ -69,7 +69,7 @@ def test_legacy_11_arg_tuple_runs_and_defaults_encoding():
     )
     game_idx, chunk = _play_one_parallel_game(args)
     assert game_idx == 3
-    assert chunk[-2] == "completed"
+    assert chunk[5] == "completed"
     assert chunk[0].shape[1] == FEATURE_DIM
 
 
@@ -92,7 +92,7 @@ def test_12_arg_tuple_runs_with_explicit_encoding_version():
     )
     game_idx, chunk = _play_one_parallel_game(args)
     assert game_idx == 5
-    assert chunk[-2] == "completed"
+    assert chunk[5] == "completed"
 
 
 def test_13_arg_tuple_runs_with_structured_tokens_flag():
@@ -113,7 +113,7 @@ def test_13_arg_tuple_runs_with_structured_tokens_flag():
     )
     game_idx, chunk = _play_one_parallel_game(args)
     assert game_idx == 1
-    assert chunk[-2] == "completed"
+    assert chunk[5] == "completed"
 
 
 # ---------------------------------------------------------------------
@@ -137,7 +137,7 @@ def test_crash_returns_empty_crashed_chunk(capfd):
     )
     game_idx, chunk = _play_one_parallel_game(args)
     assert game_idx == 9
-    assert chunk[-2] == "crashed"
+    assert chunk[5] == "crashed"
     f, o, p, m = chunk[0], chunk[1], chunk[2], chunk[3]
     assert f.shape == (0, FEATURE_DIM)
     assert o.shape == (0,)
@@ -179,7 +179,7 @@ def test_timeout_returns_empty_timed_out_chunk(monkeypatch, capfd):
     )
     game_idx, chunk = _play_one_parallel_game(args)
     assert game_idx == 2
-    assert chunk[-2] == "timed_out"
+    assert chunk[5] == "timed_out"
     assert chunk[4] is None
     assert chunk[0].shape == (0, FEATURE_DIM)
     err = capfd.readouterr().err
