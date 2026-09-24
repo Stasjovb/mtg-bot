@@ -417,6 +417,43 @@ def build_iterate_schema(
                     ),
                 },
                 {
+                    "name": "self-play-evaluator", "type": "choice",
+                    "choices": ["nn", "heuristic"],
+                    "default": "nn",
+                    "help": (
+                        "Which evaluator drives the SELF-PLAY search "
+                        "on both seats. 'heuristic' runs the same PIMC "
+                        "search over MtgHeuristicEvaluator with no "
+                        "weights at all -- the warm-start corpus path "
+                        "(the npz schema is identical, so mtg_bot "
+                        "train consumes it unchanged). The eval gate "
+                        "is always nn-vs-nn."
+                    ),
+                },
+                {
+                    "name": "corpus-only", "type": "bool", "default": False,
+                    "help": (
+                        "Run ONLY the self-play stage of each "
+                        "iteration: no train, no eval, no promotion, "
+                        "and iterate_state.json is left untouched. "
+                        "Pair with --self-play-evaluator heuristic to "
+                        "build a warm-start corpus."
+                    ),
+                },
+                {
+                    "name": "corpus-batch", "type": "int", "default": None,
+                    "help": (
+                        "Corpus-only mode: the 1-based iteration index "
+                        "to label this batch with, instead of "
+                        "iterate_state.json's iterations_completed + "
+                        "1. Required when batching a corpus across "
+                        "separate invocations -- otherwise every one "
+                        "reuses the same stage_id and the coordinator "
+                        "answers 204 to every claim. Leave blank for "
+                        "normal runs."
+                    ),
+                },
+                {
                     "name": "use-ismcts", "type": "bool", "default": False,
                     "help": (
                         "Use Information Set MCTS instead of PIMC. "
