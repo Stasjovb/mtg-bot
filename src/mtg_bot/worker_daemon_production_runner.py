@@ -181,6 +181,104 @@ def _build_nn_pimc_config(
     )
 
 
+def _heuristic_self_play_plan(claim: dict[str, Any]) -> dict[str, Any]:
+    """Build the per-claim plan for a HEURISTIC self-play game.
+
+    Returns ``{factory, action_encoding_version, structured_tokens,
+    structured_scalar_schema_version, nodes, samples, version}``.
+
+    A heuristic stage carries no weights version, so there is no
+    ``metadata.json`` on the worker to discover the corpus format
+    from: the coordinator's stage spec is authoritative for the
+    action encoding and the structured-token schema, and a spec that
+    omits ``action_encoding_version`` is rejected here rather than
+    silently defaulting (a mislabelled policy target is invisible
+    downstream). See ``mtg_bot.training.self_play_evaluator``.
+    """
+    from mtg_bot.training.self_play_evaluator import (
+        build_heuristic_pimc_config,
+    )
+    action_encoding_version = claim.get("action_encoding_version")
+    if not action_encoding_version:
+        raise RuntimeError(
+            "heuristic self-play claim is missing "
+            f"action_encoding_version: claim={claim}. The coordinator "
+            "must set it on the stage spec -- a heuristic stage has "
+            "no weights metadata.json to discover it from."
+        )
+    nodes = int(claim.get("nodes") or 200)
+    samples = int(claim.get("samples") or 4)
+    knobs = _self_play_exploration_knobs(claim)
+    cfg = build_heuristic_pimc_config(
+        nodes=nodes,
+        samples=samples,
+        root_dirichlet_alpha=knobs["root_dirichlet_alpha"],
+        root_dirichlet_eps=knobs["root_dirichlet_eps"],
+    )
+    schema = claim.get("structured_scalar_schema_version")
+    return {
+        "factory": cfg.build,
+        "action_encoding_version": str(action_encoding_version),
+        "structured_tokens": bool(claim.get("structured_tokens")),
+        "structured_scalar_schema_version": (
+            int(schema) if schema is not None else None
+        ),
+        "nodes": nodes,
+        "samples": samples,
+        "version": "heuristic",
+    }
+
+
+def _run_heuristic_self_play_game(
+    *,
+    claim: dict[str, Any],
+    deck_pool,
+    t0: float,
+) -> dict[str, Any]:
+    """Play one heuristic self-play game and return the result payload.
+
+    Shared by the subprocess body and the in-thread runner so the two
+    paths can't drift. The payload shape matches
+    :func:`_subprocess_play_self_play`'s NN return value exactly, so
+    the claim loop / GameResult decoding is unchanged.
+    """
+    plan = _heuristic_self_play_plan(claim)
+    knobs = _self_play_exploration_knobs(claim)
+    per_game_timeout_sec = claim.get("per_game_timeout_sec")
+    if per_game_timeout_sec is not None:
+        per_game_timeout_sec = float(per_game_timeout_sec)
+    chunk, outcome_kind, winner, n_samples = _play_self_play_game(
+        factory=plan["factory"],
+        base_seed=int(claim.get("seed") or 0),
+        game_idx=int(claim.get("game_idx") or 0),
+        deck_pool=deck_pool,
+        deck_indices=list(claim.get("deck_indices") or [0, 0]),
+        per_game_timeout_sec=per_game_timeout_sec,
+        capture_every=int(claim.get("capture_every") or 0),
+        action_encoding_version=plan["action_encoding_version"],
+        write_structured_tokens=plan["structured_tokens"],
+        structured_scalar_schema_version=(
+            plan["structured_scalar_schema_version"]
+        ),
+        move_temperature=knobs["move_temperature"],
+        temperature_cutoff=knobs["temperature_cutoff"],
+    )
+    npz_bytes = _encode_npz_bytes(
+        chunk, write_structured_tokens=plan["structured_tokens"],
+    )
+    return {
+        "outcome": outcome_kind,
+        "winner": winner,
+        "n_samples": n_samples,
+        "npz_bytes": npz_bytes,
+        "duration_s": time.perf_counter() - t0,
+        "game_idx": int(claim.get("game_idx") or 0),
+        "version": plan["version"],
+        "nodes": plan["nodes"],
+        "samples": plan["samples"],
+    }
+
+
 def _self_play_exploration_knobs(claim: dict[str, Any]) -> dict[str, Any]:
     """Pull the self-play exploration knobs off a coordinator claim.
 
@@ -494,6 +592,18 @@ def _subprocess_play_self_play(
         from mtg_bot.decks import decks_from_json
         _SUBPROCESS_STATE["deck_pool"] = decks_from_json(path)
     deck_pool = _SUBPROCESS_STATE["deck_pool"]
+
+    # Heuristic (warm-start corpus) stages never touch the registry:
+    # no weights fetch, no torch import, no metadata discovery. Handle
+    # them before the NN path so a missing/empty weights block is a
+    # non-event rather than the RuntimeError below.
+    from mtg_bot.training.self_play_evaluator import (
+        EVALUATOR_HEURISTIC, claim_evaluator,
+    )
+    if claim_evaluator(claim) == EVALUATOR_HEURISTIC:
+        return _run_heuristic_self_play_game(
+            claim=claim, deck_pool=deck_pool, t0=t0,
+        )
 
     # Lazy per-version weights + NNPimcConfig (persists across submits).
     configs = _SUBPROCESS_STATE.setdefault("configs_by_version", {})
@@ -865,7 +975,11 @@ def build_self_play_runner(
                 {
                     "claim_id": claim.get("claim_id"),
                     "game_idx": game_idx,
-                    "version": (claim.get("weights") or {}).get("p0"),
+                    "version": (
+                        (claim.get("weights") or {}).get("p0")
+                        or claim.get("evaluator")
+                    ),
+                    "evaluator": claim.get("evaluator") or "nn",
                     "mode": "subprocess",
                 },
             )
@@ -903,6 +1017,47 @@ def build_self_play_runner(
         # ``use_subprocess_pool=False`` builds).
         t0 = time.perf_counter()
         _ensure_deck_pool()
+
+        # Heuristic (warm-start corpus) stage: no weights fetch, no
+        # NN. Handled before the weights lookup below so an empty
+        # weights block is expected rather than fatal.
+        from mtg_bot.training.self_play_evaluator import (
+            EVALUATOR_HEURISTIC, claim_evaluator,
+        )
+        if claim_evaluator(claim) == EVALUATOR_HEURISTIC:
+            _emit(
+                "game_start",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": int(claim.get("game_idx") or 0),
+                    "version": "heuristic",
+                    "nodes": claim.get("nodes"),
+                    "samples": claim.get("samples"),
+                    "evaluator": EVALUATOR_HEURISTIC,
+                },
+            )
+            payload = _run_heuristic_self_play_game(
+                claim=claim, deck_pool=state["deck_pool"], t0=t0,
+            )
+            _emit(
+                "game_end",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": payload["game_idx"],
+                    "outcome": payload["outcome"],
+                    "winner": payload["winner"],
+                    "n_samples": payload["n_samples"],
+                    "duration_s": payload["duration_s"],
+                    "evaluator": EVALUATOR_HEURISTIC,
+                },
+            )
+            return GameResult(
+                outcome=payload["outcome"],
+                winner=payload["winner"],
+                n_samples=payload["n_samples"],
+                duration_s=payload["duration_s"],
+                npz_bytes=payload["npz_bytes"],
+            )
 
         weights = claim.get("weights") or {}
         version = weights.get("p0") or weights.get("new")

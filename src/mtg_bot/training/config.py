@@ -84,6 +84,17 @@ class PimcConfig:
     inner_nodes: int = 200
     heuristic: HeuristicConfig = field(default_factory=HeuristicConfig)
     batch_size: int = 1
+    # AlphaZero root exploration noise, carried for symmetry with
+    # :class:`NNPimcConfig` so the heuristic self-play stage accepts
+    # the same search-level knobs as the NN one. NOTE: the noise is
+    # mixed into the root children's PUCT *priors*, and priors are
+    # only consulted when ``puct=True`` -- which requires a
+    # policy-head evaluator. The heuristic evaluator has none, so
+    # this MCTS runs UCB1 and the noise is inert. The self-play
+    # driver warns about that rather than pretending otherwise; see
+    # ``mtg_bot.training.self_play_evaluator``.
+    root_dirichlet_alpha: Optional[float] = None
+    root_dirichlet_eps: float = 0.25
 
     def build(self, seed: int = 0) -> SearchStrategy:
         """Construct a fresh PIMC search strategy seeded for
@@ -92,6 +103,8 @@ class PimcConfig:
         evaluator = self.heuristic.build()
         inner_nodes = self.inner_nodes
         batch_size = self.batch_size
+        root_dirichlet_alpha = self.root_dirichlet_alpha
+        root_dirichlet_eps = self.root_dirichlet_eps
         rng_seed_inner = seed + 100
         rng_seed_outer = seed + 200
 
@@ -101,6 +114,8 @@ class PimcConfig:
                 budget_factory=lambda: Budget(max_nodes=inner_nodes),
                 rng=random.Random(rng_seed_inner),
                 batch_size=batch_size,
+                root_dirichlet_alpha=root_dirichlet_alpha,
+                root_dirichlet_eps=root_dirichlet_eps,
             )
 
         return PIMC(
@@ -115,6 +130,8 @@ class PimcConfig:
             "inner_nodes": self.inner_nodes,
             "heuristic": self.heuristic.to_dict(),
             "batch_size": self.batch_size,
+            "root_dirichlet_alpha": self.root_dirichlet_alpha,
+            "root_dirichlet_eps": self.root_dirichlet_eps,
         }
 
     @classmethod
@@ -124,6 +141,8 @@ class PimcConfig:
             inner_nodes=d["inner_nodes"],
             heuristic=HeuristicConfig.from_dict(d["heuristic"]),
             batch_size=d.get("batch_size", 1),
+            root_dirichlet_alpha=d.get("root_dirichlet_alpha"),
+            root_dirichlet_eps=d.get("root_dirichlet_eps", 0.25),
         )
 
 

@@ -158,6 +158,21 @@ class StageSpec:
     root_dirichlet_eps: float = 0.25
     move_temperature: float = 1.0
     temperature_cutoff: int = 30
+    # Which evaluator drives the self-play search: ``"nn"`` (default,
+    # historical) or ``"heuristic"`` (warm-start corpus generation --
+    # see ``mtg_bot.training.self_play_evaluator``). Eval stages are
+    # always ``"nn"``.
+    #
+    # A heuristic stage has NO weights version, so the three fields
+    # below (which the NN path auto-discovers from the version's
+    # metadata.json on the worker) have to travel on the spec
+    # instead, otherwise the worker would emit a corpus whose
+    # action encoding / token schema doesn't match the net that will
+    # be trained on it.
+    evaluator: str = "nn"
+    action_encoding_version: Optional[str] = None
+    structured_tokens: Optional[bool] = None
+    structured_scalar_schema_version: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -174,6 +189,12 @@ class StageSpec:
             "root_dirichlet_eps": self.root_dirichlet_eps,
             "move_temperature": self.move_temperature,
             "temperature_cutoff": self.temperature_cutoff,
+            "evaluator": self.evaluator,
+            "action_encoding_version": self.action_encoding_version,
+            "structured_tokens": self.structured_tokens,
+            "structured_scalar_schema_version": (
+                self.structured_scalar_schema_version
+            ),
         }
 
 
@@ -511,11 +532,42 @@ def make_self_play_stage_spec(
     root_dirichlet_eps: float = 0.25,
     move_temperature: float = 1.0,
     temperature_cutoff: int = 30,
+    evaluator: str = "nn",
+    action_encoding_version: Optional[str] = None,
+    structured_tokens: Optional[bool] = None,
+    structured_scalar_schema_version: Optional[int] = None,
 ) -> StageSpec:
     """Build a self-play :class:`StageSpec`. ``weights_version`` is the
     string label both seats share (e.g. ``"v6"``). The four
     exploration knobs travel to every worker claim (see
-    :class:`StageSpec`)."""
+    :class:`StageSpec`).
+
+    ``evaluator="heuristic"`` builds a warm-start corpus stage: both
+    seats run PIMC over ``MtgHeuristicEvaluator`` instead of the
+    network, ``weights_version`` is IGNORED, and the ``weights``
+    block is emptied so a worker running pre-``evaluator`` code
+    fails loudly on every claim rather than silently running the NN
+    (see ``mtg_bot.training.self_play_evaluator``). The three
+    corpus-format fields must then be supplied here, because a
+    heuristic stage has no metadata.json for the worker to discover
+    them from.
+    """
+    from mtg_bot.training.self_play_evaluator import (
+        EVALUATOR_HEURISTIC, heuristic_stage_weights, normalize_evaluator,
+    )
+    evaluator = normalize_evaluator(evaluator)
+    if evaluator == EVALUATOR_HEURISTIC:
+        weights = heuristic_stage_weights()
+        if action_encoding_version is None:
+            raise ValueError(
+                "evaluator='heuristic' requires an explicit "
+                "action_encoding_version: there is no weights "
+                "metadata.json for the worker to discover it from, "
+                "and a mismatched encoding silently mislabels every "
+                "policy target in the corpus."
+            )
+    else:
+        weights = {"p0": weights_version, "p1": weights_version}
     games = build_self_play_games(
         n_games=n_games, base_seed=base_seed,
         deck_pool_size=deck_pool_size,
@@ -523,7 +575,7 @@ def make_self_play_stage_spec(
     return StageSpec(
         stage_id=stage_id,
         kind="self_play",
-        weights={"p0": weights_version, "p1": weights_version},
+        weights=weights,
         nodes=nodes,
         samples=samples,
         per_game_timeout_sec=per_game_timeout_sec,
@@ -534,6 +586,10 @@ def make_self_play_stage_spec(
         root_dirichlet_eps=root_dirichlet_eps,
         move_temperature=move_temperature,
         temperature_cutoff=temperature_cutoff,
+        evaluator=evaluator,
+        action_encoding_version=action_encoding_version,
+        structured_tokens=structured_tokens,
+        structured_scalar_schema_version=structured_scalar_schema_version,
     )
 
 
