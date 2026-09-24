@@ -601,17 +601,46 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
+        "--loader-timeout-sec", type=float, default=600.0,
+        help=(
+            "Per-batch DataLoader collection timeout in seconds "
+            "(default 600). Only applies when --num-workers > 0 — "
+            "torch asserts timeout==0 for the single-process loader. "
+            "With worker processes and no timeout, a wedged worker "
+            "hangs training FOREVER with no error and no progress "
+            "(observed 2026-09-24 on the 4M-row cycle-5 train); the "
+            "timeout turns that stall into a loud RuntimeError. Pass "
+            "0 to block forever (the pre-2026-09-24 behaviour)."
+        ),
+    )
+    parser.add_argument(
         "--window-recent", type=int, default=None,
         help=(
+            "If set, train only on the last N ITERATIONS of data in "
+            "--data-dir instead of the entire directory. Files are "
+            "grouped by the <prefix>iter_NNN label in their filename "
+            "and every file of the N highest iteration indices is "
+            "kept (per lineage prefix). Default None = load every "
+            "file. NOTE this counts ITERATIONS, not files: the "
+            "distributed pipeline rehydrates one .npz per GAME, so "
+            "the old file-count semantics made --window-recent 3 "
+            "train on three games. Files whose name carries no "
+            "iteration label are always kept (with a warning). N "
+            "larger than the available iteration count loads them "
+            "all (no error). For the raw file-count behaviour use "
+            "--window-recent-files."
+        ),
+    )
+    parser.add_argument(
+        "--window-recent-files", type=int, default=None,
+        help=(
             "If set, load only the N most-recent (by mtime) .npz "
-            "files from --data-dir instead of the entire directory. "
-            "Default None = load every file. As iterate_data/ "
-            "accumulates over many iterations, training on the "
-            "entire history slows linearly with size and biases "
-            "early data; capping to the latest N files keeps "
-            "training fast and weighted toward fresh self-play. "
-            "Files greater than the available count loads them "
-            "all (no error)."
+            "files from --data-dir. This is the pre-2026-09-24 "
+            "--window-recent behaviour, kept for callers that want a "
+            "hard cap on file count (e.g. bounding RAM on the "
+            "one-npz-per-game distributed path). Mutually exclusive "
+            "with --window-recent. N greater than the available file "
+            "count loads them all (no error)."
         ),
     )
     parser.add_argument(
@@ -700,6 +729,11 @@ def main(argv=None) -> None:
         ),
     )
     args = parser.parse_args(argv)
+    if args.loader_timeout_sec is not None and args.loader_timeout_sec < 0:
+        parser.error(
+            "--loader-timeout-sec must be >= 0 (0 disables the "
+            f"stall guard); got {args.loader_timeout_sec}"
+        )
     # Structured architecture has a different data pipeline + model
     # + loss shape from the flat-feature MLP trainers; dispatch
     # before any of the flat-feature-specific argument validation.
@@ -1296,9 +1330,12 @@ def _main_structured(args, parser) -> None:
         "notes": args.notes,
         "n_samples": n_samples,
         "window_recent": args.window_recent,
+        "window_recent_files": args.window_recent_files,
         "action_encoding_version": args.action_encoding_version,
         "policy_loss_weight": args.policy_loss_weight,
         "early_stop_patience": args.early_stop_patience,
+        "num_workers": args.num_workers,
+        "loader_timeout_sec": args.loader_timeout_sec,
         "progress_path": (
             str(progress_path) if progress_path is not None else None
         ),
@@ -1405,6 +1442,7 @@ def _main_structured(args, parser) -> None:
             compile_model=args.compile_model,
             early_stop_patience=args.early_stop_patience,
             num_workers=args.num_workers,
+            loader_timeout_sec=args.loader_timeout_sec,
         )
         elapsed = time.perf_counter() - started
 

@@ -813,6 +813,7 @@ def train_structured_model(
     compile_model: Optional[bool] = None,
     early_stop_patience: Optional[int] = None,
     num_workers: int = 0,
+    loader_timeout_sec: Optional[float] = 600.0,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
@@ -860,6 +861,16 @@ def train_structured_model(
 
     ``epoch_callback`` mirrors :func:`train_value_network` — fires
     after the in-memory history is updated, exceptions are swallowed.
+
+    ``loader_timeout_sec`` (default 600 s) is the DataLoader's
+    per-batch collection timeout. It only applies when
+    ``num_workers > 0`` — torch asserts ``timeout == 0`` for the
+    single-process iterator, so a non-zero value there would raise on
+    the first batch. With worker processes and NO timeout, a wedged
+    worker (observed 2026-09-24 on the 4M-row cycle-5 train) hangs the
+    training run forever with no error and no progress; the timeout
+    turns that into a loud ``RuntimeError: DataLoader timed out``.
+    Pass ``None`` (or 0) to restore the block-forever behaviour.
     """
     # Lazy imports to avoid a hard dep on the structured-model module
     # at import time of the broader training package (the structured
@@ -942,6 +953,14 @@ def train_structured_model(
     # across epochs so the dataset's flat-storage isn't re-pickled
     # every epoch.
     _pw = num_workers > 0
+    # ``timeout`` is only legal with worker processes: torch's
+    # ``_SingleProcessDataLoaderIter`` asserts ``timeout == 0``. With
+    # workers it is the stall guard — without it a wedged worker hangs
+    # the whole run silently (seen 2026-09-24).
+    _timeout = (
+        float(loader_timeout_sec)
+        if (_pw and loader_timeout_sec) else 0
+    )
     train_loader = DataLoader(
         train_subset,
         batch_size=batch_size,
@@ -950,6 +969,7 @@ def train_structured_model(
         num_workers=num_workers,
         persistent_workers=_pw,
         pin_memory=device_obj.type == "cuda",
+        timeout=_timeout,
     )
     val_loader: Optional[DataLoader] = None
     if n_val > 0:
@@ -962,6 +982,7 @@ def train_structured_model(
             num_workers=num_workers,
             persistent_workers=_pw,
             pin_memory=device_obj.type == "cuda",
+            timeout=_timeout,
         )
 
     model = StructuredModel(config).to(device_obj)

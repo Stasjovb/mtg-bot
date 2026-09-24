@@ -459,3 +459,99 @@ def test_train_structured_model_accepts_matching_v1_width(
     )
     assert len(history.train_losses) == 1
     assert (tmp_path / "w1.pt").exists()
+
+
+# ---------------------------------------------------------------------
+# DataLoader stall guard.
+# ---------------------------------------------------------------------
+
+def _capture_dataloader_kwargs(monkeypatch) -> list[dict]:
+    """Patch ``torch.utils.data.DataLoader`` so the trainer's loader
+    kwargs are recorded. The returned loader is forced back to
+    single-process so the test never actually spawns workers."""
+    import torch.utils.data as _tud
+
+    real = _tud.DataLoader
+    seen: list[dict] = []
+
+    def _fake(*args, **kwargs):
+        seen.append(dict(kwargs))
+        forced = dict(kwargs)
+        forced["num_workers"] = 0
+        forced["persistent_workers"] = False
+        forced["timeout"] = 0
+        return real(*args, **forced)
+
+    monkeypatch.setattr(_tud, "DataLoader", _fake)
+    return seen
+
+
+def test_structured_trainer_sets_dataloader_timeout_with_workers(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``num_workers > 0`` must carry a ``timeout`` — without it a
+    wedged worker hangs training forever with no error (2026-09-24).
+    Both the train and val loaders get it."""
+    seen = _capture_dataloader_kwargs(monkeypatch)
+    ds = _make_dataset(16)
+    train_structured_model(
+        ds, weights_out_path=tmp_path / "w.pt",
+        config=StructuredModelConfig(
+            emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        ),
+        epochs=1, batch_size=4, device="cpu", compile_model=False,
+        val_split=0.25, num_workers=2, loader_timeout_sec=42.0,
+    )
+    assert len(seen) == 2, seen
+    assert [k["timeout"] for k in seen] == [42.0, 42.0]
+
+
+def test_structured_trainer_default_loader_timeout_is_600(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    seen = _capture_dataloader_kwargs(monkeypatch)
+    ds = _make_dataset(16)
+    train_structured_model(
+        ds, weights_out_path=tmp_path / "w.pt",
+        config=StructuredModelConfig(
+            emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        ),
+        epochs=1, batch_size=4, device="cpu", compile_model=False,
+        val_split=0.0, num_workers=2,
+    )
+    assert [k["timeout"] for k in seen] == [600.0]
+
+
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_structured_trainer_timeout_zero_without_workers(
+    tmp_path: Path, monkeypatch, timeout,
+) -> None:
+    """torch's single-process iterator asserts ``timeout == 0``
+    (``_SingleProcessDataLoaderIter requires timeout == 0``), so the
+    guard must NOT be applied at ``num_workers=0``. Explicitly
+    disabling it with workers is honoured too."""
+    seen = _capture_dataloader_kwargs(monkeypatch)
+    ds = _make_dataset(16)
+    train_structured_model(
+        ds, weights_out_path=tmp_path / "w.pt",
+        config=StructuredModelConfig(
+            emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        ),
+        epochs=1, batch_size=4, device="cpu", compile_model=False,
+        val_split=0.0, num_workers=0, loader_timeout_sec=timeout,
+    )
+    assert [k["timeout"] for k in seen] == [0]
+
+
+def test_single_process_dataloader_rejects_nonzero_timeout() -> None:
+    """Pins the torch behaviour the guard exists for: a non-zero
+    timeout with 0 workers blows up at ITERATION time (not
+    construction), which is why the trainer gates on num_workers."""
+    from torch.utils.data import DataLoader
+
+    loader = DataLoader(
+        [torch.zeros(1) for _ in range(4)], batch_size=2,
+        num_workers=0, timeout=600,
+    )
+    with pytest.raises(AssertionError, match="timeout == 0"):
+        list(loader)
