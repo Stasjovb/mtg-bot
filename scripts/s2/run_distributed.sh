@@ -14,7 +14,10 @@ cd "/c/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot"
 export PYTHONIOENCODING=utf-8 PYTHONPATH=src
 N="${1:-1}"
 CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
-SEED="${S2_SEED:-1}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
+SEED="${S2_SEED:-1}"
+# DataLoader worker processes for train_nn.py (iterate default 4). 0 = single-process loading;
+# use it when the multiprocess loader deadlocks (seen 2026-09-24 on the 4M-row cycle-5 train).
+TRAIN_WORKERS="${S2_TRAIN_WORKERS:-}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
 # NOTE: no --window-recent here: it means "the N most recently modified FILES"
 # (cli/train.py) and the distributed path rehydrates one .npz per GAME, so
 # --window-recent 3 trained cycle 2 on 3 games (7,278 rows). Full history instead.
@@ -39,5 +42,5 @@ for _ in $(seq 1 "$N"); do
     --data-dir iterate_data_s2 --scalar-schema-version 2 \
     --eval-games 300 --one-legal-keep-frac 0.2 \
     --early-stop-patience 5 --learning-rate 1e-3 --seed "$SEED" \
-    --per-game-timeout-sec 900
+    --per-game-timeout-sec 900 ${TRAIN_WORKERS:+--train-num-workers "$TRAIN_WORKERS"}
 done
