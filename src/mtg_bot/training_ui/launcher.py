@@ -473,6 +473,45 @@ def build_iterate_schema(
                     "help": "Train/val split fraction.",
                 },
                 {
+                    "name": "dropout", "type": "float", "default": None,
+                    "help": (
+                        "Structured-trunk only: dropout for the "
+                        "encoder layers, cross-attention and head "
+                        "MLPs. Blank = trainer default (0.1)."
+                    ),
+                },
+                {
+                    "name": "weight-decay", "type": "float",
+                    "default": None,
+                    "help": (
+                        "Structured-trunk only: AdamW decoupled "
+                        "weight decay. Blank = trainer default "
+                        "(1e-4)."
+                    ),
+                },
+                {
+                    "name": "keep-last-epoch", "type": "bool",
+                    "default": False,
+                    "help": (
+                        "Save the final epoch's weights instead of "
+                        "the best-validation epoch's. Off = "
+                        "restore-best (recommended)."
+                    ),
+                },
+                {
+                    "name": "min-holdout-value-quality", "type": "float",
+                    "default": None,
+                    "help": (
+                        "Structured-trunk only: held-out value-MSE "
+                        "ceiling. A cycle whose value head scores at "
+                        "or above this on unseen GAMES is rejected "
+                        "(nothing registered, current_best kept, "
+                        "next cycle still runs). Blank = trainer "
+                        "default (1.0 = the constant-0 predictor); "
+                        "0 disables."
+                    ),
+                },
+                {
                     "name": "policy-loss-weight", "type": "float",
                     "default": 1.0,
                     "help": (
