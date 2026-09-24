@@ -585,8 +585,105 @@ are file-backed and reclaimable, and system "available" recovers as
 the cache manager writes back. Commit charge (`private`) is the
 constraint that was being blown, and it is now flat.
 
-**Caveat / open item.** The flat store itself is 65.6 GB on disk for
-the full pool (53 GB of it is `token_type` + `token_emb_ids` stored as
-int64). Storing tokens as int32 would roughly halve it, but the
-`__getitem__` contract hands `LongTensor`s to the embedding layer, so
-that is a separate change.
+**Caveat / open item (superseded by §8A).** The flat store itself is
+65.6 GB on disk for the full pool. The claim in the original write-up
+that "53 GB of it is `token_type` + `token_emb_ids` stored as int64"
+is **wrong** — the measured per-column split (§8A) puts those two
+columns at 19.0 GB of the 65.6 GB and `token_scalars` (float32 x 29
+schema-v2 fields) at 34.3 GB. §8A narrows the two id columns; the
+scalar column is untouched and is now the store's dominant cost.
+
+## 8A. Structured flat store — narrowed token dtypes (2026-09-24)
+
+**Method.** 500 real shards copied out of `iterate_data_s2_v1corpus`
+(the largest 500 excluding the legacy 747k-row monolith): 1,488,742
+rows, 114.1M real tokens, `emb_width=7`, `scalar_width=29`,
+`ACTION_VOCAB_SIZE=517`. Same box / venv as §8 (desktop-j05412i,
+CPython 3.13.14, numpy 2.4.4, torch 2.11.0+cu128) while a 16-worker
+distributed self-play run was live, so wall times are upper bounds.
+`v1` = flat-store layout version 1 (all-int64 token columns), loaded
+from the base commit's module verbatim; `v2` = layout version 2
+(`token_type` int16, `token_emb_ids` int32, widened back to int64 in
+`__getitem__`). Measured maxima on this pool: `token_type` max 11
+(`N_TOKEN_TYPES` = 12), `token_emb_ids` max 319 (the printing id;
+`DEFAULT_N_PRINTINGS` = 320), both ≥ 0.
+
+| column | dtype v1 | v1 GB | dtype v2 | v2 GB |
+|---|---|---:|---|---:|
+| `token_scalars_flat` | float32 | 13.232 | float32 (unchanged) | 13.232 |
+| `token_emb_ids_flat` | int64 | 6.388 | **int32** | **3.194** |
+| `policy_targets` | float32 | 3.079 | float32 | 3.079 |
+| `token_type_flat` | int64 | 0.913 | **int16** | **0.228** |
+| `action_masks` | bool | 0.770 | bool | 0.770 |
+| everything else | — | 0.031 | — | 0.031 |
+| **store total** | | **24.41 GB** | | **20.53 GB** |
+
+Store bytes **−15.9%** overall, **−53%** across the two id columns
+(7.30 → 3.42 GB). Build wall: 130.7 s / 125.9 s (v1, two runs) vs
+119.1 s (v2) — narrowing does not cost build time despite the
+range-check pass over every chunk; it wins back more in write I/O
+than the min/max scan costs.
+
+**Per-batch cost of the int32/int16 → int64 widening is nil.**
+Batch of 256 rows (`max_len` 148), sampled 40 batches after warming
+the page cache, CPU:
+
+| layout | `__getitem__` x256 | `structured_collate` | total | model forward (same batch, CPU) |
+|---|---:|---:|---:|---:|
+| v1 (int64 store) | 29.09 ms | 22.76 ms | 51.85 ms | 279.1 ms |
+| v2 (narrow store) | 29.17 ms | 22.24 ms | 51.41 ms | 256.8 ms |
+
+The widening is free because `arr[start:end].astype(np.int64)` *is*
+the materializing copy the old code already did with
+`np.array(arr[start:end])` — same one copy per row, now also widening.
+Batch assembly is ~19% of a single CPU forward pass of the same batch
+either way, so the delta (±0.5 ms, within run-to-run noise) is not
+measurable in training throughput.
+
+**Scaling.** Extrapolating this pool's 76.6 tokens/row to the
+heuristic warm-start corpus now generating (~10.5k games x ~1,150
+rows ≈ 12M rows): v1 ≈ 197 GB, v2 ≈ 166 GB. **Narrowing the id
+columns alone does not make a 12M-row corpus fit a 124 GB disk.** The
+remaining levers, in order of size at 12M rows, are
+`token_scalars_flat` (~107 GB — 29 float32 fields per token, mostly
+zeros for non-permanent / non-`[GLOBAL]` tokens; a sparse or
+per-token-kind layout is the big win), `policy_targets` (~25 GB dense
+float32 x 517 for a visit distribution with a handful of nonzeros —
+sparse storage is nearly free) and `action_masks` (~6 GB of bools that
+bit-pack 8x). None of those are done. **float16 for `token_scalars`
+is NOT viable**: the schema-v2 fields normalize by 7 / 10 / 20 / 40
+and those values are not exactly representable in float16, so it
+would perturb the training input rather than merely shrink it.
+
+**Layout version.** `FLAT_STORE_VERSION` 1 → 2, and it is part of the
+persistent-cache key (`MTG_BOT_STRUCTURED_CACHE_DIR` /
+`load_structured_dataset(cache_dir=...)`), so any v1 cache directory
+is ignored and rebuilt rather than misread. Old cached stores are
+**not** auto-deleted (the caller owns the cache dir) — delete them by
+hand to reclaim the space.
+
+## 8B. Flat-store leak reclamation (2026-09-24)
+
+**Method.** Child processes with `TMP`/`TEMP` redirected to an
+isolated directory, each building a flat store and then exiting by a
+different path; leftover `mtg_bot_structured_dataset_*` dirs counted
+afterwards.
+
+| child exit path | store leaked (before fix) |
+|---|---|
+| normal exit, `close()` called | no |
+| normal exit, no `close()` | no (atexit) |
+| unhandled exception / `sys.exit(1)` | no (atexit) |
+| `KeyboardInterrupt` | no (atexit) |
+| `pytest -n 2` (xdist worker) | no (atexit) |
+| `os._exit(0)` | **yes** |
+
+So the dozens of ~2.4 GB stranded stores were not an atexit / xdist
+gap: only `os._exit` and hard kills (operator abort, `taskkill`, OOM)
+skip cleanup, and those leaks then survived up to 12 h because the
+sweep's only signal was directory mtime. Each owned store now carries
+an `owner.json` (pid + host); the sweep keeps a store whose owner pid
+is alive at any age and removes one whose owner is gone at any age,
+with the age threshold (now 2 h, was 12 h) only governing stores
+without a usable marker. `.building-*` dirs abandoned inside a
+persistent cache dir are reclaimed the same way.
