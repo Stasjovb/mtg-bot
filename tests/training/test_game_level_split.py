@@ -360,6 +360,38 @@ def test_load_structured_dataset_group_ids_new_and_legacy(
     assert any("4 game groups" in m for m in msgs)
 
 
+def test_group_ids_do_not_merge_across_iterations(tmp_path: Path):
+    """data_gen restarts ``game_ids`` at 0 for every iteration, so the
+    SPLIT KEY has to be (file, game_id) — not game_id alone, which
+    would fuse iter_001's game 0 with iter_002's game 0 into one
+    coarse group and let two different games straddle the split.
+
+    ``file_group_ids`` already applies a per-file stride offset (it
+    landed with the game-level split); this pins the end-to-end
+    consequence at the ``load_structured_dataset`` level so a future
+    loader rewrite can't silently drop it.
+    """
+    # Two "iterations", each with games numbered 0 and 1.
+    ids = np.array([0, 0, 1, 1], dtype=np.int32)
+    _write_structured_npz(tmp_path / "s2_iter_001_v5.npz", 4, ids)
+    _write_structured_npz(
+        tmp_path / "s2_iter_002_v6.npz", 4, ids.copy(), seed=1,
+    )
+    ds = load_structured_dataset(tmp_path)
+    groups = ds.group_ids
+    # FOUR distinct games, not two.
+    assert np.unique(groups).shape[0] == 4
+    # No group id is shared between the two files' row ranges.
+    assert not set(groups[:4].tolist()) & set(groups[4:].tolist())
+    # And a game-level split can therefore hold out a whole game
+    # without leaking its twin from the other iteration.
+    train_idx, val_idx = grouped_train_val_split(
+        groups, 0.25, np.random.default_rng(0),
+    )
+    _assert_partition_by_group(groups, train_idx, val_idx)
+    assert np.unique(groups[val_idx]).shape[0] == 1
+
+
 def test_train_structured_model_splits_by_group(tmp_path: Path, monkeypatch):
     calls = _spy_split(monkeypatch)
     n_rows = 24
