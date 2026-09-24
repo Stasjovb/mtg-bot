@@ -535,3 +535,58 @@ loop variable; a `ContinuousModifier` arriving in place of a
 ~850k calls per self-play game per the 2026-05-02 profile, but the
 end-to-end share was NOT re-measured — do not quote a game-level
 speed-up from this row.
+
+## 8. Structured-dataset load — streaming flat store (2026-09-24)
+
+**Method.** `mtg_bot.training.structured_dataset.load_structured_dataset`
+on the real `iterate_data_s2` pool (2501 npz, 4.76M rows, 296M real
+tokens, `scalar_width=29`, `ACTION_VOCAB_SIZE=517`), `.venv-py313`
+(CPython 3.13.14, numpy 2.4.4) on desktop-j05412i (64 GB) with the
+strength ladder + another agent's test suite live on the box. Peak
+memory sampled every 20 ms from a thread; `private` is the Windows
+`PrivateUsage` (commit charge) counter, `rss` is the working set.
+Baseline is taken AFTER the torch import so the ~1.6 GB import is not
+charged to the load. "old" = the pre-change loader extracted verbatim
+from commit `7221188b`. Both modes select the same files
+(`max_files` = most-recent-by-mtime) and produce the same store bytes.
+
+| files | rows | store on disk | loader | peak private growth | wall |
+|---|---:|---:|---|---:|---:|
+| 300 | 516k | 7.3 GB | old (eager concat) | 14,770 MB | 49.7 s |
+| 300 | 516k | 7.3 GB | **new (streaming)** | **160 MB** | **23.7 s** |
+| 1000 | 1.61M | 22.2 GB | new (streaming) | 207 MB | 74.5 s |
+| 2501 (all) | 4.76M | 65.6 GB | new (streaming) | 555 MB | 227 s |
+
+The old loader was NOT run at 1000 files or on the full pool: its peak
+tracks ~2x the store size (measured 2.02x at 300 files), i.e. ~42 GB
+and ~130 GB respectively — the second number is the box hanging, which
+is the bug this change fixes.
+
+**Why.** The old path decoded every npz into RAM, `np.concatenate`d the
+parts (a second full copy) and then wrote a third copy into the temp
+memmap dir. The new path reads the `.npy` headers + the (bool,
+~1% of compressed bytes) attention masks in a first pass — 3.3 s for
+all 2501 files — pre-allocates the flat `.npy` files at their final
+size with `np.lib.format.open_memmap`, then inflates each file 64 MB of
+rows at a time straight into its slice. It is also ~2x FASTER, because
+it never allocates/copies the concatenation and never decompresses
+`features` (unused by the structured trainer).
+
+**Chunking within a file matters.** Bounding at "one file at a time"
+was not enough: `iterate_data_s2` still contains one legacy 747k-row
+monolith whose padded arrays decode to ~20 GB, and the per-file version
+of this loader peaked at 19.7 GB private on exactly that file. With
+row-chunked inflation the same run peaks at 555 MB.
+
+**RSS is not the number to watch here.** Windows counts the flat
+store's dirty mapped pages in the working set, so `rss` grows to tens
+of GB (47 GB at full pool) and is then trimmed by the OS; those pages
+are file-backed and reclaimable, and system "available" recovers as
+the cache manager writes back. Commit charge (`private`) is the
+constraint that was being blown, and it is now flat.
+
+**Caveat / open item.** The flat store itself is 65.6 GB on disk for
+the full pool (53 GB of it is `token_type` + `token_emb_ids` stored as
+int64). Storing tokens as int32 would roughly halve it, but the
+`__getitem__` contract hands `LongTensor`s to the embedding layer, so
+that is a separate change.

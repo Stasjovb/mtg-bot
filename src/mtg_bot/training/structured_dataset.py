@@ -40,6 +40,17 @@ Public API
 - :func:`load_structured_dataset` — discover every ``*.npz`` under a
   directory, flatten each file's real tokens, and return a
   :class:`StructuredDataset` ready for the trainer's ``DataLoader``.
+  The build is **streaming**: a cheap sizing pass (npy headers + the
+  bool attention masks) gives the exact final shapes, the flat
+  ``.npy`` files are pre-allocated with ``np.lib.format.open_memmap``,
+  and each source file is decoded into its slice and dropped. Peak
+  RSS is O(largest single npz), not O(pool). The pre-2026-09 path
+  decoded every file into RAM and concatenated, peaking at ~24 GB per
+  1M rows (a 4M-row pool committed 96 GB and effectively hung).
+- :func:`sweep_stale_memmap_dirs` — remove flat stores orphaned by a
+  crashed run (``$MTG_BOT_STRUCTURED_SWEEP=0`` opts out).
+- :func:`shutdown_dataloader_workers` — drop a ``DataLoader``'s
+  persistent workers so their memmap handles stop pinning the store.
 - :class:`StructuredDataset` — wraps the packed-flat storage. The
   legacy single-array constructor (used by tests + direct callers)
   still accepts file-padded inputs and flattens them at construction
@@ -56,17 +67,26 @@ function (in ``trainer.py``) wires this loader to the new model.
 
 from __future__ import annotations
 
+import atexit
+import gc
+import hashlib
+import json
 import logging
+import os
+import shutil
 import tempfile
+import time
+import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 from mtg_bot.training.action_encoding import ACTION_VOCAB_SIZE
-from mtg_bot.training.data_gen import file_group_ids, load_dataset
+from mtg_bot.training.data_gen import file_group_ids
 
 _log = logging.getLogger(__name__)
 
@@ -78,6 +98,188 @@ _STRUCT_NPZ_KEYS = (
     "structured_attention_mask",
 )
 """Mirror of ``data_gen._STRUCT_NPZ_KEYS`` to avoid the private import."""
+
+
+MEMMAP_DIR_PREFIX = "mtg_bot_structured_dataset_"
+"""Prefix of every flat-store directory this module creates in %TEMP%."""
+
+FLAT_STORE_VERSION = 1
+"""Bump when the on-disk flat-store layout changes. Part of the
+persistent-cache key so an old cache can never be mistaken for a new
+one."""
+
+SWEEP_ENV = "MTG_BOT_STRUCTURED_SWEEP"
+"""Set to ``0``/``false`` to disable the stale-temp-dir startup sweep."""
+
+SWEEP_HOURS_ENV = "MTG_BOT_STRUCTURED_SWEEP_HOURS"
+"""Override the stale-dir age threshold (float hours)."""
+
+CACHE_DIR_ENV = "MTG_BOT_STRUCTURED_CACHE_DIR"
+"""Default value for ``load_structured_dataset(cache_dir=...)``."""
+
+DEFAULT_SWEEP_HOURS = 12.0
+
+# (attribute name, file name) for every array in a flat store. The
+# order is the write order; ``_open_memmaps`` reads the same list.
+_ARRAY_FILES: tuple[tuple[str, str], ...] = (
+    ("_token_type_flat", "token_type_flat.npy"),
+    ("_token_emb_ids_flat", "token_emb_ids_flat.npy"),
+    ("_token_scalars_flat", "token_scalars_flat.npy"),
+    ("_row_offsets", "row_offsets.npy"),
+    ("_outcomes", "outcomes.npy"),
+    ("_policy_targets", "policy_targets.npy"),
+    ("_action_masks", "action_masks.npy"),
+    ("_has_policy", "has_policy.npy"),
+    ("_group_ids", "group_ids.npy"),
+)
+
+_MANIFEST_NAME = "manifest.json"
+
+
+# ---------------------------------------------------------------------
+# Owned-directory bookkeeping + deterministic cleanup
+# ---------------------------------------------------------------------
+
+_OWNED_DIRS: set[str] = set()
+"""Flat-store directories this process created and must delete. A
+module-level set (not just ``StructuredDataset.__del__``) so an
+``atexit`` hook can still reclaim them when the interpreter tears the
+dataset down without running its finalizer."""
+
+
+def _new_owned_dir() -> str:
+    """``mkdtemp`` a flat-store directory and register it for cleanup."""
+    path = tempfile.mkdtemp(prefix=MEMMAP_DIR_PREFIX)
+    _OWNED_DIRS.add(path)
+    return path
+
+
+def _close_memmap(arr: object) -> None:
+    """Release a numpy memmap's file handle *now*.
+
+    numpy releases the underlying ``mmap`` lazily (on GC), and Windows
+    refuses to delete a file while any mapping of it is open — which is
+    exactly why the old ``TemporaryDirectory(ignore_cleanup_errors=True)``
+    teardown leaked 20-50 GB per training run. Closing explicitly makes
+    the subsequent ``rmtree`` succeed on the first try.
+    """
+    mm = getattr(arr, "_mmap", None)
+    if mm is None:
+        return
+    try:
+        mm.close()
+    except (BufferError, ValueError, OSError):  # pragma: no cover
+        # Exported buffers (a live view someone else holds) keep the
+        # mapping alive; the rmtree retry loop + GC handles it.
+        pass
+
+
+def _remove_store_dir(
+    path: str | Path, *, attempts: int = 6, delay: float = 0.02,
+) -> bool:
+    """``rmtree`` with GC-then-retry. Returns True if the dir is gone.
+
+    On Windows a file that is still mapped (a DataLoader worker that has
+    not exited, a stray array view) cannot be unlinked. Each retry runs
+    ``gc.collect()`` first, which drops the lazily-released memmap
+    handles, then tries again with a short backoff.
+    """
+    p = str(path)
+    for attempt in range(attempts):
+        if not os.path.isdir(p):
+            return True
+        try:
+            shutil.rmtree(p)
+            return True
+        except OSError:
+            gc.collect()
+            if attempt + 1 < attempts:
+                time.sleep(delay * (attempt + 1))
+    gone = not os.path.isdir(p)
+    if not gone:
+        _log.warning(
+            "structured dataset: could not remove flat-store dir %s "
+            "(still in use?); the startup sweep will retry", p,
+        )
+    return gone
+
+
+@atexit.register
+def _cleanup_owned_dirs_atexit() -> None:  # pragma: no cover - atexit
+    for path in list(_OWNED_DIRS):
+        _OWNED_DIRS.discard(path)
+        try:
+            _remove_store_dir(path, attempts=2)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _sweep_enabled() -> bool:
+    raw = os.environ.get(SWEEP_ENV)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def sweep_stale_memmap_dirs(
+    *,
+    max_age_hours: Optional[float] = None,
+    root: Optional[Path] = None,
+) -> int:
+    """Delete leftover ``mtg_bot_structured_dataset_*`` dirs.
+
+    A crashed or ``os._exit``-ed training run leaves its flat store
+    behind (tens of GB). This sweep runs at the top of
+    :func:`load_structured_dataset` and removes every such directory
+    under ``root`` (default: the system temp dir) whose mtime is older
+    than ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
+    or 12). Directories owned by *this* process are never touched.
+
+    On Windows a store still mapped by a live process cannot be
+    unlinked, so a concurrent long-running training job is protected
+    automatically. On POSIX the unlink would succeed — already-open
+    mappings keep working, but a worker that re-opens the store by
+    path afterwards would fail. The 12 h default is the margin; lower
+    it only if no run on the box lasts that long.
+
+    Opt out with ``MTG_BOT_STRUCTURED_SWEEP=0``. Returns the number of
+    directories removed.
+    """
+    if max_age_hours is None:
+        raw = os.environ.get(SWEEP_HOURS_ENV)
+        try:
+            max_age_hours = (
+                float(raw) if raw not in (None, "") else DEFAULT_SWEEP_HOURS
+            )
+        except ValueError:
+            max_age_hours = DEFAULT_SWEEP_HOURS
+    root_path = Path(root) if root is not None else Path(tempfile.gettempdir())
+    if not root_path.is_dir():
+        return 0
+    cutoff = time.time() - max(0.0, float(max_age_hours)) * 3600.0
+    removed = 0
+    try:
+        entries = list(root_path.iterdir())
+    except OSError:  # pragma: no cover - unreadable temp root
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(MEMMAP_DIR_PREFIX):
+            continue
+        if str(entry) in _OWNED_DIRS:
+            continue
+        try:
+            if not entry.is_dir() or entry.stat().st_mtime > cutoff:
+                continue
+        except OSError:  # pragma: no cover - vanished mid-sweep
+            continue
+        if _remove_store_dir(entry, attempts=1):
+            removed += 1
+    if removed:
+        _log.info(
+            "structured dataset: swept %d stale flat-store dir(s) from %s",
+            removed, root_path,
+        )
+    return removed
 
 
 class StructuredDataset(Dataset):
@@ -392,22 +594,16 @@ class StructuredDataset(Dataset):
             > 0.5
         ).astype(np.bool_)
 
-        # Owned temp directory: cleaned up automatically when the
-        # ``StructuredDataset`` (in the parent process) is garbage-
-        # collected. ``__setstate__`` (in DataLoader workers) does
-        # NOT own the directory — workers just re-open the memmaps.
-        # ``ignore_cleanup_errors=True`` is required on Windows
-        # because numpy memmap file handles are released lazily on
-        # GC; a stray PermissionError at temp-dir teardown is a
-        # cleanup nuisance, not a real failure (the OS reclaims the
-        # files on process exit even if cleanup fails).
-        self._tempdir: Optional[tempfile.TemporaryDirectory] = (
-            tempfile.TemporaryDirectory(
-                prefix="mtg_bot_structured_dataset_",
-                ignore_cleanup_errors=True,
-            )
-        )
-        memmap_dir = Path(self._tempdir.name)
+        # Owned temp directory: removed by :meth:`close` (called from
+        # ``__del__``, and from the module ``atexit`` hook as a
+        # backstop). ``__setstate__`` (in DataLoader workers) does NOT
+        # own the directory — workers just re-open the memmaps.
+        # Cleanup closes every memmap handle first; numpy releases them
+        # lazily on GC and Windows refuses to unlink a mapped file,
+        # which is what made the old ``TemporaryDirectory`` teardown
+        # silently leak the whole flat store.
+        self._owned_dir: Optional[str] = _new_owned_dir()
+        memmap_dir = Path(self._owned_dir)
         # Save each array as a separate ``.npy`` file. ``.npy`` is
         # the simplest format that supports ``mmap_mode='r'`` — it
         # writes a small header followed by the contiguous data
@@ -460,13 +656,40 @@ class StructuredDataset(Dataset):
         self._memmap_dir = str(memmap_dir)
         self._open_memmaps()
 
+    @classmethod
+    def from_memmap_dir(
+        cls,
+        memmap_dir: str | Path,
+        *,
+        own_dir: bool = False,
+    ) -> "StructuredDataset":
+        """Wrap an already-built flat store on disk.
+
+        ``own_dir=True`` transfers ownership: the returned dataset
+        deletes ``memmap_dir`` in :meth:`close` / ``__del__``. Used by
+        :func:`load_structured_dataset`, which streams the flat store
+        straight to disk instead of building it in RAM first.
+        """
+        obj = cls.__new__(cls)
+        obj._memmap_dir = str(memmap_dir)
+        obj._owned_dir = str(memmap_dir) if own_dir else None
+        if own_dir:
+            _OWNED_DIRS.add(str(memmap_dir))
+        obj._open_memmaps()
+        return obj
+
     @property
     def group_ids(self) -> np.ndarray:
         """``(len(self),)`` int64 per-row game group ids. Rows that
         share a value came from the same self-play game and must land
         on the same side of the train/val split (see
-        ``trainer.grouped_train_val_split``)."""
-        return np.asarray(self._group_ids)
+        ``trainer.grouped_train_val_split``).
+
+        Returns a plain in-RAM copy, not a view on the memmap: a live
+        view would pin the mapping open and block temp-dir cleanup on
+        Windows (the caller keeps this array for the whole training
+        run)."""
+        return np.array(self._group_ids)
 
     def _open_memmaps(self) -> None:
         """Open the on-disk ``.npy`` files as read-only memmaps.
@@ -477,34 +700,37 @@ class StructuredDataset(Dataset):
         pages are shared via the OS page cache.
         """
         d = Path(self._memmap_dir)
-        self._token_type_flat = np.load(
-            d / "token_type_flat.npy", mmap_mode="r",
-        )
-        self._token_emb_ids_flat = np.load(
-            d / "token_emb_ids_flat.npy", mmap_mode="r",
-        )
-        self._token_scalars_flat = np.load(
-            d / "token_scalars_flat.npy", mmap_mode="r",
-        )
-        self._row_offsets = np.load(
-            d / "row_offsets.npy", mmap_mode="r",
-        )
-        self._outcomes = np.load(
-            d / "outcomes.npy", mmap_mode="r",
-        )
-        self._policy_targets = np.load(
-            d / "policy_targets.npy", mmap_mode="r",
-        )
-        self._action_masks = np.load(
-            d / "action_masks.npy", mmap_mode="r",
-        )
-        self._has_policy = np.load(
-            d / "has_policy.npy", mmap_mode="r",
-        )
-        self._group_ids = np.load(
-            d / "group_ids.npy", mmap_mode="r",
-        )
+        for attr, fname in _ARRAY_FILES:
+            setattr(self, attr, np.load(d / fname, mmap_mode="r"))
         self._n_total = int(self._row_offsets.shape[0]) - 1
+
+    def close(self) -> None:
+        """Release every memmap handle and delete an owned flat store.
+
+        Idempotent. Called from ``__del__``; call it explicitly (or via
+        ``contextlib.closing``) when you want the tens of GB back
+        immediately. After ``close()`` the dataset can no longer be
+        indexed.
+        """
+        for attr, _fname in _ARRAY_FILES:
+            arr = getattr(self, attr, None)
+            if arr is None:
+                continue
+            setattr(self, attr, None)
+            _close_memmap(arr)
+            del arr
+        owned = getattr(self, "_owned_dir", None)
+        if owned:
+            self._owned_dir = None
+            _OWNED_DIRS.discard(owned)
+            gc.collect()
+            _remove_store_dir(owned)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001  # pragma: no cover
+            pass
 
     def __getstate__(self) -> dict:
         # Pickle a minimal state — just the memmap directory path
@@ -518,10 +744,13 @@ class StructuredDataset(Dataset):
     def __setstate__(self, state: dict) -> None:
         self._memmap_dir = state["_memmap_dir"]
         # Workers do NOT own the temp directory — only the parent
-        # process cleans it up. Setting ``_tempdir`` to None makes
+        # process cleans it up. Setting ``_owned_dir`` to None makes
         # this explicit and prevents ``__del__`` from trying to
-        # remove files still in use by other processes.
-        self._tempdir = None
+        # remove files still in use by other processes. Workers DO
+        # still close their own memmap handles in ``close()``, which
+        # is what lets the parent's cleanup succeed after the workers
+        # shut down.
+        self._owned_dir = None
         self._open_memmaps()
         # ``_n_total`` is also restored by ``_open_memmaps`` (from
         # row_offsets.shape), but assigning from state is a touch
@@ -765,10 +994,553 @@ def structured_collate(
     }
 
 
+# ---------------------------------------------------------------------
+# Incremental flat-store construction
+# ---------------------------------------------------------------------
+
+
+def _npy_member_names(zf: zipfile.ZipFile) -> dict[str, str]:
+    """Map npz array name -> zip member name (``<name>.npy``)."""
+    out: dict[str, str] = {}
+    for name in zf.namelist():
+        out[name[:-4] if name.endswith(".npy") else name] = name
+    return out
+
+
+def _read_member_header(
+    zf: zipfile.ZipFile, member: str,
+) -> tuple[tuple[int, ...], np.dtype]:
+    """Read one npz member's ``.npy`` header without decompressing the
+    array body.
+
+    Deflate is a stream, so reading the ~100-byte header only inflates
+    the first block — this is what makes the sizing pass cheap enough
+    to run over thousands of files.
+    """
+    with zf.open(member) as fp:
+        version = np.lib.format.read_magic(fp)
+        if version == (1, 0):
+            shape, _fortran, dtype = np.lib.format.read_array_header_1_0(fp)
+        elif version == (2, 0):
+            shape, _fortran, dtype = np.lib.format.read_array_header_2_0(fp)
+        else:  # pragma: no cover - numpy never writes other versions
+            raise ValueError(
+                f"unsupported .npy version {version} in member {member}"
+            )
+    return tuple(int(d) for d in shape), dtype
+
+
+def _read_member(zf: zipfile.ZipFile, member: str) -> np.ndarray:
+    """Decompress exactly one npz member into a fresh array."""
+    with zf.open(member) as fp:
+        return np.lib.format.read_array(fp, allow_pickle=False)
+
+
+CHUNK_BYTES = 64 * 1024 * 1024
+"""Target size of one decoded row-chunk. Bounds peak RSS *within* a
+single npz: the pool contains legacy monolithic files (one 747k-row
+npz in ``iterate_data_s2`` decodes to ~20 GB of padded arrays), so
+"one file at a time" is not by itself a small enough unit."""
+
+
+def _read_exact(fp, n: int) -> bytes:
+    """``fp.read(n)`` that tolerates short reads (ZipExtFile)."""
+    parts = []
+    remaining = n
+    while remaining > 0:
+        block = fp.read(remaining)
+        if not block:
+            raise ValueError(
+                f"unexpected EOF in npz member: wanted {n} bytes, "
+                f"short by {remaining}"
+            )
+        parts.append(block)
+        remaining -= len(block)
+    return b"".join(parts) if len(parts) > 1 else parts[0]
+
+
+def _iter_member_rows(
+    zf: zipfile.ZipFile, member: str, *, chunk_bytes: Optional[int] = None,
+):
+    """Yield ``(row_offset, chunk)`` for one npz member, row-major.
+
+    The whole point of the streaming loader is never to materialize a
+    big array; ``np.lib.format.read_array`` would do exactly that. The
+    npy body is a C-contiguous block, so a row range is a byte range:
+    we read the header, then inflate ``chunk_bytes`` worth of rows at a
+    time straight off the deflate stream.
+
+    ``chunk_bytes`` resolves to the module constant at call time (not
+    as a default argument) so tests can shrink it with monkeypatch.
+    """
+    if chunk_bytes is None:
+        chunk_bytes = CHUNK_BYTES
+    with zf.open(member) as fp:
+        version = np.lib.format.read_magic(fp)
+        if version == (1, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_1_0(fp)
+        elif version == (2, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_2_0(fp)
+        else:  # pragma: no cover - numpy never writes other versions
+            raise ValueError(
+                f"unsupported .npy version {version} in member {member}"
+            )
+        if fortran:  # pragma: no cover - savez never writes F-order
+            raise ValueError(
+                f"{member}: Fortran-ordered arrays are not supported"
+            )
+        if dtype.hasobject:  # pragma: no cover - would need pickle
+            raise ValueError(f"{member}: object arrays are not supported")
+        shape = tuple(int(d) for d in shape)
+        n_rows = shape[0] if shape else 0
+        row_items = int(np.prod(shape[1:])) if len(shape) > 1 else 1
+        row_bytes = row_items * dtype.itemsize
+        if n_rows == 0 or row_bytes == 0:
+            return
+        chunk_rows = max(1, chunk_bytes // row_bytes)
+        offset = 0
+        while offset < n_rows:
+            take = min(chunk_rows, n_rows - offset)
+            buf = _read_exact(fp, take * row_bytes)
+            yield offset, np.frombuffer(buf, dtype=dtype).reshape(
+                (take,) + shape[1:]
+            )
+            offset += take
+
+
+@dataclass
+class _FileScan:
+    """Sizing metadata for one source npz, from the cheap first pass."""
+
+    path: Path
+    n_rows: int
+    row_lengths: np.ndarray  # (n_rows,) int64
+    n_tokens: int
+    emb_width: int
+    scalar_width: int
+    policy_width: Optional[int]  # None = file carries no policy arrays
+
+
+def _require_structured(path: Path, members: dict[str, str]) -> None:
+    if any(key not in members for key in _STRUCT_NPZ_KEYS):
+        raise ValueError(
+            f"{path}: missing structured-token arrays. The "
+            f"structured trainer requires data_gen to be run "
+            f"with structured_tokens=True."
+        )
+
+
+def _scan_structured_npz(path: Path) -> _FileScan:
+    """First pass: shapes + per-row real-token counts for one npz.
+
+    Reads the ``.npy`` headers of the big arrays (no body inflation)
+    and decompresses only ``structured_attention_mask`` — a bool array
+    that is ~1% of the file's compressed bytes — to derive exact row
+    lengths. That is everything the flat store needs to be
+    pre-allocated at its final size.
+    """
+    with zipfile.ZipFile(path) as zf:
+        members = _npy_member_names(zf)
+        _require_structured(path, members)
+        tt_shape, _ = _read_member_header(zf, members["structured_token_type"])
+        emb_shape, _ = _read_member_header(
+            zf, members["structured_token_emb_ids"],
+        )
+        sca_shape, _ = _read_member_header(
+            zf, members["structured_token_scalars"],
+        )
+        mask = _read_member(zf, members["structured_attention_mask"])
+        policy_width: Optional[int] = None
+        if "policy_targets" in members:
+            p_shape, _ = _read_member_header(zf, members["policy_targets"])
+            policy_width = int(p_shape[1]) if len(p_shape) > 1 else 1
+    n_rows = int(tt_shape[0])
+    if mask.shape[0] != n_rows:
+        raise ValueError(
+            f"{path}: structured_attention_mask rows {mask.shape[0]} != "
+            f"structured_token_type rows {n_rows}"
+        )
+    if emb_shape[0] != n_rows or sca_shape[0] != n_rows:
+        raise ValueError(
+            f"{path}: structured token arrays disagree on row count: "
+            f"token_type {n_rows} / token_emb_ids {emb_shape[0]} / "
+            f"token_scalars {sca_shape[0]}"
+        )
+    mask_b = mask if mask.dtype == np.bool_ else mask.astype(np.bool_)
+    if n_rows:
+        row_lengths = (
+            mask_b.reshape(n_rows, -1).sum(axis=1).astype(np.int64)
+        )
+    else:
+        row_lengths = np.zeros((0,), dtype=np.int64)
+    return _FileScan(
+        path=path,
+        n_rows=n_rows,
+        row_lengths=row_lengths,
+        n_tokens=int(row_lengths.sum()),
+        emb_width=int(emb_shape[2]) if len(emb_shape) > 2 else 0,
+        scalar_width=int(sca_shape[2]) if len(sca_shape) > 2 else 0,
+        policy_width=policy_width,
+    )
+
+
+@dataclass
+class _StorePlan:
+    """Global shapes of the flat store, derived from the scans."""
+
+    n_rows: int
+    n_tokens: int
+    emb_width: int
+    scalar_width: int
+    policy_width: int
+    row_offsets: np.ndarray
+
+
+def _plan_store(scans: Sequence[_FileScan]) -> _StorePlan:
+    """Resolve the global widths + row offsets from the per-file scans.
+
+    Width conflicts raise here with the same message the old
+    concatenate-everything path produced (see
+    :func:`_normalize_scalar_parts`): mixing scalar schemas is a data
+    provenance bug, not something to paper over.
+    """
+    scalar_width: Optional[int] = None
+    scalar_label = ""
+    emb_width: Optional[int] = None
+    emb_label = ""
+    policy_width: Optional[int] = None
+    for scan in scans:
+        if scan.n_tokens == 0:
+            # Zero-real-token files (crash / timeout npzs) carry a
+            # placeholder width — they contribute no flat rows, so they
+            # can't constrain the schema.
+            continue
+        if scalar_width is None:
+            scalar_width = scan.scalar_width
+            scalar_label = str(scan.path)
+        elif scan.scalar_width != scalar_width:
+            raise ValueError(
+                f"scalar schema mismatch across structured-token files: "
+                f"{scan.path} has token_scalars width {scan.scalar_width} "
+                f"but {scalar_label} has {scalar_width}. All files in one "
+                f"training run must be generated under the same "
+                f"scalar_schema_version — regenerate or quarantine the "
+                f"odd files."
+            )
+        if emb_width is None:
+            emb_width = scan.emb_width
+            emb_label = str(scan.path)
+        elif scan.emb_width != emb_width:
+            raise ValueError(
+                f"token_emb_ids width mismatch across structured-token "
+                f"files: {scan.path} has width {scan.emb_width} but "
+                f"{emb_label} has {emb_width}."
+            )
+    if scalar_width is None:
+        # Every file is empty of real tokens; fall back to the first
+        # file's declared widths so the store still has a schema.
+        scalar_width = scans[0].scalar_width if scans else 0
+        emb_width = scans[0].emb_width if scans else 0
+    policy_label = ""
+    for scan in scans:
+        if scan.policy_width is None:
+            continue
+        if policy_width is None:
+            policy_width = scan.policy_width
+            policy_label = str(scan.path)
+        elif scan.policy_width != policy_width:
+            raise ValueError(
+                f"policy_targets width mismatch across structured-token "
+                f"files: {scan.path} has width {scan.policy_width} but "
+                f"{policy_label} has {policy_width}."
+            )
+    if policy_width is None:
+        policy_width = ACTION_VOCAB_SIZE
+    elif (
+        policy_width != ACTION_VOCAB_SIZE
+        and any(s.policy_width is None for s in scans)
+    ):
+        raise ValueError(
+            f"policy_targets width {policy_width} ({policy_label}) does "
+            f"not match ACTION_VOCAB_SIZE={ACTION_VOCAB_SIZE}, but other "
+            f"files carry no policy supervision and would be zero-filled "
+            f"at the vocab width. Regenerate the odd files."
+        )
+    row_lengths = (
+        np.concatenate([s.row_lengths for s in scans])
+        if scans else np.zeros((0,), dtype=np.int64)
+    )
+    row_offsets = np.concatenate(
+        ([0], np.cumsum(row_lengths)),
+    ).astype(np.int64)
+    return _StorePlan(
+        n_rows=int(row_lengths.shape[0]),
+        n_tokens=int(row_offsets[-1]) if row_offsets.size else 0,
+        emb_width=int(emb_width or 0),
+        scalar_width=int(scalar_width or 0),
+        policy_width=int(policy_width),
+        row_offsets=row_offsets,
+    )
+
+
+class _FlatStoreBuilder:
+    """Pre-allocate the flat ``.npy`` files and stream rows into them.
+
+    Every array is created at its final size with
+    ``np.lib.format.open_memmap`` and filled slice-by-slice, so peak
+    RSS is O(one source file) no matter how many files the pool has.
+    """
+
+    def __init__(self, directory: Path, plan: _StorePlan) -> None:
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.plan = plan
+        self._arrays: dict[str, np.memmap] = {}
+        alloc = self._alloc
+        n_rows, n_tok = plan.n_rows, plan.n_tokens
+        self.token_type = alloc(
+            "token_type_flat.npy", np.int64, (n_tok,),
+        )
+        self.token_emb_ids = alloc(
+            "token_emb_ids_flat.npy", np.int64, (n_tok, plan.emb_width),
+        )
+        self.token_scalars = alloc(
+            "token_scalars_flat.npy", np.float32,
+            (n_tok, plan.scalar_width),
+        )
+        self.outcomes = alloc("outcomes.npy", np.float32, (n_rows,))
+        self.policy_targets = alloc(
+            "policy_targets.npy", np.float32, (n_rows, plan.policy_width),
+        )
+        self.action_masks = alloc(
+            "action_masks.npy", np.bool_, (n_rows, plan.policy_width),
+        )
+        self.has_policy = alloc("has_policy.npy", np.bool_, (n_rows,))
+        self.group_ids = alloc("group_ids.npy", np.int64, (n_rows,))
+        # ``row_offsets`` is fully known from the sizing pass.
+        row_offsets = alloc("row_offsets.npy", np.int64, (n_rows + 1,))
+        row_offsets[:] = plan.row_offsets
+
+    def _alloc(self, name: str, dtype, shape) -> np.memmap:
+        arr = np.lib.format.open_memmap(
+            self.directory / name, mode="w+", dtype=dtype, shape=shape,
+        )
+        self._arrays[name] = arr
+        return arr
+
+    def write_tokens(
+        self,
+        dest_name: str,
+        token_start: int,
+        chunk_offset: int,
+        flat_chunk: np.ndarray,
+    ) -> None:
+        """Write one chunk's packed real tokens at ``token_start +
+        chunk_offset``. A zero-token chunk is skipped: files with no
+        real tokens (crash / timeout npzs) carry a placeholder
+        emb/scalar width that must not be broadcast against the store's
+        schema width — the streaming equivalent of
+        :func:`_normalize_scalar_parts`."""
+        n = int(flat_chunk.shape[0])
+        if not n:
+            return
+        dest = getattr(self, dest_name)
+        start = token_start + chunk_offset
+        dest[start:start + n] = flat_chunk
+
+    def write_rows(
+        self,
+        dest_name: str,
+        row_start: int,
+        chunk_offset: int,
+        chunk: np.ndarray,
+    ) -> None:
+        n = int(chunk.shape[0])
+        if not n:
+            return
+        dest = getattr(self, dest_name)
+        start = row_start + chunk_offset
+        dest[start:start + n] = chunk
+
+    def write_policy_rows(
+        self, row_start: int, chunk_offset: int, chunk: np.ndarray,
+    ) -> None:
+        """Policy targets + the derived ``has_policy`` flag.
+
+        ``has_policy`` uses the same per-row formula the old
+        whole-array precompute did; summing per chunk is bit-identical
+        because the sum is per row.
+        """
+        n = int(chunk.shape[0])
+        if not n:
+            return
+        start = row_start + chunk_offset
+        self.policy_targets[start:start + n] = chunk
+        self.has_policy[start:start + n] = (
+            np.ascontiguousarray(chunk, dtype=np.float32).sum(axis=1) > 0.5
+        )
+
+    def close(self) -> None:
+        """Flush + unmap every array. Must run before the store dir is
+        opened read-only (or deleted) on Windows."""
+        for name in list(self._arrays):
+            arr = self._arrays.pop(name)
+            try:
+                arr.flush()
+            except (ValueError, OSError):  # pragma: no cover
+                pass
+            _close_memmap(arr)
+            del arr
+        for attr in (
+            "token_type", "token_emb_ids", "token_scalars", "outcomes",
+            "policy_targets", "action_masks", "has_policy", "group_ids",
+        ):
+            setattr(self, attr, None)
+        gc.collect()
+
+
+def _stream_file_into_store(
+    builder: _FlatStoreBuilder,
+    scan: _FileScan,
+    file_index: int,
+    row_start: int,
+    token_start: int,
+) -> int:
+    """Second pass for one npz: decode in row-chunks, flatten, write.
+
+    Returns the number of distinct game groups the file contributed.
+
+    Only the arrays the dataset actually needs are decompressed —
+    ``features`` (unused by the structured trainer) is skipped
+    entirely, which is a straight I/O + CPU saving over
+    ``data_gen.load_dataset``. Each token array is inflated
+    ``CHUNK_BYTES`` at a time and written straight into its slice of
+    the store, so peak RSS is bounded by the chunk size even for the
+    legacy monolithic npzs (one file in ``iterate_data_s2`` holds 747k
+    rows / ~20 GB of padded arrays).
+    """
+    path = scan.path
+    n_rows = scan.n_rows
+    # Per-row token offsets *within this file*: chunk k's first token
+    # lands at ``token_start + local_offsets[first_row_of_chunk]``.
+    local_offsets = np.concatenate(
+        ([0], np.cumsum(scan.row_lengths)),
+    ).astype(np.int64)
+    with zipfile.ZipFile(path) as zf:
+        members = _npy_member_names(zf)
+        _require_structured(path, members)
+        mask = _read_member(zf, members["structured_attention_mask"])
+        if mask.dtype != np.bool_:
+            mask = mask.astype(np.bool_)
+        row_lengths = (
+            mask.reshape(n_rows, -1).sum(axis=1).astype(np.int64)
+            if n_rows else np.zeros((0,), dtype=np.int64)
+        )
+        if not np.array_equal(row_lengths, scan.row_lengths):
+            raise ValueError(
+                f"{path} changed between the sizing pass and the read "
+                f"pass (row lengths differ). Re-run once the data "
+                f"generator has finished writing."
+            )
+        for dest_name, key in (
+            ("token_type", "structured_token_type"),
+            ("token_emb_ids", "structured_token_emb_ids"),
+            ("token_scalars", "structured_token_scalars"),
+        ):
+            for offset, chunk in _iter_member_rows(zf, members[key]):
+                builder.write_tokens(
+                    dest_name,
+                    token_start,
+                    int(local_offsets[offset]),
+                    chunk[mask[offset:offset + chunk.shape[0]]],
+                )
+        del mask
+        outcomes_rows = 0
+        for offset, chunk in _iter_member_rows(zf, members["outcomes"]):
+            builder.write_rows("outcomes", row_start, offset, chunk)
+            outcomes_rows += int(chunk.shape[0])
+        if outcomes_rows != n_rows:
+            raise ValueError(
+                f"{path}: outcomes rows {outcomes_rows} != structured "
+                f"token rows {n_rows}"
+            )
+        # A file with no policy supervision leaves its rows at the
+        # store's zero-fill: ``open_memmap`` allocates a fresh
+        # zero-initialized file, which is exactly the all-zero
+        # policy_targets / all-False action_masks the old global
+        # zero-fill produced (and ``has_policy`` False with it).
+        if "policy_targets" in members:
+            for offset, chunk in _iter_member_rows(
+                zf, members["policy_targets"],
+            ):
+                builder.write_policy_rows(row_start, offset, chunk)
+        if "action_masks" in members:
+            for offset, chunk in _iter_member_rows(
+                zf, members["action_masks"],
+            ):
+                builder.write_rows("action_masks", row_start, offset, chunk)
+        game_ids = (
+            _read_member(zf, members["game_ids"])
+            if "game_ids" in members else None
+        )
+    # Game-level group ids: ``file_index * 1e6 + game_id`` when the
+    # file carries ``game_ids``; whole file as one group for legacy
+    # files (logged at INFO inside ``file_group_ids``).
+    group_ids = file_group_ids(game_ids, n_rows, file_index, path=path)
+    builder.write_rows("group_ids", row_start, 0, group_ids)
+    # Group ids never cross file boundaries (they are offset by
+    # ``file_index * 1e6``), so per-file unique counts sum to the
+    # global count — no second pass over the whole array needed.
+    return int(np.unique(group_ids).shape[0]) if n_rows else 0
+
+
+def _select_paths(
+    directory: Path, max_files: Optional[int],
+) -> list[Path]:
+    all_paths = list(directory.glob("*.npz"))
+    if max_files is not None and all_paths:
+        all_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        kept = all_paths[:max_files]
+        return sorted(kept)
+    return sorted(all_paths)
+
+
+def _store_signature(paths: Sequence[Path]) -> str:
+    """Cache key: layout version + every source file's path, size and
+    mtime. Any add / remove / rewrite changes the key."""
+    h = hashlib.sha256()
+    h.update(f"v{FLAT_STORE_VERSION}|vocab={ACTION_VOCAB_SIZE}\n".encode())
+    for p in paths:
+        st = p.stat()
+        h.update(
+            f"{p.name}|{st.st_size}|{st.st_mtime_ns}\n".encode("utf-8")
+        )
+    return h.hexdigest()[:32]
+
+
+def _store_is_complete(directory: Path, signature: str) -> bool:
+    manifest_path = directory / _MANIFEST_NAME
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # pragma: no cover - corrupt manifest
+        return False
+    if manifest.get("signature") != signature:
+        return False
+    if int(manifest.get("version", -1)) != FLAT_STORE_VERSION:
+        return False
+    return all(
+        (directory / fname).is_file() for _attr, fname in _ARRAY_FILES
+    )
+
+
 def load_structured_dataset(
     directory: Path,
     *,
     max_files: Optional[int] = None,
+    cache_dir: Optional[Path] = None,
+    sweep_stale: bool = True,
 ) -> StructuredDataset:
     """Load every ``*.npz`` in ``directory`` that contains the four
     structured-token arrays. Files missing those arrays raise.
@@ -783,113 +1555,157 @@ def load_structured_dataset(
     no ``np.searchsorted`` lookup, no per-row ``mask.sum()``
     recomputation. See module docstring for the storage layout and
     the history note on why this matters.
+
+    **Memory.** The load is two-pass and streaming: pass 1 reads each
+    npz's array headers plus its (tiny, bool) attention mask to learn
+    the exact final shapes; the flat ``.npy`` files are then
+    pre-allocated at full size with ``np.lib.format.open_memmap`` and
+    pass 2 writes each file's rows straight into its slice and drops
+    the decoded arrays. Peak RSS is O(largest single npz + row
+    metadata) — independent of the number of files. The old path
+    decoded every file into RAM, concatenated (doubling), then wrote a
+    third copy out, peaking at ~24 GB per 1M rows.
+
+    ``cache_dir`` (or ``$MTG_BOT_STRUCTURED_CACHE_DIR``) enables a
+    persistent flat store keyed by the exact file list + sizes +
+    mtimes: an unchanged pool skips the rebuild entirely. Cached
+    stores are NOT auto-deleted (the caller owns the directory).
+
+    ``sweep_stale`` (default True) removes leftover flat stores from
+    crashed runs; see :func:`sweep_stale_memmap_dirs`.
     """
     if max_files is not None and max_files <= 0:
         raise ValueError(
             f"max_files must be positive or None; got {max_files}"
         )
-    all_paths = list(directory.glob("*.npz"))
-    if max_files is not None and all_paths:
-        all_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        kept = all_paths[:max_files]
-        paths = sorted(kept)
-    else:
-        paths = sorted(all_paths)
+    if sweep_stale and _sweep_enabled():
+        try:
+            sweep_stale_memmap_dirs()
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover
+            _log.warning("structured dataset: temp sweep failed: %s", exc)
+    paths = _select_paths(directory, max_files)
     if not paths:
         raise FileNotFoundError(
             f"No .npz files in {directory}"
         )
-    # Accumulate one file at a time. The per-file padded arrays go
-    # out of scope after _flatten_one_file extracts their real
-    # tokens, so peak memory tracks (current file's padded + sum of
-    # flat parts already emitted) rather than (all files' padded
-    # + flat output).
-    tt_parts: list[np.ndarray] = []
-    emb_parts: list[np.ndarray] = []
-    sca_parts: list[np.ndarray] = []
-    row_len_parts: list[np.ndarray] = []
-    outcomes_parts: list[np.ndarray] = []
-    policy_parts: list[np.ndarray] = []
-    am_parts: list[np.ndarray] = []
-    group_parts: list[np.ndarray] = []
-    for file_index, path in enumerate(paths):
-        (
-            features, outcomes, policy_targets, action_masks,
-            tt, emb_ids, scalars, mask, game_ids,
-        ) = load_dataset(
-            path, with_policy=True, with_structured=True,
-            with_game_ids=True,
-        )
-        if (
-            tt is None or emb_ids is None
-            or scalars is None or mask is None
-        ):
-            raise ValueError(
-                f"{path}: missing structured-token arrays. The "
-                f"structured trainer requires data_gen to be run "
-                f"with structured_tokens=True."
+
+    if cache_dir is None:
+        env_cache = os.environ.get(CACHE_DIR_ENV)
+        cache_dir = Path(env_cache) if env_cache else None
+    signature = _store_signature(paths) if cache_dir is not None else ""
+    if cache_dir is not None:
+        cached = Path(cache_dir) / signature
+        if _store_is_complete(cached, signature):
+            _log.info(
+                "structured dataset: reusing cached flat store %s "
+                "(%d files unchanged)", cached, len(paths),
             )
-        n_rows = int(tt.shape[0])
-        # Synthesize per-file policy / action arrays when the file
-        # carries no policy supervision so old value-only data falls
-        # back to all-zero policy_targets + action_masks (same
-        # behavior as the legacy global-array zero-fill).
-        if policy_targets is None:
-            policy_targets = np.zeros(
-                (n_rows, ACTION_VOCAB_SIZE), dtype=np.float32,
+            return StructuredDataset.from_memmap_dir(cached, own_dir=False)
+
+    # ---- pass 1: sizes only (headers + bool masks) -----------------
+    scans = [_scan_structured_npz(p) for p in paths]
+    plan = _plan_store(scans)
+
+    # ---- allocate the flat store at its final size -----------------
+    if cache_dir is not None:
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        build_dir = Path(cache_dir) / f".building-{signature}-{os.getpid()}"
+        _remove_store_dir(build_dir, attempts=1)
+        owns = False
+    else:
+        build_dir = Path(_new_owned_dir())
+        owns = True
+    builder = _FlatStoreBuilder(build_dir, plan)
+
+    # ---- pass 2: stream every file into its slice ------------------
+    try:
+        row_cursor = 0
+        token_cursor = 0
+        n_groups = 0
+        for file_index, scan in enumerate(scans):
+            n_groups += _stream_file_into_store(
+                builder, scan, file_index, row_cursor, token_cursor,
             )
-        if action_masks is None:
-            action_masks = np.zeros(
-                (n_rows, ACTION_VOCAB_SIZE), dtype=np.bool_,
+            row_cursor += scan.n_rows
+            token_cursor += scan.n_tokens
+        if row_cursor != plan.n_rows or token_cursor != plan.n_tokens:
+            raise ValueError(  # pragma: no cover - defensive
+                f"flat-store fill mismatch: wrote {row_cursor}/"
+                f"{plan.n_rows} rows, {token_cursor}/{plan.n_tokens} "
+                f"tokens"
             )
-        tt_f, emb_f, sca_f, rows_f = _flatten_one_file(
-            tt, emb_ids, scalars, mask,
-        )
-        tt_parts.append(tt_f)
-        emb_parts.append(emb_f)
-        sca_parts.append(sca_f)
-        row_len_parts.append(rows_f)
-        outcomes_parts.append(outcomes)
-        policy_parts.append(policy_targets)
-        am_parts.append(action_masks)
-        # Game-level group ids: ``file_index * 1e6 + game_id`` when
-        # the file carries ``game_ids``; whole file as one group for
-        # legacy files (logged at INFO inside ``file_group_ids``).
-        group_parts.append(
-            file_group_ids(game_ids, n_rows, file_index, path=path)
-        )
-    tt_flat = np.concatenate(tt_parts)
-    emb_flat = np.concatenate(emb_parts)
-    sca_flat = np.concatenate(
-        _normalize_scalar_parts(sca_parts, [str(p) for p in paths]),
-    )
-    row_lengths_all = np.concatenate(row_len_parts).astype(np.int64)
-    row_offsets = np.concatenate(
-        ([0], np.cumsum(row_lengths_all)),
-    ).astype(np.int64)
-    outcomes_all = np.concatenate(outcomes_parts).astype(np.float32)
-    policy_all = np.concatenate(policy_parts).astype(np.float32)
-    am_all = np.concatenate(am_parts).astype(np.bool_)
-    group_all = np.concatenate(group_parts).astype(np.int64)
+        builder.close()
+    except BaseException:
+        builder.close()
+        _OWNED_DIRS.discard(str(build_dir))
+        _remove_store_dir(build_dir)
+        raise
+
     _log.info(
         "structured dataset: %d rows across %d files in %d game groups",
-        int(group_all.shape[0]), len(paths),
-        int(np.unique(group_all).shape[0]),
+        plan.n_rows, len(paths), n_groups,
     )
-    return StructuredDataset.from_flat_arrays(
-        token_type_flat=tt_flat,
-        token_emb_ids_flat=emb_flat,
-        token_scalars_flat=sca_flat,
-        row_offsets=row_offsets,
-        outcomes=outcomes_all,
-        policy_targets=policy_all,
-        action_masks=am_all,
-        group_ids=group_all,
-    )
+
+    store_dir = build_dir
+    if cache_dir is not None:
+        (build_dir / _MANIFEST_NAME).write_text(
+            json.dumps(
+                {
+                    "version": FLAT_STORE_VERSION,
+                    "signature": signature,
+                    "n_rows": plan.n_rows,
+                    "n_tokens": plan.n_tokens,
+                    "files": [p.name for p in paths],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        final_dir = Path(cache_dir) / signature
+        try:
+            os.replace(build_dir, final_dir)
+            store_dir = final_dir
+        except OSError:
+            # Another process published the same store first (or the
+            # rename lost a race on Windows). Prefer theirs.
+            if _store_is_complete(final_dir, signature):
+                _remove_store_dir(build_dir)
+                store_dir = final_dir
+            else:  # pragma: no cover - rename failed for another reason
+                store_dir = build_dir
+
+    return StructuredDataset.from_memmap_dir(store_dir, own_dir=owns)
+
+
+def shutdown_dataloader_workers(loader: object) -> None:
+    """Stop a ``DataLoader``'s persistent workers *now*.
+
+    ``persistent_workers=True`` keeps worker processes (and therefore
+    their memmap handles on the flat store) alive until the loader is
+    garbage-collected. On Windows those open handles block deletion of
+    the store, so the trainer calls this before dropping the dataset.
+    Safe to call on any object; a loader with no live iterator is a
+    no-op.
+    """
+    it = getattr(loader, "_iterator", None)
+    if it is None:
+        return
+    try:
+        shutdown = getattr(it, "_shutdown_workers", None)
+        if shutdown is not None:
+            shutdown()
+    except Exception:  # noqa: BLE001  # pragma: no cover
+        pass
+    try:
+        loader._iterator = None  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001  # pragma: no cover
+        pass
 
 
 __all__ = [
     "StructuredDataset",
     "load_structured_dataset",
     "structured_collate",
+    "sweep_stale_memmap_dirs",
+    "shutdown_dataloader_workers",
 ]
