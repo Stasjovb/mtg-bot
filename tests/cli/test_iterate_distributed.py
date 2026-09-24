@@ -96,6 +96,9 @@ def test_dry_run_prints_resolved_argv(
     assert "--bootstrap-version v5" in out
     assert "--n-iterations 1" in out
     assert "--shards-config" in out
+    # The launcher's --progress-dir must reach iterate: its stage
+    # progress JSONs and .STOP_<run_id> sentinels live there.
+    assert f"--progress-dir {progress_dir}" in out
 
 
 def test_cli_overrides_propagate_to_argv(

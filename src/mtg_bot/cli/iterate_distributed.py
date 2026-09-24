@@ -308,8 +308,17 @@ def _build_iterate_argv(
     deck_pool: Optional[Path],
     registry_root: Optional[Path],
     extra_iterate_args: list[str],
+    progress_dir: Optional[Path] = None,
 ) -> list[str]:
     """Construct the ``mtg_bot iterate`` argv from the LaunchConfig.
+
+    ``progress_dir`` is forwarded as ``--progress-dir`` so iterate's
+    per-stage progress JSONs and its ``.STOP_<run_id>`` sentinels
+    live in the SAME directory the launcher was pointed at. Before
+    this was forwarded, a lineage launched with
+    ``--progress-dir training_progress_s2`` still had iterate writing
+    to (and reading stop sentinels from) the default
+    ``training_progress/``.
 
     Hand-merges the [iter] section into the corresponding iterate
     flags. ``extra_iterate_args`` is appended at the end so the
@@ -345,6 +354,8 @@ def _build_iterate_argv(
         argv += ["--deck-pool", str(deck_pool)]
     if registry_root is not None:
         argv += ["--registry-root", str(registry_root)]
+    if progress_dir is not None:
+        argv += ["--progress-dir", str(progress_dir)]
     argv += list(extra_iterate_args)
     return argv
 
@@ -644,6 +655,7 @@ def _launch(
         deck_pool=deck_pool,
         registry_root=registry_root,
         extra_iterate_args=iterate_passthrough,
+        progress_dir=progress_dir,
     )
 
     if dry_run:
