@@ -10,8 +10,8 @@ trunk.
 This module flattens every npz's padded tokens into a single packed
 "flat" storage indexed by per-row ``row_offsets``:
 
-- ``_token_type_flat``      shape (total_real_tokens,) int64
-- ``_token_emb_ids_flat``   shape (total_real_tokens, N_EMB_FIELDS) int64
+- ``_token_type_flat``      shape (total_real_tokens,) int16
+- ``_token_emb_ids_flat``   shape (total_real_tokens, N_EMB_FIELDS) int32
 - ``_token_scalars_flat``   shape (total_real_tokens, N_SCALAR_FIELDS) float32
 - ``_row_offsets``          shape (n_total + 1,) int64 — cumulative
                             real-token count; ``_row_offsets[i+1] -
@@ -20,8 +20,27 @@ This module flattens every npz's padded tokens into a single packed
                             is row i's real tokens with NO padding.
 
 ``__getitem__(idx)`` becomes a single numpy slice + ``torch.from_numpy``
-per array — no ``.astype()`` copies, no per-row ``.sum()`` to recompute
-the sequence length, no Python-level list indexing.
+per array — one materializing copy per row (which also widens the
+narrow token-id dtypes back to ``int64``, see below), no per-row
+``.sum()`` to recompute the sequence length, no Python-level list
+indexing.
+
+**Stored token-id dtypes.** The token id columns are stored at the
+smallest integer width their vocabularies can ever need (see
+:data:`FLAT_STORE_DTYPES`): ``token_type`` is int16 (12 token types
+today), ``token_emb_ids`` is int32 (printing ids — the widest field —
+top out in the low hundreds today and the model's other id fields are
+< 32). Both are widened to ``torch.int64`` in ``__getitem__`` so the
+model's ``nn.Embedding`` layers still receive ``LongTensor``s and no
+model / trainer code changes. Store-build time asserts every value
+fits the narrowed dtype and fails loudly, naming the column and the
+offending value, rather than letting numpy truncate silently. This
+cuts ~57% off the two token-id columns (int64 -> 2 + 28 bytes per
+token): 19.0 GB -> 8.9 GB on the 296M-token / 4.76M-row
+``iterate_data_s2`` pool. ``token_scalars`` stays float32: the
+schema-v2 scalar fields include /7, /10, /20 and /40 normalizers whose
+values are not exactly representable in float16, so narrowing it
+would change the training input.
 
 History note: an earlier eager-concat-with-global-max-padding loader
 OOM'd at ~42 GiB on the iter_016 dataset (1701 files, 7M samples).
@@ -103,10 +122,88 @@ _STRUCT_NPZ_KEYS = (
 MEMMAP_DIR_PREFIX = "mtg_bot_structured_dataset_"
 """Prefix of every flat-store directory this module creates in %TEMP%."""
 
-FLAT_STORE_VERSION = 1
+FLAT_STORE_VERSION = 2
 """Bump when the on-disk flat-store layout changes. Part of the
 persistent-cache key so an old cache can never be mistaken for a new
-one."""
+one.
+
+History: v1 = all token arrays int64. v2 (2026-09-24) = narrowed
+token-id dtypes (see :data:`FLAT_STORE_DTYPES`); the tensors handed
+to the model are unchanged (still int64), only the bytes on disk
+shrink."""
+
+
+TOKEN_TYPE_DTYPE = np.int16
+"""On-disk dtype of ``token_type_flat``. ``N_TOKEN_TYPES`` is 12 and
+grows by one per new token kind, so int16 has ~2700x headroom; int8 /
+uint8 were rejected because they would leave only 100-odd spare ids
+and (for uint8) wrap a negative sentinel silently."""
+
+TOKEN_EMB_IDS_DTYPE = np.int32
+"""On-disk dtype of ``token_emb_ids_flat``. The widest field is the
+printing id (``DEFAULT_N_PRINTINGS`` = 320 today; a full-Magic
+printing table is ~10^5), the rest are < 32. int32 covers any
+plausible card database; int16 would not survive a multi-set registry
+expansion."""
+
+TOKEN_SCALARS_DTYPE = np.float32
+"""On-disk dtype of ``token_scalars_flat``. NOT narrowed to float16:
+schema-v2 fields normalize by 7 / 10 / 20 / 40, and those values are
+not exactly representable in float16 — narrowing would silently
+perturb the training input."""
+
+FLAT_STORE_DTYPES: dict[str, np.dtype] = {
+    "token_type_flat.npy": np.dtype(TOKEN_TYPE_DTYPE),
+    "token_emb_ids_flat.npy": np.dtype(TOKEN_EMB_IDS_DTYPE),
+    "token_scalars_flat.npy": np.dtype(TOKEN_SCALARS_DTYPE),
+    "row_offsets.npy": np.dtype(np.int64),
+    "outcomes.npy": np.dtype(np.float32),
+    "policy_targets.npy": np.dtype(np.float32),
+    "action_masks.npy": np.dtype(np.bool_),
+    "has_policy.npy": np.dtype(np.bool_),
+    "group_ids.npy": np.dtype(np.int64),
+}
+"""The dtype of every array in a v2 flat store, by file name. The
+on-disk contract; a test pins it."""
+
+
+def _checked_narrow(
+    column: str,
+    arr: np.ndarray,
+    dtype,
+    *,
+    source: object = None,
+) -> np.ndarray:
+    """Cast ``arr`` to ``dtype`` after proving every value fits.
+
+    numpy truncates silently on an out-of-range integer assignment
+    (``int16_store[:] = 40000`` writes -25536 with no warning), which
+    would corrupt a training corpus invisibly. Every write into a
+    narrowed store column goes through here instead: the min/max scan
+    costs one pass over an already-decompressed chunk and raises a
+    named, valued error if the vocab has outgrown the dtype.
+
+    ``source`` (optional) is the npz path, appended to the message so
+    a bad file is identifiable in a 2500-file pool.
+    """
+    target = np.dtype(dtype)
+    arr = np.asarray(arr)
+    if arr.size and arr.dtype != target:
+        info = np.iinfo(target)
+        lo = int(arr.min())
+        hi = int(arr.max())
+        if lo < info.min or hi > info.max:
+            bad = lo if lo < info.min else hi
+            where = f" (source {source})" if source is not None else ""
+            raise ValueError(
+                f"structured flat store: {column} value {bad} does not "
+                f"fit {target.name} (range [{info.min}, {info.max}])"
+                f"{where}. The vocabulary has outgrown the store's "
+                f"dtype — widen "
+                f"structured_dataset.{'TOKEN_TYPE_DTYPE' if 'type' in column else 'TOKEN_EMB_IDS_DTYPE'}"
+                f" and bump FLAT_STORE_VERSION."
+            )
+    return np.ascontiguousarray(arr, dtype=target)
 
 SWEEP_ENV = "MTG_BOT_STRUCTURED_SWEEP"
 """Set to ``0``/``false`` to disable the stale-temp-dir startup sweep."""
@@ -309,8 +406,14 @@ class StructuredDataset(Dataset):
     array, with per-row slice bounds given by ``_row_offsets``. This
     eliminates BOTH the per-file padding overhead (saves ~50% memory
     vs file-padded layouts) AND the per-row Python overhead in
-    ``__getitem__`` (a single ``arr[start:end]`` + ``torch.from_numpy``
-    per array, no ``.astype`` copies, no list indexing).
+    ``__getitem__`` (a single ``arr[start:end]`` materialization +
+    ``torch.from_numpy`` per array, no list indexing).
+
+    The two id columns are stored at their narrowest safe integer
+    width (``token_type`` int16, ``token_emb_ids`` int32 — see
+    :data:`FLAT_STORE_DTYPES`) and widened to int64 by the
+    materializing copy in ``__getitem__``, so the dict above is
+    dtype-identical to the all-int64 store it replaced.
     """
 
     def __init__(
@@ -448,9 +551,9 @@ class StructuredDataset(Dataset):
             ).astype(np.bool_)
         else:
             # Empty input lists: produce a zero-row dataset.
-            tt_flat = np.zeros((0,), dtype=np.int64)
-            emb_flat = np.zeros((0, 0), dtype=np.int64)
-            sca_flat = np.zeros((0, 0), dtype=np.float32)
+            tt_flat = np.zeros((0,), dtype=TOKEN_TYPE_DTYPE)
+            emb_flat = np.zeros((0, 0), dtype=TOKEN_EMB_IDS_DTYPE)
+            sca_flat = np.zeros((0, 0), dtype=TOKEN_SCALARS_DTYPE)
             row_lens_all = np.zeros((0,), dtype=np.int64)
             outcomes = np.zeros((0,), dtype=np.float32)
             policy_targets = np.zeros(
@@ -610,15 +713,22 @@ class StructuredDataset(Dataset):
         # block.
         np.save(
             memmap_dir / "token_type_flat.npy",
-            np.ascontiguousarray(token_type_flat, dtype=np.int64),
+            _checked_narrow(
+                "token_type_flat", token_type_flat, TOKEN_TYPE_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "token_emb_ids_flat.npy",
-            np.ascontiguousarray(token_emb_ids_flat, dtype=np.int64),
+            _checked_narrow(
+                "token_emb_ids_flat", token_emb_ids_flat,
+                TOKEN_EMB_IDS_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "token_scalars_flat.npy",
-            np.ascontiguousarray(token_scalars_flat, dtype=np.float32),
+            np.ascontiguousarray(
+                token_scalars_flat, dtype=TOKEN_SCALARS_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "row_offsets.npy",
@@ -786,8 +896,17 @@ class StructuredDataset(Dataset):
         # because that would produce a tensor pointing into a
         # read-only mapping, which collate_fn's ``in-place`` writes
         # would fail on.
-        tt = torch.from_numpy(np.array(self._token_type_flat[start:end]))
-        emb = torch.from_numpy(np.array(self._token_emb_ids_flat[start:end]))
+        # The two id columns are stored narrow (int16 / int32) and
+        # widened back to int64 here: ``.astype`` IS the materializing
+        # copy (it does not add one), so the row still costs exactly
+        # one copy per array and the model's embedding layers keep
+        # getting ``LongTensor``s.
+        tt = torch.from_numpy(
+            self._token_type_flat[start:end].astype(np.int64)
+        )
+        emb = torch.from_numpy(
+            self._token_emb_ids_flat[start:end].astype(np.int64)
+        )
         sca = torch.from_numpy(np.array(self._token_scalars_flat[start:end]))
         am = torch.ones(seq_len, dtype=torch.bool)
         outcome = torch.tensor(
@@ -1283,6 +1402,15 @@ def _plan_store(scans: Sequence[_FileScan]) -> _StorePlan:
     )
 
 
+_NARROWED_TOKEN_COLUMNS: dict[str, str] = {
+    "token_type": "token_type_flat",
+    "token_emb_ids": "token_emb_ids_flat",
+}
+"""Builder attribute -> store column name, for the columns whose
+on-disk dtype is narrower than the npz's int64 and therefore need a
+range check on every write."""
+
+
 class _FlatStoreBuilder:
     """Pre-allocate the flat ``.npy`` files and stream rows into them.
 
@@ -1299,13 +1427,14 @@ class _FlatStoreBuilder:
         alloc = self._alloc
         n_rows, n_tok = plan.n_rows, plan.n_tokens
         self.token_type = alloc(
-            "token_type_flat.npy", np.int64, (n_tok,),
+            "token_type_flat.npy", TOKEN_TYPE_DTYPE, (n_tok,),
         )
         self.token_emb_ids = alloc(
-            "token_emb_ids_flat.npy", np.int64, (n_tok, plan.emb_width),
+            "token_emb_ids_flat.npy", TOKEN_EMB_IDS_DTYPE,
+            (n_tok, plan.emb_width),
         )
         self.token_scalars = alloc(
-            "token_scalars_flat.npy", np.float32,
+            "token_scalars_flat.npy", TOKEN_SCALARS_DTYPE,
             (n_tok, plan.scalar_width),
         )
         self.outcomes = alloc("outcomes.npy", np.float32, (n_rows,))
@@ -1334,17 +1463,31 @@ class _FlatStoreBuilder:
         token_start: int,
         chunk_offset: int,
         flat_chunk: np.ndarray,
+        *,
+        source: object = None,
     ) -> None:
         """Write one chunk's packed real tokens at ``token_start +
         chunk_offset``. A zero-token chunk is skipped: files with no
         real tokens (crash / timeout npzs) carry a placeholder
         emb/scalar width that must not be broadcast against the store's
         schema width — the streaming equivalent of
-        :func:`_normalize_scalar_parts`."""
+        :func:`_normalize_scalar_parts`.
+
+        The two id columns are stored narrow, and a plain numpy
+        assignment into a narrower dest truncates silently, so each
+        chunk is range-checked first (see :func:`_checked_narrow`).
+        """
         n = int(flat_chunk.shape[0])
         if not n:
             return
         dest = getattr(self, dest_name)
+        if dest_name in _NARROWED_TOKEN_COLUMNS:
+            flat_chunk = _checked_narrow(
+                _NARROWED_TOKEN_COLUMNS[dest_name],
+                flat_chunk,
+                dest.dtype,
+                source=source,
+            )
         start = token_start + chunk_offset
         dest[start:start + n] = flat_chunk
 
@@ -1453,6 +1596,7 @@ def _stream_file_into_store(
                     token_start,
                     int(local_offsets[offset]),
                     chunk[mask[offset:offset + chunk.shape[0]]],
+                    source=path,
                 )
         del mask
         outcomes_rows = 0
@@ -1703,6 +1847,8 @@ def shutdown_dataloader_workers(loader: object) -> None:
 
 
 __all__ = [
+    "FLAT_STORE_DTYPES",
+    "FLAT_STORE_VERSION",
     "StructuredDataset",
     "load_structured_dataset",
     "structured_collate",

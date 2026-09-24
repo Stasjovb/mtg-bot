@@ -29,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from mtg_bot.features import FEATURE_DIM
 from mtg_bot.training import structured_dataset
@@ -1021,3 +1022,175 @@ def test_store_signature_tracks_mtime_and_size(tmp_path: Path) -> None:
     future = time.time() + 120
     os.utime(paths[0], (future, future))
     assert structured_dataset._store_signature(paths) != sig
+
+
+# ---------------------------------------------------------------------
+# Narrowed on-disk dtypes (flat-store layout v2)
+# ---------------------------------------------------------------------
+
+
+def _store_dtypes(directory: Path) -> dict[str, np.dtype]:
+    """Read every store array's dtype straight off its ``.npy``
+    header — no dataset object in between."""
+    out: dict[str, np.dtype] = {}
+    for path in sorted(directory.glob("*.npy")):
+        with open(path, "rb") as fp:
+            version = np.lib.format.read_magic(fp)
+            reader = (
+                np.lib.format.read_array_header_1_0 if version == (1, 0)
+                else np.lib.format.read_array_header_2_0
+            )
+            _shape, _fortran, dtype = reader(fp)
+        out[path.name] = dtype
+    return out
+
+
+def test_store_arrays_use_the_narrowed_dtypes(tmp_path: Path) -> None:
+    """Every column's on-disk dtype is the documented one: the token
+    id columns are int16 / int32, not int64."""
+    _write_multi_file_pool(tmp_path)
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        dtypes = _store_dtypes(Path(dataset._memmap_dir))
+        assert dtypes == structured_dataset.FLAT_STORE_DTYPES
+        assert dtypes["token_type_flat.npy"] == np.dtype(np.int16)
+        assert dtypes["token_emb_ids_flat.npy"] == np.dtype(np.int32)
+        assert dtypes["token_scalars_flat.npy"] == np.dtype(np.float32)
+        # The memmaps the dataset holds agree with the files.
+        assert dataset._token_type_flat.dtype == np.int16
+        assert dataset._token_emb_ids_flat.dtype == np.int32
+    finally:
+        dataset.close()
+
+
+def test_in_ram_constructor_also_narrows() -> None:
+    """The legacy single-array constructor writes the same layout."""
+    arrays = _make_struct_arrays(4, seq_lens=[1, 2, 3, 4], max_len=4, seed=5)
+    dataset = StructuredDataset(
+        arrays["structured_token_type"],
+        arrays["structured_token_emb_ids"],
+        arrays["structured_token_scalars"],
+        arrays["structured_attention_mask"],
+        np.zeros((4,), dtype=np.float32),
+        np.zeros((4, ACTION_VOCAB_SIZE), dtype=np.float32),
+        np.zeros((4, ACTION_VOCAB_SIZE), dtype=np.bool_),
+    )
+    try:
+        assert _store_dtypes(Path(dataset._memmap_dir)) == (
+            structured_dataset.FLAT_STORE_DTYPES
+        )
+        assert dataset[0]["token_type"].dtype == torch.int64
+        assert dataset[0]["token_emb_ids"].dtype == torch.int64
+    finally:
+        dataset.close()
+
+
+def test_narrow_store_yields_tensors_identical_to_the_int64_store(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Round trip: every yielded tensor — and every collated batch —
+    is dtype- and value-identical to what the pre-v2 all-int64 store
+    produced for the same pool."""
+    _write_multi_file_pool(tmp_path)
+    narrow = load_structured_dataset(tmp_path)
+    try:
+        with monkeypatch.context() as mp:
+            # Widening the dtype constants rebuilds the v1 layout
+            # through the exact same code path.
+            mp.setattr(structured_dataset, "TOKEN_TYPE_DTYPE", np.int64)
+            mp.setattr(structured_dataset, "TOKEN_EMB_IDS_DTYPE", np.int64)
+            reference = load_structured_dataset(tmp_path)
+            try:
+                ref_dtypes = _store_dtypes(Path(reference._memmap_dir))
+                assert ref_dtypes["token_type_flat.npy"] == np.dtype(np.int64)
+                assert ref_dtypes["token_emb_ids_flat.npy"] == np.dtype(
+                    np.int64
+                )
+                assert len(narrow) == len(reference)
+                for i in range(len(reference)):
+                    got, want = narrow[i], reference[i]
+                    assert got.keys() == want.keys()
+                    for key in want:
+                        assert got[key].dtype == want[key].dtype, key
+                        assert torch.equal(got[key], want[key]), key
+                    assert got["token_type"].dtype == torch.int64
+                    assert got["token_emb_ids"].dtype == torch.int64
+                batch_got = structured_collate(
+                    [narrow[i] for i in range(len(narrow))]
+                )
+                batch_want = structured_collate(
+                    [reference[i] for i in range(len(reference))]
+                )
+                for key in batch_want:
+                    assert batch_got[key].dtype == batch_want[key].dtype, key
+                    assert torch.equal(batch_got[key], batch_want[key]), key
+                assert batch_got["token_type"].dtype == torch.int64
+                assert batch_got["token_emb_ids"].dtype == torch.int64
+            finally:
+                reference.close()
+    finally:
+        narrow.close()
+
+
+@pytest.mark.parametrize(
+    "key, value, column",
+    [
+        ("structured_token_type", 40_000, "token_type_flat"),
+        ("structured_token_emb_ids", 2 ** 31, "token_emb_ids_flat"),
+    ],
+)
+def test_value_too_wide_for_the_store_dtype_fails_loudly(
+    tmp_path: Path, key: str, value: int, column: str,
+) -> None:
+    """A vocab that outgrew the stored dtype must raise, naming the
+    column, the value and the file — numpy truncates silently."""
+    _make_synthetic_npz(tmp_path / "a.npz", 3, max_len=4, seed=1)
+    with np.load(tmp_path / "a.npz") as handle:
+        arrays = {k: handle[k] for k in handle.files}
+    bumped = arrays[key].astype(np.int64)
+    if bumped.ndim == 2:
+        bumped[0, 0] = value
+    else:
+        bumped[0, 0, 0] = value
+    arrays[key] = bumped
+    _write_raw_npz(tmp_path / "a.npz", **arrays)
+
+    owned_before = set(structured_dataset._OWNED_DIRS)
+    with pytest.raises(ValueError) as excinfo:
+        load_structured_dataset(tmp_path)
+    message = str(excinfo.value)
+    assert column in message
+    assert str(value) in message
+    assert "a.npz" in message
+    # The half-written store is removed by the failure path.
+    assert set(structured_dataset._OWNED_DIRS) == owned_before
+
+
+def test_in_ram_constructor_rejects_out_of_range_ids() -> None:
+    arrays = _make_struct_arrays(2, seq_lens=[2, 2], max_len=2, seed=2)
+    arrays["structured_token_emb_ids"][0, 0, 0] = 2 ** 33
+    with pytest.raises(ValueError, match="token_emb_ids_flat"):
+        StructuredDataset(
+            arrays["structured_token_type"],
+            arrays["structured_token_emb_ids"],
+            arrays["structured_token_scalars"],
+            arrays["structured_attention_mask"],
+            np.zeros((2,), dtype=np.float32),
+            np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.float32),
+            np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.bool_),
+        )
+
+
+def test_layout_version_bump_invalidates_v1_caches(tmp_path: Path) -> None:
+    """The narrowed layout is v2, and the version is part of the
+    persistent-cache key, so a v1 store can never be reused."""
+    assert structured_dataset.FLAT_STORE_VERSION >= 2
+    _write_multi_file_pool(tmp_path)
+    paths = sorted(tmp_path.glob("*.npz"))
+    sig_now = structured_dataset._store_signature(paths)
+    saved = structured_dataset.FLAT_STORE_VERSION
+    try:
+        structured_dataset.FLAT_STORE_VERSION = 1
+        assert structured_dataset._store_signature(paths) != sig_now
+    finally:
+        structured_dataset.FLAT_STORE_VERSION = saved
