@@ -5,6 +5,10 @@
 # lineage's iterate_state.json so cycle ids stay coherent with the
 # stage labels iterate itself generates.
 #
+# Phase 2 defaults (2026-09-24): LR 3e-4 (S2_LR), acceptance-threshold 0.0 = always
+# promote so self-play uses the latest net (S2_ACCEPT=0.525 restores gated-best),
+# 1500 games/cycle (configs/launch/s2.toml), post-cycle ladder (S2_LADDER).
+#
 # Prereqs (see docs/RUNNING_DISTRIBUTED.md):
 #   - coordinator up:   Start-ScheduledTask MTGBotCoordinator   (:5099)
 #   - desktop worker:   Start-ScheduledTask MTGBotWorkerLocal    (:5198)
@@ -21,7 +25,10 @@ TRAIN_WORKERS="${S2_TRAIN_WORKERS:-}"
 # --window-recent N counts FILES (one per game on the distributed path). The full
 # history stopped fitting in the desktop 64 GB RAM at ~4M rows (2026-09-24: 96 GB
 # committed, swap thrash), so bound it: 1000 files = the last 2 cycles of 500 games.
-WINDOW="${S2_WINDOW:-1000}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
+WINDOW="${S2_WINDOW:-1000}"
+# After each cycle, put the newest registered version on the ladder vs heuristic +
+# random (the real yardstick; beating the previous net is a weak signal). S2_LADDER=0 to skip.
+LADDER="${S2_LADDER:-1}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
 # NOTE: no --window-recent here: it means "the N most recently modified FILES"
 # (cli/train.py) and the distributed path rehydrates one .npz per GAME, so
 # --window-recent 3 trained cycle 2 on 3 games (7,278 rows). Full history instead.
@@ -45,6 +52,13 @@ for _ in $(seq 1 "$N"); do
     ${DRY_RUN:+--dry-run} \
     --data-dir iterate_data_s2 --scalar-schema-version 2 \
     --eval-games 300 --one-legal-keep-frac 0.2 \
-    --early-stop-patience 5 --learning-rate 1e-3 --seed "$SEED" \
+    --early-stop-patience 5 --learning-rate "${S2_LR:-3e-4}" --seed "$SEED" --acceptance-threshold "${S2_ACCEPT:-0.0}" \
     --per-game-timeout-sec 900 ${TRAIN_WORKERS:+--train-num-workers "$TRAIN_WORKERS"} --window-recent "$WINDOW"
+  if [ "$LADDER" = "1" ]; then
+    newest=$(ls trained_weights_s2 | grep -E '^v[0-9]+$' | sort -V | tail -1)
+    if [ ! -f "ladder_runs/s2_${newest}/ladder.md" ]; then
+      echo "[s2-dist] $(date -u +%FT%TZ) ladder: ${newest} vs heuristic/random"
+      .venv-py313/Scripts/python.exe -m mtg_bot.cli ladder         --agents random heuristic "$newest" --pairs "heuristic:${newest},random:${newest}"         --games 200 --nodes 100 --samples 2 --workers 16 --per-game-timeout-sec 900         --registry-root trained_weights_s2 --deck-pool data/17lands/eoe_decks.json.gz         --out "ladder_runs/s2_${newest}" || echo "[s2-dist] ladder for ${newest} FAILED (continuing)" >&2
+    fi
+  fi
 done
