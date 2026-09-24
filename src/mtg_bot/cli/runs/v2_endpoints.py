@@ -536,6 +536,20 @@ def build_v2_blueprint(
                     "root_dirichlet_eps": spec.get("root_dirichlet_eps"),
                     "move_temperature": spec.get("move_temperature"),
                     "temperature_cutoff": spec.get("temperature_cutoff"),
+                    # Evaluator kind + the corpus-format fields a
+                    # heuristic (weights-less) self-play stage cannot
+                    # discover from a version's metadata.json. Absent
+                    # on stages created by an older orchestrator ->
+                    # the worker falls back to "nn" + metadata
+                    # discovery, exactly as before.
+                    "evaluator": spec.get("evaluator"),
+                    "action_encoding_version": spec.get(
+                        "action_encoding_version"
+                    ),
+                    "structured_tokens": spec.get("structured_tokens"),
+                    "structured_scalar_schema_version": spec.get(
+                        "structured_scalar_schema_version"
+                    ),
                     "expires_at": result["expires_at"],
                 }
                 # Track in the heartbeat poller so a DEAD worker's
