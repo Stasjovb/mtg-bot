@@ -168,6 +168,52 @@ FLAT_STORE_DTYPES: dict[str, np.dtype] = {
 on-disk contract; a test pins it."""
 
 
+_DTYPE_CONSTANT_BY_COLUMN: dict[str, str] = {
+    "token_type_flat": "TOKEN_TYPE_DTYPE",
+    "token_emb_ids_flat": "TOKEN_EMB_IDS_DTYPE",
+}
+
+
+def _check_fits_dtype(
+    column: str,
+    arr: np.ndarray,
+    dtype,
+    *,
+    source: object = None,
+) -> np.ndarray:
+    """Raise unless every value in ``arr`` fits ``dtype``.
+
+    numpy truncates silently on an out-of-range integer assignment
+    (``int16_store[:] = 40000`` stores -25536, no warning), which would
+    corrupt a training corpus invisibly. Every write into a narrowed
+    store column is checked here first: the min/max scan is one pass
+    over an already-decompressed chunk, and the error names the
+    column, the offending value and (for a streaming build) the source
+    npz, so a bad file is identifiable in a 2500-file pool.
+
+    Returns ``arr`` so callers can use it inline.
+    """
+    target = np.dtype(dtype)
+    arr = np.asarray(arr)
+    if not arr.size or arr.dtype == target:
+        return arr
+    info = np.iinfo(target)
+    lo = int(arr.min())
+    hi = int(arr.max())
+    if lo < info.min or hi > info.max:
+        bad = lo if lo < info.min else hi
+        where = f" (source {source})" if source is not None else ""
+        constant = _DTYPE_CONSTANT_BY_COLUMN.get(column, "the column's")
+        raise ValueError(
+            f"structured flat store: {column} value {bad} does not "
+            f"fit {target.name} (range [{info.min}, {info.max}])"
+            f"{where}. The vocabulary has outgrown the store's dtype "
+            f"— widen structured_dataset.{constant} and bump "
+            f"FLAT_STORE_VERSION."
+        )
+    return arr
+
+
 def _checked_narrow(
     column: str,
     arr: np.ndarray,
@@ -175,36 +221,13 @@ def _checked_narrow(
     *,
     source: object = None,
 ) -> np.ndarray:
-    """Cast ``arr`` to ``dtype`` after proving every value fits.
-
-    numpy truncates silently on an out-of-range integer assignment
-    (``int16_store[:] = 40000`` writes -25536 with no warning), which
-    would corrupt a training corpus invisibly. Every write into a
-    narrowed store column goes through here instead: the min/max scan
-    costs one pass over an already-decompressed chunk and raises a
-    named, valued error if the vocab has outgrown the dtype.
-
-    ``source`` (optional) is the npz path, appended to the message so
-    a bad file is identifiable in a 2500-file pool.
-    """
-    target = np.dtype(dtype)
-    arr = np.asarray(arr)
-    if arr.size and arr.dtype != target:
-        info = np.iinfo(target)
-        lo = int(arr.min())
-        hi = int(arr.max())
-        if lo < info.min or hi > info.max:
-            bad = lo if lo < info.min else hi
-            where = f" (source {source})" if source is not None else ""
-            raise ValueError(
-                f"structured flat store: {column} value {bad} does not "
-                f"fit {target.name} (range [{info.min}, {info.max}])"
-                f"{where}. The vocabulary has outgrown the store's "
-                f"dtype — widen "
-                f"structured_dataset.{'TOKEN_TYPE_DTYPE' if 'type' in column else 'TOKEN_EMB_IDS_DTYPE'}"
-                f" and bump FLAT_STORE_VERSION."
-            )
-    return np.ascontiguousarray(arr, dtype=target)
+    """:func:`_check_fits_dtype` followed by a contiguous cast. Used
+    by the in-RAM path, which needs a real array to ``np.save``; the
+    streaming path only checks and lets the memmap assignment do the
+    conversion in place."""
+    return np.ascontiguousarray(
+        _check_fits_dtype(column, arr, dtype, source=source), dtype=dtype,
+    )
 
 
 SWEEP_ENV = "MTG_BOT_STRUCTURED_SWEEP"
@@ -1652,7 +1675,7 @@ class _FlatStoreBuilder:
             return
         dest = getattr(self, dest_name)
         if dest_name in _NARROWED_TOKEN_COLUMNS:
-            flat_chunk = _checked_narrow(
+            _check_fits_dtype(
                 _NARROWED_TOKEN_COLUMNS[dest_name],
                 flat_chunk,
                 dest.dtype,
