@@ -867,7 +867,9 @@ def train_structured_model(
     # import cost).
     from torch.utils.data import DataLoader, Subset
 
-    from mtg_bot.training.structured_dataset import structured_collate
+    from mtg_bot.training.structured_dataset import (
+        shutdown_dataloader_workers, structured_collate,
+    )
     from mtg_bot.training.structured_model import (
         StructuredModel, StructuredModelConfig,
     )
@@ -1252,6 +1254,16 @@ def train_structured_model(
         except Exception:
             pass
         raise
+    finally:
+        # ``persistent_workers=True`` keeps the DataLoader workers (and
+        # their memmap handles on the dataset's flat store) alive until
+        # the loader is garbage-collected. On Windows those handles
+        # block deletion of the store directory — the leak that filled
+        # %TEMP% with 20-50 GB per run. Shut them down explicitly the
+        # moment the epoch loop is done.
+        for _loader in (train_loader, val_loader):
+            if _loader is not None:
+                shutdown_dataloader_workers(_loader)
 
     # When ``torch.compile`` wraps the model, save the underlying
     # module's state_dict so the on-disk format stays compatible with
