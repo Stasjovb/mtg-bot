@@ -697,6 +697,7 @@ def test_train_config_dict_shape():
         val_split=0.1,
         data_dir=Path("iterate_data"),
         window_recent=None,
+        window_recent_files=None,
         early_stop_patience=5,
         architecture="shared",
     )
@@ -730,3 +731,41 @@ def test_eval_config_dict_shape():
     assert out["games"] == 2000
     assert out["seed"] == 42 + 7777
     assert out["distributed"] is False
+
+
+def test_iterate_threads_progress_dir_into_the_train_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """iterate's ``--progress-dir`` must reach the trainer — both as
+    the iter-namespaced ``progress_path`` AND as ``progress_dir`` (so
+    the trainer's OWN default lands in the lineage's dir instead of
+    the hardcoded ``training_progress/``).
+    """
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    registry_root = tmp_path / "trained_weights"
+    _make_version_dir(registry_root, "v1")
+    deck_pool = tmp_path / "deck_pool.json.gz"
+    deck_pool.write_bytes(b"")
+
+    _setup_mocks_for_iterate(monkeypatch)
+    captured: dict = {}
+    inner = cli_iterate._train_next
+
+    def _capture_train_next(*args, **kwargs):
+        captured.update(kwargs)
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(cli_iterate, "_train_next", _capture_train_next)
+
+    progress_dir = tmp_path / "training_progress_s2"
+    argv = _baseline_argv(
+        tmp_path=tmp_path, deck_pool=deck_pool, bootstrap="v1",
+        n_iterations=1, eval_games=0, acceptance_threshold=0.0,
+    )
+    argv[argv.index("--progress-dir") + 1] = str(progress_dir)
+    cli_iterate.main(argv)
+
+    assert captured["progress_dir"] == progress_dir
+    assert captured["progress_path"].parent == progress_dir

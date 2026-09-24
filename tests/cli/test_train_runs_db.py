@@ -648,12 +648,17 @@ def test_train_main_empty_data_dir(monkeypatch, tmp_path):
         ])
 
 
-def test_train_main_window_recent_caps_loaded_files(
+def test_train_main_window_recent_files_caps_loaded_files(
     monkeypatch, tmp_path,
 ):
-    """``--window-recent`` < len(*.npz): the older files get dropped
-    from the loaded subset; metadata's data_files reflects only the
-    most-recent N."""
+    """``--window-recent-files`` < len(*.npz): the older files get
+    dropped from the loaded subset; metadata's data_files reflects
+    only the most-recent N.
+
+    ``--window-recent`` itself now windows by ITERATION (these
+    fixtures carry no iter label, so it would keep them all) — see
+    ``tests/cli/test_train_window_recent.py``.
+    """
     import time as _time
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -671,7 +676,7 @@ def test_train_main_window_recent_caps_loaded_files(
         registry_root=tmp_path / "weights",
         progress_path=tmp_path / "p" / "t.json",
         epochs=1,
-        extra=["--window-recent", "2"],
+        extra=["--window-recent-files", "2"],
     ))
 
     meta = json.loads(
@@ -680,7 +685,8 @@ def test_train_main_window_recent_caps_loaded_files(
         )
     )
     assert len(meta["training"]["data_files"]) == 2
-    assert meta["training"]["window_recent"] == 2
+    assert meta["training"]["window_recent"] is None
+    assert meta["training"]["window_recent_files"] == 2
 
 
 def test_train_main_one_legal_downsample_branch(monkeypatch, tmp_path):

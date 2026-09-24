@@ -35,6 +35,7 @@ from typing import Optional
 
 import numpy as np
 
+from mtg_bot import run_labels as _run_labels
 from mtg_bot.cli.runs import client as _runs_client
 from mtg_bot.cli.runs import lifecycle as _lifecycle
 from mtg_bot.features import FEATURE_DIM
@@ -194,6 +195,246 @@ def _git_commit() -> str | None:
     return None
 
 
+class WindowedDataDir:
+    """Duck-typed stand-in for the ``--data-dir`` ``Path`` that exposes
+    only a pre-selected subset of the directory's ``*.npz`` files.
+
+    Both dataset loaders (``data_gen.load_all_datasets`` and
+    ``structured_dataset.load_structured_dataset``) enumerate their
+    inputs with ``directory.glob("*.npz")`` and otherwise only use the
+    directory object for error messages. Wrapping it here lets the CLI
+    apply an ITERATION-level training window (see
+    :func:`select_window_files`) without teaching either loader about
+    run labels and without a second copy of the npz concatenation
+    logic.
+
+    Every attribute other than the enumeration methods delegates to the
+    real ``Path``, so ``str()`` / ``os.fspath()`` / ``is_dir()`` behave
+    exactly as before. ``glob`` and ``iterdir`` flip
+    :attr:`enumerated`; :meth:`check_enumerated` asserts it afterwards
+    so a loader that ever stops enumerating through the ``Path`` API
+    fails LOUDLY instead of silently training on the whole directory.
+    """
+
+    def __init__(self, directory: Path, paths) -> None:
+        self._directory = Path(directory)
+        self._paths = [Path(p) for p in paths]
+        self.enumerated = False
+
+    # -- enumeration surface the loaders use ------------------------
+    def glob(self, pattern: str):
+        import fnmatch
+
+        self.enumerated = True
+        return iter([
+            p for p in self._paths
+            if fnmatch.fnmatch(p.name, pattern)
+        ])
+
+    def iterdir(self):
+        self.enumerated = True
+        return iter(list(self._paths))
+
+    # -- Path pass-through -----------------------------------------
+    def __getattr__(self, name):
+        return getattr(self._directory, name)
+
+    def __truediv__(self, other):
+        return self._directory / other
+
+    def __fspath__(self) -> str:
+        return str(self._directory)
+
+    def __str__(self) -> str:
+        return str(self._directory)
+
+    def __repr__(self) -> str:
+        return (
+            f"WindowedDataDir({self._directory!r}, "
+            f"{len(self._paths)} files)"
+        )
+
+    @property
+    def paths(self) -> "list[Path]":
+        return list(self._paths)
+
+    def check_enumerated(self) -> None:
+        """Raise when the loader never asked us for the file list.
+
+        A silently-ignored window would train on the ENTIRE data dir —
+        exactly the failure this change exists to remove — so treat it
+        as a hard error rather than a warning.
+        """
+        if not self.enumerated:
+            raise RuntimeError(
+                "training window was not applied: the dataset loader "
+                "did not enumerate {} via .glob()/.iterdir(), so the "
+                "--window-recent* selection would have been silently "
+                "ignored. Teach the loader an explicit file-list "
+                "argument and pass the window through it.".format(
+                    self._directory
+                )
+            )
+
+
+def _iter_group_key(path: Path) -> "tuple[str, int] | None":
+    """``(lineage_prefix, iteration_index)`` parsed out of an npz
+    filename, or ``None`` when the name carries no iteration label."""
+    parsed = _run_labels.parse_iter_label(path.name)
+    if parsed is None:
+        return None
+    prefix, idx, _rest = parsed
+    return prefix, idx
+
+
+def select_window_files(
+    data_dir: Path,
+    *,
+    window_iters: "int | None",
+    window_files: "int | None",
+    log=print,
+) -> "list[Path] | None":
+    """Resolve the training window to a concrete list of npz paths.
+
+    Returns ``None`` when no window is configured (load the whole
+    directory — the historical default).
+
+    ``window_files`` reproduces the pre-2026-09-24 behaviour: the N
+    most recently modified files.
+
+    ``window_iters`` is the iteration-aware window: files are grouped
+    by the ``<prefix>iter_<NNN>`` label parsed out of their filename
+    (:func:`mtg_bot.run_labels.parse_iter_label`) and the N highest
+    iteration indices are kept IN FULL. This matters because the two
+    data pipelines write wildly different file counts per iteration —
+    the local loop writes ONE npz per iteration
+    (``s2_iter_001_v1_<stamp>.npz``) while the distributed loop
+    rehydrates ONE npz per GAME
+    (``s2_iter_003_self_play_v1_<host>_..._000437.npz``). Under the old
+    file-count semantics ``--window-recent 3`` trained a distributed
+    cycle on THREE GAMES (observed 2026-09-23, 7,278 rows).
+
+    Grouping is per lineage prefix: a directory holding both
+    ``iter_00N_*`` and ``s2_iter_00N_*`` keeps each lineage's last N
+    iterations rather than letting the lineage with the higher indices
+    evict the other entirely. Mixed prefixes are warned about — a
+    single data dir should belong to a single lineage.
+
+    Files whose name carries no iteration label (hand-copied data,
+    ad-hoc ``generate_training_data.py`` output, ...) are ALWAYS kept
+    and listed in a loud warning: dropping unlabelled data silently
+    would be the same class of bug this function fixes.
+    """
+    all_paths = sorted(Path(data_dir).glob("*.npz"))
+    if window_files is not None:
+        if not all_paths or len(all_paths) <= window_files:
+            return list(all_paths)
+        kept = sorted(
+            sorted(all_paths, key=lambda p: p.stat().st_mtime,
+                   reverse=True)[:window_files]
+        )
+        log(
+            f"# Window-recent-files: keeping {len(kept)} of "
+            f"{len(all_paths)} .npz files (most recent by mtime)"
+        )
+        return kept
+    if window_iters is None:
+        return None
+    if not all_paths:
+        return []
+
+    groups: dict[tuple[str, int], list[Path]] = {}
+    unlabelled: list[Path] = []
+    for path in all_paths:
+        key = _iter_group_key(path)
+        if key is None:
+            unlabelled.append(path)
+        else:
+            groups.setdefault(key, []).append(path)
+
+    prefixes = sorted({prefix for prefix, _idx in groups})
+    if len(prefixes) > 1:
+        log(
+            "# WARNING: --window-recent found MULTIPLE lineage "
+            "prefixes in {}: {}. Keeping the last {} iterations of "
+            "EACH lineage — a data dir should normally hold one "
+            "lineage.".format(
+                data_dir,
+                ", ".join(repr(p) for p in prefixes),
+                window_iters,
+            )
+        )
+    kept_keys: set[tuple[str, int]] = set()
+    for prefix in prefixes:
+        indices = sorted(
+            (idx for pfx, idx in groups if pfx == prefix), reverse=True,
+        )
+        for idx in indices[:window_iters]:
+            kept_keys.add((prefix, idx))
+
+    kept = [p for key in kept_keys for p in groups[key]]
+    if unlabelled:
+        log(
+            "# WARNING: --window-recent: {} .npz file(s) in {} carry "
+            "no <prefix>iter_NNN label and were KEPT unconditionally "
+            "(they cannot be placed in an iteration window): {}".format(
+                len(unlabelled), data_dir,
+                ", ".join(p.name for p in sorted(unlabelled)),
+            )
+        )
+        kept.extend(unlabelled)
+    kept = sorted(kept)
+    log(
+        f"# Window-recent: keeping {len(kept)} of {len(all_paths)} "
+        f".npz files from the last {window_iters} iteration(s) "
+        f"({len(kept_keys)} iteration group(s) kept of "
+        f"{len(groups)} found)"
+    )
+    return kept
+
+
+def _resolve_data_window(args, log=print):
+    """Return ``(load_dir, data_files)`` for the configured window.
+
+    ``load_dir`` is either ``args.data_dir`` itself (no window) or a
+    :class:`WindowedDataDir` exposing only the windowed subset;
+    ``data_files`` is the basename list to record in metadata.
+    """
+    window_paths = select_window_files(
+        args.data_dir,
+        window_iters=args.window_recent,
+        window_files=args.window_recent_files,
+        log=log,
+    )
+    if window_paths is None:
+        return args.data_dir, sorted(
+            p.name for p in args.data_dir.glob("*.npz")
+        )
+    return (
+        WindowedDataDir(args.data_dir, window_paths),
+        sorted(p.name for p in window_paths),
+    )
+
+
+def _validate_window_args(args, parser) -> None:
+    """Shared ``--window-recent*`` validation for both trainer paths."""
+    if args.window_recent is not None and args.window_recent <= 0:
+        parser.error(
+            "--window-recent must be a positive integer; got "
+            f"{args.window_recent}"
+        )
+    if args.window_recent_files is not None and args.window_recent_files <= 0:
+        parser.error(
+            "--window-recent-files must be a positive integer; got "
+            f"{args.window_recent_files}"
+        )
+    if args.window_recent is not None and args.window_recent_files is not None:
+        parser.error(
+            "--window-recent (iterations) and --window-recent-files "
+            "(raw file count) are mutually exclusive; pass one."
+        )
+
+
 def main(argv=None) -> None:
     # Argparse + training-driver body; previously script-level code
     # under ``scripts/train_nn.py``. The ``_downsample_one_legal_rows``
@@ -256,6 +497,19 @@ def main(argv=None) -> None:
             "disable progress emission entirely. (Iterate threads its "
             "own iter-namespaced --progress-path through, so this "
             "default only governs standalone callers.)"
+        ),
+    )
+    parser.add_argument(
+        "--progress-dir", type=Path, default=Path("training_progress"),
+        help=(
+            "Directory the default --progress-path is built under "
+            "(default training_progress/). ``mtg_bot iterate`` "
+            "forwards its own --progress-dir here (which the unified "
+            "launcher in turn forwards from the launch TOML) so a "
+            "second lineage launched with e.g. "
+            "--progress-dir training_progress_s2 keeps its training "
+            "cards out of the first lineage's directory. Ignored when "
+            "an explicit --progress-path is given."
         ),
     )
     parser.add_argument(
@@ -347,17 +601,46 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
+        "--loader-timeout-sec", type=float, default=600.0,
+        help=(
+            "Per-batch DataLoader collection timeout in seconds "
+            "(default 600). Only applies when --num-workers > 0 — "
+            "torch asserts timeout==0 for the single-process loader. "
+            "With worker processes and no timeout, a wedged worker "
+            "hangs training FOREVER with no error and no progress "
+            "(observed 2026-09-24 on the 4M-row cycle-5 train); the "
+            "timeout turns that stall into a loud RuntimeError. Pass "
+            "0 to block forever (the pre-2026-09-24 behaviour)."
+        ),
+    )
+    parser.add_argument(
         "--window-recent", type=int, default=None,
         help=(
+            "If set, train only on the last N ITERATIONS of data in "
+            "--data-dir instead of the entire directory. Files are "
+            "grouped by the <prefix>iter_NNN label in their filename "
+            "and every file of the N highest iteration indices is "
+            "kept (per lineage prefix). Default None = load every "
+            "file. NOTE this counts ITERATIONS, not files: the "
+            "distributed pipeline rehydrates one .npz per GAME, so "
+            "the old file-count semantics made --window-recent 3 "
+            "train on three games. Files whose name carries no "
+            "iteration label are always kept (with a warning). N "
+            "larger than the available iteration count loads them "
+            "all (no error). For the raw file-count behaviour use "
+            "--window-recent-files."
+        ),
+    )
+    parser.add_argument(
+        "--window-recent-files", type=int, default=None,
+        help=(
             "If set, load only the N most-recent (by mtime) .npz "
-            "files from --data-dir instead of the entire directory. "
-            "Default None = load every file. As iterate_data/ "
-            "accumulates over many iterations, training on the "
-            "entire history slows linearly with size and biases "
-            "early data; capping to the latest N files keeps "
-            "training fast and weighted toward fresh self-play. "
-            "Files greater than the available count loads them "
-            "all (no error)."
+            "files from --data-dir. This is the pre-2026-09-24 "
+            "--window-recent behaviour, kept for callers that want a "
+            "hard cap on file count (e.g. bounding RAM on the "
+            "one-npz-per-game distributed path). Mutually exclusive "
+            "with --window-recent. N greater than the available file "
+            "count loads them all (no error)."
         ),
     )
     parser.add_argument(
@@ -446,6 +729,11 @@ def main(argv=None) -> None:
         ),
     )
     args = parser.parse_args(argv)
+    if args.loader_timeout_sec is not None and args.loader_timeout_sec < 0:
+        parser.error(
+            "--loader-timeout-sec must be >= 0 (0 disables the "
+            f"stall guard); got {args.loader_timeout_sec}"
+        )
     # Structured architecture has a different data pipeline + model
     # + loss shape from the flat-feature MLP trainers; dispatch
     # before any of the flat-feature-specific argument validation.
@@ -462,11 +750,7 @@ def main(argv=None) -> None:
             "--early-stop-patience must be a positive int (>= 1); got "
             f"{args.early_stop_patience}"
         )
-    if args.window_recent is not None and args.window_recent <= 0:
-        parser.error(
-            "--window-recent must be a positive integer; got "
-            f"{args.window_recent}"
-        )
+    _validate_window_args(args, parser)
     if args.hidden_sizes is not None:
         try:
             hidden_sizes = tuple(
@@ -501,11 +785,12 @@ def main(argv=None) -> None:
         sys.exit(f"--data-dir {args.data_dir} is not a directory")
 
     print(f"# Loading data from {args.data_dir}")
-    if args.window_recent is not None:
-        print(
-            f"# Window-recent: loading at most {args.window_recent} "
-            f"most-recent files by mtime"
-        )
+    # Resolve the training window (iterations or raw file count) to an
+    # explicit file list BEFORE loading, and hand the loader a
+    # directory view restricted to that list — the loaders' own
+    # ``max_files`` knob can only express "N most recent by mtime",
+    # which is the semantics this window replaces.
+    load_dir, data_files = _resolve_data_window(args)
     # Always pull policy supervision arrays. ``include_policy=True``
     # zero-pads value-only files so the concatenated arrays align —
     # mixed dirs (some pre-A2.3 .npz, some post-A2.3) load cleanly.
@@ -514,28 +799,18 @@ def main(argv=None) -> None:
     # NPZs) so the trainer can split train/val by game, not by row.
     features, outcomes, policy_targets, action_masks, group_ids = (
         load_all_datasets(
-            args.data_dir,
+            load_dir,
             include_policy=True,
-            max_files=args.window_recent,
             include_group_ids=True,
         )
     )
+    if isinstance(load_dir, WindowedDataDir):
+        load_dir.check_enumerated()
     if features.shape[0] == 0:
         sys.exit(
             f"No .npz files found in {args.data_dir}. Generate data "
             f"with scripts/generate_training_data.py first."
         )
-    # Reflect the actually-loaded subset in metadata (not every
-    # file in the dir) when --window-recent is in play; otherwise
-    # this is identical to the all-files glob.
-    all_npz = sorted(args.data_dir.glob("*.npz"))
-    if args.window_recent is not None and len(all_npz) > args.window_recent:
-        loaded_paths = sorted(
-            all_npz, key=lambda p: p.stat().st_mtime, reverse=True,
-        )[:args.window_recent]
-        data_files = sorted(p.name for p in loaded_paths)
-    else:
-        data_files = [p.name for p in all_npz]
 
     if args.one_legal_keep_frac < 1.0:
         n_before = features.shape[0]
@@ -604,7 +879,15 @@ def main(argv=None) -> None:
     # CM; this build only governs the standalone-train row.
     train_run_id = _build_train_run_id(peeked_version, _now_stamp())
     if args.progress_path is None:
-        progress_dir = Path("training_progress")
+        # The parent dir comes from --progress-dir so an iterate /
+        # launcher lineage that runs with --progress-dir
+        # training_progress_s2 keeps its training cards (and the
+        # .STOP sentinels the UI writes next to them) in ITS
+        # directory. Before this was threaded, the trainer's default
+        # hardcoded ``training_progress`` and cycle-5 of the s2
+        # lineage printed
+        # ``# Progress JSON: training_progress\s2_iter_005_train_v6.json``.
+        progress_dir = Path(args.progress_dir)
         progress_dir.mkdir(parents=True, exist_ok=True)
         # Default progress JSON tracks the run_id (not just the
         # version label) so two concurrent / consecutive standalone
@@ -644,6 +927,7 @@ def main(argv=None) -> None:
         "policy_loss_weight": args.policy_loss_weight,
         "early_stop_patience": args.early_stop_patience,
         "window_recent": args.window_recent,
+        "window_recent_files": args.window_recent_files,
         "one_legal_keep_frac": args.one_legal_keep_frac,
         "action_encoding_version": args.action_encoding_version,
         "progress_path": (
@@ -796,6 +1080,7 @@ def main(argv=None) -> None:
                 "duration_seconds": elapsed,
                 "one_legal_keep_frac": args.one_legal_keep_frac,
                 "window_recent": args.window_recent,
+                "window_recent_files": args.window_recent_files,
                 "policy_hidden_sizes": (
                     list(policy_hidden_sizes)
                     if policy_hidden_sizes is not None else None
@@ -930,20 +1215,17 @@ def _main_structured(args, parser) -> None:
             "--early-stop-patience must be a positive int (>= 1); got "
             f"{args.early_stop_patience}"
         )
-    if args.window_recent is not None and args.window_recent <= 0:
-        parser.error(
-            "--window-recent must be a positive integer; got "
-            f"{args.window_recent}"
-        )
+    _validate_window_args(args, parser)
 
     print(
         f"# Structured-trainer: loading data from {args.data_dir}"
     )
+    # Resolve the iteration (or file-count) window to an explicit file
+    # list and load through a directory view restricted to it — see
+    # :func:`select_window_files` / :class:`WindowedDataDir`.
+    load_dir, data_files = _resolve_data_window(args)
     try:
-        dataset = load_structured_dataset(
-            args.data_dir,
-            max_files=args.window_recent,
-        )
+        dataset = load_structured_dataset(load_dir)
     except FileNotFoundError as exc:
         sys.exit(str(exc))
     except ValueError as exc:
@@ -955,17 +1237,11 @@ def _main_structured(args, parser) -> None:
             f"with structured_tokens=True. {exc}"
         )
 
+    if isinstance(load_dir, WindowedDataDir):
+        load_dir.check_enumerated()
     n_samples = len(dataset)
     if n_samples == 0:
         sys.exit(f"No samples found in {args.data_dir}")
-    all_npz = sorted(args.data_dir.glob("*.npz"))
-    if args.window_recent is not None and len(all_npz) > args.window_recent:
-        loaded_paths = sorted(
-            all_npz, key=lambda p: p.stat().st_mtime, reverse=True,
-        )[:args.window_recent]
-        data_files = sorted(p.name for p in loaded_paths)
-    else:
-        data_files = [p.name for p in all_npz]
 
     device = args.device or auto_device()
     print(
@@ -982,7 +1258,15 @@ def _main_structured(args, parser) -> None:
     # ``run_id == label`` UNIQUE-collision bug this resolves.
     train_run_id = _build_train_run_id(peeked_version, _now_stamp())
     if args.progress_path is None:
-        progress_dir = Path("training_progress")
+        # The parent dir comes from --progress-dir so an iterate /
+        # launcher lineage that runs with --progress-dir
+        # training_progress_s2 keeps its training cards (and the
+        # .STOP sentinels the UI writes next to them) in ITS
+        # directory. Before this was threaded, the trainer's default
+        # hardcoded ``training_progress`` and cycle-5 of the s2
+        # lineage printed
+        # ``# Progress JSON: training_progress\s2_iter_005_train_v6.json``.
+        progress_dir = Path(args.progress_dir)
         progress_dir.mkdir(parents=True, exist_ok=True)
         progress_path: Path | None = progress_dir / f"{train_run_id}.json"
     elif str(args.progress_path) == "":
@@ -1046,9 +1330,12 @@ def _main_structured(args, parser) -> None:
         "notes": args.notes,
         "n_samples": n_samples,
         "window_recent": args.window_recent,
+        "window_recent_files": args.window_recent_files,
         "action_encoding_version": args.action_encoding_version,
         "policy_loss_weight": args.policy_loss_weight,
         "early_stop_patience": args.early_stop_patience,
+        "num_workers": args.num_workers,
+        "loader_timeout_sec": args.loader_timeout_sec,
         "progress_path": (
             str(progress_path) if progress_path is not None else None
         ),
@@ -1155,6 +1442,7 @@ def _main_structured(args, parser) -> None:
             compile_model=args.compile_model,
             early_stop_patience=args.early_stop_patience,
             num_workers=args.num_workers,
+            loader_timeout_sec=args.loader_timeout_sec,
         )
         elapsed = time.perf_counter() - started
 
@@ -1181,6 +1469,7 @@ def _main_structured(args, parser) -> None:
                 "rng_seed": args.seed,
                 "duration_seconds": elapsed,
                 "window_recent": args.window_recent,
+                "window_recent_files": args.window_recent_files,
                 "early_stop_patience": args.early_stop_patience,
                 "epochs_trained": len(history.train_losses),
                 "structured_config": train_config["structured_config"],

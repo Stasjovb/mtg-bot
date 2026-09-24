@@ -30,9 +30,13 @@ Per-iteration files:
   trained_weights/iterate_state.json          — current "best" pointer
 
 The data directory accumulates — every iteration trains on the
-full history. Pass ``--window-recent N`` to use only the last N
-files; useful once the dir gets large or when you want to anneal
-toward more-recent data.
+full history. Pass ``--window-recent N`` to train on only the last
+N ITERATIONS of data (every .npz whose filename carries one of the
+N highest ``<prefix>iter_NNN`` labels), or ``--window-recent-files
+N`` for a hard cap on FILE count; useful once the dir gets large or
+when you want to anneal toward more-recent data. The iteration form
+is the one you almost always want: the distributed pipeline writes
+one .npz per GAME, so a file-count window of 3 means three games.
 
 Usage::
 
@@ -265,6 +269,7 @@ def _train_config_dict(
         "seed": cycle_seed,
         "data_dir": str(args.data_dir),
         "window_recent": args.window_recent,
+        "window_recent_files": args.window_recent_files,
         "early_stop_patience": args.early_stop_patience,
         "architecture": args.architecture,
     }
@@ -984,8 +989,10 @@ def _train_next(
     seed: int,
     notes: str,
     window_recent: int | None,
+    window_recent_files: int | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
     progress_path: Path | None = None,
+    progress_dir: Path | None = None,
     policy_loss_weight: float = 1.0,
     one_legal_keep_frac: float = 1.0,
     architecture: str = "shared",
@@ -1095,6 +1102,13 @@ def _train_next(
                 "--scalar-schema-version",
                 str(structured_scalar_schema_version),
             ])
+    if progress_dir is not None:
+        # Thread the lineage's progress dir through so train_nn's OWN
+        # default progress path lands there too. Without it the
+        # trainer hardcoded ``training_progress/`` and an s2-lineage
+        # cycle printed ``# Progress JSON: training_progress        # s2_iter_005_train_v6.json`` while every other artifact of
+        # that cycle lived under ``training_progress_s2/``.
+        cmd.extend(["--progress-dir", str(progress_dir)])
     if progress_path is not None:
         # Override train_nn.py's default ``training_progress/<peeked
         # _version>.json`` so the iterate-loop's training cards have
@@ -1111,6 +1125,8 @@ def _train_next(
     # weights training toward fresh self-play.
     if window_recent is not None:
         cmd.extend(["--window-recent", str(window_recent)])
+    if window_recent_files is not None:
+        cmd.extend(["--window-recent-files", str(window_recent_files)])
 
     print(f"\n[iterate] Training: {' '.join(cmd)}")
     result = subprocess.run(cmd, check=False)
@@ -1530,12 +1546,26 @@ def main(argv=None) -> None:  # pragma: no cover
     parser.add_argument(
         "--window-recent", type=int, default=None,
         help=(
-            "If set, train_nn loads only the N most-recent (by "
-            "mtime) .npz files from --data-dir instead of the whole "
-            "accumulated history. Default None = train on the full "
+            "If set, train_nn trains on only the last N ITERATIONS "
+            "of data in --data-dir instead of the whole accumulated "
+            "history (files are grouped by the <prefix>iter_NNN "
+            "label in their name). Default None = train on the full "
             "dir. Useful once iterate_data/ has accumulated hundreds "
             "of shards and per-iteration train wall-time is "
-            "dominated by data load."
+            "dominated by data load. NOTE this counts ITERATIONS, "
+            "not files — the distributed path writes one .npz per "
+            "GAME. For a raw file cap use --window-recent-files."
+        ),
+    )
+    parser.add_argument(
+        "--window-recent-files", type=int, default=None,
+        help=(
+            "If set, train_nn loads only the N most-recent (by "
+            "mtime) .npz files from --data-dir. The pre-2026-09-24 "
+            "--window-recent behaviour, kept for callers that need a "
+            "hard cap on file count / RAM on the one-npz-per-game "
+            "distributed path. Mutually exclusive with "
+            "--window-recent."
         ),
     )
     parser.add_argument(
@@ -1794,6 +1824,21 @@ def main(argv=None) -> None:  # pragma: no cover
         help=_run_labels.LABEL_PREFIX_HELP,
     )
     args = parser.parse_args(argv)
+
+    # Fail on a bad training window HERE rather than after a
+    # multi-hour self-play phase has already run: the train subprocess
+    # is the first thing that would reject it.
+    if args.window_recent is not None and args.window_recent_files is not None:
+        parser.error(
+            "--window-recent (iterations) and --window-recent-files "
+            "(raw file count) are mutually exclusive; pass one."
+        )
+    for _flag, _val in (
+        ("--window-recent", args.window_recent),
+        ("--window-recent-files", args.window_recent_files),
+    ):
+        if _val is not None and _val <= 0:
+            parser.error(f"{_flag} must be a positive integer; got {_val}")
 
     # Normalise the lineage prefix once, up-front: every label the
     # loop generates flows through ``mtg_bot.run_labels`` with this
@@ -2586,8 +2631,10 @@ def main(argv=None) -> None:  # pragma: no cover
                     f"self-play driven by {best_version}"
                 ),
                 window_recent=args.window_recent,
+                window_recent_files=args.window_recent_files,
                 hidden_sizes=iter_hidden_sizes,
                 progress_path=train_progress_path,
+                progress_dir=progress_dir,
                 policy_loss_weight=args.policy_loss_weight,
                 one_legal_keep_frac=args.one_legal_keep_frac,
                 architecture=iter_architecture,

@@ -392,10 +392,17 @@ def test_train_structured_cli_validates_window_recent(
         ])
 
 
-def test_train_structured_cli_window_recent_picks_latest(
+def test_train_structured_cli_window_recent_files_picks_latest(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """--window-recent filters to the N most recent npz files."""
+    """--window-recent-files filters to the N most recent npz files.
+
+    (This is the pre-2026-09-24 ``--window-recent`` behaviour; that
+    flag now windows by ITERATION — see
+    ``tests/cli/test_train_window_recent.py``. These fixture files
+    carry no ``iter_NNN`` label, so the iteration window would keep
+    them all.)
+    """
     import os
     import time
     data_dir = tmp_path / "data"
@@ -420,7 +427,7 @@ def test_train_structured_cli_window_recent_picks_latest(
         "--device", "cpu",
         "--progress-path", str(progress_path),
         "--architecture", "structured",
-        "--window-recent", "1",
+        "--window-recent-files", "1",
     ])
     meta = json.loads(
         (registry_root / "v1" / "metadata.json").read_text()
@@ -468,6 +475,132 @@ def test_train_structured_cli_default_progress_path(
     )
     blob = json.loads(matches[0].read_text())
     assert blob["architecture"] == "structured"
+
+
+def test_train_structured_cli_progress_dir_moves_default_progress_path(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--progress-dir`` (forwarded by iterate, which the unified
+    launcher forwards from the launch TOML) relocates the DEFAULT
+    progress JSON. Before this was threaded, an s2-lineage train
+    printed ``# Progress JSON: training_progress\\
+    s2_iter_005_train_v6.json`` while the rest of the cycle's
+    artifacts lived under ``training_progress_s2/``.
+    """
+    import re as _re
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(data_dir / "a.npz", n_rows=8, seed=0)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+        "--progress-dir", "training_progress_s2",
+    ])
+    assert not (tmp_path / "training_progress").exists()
+    matches = [
+        p for p in (tmp_path / "training_progress_s2").iterdir()
+        if _re.match(r"train_v1_\d{8}T\d{6}Z\.json", p.name)
+    ]
+    assert len(matches) == 1, list(
+        (tmp_path / "training_progress_s2").iterdir()
+    )
+
+
+def test_train_structured_cli_threads_loader_timeout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``--loader-timeout-sec`` reaches ``train_structured_model``.
+
+    The DataLoaders run with ``num_workers>0`` +
+    ``persistent_workers`` and no timeout, so a wedged worker hung
+    training forever (2026-09-24).
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(data_dir / "a.npz", n_rows=8, seed=0)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    captured: dict = {}
+    real = cli_train.train_structured_model
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        kwargs.pop("loader_timeout_sec", None)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli_train, "train_structured_model", _capture)
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+        "--progress-path", str(tmp_path / "p" / "t.json"),
+        "--loader-timeout-sec", "123",
+    ])
+    assert captured["loader_timeout_sec"] == 123.0
+
+
+def test_train_structured_cli_loader_timeout_default_is_600(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(data_dir / "a.npz", n_rows=8, seed=0)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    captured: dict = {}
+    real = cli_train.train_structured_model
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        kwargs.pop("loader_timeout_sec", None)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli_train, "train_structured_model", _capture)
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+        "--progress-path", str(tmp_path / "p" / "t.json"),
+    ])
+    assert captured["loader_timeout_sec"] == 600.0
+
+
+def test_train_structured_cli_rejects_negative_loader_timeout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(data_dir / "a.npz", n_rows=4, seed=0)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    with pytest.raises(SystemExit):
+        cli_train.main([
+            "--data-dir", str(data_dir),
+            "--registry-root", str(tmp_path / "weights"),
+            "--epochs", "1",
+            "--device", "cpu",
+            "--architecture", "structured",
+            "--loader-timeout-sec", "-1",
+        ])
 
 
 def test_train_structured_cli_runs_db_records_run(

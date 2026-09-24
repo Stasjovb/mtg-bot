@@ -492,9 +492,24 @@ def build_iterate_schema(
                 {
                     "name": "window-recent", "type": "int", "default": None,
                     "help": (
+                        "If set, train_nn trains on only the last N "
+                        "ITERATIONS of data (grouped by the "
+                        "<prefix>iter_NNN label in each .npz "
+                        "filename) instead of the whole data dir. "
+                        "Leave blank to train on full dir. Counts "
+                        "iterations, NOT files — the distributed path "
+                        "writes one .npz per game."
+                    ),
+                },
+                {
+                    "name": "window-recent-files", "type": "int",
+                    "default": None,
+                    "help": (
                         "If set, train_nn loads only the N most-recent "
-                        ".npz files instead of the whole data dir. "
-                        "Leave blank to train on full dir."
+                        "(by mtime) .npz files — a hard cap on file "
+                        "count / RAM. Mutually exclusive with "
+                        "window-recent. Leave blank to train on full "
+                        "dir."
                     ),
                 },
                 {
