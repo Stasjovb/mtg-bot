@@ -148,13 +148,91 @@ gate, not the curve, is the arbiter.
 
 ---
 
+## Diagnostic 4 — the value head memorises game identity (2026-09-24, MEASURED)
+
+**D1's "no overfit" read was an artefact of the split, and it
+inverted once the s2 lineage was measured on a GAME-level held-out
+split.** Every s2 version `v2`–`v7` (`trained_weights_s2/*/metadata.
+json`) trains to value-MSE ≈0.005 while its held-out value loss sits
+at **1.42–1.78** — *worse than the constant-0 predictor* (MSE 1.0
+against ±1 outcome labels). At turn ≤3 the value head hit 94.8 %
+outcome-sign agreement on training games and 48.2 % (a coin flip) on
+held-out games. The deck pair and the exact card printings go
+straight into `printing_embed`, so the model can key on game identity
+and recall the stored outcome. The policy head is fine (top-1 0.62 vs
+0.39 uniform); PUCT guided by saturated ±1 coin-flip values plays
+worse than random.
+
+Contributing settings, all since fixed (`feature/holdout-value-gate`):
+`dropout 0.0`, Adam with no weight decay, and early stopping that
+tracked `best_val_epoch` while SAVING the final epoch's weights.
+
+Measured before/after, same 110-file / **180,582-row** subset of
+`iterate_data_s2` (18,660 held-out rows), 3-epoch cap, production
+trunk, RTX 5090, 3 seeds each (seed also drives the split, so the
+pairs are matched):
+
+| seed | before: MSE / r | after: MSE / r |
+|--|--|--|
+| 0 | 1.5526 / **0.203** | 1.0799 / **0.431** |
+| 1 | 2.0530 / −0.068 | 1.6727 / 0.129 |
+| 2 | 2.0164 / −0.064 | 1.6001 / 0.120 |
+| **mean** | **1.874 / 0.024** | **1.451 / 0.226** |
+
+("before" = `--dropout 0 --weight-decay 0 --keep-last-epoch`;
+"after" = the new defaults `--dropout 0.1 --weight-decay 1e-4` +
+restore-best.)
+
+Two readings, both load-bearing:
+
+1. **Regularisation + restore-best helps, monotonically and on every
+   seed** (−23 % MSE, corr 0.02 → 0.23) — but it is **not a fix**.
+   All six runs are still at or above the constant-0 predictor, so
+   the held-out gate rejects all of them. Do not read the improvement
+   as "solved".
+2. **The trivial life-differential baseline beats the trained value
+   head in every configuration** (corr 0.51–0.62 vs 0.02–0.23 on the
+   same rows). Until a value head clears *that*, value-guided search
+   is adding noise, not evaluation.
+
+**Consequence for scaling decisions:** more epochs (D3) and more
+data are now suspect as the automatic answer — at 180k rows with
+per-game printings in the input, the extra epochs buy memorisation.
+The ~3,000-game s2 pool has too few distinct deck pairs relative to
+what the printing embedding can key on. Candidate next moves, in
+increasing cost: heavier dropout / weight decay; dropping or
+bottlenecking the printing embedding for the value head; many more
+distinct deck pairs per iteration; a value target that isn't the
+final-outcome label (e.g. bootstrapped / TD).
+
+`mtg_bot train --architecture structured` now REFUSES to register a
+version whose held-out value MSE is ≥ `--min-holdout-value-quality`
+(default 1.0) and exits 3; `mtg_bot iterate` marks that cycle failed,
+keeps `current_best`, and runs the next cycle. The metrics
+(held-out MSE, corr, constant-0 MSE, life-diff baseline corr) land in
+`metadata.json`, the progress JSON and the training card whether the
+gate passes or fails.
+
+---
+
 ## Synthesis — what this means for the next iterate cycle
 
 As of 2026-05-18 **three of four levers are resolved, two validated**:
 
+> **2026-09-24 amendment: read D4 before acting on the list below.**
+> D4 measured the value head on a GAME-level held-out split and found
+> it *worse than the constant-0 predictor* on every s2 version. That
+> reverses D1's "no overfit" premise (D1's val split did not hold out
+> whole games) and puts a caveat on D3's "more epochs, free strength"
+> — past the memorisation point, extra epochs buy recall of stored
+> outcomes. The depth lever (D2) is unaffected; it is about policy
+> targets.
+
 - **Trunk width — NOT indicated.** D1: no overfit, value head still
   learning on the current trunk. Scaling width has the *least*
-  supporting evidence; do not do it on a hunch.
+  supporting evidence; do not do it on a hunch. (D4 amends the
+  premise: the value head DOES overfit — it memorises game identity —
+  so "no overfit" is not an argument for more width either.)
 - **Search depth — VALIDATED high-leverage lever (D2).** Raising
   self-play `--nodes` above 200 produces a gate-promotable strength
   gain (monotone through 4×). This is the expensive lever (more
