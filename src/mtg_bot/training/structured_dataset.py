@@ -67,7 +67,10 @@ Public API
   decoded every file into RAM and concatenated, peaking at ~24 GB per
   1M rows (a 4M-row pool committed 96 GB and effectively hung).
 - :func:`sweep_stale_memmap_dirs` — remove flat stores orphaned by a
-  crashed run (``$MTG_BOT_STRUCTURED_SWEEP=0`` opts out).
+  killed run, identified by a dead owner pid (or, with no owner
+  marker, by age). ``$MTG_BOT_STRUCTURED_SWEEP=0`` opts out.
+- :func:`sweep_abandoned_build_dirs` — the same for half-built stores
+  left inside a persistent ``cache_dir``.
 - :func:`shutdown_dataloader_workers` — drop a ``DataLoader``'s
   persistent workers so their memmap handles stop pinning the store.
 - :class:`StructuredDataset` — wraps the packed-flat storage. The
