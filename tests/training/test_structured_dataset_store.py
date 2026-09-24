@@ -408,6 +408,208 @@ def test_failed_build_removes_the_partial_store(
     assert set(structured_dataset._OWNED_DIRS) == before
 
 
+def _write_raw_npz(path: Path, **arrays) -> None:
+    np.savez_compressed(path, **arrays)
+
+
+def _struct_kwargs(n_rows: int, max_len: int, *, mask_rows: int | None = None):
+    if mask_rows is None:
+        mask_rows = n_rows
+    return {
+        "structured_token_type": np.zeros((n_rows, max_len), dtype=np.int64),
+        "structured_token_emb_ids": np.zeros(
+            (n_rows, max_len, N_EMB_FIELDS), dtype=np.int64,
+        ),
+        "structured_token_scalars": np.zeros(
+            (n_rows, max_len, N_SCALAR_FIELDS), dtype=np.float32,
+        ),
+        "structured_attention_mask": np.ones(
+            (mask_rows, max_len), dtype=np.bool_,
+        ),
+    }
+
+
+def test_scan_rejects_mask_row_count_mismatch(tmp_path: Path) -> None:
+    kwargs = _struct_kwargs(3, 4, mask_rows=2)
+    _write_raw_npz(
+        tmp_path / "bad.npz",
+        features=np.zeros((3, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(3, dtype=np.float32),
+        **kwargs,
+    )
+    with pytest.raises(ValueError, match="structured_attention_mask rows"):
+        load_structured_dataset(tmp_path)
+
+
+def test_scan_rejects_token_array_row_count_mismatch(tmp_path: Path) -> None:
+    kwargs = _struct_kwargs(3, 4)
+    kwargs["structured_token_emb_ids"] = np.zeros(
+        (2, 4, N_EMB_FIELDS), dtype=np.int64,
+    )
+    _write_raw_npz(
+        tmp_path / "bad.npz",
+        features=np.zeros((3, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(3, dtype=np.float32),
+        **kwargs,
+    )
+    with pytest.raises(ValueError, match="disagree on row count"):
+        load_structured_dataset(tmp_path)
+
+
+def test_stream_rejects_outcomes_row_count_mismatch(tmp_path: Path) -> None:
+    kwargs = _struct_kwargs(3, 4)
+    _write_raw_npz(
+        tmp_path / "bad.npz",
+        features=np.zeros((3, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(2, dtype=np.float32),
+        **kwargs,
+    )
+    with pytest.raises(ValueError, match="outcomes rows"):
+        load_structured_dataset(tmp_path)
+
+
+def test_pool_with_no_real_tokens_anywhere_loads(tmp_path: Path) -> None:
+    """Every row masked out: no file can pin the schema width, so the
+    plan falls back to the first file's declared widths."""
+    for name in ("a.npz", "b.npz"):
+        kwargs = _struct_kwargs(2, 3)
+        kwargs["structured_attention_mask"] = np.zeros((2, 3), dtype=np.bool_)
+        _write_raw_npz(
+            tmp_path / name,
+            features=np.zeros((2, FEATURE_DIM), dtype=np.float32),
+            outcomes=np.zeros(2, dtype=np.float32),
+            **kwargs,
+        )
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        assert len(dataset) == 4
+        assert dataset.scalar_width == N_SCALAR_FIELDS
+        assert int(dataset[0]["token_type"].shape[0]) == 0
+        assert not bool(dataset[0]["has_policy"])
+    finally:
+        dataset.close()
+
+
+def test_plan_rejects_policy_width_mismatch(tmp_path: Path) -> None:
+    for name, width in (("a.npz", 4), ("b.npz", 5)):
+        _write_raw_npz(
+            tmp_path / name,
+            features=np.zeros((2, FEATURE_DIM), dtype=np.float32),
+            outcomes=np.zeros(2, dtype=np.float32),
+            policy_targets=np.zeros((2, width), dtype=np.float32),
+            action_masks=np.zeros((2, width), dtype=np.bool_),
+            **_struct_kwargs(2, 3),
+        )
+    with pytest.raises(ValueError, match="policy_targets width mismatch"):
+        load_structured_dataset(tmp_path)
+
+
+def test_plan_rejects_odd_policy_width_mixed_with_value_only(
+    tmp_path: Path,
+) -> None:
+    """A value-only file gets zero-filled at ACTION_VOCAB_SIZE; if the
+    files that DO carry policy use another width there is no single
+    correct store width."""
+    _write_raw_npz(
+        tmp_path / "a.npz",
+        features=np.zeros((2, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(2, dtype=np.float32),
+        policy_targets=np.zeros((2, 4), dtype=np.float32),
+        action_masks=np.zeros((2, 4), dtype=np.bool_),
+        **_struct_kwargs(2, 3),
+    )
+    _write_raw_npz(
+        tmp_path / "b.npz",
+        features=np.zeros((2, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(2, dtype=np.float32),
+        **_struct_kwargs(2, 3),
+    )
+    with pytest.raises(ValueError, match="does not match ACTION_VOCAB_SIZE"):
+        load_structured_dataset(tmp_path)
+
+
+def test_non_bool_attention_mask_is_coerced(tmp_path: Path) -> None:
+    """Older writers stored the mask as uint8; both passes must treat
+    it as boolean."""
+    kwargs = _struct_kwargs(2, 3)
+    kwargs["structured_token_type"] = np.arange(6, dtype=np.int64).reshape(2, 3)
+    mask = np.zeros((2, 3), dtype=np.uint8)
+    mask[0, :2] = 1
+    mask[1, :1] = 1
+    kwargs["structured_attention_mask"] = mask
+    _write_raw_npz(
+        tmp_path / "u8.npz",
+        features=np.zeros((2, FEATURE_DIM), dtype=np.float32),
+        outcomes=np.zeros(2, dtype=np.float32),
+        **kwargs,
+    )
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        np.testing.assert_array_equal(
+            dataset[0]["token_type"].numpy(), np.array([0, 1]),
+        )
+        np.testing.assert_array_equal(
+            dataset[1]["token_type"].numpy(), np.array([3]),
+        )
+    finally:
+        dataset.close()
+
+
+def test_npy_v2_headers_are_readable(tmp_path: Path) -> None:
+    """``.npy`` format 2.0 (header > 64 KB) needs its own header
+    reader in both the sizing and the streaming path."""
+    import io
+    import zipfile as _zipfile
+
+    arr = np.arange(24, dtype=np.int64).reshape(6, 4)
+    buf = io.BytesIO()
+    np.lib.format.write_array(buf, arr, version=(2, 0))
+    path = tmp_path / "v2.npz"
+    with _zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("arr.npy", buf.getvalue())
+    with _zipfile.ZipFile(path) as zf:
+        shape, dtype = structured_dataset._read_member_header(zf, "arr.npy")
+        assert shape == (6, 4)
+        assert dtype == np.dtype(np.int64)
+        chunks = list(
+            structured_dataset._iter_member_rows(zf, "arr.npy", chunk_bytes=64)
+        )
+    rebuilt = np.concatenate([c for _offset, c in chunks])
+    np.testing.assert_array_equal(rebuilt, arr)
+    assert [offset for offset, _c in chunks] == [0, 2, 4]
+
+
+def test_cache_publish_race_prefers_the_winner(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Two processes can build the same signature concurrently. The
+    loser's rename fails; it must adopt the published store and delete
+    its own build dir."""
+    pool = tmp_path / "pool"
+    cache = tmp_path / "cache"
+    _write_multi_file_pool(pool)
+    winner = load_structured_dataset(pool, cache_dir=cache)
+    published = Path(winner._memmap_dir)
+    winner.close()
+
+    real_is_complete = structured_dataset._store_is_complete
+    calls = {"n": 0}
+
+    def _miss_first(directory, signature):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False  # force a rebuild even though the store exists
+        return real_is_complete(directory, signature)
+
+    monkeypatch.setattr(structured_dataset, "_store_is_complete", _miss_first)
+    loser = load_structured_dataset(pool, cache_dir=cache)
+    try:
+        assert Path(loser._memmap_dir) == published
+        assert [p for p in cache.iterdir() if p.is_dir()] == [published]
+    finally:
+        loser.close()
+
+
 # ---------------------------------------------------------------------
 # Peak-memory bound
 # ---------------------------------------------------------------------

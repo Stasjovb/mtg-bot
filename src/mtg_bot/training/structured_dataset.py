@@ -233,9 +233,14 @@ def sweep_stale_memmap_dirs(
     :func:`load_structured_dataset` and removes every such directory
     under ``root`` (default: the system temp dir) whose mtime is older
     than ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
-    or 12). Directories owned by *this* process are never touched, and
-    a directory still mapped by a live process simply fails to delete
-    (Windows) and is left alone.
+    or 12). Directories owned by *this* process are never touched.
+
+    On Windows a store still mapped by a live process cannot be
+    unlinked, so a concurrent long-running training job is protected
+    automatically. On POSIX the unlink would succeed — already-open
+    mappings keep working, but a worker that re-opens the store by
+    path afterwards would fail. The 12 h default is the margin; lower
+    it only if no run on the box lasts that long.
 
     Opt out with ``MTG_BOT_STRUCTURED_SWEEP=0``. Returns the number of
     directories removed.
