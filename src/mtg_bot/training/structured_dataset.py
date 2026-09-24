@@ -35,9 +35,10 @@ model's ``nn.Embedding`` layers still receive ``LongTensor``s and no
 model / trainer code changes. Store-build time asserts every value
 fits the narrowed dtype and fails loudly, naming the column and the
 offending value, rather than letting numpy truncate silently. This
-cuts ~57% off the two token-id columns (int64 -> 2 + 28 bytes per
-token): 19.0 GB -> 8.9 GB on the 296M-token / 4.76M-row
-``iterate_data_s2`` pool. ``token_scalars`` stays float32: the
+cuts 53% off the two token-id columns (64 -> 30 bytes per token):
+19.0 GB -> 8.9 GB on the 296M-token / 4.76M-row ``iterate_data_s2``
+pool — measured on a 500-shard subset in
+``docs/BENCHMARKING_FINDINGS.md`` §8A. ``token_scalars`` stays float32: the
 schema-v2 scalar fields include /7, /10, /20 and /40 normalizers whose
 values are not exactly representable in float16, so narrowing it
 would change the training input.
@@ -346,20 +347,35 @@ def _pid_is_running(pid: int) -> bool:
         return False
     if os.name == "nt":
         import ctypes  # local: only Windows needs it
+        from ctypes import wintypes
 
         process_query_limited_information = 0x1000
         still_active = 259
         error_invalid_parameter = 87
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        # ``use_last_error`` keeps the error code with the call (a
+        # bare ``GetLastError()`` can be clobbered by ctypes' own
+        # bookkeeping), and the explicit HANDLE argtypes stop the
+        # 64-bit handle being truncated through the default c_int.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        )
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
         handle = kernel32.OpenProcess(
             process_query_limited_information, False, pid,
         )
         if not handle:
             # 87 = no such pid. Anything else (5 = access denied for a
             # process owned by another user) means it exists.
-            return kernel32.GetLastError() != error_invalid_parameter
+            return ctypes.get_last_error() != error_invalid_parameter
         try:
-            code = ctypes.c_ulong()
+            code = wintypes.DWORD()
             if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                 return code.value == still_active
             return True  # pragma: no cover - API refused to answer
