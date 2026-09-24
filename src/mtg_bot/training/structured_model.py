@@ -248,6 +248,23 @@ STEP_VOCAB_SIZE = 13
 DEFAULT_N_PRINTINGS = 320
 
 
+class _GELUDropout(nn.Sequential):
+    """GELU followed by dropout, as ONE ``nn.Sequential`` slot.
+
+    The heads are ``nn.Sequential(Linear, GELU, Linear)``; their
+    parameter keys are ``<head>.0.*`` and ``<head>.2.*``. Inserting a
+    bare ``nn.Dropout`` between the GELU and the second Linear would
+    renumber that Linear to index 3 and every checkpoint trained
+    before this change would fail to load. Wrapping GELU + Dropout in
+    one submodule keeps index 1 occupied by a parameterless container,
+    so the on-disk key set is byte-identical. ``p=0`` is an identity
+    dropout, so the numerics are unchanged too.
+    """
+
+    def __init__(self, p: float = 0.0) -> None:
+        super().__init__(nn.GELU(), nn.Dropout(p))
+
+
 @dataclass
 class StructuredModelConfig:
     """Hyperparameters for :class:`StructuredModel`.
@@ -273,6 +290,16 @@ class StructuredModelConfig:
     n_layers: int = 2
     hidden_dim: int = 256
     dropout: float = 0.0
+    """Dropout probability applied inside the transformer encoder
+    layers, the policy / hand-belief cross-attention, AND the value /
+    policy / hand-belief head MLPs.
+
+    The dataclass default stays 0.0 so constructing a model for
+    INFERENCE (or reconstructing an old checkpoint's config) is
+    unchanged; the training CLI defaults ``--dropout`` to 0.1. 0.0
+    was the setting under which the s2 lineage's value heads
+    memorised game identity — see
+    :mod:`mtg_bot.training.value_gate`."""
     action_history_n: int = 32
     n_printings: int = DEFAULT_N_PRINTINGS
     action_vocab_size: int = ACTION_VOCAB_SIZE
@@ -389,9 +416,13 @@ class StructuredModel(nn.Module):
         )
 
         # --- Value head (consumes the CLS position) ------------------
+        # ``_GELUDropout`` occupies the single Sequential slot the
+        # bare ``nn.GELU()`` used to, so the state_dict keys stay
+        # ``value_head.0.*`` / ``value_head.2.*`` and every existing
+        # checkpoint keeps loading (see the class docstring).
         self.value_head = nn.Sequential(
             nn.Linear(cfg.emb_dim, cfg.hidden_dim),
-            nn.GELU(),
+            _GELUDropout(cfg.dropout),
             nn.Linear(cfg.hidden_dim, 1),
         )
 
@@ -411,7 +442,7 @@ class StructuredModel(nn.Module):
         )
         self.policy_head = nn.Sequential(
             nn.Linear(cfg.emb_dim, cfg.hidden_dim),
-            nn.GELU(),
+            _GELUDropout(cfg.dropout),
             nn.Linear(cfg.hidden_dim, 1),
         )
 
@@ -432,7 +463,7 @@ class StructuredModel(nn.Module):
         )
         self.hand_belief_head = nn.Sequential(
             nn.Linear(cfg.emb_dim, cfg.hidden_dim),
-            nn.GELU(),
+            _GELUDropout(cfg.dropout),
             nn.Linear(cfg.hidden_dim, 1),
         )
 

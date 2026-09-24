@@ -134,6 +134,16 @@ class TrainingHistory:
 
     ``best_val_loss`` is the lowest TOTAL val loss seen — the epoch
     we'd checkpoint at if we did early stopping.
+
+    ``restored_best_epoch`` is the 0-based epoch whose weights were
+    actually SAVED. It is ``best_val_epoch`` when restore-best fired
+    and ``None`` when the final epoch's weights were kept (either
+    ``--keep-last-epoch``, or no val data to pick a best from).
+
+    ``holdout_value_metrics`` carries the post-training value-head
+    quality measured on the held-out split (see
+    :mod:`mtg_bot.training.value_gate`). ``None`` for the flat-feature
+    trainer, which does not compute it.
     """
 
     train_losses: list[float] = field(default_factory=list)
@@ -145,6 +155,8 @@ class TrainingHistory:
     best_val_loss: float = float("inf")
     best_val_epoch: int = -1
     weights_path: Optional[Path] = None
+    restored_best_epoch: Optional[int] = None
+    holdout_value_metrics: Optional[Any] = None
 
 
 def auto_device() -> str:
@@ -814,9 +826,37 @@ def train_structured_model(
     early_stop_patience: Optional[int] = None,
     num_workers: int = 0,
     loader_timeout_sec: Optional[float] = 600.0,
+    weight_decay: float = 0.0,
+    restore_best: bool = True,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
+
+    Regularisation knobs (added 2026-09-24 after every s2-lineage
+    version memorised game identity — see
+    :mod:`mtg_bot.training.value_gate`):
+
+    - ``weight_decay``: decoupled L2 through ``torch.optim.AdamW``.
+      ``0.0`` (the signature default, for back-compat with existing
+      callers/tests) makes AdamW numerically identical to the Adam
+      this used to construct; the training CLI defaults it to 1e-4.
+      Dropout is set on the model side via
+      ``StructuredModelConfig.dropout``.
+    - ``restore_best``: when True (default) and a val split exists,
+      the state_dict from ``history.best_val_epoch`` is reloaded
+      before the weights are written. Previously the FINAL epoch's
+      weights were always saved, so early stopping tracked a best
+      epoch it then threw away — every extra epoch past the optimum
+      shipped straight into the registry. Pass False (the CLI's
+      ``--keep-last-epoch``) for the old behaviour.
+
+    After training, the held-out split is re-scored and
+    ``history.holdout_value_metrics`` is populated with a
+    :class:`~mtg_bot.training.value_gate.HoldoutValueMetrics` (MSE,
+    corr(pred, outcome), the constant-0 predictor's MSE on the same
+    rows, and the life-differential baseline correlation when the
+    scalar schema carries life). The CALLER decides what to do with
+    it — this function never refuses to save.
 
     GPU fast path knobs (CUDA-only, no-op elsewhere):
 
@@ -1024,7 +1064,19 @@ def train_structured_model(
             )
             model = uncompiled_model
 
-    optimizer = optim.Adam(uncompiled_model.parameters(), lr=learning_rate)
+    # AdamW rather than Adam: decoupled weight decay is the correct
+    # L2 formulation for adaptive optimizers, and at weight_decay=0
+    # AdamW's update is identical to Adam's, so existing callers see
+    # no numerical change.
+    if weight_decay < 0.0:
+        raise ValueError(
+            f"weight_decay must be >= 0; got {weight_decay}"
+        )
+    optimizer = optim.AdamW(
+        uncompiled_model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
     mse = nn.MSELoss()
 
     import contextlib
@@ -1037,6 +1089,10 @@ def train_structured_model(
         return contextlib.nullcontext()
 
     history = TrainingHistory()
+    # CPU snapshot of the best-val-loss epoch's weights. Stays None
+    # when restore_best is off or no epoch ever produced a finite val
+    # loss (e.g. val_split=0).
+    best_state: Optional[dict[str, torch.Tensor]] = None
     progress_enabled = progress_path is not None
     started_at_iso = ""
     started_perf = 0.0
@@ -1081,6 +1137,16 @@ def train_structured_model(
             "git_commit": git_commit,
             "notes": notes,
             "architecture": "structured",
+            # Populated by the post-training held-out scoring pass, so
+            # it's None for every mid-run emit and a metrics dict on
+            # the terminal "completed" write. The training UI's
+            # progress card renders it; the CLI's gate reads the same
+            # numbers off the returned history.
+            "holdout_value_metrics": (
+                history.holdout_value_metrics.as_dict()
+                if history.holdout_value_metrics is not None else None
+            ),
+            "restored_best_epoch": history.restored_best_epoch,
         }
         atomic_write_json(progress_path, payload)
 
@@ -1197,6 +1263,17 @@ def train_structured_model(
             ):
                 history.best_val_loss = history.val_losses[-1]
                 history.best_val_epoch = epoch
+                if restore_best:
+                    # Snapshot on CPU so the checkpoint doesn't pin a
+                    # second copy of the model in VRAM for the rest of
+                    # the run. ``.clone()`` is required — ``.to("cpu")``
+                    # on an already-CPU tensor is a no-op view and
+                    # would alias the live parameter.
+                    best_state = {
+                        k: v.detach().to("cpu", copy=True)
+                        for k, v in
+                        uncompiled_model.state_dict().items()
+                    }
 
             _emit("running", current_epoch=epoch + 1)
             if epoch_callback is not None:
@@ -1274,6 +1351,43 @@ def train_structured_model(
             pass
         raise
 
+    # ----- restore-best ---------------------------------------------
+    # Load the best-val-loss epoch's weights back into the live model
+    # BEFORE scoring the held-out split and BEFORE saving. Without
+    # this, early stopping identified a best epoch and then shipped
+    # the (worse, more-overfit) final epoch's weights — patience
+    # epochs' worth of pure memorisation straight into the registry.
+    if restore_best and best_state is not None:
+        uncompiled_model.load_state_dict(best_state)
+        history.restored_best_epoch = history.best_val_epoch
+        _log.info(
+            "restore-best: loaded epoch %d weights (val loss %.4f) "
+            "over the final epoch %d",
+            history.best_val_epoch + 1, history.best_val_loss,
+            len(history.train_losses),
+        )
+    elif restore_best:
+        _log.info(
+            "restore-best requested but no best-epoch snapshot exists "
+            "(no finite val loss — e.g. val_split=0); keeping the "
+            "final epoch's weights.",
+        )
+
+    # ----- held-out value quality ------------------------------------
+    # Scored on the SAME rows early stopping used, with the weights
+    # that are about to be written. The caller (mtg_bot.cli.train)
+    # turns this into a promote/reject decision; the trainer only
+    # measures.
+    history.holdout_value_metrics = _score_holdout_value(
+        model=model,
+        val_loader=val_loader,
+        device_obj=device_obj,
+        autocast_ctx=_autocast_ctx,
+        scalar_schema_version=getattr(
+            config, "scalar_schema_version", None,
+        ),
+    )
+
     # When ``torch.compile`` wraps the model, save the underlying
     # module's state_dict so the on-disk format stays compatible with
     # ``NNEvaluator``'s loader (no ``_orig_mod.`` prefix).
@@ -1285,3 +1399,116 @@ def train_structured_model(
     _emit("completed", current_epoch=len(history.train_losses))
 
     return history
+
+
+def _score_holdout_value(
+    *,
+    model,
+    val_loader,
+    device_obj,
+    autocast_ctx,
+    scalar_schema_version: Optional[int] = None,
+):
+    """Re-score the held-out split and return
+    :class:`~mtg_bot.training.value_gate.HoldoutValueMetrics`.
+
+    Returns a zero-row metrics object when there is no val loader
+    (``val_split=0`` or a single-game dataset) — the gate reads that
+    as "could not evaluate" rather than as a failure.
+
+    The life-differential baseline needs the viewer/opponent life
+    scalars, which only exist in scalar schema v2+. Under schema v1
+    the baseline correlation comes back ``None`` (documented as
+    "skipped" rather than silently zero).
+    """
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_OPP_LIFE,
+        SCALAR_FIELD_VIEWER_LIFE,
+        SCALAR_SCHEMA_V2,
+        TOKEN_TYPE_GLOBAL,
+    )
+    from mtg_bot.training.value_gate import (
+        compute_holdout_value_metrics,
+    )
+
+    if val_loader is None:
+        return compute_holdout_value_metrics(
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+        )
+    want_life = (
+        scalar_schema_version is not None
+        and int(scalar_schema_version) >= SCALAR_SCHEMA_V2
+    )
+    preds: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
+    lifes: list[np.ndarray] = []
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            for batch in val_loader:
+                on_device = {
+                    k: v.to(device_obj, non_blocking=True)
+                    for k, v in batch.items()
+                }
+                with autocast_ctx():
+                    out = model(on_device)
+                preds.append(
+                    out["value"].detach().float().cpu().numpy()
+                )
+                targets.append(
+                    on_device["outcome"].detach().float().cpu().numpy()
+                )
+                if want_life:
+                    lifes.append(
+                        _global_life_diff(
+                            batch["token_type"],
+                            batch["token_scalars"],
+                            batch["attention_mask"],
+                            global_type=TOKEN_TYPE_GLOBAL,
+                            viewer_idx=SCALAR_FIELD_VIEWER_LIFE,
+                            opp_idx=SCALAR_FIELD_OPP_LIFE,
+                        )
+                    )
+    finally:
+        if was_training:
+            model.train()
+    life_arr = np.concatenate(lifes) if lifes else None
+    return compute_holdout_value_metrics(
+        np.concatenate(preds) if preds
+        else np.zeros((0,), dtype=np.float32),
+        np.concatenate(targets) if targets
+        else np.zeros((0,), dtype=np.float32),
+        life_diffs=life_arr,
+    )
+
+
+def _global_life_diff(
+    token_type: torch.Tensor,
+    token_scalars: torch.Tensor,
+    attention_mask: torch.Tensor,
+    *,
+    global_type: int,
+    viewer_idx: int,
+    opp_idx: int,
+) -> np.ndarray:
+    """Per-row ``viewer_life - opponent_life`` from a collated batch.
+
+    Life totals live on the row's GLOBAL token (schema v2). Rows with
+    no global token — shouldn't happen for tokenizer output, but a
+    hand-built test batch can lack one — get 0.0, which is the
+    neutral value for the baseline correlation.
+    """
+    is_global = (token_type == global_type) & attention_mask.bool()
+    # First global token per row; rows with none select index 0 and
+    # are zeroed by the ``has_any`` mask below.
+    idx = torch.argmax(is_global.to(torch.int8), dim=1)
+    has_any = is_global.any(dim=1)
+    rows = torch.arange(token_scalars.shape[0])
+    viewer = token_scalars[rows, idx, viewer_idx]
+    opp = token_scalars[rows, idx, opp_idx]
+    diff = torch.where(
+        has_any, viewer - opp, torch.zeros_like(viewer),
+    )
+    return diff.detach().float().cpu().numpy()
