@@ -18752,3 +18752,22 @@ incomplete CR conformance), add a section here with:
 **Impact estimate.** Cost: one `threading.local` attribute read (~100 ns) per MCTS iteration / PIMC sample / game decision — under 0.1 % of a ~150 us–2 ms iteration. Benefit: removes the two-games-in-one-process corruption class entirely for the observed (slow-game) timeout population, and returns the zombie's core to the pool, which breaks the timeout → fewer effective cores → more timeouts feedback loop.
 
 **Pinned by:** `tests/test_cancellation.py` (12 cases), `tests/training/test_timeout.py` (the cooperative-stop / token-lifecycle / uncooperative-warning cases), `tests/training/test_timeout_stops_real_game.py` (a real MTG game through `self_play._play_capped_game` — the exact frame from the production dumps — asserted to unwind and leak no thread).
+
+
+## Heuristic self-play carries `root_dirichlet_alpha` but the noise is INERT under UCB1 — 2026-09-24, `feature/heuristic-warm-start`
+
+**Where:** `src/mtg_bot/training/config.py::PimcConfig` (new `root_dirichlet_alpha` / `root_dirichlet_eps` fields, forwarded to the inner `MCTS`); `src/mtg_bot/training/self_play_evaluator.py::build_heuristic_pimc_config`; the consumer gate is `src/mtg_bot/search/mcts.py::_select_and_expand` (`node is root and self.puct and self.root_dirichlet_alpha is not None`).
+
+**What the shortcut is.** `mtg_bot iterate --self-play-evaluator heuristic` accepts the same `--root-dirichlet-alpha` / `--root-dirichlet-eps` knobs as the NN path, and the values are genuinely plumbed onto the stage spec, onto the worker's claim, and onto the constructed `MCTS`. They then do nothing. `_apply_root_dirichlet_noise` mixes noise into the root children's `prior` values, and `prior` is only ever read by PUCT selection; PUCT requires a policy-head evaluator, and `MtgHeuristicEvaluator` has none, so a heuristic sub-search runs UCB1 and never consults a prior.
+
+**Why it's OK.** Under `FullEnumeration` (the production expansion policy) UCB1 expands and evaluates *every* root child at least once before any selection happens, so the "search never even looks at move X" failure mode that root noise exists to prevent cannot occur at a heuristic root. The self-play diversity knob that does apply is `--move-temperature` / `--temperature-cutoff`, which lives in `data_gen._play_one_game_recording` and is entirely strategy-agnostic (it samples the PLAYED move from whatever visit counts came back). Measured on the 20-game local verification shard: 49.8 % of multi-choice policy targets are near-uniform and mean normalised entropy is 0.876, i.e. the heuristic root distribution is already wide.
+
+**Why it isn't silent.** Per `feedback_silent_noop_pipelines`, `build_heuristic_pimc_config` emits a one-time `logging.warning` naming the flag, the reason (UCB1 has no priors), and the knob that does work. `mtg_bot iterate --self-play-evaluator heuristic` prints it at stage start.
+
+**Failure mode.** An operator tunes `--root-dirichlet-alpha` on a heuristic corpus run and measures no change, concluding the knob is useless in general. The warning is the mitigation.
+
+**Fix scope estimate.** ~1 cycle, and only if wanted: give the heuristic path a prior source (e.g. `search/mtg_priors.py` as a hand-written policy prior) and run those sub-searches under PUCT, at which point the noise becomes live. That is a strength-affecting search change with its own evaluation burden, deliberately out of scope for corpus generation.
+
+**Impact estimate.** Zero perf cost (two extra floats on a frozen dataclass). Zero strength cost today — the knob is a no-op in this configuration rather than a wrong behaviour.
+
+**Pinned by:** `tests/training/test_self_play_evaluator.py::test_build_heuristic_pimc_config_carries_dirichlet_knobs` (asserts the values reach `MCTS` AND that `puct is False`), `::test_build_heuristic_pimc_config_warns_once_about_inert_noise`.

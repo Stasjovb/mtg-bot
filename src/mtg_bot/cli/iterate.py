@@ -255,6 +255,37 @@ def _self_play_config_dict(
     }
 
 
+def _iteration_index(
+    *,
+    iterations_completed: int,
+    iter_idx: int,
+    corpus_only: bool,
+    corpus_batch: "int | None",
+) -> int:
+    """Return ``n_done`` -- the 0-based iteration index the cycle's
+    labels and seeds are derived from (``iter_label(n_done + 1)``).
+
+    Normal runs: the lineage counter from ``iterate_state.json``. The
+    loop body advances it by promoting/training, so the in-process
+    ``iter_idx`` must NOT be added -- it is re-read each pass.
+
+    ``--corpus-only`` runs never advance that counter (no train, no
+    promotion), so the offset has to come from somewhere else, or
+    every pass derives the SAME iter_label / cycle_seed / stage_id:
+    the coordinator would see an identical, already-drained stage
+    spec, answer 204 to every claim, and the run would silently
+    produce zero extra games.
+
+    - Within one invocation, ``iter_idx`` supplies the offset.
+    - Across invocations (the distributed launcher always spawns
+      ``iterate --n-iterations 1``), the caller must pass an explicit
+      1-based ``--corpus-batch``.
+    """
+    if corpus_only and corpus_batch is not None:
+        return int(corpus_batch) - 1 + iter_idx
+    return int(iterations_completed) + (iter_idx if corpus_only else 0)
+
+
 def _dirichlet_alpha_or_none(value: "float | None") -> "float | None":
     """CLI convention: ``--root-dirichlet-alpha <= 0`` (or unset)
     disables root noise; ``MCTS`` wants ``None`` for "off"."""
@@ -1377,6 +1408,23 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
+        "--corpus-batch", type=int, default=None,
+        help=(
+            "Corpus-only mode: the 1-based iteration index to label "
+            "this batch with, instead of iterate_state.json's "
+            "iterations_completed + 1. REQUIRED when generating a "
+            "corpus across SEPARATE process invocations (e.g. the "
+            "distributed launcher, which always spawns iterate with "
+            "--n-iterations 1): --corpus-only never advances "
+            "iterations_completed, so every invocation would "
+            "otherwise derive the same stage_id, the coordinator "
+            "would treat it as the already-drained stage and answer "
+            "204 to every claim, and the run would silently produce "
+            "no games. Within ONE invocation, --n-iterations N "
+            "already offsets each pass. Requires --corpus-only."
+        ),
+    )
+    parser.add_argument(
         "--root-dirichlet-alpha", type=float, default=0.5,
         help=(
             "Dirichlet alpha for AlphaZero root exploration noise in "
@@ -1972,6 +2020,19 @@ def main(argv=None) -> None:  # pragma: no cover
             "callback). See docs/ISMCTS_MIGRATION.md (Phase 6)."
         )
 
+    if args.corpus_batch is not None:
+        if not args.corpus_only:
+            parser.error(
+                "--corpus-batch only applies to --corpus-only runs "
+                "(outside corpus-only mode the iteration index comes "
+                "from iterate_state.json's iterations_completed)."
+            )
+        if args.corpus_batch < 1:
+            parser.error(
+                f"--corpus-batch must be >= 1 (1-based iteration "
+                f"index); got {args.corpus_batch}"
+            )
+
     if not (0.0 < args.one_legal_keep_frac <= 1.0):
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
@@ -2355,15 +2416,11 @@ def main(argv=None) -> None:  # pragma: no cover
       for iter_idx in range(args.n_iterations):
         if user_stopped:
             break
-        # --corpus-only never advances iterations_completed (no train,
-        # no promotion), so the loop index has to supply the offset
-        # itself. Without it every pass would derive the SAME
-        # iter_label / cycle_seed / stage_id: the coordinator would
-        # see an identical, already-drained stage spec, answer 204 to
-        # every claim, and the run would silently produce zero extra
-        # games.
-        n_done = state["iterations_completed"] + (
-            iter_idx if args.corpus_only else 0
+        n_done = _iteration_index(
+            iterations_completed=state["iterations_completed"],
+            iter_idx=iter_idx,
+            corpus_only=args.corpus_only,
+            corpus_batch=args.corpus_batch,
         )
         cycle_seed = args.seed + 1_000_000 * (n_done + 1)
         best_version = state["current_best"]

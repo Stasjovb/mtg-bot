@@ -328,3 +328,63 @@ def test_self_play_config_dict_records_evaluator_provenance():
     )
     assert cfg["self_play_evaluator"] == "heuristic"
     assert cfg["corpus_only"] is True
+
+
+# ---------------------------------------------------------------------------
+# D. corpus-only iteration indexing
+# ---------------------------------------------------------------------------
+
+
+def test_iteration_index_normal_run_uses_lineage_counter():
+    """A real iterate run re-reads iterations_completed each pass (the
+    loop body advances it), so iter_idx must NOT be added."""
+    for iter_idx in (0, 1, 5):
+        assert iz._iteration_index(
+            iterations_completed=6, iter_idx=iter_idx,
+            corpus_only=False, corpus_batch=None,
+        ) == 6
+
+
+def test_iteration_index_corpus_only_offsets_within_one_invocation():
+    """--corpus-only never advances the counter, so without the loop
+    offset every pass would derive the same stage_id -- the
+    coordinator would answer 204 and the run would silently produce
+    zero extra games."""
+    got = [
+        iz._iteration_index(
+            iterations_completed=6, iter_idx=i,
+            corpus_only=True, corpus_batch=None,
+        )
+        for i in range(3)
+    ]
+    assert got == [6, 7, 8]
+    assert len(set(got)) == 3
+
+
+def test_iteration_index_corpus_batch_overrides_across_invocations():
+    """The distributed launcher always spawns iterate with
+    --n-iterations 1, so the batch index has to come in explicitly."""
+    assert iz._iteration_index(
+        iterations_completed=6, iter_idx=0,
+        corpus_only=True, corpus_batch=9,
+    ) == 8  # 1-based batch 9 -> n_done 8 -> iter_label iter_009
+    assert iz._iteration_index(
+        iterations_completed=6, iter_idx=1,
+        corpus_only=True, corpus_batch=9,
+    ) == 9
+
+
+def test_iteration_index_ignores_corpus_batch_outside_corpus_only():
+    assert iz._iteration_index(
+        iterations_completed=6, iter_idx=0,
+        corpus_only=False, corpus_batch=9,
+    ) == 6
+
+
+def test_corpus_batch_flag_is_registered_and_validated():
+    import inspect
+
+    src = inspect.getsource(iz.main)
+    assert '"--corpus-batch"' in src
+    assert "--corpus-batch only applies to --corpus-only runs" in src
+    assert "--corpus-batch must be >= 1" in src

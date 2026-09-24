@@ -78,6 +78,45 @@ Worker asks "give me a game to play from this stage."
 is `now + claim_ttl_seconds` from the stage spec; after expiry the
 coordinator marks the claim re-claimable.
 
+**Self-play evaluator kind (2026-09-24).** Self-play claims also
+carry, copied verbatim from the stage spec:
+
+```json
+{
+  "evaluator": "heuristic",                  // "nn" (default) | "heuristic"
+  "action_encoding_version": "canonical_v2",
+  "structured_tokens": true,
+  "structured_scalar_schema_version": 2,
+  "root_dirichlet_alpha": 0.5,
+  "root_dirichlet_eps": 0.25,
+  "move_temperature": 1.0,
+  "temperature_cutoff": 30
+}
+```
+
+`evaluator` selects what drives the PIMC search on both seats:
+
+* `"nn"` / absent — the historical path. The worker resolves
+  `weights.p0`, fetches the blob + `metadata.json`, and discovers the
+  action encoding / token schema from that metadata.
+* `"heuristic"` — PIMC over `MtgHeuristicEvaluator`, no weights and
+  no torch at all (the warm-start corpus path; see
+  `mtg_bot.training.self_play_evaluator`). Because there is no
+  version to discover metadata from, the three corpus-format fields
+  above are **authoritative on the claim** and
+  `action_encoding_version` is **required** — a worker that receives a
+  heuristic claim without it raises rather than guessing.
+
+**Old-worker interlock.** A heuristic stage carries
+`weights: {"p0": "", "p1": ""}`. A worker running code that predates
+the `evaluator` field does `weights.get("p0") or weights.get("new")`
+and raises `self-play claim missing weights.p0` on every claim, so
+the stage yields zero samples and `iterate` exits with
+`self_play_yield_error`. This is deliberate: silently playing a
+warm-start corpus stage with the NN would produce exactly the corpus
+the stage exists to replace. Self-update every worker before running
+a heuristic stage.
+
 ### `POST /v2/report_result`
 
 Worker submits a finished game. **Phase 2B cutover (2026-05-21):**
@@ -184,6 +223,15 @@ returns 200 with the canonical `stage_id`. Workers pulling on
 
 // Response 409 if stage_id already exists with a different spec
 ```
+
+A self-play stage may additionally carry `evaluator`,
+`action_encoding_version`, `structured_tokens`,
+`structured_scalar_schema_version`, `root_dirichlet_alpha`,
+`root_dirichlet_eps`, `move_temperature` and `temperature_cutoff`;
+the coordinator stores them in `spec_json` and copies them onto every
+claim (see `POST /v2/claim`). Eval stages pin the exploration knobs
+off and `evaluator` to `"nn"` so the promotion gate stays
+deterministic-argmax.
 
 ### `GET /v2/stage/<stage_id>`
 
