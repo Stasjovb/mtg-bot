@@ -944,6 +944,7 @@ function ensureCard(run) {
         <div class="stat" data-field="total-stat"><div class="stat-label">Total loss</div><div class="stat-value" data-field="total">—</div><div class="stat-sub" data-field="total-sub"></div></div>
         <div class="stat"><div class="stat-label">Value loss</div><div class="stat-value" data-field="value">—</div></div>
         <div class="stat"><div class="stat-label">Policy loss</div><div class="stat-value" data-field="policy">—</div><div class="stat-sub" data-field="policy-sub" hidden></div></div>
+        <div class="stat" data-field="holdout-stat" hidden><div class="stat-label">Held-out value</div><div class="stat-value" data-field="holdout">—</div><div class="stat-sub" data-field="holdout-sub"></div></div>
       </div>
       <div class="machines" data-field="machines" hidden></div>
       <div class="chart-wrap"><canvas data-field="chart"></canvas></div>`;
@@ -1107,6 +1108,39 @@ function fillRun(el, run) {
     el.querySelector('[data-field="total"]').textContent = fmtLoss(totalLoss);
     el.querySelector('[data-field="value"]').textContent = fmtLoss(valueLoss);
     el.querySelector('[data-field="policy"]').textContent = fmtLoss(policyLoss);
+
+    // Held-out value quality. Written by the structured trainer's
+    // post-training scoring pass (mtg_bot.training.value_gate), so
+    // it's absent mid-run and on flat-feature runs — the tile stays
+    // hidden in that case rather than showing a fake dash. MSE >= 1.0
+    // means the value head is no better than predicting 0 on unseen
+    // GAMES; the gate rejects those, and the tile flags them red.
+    const hv = run.holdout_value_metrics;
+    const hvStat = el.querySelector('[data-field="holdout-stat"]');
+    if (hvStat) {
+      const mse = hv && typeof hv.value_mse === 'number' ? hv.value_mse : null;
+      if (mse === null || !isFinite(mse)) {
+        hvStat.hidden = true;
+      } else {
+        hvStat.hidden = false;
+        const corr = (typeof hv.value_corr === 'number')
+          ? hv.value_corr.toFixed(2) : 'n/a';
+        const base = (typeof hv.baseline_life_diff_corr === 'number')
+          ? hv.baseline_life_diff_corr.toFixed(2) : 'n/a';
+        el.querySelector('[data-field="holdout"]').textContent =
+          fmtLoss(mse);
+        const sub = el.querySelector('[data-field="holdout-sub"]');
+        if (sub) {
+          sub.textContent = 'MSE (const-0 = 1.0) · r=' + corr
+            + ' · life r=' + base;
+        }
+        const gate = run.value_gate || {};
+        const bad = (gate.passed === false) || mse >= 1.0;
+        hvStat.title = gate.reason
+          || ('held-out value MSE over ' + (hv.n_rows || 0) + ' rows');
+        hvStat.style.color = bad ? 'var(--bad, #ef4444)' : '';
+      }
+    }
 
     // Header pill: only shown when weight differs from the default
     // 1.0. Keeps the common-case header uncluttered while making the

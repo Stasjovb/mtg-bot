@@ -498,3 +498,77 @@ def test_v1_and_v2_models_have_different_state_dict_shapes() -> None:
     m2 = StructuredModel(_cfg_for_schema(2))
     with pytest.raises(RuntimeError, match="size mismatch"):
         m1.load_state_dict(m2.state_dict())
+
+
+# ---------------------------------------------------------------------
+# Dropout wiring (regularisation fix for the memorising value head).
+# ---------------------------------------------------------------------
+
+
+def _small_cfg(dropout: float) -> StructuredModelConfig:
+    return StructuredModelConfig(
+        emb_dim=16, n_heads=2, n_layers=2, hidden_dim=8,
+        dropout=dropout, n_printings=12, action_vocab_size=7,
+        enable_hand_belief_head=True,
+    )
+
+
+def test_dropout_default_is_zero_and_reaches_every_site() -> None:
+    """The dataclass default stays 0.0 (inference-safe); a non-zero
+    config propagates to the encoder layers, the cross-attention
+    modules AND the head MLPs — the heads were the gap."""
+    assert StructuredModelConfig().dropout == 0.0
+    model = StructuredModel(_small_cfg(0.25))
+    probs = {
+        m.p for m in model.modules() if isinstance(m, nn.Dropout)
+    }
+    assert probs == {0.25}
+    # Head MLPs specifically (they had no dropout module at all before).
+    for head in (
+        model.value_head, model.policy_head, model.hand_belief_head,
+    ):
+        assert any(
+            isinstance(m, nn.Dropout) and m.p == 0.25
+            for m in head.modules()
+        )
+    # Encoder layers + cross-attention keep theirs too.
+    assert model.trunk.layers[0].dropout.p == 0.25
+    assert model.policy_decoder_attn.dropout == 0.25
+    assert model.hand_belief_attn.dropout == 0.25
+
+
+def test_dropout_does_not_change_state_dict_keys() -> None:
+    """Checkpoint compatibility: adding dropout to the heads must not
+    renumber the ``nn.Sequential`` slots, or every previously trained
+    structured version stops loading."""
+    keys_off = set(StructuredModel(_small_cfg(0.0)).state_dict())
+    keys_on = set(StructuredModel(_small_cfg(0.3)).state_dict())
+    assert keys_off == keys_on
+    assert "value_head.0.weight" in keys_off
+    assert "value_head.2.weight" in keys_off
+    assert "policy_head.2.bias" in keys_off
+    # And the weights actually cross-load.
+    model = StructuredModel(_small_cfg(0.3))
+    model.load_state_dict(StructuredModel(_small_cfg(0.0)).state_dict())
+
+
+def test_dropout_is_active_in_train_mode_only() -> None:
+    cfg = _small_cfg(0.5)
+    model = StructuredModel(cfg)
+    batch = make_dummy_batch(
+        batch_size=4, seq_len=6, config=cfg, seed=3,
+    )
+    model.eval()
+    with torch.no_grad():
+        a = model(batch)["value"]
+        b = model(batch)["value"]
+    assert torch.allclose(a, b), "eval() must be deterministic"
+
+    model.train()
+    torch.manual_seed(0)
+    with torch.no_grad():
+        c = model(batch)["value"]
+        d = model(batch)["value"]
+    assert not torch.allclose(c, d), (
+        "train() with dropout=0.5 must inject noise"
+    )

@@ -700,6 +700,10 @@ def test_train_config_dict_shape():
         window_recent_files=None,
         early_stop_patience=5,
         architecture="shared",
+        dropout=None,
+        weight_decay=None,
+        keep_last_epoch=False,
+        min_holdout_value_quality=None,
     )
     out = cli_iterate._train_config_dict(
         args=args, peeked_train_version="v4", cycle_seed=42,
@@ -708,6 +712,12 @@ def test_train_config_dict_shape():
     assert out["peeked_version"] == "v4"
     assert out["epochs"] == 50
     assert out["seed"] == 42
+    # Regularisation / gate knobs are recorded on the stage row even
+    # when left at "defer to the trainer's default".
+    assert out["dropout"] is None
+    assert out["weight_decay"] is None
+    assert out["keep_last_epoch"] is False
+    assert out["min_holdout_value_quality"] is None
 
 
 def test_eval_config_dict_shape():

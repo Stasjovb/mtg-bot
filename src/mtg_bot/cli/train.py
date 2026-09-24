@@ -53,6 +53,71 @@ from mtg_bot.training import (
     train_value_network,
 )
 from mtg_bot.training.registry import ModelMetadata, Registry
+from mtg_bot.training.value_gate import (
+    DEFAULT_MIN_HOLDOUT_VALUE_QUALITY,
+    evaluate_value_gate,
+    format_gate_failure,
+)
+
+
+_GATE_REJECT_EXIT_CODE = 3
+"""Exit code for "training finished but the held-out value gate
+rejected it". Distinct from 1 (generic failure / argparse error) so
+``mtg_bot iterate`` can tell a rejected model apart from a crashed
+trainer and keep the chain running. See
+:mod:`mtg_bot.training.value_gate`."""
+
+DEFAULT_STRUCTURED_DROPOUT = 0.1
+"""``--dropout`` default for the structured trainer.
+
+0.1 rather than a heavier 0.3: the production trunk is SMALL
+(emb_dim 128 / 2 layers / hidden 256), and the memorisation route is
+the printing-embedding path rather than raw trunk capacity, so a
+light regulariser plus restore-best plus weight decay is the
+proportionate first move. It is also the value the transformer
+literature uses by default at this scale. Raise it if the gate keeps
+rejecting."""
+
+DEFAULT_STRUCTURED_WEIGHT_DECAY = 1e-4
+"""``--weight-decay`` default. Standard AdamW starting point; enough
+to keep the printing embeddings from growing unboundedly into
+per-game lookup keys without visibly slowing the fit at 1e-3 LR."""
+
+
+class _ValueGateRejected(RuntimeError):
+    """Raised inside the run-lifecycle block when the held-out value
+    gate rejects a freshly-trained model, so the run row is marked
+    ``failed`` before the CLI exits ``_GATE_REJECT_EXIT_CODE``.
+    Carries the already-formatted operator message."""
+
+
+def _merge_into_progress_json(
+    progress_path: Optional[Path], extra: dict,
+) -> None:
+    """Merge ``extra`` into an existing progress JSON in place.
+
+    Best-effort: a missing path (progress disabled) or an unreadable /
+    malformed file is a no-op. The trainer owns the file during the
+    run; this runs after it has written its terminal payload, so a
+    read-modify-write is safe.
+    """
+    if progress_path is None:
+        return
+    import json
+
+    from mtg_bot.training.progress import atomic_write_json
+
+    try:
+        blob = json.loads(Path(progress_path).read_text())
+        if not isinstance(blob, dict):
+            return
+    except (OSError, ValueError):
+        return
+    blob.update(extra)
+    try:
+        atomic_write_json(Path(progress_path), blob)
+    except OSError:
+        pass
 
 
 # Regex matching the iterate cycle run_id format. When ``mtg_bot
@@ -728,6 +793,65 @@ def main(argv=None) -> None:
             "Recorded in metadata.json as scalar_schema_version."
         ),
     )
+    # --- Regularisation + held-out value gate (structured only) -----
+    # Added 2026-09-24. Every s2-lineage version trained to value-MSE
+    # ~0.005 while scoring 1.42-1.78 on a game-level held-out split
+    # (worse than the constant-0 predictor's 1.0): the value head
+    # memorised game identity. Defaults live here rather than on
+    # StructuredModelConfig / train_structured_model so that library
+    # callers and old checkpoints keep their exact previous behaviour
+    # and only new TRAINING RUNS pick the regularisation up.
+    parser.add_argument(
+        "--dropout", type=float, default=None,
+        help=(
+            "Structured-trunk: dropout probability applied to the "
+            "transformer encoder layers, the policy / hand-belief "
+            "cross-attention AND the value / policy head MLPs. "
+            "Default (when omitted) 0.1. Pass 0 to reproduce the "
+            "pre-2026-09-24 unregularised runs. Ignored by the "
+            "flat-feature architectures."
+        ),
+    )
+    parser.add_argument(
+        "--weight-decay", type=float, default=None,
+        help=(
+            "Structured-trunk: AdamW decoupled weight decay. Default "
+            "(when omitted) 1e-4; 0 reproduces plain Adam. Ignored by "
+            "the flat-feature architectures."
+        ),
+    )
+    parser.add_argument(
+        "--keep-last-epoch", action="store_true",
+        help=(
+            "Save the FINAL epoch's weights instead of the best-"
+            "validation epoch's. Default (flag absent) is restore-"
+            "best: after early stopping (or the epoch cap) the "
+            "state_dict from the best val epoch is reloaded before "
+            "the weights are written. Pre-2026-09-24 behaviour was "
+            "always keep-last, which threw away the very epoch early "
+            "stopping had identified."
+        ),
+    )
+    parser.add_argument(
+        "--min-holdout-value-quality", type=float,
+        default=DEFAULT_MIN_HOLDOUT_VALUE_QUALITY,
+        help=(
+            "Structured-trunk only (the flat-feature trainer has no "
+            "held-out scoring pass and ignores this). "
+            "Held-out value-MSE CEILING. After training, the value "
+            "head is re-scored on the game-level held-out split; if "
+            "its MSE is at or above this number the run is REJECTED "
+            "-- nothing is registered and the process exits "
+            f"{_GATE_REJECT_EXIT_CODE}. Quality is measured as MSE, "
+            "so a SMALLER value is a STRICTER gate. Default "
+            f"{DEFAULT_MIN_HOLDOUT_VALUE_QUALITY} is exactly the "
+            "constant-0 predictor's score against +/-1 outcome "
+            "labels: a value head that has learned nothing useful "
+            "cannot be promoted. Pass 0 (or a negative number) to "
+            "disable the gate. The metrics are written to "
+            "metadata.json and the progress JSON either way."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.loader_timeout_sec is not None and args.loader_timeout_sec < 0:
         parser.error(
@@ -740,6 +864,25 @@ def main(argv=None) -> None:
     if args.architecture == ARCHITECTURE_STRUCTURED:
         _main_structured(args, parser)
         return
+    # The regularisation + value-gate flags are structured-only (the
+    # flat MLP has no dropout module and its trainer has no held-out
+    # scoring pass). Refuse rather than silently ignoring an
+    # explicitly-passed knob — a flag that does nothing is worse than
+    # an error.
+    _flat_only_rejects = [
+        name for name, val in (
+            ("--dropout", args.dropout),
+            ("--weight-decay", args.weight_decay),
+        ) if val is not None
+    ]
+    if args.keep_last_epoch:
+        _flat_only_rejects.append("--keep-last-epoch")
+    if _flat_only_rejects:
+        parser.error(
+            f"{', '.join(_flat_only_rejects)} only apply to "
+            f"--architecture structured; got "
+            f"--architecture {args.architecture}."
+        )
     if not (0.0 < args.one_legal_keep_frac <= 1.0):
         parser.error(
             "--one-legal-keep-frac must be in (0.0, 1.0]; got "
@@ -1295,6 +1438,24 @@ def _main_structured(args, parser) -> None:
         structured_overrides["scalar_schema_version"] = (
             args.scalar_schema_version
         )
+    dropout = (
+        DEFAULT_STRUCTURED_DROPOUT if args.dropout is None
+        else float(args.dropout)
+    )
+    if not (0.0 <= dropout < 1.0):
+        parser.error(
+            f"--dropout must be in [0.0, 1.0); got {dropout}"
+        )
+    structured_overrides["dropout"] = dropout
+    weight_decay = (
+        DEFAULT_STRUCTURED_WEIGHT_DECAY if args.weight_decay is None
+        else float(args.weight_decay)
+    )
+    if weight_decay < 0.0:
+        parser.error(
+            f"--weight-decay must be >= 0; got {weight_decay}"
+        )
+    restore_best = not args.keep_last_epoch
     try:
         structured_config = StructuredModelConfig(**structured_overrides)
     except ValueError as exc:
@@ -1336,6 +1497,10 @@ def _main_structured(args, parser) -> None:
         "early_stop_patience": args.early_stop_patience,
         "num_workers": args.num_workers,
         "loader_timeout_sec": args.loader_timeout_sec,
+        "dropout": dropout,
+        "weight_decay": weight_decay,
+        "restore_best": restore_best,
+        "min_holdout_value_quality": args.min_holdout_value_quality,
         "progress_path": (
             str(progress_path) if progress_path is not None else None
         ),
@@ -1344,6 +1509,7 @@ def _main_structured(args, parser) -> None:
             "n_heads": structured_config.n_heads,
             "n_layers": structured_config.n_layers,
             "hidden_dim": structured_config.hidden_dim,
+            "dropout": structured_config.dropout,
             "action_history_n": structured_config.action_history_n,
             "n_printings": structured_config.n_printings,
             "scalar_schema_version": (
@@ -1406,14 +1572,15 @@ def _main_structured(args, parser) -> None:
             },
         )
 
-    with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
+    try:
+      with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
         run_id=train_run_id,
         kind="training",
         config=train_config,
         progress_json_path=progress_path,
         parent_run_id=parent_run_id,
         label=peeked_version,
-    ):
+      ):
         tmp_weights = Path(tmp) / "weights.pt"
         started = time.perf_counter()
         history = train_structured_model(
@@ -1443,8 +1610,48 @@ def _main_structured(args, parser) -> None:
             early_stop_patience=args.early_stop_patience,
             num_workers=args.num_workers,
             loader_timeout_sec=args.loader_timeout_sec,
+            weight_decay=weight_decay,
+            restore_best=restore_best,
         )
         elapsed = time.perf_counter() - started
+
+        # --- held-out value-quality gate ------------------------------
+        # Decided BEFORE ``registry.register`` so a rejected run leaves
+        # no promotable version behind. The metrics are surfaced either
+        # way (progress JSON above, metadata.json below, run-DB event
+        # here) so a rejection is diagnosable without a re-run.
+        holdout_metrics = history.holdout_value_metrics
+        gate = evaluate_value_gate(
+            holdout_metrics,
+            min_holdout_value_quality=args.min_holdout_value_quality,
+        )
+        print(f"# Held-out value gate: {gate.reason}")
+        _merge_into_progress_json(
+            progress_path,
+            {
+                "holdout_value_metrics": holdout_metrics.as_dict(),
+                "value_gate": gate.as_dict(),
+            },
+        )
+        _runs_client.push_event(
+            train_run_id,
+            event_type=(
+                "value_gate_passed" if gate.passed
+                else "value_gate_rejected"
+            ),
+            payload={
+                "gate": gate.as_dict(),
+                "metrics": holdout_metrics.as_dict(),
+                "peeked_version": peeked_version,
+            },
+        )
+        if not gate.passed:
+            raise _ValueGateRejected(
+                format_gate_failure(
+                    gate, holdout_metrics,
+                    version_label=peeked_version,
+                )
+            )
 
         metadata = ModelMetadata(
             version="",
@@ -1472,6 +1679,17 @@ def _main_structured(args, parser) -> None:
                 "window_recent_files": args.window_recent_files,
                 "early_stop_patience": args.early_stop_patience,
                 "epochs_trained": len(history.train_losses),
+                # Regularisation knobs, recorded so a version's
+                # metadata fully describes how it was fit (and so a
+                # later lineage comparison can attribute a held-out
+                # improvement to the settings that produced it).
+                "dropout": dropout,
+                "weight_decay": weight_decay,
+                "restore_best": restore_best,
+                "restored_best_epoch": history.restored_best_epoch,
+                "min_holdout_value_quality": (
+                    args.min_holdout_value_quality
+                ),
                 "structured_config": train_config["structured_config"],
                 # Flat ``structured_*`` mirror of the nested dims
                 # above. The loader (``NNEvaluator.from_metadata``)
@@ -1511,6 +1729,13 @@ def _main_structured(args, parser) -> None:
                 ),
                 "best_val_loss": history.best_val_loss,
                 "best_val_epoch": history.best_val_epoch,
+                "restored_best_epoch": history.restored_best_epoch,
+                # Value-head generalisation on the game-level held-out
+                # split, plus the gate's verdict. Present on every
+                # registered version so the lineage can be audited
+                # without re-scoring.
+                "holdout_value_metrics": holdout_metrics.as_dict(),
+                "value_gate": gate.as_dict(),
             },
             git_commit=_git_commit(),
             notes=args.notes,
@@ -1526,6 +1751,9 @@ def _main_structured(args, parser) -> None:
             "val_policy_losses": list(history.val_policy_losses),
             "best_val_loss": history.best_val_loss,
             "best_val_epoch": history.best_val_epoch,
+            "restored_best_epoch": history.restored_best_epoch,
+            "holdout_value_metrics": holdout_metrics.as_dict(),
+            "value_gate": gate.as_dict(),
             "epochs_trained": len(history.train_losses),
         }
         if history.train_losses:
@@ -1554,6 +1782,14 @@ def _main_structured(args, parser) -> None:
             path=str(weights_path),
             bytes_=weights_bytes,
         )
+    except _ValueGateRejected as exc:
+        # The run row is already ``failed`` (the lifecycle CM saw the
+        # exception) and nothing was registered. Print the operator
+        # message and exit with the dedicated code so ``mtg_bot
+        # iterate`` can distinguish "model rejected" from "trainer
+        # crashed" and keep the cycle chain going.
+        print(str(exc), file=sys.stderr)
+        sys.exit(_GATE_REJECT_EXIT_CODE)
 
     print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
     print(f"# Weights: {registry.weights_path(version)}")

@@ -272,6 +272,13 @@ def _train_config_dict(
         "window_recent_files": args.window_recent_files,
         "early_stop_patience": args.early_stop_patience,
         "architecture": args.architecture,
+        # Regularisation + gate knobs (None = defer to the trainer's
+        # own default; the flags are only emitted for the structured
+        # architecture).
+        "dropout": args.dropout,
+        "weight_decay": args.weight_decay,
+        "keep_last_epoch": args.keep_last_epoch,
+        "min_holdout_value_quality": args.min_holdout_value_quality,
     }
 
 
@@ -978,6 +985,22 @@ def _eval_match_distributed(  # pragma: no cover
     )
 
 
+TRAIN_GATE_REJECT_EXIT_CODE = 3
+"""Exit code ``mtg_bot train`` uses for "held-out value gate rejected
+this model". Mirrors ``mtg_bot.cli.train._GATE_REJECT_EXIT_CODE``;
+kept as a literal here so importing iterate doesn't drag in the whole
+training stack (the value is pinned by a test)."""
+
+
+class TrainRejected(RuntimeError):
+    """The train subprocess ran to completion but its held-out
+    value-quality gate refused to register the model.
+
+    Distinct from a generic training failure: the cycle keeps
+    ``current_best``, is marked failed with the reason, and the loop
+    CONTINUES to the next cycle rather than aborting the chain."""
+
+
 def _train_next(
     *,
     data_dir: Path,
@@ -1006,6 +1029,10 @@ def _train_next(
     structured_action_history_n: int | None = None,
     structured_scalar_schema_version: int | None = None,
     num_workers: int = 0,
+    dropout: float | None = None,
+    weight_decay: float | None = None,
+    keep_last_epoch: bool = False,
+    min_holdout_value_quality: float | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -1102,6 +1129,20 @@ def _train_next(
                 "--scalar-schema-version",
                 str(structured_scalar_schema_version),
             ])
+        # Regularisation + held-out value gate. Structured-only on the
+        # train side too (the flat trainer rejects them), so they are
+        # emitted inside this branch.
+        if dropout is not None:
+            cmd.extend(["--dropout", str(dropout)])
+        if weight_decay is not None:
+            cmd.extend(["--weight-decay", str(weight_decay)])
+        if keep_last_epoch:
+            cmd.append("--keep-last-epoch")
+        if min_holdout_value_quality is not None:
+            cmd.extend([
+                "--min-holdout-value-quality",
+                str(min_holdout_value_quality),
+            ])
     if progress_dir is not None:
         # Thread the lineage's progress dir through so train_nn's OWN
         # default progress path lands there too. Without it the
@@ -1130,6 +1171,18 @@ def _train_next(
 
     print(f"\n[iterate] Training: {' '.join(cmd)}")
     result = subprocess.run(cmd, check=False)
+    if result.returncode == TRAIN_GATE_REJECT_EXIT_CODE:
+        # Training finished but the held-out value gate refused to
+        # register the model. That's a verdict, not a crash — a
+        # dedicated exception so the cycle loop can keep current_best
+        # and move on to the next cycle instead of tearing the whole
+        # chain down.
+        raise TrainRejected(
+            "train_nn.py rejected the trained model: its held-out "
+            "value MSE failed the --min-holdout-value-quality gate "
+            "(no version was registered). See the training run's "
+            "stderr / progress JSON for the measured metrics."
+        )
     if result.returncode != 0:
         raise RuntimeError(
             f"train_nn.py exited with code {result.returncode}"
@@ -1435,6 +1488,47 @@ def main(argv=None) -> None:  # pragma: no cover
             "schema: the bootstrap is only used for self-play "
             "inference (its own metadata sizes its input), while the "
             "next version trains from scratch on this schema."
+        ),
+    )
+    # --- Regularisation + held-out value gate (structured only) -----
+    # Forwarded verbatim to ``mtg_bot train``; see that CLI for the
+    # defaults and the rationale (the s2 lineage's value heads
+    # memorised game identity). Left at None here so iterate does not
+    # duplicate the trainer's default values -- omitting the flag lets
+    # the trainer's own default win.
+    parser.add_argument(
+        "--dropout", type=float, default=None,
+        help=(
+            "Structured-trunk only: dropout for the encoder layers, "
+            "cross-attention and head MLPs. Blank defers to the "
+            "trainer default (0.1)."
+        ),
+    )
+    parser.add_argument(
+        "--weight-decay", type=float, default=None,
+        help=(
+            "Structured-trunk only: AdamW decoupled weight decay. "
+            "Blank defers to the trainer default (1e-4)."
+        ),
+    )
+    parser.add_argument(
+        "--keep-last-epoch", action="store_true",
+        help=(
+            "Structured-trunk only: save the final epoch's weights "
+            "instead of the best-validation epoch's. Off by default "
+            "(restore-best)."
+        ),
+    )
+    parser.add_argument(
+        "--min-holdout-value-quality", type=float, default=None,
+        help=(
+            "Structured-trunk only: held-out value-MSE ceiling. A "
+            "cycle whose trained value head scores at or above this "
+            "on the game-level held-out split is REJECTED -- no "
+            "version is registered, the cycle is marked failed with "
+            "the reason, current_best is kept, and the NEXT cycle "
+            "still runs. Blank defers to the trainer default (1.0 = "
+            "the constant-0 predictor); pass 0 to disable."
         ),
     )
     parser.add_argument(
@@ -2606,7 +2700,8 @@ def main(argv=None) -> None:  # pragma: no cover
             cycle_id, "stage_started",
             payload={"stage": "train", "run_id": train_run_id},
         )
-        with _lifecycle.run_lifecycle(
+        try:
+          with _lifecycle.run_lifecycle(
             run_id=train_run_id,
             kind="training",
             config=_train_config_dict(
@@ -2617,7 +2712,7 @@ def main(argv=None) -> None:  # pragma: no cover
             progress_json_path=train_progress_path,
             parent_run_id=cycle_id,
             label=train_run_id,
-        ):
+          ):
             new_version = _train_next(
                 data_dir=args.data_dir,
                 registry_root=args.registry_root,
@@ -2654,7 +2749,65 @@ def main(argv=None) -> None:  # pragma: no cover
                     args.scalar_schema_version
                 ),
                 num_workers=args.train_num_workers,
+                dropout=args.dropout,
+                weight_decay=args.weight_decay,
+                keep_last_epoch=args.keep_last_epoch,
+                min_holdout_value_quality=(
+                    args.min_holdout_value_quality
+                ),
             )
+        except TrainRejected as exc:
+            # The trained value head failed its held-out quality gate,
+            # so no version was registered. Treat the CYCLE as failed
+            # (with the reason on the row) but keep going: the next
+            # cycle generates fresh self-play data off the SAME
+            # current_best and gets another shot. Tearing the chain
+            # down here would turn one bad train into a dead run.
+            print(
+                f"[iterate]   train REJECTED for cycle {cycle_id}: "
+                f"{exc}",
+                file=sys.stderr,
+            )
+            _runs_client.push_event(
+                cycle_id, "stage_failed",
+                payload={
+                    "stage": "train",
+                    "run_id": train_run_id,
+                    "reason": "holdout_value_gate",
+                    "detail": str(exc),
+                },
+            )
+            state["history"].append({
+                "iteration": n_done + 1,
+                "data_file": str(data_path.name),
+                "n_samples": n_samples,
+                "n_policy_rows": n_policy,
+                "gen_seconds": gen_elapsed,
+                "trained_version": None,
+                "promoted": False,
+                "rejected": True,
+                "rejected_reason": "holdout_value_gate",
+                "eval": {},
+            })
+            state["iterations_completed"] = n_done + 1
+            _save_iterate_state(args.registry_root, state)
+            _push_cycle_stage_progress(
+                cycle_id=cycle_id,
+                iter_idx_one_based=n_done + 1,
+                n_iterations=state["iterations_completed"]
+                + args.n_iterations - 1,
+                started_perf=cycle_started_perf,
+                stage="rejected",
+            )
+            _finish_cycle(
+                "failed",
+                notes=(
+                    "train rejected by the held-out value-quality "
+                    f"gate; keeping current_best="
+                    f"{state['current_best']}"
+                ),
+            )
+            continue
         new_weights = registry.weights_path(new_version)
         # Register the produced weights file as an artifact on the
         # training run. Bytes lookup is best-effort — the weights write

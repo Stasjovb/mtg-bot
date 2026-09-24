@@ -350,10 +350,15 @@ def test_train_structured_model_emits_failed_on_exception(
     ds = _make_dataset(n_rows=4, seq_len=3)
     progress_path = tmp_path / "progress.json"
 
-    # Force a failure inside the forward pass by zeroing model weights
-    # — simpler: monkeypatch ``Adam.step`` to raise on first call.
-    from torch.optim import Adam
-    real_step = Adam.step
+    # Force a failure inside the training step: monkeypatch the
+    # optimizer's ``step`` to raise on first call. Patch ``AdamW``
+    # specifically — that's what the trainer constructs now (decoupled
+    # weight decay), and torch's ``Optimizer._patch_step_function``
+    # copies a hooked ``step`` onto the concrete subclass the first
+    # time one is instantiated, so patching the ``Adam`` base class
+    # stops taking effect once any AdamW has been built in-process.
+    from torch.optim import AdamW
+    real_step = AdamW.step
     state = {"calls": 0}
 
     def angry_step(self, *args, **kwargs):  # noqa: ANN001
@@ -362,7 +367,7 @@ def test_train_structured_model_emits_failed_on_exception(
             raise RuntimeError("synthetic-failure")
         return real_step(self, *args, **kwargs)
 
-    monkeypatch.setattr(Adam, "step", angry_step)
+    monkeypatch.setattr(AdamW, "step", angry_step)
 
     with pytest.raises(RuntimeError, match="synthetic-failure"):
         train_structured_model(
@@ -555,3 +560,285 @@ def test_single_process_dataloader_rejects_nonzero_timeout() -> None:
     )
     with pytest.raises(AssertionError, match="timeout == 0"):
         list(loader)
+
+
+# ---------------------------------------------------------------------
+# Regularisation: weight decay, restore-best, held-out value metrics.
+# ---------------------------------------------------------------------
+
+
+def test_weight_decay_reaches_adamw(tmp_path: Path, monkeypatch) -> None:
+    """``weight_decay`` must land on a real AdamW (decoupled L2), not
+    on the plain Adam the trainer used to build."""
+    import torch.optim as _optim
+
+    seen: list[dict] = []
+    real = _optim.AdamW
+
+    def spy(params, **kwargs):
+        seen.append(dict(kwargs))
+        return real(params, **kwargs)
+
+    monkeypatch.setattr(_optim, "AdamW", spy)
+    train_structured_model(
+        _make_dataset(n_rows=8, seq_len=3),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+        weight_decay=3e-4,
+    )
+    assert seen and seen[0]["weight_decay"] == 3e-4
+
+
+def test_weight_decay_defaults_to_zero_for_direct_callers(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """AdamW at weight_decay=0 is numerically Adam, so existing
+    callers that never pass the knob see no behaviour change."""
+    import torch.optim as _optim
+
+    seen: list[dict] = []
+    real = _optim.AdamW
+
+    def spy(params, **kwargs):
+        seen.append(dict(kwargs))
+        return real(params, **kwargs)
+
+    monkeypatch.setattr(_optim, "AdamW", spy)
+    train_structured_model(
+        _make_dataset(n_rows=8, seq_len=3),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+    )
+    assert seen[0]["weight_decay"] == 0.0
+
+
+def test_negative_weight_decay_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="weight_decay must be >= 0"):
+        train_structured_model(
+            _make_dataset(n_rows=4, seq_len=3),
+            weights_out_path=tmp_path / "w.pt",
+            config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+            weight_decay=-1e-4,
+        )
+
+
+def _diverging_run(tmp_path: Path, *, restore_best: bool, name: str):
+    """Train with an absurd LR so val loss is best at an EARLY epoch
+    and strictly worse afterwards — the situation restore-best exists
+    for. Deterministic: the trainer seeds torch from ``rng_seed`` and
+    the dataset is fixed."""
+    return train_structured_model(
+        _make_dataset(n_rows=16, seq_len=4),
+        weights_out_path=tmp_path / name,
+        config=_tiny_cfg(),
+        epochs=4, batch_size=4, learning_rate=5.0,
+        val_split=0.25, device="cpu", rng_seed=0,
+        restore_best=restore_best,
+    )
+
+
+def test_restore_best_saves_best_epoch_not_final_epoch(
+    tmp_path: Path,
+) -> None:
+    """The bug this closes: early stopping tracked ``best_val_epoch``
+    and then saved the FINAL epoch's weights anyway."""
+    h_last = _diverging_run(
+        tmp_path, restore_best=False, name="last.pt",
+    )
+    h_best = _diverging_run(
+        tmp_path, restore_best=True, name="best.pt",
+    )
+    # Same seed + same data => identical trajectory, so the ONLY
+    # difference between the two files is which epoch got saved.
+    assert h_last.val_losses == h_best.val_losses
+    assert h_best.best_val_epoch < len(h_best.train_losses) - 1, (
+        "test setup: best epoch must not be the last epoch"
+    )
+    assert h_best.restored_best_epoch == h_best.best_val_epoch
+    assert h_last.restored_best_epoch is None
+
+    last = torch.load(tmp_path / "last.pt", weights_only=True)
+    best = torch.load(tmp_path / "best.pt", weights_only=True)
+    assert any(
+        not torch.equal(last[k], best[k]) for k in last
+    ), "restore-best saved the same weights as keep-last"
+
+
+def test_restore_best_is_a_noop_without_val_data(
+    tmp_path: Path,
+) -> None:
+    """``val_split=0`` leaves no best epoch to restore; the final
+    epoch's weights are kept and nothing pretends otherwise."""
+    history = train_structured_model(
+        _make_dataset(n_rows=8, seq_len=3),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=2, batch_size=4, device="cpu",
+        val_split=0.0, restore_best=True,
+    )
+    assert history.best_val_epoch == -1
+    assert history.restored_best_epoch is None
+    assert (tmp_path / "w.pt").is_file()
+
+
+def test_holdout_value_metrics_populated(tmp_path: Path) -> None:
+    history = train_structured_model(
+        _make_dataset(n_rows=16, seq_len=4),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+        val_split=0.25, rng_seed=0,
+    )
+    m = history.holdout_value_metrics
+    assert m is not None
+    assert m.n_rows == 4
+    assert m.value_mse == m.value_mse  # finite, not NaN
+    assert m.constant_zero_mse >= 0.0
+    # JSON-safe for metadata.json / the progress card.
+    json.dumps(m.as_dict())
+
+
+def test_holdout_value_metrics_empty_without_val_split(
+    tmp_path: Path,
+) -> None:
+    history = train_structured_model(
+        _make_dataset(n_rows=8, seq_len=3),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+        val_split=0.0,
+    )
+    m = history.holdout_value_metrics
+    assert m is not None and m.n_rows == 0
+
+
+def test_holdout_metrics_land_in_progress_json(tmp_path: Path) -> None:
+    progress_path = tmp_path / "progress.json"
+    train_structured_model(
+        _make_dataset(n_rows=16, seq_len=4),
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+        val_split=0.25, progress_path=progress_path,
+    )
+    blob = json.loads(progress_path.read_text())
+    assert blob["status"] == "completed"
+    assert blob["holdout_value_metrics"]["n_rows"] == 4
+    assert "value_mse" in blob["holdout_value_metrics"]
+
+
+def test_holdout_life_diff_baseline_uses_global_token(
+    tmp_path: Path,
+) -> None:
+    """With schema v2 scalars the trivial life-differential baseline
+    correlation is reported; it is read off the GLOBAL token."""
+    from mtg_bot.training.structured_model import (
+        SCALAR_FIELD_OPP_LIFE, SCALAR_FIELD_VIEWER_LIFE,
+        TOKEN_TYPE_GLOBAL,
+    )
+
+    # Every row's first token is the GLOBAL token, carrying a life
+    # differential that tracks the outcome exactly.
+    n_rows, seq_len, width = 16, 3, N_SCALAR_FIELDS_V2
+    outcomes = np.array(
+        [1.0 if i % 2 else -1.0 for i in range(n_rows)],
+        dtype=np.float32,
+    )
+    token_type = np.full((n_rows, seq_len), 2, dtype=np.int64)
+    token_type[:, 0] = TOKEN_TYPE_GLOBAL
+    scalars = np.zeros((n_rows, seq_len, width), dtype=np.float32)
+    scalars[:, 0, SCALAR_FIELD_VIEWER_LIFE] = 20.0 + 5.0 * outcomes
+    scalars[:, 0, SCALAR_FIELD_OPP_LIFE] = 20.0
+    ds = StructuredDataset(
+        token_type=token_type,
+        token_emb_ids=np.zeros(
+            (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
+        ),
+        token_scalars=scalars,
+        attention_mask=np.ones((n_rows, seq_len), dtype=np.bool_),
+        outcomes=outcomes,
+        policy_targets=np.zeros(
+            (n_rows, ACTION_VOCAB_SIZE), dtype=np.float32,
+        ),
+        action_masks=np.zeros(
+            (n_rows, ACTION_VOCAB_SIZE), dtype=np.bool_,
+        ),
+    )
+    history = train_structured_model(
+        ds,
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(), epochs=1, batch_size=4, device="cpu",
+        val_split=0.5, rng_seed=0,
+    )
+    m = history.holdout_value_metrics
+    assert m.baseline_life_diff_corr is not None
+    assert m.baseline_life_diff_corr > 0.99
+
+
+def test_holdout_life_diff_baseline_skipped_for_schema_v1(
+    tmp_path: Path,
+) -> None:
+    """Schema v1 rows carry no life fields — the baseline is reported
+    as None rather than silently zero."""
+    cfg_v1 = StructuredModelConfig(
+        emb_dim=16, n_heads=2, n_layers=1, hidden_dim=32,
+        scalar_schema_version=1,
+    )
+    n_rows, seq_len = 8, 3
+    rng = np.random.default_rng(1)
+    ds = StructuredDataset(
+        token_type=np.ones((n_rows, seq_len), dtype=np.int64),
+        token_emb_ids=np.zeros(
+            (n_rows, seq_len, N_EMB_FIELDS), dtype=np.int64,
+        ),
+        # Schema-v1 rows are 3 scalars wide (no life fields at all).
+        token_scalars=rng.standard_normal(
+            (n_rows, seq_len, 3),
+        ).astype(np.float32),
+        attention_mask=np.ones((n_rows, seq_len), dtype=np.bool_),
+        outcomes=rng.choice(
+            np.array([-1.0, 1.0], dtype=np.float32), size=n_rows,
+        ),
+        policy_targets=np.zeros(
+            (n_rows, ACTION_VOCAB_SIZE), dtype=np.float32,
+        ),
+        action_masks=np.zeros(
+            (n_rows, ACTION_VOCAB_SIZE), dtype=np.bool_,
+        ),
+    )
+    history = train_structured_model(
+        ds,
+        weights_out_path=tmp_path / "w.pt",
+        config=cfg_v1, epochs=1, batch_size=4, device="cpu",
+        val_split=0.25, rng_seed=0,
+    )
+    m = history.holdout_value_metrics
+    assert m.n_rows > 0
+    assert m.baseline_life_diff_corr is None
+
+
+def test_global_life_diff_handles_rows_without_global_token() -> None:
+    from mtg_bot.training.trainer import _global_life_diff
+
+    token_type = torch.tensor([[1, 2], [2, 2]])
+    scalars = torch.zeros((2, 2, 4), dtype=torch.float32)
+    scalars[0, 0, 2] = 18.0   # viewer life on the global token
+    scalars[0, 0, 3] = 11.0   # opponent life
+    mask = torch.ones((2, 2), dtype=torch.bool)
+    out = _global_life_diff(
+        token_type, scalars, mask,
+        global_type=1, viewer_idx=2, opp_idx=3,
+    )
+    assert out.tolist() == [7.0, 0.0]
+
+
+def test_global_life_diff_ignores_padded_global_tokens() -> None:
+    """A padded position that happens to carry the global type id must
+    not be read — padding is uninitialised, not data."""
+    from mtg_bot.training.trainer import _global_life_diff
+
+    token_type = torch.tensor([[2, 1]])
+    scalars = torch.zeros((1, 2, 4), dtype=torch.float32)
+    scalars[0, 1, 2] = 99.0
+    mask = torch.tensor([[True, False]])
+    out = _global_life_diff(
+        token_type, scalars, mask,
+        global_type=1, viewer_idx=2, opp_idx=3,
+    )
+    assert out.tolist() == [0.0]
