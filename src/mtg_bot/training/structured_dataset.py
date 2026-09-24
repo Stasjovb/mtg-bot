@@ -92,6 +92,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import shutil
 import tempfile
 import time
@@ -205,6 +206,7 @@ def _checked_narrow(
             )
     return np.ascontiguousarray(arr, dtype=target)
 
+
 SWEEP_ENV = "MTG_BOT_STRUCTURED_SWEEP"
 """Set to ``0``/``false`` to disable the stale-temp-dir startup sweep."""
 
@@ -214,7 +216,22 @@ SWEEP_HOURS_ENV = "MTG_BOT_STRUCTURED_SWEEP_HOURS"
 CACHE_DIR_ENV = "MTG_BOT_STRUCTURED_CACHE_DIR"
 """Default value for ``load_structured_dataset(cache_dir=...)``."""
 
-DEFAULT_SWEEP_HOURS = 12.0
+DEFAULT_SWEEP_HOURS = 2.0
+"""Age at which a flat store with no identifiable owner is swept.
+
+Lowered from 12 h (2026-09-24) now that a single leaked store is tens
+of GB. The 12 h margin existed to protect a long-running training job
+whose store is old but still mapped; that protection is now explicit
+(:data:`_OWNER_NAME` + a pid-liveness check), so the age threshold
+only governs stores with no owner marker at all — pre-marker layouts
+and dirs whose marker never made it to disk."""
+
+_OWNER_NAME = "owner.json"
+"""Marker file written into every process-owned store: the pid that
+built it, that pid's host, and when. The sweep reclaims a store whose
+owner process is gone AT ANY AGE — which is what makes a hard-killed
+or ``os._exit``-ed run's store disappear on the next load instead of
+12 h later."""
 
 # (attribute name, file name) for every array in a flat store. The
 # order is the write order; ``_open_memmaps`` reads the same list.
@@ -245,10 +262,107 @@ dataset down without running its finalizer."""
 
 
 def _new_owned_dir() -> str:
-    """``mkdtemp`` a flat-store directory and register it for cleanup."""
+    """``mkdtemp`` a flat-store directory and register it for cleanup.
+
+    The owner marker is written immediately (before any array), so the
+    window in which a concurrent sweep sees an unidentified directory
+    is a few milliseconds wide — and that window is covered by the age
+    threshold anyway.
+    """
     path = tempfile.mkdtemp(prefix=MEMMAP_DIR_PREFIX)
     _OWNED_DIRS.add(path)
+    _write_owner_marker(path)
     return path
+
+
+def _write_owner_marker(path: str | Path) -> None:
+    """Record which process owns this store. Best-effort: a store
+    without a marker is still swept, just on the age threshold."""
+    try:
+        (Path(path) / _OWNER_NAME).write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "host": platform.node(),
+                    "created_at": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:  # pragma: no cover - unwritable temp dir
+        _log.debug("structured dataset: could not write owner marker")
+
+
+def _read_owner_marker(directory: Path) -> Optional[dict]:
+    """Owner marker as a dict, or None if absent / unreadable."""
+    try:
+        raw = (directory / _OWNER_NAME).read_text(encoding="utf-8")
+        marker = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    return marker if isinstance(marker, dict) else None
+
+
+def _pid_is_running(pid: int) -> bool:
+    """True if a process with ``pid`` exists on this host.
+
+    Deliberately conservative — anything ambiguous (access denied, an
+    API that won't answer) reports True, because the cost of a false
+    "alive" is one sweep cycle of delay while the cost of a false
+    "dead" is deleting a live training run's store.
+
+    ``os.kill(pid, 0)`` is NOT usable on Windows: CPython maps any
+    signal other than CTRL_C_EVENT / CTRL_BREAK_EVENT onto
+    ``TerminateProcess``, i.e. the liveness probe would kill the
+    process it asks about. Hence the ctypes ``OpenProcess`` path.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes  # local: only Windows needs it
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(
+            process_query_limited_information, False, pid,
+        )
+        if not handle:
+            # 87 = no such pid. Anything else (5 = access denied for a
+            # process owned by another user) means it exists.
+            return kernel32.GetLastError() != error_invalid_parameter
+        try:
+            code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == still_active
+            return True  # pragma: no cover - API refused to answer
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - POSIX, other user
+        return True
+    except OSError:  # pragma: no cover - defensive
+        return True
+    return True
+
+
+def _store_owner_is_live(directory: Path) -> Optional[bool]:
+    """True / False if the store's owner process is alive / gone;
+    None when the store carries no usable marker (pre-marker layout,
+    a marker from another host, or a truncated write) and the caller
+    must fall back to the age threshold."""
+    marker = _read_owner_marker(directory)
+    if marker is None or marker.get("host") != platform.node():
+        return None
+    try:
+        pid = int(marker["pid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return _pid_is_running(pid)
 
 
 def _close_memmap(arr: object) -> None:
@@ -325,19 +439,26 @@ def sweep_stale_memmap_dirs(
 ) -> int:
     """Delete leftover ``mtg_bot_structured_dataset_*`` dirs.
 
-    A crashed or ``os._exit``-ed training run leaves its flat store
-    behind (tens of GB). This sweep runs at the top of
-    :func:`load_structured_dataset` and removes every such directory
-    under ``root`` (default: the system temp dir) whose mtime is older
-    than ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
-    or 12). Directories owned by *this* process are never touched.
+    A hard-killed or ``os._exit``-ed training run leaves its flat
+    store behind (tens of GB; ``atexit`` covers every *normal* exit
+    path — including an unhandled exception, ``sys.exit``,
+    ``KeyboardInterrupt`` and pytest-xdist workers — but cannot run
+    when the process is killed or calls ``os._exit``). This sweep runs
+    at the top of :func:`load_structured_dataset` and removes, under
+    ``root`` (default: the system temp dir):
 
-    On Windows a store still mapped by a live process cannot be
-    unlinked, so a concurrent long-running training job is protected
-    automatically. On POSIX the unlink would succeed — already-open
-    mappings keep working, but a worker that re-opens the store by
-    path afterwards would fail. The 12 h default is the margin; lower
-    it only if no run on the box lasts that long.
+    - any store whose owner process (see :data:`_OWNER_NAME`) is gone,
+      **at any age** — that is the killed-run case, and waiting hours
+      to reclaim tens of GB is what made this a disk-space incident;
+    - any store with no usable owner marker whose mtime is older than
+      ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
+      or :data:`DEFAULT_SWEEP_HOURS`).
+
+    A store whose owner pid is still running is never removed, however
+    old it is, so a multi-hour training run is safe on POSIX too —
+    previously only Windows protected it (by refusing to unlink a
+    mapped file) and the age threshold was the only POSIX margin.
+    Directories owned by *this* process are never touched.
 
     Opt out with ``MTG_BOT_STRUCTURED_SWEEP=0``. Returns the number of
     directories removed.
@@ -365,8 +486,13 @@ def sweep_stale_memmap_dirs(
         if str(entry) in _OWNED_DIRS:
             continue
         try:
-            if not entry.is_dir() or entry.stat().st_mtime > cutoff:
+            if not entry.is_dir():
                 continue
+            owner_live = _store_owner_is_live(entry)
+            if owner_live:
+                continue  # a live run owns this store
+            if owner_live is None and entry.stat().st_mtime > cutoff:
+                continue  # unidentified and still young
         except OSError:  # pragma: no cover - vanished mid-sweep
             continue
         if _remove_store_dir(entry, attempts=1):
@@ -375,6 +501,45 @@ def sweep_stale_memmap_dirs(
         _log.info(
             "structured dataset: swept %d stale flat-store dir(s) from %s",
             removed, root_path,
+        )
+    return removed
+
+
+def sweep_abandoned_build_dirs(cache_dir: Path) -> int:
+    """Remove ``.building-*`` stores in a persistent cache dir whose
+    builder process is gone.
+
+    The temp sweep cannot see these: a cached build writes into
+    ``<cache_dir>/.building-<signature>-<pid>`` and only renames it to
+    its final name when complete, so a killed build leaves a partial
+    (tens of GB) directory that nothing ever reclaims. A live builder
+    is identified by its owner marker and left alone.
+    """
+    removed = 0
+    try:
+        entries = list(Path(cache_dir).iterdir())
+    except OSError:  # pragma: no cover - unreadable cache dir
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(".building-"):
+            continue
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:  # pragma: no cover - vanished mid-sweep
+            continue
+        if str(entry) in _OWNED_DIRS:
+            continue
+        if _store_owner_is_live(entry) is not False:
+            # Live builder, or a marker we can't judge (another host's
+            # cache on a share): leave it.
+            continue
+        if _remove_store_dir(entry, attempts=1):
+            removed += 1
+    if removed:
+        _log.info(
+            "structured dataset: removed %d abandoned build dir(s) in %s",
+            removed, cache_dir,
         )
     return removed
 
@@ -1422,6 +1587,11 @@ class _FlatStoreBuilder:
     def __init__(self, directory: Path, plan: _StorePlan) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # Identify the builder, so a build abandoned by a killed
+        # process is reclaimable by pid liveness rather than by age
+        # (this covers the persistent cache's ``.building-*`` dirs,
+        # which live outside the swept temp root).
+        _write_owner_marker(self.directory)
         self.plan = plan
         self._arrays: dict[str, np.memmap] = {}
         alloc = self._alloc
@@ -1753,6 +1923,9 @@ def load_structured_dataset(
     # ---- allocate the flat store at its final size -----------------
     if cache_dir is not None:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        # A build abandoned by a killed process leaves a partial store
+        # in the cache dir, which the temp sweep never sees.
+        sweep_abandoned_build_dirs(Path(cache_dir))
         build_dir = Path(cache_dir) / f".building-{signature}-{os.getpid()}"
         _remove_store_dir(build_dir, attempts=1)
         owns = False
@@ -1854,4 +2027,5 @@ __all__ = [
     "structured_collate",
     "sweep_stale_memmap_dirs",
     "shutdown_dataloader_workers",
+    "sweep_abandoned_build_dirs",
 ]

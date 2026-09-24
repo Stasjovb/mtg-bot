@@ -22,6 +22,9 @@ import gc
 import json
 import os
 import pickle
+import platform
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -932,12 +935,16 @@ def test_sweep_hours_env_garbage_falls_back_to_default(
 ) -> None:
     directory = tmp_path / f"{structured_dataset.MEMMAP_DIR_PREFIX}y"
     directory.mkdir()
-    old = time.time() - 2 * 3600
-    os.utime(directory, (old, old))
+    young = time.time() - 0.25 * structured_dataset.DEFAULT_SWEEP_HOURS * 3600
+    os.utime(directory, (young, young))
     monkeypatch.setenv(structured_dataset.SWEEP_HOURS_ENV, "not-a-number")
-    # Default threshold is 12 h, so a 2 h-old dir survives.
+    # Garbage falls back to DEFAULT_SWEEP_HOURS, so a dir a quarter of
+    # that age survives.
     assert structured_dataset.sweep_stale_memmap_dirs(root=tmp_path) == 0
     assert directory.is_dir()
+    old = time.time() - 4 * structured_dataset.DEFAULT_SWEEP_HOURS * 3600
+    os.utime(directory, (old, old))
+    assert structured_dataset.sweep_stale_memmap_dirs(root=tmp_path) == 1
 
 
 def test_sweep_missing_root_is_noop(tmp_path: Path) -> None:
@@ -1179,6 +1186,198 @@ def test_in_ram_constructor_rejects_out_of_range_ids() -> None:
             np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.float32),
             np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.bool_),
         )
+
+
+# ---------------------------------------------------------------------
+# Owner marker + killed-run reclamation
+# ---------------------------------------------------------------------
+
+
+def _spawned_and_exited_pid() -> int:
+    """A pid that is definitely not running any more: spawn a trivial
+    process, wait for it, return its (now free) pid."""
+    popen = subprocess.Popen([sys.executable, "-c", "pass"])
+    popen.wait()
+    return popen.pid
+
+
+def _write_marker(directory: Path, pid: int) -> None:
+    (directory / structured_dataset._OWNER_NAME).write_text(
+        json.dumps(
+            {"pid": pid, "host": platform.node(), "created_at": time.time()}
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_pid_is_running_self_and_exited_child() -> None:
+    assert structured_dataset._pid_is_running(os.getpid())
+    assert not structured_dataset._pid_is_running(_spawned_and_exited_pid())
+    assert not structured_dataset._pid_is_running(0)
+
+
+def test_owned_store_carries_an_owner_marker(tmp_path: Path) -> None:
+    _write_multi_file_pool(tmp_path)
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        marker = structured_dataset._read_owner_marker(
+            Path(dataset._memmap_dir)
+        )
+        assert marker is not None
+        assert marker["pid"] == os.getpid()
+        assert marker["host"] == platform.node()
+        assert structured_dataset._store_owner_is_live(
+            Path(dataset._memmap_dir)
+        ) is True
+    finally:
+        dataset.close()
+
+
+def test_sweep_keeps_a_live_owner_store_however_old(tmp_path: Path) -> None:
+    """A multi-hour training run's store must survive the sweep even
+    though its mtime is ancient — the pid, not the age, is the signal."""
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    live = tmp_path / f"{prefix}live"
+    live.mkdir()
+    _write_marker(live, os.getpid())
+    old = time.time() - 48 * 3600
+    os.utime(live, (old, old))
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=1, root=tmp_path,
+    )
+    assert removed == 0
+    assert live.is_dir()
+
+
+def test_sweep_removes_a_dead_owner_store_immediately(
+    tmp_path: Path,
+) -> None:
+    """A killed run's store is reclaimed on the next load, not after
+    the age threshold — a single leaked store is tens of GB."""
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    orphan = tmp_path / f"{prefix}orphan"
+    orphan.mkdir()
+    (orphan / "token_type_flat.npy").write_bytes(b"x")
+    _write_marker(orphan, _spawned_and_exited_pid())
+    # Fresh: mtime is now, so the age threshold alone would keep it.
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 1
+    assert not orphan.exists()
+
+
+def test_sweep_falls_back_to_age_without_a_usable_marker(
+    tmp_path: Path,
+) -> None:
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    foreign = tmp_path / f"{prefix}foreign_host"
+    corrupt = tmp_path / f"{prefix}corrupt_marker"
+    for directory in (foreign, corrupt):
+        directory.mkdir()
+    (foreign / structured_dataset._OWNER_NAME).write_text(
+        json.dumps({"pid": 1, "host": "some-other-box"}), encoding="utf-8",
+    )
+    (corrupt / structured_dataset._OWNER_NAME).write_text(
+        "{truncated", encoding="utf-8",
+    )
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 0, "young + unidentifiable must be left alone"
+    old = time.time() - 48 * 3600
+    os.utime(foreign, (old, old))
+    os.utime(corrupt, (old, old))
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 2
+
+
+def test_default_sweep_age_is_short_now_that_stores_are_huge() -> None:
+    assert structured_dataset.DEFAULT_SWEEP_HOURS <= 2.0
+
+
+def test_abandoned_cache_build_dirs_are_reclaimed(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    dead = cache / ".building-deadsig-1234"
+    live = cache / ".building-livesig-5678"
+    published = cache / "abcdef"
+    for directory in (dead, live, published):
+        directory.mkdir()
+    _write_marker(dead, _spawned_and_exited_pid())
+    _write_marker(live, os.getpid())
+    assert structured_dataset.sweep_abandoned_build_dirs(cache) == 1
+    assert not dead.exists()
+    assert live.is_dir(), "a live build must not be swept"
+    assert published.is_dir(), "a published store is not a build dir"
+
+
+_LEAK_CHILD = """
+import sys
+from pathlib import Path
+sys.path.insert(0, {src!r})
+from mtg_bot.training.structured_dataset import load_structured_dataset
+ds = load_structured_dataset(Path({pool!r}))
+print(ds._memmap_dir)
+sys.stdout.flush()
+{tail}
+"""
+
+
+def _run_child(tmp_root: Path, pool: Path, tail: str):
+    env = dict(os.environ)
+    env.update(
+        TMP=str(tmp_root), TEMP=str(tmp_root), TMPDIR=str(tmp_root),
+        MTG_BOT_STRUCTURED_SWEEP="0",
+    )
+    src = str(Path(structured_dataset.__file__).parents[3])
+    code = _LEAK_CHILD.format(src=src, pool=str(pool), tail=tail)
+    return subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+    )
+
+
+@pytest.mark.slow
+def test_normal_child_exit_removes_the_store_without_close(
+    tmp_path: Path,
+) -> None:
+    """``atexit`` covers the ordinary exit path: a script that never
+    calls ``close()`` still leaves nothing behind."""
+    pool = tmp_path / "pool"
+    _write_multi_file_pool(pool)
+    tmp_root = tmp_path / "temproot"
+    tmp_root.mkdir()
+    proc = _run_child(tmp_root, pool, "")
+    assert proc.returncode == 0, proc.stderr
+    leftovers = list(
+        tmp_root.glob(structured_dataset.MEMMAP_DIR_PREFIX + "*")
+    )
+    assert leftovers == [], f"atexit did not reclaim {leftovers}"
+
+
+@pytest.mark.slow
+def test_os_exit_leak_is_reclaimed_by_the_next_sweep(
+    tmp_path: Path,
+) -> None:
+    """``os._exit`` (and a hard kill) skips ``atexit``, so the store
+    IS leaked — the sweep must then reclaim it on owner death, without
+    waiting out the age threshold."""
+    pool = tmp_path / "pool"
+    _write_multi_file_pool(pool)
+    tmp_root = tmp_path / "temproot"
+    tmp_root.mkdir()
+    proc = _run_child(tmp_root, pool, "import os; os._exit(0)")
+    assert proc.returncode == 0, proc.stderr
+    leaked = list(tmp_root.glob(structured_dataset.MEMMAP_DIR_PREFIX + "*"))
+    assert len(leaked) == 1, "expected the documented os._exit leak"
+    assert structured_dataset._store_owner_is_live(leaked[0]) is False
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_root,
+    )
+    assert removed == 1
+    assert not leaked[0].exists()
 
 
 def test_layout_version_bump_invalidates_v1_caches(tmp_path: Path) -> None:
