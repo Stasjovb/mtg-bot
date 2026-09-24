@@ -392,10 +392,17 @@ def test_train_structured_cli_validates_window_recent(
         ])
 
 
-def test_train_structured_cli_window_recent_picks_latest(
+def test_train_structured_cli_window_recent_files_picks_latest(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """--window-recent filters to the N most recent npz files."""
+    """--window-recent-files filters to the N most recent npz files.
+
+    (This is the pre-2026-09-24 ``--window-recent`` behaviour; that
+    flag now windows by ITERATION — see
+    ``tests/cli/test_train_window_recent.py``. These fixture files
+    carry no ``iter_NNN`` label, so the iteration window would keep
+    them all.)
+    """
     import os
     import time
     data_dir = tmp_path / "data"
@@ -420,7 +427,7 @@ def test_train_structured_cli_window_recent_picks_latest(
         "--device", "cpu",
         "--progress-path", str(progress_path),
         "--architecture", "structured",
-        "--window-recent", "1",
+        "--window-recent-files", "1",
     ])
     meta = json.loads(
         (registry_root / "v1" / "metadata.json").read_text()

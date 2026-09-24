@@ -275,7 +275,11 @@ message rather than silently dropping into a no-op.
 - `--config PATH` — the TOML. Optional only if every required field
   is supplied via overrides.
 - `--progress-dir PATH` — root for runs.db + per-cycle ephemeral dirs
-  (default `training_progress/`).
+  (default `training_progress/`). Forwarded all the way down: launcher
+  -> `iterate --progress-dir` -> `train --progress-dir`, so a lineage
+  launched with `--progress-dir training_progress_s2` keeps ALL of its
+  stage cards (including the trainer's own default progress JSON) out
+  of the first lineage's directory.
 - `--deck-pool PATH` — forwarded to `iterate --deck-pool`.
 - `--queue-url URL` — forwarded to `iterate --queue-url`. Defaults
   to `http://<first_worker_host>:5099`.
@@ -289,6 +293,28 @@ message rather than silently dropping into a no-op.
   already exists" guard when the existing row is in a non-restartable
   state. Reserved for future strict-mode behaviour; today the
   runs.client swallows conflicts as warnings.
+
+### Bounding the training window
+
+`iterate` passes the whole `--data-dir` to the trainer by default, so
+training wall-time (and RAM) grows with the accumulated history. Two
+knobs bound it, and they are NOT interchangeable:
+
+- `--window-recent N` — the last **N iterations**. Files are grouped
+  by the `<prefix>iter_NNN` label in their filename and every file of
+  the N highest iteration indices is kept. This is the one you
+  normally want.
+- `--window-recent-files N` — the **N most recently modified files**
+  (the pre-2026-09-24 meaning of `--window-recent`). Use it when the
+  binding constraint is a file/row count rather than a cycle count —
+  e.g. the desktop's 64 GB RAM ceiling at ~4M rows.
+
+The distinction matters because the distributed pipeline rehydrates
+**one `.npz` per GAME** while the local loop writes one per
+**iteration**: under the old file-count semantics, `--window-recent 3`
+trained a distributed cycle on three games (observed 2026-09-23, 7,278
+rows). Files whose names carry no iteration label are always kept, with
+a warning naming them.
 
 ### Running a second lineage (`label_prefix`)
 

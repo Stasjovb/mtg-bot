@@ -205,3 +205,85 @@ def test_train_next_window_recent_none_omits_flag(tmp_path: Path):
         window_recent=None,
     )
     assert "--window-recent" not in cmd
+
+
+def test_train_next_threads_window_recent_files(tmp_path: Path):
+    """``window_recent_files=1000`` emits ``--window-recent-files
+    1000`` — the file-count window is a DIFFERENT flag now that
+    ``--window-recent`` counts iterations."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    registry_root = tmp_path / "weights"
+    registry_root.mkdir()
+
+    cmd = _captured_subprocess_call(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        epochs=1,
+        batch_size=8,
+        learning_rate=1e-3,
+        val_split=0.1,
+        seed=0,
+        notes="test",
+        window_recent=None,
+        window_recent_files=1000,
+    )
+    assert "--window-recent" not in cmd
+    idx = cmd.index("--window-recent-files")
+    assert cmd[idx + 1] == "1000"
+
+
+def test_train_next_threads_progress_dir(tmp_path: Path):
+    """``progress_dir`` reaches the trainer as ``--progress-dir``.
+
+    Without it the trainer's OWN default progress path hardcoded
+    ``training_progress/``: the s2 lineage's cycle-5 train printed
+    ``# Progress JSON: training_progress\\s2_iter_005_train_v6.json``
+    while every other artifact of that cycle lived under
+    ``training_progress_s2/``.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    registry_root = tmp_path / "weights"
+    registry_root.mkdir()
+    progress_dir = tmp_path / "training_progress_s2"
+
+    cmd = _captured_subprocess_call(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        epochs=1,
+        batch_size=8,
+        learning_rate=1e-3,
+        val_split=0.1,
+        seed=0,
+        notes="test",
+        window_recent=None,
+        progress_dir=progress_dir,
+        progress_path=progress_dir / "s2_iter_005_train_v6.json",
+    )
+    idx = cmd.index("--progress-dir")
+    assert cmd[idx + 1] == str(progress_dir)
+    p_idx = cmd.index("--progress-path")
+    assert cmd[p_idx + 1] == str(progress_dir / "s2_iter_005_train_v6.json")
+
+
+def test_train_next_progress_dir_none_omits_flag(tmp_path: Path):
+    """No ``progress_dir`` (direct callers / tests) = no flag, so
+    train_nn keeps its own ``training_progress`` default."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    registry_root = tmp_path / "weights"
+    registry_root.mkdir()
+
+    cmd = _captured_subprocess_call(
+        data_dir=data_dir,
+        registry_root=registry_root,
+        epochs=1,
+        batch_size=8,
+        learning_rate=1e-3,
+        val_split=0.1,
+        seed=0,
+        notes="test",
+        window_recent=None,
+    )
+    assert "--progress-dir" not in cmd
