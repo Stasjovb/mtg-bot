@@ -14,6 +14,7 @@ cd "/c/Users/Gregg Keithley/Documents/Claude/Projects/mtg-bot"
 export PYTHONIOENCODING=utf-8 PYTHONPATH=src
 N="${1:-1}"
 CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
+SEED="${S2_SEED:-1}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
 # NOTE: no --window-recent here: it means "the N most recently modified FILES"
 # (cli/train.py) and the distributed path rehydrates one .npz per GAME, so
 # --window-recent 3 trained cycle 2 on 3 games (7,278 rows). Full history instead.
@@ -37,6 +38,6 @@ for _ in $(seq 1 "$N"); do
     ${DRY_RUN:+--dry-run} \
     --data-dir iterate_data_s2 --scalar-schema-version 2 \
     --eval-games 300 --one-legal-keep-frac 0.2 \
-    --early-stop-patience 5 --learning-rate 1e-3 --seed 1 \
+    --early-stop-patience 5 --learning-rate 1e-3 --seed "$SEED" \
     --per-game-timeout-sec 900
 done
