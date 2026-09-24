@@ -1790,6 +1790,13 @@ def _main_structured(args, parser) -> None:
         # crashed" and keep the cycle chain going.
         print(str(exc), file=sys.stderr)
         sys.exit(_GATE_REJECT_EXIT_CODE)
+    finally:
+        # Release the flat store (tens of GB in temp) the moment
+        # training is over instead of waiting for the interpreter's
+        # atexit hook — the window between "training done" and
+        # "process exits" is exactly where an operator abort / kill
+        # leaves the store stranded on disk.
+        dataset.close()
 
     print(f"\n# Done in {elapsed:.1f}s. Registered as {version}.")
     print(f"# Weights: {registry.weights_path(version)}")

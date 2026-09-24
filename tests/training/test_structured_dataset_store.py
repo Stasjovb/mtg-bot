@@ -22,6 +22,9 @@ import gc
 import json
 import os
 import pickle
+import platform
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -29,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from mtg_bot.features import FEATURE_DIM
 from mtg_bot.training import structured_dataset
@@ -931,12 +935,16 @@ def test_sweep_hours_env_garbage_falls_back_to_default(
 ) -> None:
     directory = tmp_path / f"{structured_dataset.MEMMAP_DIR_PREFIX}y"
     directory.mkdir()
-    old = time.time() - 2 * 3600
-    os.utime(directory, (old, old))
+    young = time.time() - 0.25 * structured_dataset.DEFAULT_SWEEP_HOURS * 3600
+    os.utime(directory, (young, young))
     monkeypatch.setenv(structured_dataset.SWEEP_HOURS_ENV, "not-a-number")
-    # Default threshold is 12 h, so a 2 h-old dir survives.
+    # Garbage falls back to DEFAULT_SWEEP_HOURS, so a dir a quarter of
+    # that age survives.
     assert structured_dataset.sweep_stale_memmap_dirs(root=tmp_path) == 0
     assert directory.is_dir()
+    old = time.time() - 4 * structured_dataset.DEFAULT_SWEEP_HOURS * 3600
+    os.utime(directory, (old, old))
+    assert structured_dataset.sweep_stale_memmap_dirs(root=tmp_path) == 1
 
 
 def test_sweep_missing_root_is_noop(tmp_path: Path) -> None:
@@ -1021,3 +1029,367 @@ def test_store_signature_tracks_mtime_and_size(tmp_path: Path) -> None:
     future = time.time() + 120
     os.utime(paths[0], (future, future))
     assert structured_dataset._store_signature(paths) != sig
+
+
+# ---------------------------------------------------------------------
+# Narrowed on-disk dtypes (flat-store layout v2)
+# ---------------------------------------------------------------------
+
+
+def _store_dtypes(directory: Path) -> dict[str, np.dtype]:
+    """Read every store array's dtype straight off its ``.npy``
+    header — no dataset object in between."""
+    out: dict[str, np.dtype] = {}
+    for path in sorted(directory.glob("*.npy")):
+        with open(path, "rb") as fp:
+            version = np.lib.format.read_magic(fp)
+            reader = (
+                np.lib.format.read_array_header_1_0 if version == (1, 0)
+                else np.lib.format.read_array_header_2_0
+            )
+            _shape, _fortran, dtype = reader(fp)
+        out[path.name] = dtype
+    return out
+
+
+def test_store_arrays_use_the_narrowed_dtypes(tmp_path: Path) -> None:
+    """Every column's on-disk dtype is the documented one: the token
+    id columns are int16 / int32, not int64."""
+    _write_multi_file_pool(tmp_path)
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        dtypes = _store_dtypes(Path(dataset._memmap_dir))
+        assert dtypes == structured_dataset.FLAT_STORE_DTYPES
+        assert dtypes["token_type_flat.npy"] == np.dtype(np.int16)
+        assert dtypes["token_emb_ids_flat.npy"] == np.dtype(np.int32)
+        assert dtypes["token_scalars_flat.npy"] == np.dtype(np.float32)
+        # The memmaps the dataset holds agree with the files.
+        assert dataset._token_type_flat.dtype == np.int16
+        assert dataset._token_emb_ids_flat.dtype == np.int32
+    finally:
+        dataset.close()
+
+
+def test_in_ram_constructor_also_narrows() -> None:
+    """The legacy single-array constructor writes the same layout."""
+    arrays = _make_struct_arrays(4, seq_lens=[1, 2, 3, 4], max_len=4, seed=5)
+    dataset = StructuredDataset(
+        arrays["structured_token_type"],
+        arrays["structured_token_emb_ids"],
+        arrays["structured_token_scalars"],
+        arrays["structured_attention_mask"],
+        np.zeros((4,), dtype=np.float32),
+        np.zeros((4, ACTION_VOCAB_SIZE), dtype=np.float32),
+        np.zeros((4, ACTION_VOCAB_SIZE), dtype=np.bool_),
+    )
+    try:
+        assert _store_dtypes(Path(dataset._memmap_dir)) == (
+            structured_dataset.FLAT_STORE_DTYPES
+        )
+        assert dataset[0]["token_type"].dtype == torch.int64
+        assert dataset[0]["token_emb_ids"].dtype == torch.int64
+    finally:
+        dataset.close()
+
+
+def test_narrow_store_yields_tensors_identical_to_the_int64_store(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Round trip: every yielded tensor — and every collated batch —
+    is dtype- and value-identical to what the pre-v2 all-int64 store
+    produced for the same pool."""
+    _write_multi_file_pool(tmp_path)
+    narrow = load_structured_dataset(tmp_path)
+    try:
+        with monkeypatch.context() as mp:
+            # Widening the dtype constants rebuilds the v1 layout
+            # through the exact same code path.
+            mp.setattr(structured_dataset, "TOKEN_TYPE_DTYPE", np.int64)
+            mp.setattr(structured_dataset, "TOKEN_EMB_IDS_DTYPE", np.int64)
+            reference = load_structured_dataset(tmp_path)
+            try:
+                ref_dtypes = _store_dtypes(Path(reference._memmap_dir))
+                assert ref_dtypes["token_type_flat.npy"] == np.dtype(np.int64)
+                assert ref_dtypes["token_emb_ids_flat.npy"] == np.dtype(
+                    np.int64
+                )
+                assert len(narrow) == len(reference)
+                for i in range(len(reference)):
+                    got, want = narrow[i], reference[i]
+                    assert got.keys() == want.keys()
+                    for key in want:
+                        assert got[key].dtype == want[key].dtype, key
+                        assert torch.equal(got[key], want[key]), key
+                    assert got["token_type"].dtype == torch.int64
+                    assert got["token_emb_ids"].dtype == torch.int64
+                batch_got = structured_collate(
+                    [narrow[i] for i in range(len(narrow))]
+                )
+                batch_want = structured_collate(
+                    [reference[i] for i in range(len(reference))]
+                )
+                for key in batch_want:
+                    assert batch_got[key].dtype == batch_want[key].dtype, key
+                    assert torch.equal(batch_got[key], batch_want[key]), key
+                assert batch_got["token_type"].dtype == torch.int64
+                assert batch_got["token_emb_ids"].dtype == torch.int64
+            finally:
+                reference.close()
+    finally:
+        narrow.close()
+
+
+@pytest.mark.parametrize(
+    "key, value, column",
+    [
+        ("structured_token_type", 40_000, "token_type_flat"),
+        ("structured_token_emb_ids", 2 ** 31, "token_emb_ids_flat"),
+    ],
+)
+def test_value_too_wide_for_the_store_dtype_fails_loudly(
+    tmp_path: Path, key: str, value: int, column: str,
+) -> None:
+    """A vocab that outgrew the stored dtype must raise, naming the
+    column, the value and the file — numpy truncates silently."""
+    _make_synthetic_npz(tmp_path / "a.npz", 3, max_len=4, seed=1)
+    with np.load(tmp_path / "a.npz") as handle:
+        arrays = {k: handle[k] for k in handle.files}
+    bumped = arrays[key].astype(np.int64)
+    if bumped.ndim == 2:
+        bumped[0, 0] = value
+    else:
+        bumped[0, 0, 0] = value
+    arrays[key] = bumped
+    _write_raw_npz(tmp_path / "a.npz", **arrays)
+
+    owned_before = set(structured_dataset._OWNED_DIRS)
+    with pytest.raises(ValueError) as excinfo:
+        load_structured_dataset(tmp_path)
+    message = str(excinfo.value)
+    assert column in message
+    assert str(value) in message
+    assert "a.npz" in message
+    # The half-written store is removed by the failure path.
+    assert set(structured_dataset._OWNED_DIRS) == owned_before
+
+
+def test_in_ram_constructor_rejects_out_of_range_ids() -> None:
+    arrays = _make_struct_arrays(2, seq_lens=[2, 2], max_len=2, seed=2)
+    arrays["structured_token_emb_ids"][0, 0, 0] = 2 ** 33
+    with pytest.raises(ValueError, match="token_emb_ids_flat"):
+        StructuredDataset(
+            arrays["structured_token_type"],
+            arrays["structured_token_emb_ids"],
+            arrays["structured_token_scalars"],
+            arrays["structured_attention_mask"],
+            np.zeros((2,), dtype=np.float32),
+            np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.float32),
+            np.zeros((2, ACTION_VOCAB_SIZE), dtype=np.bool_),
+        )
+
+
+# ---------------------------------------------------------------------
+# Owner marker + killed-run reclamation
+# ---------------------------------------------------------------------
+
+
+def _spawned_and_exited_pid() -> int:
+    """A pid that is definitely not running any more: spawn a trivial
+    process, wait for it, return its (now free) pid."""
+    popen = subprocess.Popen([sys.executable, "-c", "pass"])
+    popen.wait()
+    return popen.pid
+
+
+def _write_marker(directory: Path, pid: int) -> None:
+    (directory / structured_dataset._OWNER_NAME).write_text(
+        json.dumps(
+            {"pid": pid, "host": platform.node(), "created_at": time.time()}
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_pid_is_running_self_and_exited_child() -> None:
+    assert structured_dataset._pid_is_running(os.getpid())
+    assert not structured_dataset._pid_is_running(_spawned_and_exited_pid())
+    assert not structured_dataset._pid_is_running(0)
+
+
+def test_owned_store_carries_an_owner_marker(tmp_path: Path) -> None:
+    _write_multi_file_pool(tmp_path)
+    dataset = load_structured_dataset(tmp_path)
+    try:
+        marker = structured_dataset._read_owner_marker(
+            Path(dataset._memmap_dir)
+        )
+        assert marker is not None
+        assert marker["pid"] == os.getpid()
+        assert marker["host"] == platform.node()
+        assert structured_dataset._store_owner_is_live(
+            Path(dataset._memmap_dir)
+        ) is True
+    finally:
+        dataset.close()
+
+
+def test_sweep_keeps_a_live_owner_store_however_old(tmp_path: Path) -> None:
+    """A multi-hour training run's store must survive the sweep even
+    though its mtime is ancient — the pid, not the age, is the signal."""
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    live = tmp_path / f"{prefix}live"
+    live.mkdir()
+    _write_marker(live, os.getpid())
+    old = time.time() - 48 * 3600
+    os.utime(live, (old, old))
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=1, root=tmp_path,
+    )
+    assert removed == 0
+    assert live.is_dir()
+
+
+def test_sweep_removes_a_dead_owner_store_immediately(
+    tmp_path: Path,
+) -> None:
+    """A killed run's store is reclaimed on the next load, not after
+    the age threshold — a single leaked store is tens of GB."""
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    orphan = tmp_path / f"{prefix}orphan"
+    orphan.mkdir()
+    (orphan / "token_type_flat.npy").write_bytes(b"x")
+    _write_marker(orphan, _spawned_and_exited_pid())
+    # Fresh: mtime is now, so the age threshold alone would keep it.
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 1
+    assert not orphan.exists()
+
+
+def test_sweep_falls_back_to_age_without_a_usable_marker(
+    tmp_path: Path,
+) -> None:
+    prefix = structured_dataset.MEMMAP_DIR_PREFIX
+    foreign = tmp_path / f"{prefix}foreign_host"
+    corrupt = tmp_path / f"{prefix}corrupt_marker"
+    for directory in (foreign, corrupt):
+        directory.mkdir()
+    (foreign / structured_dataset._OWNER_NAME).write_text(
+        json.dumps({"pid": 1, "host": "some-other-box"}), encoding="utf-8",
+    )
+    (corrupt / structured_dataset._OWNER_NAME).write_text(
+        "{truncated", encoding="utf-8",
+    )
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 0, "young + unidentifiable must be left alone"
+    old = time.time() - 48 * 3600
+    os.utime(foreign, (old, old))
+    os.utime(corrupt, (old, old))
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_path,
+    )
+    assert removed == 2
+
+
+def test_default_sweep_age_is_short_now_that_stores_are_huge() -> None:
+    assert structured_dataset.DEFAULT_SWEEP_HOURS <= 2.0
+
+
+def test_abandoned_cache_build_dirs_are_reclaimed(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    dead = cache / ".building-deadsig-1234"
+    live = cache / ".building-livesig-5678"
+    published = cache / "abcdef"
+    for directory in (dead, live, published):
+        directory.mkdir()
+    _write_marker(dead, _spawned_and_exited_pid())
+    _write_marker(live, os.getpid())
+    assert structured_dataset.sweep_abandoned_build_dirs(cache) == 1
+    assert not dead.exists()
+    assert live.is_dir(), "a live build must not be swept"
+    assert published.is_dir(), "a published store is not a build dir"
+
+
+_LEAK_CHILD = """
+import sys
+from pathlib import Path
+sys.path.insert(0, {src!r})
+from mtg_bot.training.structured_dataset import load_structured_dataset
+ds = load_structured_dataset(Path({pool!r}))
+print(ds._memmap_dir)
+sys.stdout.flush()
+{tail}
+"""
+
+
+def _run_child(tmp_root: Path, pool: Path, tail: str):
+    env = dict(os.environ)
+    env.update(
+        TMP=str(tmp_root), TEMP=str(tmp_root), TMPDIR=str(tmp_root),
+        MTG_BOT_STRUCTURED_SWEEP="0",
+    )
+    src = str(Path(structured_dataset.__file__).parents[3])
+    code = _LEAK_CHILD.format(src=src, pool=str(pool), tail=tail)
+    return subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+    )
+
+
+@pytest.mark.slow
+def test_normal_child_exit_removes_the_store_without_close(
+    tmp_path: Path,
+) -> None:
+    """``atexit`` covers the ordinary exit path: a script that never
+    calls ``close()`` still leaves nothing behind."""
+    pool = tmp_path / "pool"
+    _write_multi_file_pool(pool)
+    tmp_root = tmp_path / "temproot"
+    tmp_root.mkdir()
+    proc = _run_child(tmp_root, pool, "")
+    assert proc.returncode == 0, proc.stderr
+    leftovers = list(
+        tmp_root.glob(structured_dataset.MEMMAP_DIR_PREFIX + "*")
+    )
+    assert leftovers == [], f"atexit did not reclaim {leftovers}"
+
+
+@pytest.mark.slow
+def test_os_exit_leak_is_reclaimed_by_the_next_sweep(
+    tmp_path: Path,
+) -> None:
+    """``os._exit`` (and a hard kill) skips ``atexit``, so the store
+    IS leaked — the sweep must then reclaim it on owner death, without
+    waiting out the age threshold."""
+    pool = tmp_path / "pool"
+    _write_multi_file_pool(pool)
+    tmp_root = tmp_path / "temproot"
+    tmp_root.mkdir()
+    proc = _run_child(tmp_root, pool, "import os; os._exit(0)")
+    assert proc.returncode == 0, proc.stderr
+    leaked = list(tmp_root.glob(structured_dataset.MEMMAP_DIR_PREFIX + "*"))
+    assert len(leaked) == 1, "expected the documented os._exit leak"
+    assert structured_dataset._store_owner_is_live(leaked[0]) is False
+    removed = structured_dataset.sweep_stale_memmap_dirs(
+        max_age_hours=12, root=tmp_root,
+    )
+    assert removed == 1
+    assert not leaked[0].exists()
+
+
+def test_layout_version_bump_invalidates_v1_caches(tmp_path: Path) -> None:
+    """The narrowed layout is v2, and the version is part of the
+    persistent-cache key, so a v1 store can never be reused."""
+    assert structured_dataset.FLAT_STORE_VERSION >= 2
+    _write_multi_file_pool(tmp_path)
+    paths = sorted(tmp_path.glob("*.npz"))
+    sig_now = structured_dataset._store_signature(paths)
+    saved = structured_dataset.FLAT_STORE_VERSION
+    try:
+        structured_dataset.FLAT_STORE_VERSION = 1
+        assert structured_dataset._store_signature(paths) != sig_now
+    finally:
+        structured_dataset.FLAT_STORE_VERSION = saved

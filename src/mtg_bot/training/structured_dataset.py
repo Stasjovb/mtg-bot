@@ -10,8 +10,8 @@ trunk.
 This module flattens every npz's padded tokens into a single packed
 "flat" storage indexed by per-row ``row_offsets``:
 
-- ``_token_type_flat``      shape (total_real_tokens,) int64
-- ``_token_emb_ids_flat``   shape (total_real_tokens, N_EMB_FIELDS) int64
+- ``_token_type_flat``      shape (total_real_tokens,) int16
+- ``_token_emb_ids_flat``   shape (total_real_tokens, N_EMB_FIELDS) int32
 - ``_token_scalars_flat``   shape (total_real_tokens, N_SCALAR_FIELDS) float32
 - ``_row_offsets``          shape (n_total + 1,) int64 — cumulative
                             real-token count; ``_row_offsets[i+1] -
@@ -20,8 +20,28 @@ This module flattens every npz's padded tokens into a single packed
                             is row i's real tokens with NO padding.
 
 ``__getitem__(idx)`` becomes a single numpy slice + ``torch.from_numpy``
-per array — no ``.astype()`` copies, no per-row ``.sum()`` to recompute
-the sequence length, no Python-level list indexing.
+per array — one materializing copy per row (which also widens the
+narrow token-id dtypes back to ``int64``, see below), no per-row
+``.sum()`` to recompute the sequence length, no Python-level list
+indexing.
+
+**Stored token-id dtypes.** The token id columns are stored at the
+smallest integer width their vocabularies can ever need (see
+:data:`FLAT_STORE_DTYPES`): ``token_type`` is int16 (12 token types
+today), ``token_emb_ids`` is int32 (printing ids — the widest field —
+top out in the low hundreds today and the model's other id fields are
+< 32). Both are widened to ``torch.int64`` in ``__getitem__`` so the
+model's ``nn.Embedding`` layers still receive ``LongTensor``s and no
+model / trainer code changes. Store-build time asserts every value
+fits the narrowed dtype and fails loudly, naming the column and the
+offending value, rather than letting numpy truncate silently. This
+cuts 53% off the two token-id columns (64 -> 30 bytes per token):
+19.0 GB -> 8.9 GB on the 296M-token / 4.76M-row ``iterate_data_s2``
+pool — measured on a 500-shard subset in
+``docs/BENCHMARKING_FINDINGS.md`` §8A. ``token_scalars`` stays float32: the
+schema-v2 scalar fields include /7, /10, /20 and /40 normalizers whose
+values are not exactly representable in float16, so narrowing it
+would change the training input.
 
 History note: an earlier eager-concat-with-global-max-padding loader
 OOM'd at ~42 GiB on the iter_016 dataset (1701 files, 7M samples).
@@ -48,7 +68,10 @@ Public API
   decoded every file into RAM and concatenated, peaking at ~24 GB per
   1M rows (a 4M-row pool committed 96 GB and effectively hung).
 - :func:`sweep_stale_memmap_dirs` — remove flat stores orphaned by a
-  crashed run (``$MTG_BOT_STRUCTURED_SWEEP=0`` opts out).
+  killed run, identified by a dead owner pid (or, with no owner
+  marker, by age). ``$MTG_BOT_STRUCTURED_SWEEP=0`` opts out.
+- :func:`sweep_abandoned_build_dirs` — the same for half-built stores
+  left inside a persistent ``cache_dir``.
 - :func:`shutdown_dataloader_workers` — drop a ``DataLoader``'s
   persistent workers so their memmap handles stop pinning the store.
 - :class:`StructuredDataset` — wraps the packed-flat storage. The
@@ -73,6 +96,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import shutil
 import tempfile
 import time
@@ -103,10 +127,112 @@ _STRUCT_NPZ_KEYS = (
 MEMMAP_DIR_PREFIX = "mtg_bot_structured_dataset_"
 """Prefix of every flat-store directory this module creates in %TEMP%."""
 
-FLAT_STORE_VERSION = 1
+FLAT_STORE_VERSION = 2
 """Bump when the on-disk flat-store layout changes. Part of the
 persistent-cache key so an old cache can never be mistaken for a new
-one."""
+one.
+
+History: v1 = all token arrays int64. v2 (2026-09-24) = narrowed
+token-id dtypes (see :data:`FLAT_STORE_DTYPES`); the tensors handed
+to the model are unchanged (still int64), only the bytes on disk
+shrink."""
+
+
+TOKEN_TYPE_DTYPE = np.int16
+"""On-disk dtype of ``token_type_flat``. ``N_TOKEN_TYPES`` is 12 and
+grows by one per new token kind, so int16 has ~2700x headroom; int8 /
+uint8 were rejected because they would leave only 100-odd spare ids
+and (for uint8) wrap a negative sentinel silently."""
+
+TOKEN_EMB_IDS_DTYPE = np.int32
+"""On-disk dtype of ``token_emb_ids_flat``. The widest field is the
+printing id (``DEFAULT_N_PRINTINGS`` = 320 today; a full-Magic
+printing table is ~10^5), the rest are < 32. int32 covers any
+plausible card database; int16 would not survive a multi-set registry
+expansion."""
+
+TOKEN_SCALARS_DTYPE = np.float32
+"""On-disk dtype of ``token_scalars_flat``. NOT narrowed to float16:
+schema-v2 fields normalize by 7 / 10 / 20 / 40, and those values are
+not exactly representable in float16 — narrowing would silently
+perturb the training input."""
+
+FLAT_STORE_DTYPES: dict[str, np.dtype] = {
+    "token_type_flat.npy": np.dtype(TOKEN_TYPE_DTYPE),
+    "token_emb_ids_flat.npy": np.dtype(TOKEN_EMB_IDS_DTYPE),
+    "token_scalars_flat.npy": np.dtype(TOKEN_SCALARS_DTYPE),
+    "row_offsets.npy": np.dtype(np.int64),
+    "outcomes.npy": np.dtype(np.float32),
+    "policy_targets.npy": np.dtype(np.float32),
+    "action_masks.npy": np.dtype(np.bool_),
+    "has_policy.npy": np.dtype(np.bool_),
+    "group_ids.npy": np.dtype(np.int64),
+}
+"""The dtype of every array in a v2 flat store, by file name. The
+on-disk contract; a test pins it."""
+
+
+_DTYPE_CONSTANT_BY_COLUMN: dict[str, str] = {
+    "token_type_flat": "TOKEN_TYPE_DTYPE",
+    "token_emb_ids_flat": "TOKEN_EMB_IDS_DTYPE",
+}
+
+
+def _check_fits_dtype(
+    column: str,
+    arr: np.ndarray,
+    dtype,
+    *,
+    source: object = None,
+) -> np.ndarray:
+    """Raise unless every value in ``arr`` fits ``dtype``.
+
+    numpy truncates silently on an out-of-range integer assignment
+    (``int16_store[:] = 40000`` stores -25536, no warning), which would
+    corrupt a training corpus invisibly. Every write into a narrowed
+    store column is checked here first: the min/max scan is one pass
+    over an already-decompressed chunk, and the error names the
+    column, the offending value and (for a streaming build) the source
+    npz, so a bad file is identifiable in a 2500-file pool.
+
+    Returns ``arr`` so callers can use it inline.
+    """
+    target = np.dtype(dtype)
+    arr = np.asarray(arr)
+    if not arr.size or arr.dtype == target:
+        return arr
+    info = np.iinfo(target)
+    lo = int(arr.min())
+    hi = int(arr.max())
+    if lo < info.min or hi > info.max:
+        bad = lo if lo < info.min else hi
+        where = f" (source {source})" if source is not None else ""
+        constant = _DTYPE_CONSTANT_BY_COLUMN.get(column, "the column's")
+        raise ValueError(
+            f"structured flat store: {column} value {bad} does not "
+            f"fit {target.name} (range [{info.min}, {info.max}])"
+            f"{where}. The vocabulary has outgrown the store's dtype "
+            f"— widen structured_dataset.{constant} and bump "
+            f"FLAT_STORE_VERSION."
+        )
+    return arr
+
+
+def _checked_narrow(
+    column: str,
+    arr: np.ndarray,
+    dtype,
+    *,
+    source: object = None,
+) -> np.ndarray:
+    """:func:`_check_fits_dtype` followed by a contiguous cast. Used
+    by the in-RAM path, which needs a real array to ``np.save``; the
+    streaming path only checks and lets the memmap assignment do the
+    conversion in place."""
+    return np.ascontiguousarray(
+        _check_fits_dtype(column, arr, dtype, source=source), dtype=dtype,
+    )
+
 
 SWEEP_ENV = "MTG_BOT_STRUCTURED_SWEEP"
 """Set to ``0``/``false`` to disable the stale-temp-dir startup sweep."""
@@ -117,7 +243,22 @@ SWEEP_HOURS_ENV = "MTG_BOT_STRUCTURED_SWEEP_HOURS"
 CACHE_DIR_ENV = "MTG_BOT_STRUCTURED_CACHE_DIR"
 """Default value for ``load_structured_dataset(cache_dir=...)``."""
 
-DEFAULT_SWEEP_HOURS = 12.0
+DEFAULT_SWEEP_HOURS = 2.0
+"""Age at which a flat store with no identifiable owner is swept.
+
+Lowered from 12 h (2026-09-24) now that a single leaked store is tens
+of GB. The 12 h margin existed to protect a long-running training job
+whose store is old but still mapped; that protection is now explicit
+(:data:`_OWNER_NAME` + a pid-liveness check), so the age threshold
+only governs stores with no owner marker at all — pre-marker layouts
+and dirs whose marker never made it to disk."""
+
+_OWNER_NAME = "owner.json"
+"""Marker file written into every process-owned store: the pid that
+built it, that pid's host, and when. The sweep reclaims a store whose
+owner process is gone AT ANY AGE — which is what makes a hard-killed
+or ``os._exit``-ed run's store disappear on the next load instead of
+12 h later."""
 
 # (attribute name, file name) for every array in a flat store. The
 # order is the write order; ``_open_memmaps`` reads the same list.
@@ -148,10 +289,122 @@ dataset down without running its finalizer."""
 
 
 def _new_owned_dir() -> str:
-    """``mkdtemp`` a flat-store directory and register it for cleanup."""
+    """``mkdtemp`` a flat-store directory and register it for cleanup.
+
+    The owner marker is written immediately (before any array), so the
+    window in which a concurrent sweep sees an unidentified directory
+    is a few milliseconds wide — and that window is covered by the age
+    threshold anyway.
+    """
     path = tempfile.mkdtemp(prefix=MEMMAP_DIR_PREFIX)
     _OWNED_DIRS.add(path)
+    _write_owner_marker(path)
     return path
+
+
+def _write_owner_marker(path: str | Path) -> None:
+    """Record which process owns this store. Best-effort: a store
+    without a marker is still swept, just on the age threshold."""
+    try:
+        (Path(path) / _OWNER_NAME).write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "host": platform.node(),
+                    "created_at": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:  # pragma: no cover - unwritable temp dir
+        _log.debug("structured dataset: could not write owner marker")
+
+
+def _read_owner_marker(directory: Path) -> Optional[dict]:
+    """Owner marker as a dict, or None if absent / unreadable."""
+    try:
+        raw = (directory / _OWNER_NAME).read_text(encoding="utf-8")
+        marker = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    return marker if isinstance(marker, dict) else None
+
+
+def _pid_is_running(pid: int) -> bool:
+    """True if a process with ``pid`` exists on this host.
+
+    Deliberately conservative — anything ambiguous (access denied, an
+    API that won't answer) reports True, because the cost of a false
+    "alive" is one sweep cycle of delay while the cost of a false
+    "dead" is deleting a live training run's store.
+
+    ``os.kill(pid, 0)`` is NOT usable on Windows: CPython maps any
+    signal other than CTRL_C_EVENT / CTRL_BREAK_EVENT onto
+    ``TerminateProcess``, i.e. the liveness probe would kill the
+    process it asks about. Hence the ctypes ``OpenProcess`` path.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes  # local: only Windows needs it
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87
+        # ``use_last_error`` keeps the error code with the call (a
+        # bare ``GetLastError()`` can be clobbered by ctypes' own
+        # bookkeeping), and the explicit HANDLE argtypes stop the
+        # 64-bit handle being truncated through the default c_int.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        )
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(
+            process_query_limited_information, False, pid,
+        )
+        if not handle:
+            # 87 = no such pid. Anything else (5 = access denied for a
+            # process owned by another user) means it exists.
+            return ctypes.get_last_error() != error_invalid_parameter
+        try:
+            code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == still_active
+            return True  # pragma: no cover - API refused to answer
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - POSIX, other user
+        return True
+    except OSError:  # pragma: no cover - defensive
+        return True
+    return True
+
+
+def _store_owner_is_live(directory: Path) -> Optional[bool]:
+    """True / False if the store's owner process is alive / gone;
+    None when the store carries no usable marker (pre-marker layout,
+    a marker from another host, or a truncated write) and the caller
+    must fall back to the age threshold."""
+    marker = _read_owner_marker(directory)
+    if marker is None or marker.get("host") != platform.node():
+        return None
+    try:
+        pid = int(marker["pid"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return _pid_is_running(pid)
 
 
 def _close_memmap(arr: object) -> None:
@@ -228,19 +481,26 @@ def sweep_stale_memmap_dirs(
 ) -> int:
     """Delete leftover ``mtg_bot_structured_dataset_*`` dirs.
 
-    A crashed or ``os._exit``-ed training run leaves its flat store
-    behind (tens of GB). This sweep runs at the top of
-    :func:`load_structured_dataset` and removes every such directory
-    under ``root`` (default: the system temp dir) whose mtime is older
-    than ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
-    or 12). Directories owned by *this* process are never touched.
+    A hard-killed or ``os._exit``-ed training run leaves its flat
+    store behind (tens of GB; ``atexit`` covers every *normal* exit
+    path — including an unhandled exception, ``sys.exit``,
+    ``KeyboardInterrupt`` and pytest-xdist workers — but cannot run
+    when the process is killed or calls ``os._exit``). This sweep runs
+    at the top of :func:`load_structured_dataset` and removes, under
+    ``root`` (default: the system temp dir):
 
-    On Windows a store still mapped by a live process cannot be
-    unlinked, so a concurrent long-running training job is protected
-    automatically. On POSIX the unlink would succeed — already-open
-    mappings keep working, but a worker that re-opens the store by
-    path afterwards would fail. The 12 h default is the margin; lower
-    it only if no run on the box lasts that long.
+    - any store whose owner process (see :data:`_OWNER_NAME`) is gone,
+      **at any age** — that is the killed-run case, and waiting hours
+      to reclaim tens of GB is what made this a disk-space incident;
+    - any store with no usable owner marker whose mtime is older than
+      ``max_age_hours`` (default: ``$MTG_BOT_STRUCTURED_SWEEP_HOURS``
+      or :data:`DEFAULT_SWEEP_HOURS`).
+
+    A store whose owner pid is still running is never removed, however
+    old it is, so a multi-hour training run is safe on POSIX too —
+    previously only Windows protected it (by refusing to unlink a
+    mapped file) and the age threshold was the only POSIX margin.
+    Directories owned by *this* process are never touched.
 
     Opt out with ``MTG_BOT_STRUCTURED_SWEEP=0``. Returns the number of
     directories removed.
@@ -268,8 +528,13 @@ def sweep_stale_memmap_dirs(
         if str(entry) in _OWNED_DIRS:
             continue
         try:
-            if not entry.is_dir() or entry.stat().st_mtime > cutoff:
+            if not entry.is_dir():
                 continue
+            owner_live = _store_owner_is_live(entry)
+            if owner_live:
+                continue  # a live run owns this store
+            if owner_live is None and entry.stat().st_mtime > cutoff:
+                continue  # unidentified and still young
         except OSError:  # pragma: no cover - vanished mid-sweep
             continue
         if _remove_store_dir(entry, attempts=1):
@@ -278,6 +543,45 @@ def sweep_stale_memmap_dirs(
         _log.info(
             "structured dataset: swept %d stale flat-store dir(s) from %s",
             removed, root_path,
+        )
+    return removed
+
+
+def sweep_abandoned_build_dirs(cache_dir: Path) -> int:
+    """Remove ``.building-*`` stores in a persistent cache dir whose
+    builder process is gone.
+
+    The temp sweep cannot see these: a cached build writes into
+    ``<cache_dir>/.building-<signature>-<pid>`` and only renames it to
+    its final name when complete, so a killed build leaves a partial
+    (tens of GB) directory that nothing ever reclaims. A live builder
+    is identified by its owner marker and left alone.
+    """
+    removed = 0
+    try:
+        entries = list(Path(cache_dir).iterdir())
+    except OSError:  # pragma: no cover - unreadable cache dir
+        return 0
+    for entry in entries:
+        if not entry.name.startswith(".building-"):
+            continue
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:  # pragma: no cover - vanished mid-sweep
+            continue
+        if str(entry) in _OWNED_DIRS:
+            continue
+        if _store_owner_is_live(entry) is not False:
+            # Live builder, or a marker we can't judge (another host's
+            # cache on a share): leave it.
+            continue
+        if _remove_store_dir(entry, attempts=1):
+            removed += 1
+    if removed:
+        _log.info(
+            "structured dataset: removed %d abandoned build dir(s) in %s",
+            removed, cache_dir,
         )
     return removed
 
@@ -309,8 +613,14 @@ class StructuredDataset(Dataset):
     array, with per-row slice bounds given by ``_row_offsets``. This
     eliminates BOTH the per-file padding overhead (saves ~50% memory
     vs file-padded layouts) AND the per-row Python overhead in
-    ``__getitem__`` (a single ``arr[start:end]`` + ``torch.from_numpy``
-    per array, no ``.astype`` copies, no list indexing).
+    ``__getitem__`` (a single ``arr[start:end]`` materialization +
+    ``torch.from_numpy`` per array, no list indexing).
+
+    The two id columns are stored at their narrowest safe integer
+    width (``token_type`` int16, ``token_emb_ids`` int32 — see
+    :data:`FLAT_STORE_DTYPES`) and widened to int64 by the
+    materializing copy in ``__getitem__``, so the dict above is
+    dtype-identical to the all-int64 store it replaced.
     """
 
     def __init__(
@@ -448,9 +758,9 @@ class StructuredDataset(Dataset):
             ).astype(np.bool_)
         else:
             # Empty input lists: produce a zero-row dataset.
-            tt_flat = np.zeros((0,), dtype=np.int64)
-            emb_flat = np.zeros((0, 0), dtype=np.int64)
-            sca_flat = np.zeros((0, 0), dtype=np.float32)
+            tt_flat = np.zeros((0,), dtype=TOKEN_TYPE_DTYPE)
+            emb_flat = np.zeros((0, 0), dtype=TOKEN_EMB_IDS_DTYPE)
+            sca_flat = np.zeros((0, 0), dtype=TOKEN_SCALARS_DTYPE)
             row_lens_all = np.zeros((0,), dtype=np.int64)
             outcomes = np.zeros((0,), dtype=np.float32)
             policy_targets = np.zeros(
@@ -610,15 +920,22 @@ class StructuredDataset(Dataset):
         # block.
         np.save(
             memmap_dir / "token_type_flat.npy",
-            np.ascontiguousarray(token_type_flat, dtype=np.int64),
+            _checked_narrow(
+                "token_type_flat", token_type_flat, TOKEN_TYPE_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "token_emb_ids_flat.npy",
-            np.ascontiguousarray(token_emb_ids_flat, dtype=np.int64),
+            _checked_narrow(
+                "token_emb_ids_flat", token_emb_ids_flat,
+                TOKEN_EMB_IDS_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "token_scalars_flat.npy",
-            np.ascontiguousarray(token_scalars_flat, dtype=np.float32),
+            np.ascontiguousarray(
+                token_scalars_flat, dtype=TOKEN_SCALARS_DTYPE,
+            ),
         )
         np.save(
             memmap_dir / "row_offsets.npy",
@@ -786,8 +1103,17 @@ class StructuredDataset(Dataset):
         # because that would produce a tensor pointing into a
         # read-only mapping, which collate_fn's ``in-place`` writes
         # would fail on.
-        tt = torch.from_numpy(np.array(self._token_type_flat[start:end]))
-        emb = torch.from_numpy(np.array(self._token_emb_ids_flat[start:end]))
+        # The two id columns are stored narrow (int16 / int32) and
+        # widened back to int64 here: ``.astype`` IS the materializing
+        # copy (it does not add one), so the row still costs exactly
+        # one copy per array and the model's embedding layers keep
+        # getting ``LongTensor``s.
+        tt = torch.from_numpy(
+            self._token_type_flat[start:end].astype(np.int64)
+        )
+        emb = torch.from_numpy(
+            self._token_emb_ids_flat[start:end].astype(np.int64)
+        )
         sca = torch.from_numpy(np.array(self._token_scalars_flat[start:end]))
         am = torch.ones(seq_len, dtype=torch.bool)
         outcome = torch.tensor(
@@ -1283,6 +1609,15 @@ def _plan_store(scans: Sequence[_FileScan]) -> _StorePlan:
     )
 
 
+_NARROWED_TOKEN_COLUMNS: dict[str, str] = {
+    "token_type": "token_type_flat",
+    "token_emb_ids": "token_emb_ids_flat",
+}
+"""Builder attribute -> store column name, for the columns whose
+on-disk dtype is narrower than the npz's int64 and therefore need a
+range check on every write."""
+
+
 class _FlatStoreBuilder:
     """Pre-allocate the flat ``.npy`` files and stream rows into them.
 
@@ -1294,18 +1629,24 @@ class _FlatStoreBuilder:
     def __init__(self, directory: Path, plan: _StorePlan) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # Identify the builder, so a build abandoned by a killed
+        # process is reclaimable by pid liveness rather than by age
+        # (this covers the persistent cache's ``.building-*`` dirs,
+        # which live outside the swept temp root).
+        _write_owner_marker(self.directory)
         self.plan = plan
         self._arrays: dict[str, np.memmap] = {}
         alloc = self._alloc
         n_rows, n_tok = plan.n_rows, plan.n_tokens
         self.token_type = alloc(
-            "token_type_flat.npy", np.int64, (n_tok,),
+            "token_type_flat.npy", TOKEN_TYPE_DTYPE, (n_tok,),
         )
         self.token_emb_ids = alloc(
-            "token_emb_ids_flat.npy", np.int64, (n_tok, plan.emb_width),
+            "token_emb_ids_flat.npy", TOKEN_EMB_IDS_DTYPE,
+            (n_tok, plan.emb_width),
         )
         self.token_scalars = alloc(
-            "token_scalars_flat.npy", np.float32,
+            "token_scalars_flat.npy", TOKEN_SCALARS_DTYPE,
             (n_tok, plan.scalar_width),
         )
         self.outcomes = alloc("outcomes.npy", np.float32, (n_rows,))
@@ -1334,17 +1675,31 @@ class _FlatStoreBuilder:
         token_start: int,
         chunk_offset: int,
         flat_chunk: np.ndarray,
+        *,
+        source: object = None,
     ) -> None:
         """Write one chunk's packed real tokens at ``token_start +
         chunk_offset``. A zero-token chunk is skipped: files with no
         real tokens (crash / timeout npzs) carry a placeholder
         emb/scalar width that must not be broadcast against the store's
         schema width — the streaming equivalent of
-        :func:`_normalize_scalar_parts`."""
+        :func:`_normalize_scalar_parts`.
+
+        The two id columns are stored narrow, and a plain numpy
+        assignment into a narrower dest truncates silently, so each
+        chunk is range-checked first (see :func:`_checked_narrow`).
+        """
         n = int(flat_chunk.shape[0])
         if not n:
             return
         dest = getattr(self, dest_name)
+        if dest_name in _NARROWED_TOKEN_COLUMNS:
+            _check_fits_dtype(
+                _NARROWED_TOKEN_COLUMNS[dest_name],
+                flat_chunk,
+                dest.dtype,
+                source=source,
+            )
         start = token_start + chunk_offset
         dest[start:start + n] = flat_chunk
 
@@ -1453,6 +1808,7 @@ def _stream_file_into_store(
                     token_start,
                     int(local_offsets[offset]),
                     chunk[mask[offset:offset + chunk.shape[0]]],
+                    source=path,
                 )
         del mask
         outcomes_rows = 0
@@ -1609,6 +1965,9 @@ def load_structured_dataset(
     # ---- allocate the flat store at its final size -----------------
     if cache_dir is not None:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        # A build abandoned by a killed process leaves a partial store
+        # in the cache dir, which the temp sweep never sees.
+        sweep_abandoned_build_dirs(Path(cache_dir))
         build_dir = Path(cache_dir) / f".building-{signature}-{os.getpid()}"
         _remove_store_dir(build_dir, attempts=1)
         owns = False
@@ -1703,9 +2062,12 @@ def shutdown_dataloader_workers(loader: object) -> None:
 
 
 __all__ = [
+    "FLAT_STORE_DTYPES",
+    "FLAT_STORE_VERSION",
     "StructuredDataset",
     "load_structured_dataset",
     "structured_collate",
     "sweep_stale_memmap_dirs",
     "shutdown_dataloader_workers",
+    "sweep_abandoned_build_dirs",
 ]
