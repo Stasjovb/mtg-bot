@@ -17,7 +17,11 @@ CONFIG="${S2_CONFIG:-configs/launch/s2.toml}"
 SEED="${S2_SEED:-1}"
 # DataLoader worker processes for train_nn.py (iterate default 4). 0 = single-process loading;
 # use it when the multiprocess loader deadlocks (seen 2026-09-24 on the 4M-row cycle-5 train).
-TRAIN_WORKERS="${S2_TRAIN_WORKERS:-}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
+TRAIN_WORKERS="${S2_TRAIN_WORKERS:-}"
+# --window-recent N counts FILES (one per game on the distributed path). The full
+# history stopped fitting in the desktop 64 GB RAM at ~4M rows (2026-09-24: 96 GB
+# committed, swap thrash), so bound it: 1000 files = the last 2 cycles of 500 games.
+WINDOW="${S2_WINDOW:-1000}"   # bump when relaunching a cycle whose self-play already ran (games are seed-deterministic)
 # NOTE: no --window-recent here: it means "the N most recently modified FILES"
 # (cli/train.py) and the distributed path rehydrates one .npz per GAME, so
 # --window-recent 3 trained cycle 2 on 3 games (7,278 rows). Full history instead.
@@ -42,5 +46,5 @@ for _ in $(seq 1 "$N"); do
     --data-dir iterate_data_s2 --scalar-schema-version 2 \
     --eval-games 300 --one-legal-keep-frac 0.2 \
     --early-stop-patience 5 --learning-rate 1e-3 --seed "$SEED" \
-    --per-game-timeout-sec 900 ${TRAIN_WORKERS:+--train-num-workers "$TRAIN_WORKERS"}
+    --per-game-timeout-sec 900 ${TRAIN_WORKERS:+--train-num-workers "$TRAIN_WORKERS"} --window-recent "$WINDOW"
 done
