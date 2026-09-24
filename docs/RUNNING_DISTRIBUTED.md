@@ -63,6 +63,13 @@ re-deliver them to surviving workers.
   `git pull --ff-only origin main && .venv-py313/bin/python -m pip
   install -q -e .` then restart the launchd job. (Its stale May
   shard output was moved to `iterate_data.stale_2026-05/`.)
+* **S3 backup of the lineage:** `scripts/s2/backup_to_s3.sh` syncs
+  `iterate_data_s2/`, `iterate_data_s2_v1corpus/`, `trained_weights_s2/`,
+  `training_progress_s2/`, `ladder_runs/` and `replays_s2/` to
+  `s3://mtg-bot-artifacts-630589799985/s2/` (us-east-1, desktop
+  `mtg-bot-admin` credentials). Run it after every corpus batch / promoted
+  version; restore with the reverse `aws s3 sync`. The flat training store
+  (`%TEMP%\mtg_bot_structured_dataset_*`) must stay on local disk (memmap).
 * Scalar-schema-v2 lineage (`trained_weights_s2/`): launch via
   `scripts/s2/run_distributed.sh [n]` (config
   `configs/launch/s2.toml`; `DRY_RUN=1` prints the argv). It cannot
