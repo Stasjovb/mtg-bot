@@ -1138,6 +1138,75 @@ def test_from_metadata_stand_in_reads_schema_from_training_dict(
     assert loaded.model.scalar_proj.in_features == 3
 
 
+def test_from_metadata_applies_the_stored_value_calibration(
+    tmp_path: Path,
+):
+    """The fitted temperature ships in metadata, so EVERY consumer of
+    the evaluator's value (search, both eval servers, the replay
+    annotator) must see calibrated values without its own wiring."""
+    weights_path, meta = _make_structured_metadata(tmp_path)
+    meta.value_calibration = {
+        "method": "logit_temperature",
+        "temperature": 5.0,
+        "bias": 0.125,
+    }
+    ev = NNEvaluator.from_metadata(weights_path, meta)
+    assert ev.model.config.value_temperature == 5.0
+    assert ev.model.config.value_bias == 0.125
+
+    from mtg_bot.training.structured_model import make_dummy_batch
+
+    batch = make_dummy_batch(
+        batch_size=3, seq_len=6, config=ev.model.config, seed=11,
+    )
+    ev.model.eval()
+    with torch.no_grad():
+        out = ev.model(batch)
+    assert torch.allclose(
+        out["value"], torch.tanh(out["value_logit"] / 5.0 + 0.125),
+    )
+    # ...and the uncalibrated load is genuinely different.
+    plain = NNEvaluator.from_metadata(
+        weights_path, _make_structured_metadata(tmp_path)[1],
+    )
+    plain.model.eval()
+    with torch.no_grad():
+        plain_out = plain.model(batch)
+    assert not torch.allclose(plain_out["value"], out["value"])
+
+
+def test_from_metadata_missing_calibration_is_the_identity(
+    tmp_path: Path,
+):
+    """Every version registered before the field existed must load
+    bit-identically to before."""
+    weights_path, meta = _make_structured_metadata(tmp_path)
+    assert not hasattr(meta, "value_calibration")
+    ev = NNEvaluator.from_metadata(weights_path, meta)
+    assert ev.model.config.value_temperature == 1.0
+    assert ev.model.config.value_bias == 0.0
+
+
+def test_from_metadata_rejects_an_output_shrink_calibration(
+    tmp_path: Path,
+):
+    """A structured checkpoint always has a pre-tanh logit, so the
+    post-tanh fallback fit can't be what's stored — and the
+    temperature path cannot express it. Fail loudly."""
+    weights_path, meta = _make_structured_metadata(tmp_path)
+    meta.value_calibration = {"method": "output_shrink", "scale": 0.3}
+    with pytest.raises(ValueError, match="output_shrink"):
+        NNEvaluator.from_metadata(weights_path, meta)
+
+
+def test_from_metadata_threads_value_head_input(tmp_path: Path):
+    weights_path, meta = _make_structured_metadata(tmp_path)
+    meta.training = dict(meta.training)
+    meta.training["structured_value_head_input"] = "trunk_no_printing"
+    ev = NNEvaluator.from_metadata(weights_path, meta)
+    assert ev.model.config.value_head_input == "trunk_no_printing"
+
+
 def test_collate_structured_token_dicts_rejects_mixed_widths():
     d3 = {
         "token_type": np.array([1], dtype=np.int64),

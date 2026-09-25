@@ -134,6 +134,9 @@ from mtg_bot.training.self_play_evaluator import (
 from mtg_bot.training.data_gen import ReplayCaptureConfig
 from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
 from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
+from mtg_bot.training.structured_model import (
+    SUPPORTED_VALUE_HEAD_INPUTS,
+)
 from mtg_bot import distributed_rest_orchestrator as _rest_orch
 from mtg_bot.training.orphan_sweep import sweep_local_orphans
 from mtg_bot.training.self_play import run_match_parallel
@@ -320,6 +323,7 @@ def _train_config_dict(
         # architecture).
         "dropout": args.dropout,
         "weight_decay": args.weight_decay,
+        "value_head_input": args.value_head_input,
         "keep_last_epoch": args.keep_last_epoch,
         "min_holdout_value_quality": args.min_holdout_value_quality,
     }
@@ -1119,6 +1123,7 @@ def _train_next(
     shuffle_block_rows: int | None = None,
     dropout: float | None = None,
     weight_decay: float | None = None,
+    value_head_input: str | None = None,
     keep_last_epoch: bool = False,
     min_holdout_value_quality: float | None = None,
 ) -> str:
@@ -1231,6 +1236,8 @@ def _train_next(
             cmd.extend(["--dropout", str(dropout)])
         if weight_decay is not None:
             cmd.extend(["--weight-decay", str(weight_decay)])
+        if value_head_input is not None:
+            cmd.extend(["--value-head-input", str(value_head_input)])
         if keep_last_epoch:
             cmd.append("--keep-last-epoch")
         if min_holdout_value_quality is not None:
@@ -1646,6 +1653,18 @@ def main(argv=None) -> None:  # pragma: no cover
         help=(
             "Structured-trunk only: AdamW decoupled weight decay. "
             "Blank defers to the trainer default (1e-4)."
+        ),
+    )
+    parser.add_argument(
+        "--value-head-input", default=None,
+        choices=SUPPORTED_VALUE_HEAD_INPUTS,
+        help=(
+            "Structured-trunk only: which representation the VALUE "
+            "head reads. 'trunk' (default) shares the policy head's "
+            "pass and can memorise per-printing card identity; "
+            "'trunk_no_printing' hides the printing embeddings from "
+            "the value head only. Blank defers to the trainer "
+            "default (trunk)."
         ),
     )
     parser.add_argument(
@@ -2976,6 +2995,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 shuffle_block_rows=args.train_shuffle_block_rows,
                 dropout=args.dropout,
                 weight_decay=args.weight_decay,
+                value_head_input=args.value_head_input,
                 keep_last_epoch=args.keep_last_epoch,
                 min_holdout_value_quality=(
                     args.min_holdout_value_quality

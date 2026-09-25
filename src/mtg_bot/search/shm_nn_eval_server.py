@@ -410,6 +410,15 @@ class SharedTensorNNEvalServer:
         structured_enable_hand_belief_head: Optional[bool] = None,
         structured_dropout: Optional[float] = None,
         structured_scalar_schema_version: Optional[int] = None,
+        # Value-head routing + post-hoc value calibration; see
+        # ``StructuredModelConfig.value_head_input`` /
+        # ``.value_temperature``. ``None`` keeps the model defaults
+        # (shared trunk, identity calibration). Hosting a calibrated
+        # checkpoint here means the batched path returns the SAME
+        # value the in-process ``NNEvaluator`` would.
+        structured_value_head_input: Optional[str] = None,
+        structured_value_temperature: Optional[float] = None,
+        structured_value_bias: Optional[float] = None,
     ) -> None:
         # Deferred CUDA resolution: same pattern as PR #36's fix to
         # NNEvalServer. Don't call torch.cuda.is_available() in any
@@ -518,6 +527,9 @@ class SharedTensorNNEvalServer:
                 ),
                 dropout=structured_dropout,
                 scalar_schema_version=structured_scalar_schema_version,
+                value_head_input=structured_value_head_input,
+                value_temperature=structured_value_temperature,
+                value_bias=structured_value_bias,
             )
         elif with_policy:
             self._model = _build_dual_head_model(

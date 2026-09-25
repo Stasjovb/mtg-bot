@@ -572,3 +572,143 @@ def test_dropout_is_active_in_train_mode_only() -> None:
     assert not torch.allclose(c, d), (
         "train() with dropout=0.5 must inject noise"
     )
+
+
+# ---------------------------------------------------------------------
+# Identity-blind value path + post-hoc value calibration
+# ---------------------------------------------------------------------
+
+
+def _blind_cfg(**kw) -> StructuredModelConfig:
+    base = dict(
+        emb_dim=16, n_heads=2, n_layers=2, hidden_dim=32,
+        action_history_n=8, n_printings=32,
+    )
+    base.update(kw)
+    return StructuredModelConfig(**base)
+
+
+def test_value_head_input_rejects_an_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="value_head_input"):
+        _blind_cfg(value_head_input="nope")
+
+
+def test_value_temperature_must_be_positive_and_finite() -> None:
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="value_temperature"):
+            _blind_cfg(value_temperature=bad)
+
+
+def test_forward_exposes_the_pre_tanh_value_logit() -> None:
+    cfg = _blind_cfg()
+    model = StructuredModel(cfg)
+    model.eval()
+    batch = make_dummy_batch(batch_size=4, seq_len=6, config=cfg, seed=1)
+    with torch.no_grad():
+        out = model(batch)
+    assert out["value_logit"].shape == out["value"].shape
+    assert torch.allclose(torch.tanh(out["value_logit"]), out["value"])
+
+
+def test_identity_calibration_is_the_historical_forward() -> None:
+    """T=1 / b=0 must be bit-identical to the pre-calibration path."""
+    cfg = _blind_cfg()
+    model = StructuredModel(cfg)
+    model.eval()
+    batch = make_dummy_batch(batch_size=4, seq_len=6, config=cfg, seed=2)
+    with torch.no_grad():
+        out = model(batch)
+    assert torch.equal(out["value"], torch.tanh(out["value_logit"]))
+
+
+def test_value_temperature_shrinks_the_value_but_not_the_logit() -> None:
+    cfg = _blind_cfg()
+    hot = StructuredModel(cfg)
+    hot.eval()
+    cool_cfg = _blind_cfg(value_temperature=4.0, value_bias=0.25)
+    cool = StructuredModel(cool_cfg)
+    cool.load_state_dict(hot.state_dict())  # same weights, new config
+    cool.eval()
+    batch = make_dummy_batch(batch_size=4, seq_len=6, config=cfg, seed=4)
+    with torch.no_grad():
+        a = hot(batch)
+        b = cool(batch)
+    # The calibration is config, not weights: state_dicts cross-load
+    # and the raw logit is untouched.
+    assert torch.allclose(a["value_logit"], b["value_logit"])
+    assert torch.allclose(
+        b["value"], torch.tanh(a["value_logit"] / 4.0 + 0.25),
+    )
+
+
+def _scramble_printings(batch, n_printings):
+    """Permute every in-vocab printing id (source + target) in place."""
+    other = {k: v.clone() for k, v in batch.items()}
+    ids = other["token_emb_ids"]
+    for field in (0, 3):  # EMB_FIELD_PRINTING / EMB_FIELD_TARGET_PRINTING
+        col = ids[..., field]
+        ids[..., field] = torch.where(
+            col > 0, (col * 7 + 3) % n_printings, col,
+        )
+    return other
+
+
+def test_trunk_no_printing_value_ignores_card_identity() -> None:
+    """The whole point: permuting every printing id must not move the
+    value, while it DOES move the policy (which keeps full info)."""
+    cfg = _blind_cfg(value_head_input="trunk_no_printing")
+    model = StructuredModel(cfg)
+    model.eval()
+    batch = make_dummy_batch(batch_size=3, seq_len=7, config=cfg, seed=5)
+    other = _scramble_printings(batch, cfg.n_printings)
+    with torch.no_grad():
+        a = model(batch)
+        b = model(other)
+    assert torch.allclose(a["value"], b["value"], atol=1e-6)
+    assert not torch.allclose(a["policy_logits"], b["policy_logits"])
+
+
+def test_default_trunk_value_does_see_card_identity() -> None:
+    """Control for the test above — the default routing is NOT blind."""
+    cfg = _blind_cfg()
+    model = StructuredModel(cfg)
+    model.eval()
+    batch = make_dummy_batch(batch_size=3, seq_len=7, config=cfg, seed=5)
+    other = _scramble_printings(batch, cfg.n_printings)
+    with torch.no_grad():
+        a = model(batch)
+        b = model(other)
+    assert not torch.allclose(a["value"], b["value"])
+
+
+def test_trunk_no_printing_adds_no_parameters() -> None:
+    plain = StructuredModel(_blind_cfg())
+    blind = StructuredModel(
+        _blind_cfg(value_head_input="trunk_no_printing"),
+    )
+    assert set(plain.state_dict()) == set(blind.state_dict())
+    # Checkpoints cross-load in both directions.
+    blind.load_state_dict(plain.state_dict())
+    plain.load_state_dict(blind.state_dict())
+
+
+def test_trunk_no_printing_still_trains_the_printing_embedding() -> None:
+    """The policy head keeps full information, so the printing table
+    must still receive gradient."""
+    cfg = _blind_cfg(value_head_input="trunk_no_printing")
+    model = StructuredModel(cfg)
+    batch = make_dummy_batch(batch_size=3, seq_len=7, config=cfg, seed=6)
+    out = model(batch)
+    out["policy_logits"].sum().backward()
+    assert model.printing_embed.weight.grad is not None
+    assert torch.any(model.printing_embed.weight.grad != 0)
+
+
+def test_trunk_no_printing_value_loss_leaves_printing_untouched() -> None:
+    cfg = _blind_cfg(value_head_input="trunk_no_printing")
+    model = StructuredModel(cfg)
+    batch = make_dummy_batch(batch_size=3, seq_len=7, config=cfg, seed=7)
+    out = model(batch)
+    out["value"].sum().backward()
+    grad = model.printing_embed.weight.grad
+    assert grad is None or torch.all(grad == 0)

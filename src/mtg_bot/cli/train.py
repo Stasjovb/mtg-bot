@@ -53,6 +53,9 @@ from mtg_bot.training import (
     train_value_network,
 )
 from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
+from mtg_bot.training.structured_model import (
+    SUPPORTED_VALUE_HEAD_INPUTS,
+)
 from mtg_bot.training.registry import ModelMetadata, Registry
 from mtg_bot.training.value_gate import (
     DEFAULT_MIN_HOLDOUT_VALUE_QUALITY,
@@ -822,6 +825,23 @@ def main(argv=None) -> None:
             "Recorded in metadata.json as scalar_schema_version."
         ),
     )
+    parser.add_argument(
+        "--value-head-input", default=None,
+        choices=SUPPORTED_VALUE_HEAD_INPUTS,
+        help=(
+            "Structured-trunk: which representation the VALUE head "
+            "reads. 'trunk' (default) shares one trunk pass with the "
+            "policy head — the value head sees per-printing card "
+            "identity and, on the s2 lineage, memorised it. "
+            "'trunk_no_printing' runs the value head off a second "
+            "pass of the SAME trunk weights with the printing "
+            "embeddings dropped, so it can only use board shape / "
+            "life / counts / action kinds; the policy head keeps "
+            "full information. Adds no parameters; costs one extra "
+            "trunk forward per evaluation. Recorded in metadata.json "
+            "as training.structured_value_head_input."
+        ),
+    )
     # --- Regularisation + held-out value gate (structured only) -----
     # Added 2026-09-24. Every s2-lineage version trained to value-MSE
     # ~0.005 while scoring 1.42-1.78 on a game-level held-out split
@@ -1359,6 +1379,50 @@ def main(argv=None) -> None:
         print("# epochs_trained=0; no per-epoch losses to report")
 
 
+def _fmt_opt(val) -> str:
+    """Format an ``Optional[float]`` for the operator-facing lines."""
+    if val is None:
+        return "n/a"
+    try:
+        return f"{float(val):.4f}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _print_calibration_summary(metrics) -> None:
+    """Print the raw-vs-calibrated held-out numbers.
+
+    The gate judges the calibrated MSE, so an operator reading only
+    the gate line would not see how much of the pass (or fail) came
+    from the temperature. Print both, always.
+    """
+    cal = getattr(metrics, "calibration", None) or {}
+    method = cal.get("method")
+    if not method or method == "identity":
+        return
+    print(
+        f"# Value calibration: {method} "
+        f"T={_fmt_opt(cal.get('temperature'))} "
+        f"bias={_fmt_opt(cal.get('bias'))}"
+    )
+    print(
+        f"#   held-out MSE  raw {_fmt_opt(metrics.value_mse)} | "
+        f"calibrated {_fmt_opt(metrics.calibrated_value_mse)} | "
+        f"cross-fitted {_fmt_opt(cal.get('cv_mse'))} | "
+        f"constant-0 {_fmt_opt(metrics.constant_zero_mse)}"
+    )
+    print(
+        f"#   corr(pred, outcome)  raw {_fmt_opt(metrics.value_corr)} "
+        f"| calibrated {_fmt_opt(metrics.calibrated_value_corr)} | "
+        f"life-diff baseline "
+        f"{_fmt_opt(metrics.baseline_life_diff_corr)}"
+    )
+    print(
+        f"#   mean |pred|  raw {_fmt_opt(metrics.pred_abs_mean)} | "
+        f"calibrated {_fmt_opt(metrics.calibrated_pred_abs_mean)}"
+    )
+
+
 def _main_structured(args, parser) -> None:
     """Train + register a :class:`StructuredModel` checkpoint.
 
@@ -1467,6 +1531,8 @@ def _main_structured(args, parser) -> None:
         structured_overrides["scalar_schema_version"] = (
             args.scalar_schema_version
         )
+    if args.value_head_input is not None:
+        structured_overrides["value_head_input"] = args.value_head_input
     dropout = (
         DEFAULT_STRUCTURED_DROPOUT if args.dropout is None
         else float(args.dropout)
@@ -1546,6 +1612,7 @@ def _main_structured(args, parser) -> None:
             "scalar_schema_version": (
                 structured_config.scalar_schema_version
             ),
+            "value_head_input": structured_config.value_head_input,
         },
     }
     parent_run_id = _parent_run_id_from_notes(args.notes)
@@ -1659,6 +1726,7 @@ def _main_structured(args, parser) -> None:
             min_holdout_value_quality=args.min_holdout_value_quality,
         )
         print(f"# Held-out value gate: {gate.reason}")
+        _print_calibration_summary(holdout_metrics)
         _merge_into_progress_json(
             progress_path,
             {
@@ -1697,6 +1765,12 @@ def _main_structured(args, parser) -> None:
             # Canonical scalar-schema record; loaders size
             # ``scalar_proj`` + the tokenizer's row width from it.
             scalar_schema_version=structured_config.scalar_schema_version,
+            # Post-hoc value calibration fitted on the held-out split
+            # (see mtg_bot.training.value_calibration). Loaders push
+            # temperature/bias into StructuredModelConfig, so search
+            # and both eval servers read CALIBRATED values. Empty
+            # dict when nothing could be fit (no held-out rows).
+            value_calibration=dict(holdout_metrics.calibration or {}),
             training={
                 "data_dir": str(args.data_dir),
                 "data_files": data_files,
@@ -1743,6 +1817,9 @@ def _main_structured(args, parser) -> None:
                 "structured_n_printings": structured_config.n_printings,
                 "structured_scalar_schema_version": (
                     structured_config.scalar_schema_version
+                ),
+                "structured_value_head_input": (
+                    structured_config.value_head_input
                 ),
             },
             training_history={

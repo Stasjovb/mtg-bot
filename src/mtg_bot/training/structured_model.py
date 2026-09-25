@@ -248,6 +248,29 @@ STEP_VOCAB_SIZE = 13
 DEFAULT_N_PRINTINGS = 320
 
 
+# ---------------------------------------------------------------------
+# Value-head input routing. See ``StructuredModelConfig
+# .value_head_input`` and the ``docs/SCALING_DIAGNOSTICS.md`` D4 entry.
+# ---------------------------------------------------------------------
+
+VALUE_HEAD_INPUT_TRUNK = "trunk"
+"""Default / historical: the value head reads the [CLS] position of
+the one trunk pass the policy head also reads."""
+
+VALUE_HEAD_INPUT_TRUNK_NO_PRINTING = "trunk_no_printing"
+"""Identity-blind value path: a SECOND trunk pass (same weights) over
+token embeddings built with the printing / target-printing embedding
+contributions dropped. The value head reads that pass's [CLS]; the
+policy head keeps the full-information pass. Costs one extra trunk
+forward per evaluation and adds ZERO parameters, so every existing
+checkpoint still loads under either setting."""
+
+SUPPORTED_VALUE_HEAD_INPUTS: tuple[str, ...] = (
+    VALUE_HEAD_INPUT_TRUNK,
+    VALUE_HEAD_INPUT_TRUNK_NO_PRINTING,
+)
+
+
 class _GELUDropout(nn.Sequential):
     """GELU followed by dropout, as ONE ``nn.Sequential`` slot.
 
@@ -315,10 +338,56 @@ class StructuredModelConfig:
     keep loading. The tokenizer must be called with the SAME version
     (``tokenize_state(..., scalar_schema_version=...)``) or the batch
     width won't match ``scalar_proj``."""
+    value_head_input: str = VALUE_HEAD_INPUT_TRUNK
+    """Which representation the VALUE head consumes — see
+    ``SUPPORTED_VALUE_HEAD_INPUTS``.
+
+    ``"trunk"`` (default, and what every pre-2026-09-25 checkpoint was
+    trained under) shares one trunk pass with the policy head.
+
+    ``"trunk_no_printing"`` runs the value head off a second pass of
+    the SAME trunk over identity-blind embeddings: the per-printing
+    (``EMB_FIELD_PRINTING`` / ``EMB_FIELD_TARGET_PRINTING``) lookups
+    are dropped, leaving token type, controller, action kind, target
+    kind, variant, step and the schema-v2 scalars (mana value proxies,
+    P/T, damage, counters, life, zone sizes, ...). The value head then
+    physically cannot key on "which exact deck pair is this", which is
+    what the s2 lineage memorised. Adds no parameters; costs one extra
+    trunk forward per evaluation."""
+    value_temperature: float = 1.0
+    """Post-hoc value calibration: the value output is
+    ``tanh(logit / value_temperature + value_bias)``.
+
+    1.0 / 0.0 is the identity and is what every checkpoint trained
+    before :mod:`mtg_bot.training.value_calibration` existed uses —
+    the forward pass short-circuits to the exact previous
+    computation, so old weights are bit-identical. Fitted post-
+    training on the held-out split and carried in
+    ``ModelMetadata.value_calibration``; loaders set it here so every
+    consumer of ``out["value"]`` (search, both eval servers, the
+    replay annotator) sees calibrated values with no per-consumer
+    wiring. NOT part of the state_dict — it is metadata, so a
+    re-calibration does not rewrite weights."""
+    value_bias: float = 0.0
+    """See :attr:`value_temperature`."""
 
     def __post_init__(self) -> None:
         # Validate eagerly so a bad version surfaces at config time.
         scalar_width_for_schema(self.scalar_schema_version)
+        if self.value_head_input not in SUPPORTED_VALUE_HEAD_INPUTS:
+            raise ValueError(
+                f"value_head_input must be one of "
+                f"{SUPPORTED_VALUE_HEAD_INPUTS}; got "
+                f"{self.value_head_input!r}"
+            )
+        temp = float(self.value_temperature)
+        if not (temp > 0.0) or temp != temp or temp in (
+            float("inf"), float("-inf"),
+        ):
+            raise ValueError(
+                f"value_temperature must be finite and > 0; got "
+                f"{self.value_temperature!r}"
+            )
 
     @property
     def scalar_width(self) -> int:
@@ -476,6 +545,8 @@ class StructuredModel(nn.Module):
         token_type: torch.Tensor,
         token_emb_ids: torch.Tensor,
         token_scalars: torch.Tensor,
+        *,
+        include_printing: bool = True,
     ) -> torch.Tensor:
         """Project the raw integer + scalar token tensors into a single
         ``(B, seq_len, emb_dim)`` embedding tensor.
@@ -486,20 +557,29 @@ class StructuredModel(nn.Module):
         categorical table makes NA fields contribute the zero vector,
         which keeps "this token has no target_printing" cheap to
         represent without a separate field-presence mask.
+
+        ``include_printing=False`` drops the two printing lookups
+        (source + target), which is exactly the identity-blind
+        representation ``value_head_input='trunk_no_printing'``
+        feeds the value head. Because the contributions are summed,
+        "drop" is literally "don't add" — no masking, no shape
+        change, and the remaining fields keep their learned meaning.
         """
         # Per-categorical-field embedding lookups.
-        printing_e = self.printing_embed(
-            token_emb_ids[..., EMB_FIELD_PRINTING]
-        )
+        if include_printing:
+            printing_e = self.printing_embed(
+                token_emb_ids[..., EMB_FIELD_PRINTING]
+            )
         action_kind_e = self.action_kind_embed(
             token_emb_ids[..., EMB_FIELD_ACTION_KIND]
         )
         controller_e = self.controller_embed(
             token_emb_ids[..., EMB_FIELD_CONTROLLER]
         )
-        target_printing_e = self.printing_embed(
-            token_emb_ids[..., EMB_FIELD_TARGET_PRINTING]
-        )
+        if include_printing:
+            target_printing_e = self.printing_embed(
+                token_emb_ids[..., EMB_FIELD_TARGET_PRINTING]
+            )
         target_kind_e = self.target_kind_embed(
             token_emb_ids[..., EMB_FIELD_TARGET_KIND]
         )
@@ -513,10 +593,20 @@ class StructuredModel(nn.Module):
         type_e = self.token_type_embed(token_type)
         # Scalar projection.
         scalar_e = self.scalar_proj(token_scalars)
-        # Sum all contributions into the per-token embedding.
+        # Sum all contributions into the per-token embedding. The
+        # full-information branch keeps the exact original summation
+        # ORDER: float addition is not associative, and reordering it
+        # would perturb every existing checkpoint's output in the last
+        # ulp for no reason.
+        if include_printing:
+            return (
+                printing_e + action_kind_e + controller_e
+                + target_printing_e + target_kind_e + variant_e
+                + step_e + type_e + scalar_e
+            )
         return (
-            printing_e + action_kind_e + controller_e
-            + target_printing_e + target_kind_e + variant_e
+            action_kind_e + controller_e
+            + target_kind_e + variant_e
             + step_e + type_e + scalar_e
         )
 
@@ -559,6 +649,8 @@ class StructuredModel(nn.Module):
         Returns a dict of:
 
         - ``value``               ``(B,)``        in ``[-1, +1]``
+        - ``value_logit``         ``(B,)``        pre-tanh, pre-
+          calibration (the input a temperature fit needs)
         - ``policy_logits``       ``(B, action_vocab_size)``
         - ``hand_belief_logits``  ``(B, n_printings)`` — only when
           ``config.enable_hand_belief_head=True``.
@@ -584,6 +676,7 @@ class StructuredModel(nn.Module):
         )
         # Prepend [CLS]; the CLS position is always valid, so the
         # mask grows by one slot of ones up front.
+        raw_attention_mask = attention_mask
         token_emb, attention_mask = self._prepend_cls(
             token_emb, attention_mask,
         )
@@ -597,8 +690,35 @@ class StructuredModel(nn.Module):
         )
 
         # --- Value head (CLS pool) ----------------------------------
-        cls_vec = trunk_out[:, 0, :]
-        value = torch.tanh(self.value_head(cls_vec)).squeeze(-1)
+        # ``trunk_no_printing`` re-runs the SAME trunk weights over
+        # embeddings with the per-printing lookups dropped, so the
+        # value head sees board shape / life / counts but not card
+        # identity. The policy head always reads the full pass.
+        if self.config.value_head_input == (
+            VALUE_HEAD_INPUT_TRUNK_NO_PRINTING
+        ):
+            blind_emb = self._embed_tokens(
+                token_type, token_emb_ids, token_scalars,
+                include_printing=False,
+            )
+            blind_emb, _ = self._prepend_cls(
+                blind_emb, raw_attention_mask,
+            )
+            value_source = self.trunk(
+                blind_emb, src_key_padding_mask=key_padding_mask,
+            )
+        else:
+            value_source = trunk_out
+        cls_vec = value_source[:, 0, :]
+        value_logit = self.value_head(cls_vec).squeeze(-1)
+        temperature = float(self.config.value_temperature)
+        bias = float(self.config.value_bias)
+        if temperature == 1.0 and bias == 0.0:
+            # Identity calibration: keep the original expression so
+            # pre-calibration checkpoints are bit-identical.
+            value = torch.tanh(value_logit)
+        else:
+            value = torch.tanh(value_logit / temperature + bias)
 
         # --- Policy head (cross-attention decoder) ------------------
         # The slot queries are shared across the batch — we expand to
@@ -620,6 +740,11 @@ class StructuredModel(nn.Module):
 
         out: dict[str, torch.Tensor] = {
             "value": value,
+            # Pre-tanh, pre-calibration. Exposed so the post-hoc
+            # temperature fit (``value_calibration``) has something to
+            # fit against — a squashed ±0.999 output has already lost
+            # the information a temperature would restore.
+            "value_logit": value_logit,
             "policy_logits": policy_logits,
         }
 
