@@ -535,6 +535,15 @@ reads it for the per-machine sub-card display.
   "git_commit": "abc1234",
   "last_update": null,
   "artifact_storage_uri": "http://100.115.252.110:5099",
+  "game_crashes": 2,
+  "pool_resets": 2,
+  "pool_generation": 3,
+  "max_consecutive_crashes": 5,
+  "last_crash_detail": "Traceback (most recent call last): ...",
+  "thread_recovery": {
+    "0": {"crashes": 1, "pool_resets": 1, "consecutive_crashes": 0},
+    "3": {"crashes": 1, "pool_resets": 1, "consecutive_crashes": 0}
+  },
   "host": {
     "pool_size": 8,
     "active_workers": 7,
@@ -572,6 +581,31 @@ The launcher's pre-flight **refuses** to dispatch a cycle to a worker
 advertising `null://`: its games would complete and count toward the
 stage totals while every `.npz` was dropped on the floor. Absent on
 pre-2026-09-23 daemons, which pass the check unchanged.
+
+Crash-recovery counters (all zero on a healthy worker):
+
+- `game_crashes` — games that died mid-play and were reported with
+  `outcome: "crashed"` while the claim thread survived and kept
+  claiming. Includes both `BrokenProcessPool` deaths and game bodies
+  that threw.
+- `pool_resets` — `ProcessPoolExecutor` rebuilds. A pool whose worker
+  subprocess dies hard is permanently unusable (every later `submit()`
+  raises), so the daemon swaps in a fresh executor. All N claim
+  threads see the same death; the rebuild is deduped to one.
+- `pool_generation` — monotonic id of the live pool. Bumps on setup
+  and on every rebuild.
+- `max_consecutive_crashes` — the daemon's `--max-consecutive-crashes`
+  (default 5). A claim thread that hits this many crashes in a row
+  *without* a clean game in between parks the daemon in `ERROR`.
+- `last_crash_detail` — tail of the most recent crash traceback, for
+  triage without SSHing to the box. `null` until the first crash.
+- `thread_recovery` — per-claim-thread breakdown keyed by thread id
+  (string): `crashes`, `pool_resets`, and the live
+  `consecutive_crashes` streak (reset to 0 by any clean game).
+
+The crashed game itself is reported to the coordinator with the
+traceback in `meta.traceback`, so `claims.report_json` distinguishes a
+dead pool from a game body that threw.
 
 `host` field semantics:
 - `pool_size` — configured `n_workers` for the daemon's

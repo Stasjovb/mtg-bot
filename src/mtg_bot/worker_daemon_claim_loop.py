@@ -29,6 +29,7 @@ default to ``socket.gethostname()``. Documented in :func:`resolve_worker_id`.
 from __future__ import annotations
 
 import abc
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -66,6 +67,21 @@ DEFAULT_HTTP_TIMEOUT_S = 30.0
 # master+mac needed external ``Stop-ScheduledTask`` to recover.
 DEFAULT_DRAIN_JOIN_TIMEOUT_S = 60.0
 WEIGHTS_HTTP_TIMEOUT_S = 120.0
+# How many CONSECUTIVE per-game crashes one claim-loop thread tolerates
+# before it gives up and pushes the daemon into ERROR. A single hard
+# subprocess death (the documented CPython-3.13 interpreter-corruption
+# class that produces ``BrokenProcessPool``) is recoverable: we report
+# the claim crashed, rebuild the pool and keep claiming. A *run* of
+# them means something structural is wrong (bad weights, OOM, corrupt
+# deck pool) and burning through the whole queue reporting "crashed"
+# would be worse than parking. Twice on 2026-09-25 (cycles 8 + 9,
+# ~1 death per 1,200-1,500 games) a single BrokenProcessPool escaped
+# ``run_once`` and parked the daemon for the rest of the stage.
+DEFAULT_MAX_CONSECUTIVE_CRASHES = 5
+# Cap on the traceback text shipped to the coordinator in the crashed
+# report's ``meta``. The full text is logged locally; the wire copy is
+# only there so an operator reading runs.db can classify the failure.
+MAX_REPORTED_TRACEBACK_CHARS = 4000
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +588,12 @@ class GameResult:
     draws: Optional[int] = None  # eval only
     npz_bytes: Optional[bytes] = None
     replay_bytes: Optional[bytes] = None
+    # Failure detail for ``outcome == "crashed"`` reports. Surfaces on
+    # the wire as ``meta["traceback"]`` so the coordinator's
+    # ``claims.report_json`` records WHY a game died (a bare
+    # ``crashed`` row is indistinguishable between "pool died" and
+    # "the game body threw").
+    error_traceback: Optional[str] = None
 
 
 class GameRunner(abc.ABC):
@@ -597,6 +619,36 @@ class GameRunner(abc.ABC):
     def teardown(self) -> None:
         ...
 
+    # -- optional pool-recovery surface -------------------------------
+    #
+    # Concrete (NOT abstract) so every existing runner / test stub
+    # keeps working unchanged. Runners that own a
+    # :class:`concurrent.futures.ProcessPoolExecutor` override these so
+    # the claim loop can rebuild a pool that a hard subprocess death
+    # left permanently broken.
+
+    def pool_generation(self) -> int:
+        """Monotonic id of the runner's current process pool.
+
+        ``0`` for runners that own no pool. The claim loop reads this
+        BEFORE dispatching a game and hands it back to
+        :meth:`reset_pool`, so N threads that all trip over the same
+        dead pool collapse into a single rebuild.
+        """
+        return 0
+
+    def reset_pool(self, generation: Optional[int] = None) -> int:
+        """Rebuild the process pool; return the (possibly unchanged)
+        generation.
+
+        ``generation`` is the value :meth:`pool_generation` returned
+        before the failing game. When it no longer matches the live
+        generation a peer thread already rebuilt after the same
+        failure and this call is a no-op. A return value equal to the
+        caller's ``generation`` means "nothing was rebuilt".
+        """
+        return 0
+
 
 class CallableGameRunner(GameRunner):
     """Adapter that wraps a plain ``Callable[[claim, shard_label], GameResult]``.
@@ -611,10 +663,14 @@ class CallableGameRunner(GameRunner):
         play_one: Callable[[dict, str], GameResult],
         setup_fn: Optional[Callable[[str, Path, str, int], None]] = None,
         teardown_fn: Optional[Callable[[], None]] = None,
+        reset_pool_fn: Optional[Callable[[Optional[int]], int]] = None,
+        pool_generation_fn: Optional[Callable[[], int]] = None,
     ):
         self._play_one = play_one
         self._setup = setup_fn
         self._teardown = teardown_fn
+        self._reset_pool = reset_pool_fn
+        self._pool_generation = pool_generation_fn
 
     def setup(self, coordinator_url, weights_root, stage_kind, n_workers):
         if self._setup is not None:
@@ -626,6 +682,16 @@ class CallableGameRunner(GameRunner):
     def teardown(self):
         if self._teardown is not None:
             self._teardown()
+
+    def pool_generation(self) -> int:
+        if self._pool_generation is None:
+            return 0
+        return int(self._pool_generation())
+
+    def reset_pool(self, generation: Optional[int] = None) -> int:
+        if self._reset_pool is None:
+            return 0 if generation is None else int(generation)
+        return int(self._reset_pool(generation))
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +737,10 @@ class ClaimLoopConfig:
     # Tests can shorten this to keep wall time tiny when simulating
     # hung threads.
     drain_join_timeout_s: float = DEFAULT_DRAIN_JOIN_TIMEOUT_S
+    # Consecutive per-thread game crashes tolerated before the daemon
+    # parks in ERROR. See ``DEFAULT_MAX_CONSECUTIVE_CRASHES``. Tests
+    # set this to 1 to exercise the escalation path in one game.
+    max_consecutive_crashes: int = DEFAULT_MAX_CONSECUTIVE_CRASHES
     # HTTP transport hooks. Overridable for testing.
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = field(
         default=_http_get
@@ -710,6 +780,12 @@ class ClaimLoopRunner:
         self.cfg = cfg
         self.state = state_callbacks
         self.runner = runner
+        # Pool-rebuild reporting dedup. All N claim threads trip over
+        # the same dead pool and all N call ``reset_pool``; only one
+        # of them actually rebuilds, but every one of them observes a
+        # bumped generation. Report the rebuild once.
+        self._pool_reset_lock = threading.Lock()
+        self._last_reported_pool_generation = 0
 
     # ------------------------------------------------------------------
 
@@ -774,6 +850,14 @@ class ClaimLoopRunner:
             meta["wins_old"] = result.wins_old
         if result.draws is not None:
             meta["draws"] = result.draws
+        # Crash forensics. ``record_report`` stores the whole meta dict
+        # verbatim in ``claims.report_json``, so this is how an
+        # operator tells a BrokenProcessPool death apart from a game
+        # body that threw.
+        if result.error_traceback:
+            meta["traceback"] = (
+                result.error_traceback[:MAX_REPORTED_TRACEBACK_CHARS]
+            )
 
         # Upload artifacts FIRST so the URI is in hand by the time we
         # POST the meta. Failed uploads surface as exceptions and
@@ -853,12 +937,51 @@ class ClaimLoopRunner:
 
     # ------------------------------------------------------------------
 
-    def run_once(self) -> str:
+    def _recover_pool(self, generation: int, thread_id: int) -> None:
+        """Rebuild the runner's process pool after a hard subprocess
+        death and record the reset on the daemon's counters.
+
+        Safe under concurrency: every claim-loop thread passes the
+        generation it *observed* before its game, so the first thread
+        through rebuilds and the peers (which tripped over the same
+        dead pool) see a bumped generation and no-op. Runners that own
+        no pool return the caller's generation unchanged and nothing
+        is counted.
+        """
+        try:
+            new_generation = int(self.runner.reset_pool(generation))
+        except Exception:
+            # A failed rebuild is not itself fatal - the next game will
+            # trip the same BrokenProcessPool and try again, and the
+            # consecutive-crash counter bounds how long that can go on.
+            log.exception("[claim_loop] pool rebuild failed")
+            return
+        if new_generation == generation:
+            # Pool-less runner, or the runner declined to rebuild.
+            return
+        with self._pool_reset_lock:
+            if new_generation <= self._last_reported_pool_generation:
+                # A peer thread already reported this same rebuild.
+                return
+            self._last_reported_pool_generation = new_generation
+        log.warning(
+            "[claim_loop] thread %d rebuilt the process pool "
+            "(generation %d -> %d)",
+            thread_id, generation, new_generation,
+        )
+        if self.state.on_pool_reset is not None:
+            self.state.on_pool_reset(thread_id, new_generation)
+
+    def run_once(self, thread_id: int = 0) -> str:
         """Run one full claim/play/report turn.
 
         Returns:
         - ``"drained"`` if /claim returned 204 (loop should exit).
         - ``"continue"`` after a successful report (or 409 drop).
+        - ``"crashed"`` when the runner blew up mid-game. The claim was
+          reported ``crashed``, the process pool was rebuilt if it was
+          the pool that died, and the caller decides whether this is
+          the Nth consecutive failure that warrants ERROR.
         """
         if self.state.is_stop_requested():
             return "drained"
@@ -866,26 +989,46 @@ class ClaimLoopRunner:
         if claim is None:
             return "drained"
         self.state.on_claim()
+        # Snapshot the pool identity BEFORE the game so a rebuild
+        # triggered by a peer thread (same dead pool, different claim)
+        # doesn't get duplicated.
+        try:
+            pool_generation = int(self.runner.pool_generation())
+        except Exception:  # noqa: BLE001 - duck-typed/stub runners
+            pool_generation = 0
         try:
             t0 = time.perf_counter()
             result = self.runner.play_one_game(claim, self.cfg.shard_label)
             # If the runner didn't populate duration_s itself, fill it.
             if result.duration_s == 0.0:
                 result.duration_s = time.perf_counter() - t0
-        except Exception:
-            # Runner crashed mid-game. Report a "crashed" outcome
-            # so the coordinator's queue accounting stays sane, then
-            # propagate by re-raising so the daemon ends up in ERROR.
+        except Exception as exc:
+            # Runner crashed mid-game. Report a "crashed" outcome so
+            # the coordinator's queue accounting stays sane, rebuild
+            # the pool if this was a hard subprocess death, then hand
+            # "crashed" back to the caller instead of re-raising. A
+            # single dead pool worker used to kill the claim thread and
+            # park the whole daemon in ERROR for the rest of the stage.
+            tb = traceback.format_exc()
+            log.exception("[claim_loop] game crashed on thread %d", thread_id)
             crashed = GameResult(
                 outcome="crashed",
                 duration_s=time.perf_counter() - t0,
+                error_traceback=tb,
             )
             try:
                 self._report_one(claim, crashed)
             except Exception:
                 log.exception("[claim_loop] failed to report crashed game")
             self.state.on_drop()
-            raise
+            if isinstance(exc, concurrent.futures.BrokenExecutor):
+                # A broken ProcessPoolExecutor is permanently unusable:
+                # every subsequent submit() raises immediately. Rebuild
+                # it or the daemon spins reporting "crashed" forever.
+                self._recover_pool(pool_generation, thread_id)
+            if self.state.on_game_crash is not None:
+                self.state.on_game_crash(thread_id, tb)
+            return "crashed"
         outcome = self._report_one(claim, result)
         if outcome == "accepted":
             self.state.on_report()
@@ -929,18 +1072,44 @@ class ClaimLoopRunner:
         # mark_stopping/mark_idle so we don't clobber ERROR state.
         crashed_flag = threading.Event()
 
+        max_consecutive = max(1, int(self.cfg.max_consecutive_crashes))
+
         def _thread_body(tid: int) -> None:
+            consecutive_crashes = 0
             try:
                 while True:
                     if self.state.is_stop_requested():
                         break
-                    status = self.run_once()
+                    status = self.run_once(tid)
                     if status == "drained":
                         break
+                    if status == "crashed":
+                        consecutive_crashes += 1
+                        if consecutive_crashes >= max_consecutive:
+                            # Recovery isn't working - something
+                            # structural is wrong. Park the daemon so a
+                            # human looks at it rather than chewing
+                            # through the queue reporting "crashed".
+                            crashed_flag.set()
+                            self.state.mark_error(
+                                f"claim loop thread {tid} gave up after "
+                                f"{consecutive_crashes} consecutive game "
+                                f"crashes (limit {max_consecutive})"
+                            )
+                            break
+                        continue
+                    if consecutive_crashes:
+                        # A clean game clears the streak - the pool
+                        # rebuild worked.
+                        consecutive_crashes = 0
+                        if self.state.on_thread_recovered is not None:
+                            self.state.on_thread_recovered(tid)
             except Exception:
-                # One thread crashing puts the whole daemon into
-                # ERROR; ``mark_error`` flips ``stop_requested`` so
-                # peer threads exit on their next loop iteration.
+                # Non-game failures (claim/report retries exhausted,
+                # artifact upload wedged, ...) are still fatal: they
+                # aren't something a pool rebuild fixes. ``mark_error``
+                # flips ``stop_requested`` so peer threads exit on
+                # their next loop iteration.
                 crashed_flag.set()
                 self.state.mark_error(
                     f"claim loop thread {tid} crashed: "
@@ -1037,6 +1206,21 @@ class StateCallbacks:
     mark_stopping: Callable[[], None]
     mark_idle: Callable[[], None]
     mark_error: Callable[[str], None]
+    # Crash-recovery telemetry. Optional so every existing
+    # ``StateCallbacks(...)`` construction (tests + the daemon's own
+    # pre-recovery wiring) keeps working; ``None`` just drops the
+    # event. ``worker_daemon.create_app`` wires all three so the
+    # counters surface on ``/v2/heartbeat``.
+    #
+    # - ``on_game_crash(thread_id, traceback_text)``: a game died and
+    #   was reported ``crashed``; the thread is still alive.
+    # - ``on_pool_reset(thread_id, generation)``: the runner's process
+    #   pool was actually rebuilt (peers that no-op'd don't fire).
+    # - ``on_thread_recovered(thread_id)``: a clean game cleared the
+    #   thread's consecutive-crash streak.
+    on_game_crash: Optional[Callable[[int, str], None]] = None
+    on_pool_reset: Optional[Callable[[int, int], None]] = None
+    on_thread_recovered: Optional[Callable[[int], None]] = None
 
 
 # ---------------------------------------------------------------------------

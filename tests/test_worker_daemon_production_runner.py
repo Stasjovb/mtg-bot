@@ -1213,3 +1213,183 @@ def test_production_self_play_runner_plays_one_real_game(tmp_path):
     # the file is well-formed rather than pin a sample count we'd
     # have to retune across engine changes.
     assert data["features"].ndim == 2
+
+
+# ---------------------------------------------------------------------------
+# _PoolControls -- ProcessPoolExecutor lifecycle + rebuild-after-death
+#
+# A ProcessPoolExecutor whose worker dies hard is permanently unusable;
+# every later submit() raises BrokenProcessPool. These tests pin the
+# rebuild contract the claim loop relies on (2026-09-25 incident).
+# ---------------------------------------------------------------------------
+
+
+class _FakeExecutor:
+    """Stand-in for ProcessPoolExecutor -- spawning real subprocesses
+    in a unit test would cost seconds per case."""
+
+    instances: list["_FakeExecutor"] = []
+
+    def __init__(self, max_workers=1, mp_context=None):
+        self.max_workers = max_workers
+        self.shutdown_calls: list[tuple[bool, bool]] = []
+        _FakeExecutor.instances.append(self)
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.shutdown_calls.append((wait, cancel_futures))
+
+
+@pytest.fixture
+def fake_executor(monkeypatch):
+    _FakeExecutor.instances = []
+    monkeypatch.setattr(
+        prr.concurrent.futures, "ProcessPoolExecutor", _FakeExecutor,
+    )
+    return _FakeExecutor
+
+
+def _controls(enabled=True, events=None):
+    state: dict[str, Any] = {}
+
+    def emit(name, payload):
+        if events is not None:
+            events.append((name, payload))
+
+    return state, prr._PoolControls(
+        state, enabled=enabled, emit=emit, label="test_runner",
+    )
+
+
+def test_pool_controls_ensure_creates_one_pool(fake_executor):
+    events: list[tuple[str, dict]] = []
+    state, ctl = _controls(events=events)
+    assert ctl.generation() == 0
+
+    ctl.ensure(3)
+    assert ctl.generation() == 1
+    assert len(fake_executor.instances) == 1
+    assert fake_executor.instances[0].max_workers == 3
+    assert events[0][0] == "pool_created"
+
+    # Idempotent: a second setup on a live pool is a no-op.
+    ctl.ensure(3)
+    assert len(fake_executor.instances) == 1
+    assert ctl.generation() == 1
+
+
+def test_pool_controls_reset_rebuilds_and_bumps_generation(fake_executor):
+    events: list[tuple[str, dict]] = []
+    state, ctl = _controls(events=events)
+    ctl.ensure(2)
+    dead = state["pool"]
+
+    assert ctl.reset(1) == 2
+    # Old executor shut down without blocking; a fresh one took over.
+    assert dead.shutdown_calls == [(False, True)]
+    assert state["pool"] is not dead
+    assert state["pool"].max_workers == 2
+    assert len(fake_executor.instances) == 2
+    assert [name for name, _ in events] == ["pool_created", "pool_reset"]
+
+
+def test_pool_controls_reset_is_a_noop_on_a_stale_generation(fake_executor):
+    """Peer claim threads that tripped over the SAME dead pool must
+    not each spawn a replacement."""
+    state, ctl = _controls()
+    ctl.ensure(2)
+    assert ctl.reset(1) == 2
+    live = state["pool"]
+
+    # Three peers still holding the pre-death generation.
+    for _ in range(3):
+        assert ctl.reset(1) == 2
+    assert state["pool"] is live
+    assert len(fake_executor.instances) == 2
+
+
+def test_pool_controls_reset_without_generation_always_rebuilds(
+    fake_executor,
+):
+    state, ctl = _controls()
+    ctl.ensure(1)
+    assert ctl.reset() == 2
+    assert ctl.reset() == 3
+    assert len(fake_executor.instances) == 3
+
+
+def test_pool_controls_reset_does_not_resurrect_after_teardown(
+    fake_executor,
+):
+    """``_teardown`` ran (or the pool never came up): a late reset from
+    a thread still draining must NOT leak a fresh executor."""
+    state, ctl = _controls()
+    ctl.ensure(1)
+    ctl.shutdown(wait=False)
+    assert state["pool"] is None
+
+    assert ctl.reset(1) == 1
+    assert state["pool"] is None
+    assert len(fake_executor.instances) == 1
+
+
+def test_pool_controls_are_inert_for_in_thread_runners(fake_executor):
+    """``use_subprocess_pool=False`` runners own no pool -- every call
+    is a no-op and the generation stays 0, so the claim loop counts no
+    resets."""
+    state, ctl = _controls(enabled=False)
+    ctl.ensure(4)
+    assert state.get("pool") is None
+    assert ctl.generation() == 0
+    assert ctl.reset(0) == 0
+    assert fake_executor.instances == []
+
+
+def test_self_play_runner_exposes_the_pool_reset_surface(fake_executor):
+    """The factory wires ``_PoolControls`` onto the GameRunner the
+    claim loop drives."""
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://coord:5099",
+        stage_id="s",
+        n_workers=2,
+        weights_cache_root=Path("weights"),
+        worker_id="w",
+        use_subprocess_pool=True,
+    )
+    assert runner.pool_generation() == 0
+    runner.setup("http://coord:5099", Path("weights"), "self_play", 2)
+    assert runner.pool_generation() == 1
+    assert runner.reset_pool(1) == 2
+    assert len(fake_executor.instances) == 2
+    runner.teardown()
+
+
+def test_eval_runner_exposes_the_pool_reset_surface(fake_executor):
+    runner = prr.build_eval_runner(
+        coordinator_url="http://coord:5099",
+        stage_id="s",
+        n_workers=2,
+        weights_cache_root=Path("weights"),
+        worker_id="w",
+        use_subprocess_pool=True,
+    )
+    runner.setup("http://coord:5099", Path("weights"), "eval", 2)
+    assert runner.pool_generation() == 1
+    assert runner.reset_pool(1) == 2
+    assert len(fake_executor.instances) == 2
+    runner.teardown()
+
+
+def test_in_thread_runner_reset_pool_is_a_noop():
+    """Default (``use_subprocess_pool=False``) runners must answer the
+    claim loop's recovery calls without pretending a rebuild
+    happened."""
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://coord:5099",
+        stage_id="s",
+        n_workers=1,
+        weights_cache_root=Path("weights"),
+        worker_id="w",
+    )
+    runner.setup("http://coord:5099", Path("weights"), "self_play", 1)
+    assert runner.pool_generation() == 0
+    assert runner.reset_pool(0) == 0
