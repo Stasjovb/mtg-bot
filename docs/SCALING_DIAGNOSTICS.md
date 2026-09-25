@@ -265,20 +265,23 @@ other, both ways) — the number the gate now reads.
 
 Readings:
 
-1. **Calibration is the decisive lever and it is free.** Every arm
-   fails the raw gate (MSE 1.09–1.16 ≥ 1.0) and passes the calibrated
-   one (0.86–0.89). The fitted temperature is ~7.6 in all three —
-   the head is over-confident by nearly an order of magnitude in
-   logit space, consistently. The calibrated MSE lands on the
-   theoretical `1 - r**2` to within 0.001 in every arm, i.e. the
-   one-parameter fit extracts essentially all of the available MSE.
-   Cost: one float in `metadata.json`, applied inside
-   `StructuredModel.forward`. Zero inference cost.
+1. **Calibration is the decisive lever and it is free.** The three
+   arms that fail the raw gate (MSE 1.09–1.16 ≥ 1.0) all pass the
+   calibrated one (0.86–0.89); only the combined arm clears the
+   ceiling uncalibrated, and calibration still takes it from 0.986 to
+   0.842. The fitted temperature is ~7.6 on all three shared-or-
+   lightly-regularised arms — the head is over-confident by nearly an
+   order of magnitude in logit space, consistently. The calibrated
+   MSE lands on the theoretical `1 - r**2` to four decimal places in
+   every arm, i.e. the one-parameter fit extracts essentially all of
+   the MSE the head's correlation entitles it to. Cost: one float in
+   `metadata.json`, applied inside `StructuredModel.forward`. Zero
+   inference cost.
 2. **Un-saturating RECOVERS correlation** (0.364 → 0.394 base,
    0.331 → 0.354 blind). `tanh` near ±1 is lossy and Pearson r is not
    rank-based, so squashing costs real correlation as well as scale.
 3. **After calibration the head beats the life-differential
-   baseline** (0.35–0.39 vs 0.2998) — which D4 said it had to clear
+   baseline** (0.354–0.402 vs 0.2998) — which D4 said it had to clear
    before value-guided search is worth anything. It did not clear it
    raw on the 6,000-shard run (0.298 vs 0.310).
 4. **Heavier regularisation ALONE is not indicated; combined with
