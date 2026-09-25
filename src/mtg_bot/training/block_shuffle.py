@@ -60,13 +60,13 @@ Mixing
 
 Block shuffling is NOT a uniform shuffle. Rows in one batch are drawn
 from ``window_blocks`` randomly-placed regions of ~``block_rows`` rows
-each, rather than from the whole split. At the default 65,536 rows ×
-2 blocks that is ~131k candidate rows per batch (vs 6.6M) — plenty of
-decorrelation for SGD given that neighbouring rows are *different
-decision points of different games* only when the store is itself
-built from many interleaved files, which it is (one npz per game,
-concatenated in discovery order). The knob exists precisely so a
-caller who cares can trade memory for mixing.
+each, rather than from the whole split. At the default 16,384 rows ×
+2 blocks that is ~33k candidate rows per batch (vs 6.6M) drawn from
+two unrelated parts of the store — enough decorrelation for SGD given
+that the store is built from many interleaved source files (one npz
+per game, concatenated in discovery order), so a contiguous run
+already spans many games. The knob exists precisely so a caller who
+cares can trade memory for mixing.
 
 Memory
 ======
@@ -78,10 +78,11 @@ A worker holds ``window_blocks`` blocks of raw rows at once:
         + 4·ACTION_VOCAB + 1·ACTION_VOCAB + 5      # policy/mask/etc
     )
 
-At the production shape (~45 tokens/row, 517 actions) that is roughly
-270 MB per block, so the default 2-block window costs ~540 MB per
-worker. Shrink ``block_rows`` if that is too much; a smaller block
-still beats row shuffling as long as it is large relative to a batch.
+At the production shape (~45 tokens/row, 517 actions) that is
+9,176 B/row = **~150 MB per block**, so the default 2-block window
+costs ~300 MB per worker — ~1.2 GB across a 4-worker loader. Raising
+``block_rows`` scales that linearly (65,536 rows = ~600 MB/block =
+~4.8 GB across 4 workers) for no measured I/O gain.
 
 Degenerate subsets
 ==================
@@ -110,12 +111,16 @@ from torch.utils.data import IterableDataset
 _log = logging.getLogger(__name__)
 
 
-DEFAULT_BLOCK_ROWS = 65_536
-"""Rows per contiguous block. At the production row size (~1.4 KB of
-token bytes + 2.6 KB of policy/mask bytes per row) one block is a
-~270 MB sequential read — big enough to amortize a seek to
-irrelevance, small enough that a 2-block window fits comfortably in a
-worker."""
+DEFAULT_BLOCK_ROWS = 16_384
+"""Rows per contiguous block. At the production row size (9,176 B/row
+— 45 tokens × 146 B of token columns + 2,606 B of policy/mask/outcome)
+one block is a ~150 MB sequential read. Measured 2026-09-24 on a cold
+2.24 GB store at ``num_workers=2``: 16,384-row blocks ran a 12.6 s
+epoch and 65,536-row blocks 12.6-13.4 s, i.e. the sequential win
+saturates well below 16k rows — so the smaller block wins on the two
+axes that are still live, worker RAM (4× less) and shuffle
+granularity (4× more blocks to permute and to spread across
+workers)."""
 
 DEFAULT_WINDOW_BLOCKS = 2
 """Blocks materialized (and shuffled together) at a time. 1 = strict

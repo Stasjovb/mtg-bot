@@ -703,7 +703,7 @@ over a store several times larger than the page cache.
 
 **Fix.** `mtg_bot.training.block_shuffle.BlockShuffleDataset` — same
 rows per epoch, different order: sort the split's indices, cut into
-contiguous 65,536-row blocks, shuffle block order per epoch, shard
+contiguous 16,384-row blocks, shuffle block order per epoch, shard
 blocks across workers, materialize a 2-block window with one
 contiguous slice per flat array, then shuffle rows inside the window.
 `train_structured_model(shuffle_mode=...)`, `mtg_bot train
@@ -747,23 +747,34 @@ that is **83 min/epoch** — which is what the run showed.
 
 ### Result 2 — cold epoch, real DataLoader, 2 workers
 
-| mode | wall | rows/s |
-|---|---|---|
-| row | **171.7 s** | 1,526 |
-| block | **13.4 s** | 19,588 |
+| mode | block_rows | wall | rows/s |
+|---|---|---|---|
+| row | — | **171.7 s** | 1,526 |
+| block | 65,536 | **13.4 s** | 19,588 |
+| row | — | 175.2 s | 1,496 |
+| block | **16,384** | **12.6 s** | 20,756 |
 
-**12.8× faster** on a 2.24 GB store. The gap grows with the
+**12.8-13.9× faster** on a 2.24 GB store. The gap grows with the
 store/RAM ratio; at 2.24 GB the row-shuffle epoch is already
 IOPS-bound.
 
+The sequential win **saturates well below 16k rows** — a 150 MB run
+is already orders of magnitude past the point where seek cost
+matters — so the default `block_rows` is 16,384, not 65,536: same
+throughput, 4× less worker RAM (~300 MB per worker for the 2-block
+window vs ~1.2 GB) and 4× more blocks to permute and shard.
+
 ### Result 3 — warm epoch (store fully page-cache resident)
 
-| mode | wall | rows/s |
-|---|---|---|
-| row | **8.5 s** | 30,807 |
-| block | **9.5 s** | 27,718 |
+| mode | block_rows | wall | rows/s |
+|---|---|---|---|
+| row | — | **8.5 s** | 30,807 |
+| block | 65,536 | **9.5 s** | 27,718 |
+| row | — | 8.6 s | 30,493 |
+| block | 16,384 | 9.4 s | 27,907 |
 
-Block mode is **~11% SLOWER** when the store already fits in RAM:
+Block mode is **~9-11% SLOWER** when the store already fits in RAM
+(block size does not move it — it is the extra copy, not burstiness):
 there is no I/O to save and the block materialization is a pure extra
 memcpy, bursty enough to stall a 2-worker pipeline at window
 boundaries. **This is why the default is `auto`, not `block`.**

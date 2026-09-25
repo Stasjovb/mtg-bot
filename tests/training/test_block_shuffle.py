@@ -227,7 +227,10 @@ def test_indices_are_sorted(dataset) -> None:
 
 
 def test_default_block_rows_constant() -> None:
-    assert DEFAULT_BLOCK_ROWS == 65_536
+    """Pinned so a change is a deliberate edit with a benchmark
+    behind it: at 9,176 B/row this is ~150 MB per block and ~300 MB
+    per worker at the default 2-block window."""
+    assert DEFAULT_BLOCK_ROWS == 16_384
 
 
 # ---------------------------------------------------------------------
