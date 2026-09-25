@@ -260,6 +260,7 @@ other, both ways) — the number the gate now reads.
 | base | 0.1 / 1e-4 | trunk | 1.1605 | **0.8862** | 0.8448 | 0.364 | 0.394 | 0.872 → 0.343 | 7.71 | 96 |
 | identity-blind | 0.1 / 1e-4 | trunk_no_printing | 1.0927 | **0.8748** | 0.8748 | 0.331 | 0.354 | 0.683 → 0.269 | 7.40 | 125 |
 | heavy-reg | 0.3 / 1e-3 | trunk | 1.1621 | **0.8631** | 0.8531 | 0.363 | 0.383 | 0.873 → 0.335 | 7.63 | 94 |
+| **combined** | 0.3 / 1e-3 | trunk_no_printing | **0.9857** | **0.8418** | 0.8388 | **0.375** | **0.402** | 0.624 → 0.292 | 4.52 | 129 |
 
 Readings:
 
@@ -279,24 +280,35 @@ Readings:
    baseline** (0.35–0.39 vs 0.2998) — which D4 said it had to clear
    before value-guided search is worth anything. It did not clear it
    raw on the 6,000-shard run (0.298 vs 0.310).
-4. **Heavier regularisation is NOT indicated.** dropout 0.3 / wd 1e-3
-   is within noise of the 0.1 / 1e-4 default on every column here,
-   and the concurrent FULL-scale heavy-reg run
+4. **Heavier regularisation ALONE is not indicated; combined with
+   the identity-blind head it is.** dropout 0.3 / wd 1e-3 on the
+   shared trunk is within noise of the 0.1 / 1e-4 default on every
+   column, and the concurrent FULL-scale heavy-reg run
    (`train_v8_20260925T023425Z.json`, 6,000 shards) sat at val value
    loss 1.39–1.52 through epoch 5 — no better than the rejected run's
-   1.29. This closes D4's "heavier dropout / weight decay" candidate.
+   1.29. But *on top of* `trunk_no_printing` it is the best arm on
+   every column, and the only one that clears the ceiling even
+   UNCALIBRATED (raw 0.9857). The two levers are not redundant:
+   dropout/wd shrink the weights, `trunk_no_printing` removes the
+   feature the value head was cheating with, and removing the cheat
+   is what makes the shrinkage bite.
 5. **Identity-blind is real but not free.** Hiding the printing
    embeddings from the value head cuts saturation hard
-   (mean \|pred\| 0.87 → 0.68) and makes the temperature *transfer*
-   perfectly (cv MSE == in-sample MSE; the shared-trunk arms lose
-   0.01–0.04 across the cross-fit). At 3 epochs it trades ~0.04
-   correlation for that. It costs **~1.5× per NN eval at batch 1 on
-   CPU** (the production self-play shape; 1.33× at batch 16/256, 1.3–
-   1.6× on CUDA) because the value head runs a second trunk pass, and
-   1.3× per training epoch. Its train value loss after 3 epochs was
-   0.63 vs the shared trunk's 0.22 — it has not begun to memorise,
-   which is the whole point, and it means the 3-epoch comparison
-   understates it at the 9–20 epoch budgets the real runs use.
+   (mean \|pred\| 0.87 → 0.68 alone, → 0.62 combined; fitted T 7.7 →
+   4.5) and makes the temperature *transfer* — the blind arms' cv MSE
+   is within 0.003 of their in-sample MSE, while the base arm loses
+   0.041 across the cross-fit. **Alone** it trades ~0.04 correlation
+   for that; **with heavier regularisation** it gains correlation
+   instead (0.402 vs base's 0.394) — i.e. the 3-epoch "blind is
+   worse" reading is an artefact of pairing it with the light
+   regularisation the shared trunk needs. It costs **~1.5× per NN
+   eval at batch 1 on CPU** (the production self-play shape; 1.33× at
+   batch 16/256, 1.3–1.6× on CUDA) because the value head runs a
+   second trunk pass, and ~1.35× per training epoch. Its train value
+   loss after 3 epochs was 0.63–0.74 vs the shared trunk's 0.22–0.28
+   — it has not begun to memorise, which is the whole point, and it
+   means this 3-epoch comparison *understates* it at the 9–20 epoch
+   budgets the real runs use.
 
 ### What this changes about the gate
 
