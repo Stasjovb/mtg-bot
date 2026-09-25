@@ -24,6 +24,7 @@ from mtg_bot.training.data_gen import save_dataset
 from mtg_bot.training.structured_model import (
     N_EMB_FIELDS,
     N_SCALAR_FIELDS_V2,
+    SCALAR_FIELD_IS_VIEWER_TURN,
     SCALAR_FIELD_OPP_LIFE,
     SCALAR_FIELD_VIEWER_LIFE,
     TOKEN_TYPE_GLOBAL,
@@ -46,15 +47,31 @@ def _write_memorisable_npz(
     capacity fits the training games perfectly and is a coin flip on
     held-out games — the exact failure the gate exists to catch.
 
+    Rows alternate VIEWER within each game and the outcome label flips
+    with the viewer, mirroring real self-play (every game is recorded
+    from both seats). That makes the label mean EXACTLY 0 on any
+    subset of whole games, which is what makes the gate's constant-0
+    ceiling the true "no information" line: with imbalanced held-out
+    labels, the best CONSTANT predictor scores ``1 - mean(y)**2 < 1``,
+    and any monotone rescale of a one-signed head can reach it — so an
+    imbalanced fixture measures label skew, not value quality. The
+    viewer flag is a real input scalar, so the model can still
+    memorise ``(game, viewer) -> outcome`` on the training games.
+
     ``game_ids`` are written so the loader builds real game-level
     groups and the held-out split is non-empty.
     """
     rng = np.random.default_rng(seed)
+    if rows_per_game % 2:
+        raise ValueError("rows_per_game must be even (two viewers)")
     n_rows = n_games * rows_per_game
     game_ids = np.repeat(np.arange(n_games), rows_per_game).astype(np.int32)
     game_outcome = rng.choice(np.array([-1.0, 1.0], dtype=np.float32),
                               size=n_games)
-    outcomes = game_outcome[game_ids]
+    viewer = np.tile(np.array([0.0, 1.0], dtype=np.float32), n_rows // 2)
+    outcomes = (
+        game_outcome[game_ids] * np.where(viewer == 0.0, 1.0, -1.0)
+    ).astype(np.float32)
 
     token_type = np.full((n_rows, seq_len), 2, dtype=np.int64)
     token_type[:, 0] = TOKEN_TYPE_GLOBAL
@@ -69,6 +86,7 @@ def _write_memorisable_npz(
     )
     token_scalars[:, 0, SCALAR_FIELD_VIEWER_LIFE] = 20.0
     token_scalars[:, 0, SCALAR_FIELD_OPP_LIFE] = 20.0
+    token_scalars[:, 0, SCALAR_FIELD_IS_VIEWER_TURN] = viewer
     attention_mask = np.ones((n_rows, seq_len), dtype=np.bool_)
     save_dataset(
         rng.standard_normal((n_rows, FEATURE_DIM)).astype(np.float32),

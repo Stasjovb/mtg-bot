@@ -384,6 +384,9 @@ def _build_structured_model(
     enable_hand_belief_head: Optional[bool] = None,
     dropout: Optional[float] = None,
     scalar_schema_version: Optional[int] = None,
+    value_head_input: Optional[str] = None,
+    value_temperature: Optional[float] = None,
+    value_bias: Optional[float] = None,
 ) -> nn.Module:
     """Instantiate a ``StructuredModel`` with optional config overrides.
 
@@ -412,6 +415,12 @@ def _build_structured_model(
         ("enable_hand_belief_head", enable_hand_belief_head),
         ("dropout", dropout),
         ("scalar_schema_version", scalar_schema_version),
+        # Value-head routing + post-hoc calibration. Both are config,
+        # not state_dict, so a checkpoint trained under either setting
+        # loads either way; the loader passes what metadata recorded.
+        ("value_head_input", value_head_input),
+        ("value_temperature", value_temperature),
+        ("value_bias", value_bias),
     ):
         if value is not None:
             cfg_kwargs[key] = value
@@ -509,6 +518,16 @@ class NNEvaluator(Evaluator):
         # Threaded into every ``tokenize_state`` call so the input
         # width matches the projection.
         structured_scalar_schema_version: Optional[int] = None,
+        # Which representation the structured value head reads
+        # (``StructuredModelConfig.value_head_input``) and the
+        # post-hoc value calibration fitted on the held-out split.
+        # ``from_metadata`` fills all three from metadata.json;
+        # ``None`` keeps the model defaults (shared trunk, identity
+        # calibration), which is exactly how every pre-2026-09-25
+        # checkpoint behaved.
+        structured_value_head_input: Optional[str] = None,
+        structured_value_temperature: Optional[float] = None,
+        structured_value_bias: Optional[float] = None,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -594,6 +613,9 @@ class NNEvaluator(Evaluator):
                 ),
                 dropout=structured_dropout,
                 scalar_schema_version=structured_scalar_schema_version,
+                value_head_input=structured_value_head_input,
+                value_temperature=structured_value_temperature,
+                value_bias=structured_value_bias,
             )
             # Scalar schema the tokenizer must emit — read back off
             # the built model's config so a ``None`` override and an
@@ -1229,12 +1251,47 @@ class NNEvaluator(Evaluator):
                     "structured_scalar_schema_version",
                     "scalar_schema_version",
                 )
+            # Post-hoc value calibration. Lives at the TOP level of
+            # metadata (``ModelMetadata.value_calibration``) because
+            # it is re-fittable without retraining — ``mtg_bot
+            # calibrate-value`` rewrites only that key. Absent /
+            # empty (every pre-2026-09-25 checkpoint) => identity,
+            # i.e. bit-identical inference to before.
+            from mtg_bot.training.value_calibration import (
+                CALIBRATION_OUTPUT_SHRINK,
+                ValueCalibration,
+            )
+
+            calibration = ValueCalibration.from_dict(
+                getattr(metadata, "value_calibration", None)
+                or training.get("value_calibration"),
+            )
+            if calibration.method == CALIBRATION_OUTPUT_SHRINK:
+                # A structured model always exposes its pre-tanh
+                # logit, so a structured checkpoint should never
+                # carry the post-tanh fallback fit. If one does, the
+                # temperature path cannot express it — say so loudly
+                # rather than silently shipping uncalibrated values.
+                raise ValueError(
+                    "metadata.value_calibration uses the "
+                    "'output_shrink' method, which the structured "
+                    "model cannot apply (it calibrates the pre-tanh "
+                    "logit). Re-run `mtg_bot calibrate-value` for "
+                    "this version."
+                )
             return cls(
                 weights_path=weights_path,
                 device=device,
                 architecture=architecture,
                 action_encoding_version=action_encoding_version,
                 structured_scalar_schema_version=scalar_schema_version,
+                structured_value_head_input=_resolve(
+                    training,
+                    "structured_value_head_input",
+                    "value_head_input",
+                ),
+                structured_value_temperature=calibration.temperature,
+                structured_value_bias=calibration.bias,
                 structured_emb_dim=_resolve(
                     training, "structured_emb_dim", "emb_dim",
                 ),

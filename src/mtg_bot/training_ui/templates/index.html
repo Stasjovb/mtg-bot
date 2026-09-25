@@ -1115,24 +1115,39 @@ function fillRun(el, run) {
     // hidden in that case rather than showing a fake dash. MSE >= 1.0
     // means the value head is no better than predicting 0 on unseen
     // GAMES; the gate rejects those, and the tile flags them red.
+    //
+    // The headline number is `gate_value_mse` — the CALIBRATED MSE
+    // when a value temperature was fit (it ships in metadata and is
+    // applied at inference, so it is the score of the model that will
+    // actually run), falling back to the raw MSE for runs written
+    // before calibration existed. When the two differ the raw number
+    // moves to the subtitle so the shrink is visible, not hidden.
     const hv = run.holdout_value_metrics;
     const hvStat = el.querySelector('[data-field="holdout-stat"]');
     if (hvStat) {
-      const mse = hv && typeof hv.value_mse === 'number' ? hv.value_mse : null;
+      const rawMse = hv && typeof hv.value_mse === 'number'
+        ? hv.value_mse : null;
+      const mse = hv && typeof hv.gate_value_mse === 'number'
+        ? hv.gate_value_mse : rawMse;
       if (mse === null || !isFinite(mse)) {
         hvStat.hidden = true;
       } else {
         hvStat.hidden = false;
-        const corr = (typeof hv.value_corr === 'number')
-          ? hv.value_corr.toFixed(2) : 'n/a';
+        const shownCorr = (typeof hv.calibrated_value_corr === 'number')
+          ? hv.calibrated_value_corr : hv.value_corr;
+        const corr = (typeof shownCorr === 'number')
+          ? shownCorr.toFixed(2) : 'n/a';
         const base = (typeof hv.baseline_life_diff_corr === 'number')
           ? hv.baseline_life_diff_corr.toFixed(2) : 'n/a';
         el.querySelector('[data-field="holdout"]').textContent =
           fmtLoss(mse);
         const sub = el.querySelector('[data-field="holdout-sub"]');
         if (sub) {
-          sub.textContent = 'MSE (const-0 = 1.0) · r=' + corr
-            + ' · life r=' + base;
+          const calibrated = (rawMse !== null && rawMse !== mse);
+          sub.textContent = (calibrated
+            ? 'calibrated MSE (raw ' + fmtLoss(rawMse) + ', const-0 = 1.0)'
+            : 'MSE (const-0 = 1.0)')
+            + ' · r=' + corr + ' · life r=' + base;
         }
         const gate = run.value_gate || {};
         const bad = (gate.passed === false) || mse >= 1.0;

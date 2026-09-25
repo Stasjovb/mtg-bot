@@ -215,9 +215,229 @@ gate passes or fails.
 
 ---
 
+## Diagnostic 5 — the value head is UNCALIBRATED, not uninformed (2026-09-25, MEASURED)
+
+**D4 read the held-out MSE as "the value head has learned nothing".
+That reading is wrong, and the 6,000-shard warm start is the case
+that proves it.** The run
+(`training_progress_s2/train_v8_20260925T013714Z.json`, 6,000
+heuristic-guided shards / 6.6M rows, dropout 0.1, AdamW wd 1e-4, LR
+3e-4, restore-best epoch 3 of 9) was rejected with:
+
+| quantity | value |
+|--|--|
+| held-out value MSE | **1.294** (constant-0 = 1.000) |
+| corr(pred, outcome) | **0.298** |
+| corr(life_diff, outcome) | 0.310 |
+| mean \|pred\| | **0.888** |
+| held-out rows | 662,392 |
+
+Those three numbers are not mutually consistent with "learned
+nothing". **A predictor with correlation `r` against ±1 labels,
+optimally rescaled, scores `1 - r**2`** — 0.911 at r = 0.298. The
+head has roughly one scalar's worth of real signal; what it lacks is
+a SCALE. `mean |pred| = 0.888` says the tanh is saturated: it shouts
+±1 on unseen games where it should whisper ±0.3, and squared error
+punishes exactly that. **MSE 1.294 measures the calibration, not the
+information.**
+
+That also explains the search pathology directly: PUCT backs the leaf
+value up the tree, and when interior leaves already read ±1 a REAL
+terminal cannot dominate them, so the search collapses toward
+whatever keeps the tree shallow (empirically: PASS).
+
+### The fix, and what each lever is worth
+
+Four 3-epoch fits, **identical 1,000-shard subset** (1,099,208 rows,
+109,932 held-out, `--seed 1`, `--lr 3e-4`, batch 256, restore-best),
+production trunk, RTX 5090, driver
+`scripts/s2/value_head_sweep.sh`. The life-differential baseline is
+**r = 0.2998** on these rows. "cv MSE" is the cross-fitted calibrated
+MSE (temperature fit on one half of the held-out rows, scored on the
+other, both ways) — the number the gate now reads.
+
+| arm | dropout / wd | value head | raw MSE | **cv MSE** | in-sample cal MSE | r raw | r cal | mean \|pred\| raw → cal | T | s/epoch |
+|--|--|--|--|--|--|--|--|--|--|--|
+| base | 0.1 / 1e-4 | trunk | 1.1605 | **0.8862** | 0.8448 | 0.364 | 0.394 | 0.872 → 0.343 | 7.71 | 96 |
+| identity-blind | 0.1 / 1e-4 | trunk_no_printing | 1.0927 | **0.8748** | 0.8748 | 0.331 | 0.354 | 0.683 → 0.269 | 7.40 | 125 |
+| heavy-reg | 0.3 / 1e-3 | trunk | 1.1621 | **0.8631** | 0.8531 | 0.363 | 0.383 | 0.873 → 0.335 | 7.63 | 94 |
+| **combined** | 0.3 / 1e-3 | trunk_no_printing | **0.9857** | **0.8418** | 0.8388 | **0.375** | **0.402** | 0.624 → 0.292 | 4.52 | 129 |
+
+Readings:
+
+1. **Calibration is the decisive lever and it is free.** The three
+   arms that fail the raw gate (MSE 1.09–1.16 ≥ 1.0) all pass the
+   calibrated one (0.86–0.89); only the combined arm clears the
+   ceiling uncalibrated, and calibration still takes it from 0.986 to
+   0.842. The fitted temperature is ~7.6 on all three shared-or-
+   lightly-regularised arms — the head is over-confident by nearly an
+   order of magnitude in logit space, consistently. The calibrated
+   MSE lands on the theoretical `1 - r**2` to four decimal places in
+   every arm, i.e. the one-parameter fit extracts essentially all of
+   the MSE the head's correlation entitles it to. Cost: one float in
+   `metadata.json`, applied inside `StructuredModel.forward`. Zero
+   inference cost.
+2. **Un-saturating RECOVERS correlation** (0.364 → 0.394 base,
+   0.331 → 0.354 blind). `tanh` near ±1 is lossy and Pearson r is not
+   rank-based, so squashing costs real correlation as well as scale.
+3. **After calibration the head beats the life-differential
+   baseline** (0.354–0.402 vs 0.2998) — which D4 said it had to clear
+   before value-guided search is worth anything. It did not clear it
+   raw on the 6,000-shard run (0.298 vs 0.310).
+4. **Heavier regularisation ALONE is not indicated; combined with
+   the identity-blind head it is.** dropout 0.3 / wd 1e-3 on the
+   shared trunk is within noise of the 0.1 / 1e-4 default on every
+   column, and the concurrent FULL-scale heavy-reg run
+   (`train_v8_20260925T023425Z.json`, 6,000 shards) sat at val value
+   loss 1.39–1.52 through epoch 5 — no better than the rejected run's
+   1.29. But *on top of* `trunk_no_printing` it is the best arm on
+   every column, and the only one that clears the ceiling even
+   UNCALIBRATED (raw 0.9857). The two levers are not redundant:
+   dropout/wd shrink the weights, `trunk_no_printing` removes the
+   feature the value head was cheating with, and removing the cheat
+   is what makes the shrinkage bite.
+5. **Identity-blind is real but not free, and it LOSES at the
+   production epoch budget.** Hiding the printing
+   embeddings from the value head cuts saturation hard
+   (mean \|pred\| 0.87 → 0.68 alone, → 0.62 combined; fitted T 7.7 →
+   4.5) and makes the temperature *transfer* — the blind arms' cv MSE
+   is within 0.003 of their in-sample MSE, while the base arm loses
+   0.041 across the cross-fit. **Alone** it trades ~0.04 correlation
+   for that; **with heavier regularisation** it gains correlation
+   instead (0.402 vs base's 0.394) — i.e. the 3-epoch "blind is
+   worse" reading is an artefact of pairing it with the light
+   regularisation the shared trunk needs. It costs **~1.5× per NN
+   eval at batch 1 on CPU** (the production self-play shape; 1.33× at
+   batch 16/256, 1.3–1.6× on CUDA) because the value head runs a
+   second trunk pass, and ~1.35× per training epoch. Its train value
+   loss after 3 epochs was 0.63–0.74 vs the shared trunk's 0.22–0.28
+   — it has not begun to memorise, which is the whole point, and it
+   means this 3-epoch comparison should *understate* it at the 9–20
+   epoch budgets the real runs use. It does not — see the 9-epoch
+   section below, where that prediction is falsified.
+
+### At the real epoch budget (9 epochs, same subset + seed)
+
+3 epochs is not where the rejected run lived — it trained for 9 with
+restore-best landing on epoch 3. Re-running three of the arms at 9
+epochs on the same 1,000 shards:
+
+| arm | raw MSE | **cv MSE** | in-sample cal MSE | r raw | r cal | mean \|pred\| | T | train value loss, epoch 1 → 9 |
+|--|--|--|--|--|--|--|--|--|
+| **base9** (0.1 / 1e-4, trunk) | 1.1212 | **0.8173** | 0.8084 | 0.391 | **0.438** | 0.878 | 7.34 | 0.200 → **0.015** |
+| blind9 (0.1 / 1e-4, trunk_no_printing) | 1.0525 | 0.8784 | 0.8687 | 0.346 | 0.362 | 0.652 | 5.24 | 0.642 → 0.467 |
+| combined9 (0.3 / 1e-3, trunk_no_printing) | 0.9894 | 0.8405 | 0.8397 | 0.377 | 0.401 | 0.625 | 4.89 | 0.727 → 0.575 |
+
+The train-loss column is the memorisation channel, measured: the
+shared-trunk value head drives its TRAINING loss to 0.015 — an order
+of magnitude past the rejected 6,000-shard run's 0.09 — while the
+identity-blind head cannot get below 0.467, because the feature it
+would need is gone.
+
+**And the shared trunk still wins on the held-out numbers.** Its
+correlation *improved* with the extra epochs (0.364 → 0.391 raw,
+0.394 → 0.438 calibrated) even as it memorised harder, and its cv MSE
+(0.817) beats the blind head's (0.878). So the pre-registered guess
+that identity-blindness would pull ahead once the memorisation window
+opened is **FALSIFIED at matched regularisation**: memorisation and
+generalisation are not competing for the same capacity here. The head
+is learning something real AND recording the training games, and only
+the second one is what the raw MSE was punishing — which is exactly
+what calibration removes, for free, without giving up the first.
+
+The identity-blind head's value therefore is NOT "higher held-out
+quality at equal settings". It is (a) a much smaller calibration
+gap — its cv MSE tracks its in-sample MSE to within 0.010, against
+0.009-0.041 for the shared trunk, i.e. the temperature transfers
+across the corpus — and (b) a genuinely different operating point
+when paired with heavier regularisation, where it is the only
+configuration that clears the ceiling uncalibrated at either epoch
+budget (raw 0.986 / 0.989).
+
+**Which lever wins depends on the epoch budget, and the ordering
+inverts.** Gate metric (cv MSE), best first:
+
+| epochs | ranking |
+|--|--|
+| 3 | combined **0.842** ‹ heavy-reg 0.863 ‹ blind 0.875 ‹ base 0.886 |
+| 9 | **base 0.817** ‹ combined 0.841 ‹ blind 0.878 |
+
+Extra epochs are worth −0.069 cv MSE to the shared trunk
+(0.886 → 0.817) and essentially nothing to the identity-blind arms
+(combined 0.842 → 0.841; blind 0.875 → 0.878). Read together: the
+printing embedding is carrying real, generalising signal for the
+value head that only a longer fit extracts — blinding the head to it
+costs that, and what it buys back (a stable temperature, an
+uncalibrated pass) is not worth 1.5× per NN eval at the epoch budget
+the production runs actually use.
+
+### Recommendation for the full 6,000-shard warm start
+
+**Enable calibration (automatic — no flag) and change nothing else.**
+Keep `--value-head-input trunk` and `--dropout 0.1 --weight-decay
+1e-4`. At the 9-epoch budget the production run uses, that is the
+best-measured configuration on the gate metric AND the cheapest (no
+1.5× inference tax, no extra trunk pass).
+
+Expected numbers, derived from the rejected run's OWN held-out
+measurement (`r_raw = 0.2977`, `mean |pred| = 0.888`, 662,392 rows)
+rather than from the 1,000-shard subset, which runs hotter
+(`r_raw` 0.36-0.39 on the same settings):
+
+| quantity | expected | how |
+|--|--|--|
+| calibrated held-out MSE | **0.89-0.91** | `1 - r_cal**2`, with `r_cal / r_raw` = 1.06-1.12 measured across all seven arms |
+| cross-fitted (gate-judged) MSE | **0.89-0.95** | plus the shared-trunk cross-fit penalty, 0.009-0.041 |
+| corr(pred, outcome), calibrated | **0.32-0.33** | 0.2977 × 1.06-1.12 |
+| fitted temperature | **7-9** | 7.3-8.0 on every shared-trunk arm |
+| mean \|pred\| | **0.888 → ~0.35** | 0.87 → 0.34-0.38 measured |
+| verdict | **PASS** (ceiling 1.0) | worst case 0.952 with zero de-saturation gain and the largest observed cross-fit penalty |
+
+**The honest caveat that survives the pass:** at `r_cal ~ 0.32` the
+head only just clears the life-differential baseline (0.310 on those
+rows). It will be a *calibrated* evaluator carrying about one
+scalar's worth of information, not a good one. The gate is a floor,
+not a target; `mtg_bot train` prints an explicit NOTE when the
+calibrated correlation fails to beat the baseline.
+
+### What this changes about the gate
+
+`mtg_bot train` now fits the temperature on the held-out split and
+judges the gate on the CALIBRATED (cross-fitted) MSE, because the
+temperature ships in `metadata.value_calibration` and is applied at
+inference — the raw MSE grades a model nobody will run. **The
+threshold is unchanged at 1.0.** Both numbers are reported (progress
+JSON, `metadata.json`, the training card, the CLI). A standalone
+`mtg_bot calibrate-value --version vN` re-fits an already-registered
+version without retraining.
+
+Two guards keep the calibrated gate honest: a zero-variance head is
+never calibrated (every monotone one-parameter family over a constant
+input degenerates into a fitted intercept), and the additive bias is
+opt-in for the same reason. Full argument in
+`mtg_bot/training/value_calibration.py`.
+
+**Residual caveat, deliberately not "fixed" here:** the fixed 1.0
+ceiling is the true "no information" line only when the held-out
+labels are BALANCED, because the best CONSTANT predictor scores
+`1 - mean(y)**2`. Self-play labels are balanced by construction (both
+seats recorded) and the real 662k-row split measured
+`target_mean = 0.0` exactly, so this is a property of the corpus, not
+a hole — but a skewed hand-built split would want the best-constant
+baseline instead. `target_mean` is reported so the skew is visible.
+
+---
+
 ## Synthesis — what this means for the next iterate cycle
 
 As of 2026-05-18 **three of four levers are resolved, two validated**:
+
+> **2026-09-25 amendment: D5 supersedes half of D4's diagnosis.**
+> The value head is UNCALIBRATED, not uninformed: at corr 0.298 the
+> optimally-rescaled MSE is 0.911, and a one-parameter temperature
+> fit realises it. "Heavier dropout / weight decay", D4's first
+> candidate, is now measured and NOT indicated. Read D5 before
+> acting on D4's candidate list.
 
 > **2026-09-24 amendment: read D4 before acting on the list below.**
 > D4 measured the value head on a GAME-level held-out split and found

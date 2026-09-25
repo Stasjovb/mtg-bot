@@ -305,6 +305,54 @@ def test_structured_server_forces_with_policy_true(tmp_path: Path):
     assert server.handle().with_policy is True
 
 
+def test_structured_server_honours_value_calibration(tmp_path: Path):
+    """The batched path must return the SAME calibrated value the
+    in-process ``NNEvaluator`` would.
+
+    The fitted temperature ships in ``metadata.value_calibration`` and
+    is applied inside ``StructuredModel.forward``, so hosting a
+    calibrated checkpoint here is a matter of threading the config —
+    if this server ever built its model without it, search behind the
+    SHM server would silently see raw, saturated values.
+    """
+    torch.manual_seed(0)
+    server = SharedTensorNNEvalServer(
+        weights_path=None,
+        device="cpu",
+        architecture=ARCHITECTURE_STRUCTURED,
+        n_slots=2,
+        batch_size=1,
+        batch_wait_ms=0.0,
+        structured_value_temperature=6.5,
+        structured_value_bias=0.125,
+        structured_value_head_input="trunk_no_printing",
+        **SMALL_KWARGS,
+    )
+    cfg = server._model.config
+    assert cfg.value_temperature == 6.5
+    assert cfg.value_bias == 0.125
+    assert cfg.value_head_input == "trunk_no_printing"
+
+
+def test_structured_server_defaults_to_the_identity_calibration(
+    tmp_path: Path,
+):
+    torch.manual_seed(0)
+    server = SharedTensorNNEvalServer(
+        weights_path=None,
+        device="cpu",
+        architecture=ARCHITECTURE_STRUCTURED,
+        n_slots=2,
+        batch_size=1,
+        batch_wait_ms=0.0,
+        **SMALL_KWARGS,
+    )
+    cfg = server._model.config
+    assert cfg.value_temperature == 1.0
+    assert cfg.value_bias == 0.0
+    assert cfg.value_head_input == "trunk"
+
+
 def test_structured_server_rejects_unknown_architecture(tmp_path: Path):
     """A typo at construction time must surface immediately."""
     with pytest.raises(ValueError, match="architecture must be one of"):

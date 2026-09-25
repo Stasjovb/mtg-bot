@@ -109,6 +109,19 @@ class HoldoutValueMetrics:
     sanity yardstick: a value head whose correlation is below the
     life-differential baseline has learned nothing a one-line
     heuristic doesn't already know.
+
+    ``calibrated_value_mse`` / ``calibrated_value_corr`` /
+    ``calibrated_pred_abs_mean`` are the same three numbers after the
+    post-hoc temperature fit in
+    :mod:`mtg_bot.training.value_calibration` — the scale the shipped
+    checkpoint actually evaluates at, because the fitted temperature
+    is written into ``metadata.value_calibration`` and applied inside
+    ``StructuredModel.forward``. They are ``None`` when no calibration
+    was fit (no pre-tanh logits available, or an empty split), in
+    which case the raw numbers ARE the shipped ones.
+
+    :attr:`gate_value_mse` is the single number the gate compares
+    against its ceiling. See its docstring for the precedence.
     """
 
     n_rows: int
@@ -119,6 +132,37 @@ class HoldoutValueMetrics:
     pred_mean: Optional[float] = None
     pred_abs_mean: Optional[float] = None
     target_mean: Optional[float] = None
+    calibrated_value_mse: Optional[float] = None
+    calibrated_value_corr: Optional[float] = None
+    calibrated_pred_abs_mean: Optional[float] = None
+    calibration: Optional[dict[str, Any]] = None
+
+    @property
+    def gate_value_mse(self) -> float:
+        """The MSE the gate judges.
+
+        Precedence: the CROSS-FITTED calibrated MSE (calibration
+        parameters fit on one half of the held-out rows and scored on
+        the other) > the in-sample calibrated MSE > the raw MSE. The
+        cross-fitted number is preferred so "calibrate, then grade
+        the calibration on the rows it was fit on" cannot flatter a
+        run, however small one free parameter against 10^5+ rows
+        makes that effect.
+
+        Judging the CALIBRATED number is the point: temperature is
+        part of the shipped artifact (metadata + forward pass), so
+        the raw MSE grades a model nobody will run.
+        """
+        cal = self.calibration or {}
+        cv = cal.get("cv_mse")
+        if isinstance(cv, (int, float)) and math.isfinite(float(cv)):
+            return float(cv)
+        if (
+            self.calibrated_value_mse is not None
+            and math.isfinite(self.calibrated_value_mse)
+        ):
+            return float(self.calibrated_value_mse)
+        return float(self.value_mse)
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict (no NaN/Inf) for metadata + progress JSON."""
@@ -126,6 +170,10 @@ class HoldoutValueMetrics:
         for key, val in list(out.items()):
             if isinstance(val, float) and not math.isfinite(val):
                 out[key] = None
+        out["gate_value_mse"] = (
+            self.gate_value_mse
+            if math.isfinite(self.gate_value_mse) else None
+        )
         return out
 
 
@@ -133,6 +181,10 @@ def compute_holdout_value_metrics(
     preds: np.ndarray,
     targets: np.ndarray,
     life_diffs: Optional[np.ndarray] = None,
+    logits: Optional[np.ndarray] = None,
+    *,
+    calibrate: bool = True,
+    fit_bias: bool = False,
 ) -> HoldoutValueMetrics:
     """Build :class:`HoldoutValueMetrics` from raw held-out arrays.
 
@@ -141,6 +193,23 @@ def compute_holdout_value_metrics(
     viewer-minus-opponent life differential for the same rows, used
     for the trivial baseline correlation; pass ``None`` when the
     stored token scalars do not carry life (schema v1).
+
+    ``logits`` (optional, ``(N,)``) are the PRE-tanh value-head
+    outputs for the same rows. When present (and ``calibrate``), a
+    temperature is fit on them
+    (:func:`~mtg_bot.training.value_calibration.calibrate_holdout`)
+    and the calibrated MSE / corr / |pred| land in the
+    ``calibrated_*`` fields. Without logits the fallback is a
+    monotone output shrink on ``preds``, which is weaker but still
+    reported. Pass ``calibrate=False`` for the raw-only measurement
+    (what the pre-calibration gate did).
+
+    ``fit_bias`` defaults to False — temperature only. The additive
+    pre-tanh bias is a diagnosis knob, not something a GATE should be
+    graded through (see
+    :mod:`mtg_bot.training.value_calibration`); this is the default
+    every training run inherits, so it must match the fitters' own
+    default or the gate silently reads a two-parameter fit.
 
     An empty input yields ``n_rows=0`` with NaN MSEs — the gate
     treats that as "could not evaluate" rather than a failure.
@@ -172,6 +241,29 @@ def compute_holdout_value_metrics(
                 f"{n}"
             )
         baseline_corr = pearson_corr(life_diffs, targets)
+    cal_mse: Optional[float] = None
+    cal_corr: Optional[float] = None
+    cal_abs: Optional[float] = None
+    cal_dict: Optional[dict[str, Any]] = None
+    if calibrate:
+        from mtg_bot.training.value_calibration import calibrate_holdout
+
+        if logits is not None:
+            logits = np.asarray(logits, dtype=np.float64).ravel()
+            if logits.shape[0] != n:
+                raise ValueError(
+                    f"logits rows {logits.shape[0]} != preds rows {n}"
+                )
+        calibration, cal_preds = calibrate_holdout(
+            targets,
+            logits=logits,
+            preds=None if logits is not None else preds,
+            fit_bias=fit_bias,
+        )
+        cal_dict = calibration.as_dict()
+        cal_mse = float(np.mean((cal_preds - targets) ** 2))
+        cal_corr = pearson_corr(cal_preds, targets)
+        cal_abs = float(np.mean(np.abs(cal_preds)))
     return HoldoutValueMetrics(
         n_rows=n,
         value_mse=mse,
@@ -181,6 +273,10 @@ def compute_holdout_value_metrics(
         pred_mean=float(np.mean(preds)),
         pred_abs_mean=float(np.mean(np.abs(preds))),
         target_mean=float(np.mean(targets)),
+        calibrated_value_mse=cal_mse,
+        calibrated_value_corr=cal_corr,
+        calibrated_pred_abs_mean=cal_abs,
+        calibration=cal_dict,
     )
 
 
@@ -212,8 +308,12 @@ def evaluate_value_gate(
     """Decide whether a trained value head is fit to be registered.
 
     ``min_holdout_value_quality`` is the held-out value-MSE CEILING:
-    the run passes only when ``metrics.value_mse <
-    min_holdout_value_quality``. Quality is measured as MSE here, so
+    the run passes only when ``metrics.gate_value_mse <
+    min_holdout_value_quality``. That is the CALIBRATED MSE when a
+    temperature was fit (see :attr:`HoldoutValueMetrics
+    .gate_value_mse`), because the temperature ships with the
+    checkpoint and is applied at inference — the raw MSE grades a
+    model nobody will run. Quality is measured as MSE here, so
     a SMALLER number is a STRICTER gate; the flag keeps the
     "min quality" name because that is the operator-facing knob
     (``--min-holdout-value-quality``). The default
@@ -260,7 +360,8 @@ def evaluate_value_gate(
             threshold=threshold,
             evaluated=False,
         )
-    if not math.isfinite(metrics.value_mse):
+    judged = metrics.gate_value_mse
+    if not math.isfinite(metrics.value_mse) or not math.isfinite(judged):
         return ValueGateDecision(
             passed=False,
             reason=(
@@ -271,13 +372,18 @@ def evaluate_value_gate(
             threshold=threshold,
             evaluated=True,
         )
-    if metrics.value_mse >= threshold:
+    raw_note = (
+        f"raw {metrics.value_mse:.4f}"
+        if judged != metrics.value_mse
+        else "uncalibrated"
+    )
+    if judged >= threshold:
         return ValueGateDecision(
             passed=False,
             reason=(
-                f"held-out value MSE {metrics.value_mse:.4f} >= "
+                f"held-out value MSE {judged:.4f} >= "
                 f"{threshold:.4f} over {metrics.n_rows} held-out rows "
-                f"(constant-0 predictor scores "
+                f"[{raw_note}] (constant-0 predictor scores "
                 f"{metrics.constant_zero_mse:.4f} on the same rows) — "
                 f"the value head does not generalise."
             ),
@@ -287,9 +393,9 @@ def evaluate_value_gate(
     return ValueGateDecision(
         passed=True,
         reason=(
-            f"held-out value MSE {metrics.value_mse:.4f} < "
+            f"held-out value MSE {judged:.4f} < "
             f"{threshold:.4f} over {metrics.n_rows} held-out rows "
-            f"(constant-0 predictor: "
+            f"[{raw_note}] (constant-0 predictor: "
             f"{metrics.constant_zero_mse:.4f})"
         ),
         threshold=threshold,
@@ -324,14 +430,21 @@ def format_gate_failure(
         f"  {decision.reason}",
         "",
         f"  held-out rows .............. {metrics.n_rows}",
-        f"  held-out value MSE ......... {_fmt(metrics.value_mse)}",
+        f"  held-out value MSE (raw) ... {_fmt(metrics.value_mse)}",
+        f"  held-out value MSE (calib) . "
+        f"{_fmt(metrics.calibrated_value_mse)}",
+        f"  gate-judged MSE ............ "
+        f"{_fmt(metrics.gate_value_mse)}",
         f"  constant-0 predictor MSE ... "
         f"{_fmt(metrics.constant_zero_mse)}",
         f"  corr(pred, outcome) ........ {_fmt(metrics.value_corr)}",
         f"  corr(life_diff, outcome) ... "
         f"{_fmt(metrics.baseline_life_diff_corr)}",
-        f"  mean |pred| ................ "
-        f"{_fmt(metrics.pred_abs_mean)}",
+        f"  mean |pred| raw / calib .... "
+        f"{_fmt(metrics.pred_abs_mean)} / "
+        f"{_fmt(metrics.calibrated_pred_abs_mean)}",
+        f"  value temperature .......... "
+        f"{_fmt((metrics.calibration or {}).get('temperature'))}",
         f"  gate ceiling ............... {decision.threshold:.4f}",
         "",
         f"  The weights were NOT registered (would have been "
@@ -341,6 +454,8 @@ def format_gate_failure(
         "  PUCT search guided by it plays worse than random.",
         "",
         "  Likely next moves:",
+        "    * --value-head-input trunk_no_printing (hide per-card",
+        "      identity from the value head; the policy head keeps it)",
         "    * raise --dropout / --weight-decay (regularise harder)",
         "    * generate more self-play games (more distinct deck",
         "      pairs => less to memorise)",

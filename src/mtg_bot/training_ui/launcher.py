@@ -534,6 +534,24 @@ def build_iterate_schema(
                     ),
                 },
                 {
+                    "name": "value-head-input", "type": "choice",
+                    "choices": ["", "trunk", "trunk_no_printing"],
+                    "default": "",
+                    "help": (
+                        "Structured-trunk only: which representation "
+                        "the VALUE head reads. 'trunk' shares one "
+                        "trunk pass with the policy head and can "
+                        "memorise per-printing card identity (the s2 "
+                        "failure); 'trunk_no_printing' runs the value "
+                        "head off a second pass of the SAME trunk "
+                        "weights with the printing embeddings "
+                        "dropped, so it sees board shape / life / "
+                        "counts but not which cards. Adds no "
+                        "parameters; ~1.5x per NN eval. Blank = "
+                        "trainer default (trunk)."
+                    ),
+                },
+                {
                     "name": "keep-last-epoch", "type": "bool",
                     "default": False,
                     "help": (

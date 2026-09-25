@@ -1487,6 +1487,13 @@ def _score_holdout_value(
     """Re-score the held-out split and return
     :class:`~mtg_bot.training.value_gate.HoldoutValueMetrics`.
 
+    Collects the model's PRE-tanh ``value_logit`` alongside the
+    squashed ``value`` so
+    :func:`~mtg_bot.training.value_gate.compute_holdout_value_metrics`
+    can fit the post-hoc temperature
+    (:mod:`mtg_bot.training.value_calibration`) that the caller then
+    writes into ``metadata.value_calibration``.
+
     Returns a zero-row metrics object when there is no val loader
     (``val_split=0`` or a single-game dataset) — the gate reads that
     as "could not evaluate" rather than as a failure.
@@ -1516,6 +1523,7 @@ def _score_holdout_value(
         and int(scalar_schema_version) >= SCALAR_SCHEMA_V2
     )
     preds: list[np.ndarray] = []
+    logits: list[np.ndarray] = []
     targets: list[np.ndarray] = []
     lifes: list[np.ndarray] = []
     was_training = model.training
@@ -1532,6 +1540,16 @@ def _score_holdout_value(
                 preds.append(
                     out["value"].detach().float().cpu().numpy()
                 )
+                # Pre-tanh logits feed the post-hoc temperature fit.
+                # ``.get`` rather than ``[...]`` so a stand-in model
+                # in a test (or a future head that squashes
+                # internally) degrades to the post-tanh shrink fit
+                # instead of raising.
+                logit_t = out.get("value_logit")
+                if logit_t is not None:
+                    logits.append(
+                        logit_t.detach().float().cpu().numpy()
+                    )
                 targets.append(
                     on_device["outcome"].detach().float().cpu().numpy()
                 )
@@ -1550,12 +1568,17 @@ def _score_holdout_value(
         if was_training:
             model.train()
     life_arr = np.concatenate(lifes) if lifes else None
+    logit_arr = (
+        np.concatenate(logits)
+        if logits and len(logits) == len(preds) else None
+    )
     return compute_holdout_value_metrics(
         np.concatenate(preds) if preds
         else np.zeros((0,), dtype=np.float32),
         np.concatenate(targets) if targets
         else np.zeros((0,), dtype=np.float32),
         life_diffs=life_arr,
+        logits=logit_arr,
     )
 
 

@@ -120,6 +120,21 @@ class ModelMetadata:
     # ``tokenize_state`` call (input width). Ignored for the
     # flat-feature MLP architectures.
     scalar_schema_version: int = 1
+    # ``value_calibration`` carries the post-hoc value-head
+    # calibration fitted on the held-out split after training (see
+    # ``mtg_bot.training.value_calibration``):
+    # ``{"method": "logit_temperature", "temperature": T,
+    #    "bias": b, "n_rows": N, "raw_mse": ..., "calibrated_mse": ...,
+    #    "cv_mse": ...}``.
+    # It is METADATA, not weights: ``mtg_bot calibrate-value
+    # --version vN`` re-fits and rewrites this key alone, and
+    # ``NNEvaluator.from_metadata`` threads temperature/bias into
+    # ``StructuredModelConfig`` so every consumer of the model's
+    # ``value`` output is calibrated without per-consumer wiring.
+    # Empty (the default) means the identity calibration — exactly
+    # what every checkpoint registered before this field existed
+    # behaved like, so old metadata.json files round-trip unchanged.
+    value_calibration: dict[str, Any] = field(default_factory=dict)
     # Training inputs and hyperparameters.
     training: dict[str, Any] = field(default_factory=dict)
     # Per-epoch loss series + summary, from TrainingHistory.
@@ -143,7 +158,7 @@ class ModelMetadata:
         known = {
             "version", "created_at", "feature_dim", "hidden_sizes",
             "with_policy", "architecture", "action_encoding_version",
-            "scalar_schema_version",
+            "scalar_schema_version", "value_calibration",
             "training", "training_history", "evaluation", "git_commit",
             "notes", "extra",
         }
@@ -176,6 +191,10 @@ class ModelMetadata:
             # key) loads as the 3-slot scalar layout every pre-v2
             # structured checkpoint was trained against.
             scalar_schema_version=int(d.get("scalar_schema_version", 1)),
+            # Default {} so old metadata.json (no value_calibration
+            # key) loads as the identity calibration — bit-exact
+            # pre-calibration inference.
+            value_calibration=dict(d.get("value_calibration") or {}),
             training=dict(d.get("training", {})),
             training_history=dict(d.get("training_history", {})),
             evaluation=dict(d.get("evaluation", {})),
@@ -344,6 +363,33 @@ class Registry:
         serializable dict. Overwrites if already present."""
         metadata = self.load_metadata(version)
         metadata.evaluation[name] = result
+        self._write_metadata(version, metadata)
+
+    def set_value_calibration(
+        self,
+        version: str,
+        calibration: dict[str, Any],
+        *,
+        holdout_metrics: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Rewrite a registered version's ``value_calibration``.
+
+        The calibration is metadata, not weights: ``weights.pt`` is
+        untouched, and the next loader that reads this version picks
+        the new temperature up. ``holdout_metrics``, when given, is
+        stashed under ``training_history
+        .holdout_value_metrics_recalibrated`` so an audit can see
+        WHICH held-out measurement produced the stored temperature
+        without overwriting the numbers the training run recorded.
+        """
+        metadata = self.load_metadata(version)
+        metadata.value_calibration = dict(calibration)
+        if holdout_metrics is not None:
+            history = dict(metadata.training_history or {})
+            history["holdout_value_metrics_recalibrated"] = dict(
+                holdout_metrics,
+            )
+            metadata.training_history = history
         self._write_metadata(version, metadata)
 
     # ---- internals ---------------------------------------------------------
