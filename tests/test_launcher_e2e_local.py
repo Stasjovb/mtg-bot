@@ -290,6 +290,13 @@ def test_launcher_e2e_local_ends_in_terminal_state(
         # network behaviour.
         # Note: we DO want verify to run here -- the mock IS reachable
         # and returns IDLE -- so we don't pass --skip-worker-verify.
+        #
+        # The mock advertises a synthetic git_commit ("test0000") that
+        # can never match the launcher's real HEAD, so the stale-worker
+        # pre-flight would (correctly) abort this e2e. Exercising the
+        # documented escape hatch keeps the rest of the launcher path
+        # under test AND proves the flag actually reaches the check.
+        "--allow-stale-workers",
     ]
 
     # Run the launcher to completion in a thread so the test can poll
