@@ -146,7 +146,7 @@ class HoldoutValueMetrics:
         the other) > the in-sample calibrated MSE > the raw MSE. The
         cross-fitted number is preferred so "calibrate, then grade
         the calibration on the rows it was fit on" cannot flatter a
-        run, however small two free parameters against 10^5+ rows
+        run, however small one free parameter against 10^5+ rows
         makes that effect.
 
         Judging the CALIBRATED number is the point: temperature is
