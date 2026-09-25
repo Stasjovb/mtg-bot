@@ -68,7 +68,7 @@ def stub_heartbeat(monkeypatch):
     """Bypass the live IDLE check -- tests don't have real workers."""
     monkeypatch.setattr(
         id_mod, "verify_worker_idle",
-        lambda url: None,
+        lambda url, **kwargs: {"state": "IDLE", "git_commit": "deadbee"},
     )
 
 
@@ -497,7 +497,7 @@ def test_skip_worker_verify_does_not_call_heartbeat(
     minimal_toml: Path, progress_dir: Path, runs_db_env: Path, monkeypatch,
 ):
     """--skip-worker-verify must bypass even the IDLE check."""
-    def fail(url):
+    def fail(url, **kwargs):
         raise AssertionError(
             f"verify_worker_idle({url}) called despite --skip-worker-verify",
         )
@@ -552,3 +552,279 @@ win10_url = "http://h2:5198"
     cfg = load_config(toml)
     urls = id_mod.collect_worker_urls(cfg)
     assert urls == ["http://h1:5198", "http://h2:5198"]
+
+
+# ---------------------------------------------------------------------------
+# Stale-worker pre-flight
+#
+# A worker daemon caches its checkout SHA at process start and reports
+# it as ``git_commit``. A daemon that was never restarted after a merge
+# silently generates an entire cycle from old code -- indistinguishable
+# from a current one on every other heartbeat field.
+# ---------------------------------------------------------------------------
+
+
+def _hb(**extra):
+    """Heartbeat stub: IDLE + real artifact storage unless overridden."""
+    body = {
+        "state": "IDLE",
+        "artifact_storage_uri": "file:///tmp/artifacts",
+    }
+    body.update(extra)
+    return lambda url, timeout=5.0: (200, body)
+
+
+def test_verify_worker_idle_accepts_matching_commit(monkeypatch):
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb(git_commit="abc1234"))
+    body = id_mod.verify_worker_idle(
+        "http://h:5198", expected_commit="abc1234",
+    )
+    # The heartbeat body comes back so the caller can print the banner.
+    assert body["git_commit"] == "abc1234"
+
+
+@pytest.mark.parametrize(
+    ("worker", "expected"),
+    [
+        ("abc1234", "abc12345"),   # launcher's --short is longer
+        ("abc12345", "abc1234"),   # worker's is longer
+        ("ABC1234", "abc1234"),    # case-insensitive
+    ],
+)
+def test_verify_worker_idle_matches_on_the_shorter_prefix(
+    worker, expected, monkeypatch,
+):
+    """``git rev-parse --short`` picks whatever length is unambiguous;
+    the daemon hard-truncates to 7. Same commit, different strings."""
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb(git_commit=worker))
+    id_mod.verify_worker_idle("http://h:5198", expected_commit=expected)
+
+
+def test_verify_worker_idle_rejects_stale_commit(monkeypatch):
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb(git_commit="0ldc0de"))
+    with pytest.raises(id_mod.WorkerStaleCommitError) as exc:
+        id_mod.verify_worker_idle(
+            "http://h:5198", expected_commit="feedbee",
+        )
+    msg = str(exc.value)
+    # Names the worker, its commit, the expected commit, the remedy.
+    assert "http://h:5198" in msg
+    assert "0ldc0de" in msg
+    assert "feedbee" in msg
+    assert "/v2/self_update" in msg
+    assert "restart the daemon" in msg
+    assert "--allow-stale-workers" in msg
+
+
+def test_worker_stale_commit_error_is_a_worker_not_idle_error():
+    assert issubclass(
+        id_mod.WorkerStaleCommitError, id_mod.WorkerNotIdleError,
+    )
+
+
+def test_verify_worker_idle_allows_stale_with_flag(monkeypatch, capsys):
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb(git_commit="0ldc0de"))
+    id_mod.verify_worker_idle(
+        "http://h:5198", expected_commit="feedbee", allow_stale=True,
+    )
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "0ldc0de" in err
+
+
+def test_verify_worker_idle_allows_stale_with_env_override(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv(id_mod.ALLOW_STALE_WORKERS_ENV, "1")
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb(git_commit="0ldc0de"))
+    id_mod.verify_worker_idle(
+        "http://h:5198", expected_commit="feedbee",
+    )
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_verify_worker_idle_warns_when_heartbeat_has_no_commit(
+    monkeypatch, capsys,
+):
+    """Pre-self-update daemons and test stubs don't report
+    ``git_commit`` -- they pass, loudly."""
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    monkeypatch.setattr(id_mod, "_http_get_json", _hb())
+    id_mod.verify_worker_idle("http://h:5198", expected_commit="feedbee")
+    err = capsys.readouterr().err
+    assert "does not report git_commit" in err
+
+
+@pytest.mark.parametrize("value", [None, 123, "", "   "])
+def test_verify_worker_commit_tolerates_malformed_values(
+    value, monkeypatch, capsys,
+):
+    monkeypatch.delenv(id_mod.ALLOW_STALE_WORKERS_ENV, raising=False)
+    id_mod._verify_worker_commit(
+        "http://h:5198", {"git_commit": value},
+        expected_commit="feedbee", allow_stale=False,
+    )
+    assert "cannot verify" in capsys.readouterr().err
+
+
+def test_verify_worker_commit_warns_when_launcher_commit_unknown(
+    capsys,
+):
+    """A non-git deploy must not block every launch."""
+    id_mod._verify_worker_commit(
+        "http://h:5198", {"git_commit": "0ldc0de"},
+        expected_commit=None, allow_stale=False,
+    )
+    assert "cannot resolve the launcher" in capsys.readouterr().err
+
+
+def test_resolve_expected_commit_prefers_git(monkeypatch):
+    monkeypatch.setattr(id_mod, "_launcher_repo_commit", lambda: "gitsha1")
+    monkeypatch.setenv(id_mod.EXPECTED_COMMIT_ENV, "envsha1")
+    assert id_mod.resolve_expected_commit() == "gitsha1"
+
+
+def test_resolve_expected_commit_falls_back_to_env(monkeypatch):
+    monkeypatch.setattr(id_mod, "_launcher_repo_commit", lambda: None)
+    monkeypatch.setenv(id_mod.EXPECTED_COMMIT_ENV, "envsha1")
+    assert id_mod.resolve_expected_commit() == "envsha1"
+
+
+def test_resolve_expected_commit_is_none_without_git_or_env(monkeypatch):
+    monkeypatch.setattr(id_mod, "_launcher_repo_commit", lambda: None)
+    monkeypatch.delenv(id_mod.EXPECTED_COMMIT_ENV, raising=False)
+    assert id_mod.resolve_expected_commit() is None
+
+
+def test_launcher_repo_commit_returns_none_when_git_is_missing(
+    monkeypatch,
+):
+    def boom(*a, **kw):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(id_mod.subprocess, "run", boom)
+    assert id_mod._launcher_repo_commit() is None
+
+
+# ---------------------------------------------------------------------------
+# ERROR is its own failure, not "not IDLE"
+# ---------------------------------------------------------------------------
+
+
+def test_verify_worker_idle_reports_parked_error_distinctly(monkeypatch):
+    monkeypatch.setattr(
+        id_mod, "_http_get_json",
+        _hb(state="ERROR", error="claim loop thread 3 crashed: ..."),
+    )
+    with pytest.raises(id_mod.WorkerParkedInErrorError) as exc:
+        id_mod.verify_worker_idle("http://h:5198")
+    msg = str(exc.value)
+    assert "parked in ERROR" in msg
+    assert "restart it" in msg
+    # NOT the generic draining advice.
+    assert "may still be draining" not in msg
+
+
+def test_worker_parked_in_error_is_a_worker_not_idle_error():
+    assert issubclass(
+        id_mod.WorkerParkedInErrorError, id_mod.WorkerNotIdleError,
+    )
+
+
+def test_non_idle_non_error_still_gets_the_draining_message(monkeypatch):
+    monkeypatch.setattr(
+        id_mod, "_http_get_json", _hb(state="SELF_PLAY_RUNNING"),
+    )
+    with pytest.raises(id_mod.WorkerNotIdleError) as exc:
+        id_mod.verify_worker_idle("http://h:5198")
+    assert "may still be draining" in str(exc.value)
+    assert not isinstance(exc.value, id_mod.WorkerParkedInErrorError)
+
+
+# ---------------------------------------------------------------------------
+# Launch banner + flag plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_launch_banner_prints_every_worker_commit(
+    minimal_toml: Path, progress_dir: Path, runs_db_env: Path,
+    monkeypatch, capsys,
+):
+    seen: list[tuple[str, object, object]] = []
+
+    def stub(url, *, expected_commit=None, allow_stale=False):
+        seen.append((url, expected_commit, allow_stale))
+        return {"state": "IDLE", "git_commit": "abc1234"}
+
+    monkeypatch.setattr(id_mod, "verify_worker_idle", stub)
+    monkeypatch.setattr(id_mod, "resolve_expected_commit", lambda: "abc1234")
+    monkeypatch.setattr(
+        id_mod, "spawn_iterate_subprocess", _stub_spawn({}, exit_code=0),
+    )
+    rc = id_mod.main([
+        "--config", str(minimal_toml),
+        "--progress-dir", str(progress_dir),
+        "--deck-pool", "data/decks.json.gz",
+    ])
+    assert rc == 0
+    assert seen, "verify_worker_idle was never called"
+    # The resolved expectation is threaded through to every worker.
+    assert all(entry[1] == "abc1234" for entry in seen)
+    assert all(entry[2] is False for entry in seen)
+    err = capsys.readouterr().err
+    for url, _, _ in seen:
+        assert f"worker {url} commit=abc1234" in err
+    assert "launcher commit=abc1234" in err
+
+
+def test_allow_stale_workers_flag_reaches_the_pre_flight(
+    minimal_toml: Path, progress_dir: Path, runs_db_env: Path,
+    monkeypatch,
+):
+    seen: list[bool] = []
+
+    def stub(url, *, expected_commit=None, allow_stale=False):
+        seen.append(allow_stale)
+        return {"state": "IDLE", "git_commit": "abc1234"}
+
+    monkeypatch.setattr(id_mod, "verify_worker_idle", stub)
+    monkeypatch.setattr(
+        id_mod, "spawn_iterate_subprocess", _stub_spawn({}, exit_code=0),
+    )
+    rc = id_mod.main([
+        "--config", str(minimal_toml),
+        "--progress-dir", str(progress_dir),
+        "--deck-pool", "data/decks.json.gz",
+        "--allow-stale-workers",
+    ])
+    assert rc == 0
+    assert seen and all(seen)
+
+
+def test_stale_worker_aborts_the_launch(
+    minimal_toml: Path, progress_dir: Path, runs_db_env: Path,
+    monkeypatch,
+):
+    """The whole point: a stale worker stops the cycle before any
+    subprocess is spawned."""
+    def stub(url, *, expected_commit=None, allow_stale=False):
+        raise id_mod.WorkerStaleCommitError(
+            f"worker {url} is running commit 0ldc0de",
+        )
+
+    monkeypatch.setattr(id_mod, "verify_worker_idle", stub)
+
+    def never(*a, **kw):  # pragma: no cover - must not run
+        raise AssertionError("iterate was spawned despite a stale worker")
+
+    monkeypatch.setattr(id_mod, "spawn_iterate_subprocess", never)
+    with pytest.raises(id_mod.WorkerStaleCommitError):
+        id_mod.main([
+            "--config", str(minimal_toml),
+            "--progress-dir", str(progress_dir),
+            "--deck-pool", "data/decks.json.gz",
+        ])

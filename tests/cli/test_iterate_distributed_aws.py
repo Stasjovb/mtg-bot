@@ -88,7 +88,8 @@ def runs_db_env(progress_dir: Path, monkeypatch):
 def stub_heartbeat(monkeypatch):
     """Bypass the live IDLE check on the cluster URLs."""
     monkeypatch.setattr(
-        id_mod, "verify_worker_idle", lambda url: None,
+        id_mod, "verify_worker_idle",
+        lambda url, **kwargs: {"state": "IDLE", "git_commit": "deadbee"},
     )
 
 
