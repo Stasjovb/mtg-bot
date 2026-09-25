@@ -307,11 +307,11 @@ def fit_logit_temperature(
     ``max_fit_rows`` strides the input down before the search when it
     is larger (the 6.6M-row run's held-out split is ~660k rows, and
     ~200 full-array ``tanh`` passes over that is minutes of pointless
-    work). Two parameters do not need 660k rows; the reported MSEs
-    are always computed on ALL rows.
+    work). One or two parameters do not need 660k rows; the reported
+    MSEs are always computed on ALL rows.
 
     Returns ``(1.0, 0.0)`` for degenerate input (fewer than 2 rows,
-    non-finite values, or an all-zero logit vector) — the identity,
+    non-finite values, or a CONSTANT logit vector) — the identity,
     which is the only honest answer when there is nothing to fit.
     """
     z = np.asarray(logits, dtype=np.float64).ravel()
