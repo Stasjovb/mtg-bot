@@ -52,6 +52,7 @@ from mtg_bot.search.nn_evaluator import (
     _build_dual_head_model,
     _ValueMLP,
 )
+from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
 from mtg_bot.training.progress import atomic_write_json, git_short_sha
 
 _log = logging.getLogger(__name__)
@@ -828,6 +829,8 @@ def train_structured_model(
     loader_timeout_sec: Optional[float] = 600.0,
     weight_decay: float = 0.0,
     restore_best: bool = True,
+    shuffle_mode: str = "auto",
+    shuffle_block_rows: int = DEFAULT_BLOCK_ROWS,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
@@ -902,6 +905,27 @@ def train_structured_model(
     ``epoch_callback`` mirrors :func:`train_value_network` — fires
     after the in-memory history is updated, exceptions are swallowed.
 
+    ``shuffle_mode`` picks how the train split is ordered:
+
+    - ``"row"`` — the historical ``DataLoader(Subset, shuffle=True)``:
+      a uniform shuffle over every train row. Each batch is
+      ``batch_size`` independent random slices into the flat store's
+      memmaps.
+    - ``"block"`` — :class:`~mtg_bot.training.block_shuffle.BlockShuffleDataset`:
+      the same rows per epoch, but read in shuffled contiguous blocks
+      of ``shuffle_block_rows`` rows so the store is streamed
+      sequentially instead of page-faulted at random. Also sorts the
+      val split's indices, which are otherwise a random permutation
+      read back with ``shuffle=False`` — the same random-I/O problem
+      for 10% of the rows, every epoch.
+    - ``"auto"`` (default) — ``block`` once the flat store is larger
+      than half of available RAM (i.e. once the page cache can no
+      longer hold it), ``row`` below that. See
+      :func:`~mtg_bot.training.block_shuffle.resolve_shuffle_mode`.
+
+    Block mode changes the ORDER rows are visited in, never the SET:
+    one epoch is still exactly one pass over every train row.
+
     ``loader_timeout_sec`` (default 600 s) is the DataLoader's
     per-batch collection timeout. It only applies when
     ``num_workers > 0`` — torch asserts ``timeout == 0`` for the
@@ -918,6 +942,9 @@ def train_structured_model(
     # import cost).
     from torch.utils.data import DataLoader, Subset
 
+    from mtg_bot.training.block_shuffle import (
+        BlockShuffleDataset, resolve_shuffle_mode,
+    )
     from mtg_bot.training.structured_dataset import (
         shutdown_dataloader_workers, structured_collate,
     )
@@ -936,6 +963,14 @@ def train_structured_model(
             f"early_stop_patience must be >= 1 (or None to disable); "
             f"got {early_stop_patience}"
         )
+    if shuffle_block_rows < 1:
+        raise ValueError(
+            f"shuffle_block_rows must be >= 1; got {shuffle_block_rows}"
+        )
+    # Resolved BEFORE anything expensive so an invalid mode (or
+    # 'block' on a dataset with no flat store) fails on the argument
+    # rather than 20 minutes into epoch 1.
+    resolved_shuffle = resolve_shuffle_mode(shuffle_mode, dataset)
     if config is None:
         config = StructuredModelConfig()
     # Scalar-schema width gate. The dataset's ``token_scalars`` row
@@ -986,6 +1021,15 @@ def train_structured_model(
     val_idx = val_idx_arr.tolist()
     train_idx = train_idx_arr.tolist()
     train_subset = Subset(dataset, train_idx) if train_idx else dataset
+    if resolved_shuffle == "block":
+        # Sorting the val indices costs nothing and removes the other
+        # half of the random-I/O problem: ``grouped_train_val_split``
+        # returns a PERMUTATION, and the val loader reads it back with
+        # ``shuffle=False``, so every eval pass was seeking too. The
+        # val ROW SET is unchanged, and a row's model output doesn't
+        # depend on which rows share its batch, so the holdout metrics
+        # are the same.
+        val_idx = sorted(val_idx)
     # ``num_workers=0`` keeps DataLoader on the main thread — fine for
     # smoke tests + tiny datasets but starves the GPU on real iter
     # data (7M+ samples ran at ~9% GPU util with single-process
@@ -1003,16 +1047,35 @@ def train_structured_model(
         float(loader_timeout_sec)
         if (_pw and loader_timeout_sec) else 0
     )
-    train_loader = DataLoader(
-        train_subset,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=structured_collate,
-        num_workers=num_workers,
-        persistent_workers=_pw,
-        pin_memory=device_obj.type == "cuda",
-        timeout=_timeout,
-    )
+    if resolved_shuffle == "block":
+        # ``shuffle=True`` is illegal on an IterableDataset — the
+        # wrapper IS the shuffle. Workers shard by block, so each one
+        # gets a disjoint slice of the epoch with no sampler involved.
+        train_loader = DataLoader(
+            BlockShuffleDataset(
+                train_subset,
+                block_rows=shuffle_block_rows,
+                seed=rng_seed,
+            ),
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=structured_collate,
+            num_workers=num_workers,
+            persistent_workers=_pw,
+            pin_memory=device_obj.type == "cuda",
+            timeout=_timeout,
+        )
+    else:
+        train_loader = DataLoader(
+            train_subset,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=structured_collate,
+            num_workers=num_workers,
+            persistent_workers=_pw,
+            pin_memory=device_obj.type == "cuda",
+            timeout=_timeout,
+        )
     val_loader: Optional[DataLoader] = None
     if n_val > 0:
         val_subset = Subset(dataset, val_idx)

@@ -132,6 +132,7 @@ from mtg_bot.training.self_play_evaluator import (
     SELF_PLAY_EVALUATORS as _SELF_PLAY_EVALUATORS,
 )
 from mtg_bot.training.data_gen import ReplayCaptureConfig
+from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
 from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
 from mtg_bot import distributed_rest_orchestrator as _rest_orch
 from mtg_bot.training.orphan_sweep import sweep_local_orphans
@@ -1114,6 +1115,8 @@ def _train_next(
     structured_action_history_n: int | None = None,
     structured_scalar_schema_version: int | None = None,
     num_workers: int = 0,
+    shuffle_mode: str | None = None,
+    shuffle_block_rows: int | None = None,
     dropout: float | None = None,
     weight_decay: float | None = None,
     keep_last_epoch: bool = False,
@@ -1188,6 +1191,13 @@ def _train_next(
         ])
     if num_workers > 0:
         cmd.extend(["--num-workers", str(num_workers)])
+    # Train-split ordering. Blank = inherit train_nn.py's own default
+    # ("auto": block-shuffle once the flat store outgrows the page
+    # cache).
+    if shuffle_mode is not None:
+        cmd.extend(["--shuffle-mode", str(shuffle_mode)])
+    if shuffle_block_rows is not None:
+        cmd.extend(["--shuffle-block-rows", str(shuffle_block_rows)])
     # Structured-architecture hyperparams (Slice G). Only emitted when
     # the architecture is "structured" — the flat-feature trainer
     # ignores them, and emitting them unconditionally would surface as
@@ -1667,6 +1677,28 @@ def main(argv=None) -> None:  # pragma: no cover
             "__getitem__ + collate runs on the main thread between "
             "GPU forward/backward calls. Set to 0 for smoke tests "
             "where multiprocessing fork is finicky."
+        ),
+    )
+    parser.add_argument(
+        "--train-shuffle-mode", choices=("auto", "row", "block"),
+        default="auto",
+        help=(
+            "Train-phase ordering of the train split. 'row' is the "
+            "historical uniform shuffle -- every batch is batch_size "
+            "random slices into the flat memmap store, i.e. thousands "
+            "of 4 KB page faults per batch once the store outgrows "
+            "the page cache. 'block' streams shuffled contiguous "
+            "blocks of --train-shuffle-block-rows rows instead (same "
+            "rows per epoch, different order). 'auto' (default) picks "
+            "block once the store exceeds half of available RAM."
+        ),
+    )
+    parser.add_argument(
+        "--train-shuffle-block-rows", type=int,
+        default=DEFAULT_BLOCK_ROWS,
+        help=(
+            "Rows per contiguous block under --train-shuffle-mode "
+            "block (default %(default)s)."
         ),
     )
     parser.add_argument(
@@ -2940,6 +2972,8 @@ def main(argv=None) -> None:  # pragma: no cover
                     args.scalar_schema_version
                 ),
                 num_workers=args.train_num_workers,
+                shuffle_mode=args.train_shuffle_mode,
+                shuffle_block_rows=args.train_shuffle_block_rows,
                 dropout=args.dropout,
                 weight_decay=args.weight_decay,
                 keep_last_epoch=args.keep_last_epoch,

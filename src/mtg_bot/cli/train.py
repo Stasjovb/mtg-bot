@@ -52,6 +52,7 @@ from mtg_bot.training import (
     train_structured_model,
     train_value_network,
 )
+from mtg_bot.training.block_shuffle import DEFAULT_BLOCK_ROWS
 from mtg_bot.training.registry import ModelMetadata, Registry
 from mtg_bot.training.value_gate import (
     DEFAULT_MIN_HOLDOUT_VALUE_QUALITY,
@@ -676,6 +677,34 @@ def main(argv=None) -> None:
             "(observed 2026-09-24 on the 4M-row cycle-5 train); the "
             "timeout turns that stall into a loud RuntimeError. Pass "
             "0 to block forever (the pre-2026-09-24 behaviour)."
+        ),
+    )
+    parser.add_argument(
+        "--shuffle-mode", choices=("auto", "row", "block"),
+        default="auto",
+        help=(
+            "Structured-trainer train-split ordering. 'row' is the "
+            "historical uniform shuffle: every batch is batch_size "
+            "random slices into the flat store's memmaps, which is "
+            "thousands of 4 KB page faults per batch once the store "
+            "no longer fits the page cache (measured 2026-09-25: "
+            "~60 GB store on a 64 GB box ran the disk at 111%% busy / "
+            "~6,800 reads/s and left the GPU at 10-20%%). 'block' "
+            "reads shuffled contiguous blocks of --shuffle-block-rows "
+            "rows, one sequential slice per array, and shuffles "
+            "within a 2-block window; same rows per epoch, different "
+            "order. 'auto' (default) picks block once the store "
+            "exceeds half of available RAM."
+        ),
+    )
+    parser.add_argument(
+        "--shuffle-block-rows", type=int, default=DEFAULT_BLOCK_ROWS,
+        help=(
+            "Rows per contiguous block under --shuffle-mode block "
+            "(default %(default)s). Bigger = more sequential I/O and "
+            "better within-block mixing, at ~4 KB of worker RAM per "
+            "row per block in the 2-block window. Ignored under "
+            "--shuffle-mode row."
         ),
     )
     parser.add_argument(
@@ -1497,6 +1526,8 @@ def _main_structured(args, parser) -> None:
         "early_stop_patience": args.early_stop_patience,
         "num_workers": args.num_workers,
         "loader_timeout_sec": args.loader_timeout_sec,
+        "shuffle_mode": args.shuffle_mode,
+        "shuffle_block_rows": args.shuffle_block_rows,
         "dropout": dropout,
         "weight_decay": weight_decay,
         "restore_best": restore_best,
@@ -1612,6 +1643,8 @@ def _main_structured(args, parser) -> None:
             loader_timeout_sec=args.loader_timeout_sec,
             weight_decay=weight_decay,
             restore_best=restore_best,
+            shuffle_mode=args.shuffle_mode,
+            shuffle_block_rows=args.shuffle_block_rows,
         )
         elapsed = time.perf_counter() - started
 
