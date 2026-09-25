@@ -29,17 +29,47 @@ and "actually won".
 What this module does
 ---------------------
 
-One scalar temperature ``T`` (and optionally a bias ``b``) fit on the
-held-out split by minimising MSE of
+One scalar temperature ``T`` fit on the held-out split by minimising
+MSE of
 
-    pred = tanh(z / T + b)
+    pred = tanh(z / T)
 
 where ``z`` is the value head's PRE-tanh logit. ``T > 1`` shrinks a
 saturated head toward 0 while preserving its ranking exactly
 (``tanh(z/T)`` is strictly monotone in ``z``), so correlation is
 essentially untouched and the MSE moves to where the correlation says
-it should be. Two fitted parameters against ~10^5-10^6 held-out rows
+it should be. One fitted parameter against ~10^5-10^6 held-out rows
 is not a capacity that can memorise anything.
+
+**What calibration must never do: make an uninformative head look
+informative.** Two guards enforce that.
+
+1. *A zero-variance head is never calibrated.* If the held-out logits
+   are CONSTANT, every monotone one-parameter family degenerates into
+   a fitted intercept — ``tanh(c/T)`` sweeps all of ``(0, 1)`` as
+   ``T`` varies — so "calibrating" it would mean predicting the
+   held-out label mean, which scores ``1 - mean(y)**2`` and can slip
+   under a 1.0 MSE ceiling on any imbalanced split. Both fitters
+   return the identity in that case.
+
+2. *The additive bias is opt-in* (``fit_bias``, default False).
+   ``tanh(z / T + b)`` is supported for diagnosis, but a second free
+   parameter aimed squarely at the label mean is not what a gate
+   should be graded through. Measured on the real 1000-shard fit the
+   bias bought 0.0001 MSE — the calibrated score landed on the
+   theoretical ``1 - r**2`` either way, because ``target_mean`` is
+   0.0 on a balanced self-play corpus — so pinning it costs nothing
+   where it matters.
+
+Note the residual honesty caveat: the gate's fixed 1.0 ceiling is the
+"no information" line only when the held-out labels are BALANCED
+(``constant_zero_mse == 1 - mean(y)**2``). Self-play outcome labels
+are balanced by construction (both seats are recorded), and the real
+660k-row split measured ``target_mean = 0.0`` exactly, so this is a
+property of the corpus rather than a hole — but a hand-built or
+heavily-skewed split would want the best-constant baseline instead,
+and ``HoldoutValueMetrics`` reports ``target_mean`` so the skew is
+visible.
 
 When the pre-tanh logit is not available (an evaluator that only
 exposes the squashed output, or a non-structured head), the fallback
@@ -111,7 +141,7 @@ class ValueCalibration:
     the rows it was fit on, and ``cv_mse`` records the 2-fold
     cross-fitted MSE (fit on one half of the held-out rows, scored on
     the other, both ways). ``cv_mse`` is the number the gate reads:
-    it cannot be gamed by fitting two parameters on the rows being
+    it cannot be gamed by fitting the parameters on the rows being
     scored, however negligible that is at these row counts.
     """
 
@@ -245,7 +275,7 @@ def fit_logit_temperature(
     logits: np.ndarray,
     targets: np.ndarray,
     *,
-    fit_bias: bool = True,
+    fit_bias: bool = False,
     n_grid: int = 33,
     n_refine: int = 3,
     max_fit_rows: int = 250_000,
@@ -259,6 +289,13 @@ def fit_logit_temperature(
     the objective is well-behaved (unimodal in T for any fixed b at
     these scales), so a bracketed grid is both sufficient and
     reproducible.
+
+    ``fit_bias`` defaults to **False** — see the module docstring.
+    A free bias turns the ``T -> inf`` limit into "predict the
+    held-out label mean", which is a constant predictor that can
+    score under the gate's constant-0 ceiling on any imbalanced
+    split. Temperature alone degenerates to the constant-0 predictor
+    exactly, so it can never manufacture a pass.
 
     ``max_fit_rows`` strides the input down before the search when it
     is larger (the 6.6M-row run's held-out split is ~660k rows, and
@@ -280,7 +317,14 @@ def fit_logit_temperature(
         return 1.0, 0.0
     if not (np.all(np.isfinite(z)) and np.all(np.isfinite(y))):
         return 1.0, 0.0
-    if float(np.max(np.abs(z))) <= 0.0:
+    if float(np.ptp(z)) <= 0.0:
+        # A CONSTANT logit vector. There is no ranking to rescale, and
+        # every monotone family collapses to a fitted intercept:
+        # tanh(c/T) sweeps (0, 1) as T varies, so "calibration" would
+        # silently become "predict the held-out label mean", which
+        # scores 1 - mean(y)**2 and can slip under a 1.0 MSE ceiling
+        # on any imbalanced split. A zero-variance value head carries
+        # no information; report it as it is.
         return 1.0, 0.0
     cap = int(max_fit_rows)
     if cap > 0 and z.shape[0] > cap:
@@ -340,6 +384,11 @@ def fit_output_shrink(
         return 1.0
     if not (np.all(np.isfinite(p)) and np.all(np.isfinite(y))):
         return 1.0
+    if float(np.ptp(p)) <= 0.0:
+        # Constant head — same argument as in
+        # :func:`fit_logit_temperature`: ``a * c`` is a fitted
+        # intercept, not a calibration. Identity.
+        return 1.0
     denom = float(np.dot(p, p))
     if denom <= 0.0:
         return 1.0
@@ -351,7 +400,7 @@ def calibrate_holdout(
     *,
     logits: Optional[np.ndarray] = None,
     preds: Optional[np.ndarray] = None,
-    fit_bias: bool = True,
+    fit_bias: bool = False,
 ) -> tuple[ValueCalibration, np.ndarray]:
     """Fit a calibration on held-out rows; return it + the calibrated
     predictions.

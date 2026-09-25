@@ -105,11 +105,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="DataLoader worker processes for scoring. Default 0.",
     )
     parser.add_argument(
-        "--no-bias", action="store_true",
+        "--fit-bias", action="store_true",
         help=(
-            "Fit the temperature only (bias pinned to 0). The bias "
-            "is a second free parameter; pin it when you want the "
-            "calibration to be a pure monotone rescale."
+            "Also fit an additive pre-tanh bias b, i.e. "
+            "tanh(z / T + b). OFF by default and deliberately so: a "
+            "free bias makes the T -> infinity limit 'predict the "
+            "held-out label mean', a CONSTANT predictor that can "
+            "score under the gate's constant-0 ceiling on any "
+            "imbalanced split. Temperature alone degenerates to "
+            "exactly the constant-0 predictor, so it can never "
+            "manufacture a pass. Use this for diagnosis, not for a "
+            "number you intend to gate on."
         ),
     )
     parser.add_argument(
@@ -253,7 +259,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dataset.close()
 
     metrics = compute_holdout_value_metrics(
-        preds, targets, None, logits, fit_bias=not args.no_bias,
+        preds, targets, None, logits, fit_bias=args.fit_bias,
     )
     calibration = metrics.calibration or {}
     print(f"# held-out rows ............ {metrics.n_rows}")

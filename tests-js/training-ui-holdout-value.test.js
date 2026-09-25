@@ -148,6 +148,41 @@ describe('training UI held-out value tile', () => {
       .toBe(true);
   });
 
+  it('headlines the calibrated MSE and keeps the raw one visible', () => {
+    // The 2026-09-25 warm-start signature: raw MSE above the ceiling,
+    // calibrated (and cross-fitted) below it. The tile must show the
+    // number the gate judged — the calibrated one, because the fitted
+    // temperature ships with the checkpoint — without hiding the raw.
+    const run = trainingPayload({
+      holdout_value_metrics: {
+        n_rows: 662392,
+        value_mse: 1.2938,
+        value_corr: 0.2977,
+        calibrated_value_mse: 0.9105,
+        calibrated_value_corr: 0.3111,
+        gate_value_mse: 0.9107,
+        constant_zero_mse: 1.0,
+        baseline_life_diff_corr: 0.3096,
+        calibration: { method: 'logit_temperature', temperature: 4.1 },
+      },
+      value_gate: {
+        passed: true, evaluated: true, threshold: 1.0,
+        reason: 'held-out value MSE 0.9107 < 1.0000 ... [raw 1.2938]',
+      },
+    });
+    const card = buildCard(run);
+    const stat = card.querySelector('[data-field="holdout-stat"]');
+    expect(stat.hidden).toBe(false);
+    expect(card.querySelector('[data-field="holdout"]').textContent)
+      .toBe('0.9107');
+    expect(card.querySelector('[data-field="holdout-sub"]').textContent)
+      .toBe('calibrated MSE (raw 1.2938, const-0 = 1.0) · r=0.31'
+        + ' · life r=0.31');
+    // A passing gate must not be painted as a failure just because
+    // the RAW number is over the ceiling.
+    expect(stat.style.color).toBe('');
+  });
+
   it('renders n/a for an undefined correlation', () => {
     const card = buildCard(trainingPayload({
       holdout_value_metrics: {

@@ -194,16 +194,35 @@ def test_the_written_temperature_is_what_the_loader_applies(
     )
 
 
-def test_no_bias_pins_the_bias_to_zero(trained) -> None:
+def test_bias_is_pinned_to_zero_by_default(trained) -> None:
+    """The default fit is temperature-only. A free bias would let the
+    T -> infinity limit become 'predict the held-out label mean',
+    which is a constant predictor that can slip under the gate's
+    constant-0 ceiling on an imbalanced split."""
     data_dir, registry_root = trained
     assert cli_calibrate.main([
         "--version", "v1",
         "--registry-root", str(registry_root),
         "--data-dir", str(data_dir),
         "--device", "cpu",
-        "--no-bias",
     ]) == 0
     assert _meta(registry_root)["value_calibration"]["bias"] == 0.0
+
+
+def test_fit_bias_opts_the_bias_back_in(trained) -> None:
+    data_dir, registry_root = trained
+    assert cli_calibrate.main([
+        "--version", "v1",
+        "--registry-root", str(registry_root),
+        "--data-dir", str(data_dir),
+        "--device", "cpu",
+        "--fit-bias",
+    ]) == 0
+    # The synthetic corpus has a non-zero label mean, so the bias fit
+    # finds something to do; the point is only that the flag is live.
+    cal = _meta(registry_root)["value_calibration"]
+    assert cal["method"] == "logit_temperature"
+    assert isinstance(cal["bias"], float)
 
 
 def test_json_out_writes_the_payload(trained, tmp_path: Path) -> None:

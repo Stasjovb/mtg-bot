@@ -1421,6 +1421,26 @@ def _print_calibration_summary(metrics) -> None:
         f"#   mean |pred|  raw {_fmt_opt(metrics.pred_abs_mean)} | "
         f"calibrated {_fmt_opt(metrics.calibrated_pred_abs_mean)}"
     )
+    # Advisory, NOT a gate: calibration fixes the SCALE, never the
+    # information content. A head whose correlation is still under
+    # the one-line life-differential baseline has learned nothing
+    # that baseline doesn't already know, and passing the MSE
+    # ceiling on a shrunken output must not read as "solved".
+    head_corr = metrics.calibrated_value_corr
+    if head_corr is None:
+        head_corr = metrics.value_corr
+    baseline = metrics.baseline_life_diff_corr
+    if (
+        head_corr is not None and baseline is not None
+        and abs(head_corr) <= abs(baseline)
+    ):
+        print(
+            f"#   NOTE: corr(pred, outcome) {_fmt_opt(head_corr)} does "
+            f"not beat the trivial life-differential baseline "
+            f"{_fmt_opt(baseline)} on the same rows. Calibration "
+            f"fixes the SCALE, not the information — this head is "
+            f"still no more informative than 'who is ahead on life'."
+        )
 
 
 def _main_structured(args, parser) -> None:

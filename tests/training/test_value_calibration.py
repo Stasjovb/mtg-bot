@@ -61,6 +61,7 @@ def test_saturated_predictor_is_worse_than_constant_zero_raw():
 def test_temperature_fit_beats_constant_zero_on_the_same_rows():
     logits, targets = _saturated_corpus()
     t, b = fit_logit_temperature(logits, targets)
+    assert b == 0.0  # temperature-only by default
     assert t > 1.0  # a saturated head needs shrinking, not sharpening
     cal = apply_logit_temperature(logits, t, b)
     cal_mse = float(np.mean((cal - targets) ** 2))
@@ -115,11 +116,46 @@ def test_temperature_fit_leaves_a_calibrated_head_alone():
     assert abs(b) < 0.05
 
 
-def test_fit_bias_false_pins_the_bias():
+def test_fit_bias_is_off_by_default_and_opt_in_when_asked():
     logits, targets = _saturated_corpus()
-    t, b = fit_logit_temperature(logits, targets, fit_bias=False)
+    t, b = fit_logit_temperature(logits, targets)
     assert b == 0.0
     assert t > 1.0
+    # Opt-in still works — it is a diagnosis tool, not the gate path.
+    _, b_on = fit_logit_temperature(logits, targets, fit_bias=True)
+    assert isinstance(b_on, float)
+
+
+def test_a_constant_head_cannot_calibrate_its_way_past_the_gate():
+    """A zero-variance value head must come out of calibration
+    UNCHANGED.
+
+    It carries no ranking, so there is no scale to fit — and every
+    monotone one-parameter family over a constant input degenerates
+    into a fitted intercept (``tanh(c/T)`` sweeps all of ``(0, 1)``),
+    which on an imbalanced split lands at the held-out label mean and
+    scores ``1 - mean(y)**2 < 1``. That would be a gate pass bought
+    with zero information.
+    """
+    rng = np.random.default_rng(17)
+    # Deliberately imbalanced labels, as a small held-out split is.
+    targets = np.where(rng.random(400) < 0.6, 1.0, -1.0)
+    logits = np.full(targets.shape, 12.0)  # saturated AND constant
+
+    assert fit_logit_temperature(logits, targets) == (1.0, 0.0)
+    assert fit_logit_temperature(
+        logits, targets, fit_bias=True,
+    ) == (1.0, 0.0)
+    assert fit_output_shrink(np.tanh(logits), targets) == 1.0
+
+    metrics = compute_holdout_value_metrics(
+        np.tanh(logits), targets, None, logits,
+    )
+    assert metrics.calibrated_value_mse == pytest.approx(
+        metrics.value_mse,
+    )
+    assert metrics.calibrated_value_mse > metrics.constant_zero_mse
+    assert not evaluate_value_gate(metrics).passed
 
 
 def test_fit_logit_temperature_degenerate_inputs_return_identity():
