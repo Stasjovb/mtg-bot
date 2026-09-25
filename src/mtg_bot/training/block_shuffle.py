@@ -296,17 +296,24 @@ class _RowBlock:
             return
         self._dataset = None
         # --- the sequential reads --------------------------------
-        row_off = np.asarray(dataset._row_offsets[lo:hi + 1])
+        # ``np.array(...)`` and NOT ``np.asarray(...)``: a memmap is
+        # an ndarray subclass, so ``asarray`` hands back the mapped
+        # VIEW untouched and not one byte is read. The whole point is
+        # to fault the block in as one sequential pass, so the copy
+        # has to be forced. (Measured cold on an NVMe under load:
+        # ~570 MB/s for this sequential materialization vs ~15 MB/s
+        # for the same bytes reached by per-row random faults.)
+        row_off = np.array(dataset._row_offsets[lo:hi + 1])
         t0 = int(row_off[0])
         t1 = int(row_off[-1])
         self._offsets = (row_off - t0).astype(np.int64, copy=False)
-        self._tt = np.asarray(dataset._token_type_flat[t0:t1])
-        self._emb = np.asarray(dataset._token_emb_ids_flat[t0:t1])
-        self._sca = np.asarray(dataset._token_scalars_flat[t0:t1])
-        self._outcomes = np.asarray(dataset._outcomes[lo:hi])
-        self._policy = np.asarray(dataset._policy_targets[lo:hi])
-        self._mask = np.asarray(dataset._action_masks[lo:hi])
-        self._has_policy = np.asarray(dataset._has_policy[lo:hi])
+        self._tt = np.array(dataset._token_type_flat[t0:t1])
+        self._emb = np.array(dataset._token_emb_ids_flat[t0:t1])
+        self._sca = np.array(dataset._token_scalars_flat[t0:t1])
+        self._outcomes = np.array(dataset._outcomes[lo:hi])
+        self._policy = np.array(dataset._policy_targets[lo:hi])
+        self._mask = np.array(dataset._action_masks[lo:hi])
+        self._has_policy = np.array(dataset._has_policy[lo:hi])
         self.nbytes = int(
             self._tt.nbytes + self._emb.nbytes + self._sca.nbytes
             + self._outcomes.nbytes + self._policy.nbytes

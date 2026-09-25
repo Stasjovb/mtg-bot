@@ -506,3 +506,33 @@ def test_dataloader_two_epochs_reshuffle_same_rows(dataset) -> None:
     first, second = _epoch(), _epoch()
     assert sorted(first) == sorted(second) == list(range(len(dataset)))
     assert first != second
+
+
+def test_block_materializes_instead_of_holding_memmap_views() -> None:
+    """The regression that made the whole feature a no-op: a memmap
+    is an ndarray subclass, so ``np.asarray(memmap[lo:hi])`` returns
+    the mapped VIEW and reads nothing. Every block array must be a
+    real in-RAM copy, or the rows still fault in one at a time and
+    block mode buys exactly zero I/O.
+
+    Measured cold on this box: sequential materialization of a
+    1.27 GB array ran at 570 MB/s; the same bytes reached by per-row
+    random faults ran at ~15 MB/s.
+    """
+    from mtg_bot.training.block_shuffle import _RowBlock
+
+    ds = _make_dataset()
+    try:
+        block = _RowBlock(ds, np.arange(0, 64, dtype=np.int64))
+        for name in ("_tt", "_emb", "_sca", "_outcomes",
+                     "_policy", "_mask", "_has_policy"):
+            arr = getattr(block, name)
+            assert not isinstance(arr, np.memmap), (
+                f"{name} is still a memmap view -- no bytes were read"
+            )
+            assert arr.base is None or not isinstance(
+                arr.base, np.memmap
+            ), f"{name} is a view onto a memmap"
+        assert block.nbytes > 0
+    finally:
+        ds.close()

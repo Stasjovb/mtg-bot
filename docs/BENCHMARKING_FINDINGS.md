@@ -687,3 +687,118 @@ is alive at any age and removes one whose owner is gone at any age,
 with the age threshold (now 2 h, was 12 h) only governing stores
 without a usable marker. `.building-*` dirs abandoned inside a
 persistent cache dir are reclaimed the same way.
+
+
+## 8C. Block-shuffled sampling over an out-of-RAM flat store (2026-09-24)
+
+**Problem observed 2026-09-25 on the real warm-start run** (6,000
+files / ~6.6M rows / ~60 GB flat store, 64 GB box with ~27 GB free,
+4 DataLoader workers, batch 256): workers sat in
+`StructuredDataset.__getitem__` page-faulting. Disk **111% busy,
+~6,800 reads/s at ~170 MB/s** (≈25 KB per read), GPU **10-20%**,
+epoch 1 **unfinished after 70 minutes** (26k steps). `shuffle=True`
+over a `Subset` draws rows uniformly at random over the whole split,
+so every batch is `batch_size` independent random slices scattered
+over a store several times larger than the page cache.
+
+**Fix.** `mtg_bot.training.block_shuffle.BlockShuffleDataset` — same
+rows per epoch, different order: sort the split's indices, cut into
+contiguous 65,536-row blocks, shuffle block order per epoch, shard
+blocks across workers, materialize a 2-block window with one
+contiguous slice per flat array, then shuffle rows inside the window.
+`train_structured_model(shuffle_mode=...)`, `mtg_bot train
+--shuffle-mode/--shuffle-block-rows`, `mtg_bot iterate
+--train-shuffle-mode/--train-shuffle-block-rows`. Default `auto` =
+block once the store exceeds half of available RAM.
+
+### Method
+
+`scripts/bench_block_shuffle_io.py`. Synthetic flat store with the
+production per-row byte profile (45 tokens × 146 B + 2,606 B of
+policy/mask/outcome = **9,176 B/row**, i.e. the same 9.1 KB/row the
+60 GB / 6.6M-row production store has). 262,144 rows = **2.24 GB**.
+Batch 256, `num_workers=2`, block_rows 65,536. Win11 + RTX 5090 box,
+NVMe, **with the production warm-start training run live on the same
+disk** — so the absolute rates are contended; the ratios are the
+point.
+
+Cold-cache epochs are real, not simulated: opening each store file
+with `FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH` makes the
+Windows cache manager purge that file's section. Verified: a 1.27 GB
+sequential read runs 2,525 MB/s warm → 1,192 MB/s straight after the
+purge → 2,590 MB/s warm again.
+
+### Result 1 — access-trace analysis (deterministic, machine-independent)
+
+One epoch's exact read requests replayed against the store's byte
+layout:
+
+| | read requests / epoch | mean run | bytes from disk @ 25%-of-store LRU cache |
+|---|---|---|---|
+| row shuffle | **1,350,931** | 6.3 KB | 4.82 GB (2.15× the store) |
+| block shuffle | **28** | 81.8 MB | 2.24 GB (each byte exactly once) |
+
+**48,000× fewer read requests**, and 2.15× fewer bytes off the
+platter because a random walk re-reads pages it already evicted.
+
+Extrapolating the request count to production (6.6M rows) gives
+34M requests/epoch; at the 6,800 reads/s the box actually sustained
+that is **83 min/epoch** — which is what the run showed.
+
+### Result 2 — cold epoch, real DataLoader, 2 workers
+
+| mode | wall | rows/s |
+|---|---|---|
+| row | **171.7 s** | 1,526 |
+| block | **13.4 s** | 19,588 |
+
+**12.8× faster** on a 2.24 GB store. The gap grows with the
+store/RAM ratio; at 2.24 GB the row-shuffle epoch is already
+IOPS-bound.
+
+### Result 3 — warm epoch (store fully page-cache resident)
+
+| mode | wall | rows/s |
+|---|---|---|
+| row | **8.5 s** | 30,807 |
+| block | **9.5 s** | 27,718 |
+
+Block mode is **~11% SLOWER** when the store already fits in RAM:
+there is no I/O to save and the block materialization is a pure extra
+memcpy, bursty enough to stall a 2-worker pipeline at window
+boundaries. **This is why the default is `auto`, not `block`.**
+
+### Result 4 — per-batch CPU cost of `__getitem__` + `structured_collate`
+
+Single process, no model, warm cache, batch 256:
+
+| | mean ms/batch | p50 | p90 | µs/row |
+|---|---|---|---|---|
+| row | 16.84 | 15.73 | 22.47 | 65.8 |
+| block (steady state, block resident) | **12.21** | 12.38 | **13.34** | **47.7** |
+| block (incl. amortized materialization, 16k-row blocks) | 15.08 | 12.56 | 19.06 | 58.9 |
+
+Slicing rows out of a contiguous in-RAM block is **27% cheaper** per
+batch than slicing them out of a memmap, and far more consistent
+(p90 22.47 → 13.34 ms, −41%). Folding the block read back in on a
+warm cache leaves **−5% mean / −18% p90** — the materialization is
+pure memcpy when the pages are already resident, and *is* the
+sequential read when they are not.
+
+### Trap worth remembering
+
+`np.asarray(memmap[lo:hi])` does **not** read anything. `np.memmap`
+is an `ndarray` subclass, so `asarray` hands the mapped view straight
+back and the rows still fault in one at a time. The first cut of
+`_RowBlock` used `asarray` and measured **identical** cold epochs for
+both modes (171.7 s vs 164.0 s) — the feature was a no-op. `np.array`
+(copy) is required; `tests/training/test_block_shuffle.py::test_block_materializes_instead_of_holding_memmap_views`
+pins it.
+
+### Reproduce
+
+```bash
+PYTHONPATH=src python scripts/bench_block_shuffle_io.py \
+    --rows 262144 --batch-size 256 --block-rows 65536 --workers 2
+# add --cold for purged-cache epochs (win32 only)
+```
