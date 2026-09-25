@@ -1,0 +1,37 @@
+# Launch config for the scalar-schema-v2 lineage (trained_weights_s2/),
+# distributed across the desktop worker daemon + the Mac worker.
+#
+# Do NOT run this by hand per iteration -- use the wrapper, which
+# derives target_iter from trained_weights_s2/iterate_state.json and
+# forwards the lineage-specific flags the TOML can't express:
+#
+#   scripts/s2/run_distributed.sh [n_iterations]
+#
+[iter]
+target_iter = 1            # overridden per cycle by the wrapper
+label_prefix = "s2_"       # every run id becomes s2_iter_NNN_* (shared runs.db with the old lineage)
+bootstrap_version = "v1"   # random-init schema-2 net (scripts/bootstrap_structured_s2.py)
+nodes = 400   # deeper search for the heuristic warm-start corpus: sharper visit targets; still ~4x cheaper than NN self-play at 100
+samples = 2
+games_per_iteration = 1500   # phase 2 (2026-09-24): 3x more data per cycle
+epochs = 20
+architecture = "structured"
+root_dirichlet_alpha = 0.5
+root_dirichlet_eps = 0.25
+move_temperature = 1.0
+temperature_cutoff = 30
+
+[cluster]
+local_only = true
+# Desktop worker daemon (MTGBotWorkerLocal task / hub mtg_bot_worker_windows).
+master_url = "http://100.115.252.110:5198"
+# Mac worker (tailnet node greggs-macbook-pro). Its old -1 node / 100.77.31.125
+# was a second (Homebrew) tailscaled, removed 2026-09-23.
+# mac_url omitted: desktop-only variant for when the Mac is unreachable.
+
+[aws]
+count = 0
+
+[ui]
+auto_start_training_ui = true
+base_url = "http://desktop-j05412i:5103"
