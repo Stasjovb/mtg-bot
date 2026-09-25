@@ -805,8 +805,14 @@ class ClaimLoopRunner:
                 time.sleep(delay)
             try:
                 status, resp_body, _ = self.cfg.http_post_json(url, body)
-            except urllib.error.URLError as e:
-                last_err = f"URLError attempt {attempt}: {e}"
+            except (urllib.error.URLError, OSError) as e:
+                # URLError covers connect failures; a bare OSError
+                # (socket.timeout / TimeoutError, ConnectionResetError,
+                # RemoteDisconnected) is what urllib raises when the
+                # coordinator goes quiet AFTER the connection is up --
+                # the remote-worker-over-flaky-tailnet case. Both are
+                # transient: back off and retry, never crash the thread.
+                last_err = f"{type(e).__name__} attempt {attempt}: {e}"
                 log.warning("[claim_loop] %s", last_err)
                 continue
             if status == 200:
@@ -905,8 +911,9 @@ class ClaimLoopRunner:
                 time.sleep(delay)
             try:
                 status, resp_body, _ = self.cfg.http_post_json(url, body)
-            except urllib.error.URLError as e:
-                last_err = f"URLError attempt {attempt}: {e}"
+            except (urllib.error.URLError, OSError) as e:
+                # Same transient-transport set as _claim_one.
+                last_err = f"{type(e).__name__} attempt {attempt}: {e}"
                 log.warning("[report_loop] %s", last_err)
                 continue
             # 200 = legacy synchronous coord path (Phase 1 + early 2A

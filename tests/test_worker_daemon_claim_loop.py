@@ -1060,6 +1060,55 @@ def test_claim_loop_retries_on_url_error_then_succeeds():
     assert raises_left[0] == 0  # both flaky raises consumed
 
 
+def test_claim_loop_retries_on_socket_timeout_then_succeeds():
+    """A bare ``TimeoutError`` (what urllib raises when the coordinator
+    stops answering after the TCP connect -- the Mac-over-flaky-tailnet
+    case, 2026-09-25) is transient like URLError: retried, not fatal.
+    Before the fix this crashed the claim thread and parked the daemon
+    in ERROR mid-stage."""
+    fake = FakeCoordinator()
+    raises_left = [2]
+    real_post = fake.http_post_json
+
+    def flaky_post(url, payload, timeout=30.0):
+        if raises_left[0] > 0:
+            raises_left[0] -= 1
+            raise TimeoutError("timed out")
+        return real_post(url, payload, timeout)
+
+    fake.http_post_json = flaky_post
+    fake.claims_queue = [_make_claim(0)]
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    loop, _ = _build_loop(fake, state=state)
+    loop.run()
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 1
+    assert raises_left[0] == 0
+
+
+def test_report_loop_retries_on_connection_reset_then_succeeds():
+    """``ConnectionResetError`` on /v2/report_result is retried too."""
+    fake = FakeCoordinator(claims_queue=[_make_claim(0)])
+    real_post = fake.http_post_json
+    raises_left = [1]
+
+    def flaky_post(url, payload, timeout=30.0):
+        if url.endswith("/v2/report_result") and raises_left[0] > 0:
+            raises_left[0] -= 1
+            raise ConnectionResetError("peer reset")
+        return real_post(url, payload, timeout)
+
+    fake.http_post_json = flaky_post
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+    loop, _ = _build_loop(fake, state=state)
+    loop.run()
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == 1
+    assert raises_left[0] == 0
+
+
 def test_report_loop_retries_on_5xx_then_succeeds():
     """A transient 503 on /v2/report_result retries and accepts."""
     fake = FakeCoordinator(
