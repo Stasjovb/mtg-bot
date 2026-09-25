@@ -511,6 +511,26 @@ def build_v2_blueprint(
                     now_unix=time.time(),
                 )
                 if result is None:
+                    # Queue empty. Before answering "drained", sweep
+                    # claims whose TTL lapsed and try once more. The
+                    # heartbeat poller is the fast lane for a worker
+                    # that dies outright, but a worker that flaps
+                    # (Mac sleeping on battery, 2026-09-25) can claim
+                    # a game while labelled DEAD and never transition
+                    # again, so its claim was only ever swept at
+                    # coordinator *startup* -- and the stage sat at
+                    # 1499/1500 forever. A worker asking for work is
+                    # exactly the moment the sweep matters.
+                    if queue_db.requeue_expired_claims(
+                        conn, now_unix=time.time(),
+                    ):
+                        result = queue_db.claim_next_game(
+                            conn,
+                            stage_id=stage_id,
+                            worker_id=worker_id,
+                            now_unix=time.time(),
+                        )
+                if result is None:
                     # Either drained or queue empty. Distinguish from
                     # 404 (which the API doc reserves for "no such
                     # stage_id"); both drained/empty share 204.

@@ -94,6 +94,46 @@ def test_expired_claim_is_requeued_on_recovery(tmp_path):
     assert body["game_idx"] == 0
 
 
+def test_expired_claim_is_requeued_lazily_on_next_claim(tmp_path):
+    """No coordinator restart needed: once a claim's TTL lapses, the
+    next ``/v2/claim`` that would otherwise answer 204 sweeps it back
+    into the queue and hands it out. Regression for the 2026-09-25
+    stall where a flapping worker held game 1499/1500 past its TTL
+    and the stage never completed because the sweep only ran at boot."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    client.post("/v2/stage/create", json=_spec())  # claim_ttl_seconds=1
+    first = client.post("/v2/claim", json={
+        "worker_id": "wA", "stage_id": "iter_009_self_play_v6",
+    })
+    assert first.status_code == 200
+    # Not yet expired: the queue is genuinely empty.
+    res = client.post("/v2/claim", json={
+        "worker_id": "wB", "stage_id": "iter_009_self_play_v6",
+    })
+    assert res.status_code == 204
+    # Let the 1s TTL lapse (expires_at has whole-second resolution,
+    # and the sweep uses strict '<', so wait past the next tick).
+    time.sleep(2.1)
+    res = client.post("/v2/claim", json={
+        "worker_id": "wB", "stage_id": "iter_009_self_play_v6",
+    })
+    assert res.status_code == 200, res.data
+    body = res.get_json()
+    assert body["game_idx"] == 0
+    # And it is a fresh claim (new claim owner), not the stale one.
+    conn = queue_db.connect(tmp_path / "queue.db")
+    try:
+        rows = conn.execute(
+            "SELECT worker_id, reported FROM claims "
+            "WHERE stage_id = ? ORDER BY claimed_at",
+            ("iter_009_self_play_v6",),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [r["worker_id"] for r in rows][-1] == "wB"
+
+
 def test_recovery_path_runs_on_startup(tmp_path):
     """The serve.create_app factory itself runs requeue_expired_claims
     once at boot."""
