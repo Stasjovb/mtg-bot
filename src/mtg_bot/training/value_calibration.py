@@ -36,10 +36,17 @@ MSE of
 
 where ``z`` is the value head's PRE-tanh logit. ``T > 1`` shrinks a
 saturated head toward 0 while preserving its ranking exactly
-(``tanh(z/T)`` is strictly monotone in ``z``), so correlation is
-essentially untouched and the MSE moves to where the correlation says
-it should be. One fitted parameter against ~10^5-10^6 held-out rows
-is not a capacity that can memorise anything.
+(``tanh(z/T)`` is strictly monotone in ``z``), and the MSE moves to
+where the correlation says it should be. One fitted parameter against
+~10^5-10^6 held-out rows is not a capacity that can memorise
+anything.
+
+Pearson ``r`` is not rank-based, so un-saturating also RECOVERS a
+few points of correlation — measured +6-8 % across four matched fits
+(`docs/SCALING_DIAGNOSTICS.md` D5). And the fit is tight: in all four
+the calibrated MSE landed on the theoretical ``1 - r**2`` to four
+decimal places, i.e. the temperature extracts essentially all of the
+MSE the head's correlation entitles it to, and nothing else.
 
 **What calibration must never do: make an uninformative head look
 informative.** Two guards enforce that.
