@@ -116,6 +116,35 @@ def test_temperature_fit_leaves_a_calibrated_head_alone():
     assert abs(b) < 0.05
 
 
+def test_every_layer_defaults_to_temperature_only():
+    """The bias default must agree at EVERY layer.
+
+    ``compute_holdout_value_metrics`` is the layer the trainer calls,
+    so a stale ``fit_bias=True`` there would silently hand the gate a
+    two-parameter fit even though both fitters default to one.
+    Caught in production on 2026-09-25: a 9-epoch fit came back with
+    ``bias=-0.0791`` after the fitters had already been pinned.
+    """
+    import inspect
+
+    from mtg_bot.training import value_calibration as vc
+
+    for fn in (
+        vc.fit_logit_temperature,
+        vc.calibrate_holdout,
+        compute_holdout_value_metrics,
+    ):
+        assert (
+            inspect.signature(fn).parameters["fit_bias"].default is False
+        ), fn.__name__
+
+    logits, targets = _saturated_corpus(n=4_000)
+    metrics = compute_holdout_value_metrics(
+        np.tanh(logits), targets, None, logits,
+    )
+    assert metrics.calibration["bias"] == 0.0
+
+
 def test_fit_bias_is_off_by_default_and_opt_in_when_asked():
     logits, targets = _saturated_corpus()
     t, b = fit_logit_temperature(logits, targets)

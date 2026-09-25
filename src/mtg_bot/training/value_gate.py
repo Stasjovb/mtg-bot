@@ -184,7 +184,7 @@ def compute_holdout_value_metrics(
     logits: Optional[np.ndarray] = None,
     *,
     calibrate: bool = True,
-    fit_bias: bool = True,
+    fit_bias: bool = False,
 ) -> HoldoutValueMetrics:
     """Build :class:`HoldoutValueMetrics` from raw held-out arrays.
 
@@ -203,6 +203,13 @@ def compute_holdout_value_metrics(
     monotone output shrink on ``preds``, which is weaker but still
     reported. Pass ``calibrate=False`` for the raw-only measurement
     (what the pre-calibration gate did).
+
+    ``fit_bias`` defaults to False — temperature only. The additive
+    pre-tanh bias is a diagnosis knob, not something a GATE should be
+    graded through (see
+    :mod:`mtg_bot.training.value_calibration`); this is the default
+    every training run inherits, so it must match the fitters' own
+    default or the gate silently reads a two-parameter fit.
 
     An empty input yields ``n_rows=0`` with NaN MSEs — the gate
     treats that as "could not evaluate" rather than a failure.

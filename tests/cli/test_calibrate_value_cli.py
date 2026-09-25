@@ -92,6 +92,12 @@ def trained(tmp_path: Path, monkeypatch):
         "--device", "cpu",
         "--progress-path", str(tmp_path / "progress" / "train.json"),
         "--architecture", "structured",
+        # The corpus is random labels on 144 rows — it cannot pass
+        # the held-out value gate, and it isn't meant to. These tests
+        # need a REGISTERED structured version to point
+        # calibrate-value at, so disable the gate rather than tune a
+        # synthetic corpus into passing it.
+        "--min-holdout-value-quality", "0",
         "--notes", "calibrate-value fixture",
     ])
     return data_dir, registry_root
