@@ -109,6 +109,24 @@ the config with every table below.
 
 Paste each run's `ladder.md` Elo table + config here, newest first.
 
+### 2026-09-25 -- v8, the heuristic warm-start net (nodes 100 / samples 2)
+
+`ladder_runs/s2_v8/`, 200 games/pair. v8 = structured net trained on 6,000
+heuristic-PIMC self-play games (nodes 400 / samples 2) with post-hoc value
+calibration (see docs/SCALING_DIAGNOSTICS.md D4/D5).
+
+| rank | agent | Elo | 95% CI | games | score |
+|---:|---|---:|---|---:|---:|
+| 1 | heuristic | +470 | [+397, +572] | 199 | 76.4% |
+| 2 | **v8** | **+267** | [+213, +343] | 399 | 53.1% |
+| 3 | random | +0 | -- | 200 | 17.5% |
+
+Pairwise: heuristic vs v8 152-47 (v8 23.6%); random vs v8 35-165 (v8 82.5%).
+For comparison the previous best NN (v5, self-play from random init) LOST
+to random 68-132 and took 9/200 from the heuristic. Baseline from 09-23:
+heuristic +407, v13s +30, random 0 (different game sample; Elo anchored
+to random each run, so compare within a run).
+
 ### 2026-09-23 -- first absolute-strength table (nodes 100 / samples 2)
 
 Commit `5c1bc306`, `ladder_runs/prod_n100s2/` (full report snapshot:
