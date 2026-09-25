@@ -296,7 +296,8 @@ Readings:
    dropout/wd shrink the weights, `trunk_no_printing` removes the
    feature the value head was cheating with, and removing the cheat
    is what makes the shrinkage bite.
-5. **Identity-blind is real but not free.** Hiding the printing
+5. **Identity-blind is real but not free, and it LOSES at the
+   production epoch budget.** Hiding the printing
    embeddings from the value head cuts saturation hard
    (mean \|pred\| 0.87 → 0.68 alone, → 0.62 combined; fitted T 7.7 →
    4.5) and makes the temperature *transfer* — the blind arms' cv MSE
@@ -311,19 +312,21 @@ Readings:
    second trunk pass, and ~1.35× per training epoch. Its train value
    loss after 3 epochs was 0.63–0.74 vs the shared trunk's 0.22–0.28
    — it has not begun to memorise, which is the whole point, and it
-   means this 3-epoch comparison *understates* it at the 9–20 epoch
-   budgets the real runs use.
+   means this 3-epoch comparison should *understate* it at the 9–20
+   epoch budgets the real runs use. It does not — see the 9-epoch
+   section below, where that prediction is falsified.
 
 ### At the real epoch budget (9 epochs, same subset + seed)
 
 3 epochs is not where the rejected run lived — it trained for 9 with
-restore-best landing on epoch 3. Re-running the two value-head
-routings at 9 epochs on the same 1,000 shards:
+restore-best landing on epoch 3. Re-running three of the arms at 9
+epochs on the same 1,000 shards:
 
 | arm | raw MSE | **cv MSE** | in-sample cal MSE | r raw | r cal | mean \|pred\| | T | train value loss, epoch 1 → 9 |
 |--|--|--|--|--|--|--|--|--|
 | **base9** (0.1 / 1e-4, trunk) | 1.1212 | **0.8173** | 0.8084 | 0.391 | **0.438** | 0.878 | 7.34 | 0.200 → **0.015** |
 | blind9 (0.1 / 1e-4, trunk_no_printing) | 1.0525 | 0.8784 | 0.8687 | 0.346 | 0.362 | 0.652 | 5.24 | 0.642 → 0.467 |
+| combined9 (0.3 / 1e-3, trunk_no_printing) | 0.9894 | 0.8405 | 0.8397 | 0.377 | 0.401 | 0.625 | 4.89 | 0.727 → 0.575 |
 
 The train-loss column is the memorisation channel, measured: the
 shared-trunk value head drives its TRAINING loss to 0.015 — an order
@@ -347,8 +350,55 @@ quality at equal settings". It is (a) a much smaller calibration
 gap — its cv MSE tracks its in-sample MSE to within 0.010, against
 0.009-0.041 for the shared trunk, i.e. the temperature transfers
 across the corpus — and (b) a genuinely different operating point
-when paired with heavier regularisation, where at 3 epochs it was the
-only arm to clear the ceiling uncalibrated.
+when paired with heavier regularisation, where it is the only
+configuration that clears the ceiling uncalibrated at either epoch
+budget (raw 0.986 / 0.989).
+
+**Which lever wins depends on the epoch budget, and the ordering
+inverts.** Gate metric (cv MSE), best first:
+
+| epochs | ranking |
+|--|--|
+| 3 | combined **0.842** ‹ heavy-reg 0.863 ‹ blind 0.875 ‹ base 0.886 |
+| 9 | **base 0.817** ‹ combined 0.841 ‹ blind 0.878 |
+
+Extra epochs are worth −0.069 cv MSE to the shared trunk
+(0.886 → 0.817) and essentially nothing to the identity-blind arms
+(combined 0.842 → 0.841; blind 0.875 → 0.878). Read together: the
+printing embedding is carrying real, generalising signal for the
+value head that only a longer fit extracts — blinding the head to it
+costs that, and what it buys back (a stable temperature, an
+uncalibrated pass) is not worth 1.5× per NN eval at the epoch budget
+the production runs actually use.
+
+### Recommendation for the full 6,000-shard warm start
+
+**Enable calibration (automatic — no flag) and change nothing else.**
+Keep `--value-head-input trunk` and `--dropout 0.1 --weight-decay
+1e-4`. At the 9-epoch budget the production run uses, that is the
+best-measured configuration on the gate metric AND the cheapest (no
+1.5× inference tax, no extra trunk pass).
+
+Expected numbers, derived from the rejected run's OWN held-out
+measurement (`r_raw = 0.2977`, `mean |pred| = 0.888`, 662,392 rows)
+rather than from the 1,000-shard subset, which runs hotter
+(`r_raw` 0.36-0.39 on the same settings):
+
+| quantity | expected | how |
+|--|--|--|
+| calibrated held-out MSE | **0.89-0.91** | `1 - r_cal**2`, with `r_cal / r_raw` = 1.06-1.12 measured across all seven arms |
+| cross-fitted (gate-judged) MSE | **0.89-0.95** | plus the shared-trunk cross-fit penalty, 0.009-0.041 |
+| corr(pred, outcome), calibrated | **0.32-0.33** | 0.2977 × 1.06-1.12 |
+| fitted temperature | **7-9** | 7.3-8.0 on every shared-trunk arm |
+| mean \|pred\| | **0.888 → ~0.35** | 0.87 → 0.34-0.38 measured |
+| verdict | **PASS** (ceiling 1.0) | worst case 0.952 with zero de-saturation gain and the largest observed cross-fit penalty |
+
+**The honest caveat that survives the pass:** at `r_cal ~ 0.32` the
+head only just clears the life-differential baseline (0.310 on those
+rows). It will be a *calibrated* evaluator carrying about one
+scalar's worth of information, not a good one. The gate is a floor,
+not a target; `mtg_bot train` prints an explicit NOTE when the
+calibrated correlation fails to beat the baseline.
 
 ### What this changes about the gate
 
