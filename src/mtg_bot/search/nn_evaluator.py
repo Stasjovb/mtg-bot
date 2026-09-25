@@ -1258,11 +1258,8 @@ class NNEvaluator(Evaluator):
             # empty (every pre-2026-09-25 checkpoint) => identity,
             # i.e. bit-identical inference to before.
             from mtg_bot.training.value_calibration import (
-                ValueCalibration,
-            )
-
-            from mtg_bot.training.value_calibration import (
                 CALIBRATION_OUTPUT_SHRINK,
+                ValueCalibration,
             )
 
             calibration = ValueCalibration.from_dict(
